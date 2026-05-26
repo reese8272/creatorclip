@@ -20,6 +20,23 @@ logger = logging.getLogger(__name__)
 _AUDIO_SAMPLE_RATE = 16000
 
 
+def probe_duration_s(path: str | Path) -> float | None:
+    """Return the duration of a media file in seconds via ffprobe, or None on failure."""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception as exc:
+        logger.warning("ffprobe duration probe failed for %s: %s", path, exc)
+    return None
+
+
 def extract_audio_wav(source_path: str | Path, dest_path: str | Path) -> None:
     """Extract 16 kHz mono WAV from any video/audio source using ffmpeg."""
     cmd = [

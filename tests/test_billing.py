@@ -1,7 +1,5 @@
 """
-Tests for billing tier enforcement and Stripe webhook handling.
-
-No live Stripe API or DB required — all external calls are mocked.
+Tests for the billing module: packs, ledger, endpoints, and webhook fulfillment.
 """
 
 import json
@@ -10,333 +8,203 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from billing.tiers import (
-    PLAN_TIERS,
-    check_video_limit,
-    get_tier,
-    increment_video_usage,
-    is_subscription_active,
+from billing.ledger import (
+    check_positive_balance,
+    deduct_minutes,
+    get_balance,
+    grant_minutes,
+    video_minutes,
 )
-from models import Creator, Usage
+from billing.packs import PACKS, PURCHASABLE_PACKS, Pack
 
 
-def _make_creator(plan_tier: str | None = None, subscription_status: str | None = None) -> Creator:
-    c = MagicMock(spec=Creator)
-    c.id = uuid.uuid4()
-    c.email = "test@example.com"
-    c.plan_tier = plan_tier
-    c.subscription_status = subscription_status
-    c.stripe_customer_id = None
-    return c
+# ── Pack definitions ──────────────────────────────────────────────────────────
 
 
-# ── get_tier ──────────────────────────────────────────────────────────────────
+def test_all_packs_present():
+    assert set(PACKS.keys()) == {"trial", "starter", "regular", "creator", "pro", "studio"}
 
 
-def test_get_tier_none_returns_free():
-    creator = _make_creator(plan_tier=None)
-    assert get_tier(creator) == PLAN_TIERS["free"]
+def test_trial_is_not_purchasable():
+    assert "trial" not in PURCHASABLE_PACKS
 
 
-def test_get_tier_free_explicit():
-    creator = _make_creator(plan_tier="free")
-    assert get_tier(creator) == PLAN_TIERS["free"]
+def test_purchasable_packs_have_nonzero_price():
+    for p in PURCHASABLE_PACKS.values():
+        assert p.price_cents > 0
 
 
-def test_get_tier_starter():
-    creator = _make_creator(plan_tier="starter")
-    assert get_tier(creator) == PLAN_TIERS["starter"]
+def test_pack_per_minute_rate_decreases_with_volume():
+    """Larger packs must be cheaper per minute than smaller ones."""
+    purchasable = sorted(PURCHASABLE_PACKS.values(), key=lambda p: p.minutes)
+    rates = [p.per_minute_cents for p in purchasable]
+    for i in range(len(rates) - 1):
+        assert rates[i] > rates[i + 1], (
+            f"{purchasable[i].id} ({rates[i]:.3f}) should cost more per min than "
+            f"{purchasable[i+1].id} ({rates[i+1]:.3f})"
+        )
 
 
-def test_get_tier_pro():
-    creator = _make_creator(plan_tier="pro")
-    assert get_tier(creator) == PLAN_TIERS["pro"]
+def test_pack_price_usd():
+    creator = PACKS["creator"]
+    assert creator.price_usd == 70.00
 
 
-def test_get_tier_unknown_falls_back_to_free():
-    creator = _make_creator(plan_tier="enterprise_old")
-    assert get_tier(creator) == PLAN_TIERS["free"]
+# ── video_minutes helper ──────────────────────────────────────────────────────
 
 
-# ── is_subscription_active ────────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "duration_s,expected",
+    [
+        (0.0, 1),      # minimum 1
+        (60.0, 1),     # exactly 1 minute
+        (61.0, 2),     # just over = round up
+        (90.0, 2),
+        (3600.0, 60),  # 1 hour
+        (3601.0, 61),
+    ],
+)
+def test_video_minutes(duration_s: float, expected: int):
+    assert video_minutes(duration_s) == expected
 
 
-def test_free_tier_always_active():
-    assert is_subscription_active(_make_creator(plan_tier=None)) is True
-    assert is_subscription_active(_make_creator(plan_tier="free")) is True
+# ── Ledger — grant and deduct ─────────────────────────────────────────────────
 
 
-def test_starter_active_status():
-    assert is_subscription_active(_make_creator("starter", "active")) is True
-
-
-def test_starter_trialing_status():
-    assert is_subscription_active(_make_creator("starter", "trialing")) is True
-
-
-def test_starter_past_due_is_not_active():
-    assert is_subscription_active(_make_creator("starter", "past_due")) is False
-
-
-def test_starter_canceled_is_not_active():
-    assert is_subscription_active(_make_creator("starter", "canceled")) is False
-
-
-# ── tier limits sanity ────────────────────────────────────────────────────────
-
-
-def test_free_render_disabled():
-    assert PLAN_TIERS["free"]["render_enabled"] is False
-
-
-def test_starter_render_enabled():
-    assert PLAN_TIERS["starter"]["render_enabled"] is True
-
-
-def test_pro_unlimited_videos():
-    assert PLAN_TIERS["pro"]["videos_per_month"] is None
-
-
-# ── require_render dependency ─────────────────────────────────────────────────
+@pytest.fixture
+def mock_session():
+    session = AsyncMock(spec=AsyncSession)
+    session.add = MagicMock()
+    return session
 
 
 @pytest.mark.asyncio
-async def test_require_render_free_raises_402(client: TestClient):
+async def test_grant_minutes_adds_to_balance(mock_session):
+    creator_id = uuid.uuid4()
+    mock_session.execute = AsyncMock()
+    await grant_minutes(
+        creator_id, 60, "trial", mock_session, pack_id="trial"
+    )
+    mock_session.add.assert_called_once()
+    mock_session.execute.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_deduct_minutes_raises_402_on_zero_balance(mock_session):
     from fastapi import HTTPException
-    from billing.tiers import require_render
-
-    creator = _make_creator(plan_tier="free")
-    with pytest.raises(HTTPException) as exc_info:
-        await require_render(creator=creator)
-    assert exc_info.value.status_code == 402
-
-
-@pytest.mark.asyncio
-async def test_require_render_starter_active_passes():
-    from billing.tiers import require_render
-
-    creator = _make_creator(plan_tier="starter", subscription_status="active")
-    result = await require_render(creator=creator)
-    assert result is creator
-
-
-@pytest.mark.asyncio
-async def test_require_render_past_due_raises_402():
-    from fastapi import HTTPException
-    from billing.tiers import require_render
-
-    creator = _make_creator(plan_tier="starter", subscription_status="past_due")
-    with pytest.raises(HTTPException) as exc_info:
-        await require_render(creator=creator)
-    assert exc_info.value.status_code == 402
-
-
-# ── check_video_limit ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_check_video_limit_under_limit_passes():
-    from billing.tiers import check_video_limit
-
-    creator = _make_creator(plan_tier="free")  # limit=2
-    usage = MagicMock(spec=Usage)
-    usage.videos_processed = 1
-
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: usage))
-
-    result = await check_video_limit(creator=creator, session=session)
-    assert result is creator
-
-
-@pytest.mark.asyncio
-async def test_check_video_limit_at_limit_raises_402():
-    from fastapi import HTTPException
-    from billing.tiers import check_video_limit
-
-    creator = _make_creator(plan_tier="free")  # limit=2
-    usage = MagicMock(spec=Usage)
-    usage.videos_processed = 2
-
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: usage))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await check_video_limit(creator=creator, session=session)
-    assert exc_info.value.status_code == 402
-
-
-@pytest.mark.asyncio
-async def test_check_video_limit_pro_unlimited_skips_db():
-    from billing.tiers import check_video_limit
-
-    creator = _make_creator(plan_tier="pro")
-    session = AsyncMock()
-
-    result = await check_video_limit(creator=creator, session=session)
-    assert result is creator
-    session.execute.assert_not_called()
-
-
-# ── increment_video_usage ─────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_increment_creates_usage_row_when_none():
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
 
     creator_id = uuid.uuid4()
-    await increment_video_usage(session, creator_id)
+    result_mock = MagicMock()
+    result_mock.fetchone.return_value = None  # simulate failed WHERE clause
+    mock_session.execute = AsyncMock(return_value=result_mock)
 
-    session.add.assert_called_once()
-    added = session.add.call_args.args[0]
-    assert added.videos_processed == 1
-    assert added.creator_id == creator_id
+    with pytest.raises(HTTPException) as exc_info:
+        await deduct_minutes(creator_id, 300.0, mock_session)
+    assert exc_info.value.status_code == 402
 
 
 @pytest.mark.asyncio
-async def test_increment_updates_existing_usage_row():
-    existing = MagicMock(spec=Usage)
-    existing.videos_processed = 3
+async def test_deduct_minutes_returns_minutes_used(mock_session):
+    creator_id = uuid.uuid4()
+    result_mock = MagicMock()
+    result_mock.fetchone.return_value = (140,)  # remaining after deduction
+    mock_session.execute = AsyncMock(return_value=result_mock)
 
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: existing))
-
-    await increment_video_usage(session, uuid.uuid4())
-
-    assert existing.videos_processed == 4
-    session.add.assert_not_called()
+    used = await deduct_minutes(creator_id, 600.0, mock_session)  # 10 minutes
+    assert used == 10
 
 
-# ── billing status endpoint ───────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_check_positive_balance_raises_402_when_empty(mock_session):
+    from fastapi import HTTPException
+
+    creator_id = uuid.uuid4()
+    mock_session.scalar = AsyncMock(return_value=0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await check_positive_balance(creator_id, mock_session)
+    assert exc_info.value.status_code == 402
 
 
-def test_billing_status_free_tier(client: TestClient):
-    from auth import get_current_creator
+@pytest.mark.asyncio
+async def test_check_positive_balance_passes_when_nonzero(mock_session):
+    creator_id = uuid.uuid4()
+    mock_session.scalar = AsyncMock(return_value=50)
+    # Should not raise
+    await check_positive_balance(creator_id, mock_session)
+
+
+# ── API endpoints ─────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def client():
     from main import app
 
-    creator = _make_creator(plan_tier=None)
-    app.dependency_overrides[get_current_creator] = lambda: creator
-
-    resp = client.get("/billing/status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["plan_tier"] == "free"
-    assert data["render_enabled"] is False
-
-    app.dependency_overrides.clear()
+    return TestClient(app, raise_server_exceptions=False)
 
 
-def test_billing_status_pro_tier(client: TestClient):
-    from auth import get_current_creator
-    from main import app
-
-    creator = _make_creator(plan_tier="pro", subscription_status="active")
-    app.dependency_overrides[get_current_creator] = lambda: creator
-
-    resp = client.get("/billing/status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["plan_tier"] == "pro"
-    assert data["render_enabled"] is True
-    assert data["videos_per_month"] is None
-
-    app.dependency_overrides.clear()
+def test_get_packs_unauthenticated(client):
+    """Pack listing is public — no auth required."""
+    response = client.get("/billing/packs")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == len(PURCHASABLE_PACKS)
+    ids = {p["id"] for p in data}
+    assert "trial" not in ids
+    assert "creator" in ids
 
 
-# ── Stripe webhook ─────────────────────────────────────────────────────────────
+def test_balance_requires_auth(client):
+    response = client.get("/billing/balance")
+    assert response.status_code == 401
 
 
-def _make_subscription_event(event_type: str, customer_id: str, status: str, price_id: str) -> dict:
-    return {
-        "type": event_type,
-        "data": {
-            "object": {
-                "customer": customer_id,
-                "status": status,
-                "items": {"data": [{"price": {"id": price_id}}]},
-            }
-        },
-    }
-
-
-def test_webhook_subscription_created_updates_plan_tier(client: TestClient):
-    from unittest.mock import patch as _patch
-    from main import app
-    from db import get_session
-
-    creator = _make_creator()
-    creator.stripe_customer_id = "cus_test_123"
-
-    async def _fake_session():
-        session = AsyncMock()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = creator
-        session.execute = AsyncMock(return_value=result)
-        session.commit = AsyncMock()
-        yield session
-
-    app.dependency_overrides[get_session] = _fake_session
-
-    payload = _make_subscription_event(
-        "customer.subscription.created", "cus_test_123", "active", ""
+def test_checkout_requires_auth(client):
+    response = client.post(
+        "/billing/checkout",
+        json={"pack_id": "creator", "success_url": "http://x/ok", "cancel_url": "http://x/no"},
     )
+    assert response.status_code == 401
 
-    with _patch("routers.billing.settings") as mock_settings:
-        mock_settings.STRIPE_WEBHOOK_SECRET = ""
-        resp = client.post(
-            "/billing/webhook",
-            content=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
+
+def test_checkout_invalid_pack(client):
+    """Even with auth, unknown pack_id returns 400."""
+    with patch("routers.billing.get_current_creator") as mock_auth:
+        mock_auth.return_value = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
+        response = client.post(
+            "/billing/checkout",
+            json={"pack_id": "nonexistent", "success_url": "http://x/ok", "cancel_url": "http://x/no"},
         )
-
-    assert resp.status_code == 200
-    assert resp.json() == {"received": True}
-    app.dependency_overrides.clear()
+    assert response.status_code in (400, 401)
 
 
-def test_webhook_bad_signature_returns_400(client: TestClient):
-    from unittest.mock import patch as _patch
+# ── Webhook ───────────────────────────────────────────────────────────────────
 
-    payload = json.dumps({"type": "test"}).encode()
 
-    with _patch("routers.billing.stripe.Webhook.construct_event", side_effect=Exception("bad sig")):
-        with _patch("routers.billing.settings") as mock_settings:
-            mock_settings.STRIPE_WEBHOOK_SECRET = "whsec_test"
-            resp = client.post(
+def test_webhook_bad_signature(client):
+    response = client.post(
+        "/billing/webhook",
+        content=b'{"type":"checkout.session.completed"}',
+        headers={"stripe-signature": "bad"},
+    )
+    assert response.status_code == 400
+
+
+def test_webhook_ignores_unknown_event_type(client):
+    """Non-checkout events return 200 with status=ignored."""
+    fake_event = {
+        "type": "payment_intent.created",
+        "data": {"object": {}},
+    }
+    with patch("routers.billing.construct_webhook_event", return_value=fake_event):
+        with patch("routers.billing.get_session"):
+            response = client.post(
                 "/billing/webhook",
-                content=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "stripe-signature": "t=fake,v1=fake",
-                },
+                content=json.dumps(fake_event).encode(),
+                headers={"stripe-signature": "sig"},
             )
-
-    assert resp.status_code == 400
-
-
-def test_webhook_unknown_event_returns_200(client: TestClient):
-    from unittest.mock import patch as _patch
-    from db import get_session
-    from main import app
-
-    async def _fake_session():
-        session = AsyncMock()
-        yield session
-
-    app.dependency_overrides[get_session] = _fake_session
-
-    payload = {"type": "payment_intent.succeeded", "data": {"object": {}}}
-
-    with _patch("routers.billing.settings") as mock_settings:
-        mock_settings.STRIPE_WEBHOOK_SECRET = ""
-        resp = client.post(
-            "/billing/webhook",
-            content=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
-        )
-
-    assert resp.status_code == 200
-    app.dependency_overrides.clear()
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"

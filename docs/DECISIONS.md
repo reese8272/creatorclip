@@ -161,17 +161,40 @@ task functions synchronous. 2026-05-25.
 
 ---
 
-## 2026-05-26 — Stripe Billing: Subscription Tiers + Enforcement
+## 2026-05-26 — Billing: Minute Packs (replaces subscription tiers)
 
-### Billing: Stripe Metered Subscriptions
+**What**: Billing model is pre-paid minute packs, not subscriptions. `Creator.plan_tier` and
+`Creator.subscription_status` replaced with `Creator.minutes_balance` (int) and a
+`minute_packs` ledger table. Stripe Checkout in one-time payment mode — no subscriptions,
+no Billing Meters. Five purchasable packs (Starter 200 min → Studio 5,000 min) with
+programmatically-verified volume discounts. 60-minute free trial granted on first login.
+Minutes deducted atomically at ingest via `UPDATE … WHERE minutes_balance >= X RETURNING`.
 
-**What**: Stripe is the billing provider. Three tiers (free / starter / pro) stored on `Creator.plan_tier`, set by Stripe webhook. Enforcement via FastAPI dependencies at the render and video-registration endpoints. Monthly video usage tracked in the existing `usage` table.
+**Why**: Subscriptions require monthly commitment — a poor fit for creators who post
+episodically. Minute packs let creators pay for exactly what they use and never expire,
+which is a better conversion funnel ("try 60 free minutes, buy more when you need them").
+One-time Stripe Checkout is also significantly simpler to implement than subscriptions
+(no Customer Portal, no dunning, no invoice lifecycle).
 
-**Why**: Usage-based SaaS billing with Stripe checkout + customer portal is the industry standard. Stripe handles PCI compliance, payment retry, dunning, and tax. Our code only needs to respond to webhook events and call the Customer Portal API.
+**Source**: Product decision, 2026-05-26. Feature branch `claude/zealous-wozniak-5KVb7`
+merged into main.
 
-**Price ID mapping**: Price IDs are config-driven (`STRIPE_STARTER_PRICE_ID`, `STRIPE_PRO_PRICE_ID`) so plans can be renamed or repriced without a code deploy.
+---
 
-**Source**: Stripe metered billing docs; standard SaaS billing pattern. 2026-05-26.
+## 2026-05-26 — Beta deployment: VM + Docker Compose, not Kubernetes
+
+**What**: BETA_DEPLOYMENT phase (Issues 23–28) runs on a single cloud VM (DigitalOcean
+Droplet, 4 vCPU / 8 GB RAM) with Docker Compose + Cloudflare Tunnel, not Kubernetes.
+This is a scoped exception to the "Docker Compose = dev only" stance in `docs/SOT.md`.
+
+**Why**: Kubernetes is right for 10k+ scale but adds unnecessary operational complexity
+for a close-friends beta with < 10 users. The existing CI/CD pipeline (`deploy.yml`)
+already handles image build, SSH deploy, and DB migration — no K8s tooling needed for
+beta. `docs/SOT.md` still targets GKE Autopilot for production (Issue 22 Helm charts
+are ready); this is a scoped beta exception only.
+
+**Source**: Practical deployment gap analysis, 2026-05-26. Production deployment phase
+(Issues 29–30) retains the Kubernetes target.
 
 ---
 

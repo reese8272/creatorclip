@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
-from billing.tiers import check_video_limit, increment_video_usage
+from billing.ledger import check_positive_balance
 from config import settings
 from db import get_session
 from limiter import limiter
@@ -49,7 +49,7 @@ async def list_videos(
 async def link_video(
     request: Request,
     youtube_video_id: str = Form(...),
-    creator: Creator = Depends(check_video_limit),
+    creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Register a YouTube video by ID. Does not download any content."""
@@ -69,7 +69,6 @@ async def link_video(
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
-    await increment_video_usage(session, creator.id)
     await session.commit()
     await session.refresh(video)
     return {"video_id": str(video.id), "status": video.ingest_status.value}
@@ -81,10 +80,12 @@ async def upload_video(
     request: Request,
     youtube_video_id: str = Form(...),
     file: UploadFile = File(...),
-    creator: Creator = Depends(check_video_limit),
+    creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Upload a video file and start the ingest pipeline."""
+    await check_positive_balance(creator.id, session)
+
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
     contents = await file.read(max_bytes + 1)
     if len(contents) > max_bytes:
@@ -120,7 +121,6 @@ async def upload_video(
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
-    await increment_video_usage(session, creator.id)
     await session.commit()
     await session.refresh(video)
 

@@ -198,15 +198,214 @@ and feed it back as the strongest positive label.
 
 ---
 
-## Issue 14+: Phase 2 Backlog
+---
 
-Each becomes its own issue after the core loop ships:
-- Vision signals (MediaPipe / face-emotion)
+## BETA_DEPLOYMENT Phase (Issues 23–28)
+
+Goal: app running at a real URL, accessible to a small group of close YouTube friends.
+All code is written. These issues are infrastructure + configuration only.
+
+---
+
+## Issue 23: VM provisioning + Cloudflare DNS + HTTPS
+**Depends on**: nothing (external setup)
+**Status**: 🔲 Not started
+
+**What**: Provision a cloud VM (DigitalOcean Droplet at `147.182.136.107`), install Docker
++ Docker Compose, point `agenticlip.studio` at it via Cloudflare Tunnel (no open inbound
+ports needed), and verify HTTPS is live.
+
+**Steps**:
+- SSH into the VM; install Docker Engine + Docker Compose v2
+- Install `cloudflared`; authenticate and create a tunnel for `agenticlip.studio`
+- Configure Cloudflare DNS to route `agenticlip.studio` → tunnel (CNAME, orange cloud)
+- Write `docker-compose.prod.yml` cloudflared service (or run as systemd unit)
+- Verify the app container listens on port 80 (already configured)
+
+**Acceptance criteria**:
+- [ ] `docker compose -f docker-compose.prod.yml up -d` starts all services without errors
+- [ ] `https://agenticlip.studio/health` returns `{status: ok, postgres: ok, redis: ok}` from public internet
+- [ ] HTTPS terminates at Cloudflare; no direct port exposure on the VM (ports 80/443 not open)
+- [ ] SSH access is key-only; password auth disabled
+
+---
+
+## Issue 24: Production environment configuration
+**Depends on**: 23 (needs the domain for OAUTH_REDIRECT_URI and ALLOWED_ORIGINS)
+
+**What**: Build the production `.env` file on the VM with all required secrets, lock CORS
+and docs settings, and set GitHub Actions secrets for CI/CD.
+
+**Steps**:
+- Copy `.env.example` → `.env` on the VM at `/opt/autoclip/`; fill every required field
+- Generate `TOKEN_ENCRYPTION_KEY`: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+- Generate `JWT_SECRET_KEY`: `openssl rand -hex 32`
+- Set `ENV=production`, `ALLOWED_ORIGINS=https://agenticlip.studio`, `OAUTH_REDIRECT_URI=https://agenticlip.studio/auth/callback`
+- Set `APP_BASE_URL=https://agenticlip.studio`
+- Confirm `/docs` is disabled (`ENV=production` already gates this in `main.py`)
+- Set GitHub Actions secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `GHCR_TOKEN`
+
+**Acceptance criteria**:
+- [ ] App starts with `ENV=production`; `/docs` returns 404
+- [ ] `ALLOWED_ORIGINS` is exactly `https://agenticlip.studio` (no wildcard, no localhost)
+- [ ] `TOKEN_ENCRYPTION_KEY` and `JWT_SECRET_KEY` are unique, random, and not committed to git
+- [ ] `.env` is in `.gitignore` (verify)
+- [ ] CI/CD pipeline (`deploy.yml`) succeeds end-to-end on a manual trigger
+
+---
+
+## Issue 25: External API services provisioning
+**Depends on**: 24
+
+**What**: Create accounts and provision API keys for every external service the app requires.
+Verify all connections via `/health` and a real request.
+
+**Services to provision**:
+- **Anthropic**: API key → `ANTHROPIC_API_KEY`
+- **Voyage AI**: API key → `VOYAGE_API_KEY`
+- **Deepgram**: API key → `DEEPGRAM_API_KEY`; set `TRANSCRIPTION_BACKEND=deepgram`
+- **Cloudflare R2**: bucket `creatorclip-beta`; generate R2 API token; fill `R2_ACCOUNT_ID=997799b711c382c4de3ab1501bd2751f`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET=creatorclip-beta`; set `STORAGE_BACKEND=r2`
+- **Stripe**: live/test keys → `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`
+
+**Acceptance criteria**:
+- [ ] `GET /health` reports all services healthy with real credentials in place
+- [ ] Deepgram: a short test audio file transcribes successfully via the app
+- [ ] R2: a test file upload + download succeeds via the storage client
+- [ ] All API keys in `.env` on the VM only — none in git, none in logs
+
+---
+
+## Issue 26: Google OAuth consent screen + beta test users
+**Depends on**: 23 (needs the production domain for the redirect URI)
+
+**What**: Configure the Google Cloud project's OAuth consent screen for external users in
+Testing status, add beta testers' Google accounts as test users, and verify the full
+OAuth flow end-to-end against the production URL.
+
+**Steps**:
+- In Google Cloud Console → APIs & Services → OAuth consent screen:
+  - User type: **External**; Publishing status: **Testing** (stays in testing until public launch)
+  - Add app name (`CreatorClip`), support email, and `agenticlip.studio` as authorized domain
+  - Add scopes: `youtube.readonly`, `yt-analytics.readonly`, `userinfo.email`, `userinfo.profile`
+  - Add each beta tester's Gmail address under **Test users** (up to 100 allowed in Testing status)
+- In Credentials → OAuth 2.0 Client IDs: confirm Authorized redirect URI includes `https://agenticlip.studio/auth/callback`
+- Verify `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `.env` match this project
+
+**Acceptance criteria**:
+- [ ] At least 2 beta testers added as test users in Google Cloud Console
+- [ ] OAuth consent screen shows app name and correct scopes
+- [ ] Full OAuth flow works end-to-end: visit `https://agenticlip.studio/auth/login` → Google consent → redirect back → creator record created in DB
+- [ ] Protected routes return 401 without a session (verify with curl)
+- [ ] Cross-creator isolation test passes on the live DB
+
+---
+
+## Issue 27: YouTube API quota check + backoff verification
+**Depends on**: 25, 26
+
+**What**: Confirm the project's YouTube API daily quota is sufficient for beta usage and
+verify that the app's backoff + caching handles quota exhaustion gracefully.
+
+**Steps**:
+- Check Google Cloud Console → APIs & Services → Quotas for:
+  - YouTube Data API v3 (default: 10,000 units/day)
+  - YouTube Analytics API (default: varies)
+- Calculate expected units per active user per day (catalog fetch + per-video metrics)
+- Request a quota increase via Google Cloud Console if needed
+- Simulate a 403 and confirm `analytics.py` retries with backoff
+- Document quota limits and per-user unit cost in `docs/DECISIONS.md`
+
+**Acceptance criteria**:
+- [ ] Quota limits documented with units-per-user estimate for beta
+- [ ] Quota increase requested (or confirmed sufficient) before inviting friends
+- [ ] 403 response from YouTube API triggers exponential backoff (test passes or manual verification)
+- [ ] Quota headroom: at least 3× expected daily usage for beta group
+
+---
+
+## Issue 28: Beta go-live smoke test + friend onboarding
+**Depends on**: 23–27
+
+**What**: Run the full user journey end-to-end on the live deployment, then invite 2–3
+close YouTube friends. Monitor logs for 48 hours before expanding the invite list.
+
+**Pre-invite checklist**:
+- [ ] Full pipeline smoke test: OAuth → link a video → ingest → transcribe → signals → DNA build → clip candidates → render → review UI
+- [ ] Celery Beat tasks confirmed running: `purge_stale_source_media`, `refresh_youtube_analytics`, `poll_clip_outcomes`
+- [ ] Rate limits verified live (hit the LLM rate limit endpoint; confirm 429 response)
+- [ ] Account deletion flow works on the live DB
+- [ ] `docker compose logs --tail 200 app worker` clean (no unhandled exceptions)
+- [ ] Browser console clean on index, review, onboarding, and profile pages
+
+**Onboarding**:
+- [ ] Each friend added as a Google OAuth test user (Issue 26)
+- [ ] Share URL + brief instructions (connect YouTube, wait for DNA build, try the review queue)
+- [ ] Monitor logs for 48 hours; document any issues in `docs/PROJECT_STATE.md`
+
+**Acceptance criteria**:
+- [ ] At least 2 friends complete onboarding and generate their first clip candidates
+- [ ] No data-isolation breach between creator accounts (verified in DB)
+- [ ] No PII or tokens visible in logs
+- [ ] BETA_DEPLOYMENT phase declared done in `docs/PROJECT_STATE.md`
+
+---
+
+## PRODUCTION_DEPLOYMENT Phase (Issues 29–30)
+
+Goal: scalable, verified, publicly launchable infrastructure. Start after beta is stable.
+K8s provider decided and Helm charts written (Issue 22 — GKE Autopilot + KEDA + PgBouncer).
+Billing implemented (Issue 21 — minute packs + Stripe Checkout).
+
+---
+
+## Issue 29: Google OAuth app verification
+**Depends on**: 28 (needs a stable production URL and privacy policy live)
+
+**What**: Submit the Google OAuth consent screen for verification. Required to move from
+Testing status (100-user limit) to Published (unlimited users).
+
+**Steps**:
+- Ensure TOS and Privacy Policy pages are live at `agenticlip.studio` (already built — Issue 14)
+- Prepare scope justification for each requested YouTube scope
+- Submit for verification via Google Cloud Console → OAuth consent screen → Publish App
+- Respond to Google review team requests (this process typically takes 1–4 weeks)
+
+**Acceptance criteria**:
+- [ ] App submitted for verification
+- [ ] Publishing status changes from "Testing" to "In production"
+- [ ] OAuth flow works for a Google account NOT in the test users list
+- [ ] `docs/PROJECT_STATE.md` Pre-Public-Launch Gates: Google OAuth verification checked off
+
+---
+
+## Issue 30: Production hardening + public go-live
+**Depends on**: 29
+
+**What**: Run the full pre-public-launch checklist, load test the K8s deployment, and
+cut the first production release.
+
+**Pre-launch gates** (all must be green):
+- [ ] All items in `docs/PROJECT_STATE.md` Pre-Public-Launch Gates checked off
+- [ ] Load test: simulate 50 concurrent users running the ingest → clip pipeline; p99 latency acceptable
+- [ ] `TOKEN_ENCRYPTION_KEY` rotation runbook tested end-to-end on staging
+- [ ] `ALLOWED_ORIGINS` locked to production domain; `/docs` returns 404
+- [ ] No virality promise in any UI or API response (structural test green)
+- [ ] Monitoring + alerting live (Cloudflare Analytics + application-level error rate alert)
+- [ ] Final security review: no PII in logs, no tokens in responses, per-creator isolation confirmed
+- [ ] Account-deletion (right-to-erasure) tested on the production K8s environment
+
+**Go-live**:
+- [ ] `docs/PROJECT_STATE.md` updated: PRODUCTION_DEPLOYMENT phase declared done
+- [ ] `docs/DEPLOYMENT.md` updated with the final production runbook
+- [ ] Git tag: `v1.0.0`
+
+---
+
+## Phase 3 Backlog (post-production)
+
+Items deferred until the product is live and stable:
+- Vision signals (MediaPipe / face-emotion) — Phase 2
 - Auto-publish to YouTube Shorts (additional OAuth scope)
 - Multi-platform export (TikTok / Reels)
-- Production deployment (Kubernetes, KEDA, GPU nodes)
-- Usage-based billing (Stripe metered billing)
-- Eval harness hardening (adversarial / edge cases)
-- TOKEN_ENCRYPTION_KEY rotation runbook
 - Hot-key clipping during live recording / OBS integration
 - In-app subtitle, font, crop editor on the review surface

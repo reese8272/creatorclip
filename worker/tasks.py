@@ -164,7 +164,11 @@ async def _ingest_async(video_id: str) -> None:
         video.ingest_status = IngestStatus.running
         await session.commit()
 
+    duration_s: float | None = None
     with local_path(source_uri) as src:
+        from youtube.ingest import probe_duration_s
+
+        duration_s = probe_duration_s(src)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = Path(tmp.name)
         try:
@@ -177,6 +181,12 @@ async def _ingest_async(video_id: str) -> None:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.source_uri = audio_uri
+            if duration_s and not video.duration_s:
+                video.duration_s = duration_s
+            if duration_s:
+                from billing.ledger import deduct_minutes
+
+                await deduct_minutes(video.creator_id, duration_s, session)
             await session.commit()
 
 
