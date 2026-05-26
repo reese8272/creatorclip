@@ -1,0 +1,33 @@
+# Production overrides — supply at deploy time:
+#   helm upgrade --install creatorclip ./charts/creatorclip \
+#     -f values.prod.yaml \
+#     --set image.tag=$(git rev-parse --short HEAD)
+
+image:
+  repository: gcr.io/YOUR_PROJECT_ID/creatorclip
+  pullPolicy: Always
+
+replicaCount:
+  app: 3
+
+hpa:
+  minReplicas: 3
+  maxReplicas: 20
+
+keda:
+  maxReplicas: 50
+
+ingress:
+  host: "app.creatorclip.com"
+  tls:
+    enabled: true
+    secretName: "creatorclip-tls"
+
+externalSecret:
+  enabled: true
+  provider: "gcpsm"
+  gcpProjectId: "YOUR_GCP_PROJECT_ID"
+  secretName: "creatorclip-prod-env"
+
+pgbouncer:
+  defaultPoolSize: 50

@@ -6,8 +6,8 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none — all planned issues complete)_
-**Last completed**: Issue 19 — Account deletion / right-to-erasure (2026-05-25)
+**Active issue**: _(none — all issues complete)_
+**Last completed**: Issue 22 — Production Kubernetes deployment (2026-05-26)
 **Blocked**: _(none)_
 
 ---
@@ -35,13 +35,16 @@ Updated after every issue closes.
 | 17 | Source media purge + YouTube analytics refresh | ✅ Done | purge_stale_source_media + refresh_youtube_analytics Beat tasks; datetime fix; 13 tests pass |
 | 18 | Per-creator rate limiting | ✅ Done | slowapi + Redis; creator_id key from JWT; 10/h LLM, 20/h render, 120/min rest; 11 tests pass |
 | 19 | Account deletion (right-to-erasure) | ✅ Done | DELETE /creators/me; OAuth revoke; storage purge; cascade delete; audit log; 6 tests pass |
+| 20 | YouTube API quota hardening | ✅ Done | youtube/quota.py; atomic Lua consume; backoff in data_api; Beat refresh stops gracefully; 8 tests pass |
+| 21 | Stripe billing + plan tier enforcement | ✅ Done | billing/tiers.py; stripe_client; routers/billing.py; webhook handler; render + video-limit gates; 26 tests pass |
+| 22 | Production Kubernetes deployment | ✅ Done | Helm charts in deploy/; KEDA ScaledObject; PgBouncer sidecar; GKE Autopilot decision; deploy/README.md |
 
 ---
 
 ## Open Research Items
 
-- [ ] **Pricing model**: Usage-based tiers + Stripe metered billing. Must complete before public launch.
-- [ ] **Production deployment**: Kubernetes provider + Helm/manifests + KEDA for Celery autoscaling. Must complete before first production deploy.
+- [x] **Pricing model**: Stripe free/starter/pro tiers with webhook enforcement. Issue 21.
+- [x] **Production deployment**: GKE Autopilot + Helm + KEDA + PgBouncer. Issue 22.
 - [x] **Transcription compute**: Deepgram (hosted) for MVP; WhisperX selectable via config. Resolved 2026-05-25.
 - [ ] **YouTube API quota**: Confirm daily quota limits from Google Cloud Console for the project.
 - [ ] **Retention curve availability window**: Verify how far back retention curves are available for the target channel.
@@ -57,7 +60,7 @@ Updated after every issue closes.
 - [x] YouTube data-retention/refresh fully compliant (see `docs/COMPLIANCE.md`) — Issue 17 (Beat purge + analytics refresh)
 - [x] `TOKEN_ENCRYPTION_KEY` rotation runbook written — see `docs/RUNBOOKS.md`
 - [x] Terms of Service + Privacy Policy pages live — Issue 14 (`/static/tos.html`, `/static/privacy.html`)
-- [ ] Google OAuth app verification completed for requested scopes — external Google process
+- [ ] Google OAuth app verification completed for requested scopes — external Google process (submit now; multi-week review)
 - [x] Account-deletion endpoint (right-to-erasure: token revocation + media purge) — Issue 19
-- [ ] Billing + plan-tier columns wired — pricing research pending; Stripe metered billing
+- [x] Billing + plan-tier columns wired — Issue 21 (Stripe free/starter/pro + webhook enforcement)
 - [x] Eval harness hardened with adversarial/edge cases — 3 new fixtures: no_silence_boundary, overlapping_peaks, peak_very_early; fixed early-peak MIN_CLIP_S bug in candidates.py

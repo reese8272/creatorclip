@@ -52,20 +52,31 @@ Production Gaps.
 
 ---
 
-### Production Deployment: Kubernetes (Research Pending)
+### Production Deployment: GKE Autopilot + Helm + KEDA
 
-**What**: Docker Compose is dev/test only. Production deployment targets Kubernetes
-(EKS / GKE / DigitalOcean Kubernetes or equivalent managed service).
+**What**: GKE Autopilot is the production K8s platform. Helm charts in
+`deploy/charts/creatorclip/`. KEDA ScaledObject autoscales Celery workers on Redis
+queue depth. PgBouncer sidecar handles connection pooling. Cloud SQL for PostgreSQL 16
+(pgvector enabled). GCP Secret Manager + External Secrets Operator for secrets.
 
-**Why**: Target scale is 10k+ users. Docker Compose has no horizontal scaling, no
-rolling updates, no pod-level resource limits, and no built-in service discovery for
-multi-host. Kubernetes solves all of these. Cloudflare Tunnel can still front the ingress.
+**Why GKE Autopilot over EKS/DO**:
+- No node management — Google provisions and upgrades nodes automatically
+- Cloud SQL for PostgreSQL 16 has first-class pgvector support (vs. RDS which requires
+  custom parameter groups and is slower to enable extensions)
+- GCP Secret Manager + Workload Identity = cleanest managed-secrets story without extra agents
+- Spot node pools for transcription workers available when we add WhisperX
+- Familiarity: same provider as Cloudflare Tunnel integration already in dev
 
-**Research needed**: Managed K8s provider selection (AWS EKS vs GCP GKE vs DO),
-Helm chart vs raw manifests, Celery worker autoscaling (KEDA), and GPU node pools for
-WhisperX. Decide before the first production deploy issue.
+**KEDA vs HPA-only**: HPA on CPU is insufficient for Celery — a backlogged queue does
+not spike CPU until workers are already overwhelmed. KEDA's `redis-listLength` trigger
+scales on actual work queued, providing proactive scaling.
 
-**Source**: Creator input (10k+ scale target), 2026-05-25.
+**PgBouncer sidecar vs RDS Proxy**: Sidecar eliminates the network hop to a separate
+pooler, is free, and transaction mode allows up to 25 upstream connections per pod
+(→ 750 at 30 pods, well within Cloud SQL's 1,000 limit).
+
+**Source**: Compared providers on pgvector support, managed node overhead, secrets
+integration, and community KEDA+Celery patterns. 2026-05-26.
 
 ---
 
@@ -147,6 +158,20 @@ no event-loop conflict.
 
 **Source**: SQLAlchemy async docs "Using Asyncio" section; Celery docs recommend keeping
 task functions synchronous. 2026-05-25.
+
+---
+
+## 2026-05-26 — Stripe Billing: Subscription Tiers + Enforcement
+
+### Billing: Stripe Metered Subscriptions
+
+**What**: Stripe is the billing provider. Three tiers (free / starter / pro) stored on `Creator.plan_tier`, set by Stripe webhook. Enforcement via FastAPI dependencies at the render and video-registration endpoints. Monthly video usage tracked in the existing `usage` table.
+
+**Why**: Usage-based SaaS billing with Stripe checkout + customer portal is the industry standard. Stripe handles PCI compliance, payment retry, dunning, and tax. Our code only needs to respond to webhook events and call the Customer Portal API.
+
+**Price ID mapping**: Price IDs are config-driven (`STRIPE_STARTER_PRICE_ID`, `STRIPE_PRO_PRICE_ID`) so plans can be renamed or repriced without a code deploy.
+
+**Source**: Stripe metered billing docs; standard SaaS billing pattern. 2026-05-26.
 
 ---
 

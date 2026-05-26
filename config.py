@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
+    YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
+
+    # ── Stripe billing ────────────────────────────────────────────────────────
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_STARTER_PRICE_ID: str = ""
+    STRIPE_PRO_PRICE_ID: str = ""
+    APP_BASE_URL: str = "http://localhost:8000"
+
+    # ── Comped accounts (comma-separated emails, auto-granted pro on login) ──
+    COMPED_EMAILS: str = ""
     UPLOAD_MAX_MB: int = 500
     LOCAL_MEDIA_DIR: str = "./media"
 

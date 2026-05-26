@@ -16,6 +16,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from config import settings
 from limiter import limiter
 from routers import auth as auth_router
+from routers import billing as billing_router
 from routers import clips as clips_module
 from routers import creators as creators_router
 from routers import improvement as improvement_router
@@ -57,6 +58,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(auth_router.router)
+app.include_router(billing_router.router)
 app.include_router(creators_router.router)
 app.include_router(videos_router.router)
 app.include_router(clips_module.router)

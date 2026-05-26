@@ -1,0 +1,28 @@
+{{- if .Values.keda.enabled }}
+# KEDA ScaledObject: scales Celery workers based on Redis queue depth.
+# Install KEDA first: helm repo add kedacore https://kedacore.github.io/charts
+#                     helm install keda kedacore/keda -n keda --create-namespace
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "creatorclip.name" . }}-worker
+  labels:
+    {{- include "creatorclip.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "creatorclip.name" . }}-worker
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+  pollingInterval: 15   # check queue every 15s
+  cooldownPeriod: 60    # wait 60s before scaling down
+  triggers:
+    - type: redis
+      metadata:
+        # Redis address — for managed Redis (Upstash / Memorystore), update to the service host.
+        address: {{ .Values.redis.url | replace "redis://" "" | replace "/0" "" }}
+        listName: {{ .Values.keda.redisQueueName }}
+        # Scale up when queue depth exceeds (listLength × replicas).
+        listLength: {{ .Values.keda.queueDepthPerReplica | quote }}
+{{- end }}

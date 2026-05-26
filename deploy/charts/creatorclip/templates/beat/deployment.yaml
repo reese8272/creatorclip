@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "creatorclip.name" . }}-beat
+  labels:
+    {{- include "creatorclip.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beat
+spec:
+  # Beat MUST run as exactly 1 replica — multiple replicas cause duplicate task scheduling.
+  replicas: {{ .Values.replicaCount.beat }}
+  strategy:
+    # Recreate (not RollingUpdate) so the old beat pod is gone before the new one starts.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "creatorclip.name" . }}
+      app.kubernetes.io/component: beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "creatorclip.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: beat
+    spec:
+      containers:
+        - name: beat
+          image: {{ include "creatorclip.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - worker.celery_app
+            - beat
+            - --loglevel=info
+            - --schedule=/tmp/celerybeat-schedule
+          {{- include "creatorclip.envFrom" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.resources.beat | nindent 12 }}

@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "creatorclip.name" . }}-worker
+  labels:
+    {{- include "creatorclip.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  # Replica count is managed by KEDA when keda.enabled=true.
+  # This value is the initial count before KEDA takes over.
+  replicas: {{ .Values.keda.minReplicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "creatorclip.name" . }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "creatorclip.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: worker
+    spec:
+      terminationGracePeriodSeconds: 300  # allow long video jobs to finish
+      containers:
+        - name: worker
+          image: {{ include "creatorclip.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - worker.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency=2
+            - --max-tasks-per-child=50  # reclaim memory after 50 tasks
+          {{- include "creatorclip.envFrom" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.resources.worker | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - worker.celery_app
+                - inspect
+                - ping
+                - -d
+                - celery@$HOSTNAME
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3

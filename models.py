@@ -93,6 +93,7 @@ class Creator(Base):
     )
     plan_tier: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     subscription_status: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(sa.String(256), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
