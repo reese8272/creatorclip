@@ -150,6 +150,20 @@ task functions synchronous. 2026-05-25.
 
 ---
 
+## 2026-05-26 — Stripe Billing: Subscription Tiers + Enforcement
+
+### Billing: Stripe Metered Subscriptions
+
+**What**: Stripe is the billing provider. Three tiers (free / starter / pro) stored on `Creator.plan_tier`, set by Stripe webhook. Enforcement via FastAPI dependencies at the render and video-registration endpoints. Monthly video usage tracked in the existing `usage` table.
+
+**Why**: Usage-based SaaS billing with Stripe checkout + customer portal is the industry standard. Stripe handles PCI compliance, payment retry, dunning, and tax. Our code only needs to respond to webhook events and call the Customer Portal API.
+
+**Price ID mapping**: Price IDs are config-driven (`STRIPE_STARTER_PRICE_ID`, `STRIPE_PRO_PRICE_ID`) so plans can be renamed or repriced without a code deploy.
+
+**Source**: Stripe metered billing docs; standard SaaS billing pattern. 2026-05-26.
+
+---
+
 ## 2026-05-26 — Clip engine: extend end_s for early-peak candidates
 
 **What changed**: `clip_engine/candidates.py` — `end_s` now computed as

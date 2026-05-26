@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.tiers import require_render
 from config import settings
 from db import get_session
 from limiter import limiter
@@ -106,7 +107,7 @@ async def list_clips(
 async def render_clip(
     request: Request,
     clip_id: uuid.UUID,
-    creator: Creator = Depends(get_current_creator),
+    creator: Creator = Depends(require_render),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Queue a render job for the clip. Returns task_id."""
