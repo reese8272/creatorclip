@@ -11,6 +11,7 @@ from config import settings
 from db import get_session
 from limiter import limiter
 from models import Creator, append_audit
+from billing.stripe_client import find_active_subscription_for_email
 from youtube.oauth import (
     build_authorization_url,
     exchange_code,
@@ -71,6 +72,21 @@ async def callback(
         channel_title=identity.get("channel_title"),
     )
     await session.flush()
+
+    # Auto-link a pre-purchase Stripe subscription if one exists for this email.
+    # This runs when an early-access subscriber connects YouTube after paying.
+    if not creator.stripe_customer_id and creator.email:
+        result = find_active_subscription_for_email(creator.email)
+        if result:
+            stripe_customer_id, plan_tier, subscription_status = result
+            creator.stripe_customer_id = stripe_customer_id
+            creator.plan_tier = plan_tier
+            creator.subscription_status = subscription_status
+            logger.info(
+                "Auto-linked Stripe subscription for creator %s: tier=%s",
+                creator.id,
+                plan_tier,
+            )
 
     await store_or_update_tokens(
         session,

@@ -1,6 +1,7 @@
 """
 Billing endpoints:
   POST /billing/webhook       — Stripe webhook receiver (no auth, signature-verified)
+  POST /billing/early-access  — Pre-auth checkout for early-access subscribers (no auth)
   GET  /billing/portal        — Return Stripe Customer Portal URL for the current creator
   POST /billing/checkout      — Create a Stripe Checkout session and return the URL
   GET  /billing/status        — Return the current creator's plan tier and subscription status
@@ -10,6 +11,7 @@ import logging
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,7 +67,9 @@ async def stripe_webhook(
     event_type = event.get("type") if isinstance(event, dict) else event.type
     obj = event.get("data", {}).get("object", {}) if isinstance(event, dict) else event.data.object
 
-    if event_type in _SUBSCRIPTION_EVENTS:
+    if event_type == "checkout.session.completed":
+        await _handle_checkout_completed(obj)
+    elif event_type in _SUBSCRIPTION_EVENTS:
         await _handle_subscription_event(session, event_type, obj)
     elif event_type == "invoice.payment_failed":
         await _handle_payment_failed(session, obj)
@@ -125,6 +129,63 @@ async def _creator_by_stripe_id(session: AsyncSession, stripe_customer_id: str) 
     return result.scalar_one_or_none()
 
 
+async def _handle_checkout_completed(checkout_obj: dict) -> None:
+    """
+    Fires when a Stripe Checkout session is paid. Retrieves the Google account
+    email from the custom field and logs a prominent admin notification so the
+    user can be added as a test user in Google Cloud Console.
+    """
+    session_id = checkout_obj.get("id") if isinstance(checkout_obj, dict) else checkout_obj.id
+    customer_id = checkout_obj.get("customer") if isinstance(checkout_obj, dict) else checkout_obj.customer
+
+    google_email: str | None = None
+    try:
+        full_session = stripe.checkout.Session.retrieve(session_id, expand=["custom_fields"])
+        fields = (
+            full_session.get("custom_fields", [])
+            if isinstance(full_session, dict)
+            else (full_session.custom_fields or [])
+        )
+        for field in fields:
+            key = field.get("key") if isinstance(field, dict) else field.key
+            if key == "google_account_email":
+                text = field.get("text", {}) if isinstance(field, dict) else field.text
+                google_email = (
+                    text.get("value") if isinstance(text, dict) else getattr(text, "value", None)
+                )
+    except Exception as exc:
+        logger.warning("Could not retrieve checkout session %s custom fields: %s", session_id, exc)
+
+    # Fall back to the session's customer_details email if no custom field was collected
+    if not google_email:
+        details = (
+            checkout_obj.get("customer_details", {})
+            if isinstance(checkout_obj, dict)
+            else getattr(checkout_obj, "customer_details", None) or {}
+        )
+        google_email = (
+            details.get("email") if isinstance(details, dict) else getattr(details, "email", None)
+        )
+
+    if google_email:
+        try:
+            stripe.Customer.modify(customer_id, metadata={"google_account_email": google_email})
+        except Exception as exc:
+            logger.warning("Could not update Stripe customer metadata: %s", exc)
+
+        # Highly visible so it's impossible to miss in logs / monitoring
+        logger.info(
+            "=" * 60 + "\nNEW SUBSCRIBER — ADD TEST USER IN GOOGLE CLOUD CONSOLE\n"
+            "Email: %s\nStripe customer: %s\n" + "=" * 60,
+            google_email,
+            customer_id,
+        )
+    else:
+        logger.info(
+            "NEW SUBSCRIBER — Stripe customer %s (no Google email captured)", customer_id
+        )
+
+
 async def _get_or_create_stripe_customer(creator: Creator, session: AsyncSession) -> str:
     """Return the creator's Stripe customer ID, creating one if it doesn't exist."""
     if creator.stripe_customer_id:
@@ -137,6 +198,68 @@ async def _get_or_create_stripe_customer(creator: Creator, session: AsyncSession
     creator.stripe_customer_id = customer.id
     await session.commit()
     return customer.id
+
+
+class EarlyAccessRequest(BaseModel):
+    google_email: EmailStr
+    tier: str = "starter"
+
+
+@router.post("/early-access")
+async def early_access_checkout(body: EarlyAccessRequest) -> dict:
+    """
+    Pre-auth checkout for early-access subscribers. No YouTube connection required.
+    Creates a Stripe customer keyed to their Google account email and returns a
+    Checkout URL. After payment, the subscription is auto-linked when they connect
+    their YouTube account via OAuth.
+    """
+    if not is_configured():
+        raise HTTPException(status_code=503, detail="Billing not configured")
+
+    if body.tier not in PLAN_TIERS or body.tier == "free":
+        raise HTTPException(status_code=400, detail="Invalid tier. Choose 'starter' or 'pro'.")
+
+    price_id = (
+        settings.STRIPE_STARTER_PRICE_ID
+        if body.tier == "starter"
+        else settings.STRIPE_PRO_PRICE_ID
+    )
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"Price ID for {body.tier} not configured")
+
+    # Find or create Stripe customer keyed to their Google account email
+    existing = stripe.Customer.list(email=body.google_email, limit=1)
+    existing_list = existing.data if hasattr(existing, "data") else existing.get("data", [])
+    if existing_list:
+        customer_id = (
+            existing_list[0].id
+            if hasattr(existing_list[0], "id")
+            else existing_list[0]["id"]
+        )
+    else:
+        customer = stripe.Customer.create(
+            email=body.google_email,
+            metadata={"google_account_email": body.google_email},
+        )
+        customer_id = customer.id if hasattr(customer, "id") else customer["id"]
+
+    checkout = stripe.checkout.Session.create(
+        mode="subscription",
+        customer=customer_id,
+        line_items=[{"price": price_id, "quantity": 1}],
+        custom_fields=[
+            {
+                "key": "google_account_email",
+                "label": {"type": "custom", "custom": "Google account email"},
+                "type": "text",
+                "optional": False,
+            }
+        ],
+        success_url=f"{settings.APP_BASE_URL}/static/early-access.html?payment=success",
+        cancel_url=f"{settings.APP_BASE_URL}/static/early-access.html",
+    )
+    url = checkout.url if hasattr(checkout, "url") else checkout["url"]
+    return {"checkout_url": url}
 
 
 @router.get("/status")

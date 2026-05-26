@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CreatorClip — Early Access</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0a0a;
+      color: #f0f0f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 16px;
+      padding: 48px 40px;
+      max-width: 480px;
+      width: 100%;
+    }
+
+    .logo {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 32px;
+      color: #fff;
+    }
+    .logo span { color: #e63946; }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+
+    .sub {
+      color: #888;
+      font-size: 15px;
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    .tiers {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .tier {
+      flex: 1;
+      border: 2px solid #222;
+      border-radius: 10px;
+      padding: 16px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      text-align: center;
+    }
+    .tier.selected { border-color: #e63946; }
+    .tier:hover { border-color: #444; }
+    .tier .name { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+    .tier .price { font-size: 22px; font-weight: 700; color: #fff; }
+    .tier .price span { font-size: 13px; font-weight: 400; color: #888; }
+    .tier .features { font-size: 12px; color: #666; margin-top: 6px; line-height: 1.5; }
+
+    label {
+      display: block;
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    input[type="email"] {
+      width: 100%;
+      background: #0a0a0a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: #f0f0f0;
+      font-size: 15px;
+      outline: none;
+      margin-bottom: 16px;
+      transition: border-color 0.15s;
+    }
+    input[type="email"]:focus { border-color: #444; }
+    input[type="email"]::placeholder { color: #444; }
+
+    .btn {
+      width: 100%;
+      background: #e63946;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+
+    .notice {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 13px;
+      color: #888;
+      line-height: 1.6;
+      margin-top: 20px;
+    }
+    .notice strong { color: #aaa; }
+
+    .error { color: #e63946; font-size: 13px; margin-top: 8px; display: none; }
+
+    /* Success state */
+    .success-state { display: none; text-align: center; }
+    .success-state .check {
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+    .success-state h2 { font-size: 24px; font-weight: 700; margin-bottom: 12px; }
+    .success-state p { color: #888; line-height: 1.7; font-size: 15px; }
+    .success-state .steps {
+      text-align: left;
+      margin-top: 24px;
+      background: #0a0a0a;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .success-state .steps li {
+      color: #ccc;
+      font-size: 14px;
+      margin-bottom: 10px;
+      padding-left: 8px;
+      line-height: 1.5;
+    }
+    .connect-btn {
+      display: block;
+      margin-top: 24px;
+      width: 100%;
+      background: #fff;
+      color: #0a0a0a;
+      border: none;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Creator<span>Clip</span></div>
+
+  <!-- Payment form -->
+  <div id="form-state">
+    <h1>Get Early Access</h1>
+    <p class="sub">
+      The AI editor that learns your channel — clips your best moments,
+      scores them against your own audience, and gets smarter every time you use it.
+    </p>
+
+    <div class="tiers">
+      <div class="tier selected" data-tier="starter" onclick="selectTier('starter')">
+        <div class="name">Starter</div>
+        <div class="price">$29<span>/mo</span></div>
+        <div class="features">20 videos/mo<br>Full clip engine<br>Render + export</div>
+      </div>
+      <div class="tier" data-tier="pro" onclick="selectTier('pro')">
+        <div class="name">Pro</div>
+        <div class="price">$79<span>/mo</span></div>
+        <div class="features">Unlimited videos<br>Priority processing<br>Everything in Starter</div>
+      </div>
+    </div>
+
+    <label for="email">Your Google account email</label>
+    <input
+      type="email"
+      id="email"
+      placeholder="you@gmail.com"
+      autocomplete="email"
+    />
+
+    <button class="btn" id="pay-btn" onclick="startCheckout()">
+      Continue to payment
+    </button>
+    <div class="error" id="error-msg"></div>
+
+    <div class="notice">
+      <strong>During beta:</strong> After payment you'll receive access within a few hours.
+      When you connect YouTube you'll see a "Google hasn't verified this app" warning —
+      click <strong>Advanced → Go to CreatorClip</strong> to proceed. This is normal while
+      we complete Google's verification process.
+    </div>
+  </div>
+
+  <!-- Success state -->
+  <div class="success-state" id="success-state">
+    <div class="check">✓</div>
+    <h2>You're in.</h2>
+    <p>Your payment went through. Here's what happens next:</p>
+    <div class="steps">
+      <ol>
+        <li><strong>We'll activate your access</strong> — usually within a few hours, often faster.</li>
+        <li><strong>Connect your YouTube channel</strong> below. You'll see an "unverified app" warning — click Advanced → Go to CreatorClip to continue.</li>
+        <li><strong>Your subscription kicks in automatically</strong> — no manual setup needed once you connect.</li>
+      </ol>
+    </div>
+    <a href="/auth/login" class="connect-btn">Connect YouTube →</a>
+  </div>
+</div>
+
+<script>
+  let selectedTier = 'starter';
+
+  function selectTier(tier) {
+    selectedTier = tier;
+    document.querySelectorAll('.tier').forEach(el => el.classList.remove('selected'));
+    document.querySelector(`[data-tier="${tier}"]`).classList.add('selected');
+  }
+
+  // Show success state if redirected back from Stripe
+  if (new URLSearchParams(window.location.search).get('payment') === 'success') {
+    document.getElementById('form-state').style.display = 'none';
+    document.getElementById('success-state').style.display = 'block';
+  }
+
+  async function startCheckout() {
+    const email = document.getElementById('email').value.trim();
+    const errorEl = document.getElementById('error-msg');
+    const btn = document.getElementById('pay-btn');
+
+    errorEl.style.display = 'none';
+
+    if (!email || !email.includes('@')) {
+      errorEl.textContent = 'Please enter a valid Google account email.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Redirecting…';
+
+    try {
+      const resp = await fetch('/billing/early-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ google_email: email, tier: selectedTier }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.detail || 'Something went wrong');
+      }
+      window.location.href = data.checkout_url;
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Continue to payment';
+    }
+  }
+</script>
+</body>
+</html>
