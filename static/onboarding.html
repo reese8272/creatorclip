@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CreatorClip — Setup</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/static/auth.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0;
+           display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 40px 16px; }
+    h1 { font-size: 1.6rem; margin-bottom: 8px; }
+    .sub { color: #888; font-size: 0.9rem; margin-bottom: 32px; text-align: center; }
+    .disclaimer { background: #1a1a2e; border-left: 3px solid #6c63ff;
+                  padding: 8px 14px; font-size: 0.75rem; color: #aaa; max-width: 480px; width: 100%; margin-bottom: 24px; }
+    .card { background: #1e1e1e; border-radius: 10px; padding: 24px; max-width: 480px; width: 100%; margin-bottom: 16px; }
+    .card h2 { font-size: 1rem; margin-bottom: 12px; color: #ccc; }
+    .status { font-size: 0.85rem; color: #aaa; margin-bottom: 16px; }
+    .status .ok  { color: #2ecc71; }
+    .status .wait { color: #f39c12; }
+    button {
+      padding: 10px 24px; border-radius: 6px; border: none;
+      font-size: 0.9rem; cursor: pointer; font-weight: 600; width: 100%;
+    }
+    .btn-primary { background: #6c63ff; color: #fff; }
+    .btn-secondary { background: #333; color: #e0e0e0; margin-top: 8px; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #dna-status { font-size: 0.8rem; color: #aaa; margin-top: 8px; min-height: 20px; text-align: center; }
+  </style>
+</head>
+<body>
+  <nav style="display:flex;align-items:center;gap:24px;padding:14px 24px;background:#161616;border-bottom:1px solid #2a2a2a;margin-bottom:0">
+    <a href="/" style="font-weight:700;color:#6c63ff;font-size:1.05rem;text-decoration:none">CreatorClip</a>
+    <div style="margin-left:auto">
+      <a href="#" style="font-size:0.8rem;color:#888;text-decoration:none" onclick="logout()">Logout</a>
+    </div>
+  </nav>
+
+  <h1 style="margin-top:32px;text-align:center">Set up CreatorClip</h1>
+  <p class="sub">Connect your channel once. We learn the rest from your data.</p>
+
+  <div class="disclaimer">
+    CreatorClip predicts fit with your style and audience — it does not promise virality.
+  </div>
+
+  <!-- Step 1: Connect YouTube -->
+  <div class="card">
+    <h2>1. Connect your YouTube channel</h2>
+    <p class="status" id="auth-status">
+      <span class="wait">Not connected</span>
+    </p>
+    <button class="btn-primary" onclick="window.location='/auth/login'">Connect YouTube</button>
+  </div>
+
+  <!-- Step 2: Data gate -->
+  <div class="card">
+    <h2>2. Channel data</h2>
+    <p class="status" id="data-gate-status">
+      Checking…
+    </p>
+    <button class="btn-secondary" id="refresh-data-btn"
+            hx-get="/creators/me/data-gate"
+            hx-target="#data-gate-status"
+            hx-swap="innerHTML"
+            hx-trigger="click">
+      Refresh data status
+    </button>
+  </div>
+
+  <!-- Step 3: Build DNA -->
+  <div class="card">
+    <h2>3. Build your Creator DNA</h2>
+    <p class="status">
+      Analyses your top &amp; bottom performers to generate a personalised brief.
+    </p>
+    <button class="btn-primary" id="build-dna-btn" onclick="buildDna()">
+      Build Creator DNA
+    </button>
+    <div id="dna-status"></div>
+  </div>
+
+  <!-- Step 4: Confirm DNA -->
+  <div class="card">
+    <h2>4. Review &amp; confirm your brief</h2>
+    <p class="status">
+      Check your Creator Brief, then confirm to activate personalised clip scoring.
+    </p>
+    <button class="btn-secondary" onclick="window.location='/static/profile.html'">
+      View &amp; confirm brief →
+    </button>
+  </div>
+
+  <script>
+    async function buildDna() {
+      const btn = document.getElementById('build-dna-btn');
+      const status = document.getElementById('dna-status');
+      btn.disabled = true;
+      status.textContent = 'Building DNA… this takes ~30 seconds.';
+      try {
+        const resp = await fetch('/creators/me/dna/build', {
+          method: 'POST', credentials: 'include'
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          status.textContent = `Queued (task ${data.task_id}). Refresh in ~30s.`;
+        } else {
+          status.textContent = data.detail || 'Error — check data gate first.';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        status.textContent = 'Network error — try again.';
+        btn.disabled = false;
+      }
+    }
+
+    document.addEventListener('auth:ready', (e) => {
+      const user = e.detail;
+      const el = document.getElementById('auth-status');
+      if (user) {
+        el.innerHTML = `<span class="ok">Connected as ${user.channel_title || user.email || 'your channel'}</span>`;
+      }
+    });
+  </script>
+</body>
+</html>

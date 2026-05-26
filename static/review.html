@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CreatorClip — Review</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/static/auth.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+    nav {
+      display: flex; align-items: center; gap: 24px;
+      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
+    }
+    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
+    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
+    nav a:hover, nav a.active { color: #e0e0e0; }
+    nav .right { margin-left: auto; }
+
+    .disclaimer {
+      background: #1a1a2e; border-left: 3px solid #6c63ff;
+      padding: 8px 14px; font-size: 0.75rem; color: #aaa;
+    }
+
+    .player-wrap {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 16px; padding: 24px 16px;
+    }
+
+    video {
+      max-width: 360px; width: 100%; aspect-ratio: 9/16;
+      background: #000; border-radius: 8px;
+    }
+
+    .meta { font-size: 0.8rem; color: #888; text-align: center; }
+    .principle { font-size: 0.75rem; color: #6c63ff; font-style: italic; text-align: center; }
+
+    /* Trim handles */
+    .trim-section { width: 100%; max-width: 360px; }
+    .trim-section label { font-size: 0.75rem; color: #aaa; display: block; margin-bottom: 4px; }
+    .trim-row { display: flex; align-items: center; gap: 8px; }
+    input[type=range] { flex: 1; accent-color: #6c63ff; }
+    .trim-val { font-size: 0.75rem; color: #ccc; width: 42px; text-align: right; }
+
+    /* Action buttons */
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button {
+      padding: 10px 20px; border-radius: 6px; border: none;
+      font-size: 0.9rem; cursor: pointer; font-weight: 600;
+    }
+    .btn-up   { background: #2ecc71; color: #000; }
+    .btn-down { background: #e74c3c; color: #fff; }
+    .btn-skip { background: #555; color: #fff; }
+    .btn-trim { background: #6c63ff; color: #fff; }
+    button:active { opacity: 0.8; }
+
+    .next-wrap { text-align: center; padding: 8px 0; }
+    .btn-next { background: #333; color: #e0e0e0; font-size: 0.85rem; padding: 8px 28px; }
+
+    #feedback-flash {
+      text-align: center; font-size: 0.8rem; color: #2ecc71;
+      min-height: 20px; padding: 4px;
+    }
+  </style>
+</head>
+<body>
+<nav>
+  <a class="brand" href="/">CreatorClip</a>
+  <a href="/">Dashboard</a>
+  <a href="/static/review.html" class="active">Review</a>
+  <a href="/static/insights.html">Insights</a>
+  <a href="/static/profile.html">Profile</a>
+  <div class="right">
+    <a href="#" style="font-size:0.8rem;color:#888" onclick="logout()">Logout</a>
+  </div>
+</nav>
+
+<div class="disclaimer">
+  CreatorClip predicts fit with your style and audience — it does not promise virality.
+  All scores are estimates grounded in your own channel data.
+</div>
+
+<div class="player-wrap">
+  <video id="clip-player" controls playsinline></video>
+
+  <div class="meta" id="clip-meta">Loading clip…</div>
+  <div class="principle" id="clip-principle"></div>
+
+  <div class="trim-section">
+    <label>Trim start</label>
+    <div class="trim-row">
+      <input type="range" id="trim-start" min="0" max="100" step="0.1" value="0">
+      <span class="trim-val" id="trim-start-val">0.0s</span>
+    </div>
+    <label style="margin-top:8px">Trim end</label>
+    <div class="trim-row">
+      <input type="range" id="trim-end" min="0" max="100" step="0.1" value="100">
+      <span class="trim-val" id="trim-end-val">—</span>
+    </div>
+  </div>
+
+  <div id="feedback-flash"></div>
+
+  <div class="actions">
+    <button class="btn-up"   onclick="sendFeedback('upvote')">👍 Keep</button>
+    <button class="btn-down" onclick="sendFeedback('downvote')">👎 Drop</button>
+    <button class="btn-skip" onclick="sendFeedback('skip')">Skip</button>
+    <button class="btn-trim" onclick="sendFeedback('trim')">✂ Trim</button>
+  </div>
+
+  <div class="next-wrap">
+    <button class="btn-next" onclick="loadNext()">Next clip →</button>
+  </div>
+</div>
+
+<script>
+  let clips = [];
+  let currentIndex = 0;
+  let currentClip = null;
+
+  const player    = document.getElementById('clip-player');
+  const metaEl    = document.getElementById('clip-meta');
+  const princEl   = document.getElementById('clip-principle');
+  const trimStart = document.getElementById('trim-start');
+  const trimEnd   = document.getElementById('trim-end');
+  const startVal  = document.getElementById('trim-start-val');
+  const endVal    = document.getElementById('trim-end-val');
+  const flash     = document.getElementById('feedback-flash');
+
+  document.addEventListener('auth:ready', async () => {
+    const params = new URLSearchParams(window.location.search);
+    const videoId = params.get('video_id');
+    if (!videoId) {
+      metaEl.textContent = 'No video selected — go to Dashboard to pick a video.';
+      return;
+    }
+    const resp = await fetch(`/videos/${videoId}/clips`, { credentials: 'include' });
+    if (!resp.ok) {
+      metaEl.textContent = 'Could not load clips for this video.';
+      return;
+    }
+    const data = await resp.json();
+    clips = data.clips || [];
+    if (clips.length) {
+      loadClip(clips[0]);
+    } else {
+      metaEl.textContent = 'No clips yet — generate them from the Dashboard.';
+    }
+  });
+
+  function loadClip(clip) {
+    currentClip = clip;
+    if (clip.render_uri) {
+      player.src = clip.render_uri;
+      player.load();
+      player.play().catch(() => {});
+    } else {
+      player.src = '';
+      metaEl.textContent += ' (not yet rendered)';
+    }
+    const dur = (clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1);
+    metaEl.textContent = `Clip #${clip.rank ?? currentIndex + 1} · ${dur}s · score ${(clip.score || 0).toFixed(2)}`;
+    princEl.textContent = clip.principle ? `Principle: ${clip.principle}` : '';
+
+    const clipDur = clip.end_s - clip.start_s;
+    trimStart.min = 0; trimStart.max = clipDur; trimStart.value = 0;
+    trimEnd.min = 0;   trimEnd.max = clipDur;   trimEnd.value = clipDur;
+    startVal.textContent = '0.0s';
+    endVal.textContent   = clipDur.toFixed(1) + 's';
+  }
+
+  trimStart.addEventListener('input', () => {
+    startVal.textContent = parseFloat(trimStart.value).toFixed(1) + 's';
+  });
+  trimEnd.addEventListener('input', () => {
+    endVal.textContent = parseFloat(trimEnd.value).toFixed(1) + 's';
+  });
+
+  async function sendFeedback(action) {
+    if (!currentClip) return;
+    const body = { action };
+    if (action === 'trim') {
+      body.trim_start_s = parseFloat(trimStart.value);
+      body.trim_end_s   = parseFloat(trimEnd.value);
+    }
+    try {
+      const resp = await fetch(`/clips/${currentClip.id}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'include',
+      });
+      if (resp.ok) {
+        flash.textContent = action === 'trim' ? 'Trim saved ✓' : `${action} recorded ✓`;
+        setTimeout(() => { flash.textContent = ''; }, 1500);
+        if (action !== 'trim') loadNext();
+      }
+    } catch (e) {
+      flash.textContent = 'Error — try again';
+    }
+  }
+
+  function loadNext() {
+    currentIndex++;
+    if (currentIndex < clips.length) {
+      loadClip(clips[currentIndex]);
+    } else {
+      metaEl.textContent = 'All clips reviewed! Great work.';
+      player.src = '';
+      princEl.textContent = '';
+      flash.textContent = '';
+      setTimeout(() => { window.location = '/'; }, 2000);
+    }
+  }
+</script>
+</body>
+</html>

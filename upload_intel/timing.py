@@ -1,0 +1,54 @@
+"""
+Compute best upload windows from audience_activity rows.
+Pure deterministic logic — no LLM.
+"""
+
+_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+
+def best_upload_windows(
+    activity_rows: list,
+    top_n: int = 3,
+) -> list[dict]:
+    """
+    Return the top_n audience activity windows sorted by activity_index descending.
+
+    Each result: {day_of_week, day_name, hour, activity_index, label}
+    Returns [] if no activity data is available.
+    """
+    if not activity_rows:
+        return []
+
+    sorted_rows = sorted(activity_rows, key=lambda r: r.activity_index, reverse=True)[:top_n]
+
+    results = []
+    for row in sorted_rows:
+        hour = int(row.hour)
+        period = "AM" if hour < 12 else "PM"
+        display_hour = hour if hour <= 12 else hour - 12
+        display_hour = 12 if display_hour == 0 else display_hour
+        results.append(
+            {
+                "day_of_week": int(row.day_of_week),
+                "day_name": _DAY_NAMES[int(row.day_of_week)],
+                "hour": hour,
+                "label": f"{_DAY_NAMES[int(row.day_of_week)]} {display_hour}:00 {period}",
+                "activity_index": float(row.activity_index),
+            }
+        )
+    return results
+
+
+def optimal_gap_hours(activity_rows: list) -> float | None:
+    """
+    Estimate optimal hours between uploads from gap between top-3 activity peaks.
+    Returns None if < 2 activity rows.
+    """
+    if len(activity_rows) < 2:
+        return None
+    top = sorted(activity_rows, key=lambda r: r.activity_index, reverse=True)[:3]
+    times = sorted(r.day_of_week * 24 + r.hour for r in top)
+    if len(times) < 2:
+        return None
+    gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+    return sum(gaps) / len(gaps)

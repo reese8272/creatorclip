@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CreatorClip — Your DNA</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/static/auth.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+    nav {
+      display: flex; align-items: center; gap: 24px;
+      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
+    }
+    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
+    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
+    nav a:hover, nav a.active { color: #e0e0e0; }
+    nav .right { margin-left: auto; }
+    .page-content { max-width: 680px; margin: 0 auto; padding: 32px 16px; }
+    .disclaimer { background: #1a1a2e; border-left: 3px solid #6c63ff;
+                  padding: 8px 14px; font-size: 0.75rem; color: #aaa; margin-bottom: 24px; }
+    h1 { font-size: 1.5rem; margin-bottom: 4px; }
+    .version-badge { font-size: 0.75rem; color: #888; margin-bottom: 24px; }
+    .brief-box {
+      background: #1e1e1e; border-radius: 8px; padding: 20px;
+      white-space: pre-wrap; font-size: 0.875rem; line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+    .stat { background: #1e1e1e; border-radius: 6px; padding: 12px 16px; flex: 1; min-width: 120px; }
+    .stat .label { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat .value { font-size: 1.1rem; font-weight: 700; color: #e0e0e0; margin-top: 4px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    button { padding: 10px 20px; border-radius: 6px; border: none; font-size: 0.9rem;
+             cursor: pointer; font-weight: 600; }
+    .btn-confirm { background: #2ecc71; color: #000; }
+    .btn-rebuild { background: #333; color: #e0e0e0; }
+    #confirm-status { font-size: 0.8rem; margin-top: 10px; color: #aaa; min-height: 20px; }
+  </style>
+</head>
+<body>
+<nav>
+  <a class="brand" href="/">CreatorClip</a>
+  <a href="/">Dashboard</a>
+  <a href="/static/review.html">Review</a>
+  <a href="/static/insights.html">Insights</a>
+  <a href="/static/profile.html" class="active">Profile</a>
+  <div class="right">
+    <a href="#" style="font-size:0.8rem;color:#888" onclick="logout()">Logout</a>
+  </div>
+</nav>
+
+<div class="page-content">
+  <div class="disclaimer">
+    CreatorClip predicts fit with your style and audience — it does not promise virality.
+    This brief is grounded in your own channel data.
+  </div>
+
+  <h1>Your Creator DNA</h1>
+  <div class="version-badge" id="version-badge">Loading…</div>
+
+  <div class="brief-box" id="brief-content">Loading your creator brief…</div>
+
+  <div class="stats" id="stats-row"></div>
+
+  <div class="actions">
+    <button class="btn-confirm" onclick="confirmDna()">✓ Confirm &amp; activate</button>
+    <button class="btn-rebuild" onclick="rebuildDna()">↺ Rebuild DNA</button>
+  </div>
+  <div id="confirm-status"></div>
+
+  <script>
+    async function loadDna() {
+      const resp = await fetch('/creators/me/dna', { credentials: 'include' });
+      const data = await resp.json();
+      if (!data.profile) {
+        document.getElementById('brief-content').textContent = data.message || 'No DNA yet.';
+        document.getElementById('version-badge').textContent = '';
+        return;
+      }
+      const p = data.profile;
+      document.getElementById('version-badge').textContent =
+        `Version ${p.version} · ${p.status} · ${new Date(p.created_at).toLocaleDateString()}`;
+      document.getElementById('brief-content').textContent = p.brief_text || '(no brief text)';
+
+      const stats = [];
+      if (p.optimal_clip_len_s) stats.push({ label: 'Optimal clip', value: p.optimal_clip_len_s.toFixed(0) + 's' });
+      if (p.best_source_region)  stats.push({ label: 'Best region',  value: p.best_source_region.replace('_', ' ') });
+      if (p.optimal_upload_gap_h) stats.push({ label: 'Upload gap',  value: p.optimal_upload_gap_h.toFixed(1) + 'h' });
+      const row = document.getElementById('stats-row');
+      stats.forEach(s => {
+        row.innerHTML += `<div class="stat"><div class="label">${s.label}</div><div class="value">${s.value}</div></div>`;
+      });
+    }
+
+    async function confirmDna() {
+      const status = document.getElementById('confirm-status');
+      const resp = await fetch('/creators/me/dna/confirm', {
+        method: 'POST', credentials: 'include'
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        status.textContent = `✓ DNA v${data.version} confirmed and active! Redirecting…`;
+        status.style.color = '#2ecc71';
+        setTimeout(() => { window.location = '/'; }, 1500);
+      } else {
+        status.textContent = data.detail || 'Error confirming.';
+      }
+    }
+
+    async function rebuildDna() {
+      const status = document.getElementById('confirm-status');
+      const resp = await fetch('/creators/me/dna/build', {
+        method: 'POST', credentials: 'include'
+      });
+      if (resp.ok) {
+        status.textContent = 'Rebuild queued. Come back in ~30 seconds.';
+      }
+    }
+
+    document.addEventListener('auth:ready', loadDna);
+  </script>
+</div>
+</body>
+</html>

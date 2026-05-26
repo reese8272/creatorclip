@@ -1,0 +1,25 @@
+scenario: overlapping_peaks
+description: >
+  Two retention spikes only 8s apart (92s and 100s), well within the minimum
+  clip window. The engine must NOT produce two separate clips whose windows
+  overlap — it should emit at most one candidate covering this region.
+  Verifies the deduplication / window-overlap guard.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 180.0
+    events:
+      - {type: silence,         start_s: 78.0, end_s: 81.0}
+      - {type: energy_spike,    start_s: 81.0, end_s: 93.0, value: 0.9}
+      - {type: retention_spike, start_s: 92.0, end_s: 94.0, value: 1.6}
+      - {type: retention_spike, start_s: 100.0, end_s: 102.0, value: 1.4}
+
+expected:
+  # The two peaks are 8s apart; one clip should cover both rather than
+  # producing two overlapping short clips.
+  max_candidates_in_window:
+    window_start_s: 80.0
+    window_end_s: 115.0
+    max: 1
+  all_setup_before_peak: true

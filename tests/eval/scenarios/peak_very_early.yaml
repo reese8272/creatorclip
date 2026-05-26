@@ -1,0 +1,22 @@
+scenario: peak_very_early
+description: >
+  Retention spike at 12s — very close to the start of the video. The backward
+  lookback window would extend before t=0. The engine must clamp setup_start_s
+  to >= 0 and still produce a valid candidate rather than crashing or skipping.
+  Verifies the t=0 boundary guard.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 120.0
+    events:
+      - {type: energy_spike,    start_s: 5.0,  end_s: 13.0, value: 0.8}
+      - {type: retention_spike, start_s: 12.0, end_s: 14.0, value: 1.7}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 10.0
+      peak_s_max: 16.0
+      # Must be clamped to start of video — never negative
+      setup_start_s_max: 5.0

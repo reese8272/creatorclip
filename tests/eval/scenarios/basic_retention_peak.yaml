@@ -1,0 +1,25 @@
+scenario: basic_retention_peak
+description: >
+  Retention spike at 91s with energy buildup starting at 76s and a silence
+  boundary at 73-76s. The clip must start at or before the energy spike start
+  (76s), NOT at the peak (91s). This verifies principle #2: clip the setup,
+  not the aftermath.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 180.0
+    events:
+      - {type: silence,         start_s: 73.0, end_s: 76.0}
+      - {type: energy_spike,    start_s: 76.0, end_s: 91.0, value: 0.9}
+      - {type: laughter,        start_s: 85.0, end_s: 87.0, value: 0.7}
+      - {type: retention_spike, start_s: 91.0, end_s: 93.0, value: 1.6}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 85.0
+      peak_s_max: 95.0
+      # setup_start_s must be at or before the silence end (76s),
+      # proving the clip starts at the setup — never the aftermath
+      setup_start_s_max: 76.5

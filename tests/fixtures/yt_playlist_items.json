@@ -1,0 +1,31 @@
+{
+  "kind": "youtube#playlistItemListResponse",
+  "etag": "test_etag",
+  "pageInfo": {"totalResults": 2, "resultsPerPage": 50},
+  "items": [
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "test_etag",
+      "id": "playlist_item_1",
+      "snippet": {
+        "publishedAt": "2026-01-15T12:00:00Z",
+        "channelId": "UC_test_channel",
+        "title": "Long Form Video",
+        "resourceId": {"kind": "youtube#video", "videoId": "video_long_1"},
+        "playlistId": "UU_test_channel"
+      }
+    },
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "test_etag",
+      "id": "playlist_item_2",
+      "snippet": {
+        "publishedAt": "2026-02-01T10:00:00Z",
+        "channelId": "UC_test_channel",
+        "title": "Short Video",
+        "resourceId": {"kind": "youtube#video", "videoId": "video_short_1"},
+        "playlistId": "UU_test_channel"
+      }
+    }
+  ]
+}

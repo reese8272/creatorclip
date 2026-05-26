@@ -1,0 +1,19 @@
+{
+  "kind": "youtube#videoListResponse",
+  "etag": "test_etag",
+  "pageInfo": {"totalResults": 2, "resultsPerPage": 50},
+  "items": [
+    {
+      "kind": "youtube#video",
+      "etag": "test_etag",
+      "id": "video_long_1",
+      "contentDetails": {"duration": "PT12M34S", "caption": "true"}
+    },
+    {
+      "kind": "youtube#video",
+      "etag": "test_etag",
+      "id": "video_short_1",
+      "contentDetails": {"duration": "PT58S", "caption": "false"}
+    }
+  ]
+}

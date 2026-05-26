@@ -1,0 +1,56 @@
+import sys
+
+from pydantic import ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # --- Required ---
+    ANTHROPIC_API_KEY: str
+    DATABASE_URL: str
+    REDIS_URL: str
+    GOOGLE_OAUTH_CLIENT_ID: str
+    GOOGLE_OAUTH_CLIENT_SECRET: str
+    OAUTH_REDIRECT_URI: str
+    TOKEN_ENCRYPTION_KEY: str
+    JWT_SECRET_KEY: str
+    ALLOWED_ORIGINS: str
+
+    # --- Optional with defaults ---
+    VOYAGE_API_KEY: str = ""
+    JWT_EXPIRY_MINUTES: int = 60
+    TRANSCRIPTION_BACKEND: str = "deepgram"
+    DEEPGRAM_API_KEY: str = ""
+    ASSEMBLYAI_API_KEY: str = ""
+    WHISPER_MODEL: str = "large-v3"
+    STORAGE_BACKEND: str = "local"
+    R2_ACCOUNT_ID: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET: str = ""
+    SOURCE_MEDIA_RETENTION_HOURS: int = 72
+    CLIPS_PER_VIDEO_DEFAULT: int = 8
+    MIN_VIDEOS_FOR_DNA: int = 10
+    MIN_SHORTS_FOR_DNA: int = 5
+    PERSONALIZATION_THRESHOLD_LABELS: int = 20
+    LLM_TIMEOUT_SECONDS: int = 120
+    ENV: str = "development"
+    YTDLP_ENABLED: bool = False
+    UPLOAD_MAX_MB: int = 500
+    LOCAL_MEDIA_DIR: str = "./media"
+
+
+try:
+    settings = Settings()
+except ValidationError as exc:
+    missing = [str(e["loc"][0]) for e in exc.errors() if e["type"] == "missing"]
+    if missing:
+        print(
+            f"[CreatorClip] Missing required environment variables: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"[CreatorClip] Configuration error:\n{exc}", file=sys.stderr)
+    sys.exit(1)

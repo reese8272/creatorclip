@@ -1,0 +1,22 @@
+scenario: multi_peak_ordering
+description: >
+  Two retention spikes at 60s and 130s with preceding silences.
+  Verifies that both peaks produce candidates and that each
+  setup_start_s is strictly less than its peak_s.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 200.0
+    events:
+      - {type: silence,         start_s: 45.0, end_s: 48.0}
+      - {type: energy_spike,    start_s: 48.0, end_s: 61.0, value: 0.8}
+      - {type: retention_spike, start_s: 61.0, end_s: 63.0, value: 1.4}
+      - {type: silence,         start_s: 115.0, end_s: 118.0}
+      - {type: energy_spike,    start_s: 118.0, end_s: 131.0, value: 0.7}
+      - {type: retention_spike, start_s: 131.0, end_s: 133.0, value: 1.5}
+
+expected:
+  min_candidates: 2
+  # All candidates must satisfy setup_start_s < peak_s
+  all_setup_before_peak: true

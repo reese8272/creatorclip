@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CreatorClip — Insights</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/static/auth.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+
+    nav {
+      display: flex; align-items: center; gap: 24px;
+      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
+    }
+    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
+    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
+    nav a:hover { color: #e0e0e0; }
+    nav .right { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+
+    .disclaimer {
+      background: #1a1a2e; border-left: 3px solid #6c63ff;
+      padding: 8px 24px; font-size: 0.75rem; color: #aaa;
+    }
+
+    main { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
+    h2 { font-size: 1.1rem; margin-bottom: 16px; color: #ccc; }
+
+    .card { background: #1e1e1e; border-radius: 10px; padding: 24px; margin-bottom: 24px; }
+    .card h3 { font-size: 0.95rem; color: #ccc; margin-bottom: 16px; }
+
+    .window-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 0; border-bottom: 1px solid #2a2a2a; font-size: 0.88rem;
+    }
+    .window-row:last-child { border-bottom: none; }
+    .window-label { color: #e0e0e0; }
+    .window-score { color: #6c63ff; font-weight: 600; }
+    .gap-value { font-size: 1.4rem; font-weight: 700; color: #2ecc71; }
+
+    .btn { padding: 10px 24px; border-radius: 6px; border: none;
+           font-size: 0.9rem; cursor: pointer; font-weight: 600; }
+    .btn-primary { background: #6c63ff; color: #fff; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #brief-output {
+      white-space: pre-wrap; font-size: 0.85rem; line-height: 1.65;
+      color: #d0d0d0; margin-top: 16px; min-height: 40px;
+    }
+    .loading { color: #888; font-size: 0.85rem; font-style: italic; }
+    .error { color: #e74c3c; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a class="brand" href="/">CreatorClip</a>
+    <a href="/">Dashboard</a>
+    <a href="/static/review.html">Review</a>
+    <a href="/static/insights.html" style="color:#e0e0e0">Insights</a>
+    <a href="/static/profile.html">Profile</a>
+    <div class="right">
+      <a href="#" style="font-size:0.8rem;color:#888" onclick="logout()">Logout</a>
+    </div>
+  </nav>
+
+  <div class="disclaimer">
+    CreatorClip predicts fit with your style and audience — it does not promise virality.
+    Recommendations are estimates grounded in your own data, not guarantees.
+  </div>
+
+  <main>
+    <!-- Upload timing -->
+    <div class="card">
+      <h3>Best upload windows</h3>
+      <div id="timing-content" class="loading">Loading…</div>
+      <div id="gap-section" style="margin-top:20px;display:none">
+        <div style="font-size:0.8rem;color:#888;margin-bottom:4px">Optimal gap between long-form → Short</div>
+        <div class="gap-value" id="gap-value"></div>
+      </div>
+    </div>
+
+    <!-- Improvement brief -->
+    <div class="card">
+      <h3>Content improvement brief</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:16px">
+        Uses live web research + your channel data. Takes ~15 seconds.
+      </p>
+      <button class="btn btn-primary" id="brief-btn" onclick="loadBrief()">
+        Generate brief
+      </button>
+      <div id="brief-output"></div>
+    </div>
+  </main>
+
+  <script>
+    async function logout() {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+      window.location = '/auth/login';
+    }
+
+    async function init() {
+      const resp = await fetch('/creators/me/upload-intel', { credentials: 'include' });
+      const el = document.getElementById('timing-content');
+      if (!resp.ok) {
+        el.innerHTML = '<span class="error">Could not load timing data.</span>';
+        return;
+      }
+      const data = await resp.json();
+      if (!data.data_available || !data.best_windows.length) {
+        el.innerHTML = '<span style="color:#888">Not enough audience activity data yet. Connect your channel and sync data first.</span>';
+        return;
+      }
+
+      el.innerHTML = data.best_windows.map(w => `
+        <div class="window-row">
+          <span class="window-label">${w.day_name} ${w.label}</span>
+          <span class="window-score">${(w.activity_index * 100).toFixed(0)}% activity</span>
+        </div>
+      `).join('');
+
+      if (data.optimal_gap_hours != null) {
+        document.getElementById('gap-section').style.display = 'block';
+        document.getElementById('gap-value').textContent = `${data.optimal_gap_hours.toFixed(1)} hours`;
+      }
+    }
+
+    async function loadBrief() {
+      const btn = document.getElementById('brief-btn');
+      const out = document.getElementById('brief-output');
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      out.textContent = '';
+
+      const resp = await fetch('/creators/me/improvement-brief', { credentials: 'include' });
+      if (!resp.ok) {
+        out.innerHTML = '<span class="error">Failed to generate brief — try again.</span>';
+        btn.disabled = false; btn.textContent = 'Retry';
+        return;
+      }
+      const data = await resp.json();
+      out.textContent = data.brief;
+      btn.textContent = 'Regenerate';
+      btn.disabled = false;
+    }
+
+    document.addEventListener('auth:ready', init);
+  </script>
+</body>
+</html>

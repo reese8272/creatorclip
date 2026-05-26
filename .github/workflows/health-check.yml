@@ -1,0 +1,51 @@
+name: Production health check
+
+on:
+  # Run every 30 minutes to catch silent degradation
+  schedule:
+    - cron: "*/30 * * * *"
+  # Allow manual trigger (useful after a deploy)
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Base URL to check (overrides PRODUCTION_URL secret)"
+        required: false
+        type: string
+
+jobs:
+  health:
+    name: /health probe
+    runs-on: ubuntu-latest
+    # Only run against a real deployment — skip if secret is not configured
+    if: vars.PRODUCTION_URL != '' || github.event.inputs.url != ''
+
+    steps:
+      - name: Resolve target URL
+        id: url
+        run: |
+          TARGET="${{ github.event.inputs.url || vars.PRODUCTION_URL }}"
+          echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
+
+      - name: Probe /health
+        id: probe
+        run: |
+          RESPONSE=$(curl -sf --max-time 10 "${{ steps.url.outputs.target }}/health")
+          echo "response=${RESPONSE}" >> "$GITHUB_OUTPUT"
+          echo "$RESPONSE" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert d.get('status') == 'ok', f'status not ok: {d}'
+          assert d.get('postgres') == 'ok', f'postgres degraded: {d}'
+          assert d.get('redis') == 'ok', f'redis degraded: {d}'
+          print('All systems ok:', d)
+          "
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          echo "::error::Health check FAILED for ${{ steps.url.outputs.target }}"
+          echo "Response was: ${{ steps.probe.outputs.response }}"
+          # In production, replace this step with your alerting integration
+          # (PagerDuty, Slack webhook, etc.) by adding a step here that
+          # posts to SLACK_WEBHOOK_URL or PAGERDUTY_KEY secrets.
+          exit 1

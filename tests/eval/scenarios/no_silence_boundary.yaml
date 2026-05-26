@@ -1,0 +1,23 @@
+scenario: no_silence_boundary
+description: >
+  Retention spike at 80s but NO preceding silence event. The engine must
+  still produce a candidate by falling back to the energy-spike start or the
+  maximum lookback window — it must NOT start at the peak itself.
+  Verifies robustness when silence detection produced no boundary.
+
+input:
+  timeline:
+    version: 1
+    duration_s: 150.0
+    events:
+      - {type: energy_spike,    start_s: 60.0, end_s: 81.0, value: 0.85}
+      - {type: retention_spike, start_s: 80.0, end_s: 82.0, value: 1.5}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 75.0
+      peak_s_max: 85.0
+      # Without a silence marker the engine falls back to energy spike start.
+      # Clip must still begin well before the peak — max 5s before peak.
+      setup_start_s_max: 75.0

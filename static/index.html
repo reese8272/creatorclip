@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CreatorClip — Dashboard</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/static/auth.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+
+    nav {
+      display: flex; align-items: center; gap: 24px;
+      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
+    }
+    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
+    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
+    nav a:hover { color: #e0e0e0; }
+    nav .right { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+    nav .user { font-size: 0.8rem; color: #888; }
+
+    .disclaimer {
+      background: #1a1a2e; border-left: 3px solid #6c63ff;
+      padding: 8px 24px; font-size: 0.75rem; color: #aaa;
+    }
+
+    main { max-width: 860px; margin: 0 auto; padding: 32px 16px; }
+    h2 { font-size: 1.1rem; margin-bottom: 16px; color: #ccc; }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .card { background: #1e1e1e; border-radius: 10px; padding: 20px; }
+    .card .label { font-size: 0.75rem; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+    .card .value { font-size: 1.6rem; font-weight: 700; }
+    .card .sub   { font-size: 0.8rem; color: #888; margin-top: 4px; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
+    .badge-done    { background: #1a3a1a; color: #2ecc71; }
+    .badge-running { background: #3a2a00; color: #f39c12; }
+    .badge-pending { background: #2a2a2a; color: #888; }
+    .badge-failed  { background: #3a1a1a; color: #e74c3c; }
+    .badge-dna     { background: #1a1a3a; color: #6c63ff; }
+
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .btn { padding: 8px 18px; border-radius: 6px; border: none; font-size: 0.85rem;
+           cursor: pointer; font-weight: 600; text-decoration: none; display: inline-block; }
+    .btn-primary { background: #6c63ff; color: #fff; }
+    .btn-secondary { background: #2a2a2a; color: #e0e0e0; }
+    .btn:hover { opacity: 0.85; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 8px 12px; color: #888; font-weight: 500; border-bottom: 1px solid #2a2a2a; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1a1a1a; vertical-align: middle; }
+    tr:hover td { background: #1a1a1a; }
+    .yt-id { color: #888; font-size: 0.8rem; font-family: monospace; }
+    .title-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    #link-form { display: flex; gap: 10px; margin-top: 8px; }
+    #link-form input {
+      flex: 1; padding: 9px 12px; border-radius: 6px; border: 1px solid #333;
+      background: #1e1e1e; color: #e0e0e0; font-size: 0.85rem;
+    }
+
+    .dna-cta { background: #1a1a3a; border: 1px solid #2a2a5a; border-radius: 10px;
+               padding: 18px 20px; margin-bottom: 28px; display: flex; align-items: center;
+               justify-content: space-between; gap: 16px; }
+    .dna-cta p { font-size: 0.88rem; color: #aaa; }
+    .empty { color: #555; font-size: 0.88rem; padding: 24px 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a class="brand" href="/">CreatorClip</a>
+    <a href="/static/review.html">Review</a>
+    <a href="/static/insights.html">Insights</a>
+    <a href="/static/profile.html">Profile</a>
+    <div class="right">
+      <span class="user" id="nav-user"></span>
+      <a href="#" class="btn btn-secondary" style="font-size:0.8rem;padding:6px 12px" onclick="logout()">Logout</a>
+    </div>
+  </nav>
+
+  <div class="disclaimer">
+    CreatorClip predicts fit with your style and audience — it does not promise virality.
+    Recommendations are estimates grounded in your own data, not guarantees.
+  </div>
+
+  <main>
+    <!-- DNA CTA (hidden once active) -->
+    <div class="dna-cta" id="dna-cta" style="display:none">
+      <p id="dna-cta-text">Build your Creator DNA to unlock personalised clip scoring.</p>
+      <a href="/static/onboarding.html" class="btn btn-primary">Set up →</a>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="label">Creator DNA</div>
+        <div class="value" id="dna-status">—</div>
+        <div class="sub" id="dna-version"></div>
+      </div>
+      <div class="card">
+        <div class="label">Videos</div>
+        <div class="value" id="video-count">—</div>
+        <div class="sub">in library</div>
+      </div>
+      <div class="card">
+        <div class="label">Clips ready</div>
+        <div class="value" id="clips-ready">—</div>
+        <div class="sub"><a href="/static/review.html" style="color:#6c63ff">Review queue →</a></div>
+      </div>
+    </div>
+
+    <!-- Link a video -->
+    <div class="section-header">
+      <h2>Link a video</h2>
+    </div>
+    <div id="link-form">
+      <input id="yt-id-input" type="text" placeholder="YouTube video ID (e.g. dQw4w9WgXcQ)" />
+      <button class="btn btn-primary" onclick="linkVideo()">Link video</button>
+    </div>
+    <p id="link-status" style="font-size:0.8rem;color:#888;margin-top:8px;min-height:18px"></p>
+
+    <!-- Video list -->
+    <div class="section-header" style="margin-top:32px">
+      <h2>Your videos</h2>
+    </div>
+    <table id="video-table">
+      <thead>
+        <tr>
+          <th>Title / ID</th>
+          <th>Kind</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="video-tbody">
+        <tr><td colspan="4" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script>
+    const STATUS_BADGE = {
+      pending: 'badge-pending', running: 'badge-running',
+      done: 'badge-done', failed: 'badge-failed'
+    };
+
+    async function logout() {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+      window.location = '/auth/login';
+    }
+
+    async function init(me) {
+
+      document.getElementById('nav-user').textContent = me.channel_title || me.email || '';
+
+      // DNA status
+      const state = me.onboarding_state;
+      if (state !== 'active') {
+        document.getElementById('dna-cta').style.display = 'flex';
+        if (state === 'dna_pending') {
+          document.getElementById('dna-cta-text').textContent = 'Your DNA is ready — confirm your Creator Brief to activate personalised scoring.';
+          document.querySelector('#dna-cta a').href = '/static/profile.html';
+        }
+      }
+
+      const dnaResp = await fetch('/creators/me/dna', { credentials: 'include' });
+      if (dnaResp.ok) {
+        const dna = await dnaResp.json();
+        document.getElementById('dna-status').innerHTML = `<span class="badge badge-dna">${dna.status}</span>`;
+        document.getElementById('dna-version').textContent = `v${dna.version}`;
+      } else {
+        document.getElementById('dna-status').textContent = 'Not built';
+      }
+
+      await loadVideos();
+    }
+
+    async function loadVideos() {
+      const resp = await fetch('/videos', { credentials: 'include' });
+      if (!resp.ok) return;
+      const videos = await resp.json();
+
+      document.getElementById('video-count').textContent = videos.length;
+
+      const tbody = document.getElementById('video-tbody');
+      if (!videos.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No videos yet — link one above.</td></tr>';
+        document.getElementById('clips-ready').textContent = '0';
+        return;
+      }
+
+      let clipsReadyCount = 0;
+      const rows = await Promise.all(videos.map(async v => {
+        let clipsHtml = '';
+        if (v.ingest_status === 'done') {
+          const cr = await fetch(`/videos/${v.id}/clips`, { credentials: 'include' });
+          if (cr.ok) {
+            const clips = await cr.json();
+            if (clips.length) {
+              clipsReadyCount += clips.length;
+              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary" style="font-size:0.78rem;padding:4px 10px">${clips.length} clips</a>`;
+            } else {
+              clipsHtml = `<button class="btn btn-primary" style="font-size:0.78rem;padding:4px 10px" onclick="generateClips('${v.id}',this)">Generate clips</button>`;
+            }
+          }
+        }
+        const badge = STATUS_BADGE[v.ingest_status] || 'badge-pending';
+        return `<tr data-video-id="${v.id}" data-status="${v.ingest_status}">
+          <td>
+            <div class="title-cell">${v.title || '—'}</div>
+            <div class="yt-id">${v.youtube_video_id}</div>
+          </td>
+          <td>${v.kind}</td>
+          <td><span class="badge ${badge}">${v.ingest_status}</span></td>
+          <td>${clipsHtml}</td>
+        </tr>`;
+      }));
+      tbody.innerHTML = rows.join('');
+      document.getElementById('clips-ready').textContent = clipsReadyCount;
+      startPolling();
+    }
+
+    async function linkVideo() {
+      const ytId = document.getElementById('yt-id-input').value.trim();
+      const status = document.getElementById('link-status');
+      if (!ytId) { status.textContent = 'Enter a YouTube video ID.'; return; }
+
+      status.textContent = 'Linking…';
+      const resp = await fetch('/videos/link', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `youtube_video_id=${encodeURIComponent(ytId)}`
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        status.textContent = `Linked (${data.video_id}). Refresh to see it in the list.`;
+        document.getElementById('yt-id-input').value = '';
+        await loadVideos();
+      } else {
+        status.textContent = data.detail || 'Error linking video.';
+      }
+    }
+
+    async function generateClips(videoId, btn) {
+      btn.disabled = true; btn.textContent = 'Generating…';
+      const resp = await fetch(`/videos/${videoId}/clips/generate`, {
+        method: 'POST', credentials: 'include'
+      });
+      if (resp.ok) {
+        btn.textContent = 'Queued ✓';
+        setTimeout(loadVideos, 3000);
+      } else {
+        btn.disabled = false; btn.textContent = 'Retry';
+      }
+    }
+
+    document.addEventListener('auth:ready', (e) => init(e.detail));
+
+    // Poll status for in-progress videos every 5s
+    let _pollTimer = null;
+    function startPolling() {
+      if (_pollTimer) return;
+      _pollTimer = setInterval(async () => {
+        const rows = document.querySelectorAll('[data-video-id][data-status]');
+        const inProgress = [...rows].filter(r =>
+          r.dataset.status === 'pending' || r.dataset.status === 'running'
+        );
+        if (!inProgress.length) { clearInterval(_pollTimer); _pollTimer = null; return; }
+        for (const row of inProgress) {
+          const resp = await fetch(`/videos/${row.dataset.videoId}/status`, { credentials: 'include' });
+          if (!resp.ok) continue;
+          const data = await resp.json();
+          if (data.ingest_status !== row.dataset.status) await loadVideos();
+        }
+      }, 5000);
+    }
+  </script>
+</body>
+</html>
