@@ -14,6 +14,7 @@ from datetime import UTC
 from pathlib import Path
 
 from db import AsyncSessionLocal
+from youtube.quota import QuotaExhaustedError, remaining
 from models import (
     Clip,
     ClipOutcome,
@@ -502,6 +503,13 @@ async def _refresh_youtube_analytics_async() -> None:
         result = await session.execute(select(Creator))
         creators = list(result.scalars())
 
+        quota_left = await remaining()
+        logger.info(
+            "Starting analytics refresh for %d creator(s); quota remaining: %d units",
+            len(creators),
+            quota_left,
+        )
+
         for creator in creators:
             try:
                 access_token = await get_valid_access_token(creator.id, session)
@@ -519,6 +527,13 @@ async def _refresh_youtube_analytics_async() -> None:
                 await sync_audience_data(session, creator, access_token)
                 await session.commit()
                 logger.info("Refreshed analytics for creator %s", creator.id)
+            except QuotaExhaustedError:
+                logger.warning(
+                    "YouTube quota exhausted during analytics refresh — stopping early. "
+                    "Remaining creators will be refreshed in tomorrow's run."
+                )
+                await session.rollback()
+                break
             except Exception as exc:
                 logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
                 await session.rollback()

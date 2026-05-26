@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
+    YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
     UPLOAD_MAX_MB: int = 500
     LOCAL_MEDIA_DIR: str = "./media"
 

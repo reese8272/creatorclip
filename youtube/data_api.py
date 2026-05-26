@@ -4,11 +4,25 @@ YouTube Data API v3 helpers.
 All external HTTP calls go through _get_json() so tests can patch a single point.
 """
 
+import asyncio
+import logging
+import random
 import re
 
 import httpx
 
 from models import VideoKind
+from youtube.quota import (
+    COST_DATA_CAPTIONS,
+    COST_DATA_CHANNELS,
+    COST_DATA_PLAYLIST_ITEMS,
+    COST_DATA_VIDEOS,
+    consume,
+)
+
+logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 4
 
 _YOUTUBE_V3 = "https://www.googleapis.com/youtube/v3"
 _MAX_RESULTS = 50
@@ -31,12 +45,28 @@ def classify_video_kind(duration_s: float) -> VideoKind:
     return VideoKind.short if duration_s <= 60 else VideoKind.long
 
 
-async def _get_json(access_token: str, url: str, params: dict) -> dict:
+async def _get_json(access_token: str, url: str, params: dict, cost: int = COST_DATA_VIDEOS) -> dict:
+    await consume(cost)
     headers = {"Authorization": f"Bearer {access_token}"}
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        return resp.json()
+    delay = 1.0
+
+    for attempt in range(_MAX_RETRIES):
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers=headers, params=params)
+
+        if resp.status_code not in (403, 429):
+            resp.raise_for_status()
+            return resp.json()
+
+        if attempt < _MAX_RETRIES - 1:
+            jitter = random.uniform(0, delay * 0.3)
+            await asyncio.sleep(delay + jitter)
+            delay *= 2
+        else:
+            logger.warning("YouTube Data API %s returned %s after %d retries", url, resp.status_code, _MAX_RETRIES)
+
+    resp.raise_for_status()
+    return {}  # unreachable
 
 
 async def get_uploads_playlist_id(access_token: str) -> str:
@@ -44,6 +74,7 @@ async def get_uploads_playlist_id(access_token: str) -> str:
         access_token,
         f"{_YOUTUBE_V3}/channels",
         {"part": "contentDetails", "mine": "true"},
+        cost=COST_DATA_CHANNELS,
     )
     items = data.get("items", [])
     if not items:
@@ -66,7 +97,7 @@ async def list_channel_videos(access_token: str) -> list[dict]:
         if page_token:
             params["pageToken"] = page_token
 
-        data = await _get_json(access_token, f"{_YOUTUBE_V3}/playlistItems", params)
+        data = await _get_json(access_token, f"{_YOUTUBE_V3}/playlistItems", params, cost=COST_DATA_PLAYLIST_ITEMS)
         for item in data.get("items", []):
             snippet = item.get("snippet", {})
             resource_id = snippet.get("resourceId", {})
@@ -113,6 +144,7 @@ async def check_captions_available(access_token: str, video_id: str) -> bool:
         access_token,
         f"{_YOUTUBE_V3}/captions",
         {"part": "snippet", "videoId": video_id},
+        cost=COST_DATA_CAPTIONS,
     )
     return bool(data.get("items"))
 

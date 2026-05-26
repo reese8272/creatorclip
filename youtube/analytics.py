@@ -16,6 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from youtube.quota import COST_ANALYTICS_REPORT, consume
 from models import (
     AudienceActivity,
     Creator,
@@ -35,6 +36,7 @@ _MAX_RETRIES = 4
 
 
 async def _fetch_report(access_token: str, params: dict) -> dict:
+    await consume(COST_ANALYTICS_REPORT)
     headers = {"Authorization": f"Bearer {access_token}"}
     delay = 1.0
 

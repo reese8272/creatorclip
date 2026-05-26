@@ -207,6 +207,7 @@ def test_analytics_refresh_iterates_creators():
                 "youtube.analytics.sync_video_analytics", new_callable=AsyncMock
             ) as mock_sync_vid,
             patch("youtube.analytics.sync_audience_data", new_callable=AsyncMock) as mock_sync_aud,
+            patch("worker.tasks.remaining", new_callable=AsyncMock, return_value=5000),
         ):
             session = AsyncMock()
             session.execute = AsyncMock(side_effect=[creators_result, videos_result])
@@ -246,6 +247,7 @@ def test_analytics_refresh_skips_creator_on_token_error():
                 "youtube.analytics.sync_video_analytics", new_callable=AsyncMock
             ) as mock_sync_vid,
             patch("youtube.analytics.sync_audience_data", new_callable=AsyncMock) as mock_sync_aud,
+            patch("worker.tasks.remaining", new_callable=AsyncMock, return_value=5000),
         ):
             session = AsyncMock()
             session.execute = AsyncMock(return_value=creators_result)
