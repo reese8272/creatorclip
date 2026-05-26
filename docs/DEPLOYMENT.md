@@ -32,25 +32,18 @@ pytest -m integration
 
 Docker Compose is **dev/test only**. Production at 10k+ scale requires Kubernetes.
 
-### Research Pending
+### Decisions Made (see `docs/DECISIONS.md` for full rationale)
 
-The following must be decided and documented in `docs/DECISIONS.md` before the first
-production deployment:
-
-- [ ] **Managed K8s provider**: AWS EKS vs GCP GKE vs DigitalOcean Kubernetes. Evaluate on
-  cost, managed node pools, GPU node support for WhisperX, and team familiarity.
-- [ ] **Ingress + TLS**: Cloudflare Tunnel (already used for dev) or Cloudflare Load Balancer +
-  nginx-ingress.
-- [ ] **Celery worker autoscaling**: KEDA (Kubernetes Event-Driven Autoscaling) with Redis
-  queue depth as the scaling metric. Research KEDA + Celery integration.
-- [ ] **GPU node pool for WhisperX**: Spot/preemptible GPU nodes for transcription workers.
-  Alternative: dedicated hosted transcription (Deepgram/AssemblyAI) to avoid GPU management.
-- [ ] **Database**: Managed PostgreSQL (RDS, Cloud SQL, or DO Managed Postgres) with pgvector
-  extension support. Confirm pgvector support on each provider.
-- [ ] **Helm vs raw manifests**: Helm charts for repeatable deploys.
-- [ ] **Secrets management**: Kubernetes Secrets + external secrets operator (Doppler / AWS
-  Secrets Manager / GCP Secret Manager).
-- [ ] **Connection pooling**: PgBouncer sidecar or RDS Proxy for 10k+ concurrent DB connections.
+- [x] **Managed K8s provider**: GKE Autopilot — lowest-ops, no node management, Cloud SQL
+  supports pgvector, Secret Manager integrates cleanly.
+- [x] **Ingress + TLS**: nginx-ingress + Cloudflare Tunnel; TLS terminated at Cloudflare.
+- [x] **Celery worker autoscaling**: KEDA with Redis `listLength` trigger on the `celery` queue.
+- [x] **GPU / transcription**: Deepgram (hosted) for MVP; WhisperX selectable via config for
+  self-hosted GPU cost optimization later. No GPU nodes needed at launch.
+- [x] **Database**: Cloud SQL for PostgreSQL 16; pgvector extension enabled post-provision.
+- [x] **Helm charts**: Written in `deploy/charts/creatorclip/`. See `deploy/README.md`.
+- [x] **Secrets management**: GCP Secret Manager + External Secrets Operator syncs to K8s.
+- [x] **Connection pooling**: PgBouncer sidecar in the app pod, transaction mode, 25 conns/pod.
 
 ### Preliminary Production Architecture (subject to research)
 

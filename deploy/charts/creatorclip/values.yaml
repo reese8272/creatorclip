@@ -1,0 +1,96 @@
+# Default values — override in values.prod.yaml or via --set on deploy.
+
+image:
+  repository: gcr.io/YOUR_PROJECT_ID/creatorclip
+  tag: latest
+  pullPolicy: Always
+
+replicaCount:
+  app: 2
+  beat: 1
+
+# Resource limits for each component.
+# Tune after observing real usage; these are conservative starting points.
+resources:
+  app:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  worker:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  beat:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "250m"
+      memory: "512Mi"
+
+# Horizontal Pod Autoscaler for the FastAPI app.
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# KEDA ScaledObject for Celery workers — scales on Redis queue depth.
+keda:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 20
+  # Scale up when the Celery queue has more than this many tasks per worker replica.
+  queueDepthPerReplica: "5"
+  # Name of the Celery default queue key in Redis.
+  redisQueueName: "celery"
+
+# Ingress (nginx-ingress + Cloudflare Tunnel or external LB).
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "app.creatorclip.com"
+  # TLS is terminated at Cloudflare; internal traffic can be HTTP.
+  # Set tls.enabled=true if terminating TLS at the ingress.
+  tls:
+    enabled: false
+    secretName: "creatorclip-tls"
+
+# Service configuration for the FastAPI app.
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+# Redis — use a managed service in production (Upstash / Cloud Memorystore).
+# Set this to the Redis connection URL from your managed provider.
+redis:
+  url: "redis://redis-service:6379/0"
+
+# External secrets — reference your GCP Secret Manager / Doppler project.
+# The secret named here must contain all required env vars as key/value pairs.
+# Create with: kubectl create secret generic creatorclip-env --from-env-file=.env
+externalSecret:
+  enabled: false
+  provider: "gcpsm"           # gcpsm | doppler | aws
+  gcpProjectId: "YOUR_GCP_PROJECT_ID"
+  secretName: "creatorclip-prod-env"
+  k8sSecretName: "creatorclip-env"
+
+# When externalSecret.enabled=false, set these directly (dev/staging only).
+# In production always use externalSecret or mount from a secrets manager.
+envSecretName: "creatorclip-env"
+
+# PgBouncer connection pooler sidecar for the app deployment.
+pgbouncer:
+  enabled: true
+  image: "bitnami/pgbouncer:1.22.0"
+  poolMode: "transaction"
+  maxClientConn: 1000
+  defaultPoolSize: 25
