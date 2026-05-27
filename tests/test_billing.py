@@ -13,12 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from billing.ledger import (
     check_positive_balance,
     deduct_minutes,
-    get_balance,
     grant_minutes,
     video_minutes,
 )
-from billing.packs import PACKS, PURCHASABLE_PACKS, Pack
-
+from billing.packs import PACKS, PURCHASABLE_PACKS
 
 # ── Pack definitions ──────────────────────────────────────────────────────────
 
@@ -43,7 +41,7 @@ def test_pack_per_minute_rate_decreases_with_volume():
     for i in range(len(rates) - 1):
         assert rates[i] > rates[i + 1], (
             f"{purchasable[i].id} ({rates[i]:.3f}) should cost more per min than "
-            f"{purchasable[i+1].id} ({rates[i+1]:.3f})"
+            f"{purchasable[i + 1].id} ({rates[i + 1]:.3f})"
         )
 
 
@@ -58,9 +56,9 @@ def test_pack_price_usd():
 @pytest.mark.parametrize(
     "duration_s,expected",
     [
-        (0.0, 1),      # minimum 1
-        (60.0, 1),     # exactly 1 minute
-        (61.0, 2),     # just over = round up
+        (0.0, 1),  # minimum 1
+        (60.0, 1),  # exactly 1 minute
+        (61.0, 2),  # just over = round up
         (90.0, 2),
         (3600.0, 60),  # 1 hour
         (3601.0, 61),
@@ -84,9 +82,7 @@ def mock_session():
 async def test_grant_minutes_adds_to_balance(mock_session):
     creator_id = uuid.uuid4()
     mock_session.execute = AsyncMock()
-    await grant_minutes(
-        creator_id, 60, "trial", mock_session, pack_id="trial"
-    )
+    await grant_minutes(creator_id, 60, "trial", mock_session, pack_id="trial")
     mock_session.add.assert_called_once()
     mock_session.execute.assert_called_once()
 
@@ -176,7 +172,11 @@ def test_checkout_invalid_pack(client):
         mock_auth.return_value = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
         response = client.post(
             "/billing/checkout",
-            json={"pack_id": "nonexistent", "success_url": "http://x/ok", "cancel_url": "http://x/no"},
+            json={
+                "pack_id": "nonexistent",
+                "success_url": "http://x/ok",
+                "cancel_url": "http://x/no",
+            },
         )
     assert response.status_code in (400, 401)
 
@@ -199,12 +199,14 @@ def test_webhook_ignores_unknown_event_type(client):
         "type": "payment_intent.created",
         "data": {"object": {}},
     }
-    with patch("routers.billing.construct_webhook_event", return_value=fake_event):
-        with patch("routers.billing.get_session"):
-            response = client.post(
-                "/billing/webhook",
-                content=json.dumps(fake_event).encode(),
-                headers={"stripe-signature": "sig"},
-            )
+    with (
+        patch("routers.billing.construct_webhook_event", return_value=fake_event),
+        patch("routers.billing.get_session"),
+    ):
+        response = client.post(
+            "/billing/webhook",
+            content=json.dumps(fake_event).encode(),
+            headers={"stripe-signature": "sig"},
+        )
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"

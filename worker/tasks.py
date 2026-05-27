@@ -14,7 +14,6 @@ from datetime import UTC
 from pathlib import Path
 
 from db import AsyncSessionLocal
-from youtube.quota import QuotaExhaustedError, remaining
 from models import (
     Clip,
     ClipOutcome,
@@ -29,6 +28,7 @@ from models import (
     VideoMetrics,
 )
 from worker.celery_app import celery
+from youtube.quota import QuotaExhaustedError, remaining
 
 logger = logging.getLogger(__name__)
 

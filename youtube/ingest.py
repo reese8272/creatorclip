@@ -23,9 +23,13 @@ _AUDIO_SAMPLE_RATE = 16000
 def probe_duration_s(path: str | Path) -> float | None:
     """Return the duration of a media file in seconds via ffprobe, or None on failure."""
     cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
         str(path),
     ]
     try:

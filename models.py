@@ -435,7 +435,9 @@ class MinutePack(Base):
     pack_id: Mapped[str] = mapped_column(sa.String(32), nullable=False)
     minutes_granted: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     price_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
-    stripe_session_id: Mapped[str | None] = mapped_column(sa.String(128), nullable=True, unique=True)
+    stripe_session_id: Mapped[str | None] = mapped_column(
+        sa.String(128), nullable=True, unique=True
+    )
     reason: Mapped[str] = mapped_column(sa.String(64), nullable=False)  # "trial" | "purchase"
     granted_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)

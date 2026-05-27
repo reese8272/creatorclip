@@ -55,9 +55,7 @@ def create_checkout_session(
         "success_url": success_url,
         "cancel_url": cancel_url,
         "metadata": {"creator_id": creator_id, "pack_id": pack_id},
-        "payment_intent_data": {
-            "metadata": {"creator_id": creator_id, "pack_id": pack_id}
-        },
+        "payment_intent_data": {"metadata": {"creator_id": creator_id, "pack_id": pack_id}},
     }
     if stripe_customer_id:
         params["customer"] = stripe_customer_id
@@ -70,6 +68,4 @@ def create_checkout_session(
 
 
 def construct_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
-    return stripe.Webhook.construct_event(
-        payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
-    )
+    return stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_WEBHOOK_SECRET)

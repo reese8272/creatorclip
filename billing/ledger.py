@@ -25,9 +25,7 @@ def video_minutes(duration_s: float) -> int:
 
 
 async def get_balance(creator_id: uuid.UUID, session: AsyncSession) -> int:
-    balance = await session.scalar(
-        select(Creator.minutes_balance).where(Creator.id == creator_id)
-    )
+    balance = await session.scalar(select(Creator.minutes_balance).where(Creator.id == creator_id))
     if balance is None:
         raise HTTPException(status_code=404, detail="Creator not found")
     return balance
@@ -86,13 +84,10 @@ async def deduct_minutes(
         raise HTTPException(
             status_code=402,
             detail=(
-                "Insufficient minutes balance. "
-                "Purchase a pack at /pricing to continue processing."
+                "Insufficient minutes balance. Purchase a pack at /pricing to continue processing."
             ),
         )
-    logger.info(
-        "billing deduct creator=%s minutes=%d remaining=%d", creator_id, minutes, row[0]
-    )
+    logger.info("billing deduct creator=%s minutes=%d remaining=%d", creator_id, minutes, row[0])
     return minutes
 
 
@@ -102,8 +97,5 @@ async def check_positive_balance(creator_id: uuid.UUID, session: AsyncSession) -
     if balance <= 0:
         raise HTTPException(
             status_code=402,
-            detail=(
-                "No minutes remaining. "
-                "Purchase a pack at /pricing to process videos."
-            ),
+            detail=("No minutes remaining. Purchase a pack at /pricing to process videos."),
         )

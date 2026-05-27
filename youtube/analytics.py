@@ -16,7 +16,6 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from youtube.quota import COST_ANALYTICS_REPORT, consume
 from models import (
     AudienceActivity,
     Creator,
@@ -28,6 +27,7 @@ from models import (
     VideoMetrics,
 )
 from youtube.data_api import get_videos_metadata, list_channel_videos
+from youtube.quota import COST_ANALYTICS_REPORT, consume
 
 logger = logging.getLogger(__name__)
 

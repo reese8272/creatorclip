@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from billing.ledger import get_balance, grant_minutes
-from billing.packs import PURCHASABLE_PACKS, Pack
+from billing.packs import PURCHASABLE_PACKS
 from billing.stripe_client import construct_webhook_event, create_checkout_session
 from config import settings
 from db import get_session

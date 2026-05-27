@@ -26,9 +26,21 @@ jobs:
   test:
     name: Unit tests (pytest)
     runs-on: ubuntu-latest
-    # Unit tests are fully self-contained — conftest.py injects fake creds and
-    # all external services are mocked via FastAPI dependency_overrides.
-    # Integration tests (marker: integration) run separately against a real stack.
+    # conftest.py injects fake creds and DB/external APIs are overridden, but the
+    # slowapi rate limiter talks to a real Redis (no in-memory fallback), so the
+    # unit suite needs a Redis service. conftest defaults REDIS_URL to
+    # redis://localhost:6379/0, which maps to the service below.
+    # Integration tests (marker: integration) run separately against a full stack.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 

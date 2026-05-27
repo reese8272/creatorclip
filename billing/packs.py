@@ -26,12 +26,12 @@ class Pack:
 
 # Ordered from smallest to largest for display purposes.
 ALL_PACKS: list[Pack] = [
-    Pack("trial",   "Free Trial", 60,   0),
-    Pack("starter", "Starter",    200,  1800),
-    Pack("regular", "Regular",    500,  4000),
-    Pack("creator", "Creator",    1000, 7000),
-    Pack("pro",     "Pro",        2000, 11000),
-    Pack("studio",  "Studio",     5000, 22500),
+    Pack("trial", "Free Trial", 60, 0),
+    Pack("starter", "Starter", 200, 1800),
+    Pack("regular", "Regular", 500, 4000),
+    Pack("creator", "Creator", 1000, 7000),
+    Pack("pro", "Pro", 2000, 11000),
+    Pack("studio", "Studio", 5000, 22500),
 ]
 
 PACKS: dict[str, Pack] = {p.id: p for p in ALL_PACKS}
