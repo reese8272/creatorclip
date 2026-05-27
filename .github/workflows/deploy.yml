@@ -9,7 +9,7 @@ on:
 
 jobs:
   deploy:
-    name: SSH deploy → autoclip.studio
+    name: SSH deploy → agenticlip.studio
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     environment: production
@@ -44,6 +44,12 @@ jobs:
 
             # Pull latest images
             docker compose -f docker-compose.prod.yml pull
+
+            # Preflight: fail the deploy BEFORE migrating or cutting over if any
+            # required secret is missing/invalid or Postgres/Redis is unreachable.
+            # Output is redacted (no secret values printed). See docs/SECRETS.md.
+            docker compose -f docker-compose.prod.yml run --rm app \
+              python scripts/doctor.py
 
             # Run DB migrations before cutting over traffic
             docker compose -f docker-compose.prod.yml run --rm app \

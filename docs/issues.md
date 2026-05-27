@@ -401,6 +401,37 @@ cut the first production release.
 
 ---
 
+## Issue 31: Operability kit — secrets registry, preflight doctor, deploy hardening, auto-heal
+**Depends on**: nothing (cross-cuts the BETA phase)
+**Status**: ✅ Done (2026-05-27)
+
+**What**: Make secrets and deploys legible and reliable. A single secrets registry, a redacted
+preflight validator, faster/more-consistent deploys, and container auto-recovery.
+
+**Delivered**:
+- `docs/SECRETS.md` — canonical registry of every secret/config value (what, where it lives, how
+  to get/rotate) + the creatorclip/autoclip/agenticlip naming map.
+- `scripts/doctor.py` (+ `tests/test_doctor.py`) — presence + format + live checks with redacted
+  output; non-zero exit so it gates the deploy. `--full` / `--offline` / `--json` modes.
+- `docs/ACCESS.md` — click-by-click SSH + CI deploy-key + Cloudflare Tunnel runbook (tailored to
+  the droplet + agenticlip.studio), with key inventory/consolidation steps.
+- Deploy hardening — amd64-only image build; `deploy.yml` doctor preflight before migrate/cutover;
+  job/domain naming reconciled.
+- `docker-compose.prod.yml` — `cloudflared` service + no host port; app/worker healthchecks; dev
+  `--reload` dropped; `willfarrell/autoheal` sidecar for restart-on-unhealthy.
+- Bug fix — `routers/clips.py` stale `billing.tiers` import (app could not start) → minute-packs
+  `check_positive_balance` guard.
+
+**Acceptance criteria**:
+- [x] Every secret documented in `docs/SECRETS.md` with location + how-to-obtain
+- [x] `python scripts/doctor.py` reports per-secret status with values redacted; exits non-zero on failure
+- [x] `docs/ACCESS.md` gives concrete SSH + tunnel steps for this infrastructure
+- [x] Prod compose exposes no host port; `cloudflared` fronts the app; app/worker auto-heal on unhealthy
+- [x] CI image builds amd64-only; deploy runs the doctor preflight before cutover
+- [x] App imports and full suite green (`313 passed`)
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

@@ -7,8 +7,15 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Issue 23 — VM provisioning + Cloudflare DNS + HTTPS (BETA_DEPLOYMENT start)
-**Last completed**: Issue 22 — Production Kubernetes deployment (2026-05-26)
+**Last completed**: Issue 31 — Operability kit: secrets registry, preflight doctor, deploy hardening, auto-heal (2026-05-27)
 **Blocked**: _(none)_
+
+> **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
+> **blocking pre-existing bug** — `routers/clips.py` imported the deleted `billing.tiers`, so
+> `import main` failed and the app could not start (likely a real cause of failed/timed-out
+> deploys). Fixed to the minute-packs `check_positive_balance` guard. Full suite now `313 passed`.
+> Note: CI lint (`ruff check .`) has ~11 pre-existing violations unrelated to this work — flagged,
+> not swept in. The local unprovisioned `.env` is missing most required vars (dev only).
 
 ---
 
@@ -46,6 +53,7 @@ Updated after every issue closes.
 | 28 | Beta go-live smoke test + friend onboarding | BETA | 🔲 Not started | Full E2E on live deployment; invite 2-3 friends |
 | 29 | Google OAuth app verification | PROD | 🔲 Not started | Submit for Google review; ~1–4 weeks external |
 | 30 | Production hardening + public go-live | PROD | 🔲 Not started | Load test; all gates green; v1.0.0 tag |
+| 31 | Operability kit — secrets registry, preflight doctor, deploy hardening, auto-heal | BETA | ✅ Done | docs/SECRETS.md + docs/ACCESS.md; scripts/doctor.py (14 tests); cloudflared+autoheal+healthchecks; amd64-only build; fixed blocking billing.tiers import; 313 tests pass |
 
 ---
 

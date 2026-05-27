@@ -211,3 +211,76 @@ minimum, so early-video hooks are never dropped.
 
 **Source**: `tests/eval/scenarios/peak_very_early.yaml` — engine returned 0 candidates.
 Debug confirmed `end_s - setup_start_s = 27.5 < 30.0`. 2026-05-26.
+
+---
+
+## 2026-05-27 — Issue 31: Operability kit (secrets registry, preflight doctor, deploy hardening, auto-heal)
+
+### Secrets storage: plain gitignored `.env` + registry (not SOPS+age)
+
+**What**: Secrets are kept in gitignored `.env` files (local + VM `/opt/autoclip/.env`, chmod 600),
+documented in a single registry at `docs/SECRETS.md`. SOPS+age (encrypted-in-git) was considered
+and deferred.
+
+**Why**: For a <10-user close-friends beta on a single VM, plain `.env` with strict file
+permissions is the industry-accepted baseline and matches the existing setup with zero new
+tooling. SOPS+age adds a keypair to manage and deploy-step changes — robustness we don't need
+until multi-operator or compliance requirements appear. Logged as the explicit upgrade path.
+
+**Source**: Web research on single-VM Docker Compose secret management (GitGuardian; Docker docs;
+cmmx.de SOPS/age guide), 2026-05-27. Owner chose plain `.env` + registry.
+
+### Pre-existing bug fixed: `routers/clips.py` imported deleted `billing.tiers`
+
+**What changed**: `routers/clips.py` imported `require_render` from `billing.tiers`, a module the
+minute-packs rewrite (commit `41016e6`) deleted. The render endpoint now uses
+`Depends(get_current_creator)` + `await check_positive_balance(...)`, matching the minute-packs
+guard already used in `routers/videos.py`.
+
+**Why**: The stale import meant `import main` raised `ModuleNotFoundError` — the app could not
+start at all, the full test suite could not collect, and any container built from `main` would
+crash on boot (a likely real cause of "deploy fails / times out"). Minutes are deducted at ingest
+(`worker/tasks.py`), so a render needs only a positive-balance guard, not a second deduction.
+
+**Source**: Discovered while running `pytest` during Issue 31 Phase 3. The breaking commit was the
+unpushed local `main` commit; this fix lands on top before any push. 2026-05-27.
+
+### Image build: amd64 only
+
+**What**: `docker-publish.yml` builds `linux/amd64` only (was `linux/amd64,linux/arm64`).
+
+**Why**: The DigitalOcean droplet is x86_64. The arm64 build was pure wasted CI time — roughly
+doubling image build duration for an architecture nothing runs. Contributed to slow deploys.
+
+**Source**: Deploy-time analysis, 2026-05-27. If an arm64 host is ever added, restore the matrix.
+
+### Cloudflared in Compose + no host port + auto-heal (beta VM)
+
+**What**: `docker-compose.prod.yml` now (a) runs `cloudflared` as a service, (b) removes the app's
+`ports: 80:8000` host mapping, (c) drops the dev `--reload` from the app command, (d) adds
+liveness `healthcheck`s to `app` and `worker`, and (e) adds a `willfarrell/autoheal` sidecar that
+restarts containers labelled `autoheal=true` when their healthcheck goes unhealthy. The tunnel's
+public-hostname ingress must target `app:8000` (Compose DNS), documented in `docs/ACCESS.md`.
+
+**Why**: Docker has no native restart-on-unhealthy (confirmed 2026); `autoheal` + per-service
+healthchecks is the standard Compose pattern. Routing inbound traffic only through the tunnel
+satisfies Issue 23's "no open inbound ports" acceptance and removes the `localhost:80` vs
+`app:8000` ambiguity that breaks tunnels. App healthcheck is liveness-only so a transient Postgres
+blip doesn't trigger an app restart loop.
+
+**Source**: Web research on Docker Compose auto-healing (willfarrell/autoheal; oneuptime 2026
+guides), 2026-05-27.
+
+### Preflight doctor as the deploy gate
+
+**What**: New `scripts/doctor.py` validates presence + format + live reachability of every secret
+and prints a **redacted** status table (length + last-4 only). `config.py` keeps its fail-fast on
+*missing* required vars; the doctor adds *validity* and *connectivity*. `deploy.yml` runs
+`python scripts/doctor.py` after image pull and **before** migrations/cutover, so a bad secret
+fails the deploy early with safe, visible output rather than a silent crash.
+
+**Why**: The owner's core pain was being unable to see *why* a deploy failed without exposing
+secrets. A redacted doctor is the standard "preflight/doctor" answer; pydantic-settings only
+covers presence.
+
+**Source**: Web research on pydantic-settings validation patterns, 2026-05-27.

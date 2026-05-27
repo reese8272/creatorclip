@@ -49,4 +49,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          # The DigitalOcean droplet is x86_64. Building arm64 too doubled build
+          # time for an architecture nothing runs — amd64 only.
+          platforms: linux/amd64
