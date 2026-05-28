@@ -22,21 +22,6 @@ def upgrade() -> None:
     # ── pgvector extension ────────────────────────────────────────────────────
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    # ── Enums ─────────────────────────────────────────────────────────────────
-    op.execute(
-        "CREATE TYPE onboarding_state_enum AS ENUM "
-        "('connected','awaiting_data','dna_pending','active')"
-    )
-    op.execute("CREATE TYPE video_kind_enum AS ENUM ('long','short')")
-    op.execute("CREATE TYPE ingest_status_enum AS ENUM ('pending','running','done','failed')")
-    op.execute("CREATE TYPE dna_status_enum AS ENUM ('draft','confirmed','superseded')")
-    op.execute("CREATE TYPE dna_embedding_kind_enum AS ENUM ('pattern','clip','hook')")
-    op.execute("CREATE TYPE clip_format_enum AS ENUM ('short','horizontal')")
-    op.execute("CREATE TYPE render_status_enum AS ENUM ('pending','running','done','failed')")
-    op.execute(
-        "CREATE TYPE feedback_action_enum AS ENUM ('upvote','downvote','skip','trim','format')"
-    )
-
     # ── creators ──────────────────────────────────────────────────────────────
     op.create_table(
         "creators",
@@ -53,7 +38,6 @@ def upgrade() -> None:
                 "dna_pending",
                 "active",
                 name="onboarding_state_enum",
-                create_type=False,
             ),
             nullable=False,
             server_default="connected",
@@ -101,7 +85,7 @@ def upgrade() -> None:
         sa.Column("title", sa.Text, nullable=True),
         sa.Column(
             "kind",
-            sa.Enum("long", "short", name="video_kind_enum", create_type=False),
+            sa.Enum("long", "short", name="video_kind_enum"),
             nullable=False,
         ),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
@@ -111,7 +95,7 @@ def upgrade() -> None:
         sa.Column(
             "ingest_status",
             sa.Enum(
-                "pending", "running", "done", "failed", name="ingest_status_enum", create_type=False
+                "pending", "running", "done", "failed", name="ingest_status_enum"
             ),
             nullable=False,
             server_default="pending",
@@ -313,7 +297,6 @@ def upgrade() -> None:
                 "trim",
                 "format",
                 name="feedback_action_enum",
-                create_type=False,
             ),
             nullable=False,
         ),
