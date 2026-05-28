@@ -6,9 +6,33 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Issue 37 next (External SDK timeouts + retry-with-backoff)
-**Last completed**: Issue 36 — OAuth token lifecycle hardening (SEV-1) (2026-05-28)
+**Active issue**: Phase 2 hardening — Batch 3 next (worker/tasks.py-heavy: Issues 39, 43, 46, 47, 57, must serialize)
+**Last completed**: Batch 1 — Issues 37, 45, 48, 50, 53, 54 (six parallel agents, 2026-05-28 PM)
 **Blocked**: _(none)_
+
+> **Closed Batch 1** (2026-05-28 PM): Six issues landed via parallel agents in
+> isolated worktrees, merged serially into main with full suite green after each merge.
+>
+> - **Issue 37** (SEV-1, SDK timeouts): module-level singletons for Anthropic / Stripe /
+>   Voyage / boto3 with timeout + retry config. Anthropic 60s/2-retry, 120s override for
+>   improvement_brief web_search path. Stripe `max_network_retries=3`. Voyage `timeout=30`
+>   wrapped in tenacity (3 attempts, exp backoff). boto3 adaptive retry, max_attempts=5,
+>   connect/read 10/60. Added `tenacity==9.1.4` to requirements.
+> - **Issue 45** (SEV-2, refresh race + Redis pool): per-creator `SET NX EX 10` lock around
+>   the Google refresh branch with canonical Lua compare-and-delete release. Module-level
+>   `redis.asyncio.Redis` singleton in new `youtube/_redis.py` shared by oauth + quota.
+> - **Issue 48** (TESTS): 14 new integration tests covering every protected route — zero
+>   SEV-0 isolation findings (all routes correctly enforce per-creator filtering).
+> - **Issue 50** (TESTS): 4 integration tests verifying cascade across all 17 dependent
+>   tables; no missed FK cascades.
+> - **Issue 53** (TESTS): renamed misnomered `test_compliance.py` → `test_retention_tasks.py`;
+>   new `test_compliance_no_virality.py` with 3 structural scans (OpenAPI bodies, static
+>   assets, schema descriptions). Codebase clean — no forbidden phrases.
+> - **Issue 54** (TESTS): 3 integration tests for `scripts/rotate_token_key.py` —
+>   happy-path full re-encrypt, corrupt-row rollback, caplog no-plaintext.
+>
+> Test count: **349 passed, 1 skipped, 37 deselected** (was 335 + 16 deselected;
+> +14 unit / +21 integration). See `docs/DECISIONS.md` 2026-05-28 entries for Issues 37, 45.
 
 > **Closed Issue 36** (2026-05-28): Three lifecycle gaps closed in one commit.
 > (a) `DELETE /auth/me` now revokes the **refresh** token at

@@ -726,7 +726,7 @@ have its source purged mid-pipeline.
 ### Issue 45: Concurrent token refresh lock + Redis pool
 **Severity**: SEV-2 — refresh-token race; per-call aioredis connections
 **Depends on**: 32, 36
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**:
 - `youtube/oauth.py:201` — two concurrent worker tasks can race a refresh; Google rotates the refresh_token on some flows, so last-write-wins can invalidate the in-flight token.
@@ -780,7 +780,7 @@ creators.
 ### Issue 48: Per-creator isolation tests across all protected routes
 **Severity**: TESTS — load-bearing isolation guarantee
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Only 3 of ~12 protected routes have an explicit cross-creator isolation test.
 
@@ -814,7 +814,7 @@ and "double-fulfill" cases cannot be caught.
 ### Issue 50: Account-deletion cascade tests against real Postgres
 **Severity**: TESTS — load-bearing privacy / right-to-erasure
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `test_account_deletion.py` uses MagicMock; FK cascade behavior is never verified.
 A weakened cascade in a future migration would silently leave PII behind.
@@ -870,7 +870,7 @@ tests; `test_pipeline_trigger.py` calls the mock itself rather than the real tas
 ### Issue 53: Compliance structural scan — no virality across all surfaces
 **Severity**: TESTS — load-bearing honesty / ToS
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `tests/test_compliance.py` is misnamed — it actually covers retention tasks. The
 "no response promises virality" constraint is asserted only in two LLM-output paths. Need a
@@ -890,7 +890,7 @@ add new `tests/test_compliance_no_virality.py`.
 ### Issue 54: `scripts/rotate_token_key.py` integration test
 **Severity**: TESTS — pre-public-launch gate
 **Depends on**: 32, 44
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **Files**: `tests/test_rotate_token_key.py` (new), real Postgres.
 
