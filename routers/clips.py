@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
-from billing.tiers import require_render
+from billing.ledger import check_positive_balance
 from config import settings
 from db import get_session
 from limiter import limiter
@@ -107,10 +107,12 @@ async def list_clips(
 async def render_clip(
     request: Request,
     clip_id: uuid.UUID,
-    creator: Creator = Depends(require_render),
+    creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Queue a render job for the clip. Returns task_id."""
+    await check_positive_balance(creator.id, session)
+
     clip = await session.get(Clip, clip_id)
     if not clip or clip.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Clip not found")

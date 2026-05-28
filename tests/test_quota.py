@@ -41,9 +41,11 @@ async def test_consume_success_does_not_raise():
 @pytest.mark.asyncio
 async def test_consume_exhausted_raises_quota_error():
     ctx, _ = _make_redis(eval_return=-1)
-    with patch("youtube.quota.aioredis.from_url", return_value=ctx):
-        with pytest.raises(QuotaExhaustedError):
-            await consume(COST_ANALYTICS_REPORT)
+    with (
+        patch("youtube.quota.aioredis.from_url", return_value=ctx),
+        pytest.raises(QuotaExhaustedError),
+    ):
+        await consume(COST_ANALYTICS_REPORT)
 
 
 @pytest.mark.asyncio
@@ -61,6 +63,7 @@ async def test_remaining_calculates_from_redis():
     ctx, _ = _make_redis(get_return="3000")
     with patch("youtube.quota.aioredis.from_url", return_value=ctx):
         from config import settings
+
         left = await remaining()
     assert left == settings.YOUTUBE_QUOTA_DAILY_UNITS - 3000
 
@@ -70,6 +73,7 @@ async def test_remaining_when_no_key_returns_full_budget():
     ctx, _ = _make_redis(get_return=None)
     with patch("youtube.quota.aioredis.from_url", return_value=ctx):
         from config import settings
+
         left = await remaining()
     assert left == settings.YOUTUBE_QUOTA_DAILY_UNITS
 
@@ -84,6 +88,7 @@ async def test_remaining_never_negative():
 
 def test_quota_key_contains_today():
     from datetime import UTC, datetime
+
     key = _quota_key()
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     assert today in key

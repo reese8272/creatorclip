@@ -45,7 +45,9 @@ def classify_video_kind(duration_s: float) -> VideoKind:
     return VideoKind.short if duration_s <= 60 else VideoKind.long
 
 
-async def _get_json(access_token: str, url: str, params: dict, cost: int = COST_DATA_VIDEOS) -> dict:
+async def _get_json(
+    access_token: str, url: str, params: dict, cost: int = COST_DATA_VIDEOS
+) -> dict:
     await consume(cost)
     headers = {"Authorization": f"Bearer {access_token}"}
     delay = 1.0
@@ -63,7 +65,12 @@ async def _get_json(access_token: str, url: str, params: dict, cost: int = COST_
             await asyncio.sleep(delay + jitter)
             delay *= 2
         else:
-            logger.warning("YouTube Data API %s returned %s after %d retries", url, resp.status_code, _MAX_RETRIES)
+            logger.warning(
+                "YouTube Data API %s returned %s after %d retries",
+                url,
+                resp.status_code,
+                _MAX_RETRIES,
+            )
 
     resp.raise_for_status()
     return {}  # unreachable
@@ -97,7 +104,9 @@ async def list_channel_videos(access_token: str) -> list[dict]:
         if page_token:
             params["pageToken"] = page_token
 
-        data = await _get_json(access_token, f"{_YOUTUBE_V3}/playlistItems", params, cost=COST_DATA_PLAYLIST_ITEMS)
+        data = await _get_json(
+            access_token, f"{_YOUTUBE_V3}/playlistItems", params, cost=COST_DATA_PLAYLIST_ITEMS
+        )
         for item in data.get("items", []):
             snippet = item.get("snippet", {})
             resource_id = snippet.get("resourceId", {})

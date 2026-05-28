@@ -30,6 +30,9 @@ htmlcov/
 # Docker volumes (if bound locally)
 postgres_data/
 
+# Redis snapshot (created when running redis-server locally for tests)
+*.rdb
+
 # Local media / clip output
 local_storage/
 *.mp4
@@ -42,3 +45,4 @@ local_storage/
 *.swp
 *.swo
 .DS_Store
+"Screenshot 2026-05-27 124552.png"

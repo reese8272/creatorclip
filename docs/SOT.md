@@ -27,7 +27,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Token encryption at rest | `cryptography` Fernet on token columns | Key from `TOKEN_ENCRYPTION_KEY` |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
 | Frontend | Vanilla HTML/CSS/JS, player-first | No build step. **Review-UI framework is a flagged DECISIONS.md candidate — resolve before Issue 10.** |
-| Containerization | Docker Compose (dev) | `app`, `worker`, `postgres`, `redis` |
+| Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
 | Production deployment | Kubernetes (research pending) | Docker Compose = dev/test only. Production target: EKS / GKE / managed K8s. See `docs/DEPLOYMENT.md`. |
 
 ---
@@ -60,6 +60,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated origins; never `*` in production |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `agenticlip.studio` → `app:8000` with no open inbound ports |
 
 ---
 
@@ -160,6 +161,10 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── eval/                   # Clip-quality eval: labeled videos + expected clip windows
 │       └── scenarios/*.yaml
 │
+├── scripts/
+│   ├── doctor.py               # Preflight secrets validator (presence/format/live, redacted) — deploy gate
+│   └── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
+│
 └── docs/
     ├── PRD.md
     ├── SOT.md                  # (this file)
@@ -168,7 +173,10 @@ This describes how CreatorClip **is built**. Update on every architectural chang
     ├── issues.md
     ├── CLIPPING_PRINCIPLES.md
     ├── COMPLIANCE.md
-    └── DEPLOYMENT.md
+    ├── DEPLOYMENT.md
+    ├── RUNBOOKS.md             # Encryption-key rotation procedures
+    ├── SECRETS.md              # Canonical secrets/config registry (what, where, how-to-obtain)
+    └── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel runbook
 ```
 
 ---

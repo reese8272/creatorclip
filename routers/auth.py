@@ -11,7 +11,6 @@ from config import settings
 from db import get_session
 from limiter import limiter
 from models import Creator, append_audit
-from billing.stripe_client import find_active_subscription_for_email
 from youtube.oauth import (
     build_authorization_url,
     exchange_code,
@@ -64,7 +63,7 @@ async def callback(
     tokens = await exchange_code(code)
     identity = await fetch_creator_identity(tokens["access_token"])
 
-    creator = await upsert_creator(
+    creator, is_new = await upsert_creator(
         session,
         google_sub=identity["google_sub"],
         email=identity.get("email"),
@@ -73,27 +72,17 @@ async def callback(
     )
     await session.flush()
 
-    # Grant pro access to comped accounts (owner, beta testers, etc.)
-    comped = {e.strip().lower() for e in settings.COMPED_EMAILS.split(",") if e.strip()}
-    if creator.email and creator.email.lower() in comped:
-        creator.plan_tier = "pro"
-        creator.subscription_status = "active"
-        logger.info("Comped pro access granted for creator %s", creator.id)
+    if is_new:
+        from billing.ledger import grant_minutes
 
-    # Auto-link a pre-purchase Stripe subscription if one exists for this email.
-    # This runs when an early-access subscriber connects YouTube after paying.
-    elif not creator.stripe_customer_id and creator.email:
-        result = find_active_subscription_for_email(creator.email)
-        if result:
-            stripe_customer_id, plan_tier, subscription_status = result
-            creator.stripe_customer_id = stripe_customer_id
-            creator.plan_tier = plan_tier
-            creator.subscription_status = subscription_status
-            logger.info(
-                "Auto-linked Stripe subscription for creator %s: tier=%s",
-                creator.id,
-                plan_tier,
-            )
+        await grant_minutes(
+            creator.id,
+            settings.FREE_TRIAL_MINUTES,
+            "trial",
+            session,
+            pack_id="trial",
+        )
+        logger.info("trial granted creator=%s minutes=%d", creator.id, settings.FREE_TRIAL_MINUTES)
 
     await store_or_update_tokens(
         session,

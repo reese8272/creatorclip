@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pricing — CreatorClip</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .pricing-hero {
+      text-align: center;
+      padding: 3rem 1rem 1rem;
+    }
+    .pricing-hero h1 { font-size: 2.2rem; margin-bottom: 0.5rem; }
+    .pricing-hero p  { color: var(--muted); max-width: 540px; margin: 0 auto 2rem; }
+
+    .pack-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.25rem;
+      max-width: 960px;
+      margin: 0 auto 2rem;
+      padding: 0 1rem;
+    }
+
+    .pack-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      position: relative;
+      transition: border-color 0.15s;
+    }
+    .pack-card:hover { border-color: var(--accent); }
+    .pack-card.featured {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+    .pack-card .badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 99px;
+      white-space: nowrap;
+    }
+
+    .pack-label   { font-weight: 700; font-size: 1rem; }
+    .pack-minutes { font-size: 1.6rem; font-weight: 800; color: var(--accent); }
+    .pack-minutes span { font-size: 0.85rem; font-weight: 400; color: var(--muted); }
+    .pack-price   { font-size: 1.1rem; font-weight: 600; }
+    .pack-permin  { font-size: 0.8rem; color: var(--muted); }
+    .pack-note    { font-size: 0.78rem; color: var(--muted); margin-top: auto; }
+
+    .pack-btn {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.6rem 0;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    .pack-btn:disabled { opacity: 0.5; cursor: default; }
+    .pack-btn.secondary {
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    .balance-bar {
+      text-align: center;
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 1.5rem;
+    }
+    .balance-bar strong { color: var(--text); }
+
+    .disclaimer {
+      max-width: 640px;
+      margin: 0 auto 3rem;
+      padding: 0 1rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 0.7rem 1.4rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+      z-index: 999;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <a class="nav-brand" href="/">CreatorClip</a>
+    <div class="nav-links">
+      <a href="/static/index.html">Dashboard</a>
+      <a href="/static/pricing.html" class="active">Pricing</a>
+      <a href="/static/profile.html">Profile</a>
+      <span id="nav-auth"></span>
+    </div>
+  </nav>
+
+  <div class="pricing-hero">
+    <h1>Buy the minutes you need.</h1>
+    <p>No subscription. No expiry. Pay once, use whenever — stash extras for next season.</p>
+    <div class="balance-bar" id="balance-bar" style="display:none">
+      Your balance: <strong id="balance-display">—</strong> minutes remaining
+    </div>
+  </div>
+
+  <div class="pack-grid" id="pack-grid">
+    <!-- injected by JS -->
+  </div>
+
+  <div class="disclaimer">
+    CreatorClip predicts fit with your style and audience — it does not promise virality.
+    Every recommendation is an estimate grounded in your own data.
+    Minutes cover source video processing time (transcription + AI analysis + render).
+    One minute of source video = one minute deducted.
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="/static/auth.js"></script>
+  <script>
+    const PACKS = [
+      { id: "starter", label: "Starter",  minutes: 200,  price_cents: 1800,  per_min: 0.09,  featured: false },
+      { id: "regular", label: "Regular",  minutes: 500,  price_cents: 4000,  per_min: 0.08,  featured: false },
+      { id: "creator", label: "Creator",  minutes: 1000, price_cents: 7000,  per_min: 0.07,  featured: true  },
+      { id: "pro",     label: "Pro",      minutes: 2000, price_cents: 11000, per_min: 0.055, featured: false },
+      { id: "studio",  label: "Studio",   minutes: 5000, price_cents: 22500, per_min: 0.045, featured: false },
+    ];
+
+    function formatPrice(cents) {
+      return "$" + (cents / 100).toFixed(2);
+    }
+
+    function renderPacks(authed) {
+      const grid = document.getElementById("pack-grid");
+      grid.innerHTML = PACKS.map(p => `
+        <div class="pack-card${p.featured ? " featured" : ""}">
+          ${p.featured ? '<span class="badge">Most Popular</span>' : ""}
+          <div class="pack-label">${p.label}</div>
+          <div class="pack-minutes">${p.minutes.toLocaleString()} <span>minutes</span></div>
+          <div class="pack-price">${formatPrice(p.price_cents)}</div>
+          <div class="pack-permin">$${p.per_min.toFixed(3)}/min</div>
+          <div class="pack-note">Minutes never expire. One source minute = one minute used.</div>
+          <button
+            class="pack-btn${authed ? "" : " secondary"}"
+            onclick="buyPack('${p.id}')"
+          >${authed ? "Buy Now" : "Sign in to Buy"}</button>
+        </div>
+      `).join("");
+    }
+
+    function showToast(msg, ms = 3000) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.style.display = "block";
+      setTimeout(() => { t.style.display = "none"; }, ms);
+    }
+
+    async function loadBalance() {
+      try {
+        const r = await fetch("/billing/balance", { credentials: "include" });
+        if (!r.ok) return;
+        const d = await r.json();
+        document.getElementById("balance-display").textContent = d.minutes_balance.toLocaleString();
+        document.getElementById("balance-bar").style.display = "block";
+      } catch (_) {}
+    }
+
+    async function buyPack(packId) {
+      const origin = window.location.origin;
+      try {
+        const r = await fetch("/billing/checkout", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pack_id: packId,
+            success_url: origin + "/static/pricing.html?success=1",
+            cancel_url:  origin + "/static/pricing.html?cancelled=1",
+          }),
+        });
+        if (r.status === 401) { window.location.href = "/auth/login"; return; }
+        if (!r.ok) { showToast("Could not start checkout. Try again shortly."); return; }
+        const { checkout_url } = await r.json();
+        window.location.href = checkout_url;
+      } catch (_) {
+        showToast("Network error. Check your connection and try again.");
+      }
+    }
+
+    document.addEventListener("auth:ready", e => {
+      const authed = !!e.detail?.creator;
+      renderPacks(authed);
+      if (authed) loadBalance();
+    });
+
+    // Handle post-checkout redirects
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("success") === "1") {
+      window.history.replaceState({}, "", "/static/pricing.html");
+      setTimeout(() => showToast("Purchase complete — minutes added to your balance!"), 400);
+    } else if (params.get("cancelled") === "1") {
+      window.history.replaceState({}, "", "/static/pricing.html");
+    }
+  </script>
+</body>
+</html>
