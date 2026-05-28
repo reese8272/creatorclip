@@ -66,12 +66,13 @@ jobs:
             # Clean up old images to save disk space
             docker image prune -f
 
-            # Smoke test — exec into the app container to bypass Cloudflare
-            # (port 8000 is not exposed to the host, only to the Docker network).
+            # Smoke test — use Python urllib inside the app container to bypass
+            # Cloudflare (port 8000 not exposed to host; curl not in the image).
             echo "Running smoke test..."
             for i in 1 2 3 4 5; do
               BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
-                curl -s --max-time 10 http://localhost:8000/health 2>/dev/null || true)
+                python3 -c "import urllib.request,json; r=urllib.request.urlopen('http://localhost:8000/health',timeout=10); print(r.read().decode())" \
+                2>/dev/null || true)
               echo "Attempt $i: $BODY"
               STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
               if [ "$STATUS" = "ok" ]; then
