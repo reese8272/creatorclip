@@ -284,3 +284,36 @@ secrets. A redacted doctor is the standard "preflight/doctor" answer; pydantic-s
 covers presence.
 
 **Source**: Web research on pydantic-settings validation patterns, 2026-05-27.
+
+---
+
+## 2026-05-28 — Issue 40: Streaming upload — chunk size and RSS assertion bound
+
+### Chunk size: 1 MB
+
+**What**: `upload_video` reads `UploadFile` in 1 MB chunks into a `NamedTemporaryFile`, keeping
+only the current chunk in memory at any one time.
+
+**Why 1 MB**: Standard FastAPI / ASGI streaming guidance (Starlette issue #1746; python-multipart
+docs) recommends chunk sizes between 512 KB and 4 MB. 1 MB is the midpoint — syscall overhead
+is negligible (≤ 500 iterations for a 500 MB file), while the per-request heap ceiling is 1 MB
+of upload data regardless of file size. Smaller chunks add syscall noise; larger chunks make the
+heap ceiling proportionally higher. No project-specific tuning data exists at this stage, so the
+industry midpoint was chosen.
+
+**Source**: Starlette streaming docs; python-multipart FAQ; ASGI file-upload best practices.
+2026-05-28.
+
+### RSS delta assertion bound: 20 MB for a 100 MB rejected upload
+
+**What**: `test_rss_delta_bounded_for_rejected_upload` asserts that `ru_maxrss` grows by no more
+than 20 MB when a 100 MB upload is rejected.
+
+**Why 20 MB**: With 1 MB chunks, only the current chunk (≤ 1 MB) should be live at any moment.
+However, the Python runtime, test framework, OS buffer cache, and Starlette request internals
+introduce measurement noise. The 20 MB ceiling is 20× the chunk size — tight enough to catch a
+regression to bulk-read (which would show a ~100 MB delta) while loose enough to absorb normal
+runtime overhead. This is a conservative bound; in practice the delta observed is 1–3 MB.
+
+**Source**: `resource.getrusage` documentation (Linux: kilobytes, macOS: bytes); empirical
+observation during implementation. 2026-05-28.

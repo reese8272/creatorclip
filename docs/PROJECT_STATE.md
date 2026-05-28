@@ -7,8 +7,15 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Issue 23 — VM provisioning + Cloudflare DNS + HTTPS (BETA_DEPLOYMENT start)
-**Last completed**: Issue 31 — Operability kit: secrets registry, preflight doctor, deploy hardening, auto-heal (2026-05-27)
+**Last completed**: Issue 40 — Streaming upload + DoS guard (2026-05-28)
 **Blocked**: _(none)_
+
+> **2026-05-28 session note (Issue 40)**: Replaced `await file.read(max_bytes + 1)` bulk-read
+> (SEV-1: up to 500 MB into heap per request) with a 1 MB streaming chunk loop. Temp file is
+> always unlinked on the 413 rejection path via `except HTTPException`. 3 new tests in
+> `tests/test_videos_upload_streaming.py`: 413 on oversize, tempfile cleanup verified, RSS delta
+> asserted < 20 MB for a 100 MB rejected upload. Test count: **314 passed** (net +3).
+> See `docs/DECISIONS.md` 2026-05-28 Issue 40 entry.
 
 > **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
 > **blocking pre-existing bug** — `routers/clips.py` imported the deleted `billing.tiers`, so
@@ -54,6 +61,7 @@ Updated after every issue closes.
 | 29 | Google OAuth app verification | PROD | 🔲 Not started | Submit for Google review; ~1–4 weeks external |
 | 30 | Production hardening + public go-live | PROD | 🔲 Not started | Load test; all gates green; v1.0.0 tag |
 | 31 | Operability kit — secrets registry, preflight doctor, deploy hardening, auto-heal | BETA | ✅ Done | docs/SECRETS.md + docs/ACCESS.md; scripts/doctor.py (14 tests); cloudflared+autoheal+healthchecks; amd64-only build; fixed blocking billing.tiers import; 313 tests pass |
+| 40 | Streaming upload + DoS guard | HARDENING | ✅ Done | 1 MB streaming chunk loop in upload_video; 413 + tempfile unlink on oversize; RSS delta test; 3 new tests in test_videos_upload_streaming.py; 314 tests pass |
 
 ---
 

@@ -83,15 +83,39 @@ async def upload_video(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Upload a video file and start the ingest pipeline."""
+    """Upload a video file and start the ingest pipeline.
+
+    Streams to a temp file in 1 MB chunks, enforcing the size limit without
+    loading the full upload into memory.
+    """
     await check_positive_balance(creator.id, session)
 
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
-    contents = await file.read(max_bytes + 1)
-    if len(contents) > max_bytes:
-        raise HTTPException(
-            status_code=413, detail=f"File exceeds {settings.UPLOAD_MAX_MB} MB limit"
-        )
+    # 1 MB read chunks — balances syscall overhead against per-request heap cost.
+    chunk_size = 1 * 1024 * 1024
+
+    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    bytes_received = 0
+    try:
+        with tmp_path.open("wb") as fh:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                bytes_received += len(chunk)
+                if bytes_received > max_bytes:
+                    # Abort immediately; partial file is cleaned up in finally.
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds {settings.UPLOAD_MAX_MB} MB limit",
+                    )
+                fh.write(chunk)
+    except HTTPException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     existing = await session.execute(
         select(Video).where(
@@ -100,12 +124,8 @@ async def upload_video(
         )
     )
     if existing.scalar_one_or_none():
+        tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="Video already registered")
-
-    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(contents)
-        tmp_path = Path(tmp.name)
 
     try:
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"

@@ -432,6 +432,23 @@ preflight validator, faster/more-consistent deploys, and container auto-recovery
 
 ---
 
+### Issue 40: Streaming upload + DoS guard
+**Severity**: SEV-1 — up to 500 MB into memory per upload request
+**Depends on**: 32
+**Status**: ✅ Done (2026-05-28)
+
+**What**: `routers/videos.py:90` reads `await file.read(max_bytes + 1)` — loads the entire
+upload into RAM before validating size.
+
+**Files**: `routers/videos.py:77–129`.
+
+**Acceptance criteria**:
+- [x] Upload streams to a temp file in fixed chunks (e.g., 1 MB) with running byte-count check
+- [x] 413 returned as soon as max size is exceeded; partial upload deleted
+- [x] Test that the API container's RSS does not balloon for a rejected oversized upload
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
