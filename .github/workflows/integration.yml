@@ -39,7 +39,14 @@ jobs:
     env:
       DATABASE_URL: postgresql+psycopg://creatorclip:ci_password@localhost:5432/creatorclip_test
       REDIS_URL: redis://localhost:6379/0
-      # Remaining vars use conftest.py defaults (fake keys OK for integration tests)
+      # Fake values — config.py requires these present; no real API calls made in CI
+      ANTHROPIC_API_KEY: sk-ant-ci-placeholder
+      GOOGLE_OAUTH_CLIENT_ID: 000000000000-ci.apps.googleusercontent.com
+      GOOGLE_OAUTH_CLIENT_SECRET: ci-secret
+      OAUTH_REDIRECT_URI: http://localhost:8000/auth/callback
+      TOKEN_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      JWT_SECRET_KEY: ci-jwt-secret-key-not-used-in-tests
+      ALLOWED_ORIGINS: http://localhost:8000
 
     steps:
       - uses: actions/checkout@v4

@@ -133,10 +133,11 @@ async def upsert_creator(
     email: str | None,
     channel_id: str | None,
     channel_title: str | None,
-) -> Creator:
+) -> tuple[Creator, bool]:
     result = await session.execute(select(Creator).where(Creator.google_sub == google_sub))
     creator = result.scalar_one_or_none()
-    if creator is None:
+    is_new = creator is None
+    if is_new:
         creator = Creator(
             google_sub=google_sub,
             email=email,
@@ -149,7 +150,7 @@ async def upsert_creator(
         creator.email = email
         creator.channel_id = channel_id
         creator.channel_title = channel_title
-    return creator
+    return creator, is_new
 
 
 async def store_or_update_tokens(
