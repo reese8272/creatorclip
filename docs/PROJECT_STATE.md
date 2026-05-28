@@ -7,8 +7,30 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2 hardening — Batch 3 next (worker/tasks.py-heavy: Issues 39, 43, 46, 47, 57, must serialize)
-**Last completed**: Batch 1 — Issues 37, 45, 48, 50, 53, 54 (six parallel agents, 2026-05-28 PM)
+**Last completed**: Batch 2 — Issues 49, 51, 55 (three parallel agents, 2026-05-28 PM session 3)
 **Blocked**: _(none)_
+
+> **Closed Batch 2** (2026-05-28 PM): Three TEST-ONLY issues via parallel agents.
+>
+> - **Issue 49**: 4 integration tests for the billing money paths (concurrent deduct
+>   race, webhook idempotency same session_id, unknown pack_id, missing metadata).
+>   Finding: webhook returns 200 `{"status": "ignored"}` for anomalies, NOT 4xx — this
+>   is the correct Stripe pattern (2xx prevents retry storms; anomalies logged internally).
+>   Tests document and assert the actual behavior.
+> - **Issue 51**: 4 new tests appended to `tests/test_oauth_lifecycle.py` (now 15 total):
+>   refresh-path success, callback caplog no-plaintext, authorization URL exact scopes
+>   (no `youtube.upload`), `prompt=consent` + `access_type=offline` round-trip.
+> - **Issue 55**: 9 surgical load-bearing tests across 8 existing files + 1 adversarial
+>   YAML scenario (`loud_aftermath.yaml`).
+>
+> One merge-flow defect caught during Batch 2: Issue 51's new
+> `test_callback_logs_no_token_plaintext` drives the full callback success path, which
+> sets a `cc_session` JWT cookie on the session-scoped TestClient cookie jar — leaking
+> auth into subsequent tests and causing `test_static::test_list_videos_requires_auth`
+> to hit real Postgres. Fix: clear `client.cookies` in the finally block and `pop` only
+> the dependency override this test set instead of `.clear()` (the project convention).
+>
+> Test count: **362 passed, 1 skipped, 41 deselected** (was 349; +13 unit / +4 integration).
 
 > **Closed Batch 1** (2026-05-28 PM): Six issues landed via parallel agents in
 > isolated worktrees, merged serially into main with full suite green after each merge.

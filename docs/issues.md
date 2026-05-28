@@ -796,7 +796,7 @@ creators.
 ### Issue 49: Billing race + Stripe webhook idempotency against real Postgres
 **Severity**: TESTS — load-bearing money path
 **Depends on**: 32, 34
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Existing `test_billing.py` uses `AsyncMock` for sessions; SEV-0 "double-deduct"
 and "double-fulfill" cases cannot be caught.
@@ -833,7 +833,7 @@ A weakened cascade in a future migration would silently leave PII behind.
 ### Issue 51: OAuth lifecycle tests
 **Severity**: TESTS — load-bearing auth + ToS
 **Depends on**: 32, 36
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **Files**: `tests/test_oauth_lifecycle.py` (new).
 
@@ -904,7 +904,7 @@ add new `tests/test_compliance_no_virality.py`.
 ### Issue 55: Bundled load-bearing test gaps
 **Severity**: TESTS
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Cluster of smaller load-bearing assertions, one test each — appended to the
 existing test files rather than a new file per item.
