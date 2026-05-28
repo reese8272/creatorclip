@@ -7,7 +7,7 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2 hardening — Issue 36 next (OAuth token lifecycle)
-**Last completed**: Issue 35 — Idempotent DNA build (SEV-0) (2026-05-28)
+**Last completed**: Issue 44 — Auth boundary hardening (SEV-1) (2026-05-28)
 **Blocked**: _(none)_
 
 > **Closed Issue 41**: `preference/model.py:35–40` used `pickle.dumps(self)` / `pickle.loads(data)`
@@ -82,6 +82,15 @@ Updated after every issue closes.
 > asserted < 20 MB for a 100 MB rejected upload. Test count: **314 passed** (net +3).
 > See `docs/DECISIONS.md` 2026-05-28 Issue 40 entry.
 
+> **2026-05-28 session note**: Completed Issue 44 (auth boundary hardening). Three security
+> fixes: (1) `auth.py` `get_current_creator` now catches `ValueError`/`KeyError` alongside
+> `PyJWTError` so a malformed JWT `sub` returns 401 instead of 500; (2) `DELETE /auth/me` rate-
+> limited to 5/hour via the existing slowapi limiter; (3) `crypto.py` rewritten to use
+> `MultiFernet` for zero-downtime key rotation + typed `TokenDecryptError`. Added
+> `TOKEN_ENCRYPTION_KEY_PREVIOUS` optional setting. Test count delta: +8 tests (2 in
+> `test_auth.py`, 6 in `test_crypto.py` replacing 1 old test). All existing tests updated for
+> the new rate-limit requirement on `DELETE /me`.
+
 > **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
 > **blocking pre-existing bug** — `routers/clips.py` imported the deleted `billing.tiers`, so
 > `import main` failed and the app could not start (likely a real cause of failed/timed-out
@@ -139,6 +148,7 @@ Updated after every issue closes.
 | 42 | ffmpeg/subprocess timeouts | HARDENING | ✅ Done | `_run` accepts `timeout_s=120.0`; `_frame_dimensions` hardcodes `timeout=30`; `render_clip_file` computes `max(120, duration*4)`; 3 new timeout tests; DECISIONS.md entry |
 | 35 | Idempotent DNA build (SEV-0) | HARDENING | ✅ Done | Single-transaction commit in `_build_dna_async`; `commit=False` param on `create_draft`, `embed_patterns`, `embed_brief`; 3 integration tests; 313 non-integration tests pass |
 | 40 | Streaming upload + DoS guard | HARDENING | ✅ Done | 1 MB streaming chunk loop in upload_video; 413 + tempfile unlink on oversize; RSS delta test; 3 new tests in test_videos_upload_streaming.py; 314 tests pass |
+| 44 | Auth boundary hardening — malformed sub 401, DELETE /me rate limit, MultiFernet rotation | SEC | ✅ Done | auth.py ValueError/KeyError catch; routers/auth.py 5/hour on DELETE /me; crypto.py MultiFernet + TokenDecryptError; +8 tests |
 
 ---
 

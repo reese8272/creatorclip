@@ -37,10 +37,9 @@ async def get_current_creator(
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = decode_session_token(token)
-    except jwt.PyJWTError:
+        creator_id = uuid.UUID(payload["sub"])
+    except (jwt.PyJWTError, ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid or expired session") from None
-
-    creator_id = uuid.UUID(payload["sub"])
     result = await session.execute(select(Creator).where(Creator.id == creator_id))
     creator = result.scalar_one_or_none()
     if creator is None:

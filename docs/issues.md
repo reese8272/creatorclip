@@ -1011,6 +1011,19 @@ are staged, then flush atomically.
 - [x] Upload streams to a temp file in fixed chunks (e.g., 1 MB) with running byte-count check
 - [x] 413 returned as soon as max size is exceeded; partial upload deleted
 - [x] Test that the API container's RSS does not balloon for a rejected oversized upload
+## Issue 44: Auth boundary hardening (SEV-1)
+**Depends on**: 3, 18, 19
+**Status**: ✅ Done (2026-05-28)
+
+**What**: Three security sub-fixes: (1) malformed JWT `sub` returns 401 not 500,
+(2) `DELETE /me` rate-limited to 5/hour, (3) `crypto.py` MultiFernet + typed exception.
+
+**Acceptance criteria**:
+- [x] Malformed sub → 401 (not 500); test asserts
+- [x] 6th `DELETE /me` in an hour → 429; test asserts rate limit registered
+- [x] Encrypt with primary, set previous-only-key, decrypt with previous; round-trip works
+- [x] Decrypt of garbage → `TokenDecryptError` (not raw `InvalidToken`)
+- [x] All existing tests still pass
 
 ---
 

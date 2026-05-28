@@ -4,7 +4,7 @@ Auth test suite.
 Unit tests (no DB, no network — always pass):
   JWT helpers, URL builder, /auth/login redirect,
   /auth/me without session → 401, /auth/callback invalid state → 400,
-  /auth/logout cookie clearing.
+  /auth/logout cookie clearing, malformed sub → 401.
 
 Integration tests (require docker compose up + alembic upgrade head):
   Full OAuth callback flow (Google calls mocked), /auth/me with valid session,
@@ -142,6 +142,45 @@ def test_callback_with_google_error_returns_400(client):
     resp = client.get("/auth/callback?error=access_denied", follow_redirects=False)
     client.cookies.clear()
     assert resp.status_code == 400
+
+
+# ── Malformed sub in JWT payload → 401 (not 500) ─────────────────────────────
+
+
+def test_me_with_non_uuid_sub_returns_401(client):
+    """A valid JWT whose 'sub' is not a UUID must return 401, not 500."""
+    payload = {
+        "sub": "not-a-uuid",
+        "iat": datetime.now(UTC),
+        "exp": datetime.now(UTC) + timedelta(minutes=60),
+    }
+    token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+    resp = client.get("/auth/me", cookies={SESSION_COOKIE: token})
+    assert resp.status_code == 401
+
+
+def test_me_with_missing_sub_returns_401(client):
+    """A valid JWT whose payload lacks the 'sub' key must return 401, not 500."""
+    payload = {
+        "iat": datetime.now(UTC),
+        "exp": datetime.now(UTC) + timedelta(minutes=60),
+    }
+    token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+    resp = client.get("/auth/me", cookies={SESSION_COOKIE: token})
+    assert resp.status_code == 401
+
+
+# ── DELETE /me rate limit ─────────────────────────────────────────────────────
+
+
+def test_delete_me_has_5_per_hour_limit():
+    """DELETE /me must carry a 5/hour rate limit."""
+    from limiter import limiter
+
+    limits = limiter._route_limits.get("routers.auth.delete_account", [])
+    assert any("5" in str(lim.limit) and "hour" in str(lim.limit).lower() for lim in limits), (
+        f"Expected 5/hour on delete_account, got: {limits}"
+    )
 
 
 # ── Integration tests (require running DB) ────────────────────────────────────

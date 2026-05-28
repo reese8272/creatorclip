@@ -271,6 +271,70 @@ blip doesn't trigger an app restart loop.
 **Source**: Web research on Docker Compose auto-healing (willfarrell/autoheal; oneuptime 2026
 guides), 2026-05-27.
 
+## 2026-05-28 — Issue 44: Auth boundary hardening
+
+### `get_current_creator`: catch ValueError/KeyError alongside PyJWTError
+
+**What changed**: `auth.py` — `uuid.UUID(payload["sub"])` moved inside the existing
+`try/except`, with `(ValueError, KeyError)` added to the caught exception types. A malformed
+`sub` (non-UUID string, missing key) now returns 401 "Invalid or expired session" instead of
+propagating as a 500.
+
+**Why**: The call was outside the `try` block, so any `ValueError` from `uuid.UUID()` or
+`KeyError` from a missing `sub` key fell through to the global exception handler and surfaced
+as a 500 with a stack trace in development mode. Per defence-in-depth, any invalid token
+payload should yield 401 — not leak error details.
+
+**Source**: Code review of `auth.py:43`; Python `uuid.UUID` docs confirm `ValueError` on
+malformed input. 2026-05-28.
+
+---
+
+### `DELETE /me`: add 5/hour rate limit
+
+**What changed**: `routers/auth.py` — `@limiter.limit("5/hour")` added to the
+`delete_account` handler. `request: Request` added to handler signature (required by
+slowapi for key extraction).
+
+**Why**: The right-to-erasure endpoint had no rate limit. An attacker with a stolen session
+could spam it; even accidental repeated clicks should be bounded. 5/hour is generous for
+legitimate use (account deletion is a one-time action) and tight enough to prevent abuse.
+The existing `limiter` from Issue 18 already uses `_creator_key` (JWT sub → creator UUID),
+which gives correct per-creator isolation.
+
+**Source**: slowapi docs on `@limiter.limit`; Issue 18 pattern in `routers/videos.py`.
+2026-05-28.
+
+---
+
+### `crypto.py`: MultiFernet + typed TokenDecryptError
+
+**What changed**: `crypto.py` — `_fernet()` now returns `MultiFernet([primary])` when no
+previous key is configured, and `MultiFernet([primary, previous])` when
+`TOKEN_ENCRYPTION_KEY_PREVIOUS` is set. `decrypt()` catches `cryptography.fernet.InvalidToken`
+and re-raises as the new typed `TokenDecryptError`. `config.py` adds
+`TOKEN_ENCRYPTION_KEY_PREVIOUS: str | None = None`. `.env.example` documents the rotation
+workflow.
+
+**Why MultiFernet over Fernet**: `MultiFernet.encrypt()` always uses the first (primary) key;
+`MultiFernet.decrypt()` tries keys in order. This enables zero-downtime key rotation: set
+`TOKEN_ENCRYPTION_KEY_PREVIOUS = old key`, run `scripts/rotate_token_key.py` to re-encrypt
+all rows under the new primary, then clear `TOKEN_ENCRYPTION_KEY_PREVIOUS`. During the window
+between setting the new primary and completing re-encryption, both old and new tokens are
+readable. A single-key `MultiFernet([primary])` is functionally identical to `Fernet(primary)`
+so there is no behaviour change when no previous key is configured.
+
+**Why TokenDecryptError**: callers (`routers/auth.py`, `youtube/oauth.py`) were inconsistently
+handling raw `cryptography.fernet.InvalidToken` — some caught it, some didn't. A project-level
+typed exception makes the contract explicit and prevents internal cryptography exceptions from
+leaking through unhandled.
+
+**Source**: `cryptography` library docs on `MultiFernet`; Python exception-hierarchy best
+practices. Confirmed: `MultiFernet` ships in the same `cryptography` package already pinned
+in `requirements.txt`. 2026-05-28.
+
+---
+
 ### Preflight doctor as the deploy gate
 
 **What**: New `scripts/doctor.py` validates presence + format + live reachability of every secret

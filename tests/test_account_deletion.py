@@ -7,7 +7,7 @@ media prefixes purged, cascade delete called, cookie cleared, audit log written.
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from auth import get_current_creator
+from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from db import get_session
 from main import app
 
@@ -18,6 +18,15 @@ def _make_creator():
     c.channel_id = "UCtest"
     c.email = "test@example.com"
     return c
+
+
+def _session_cookie_for(creator) -> dict:
+    """Build a real JWT cookie so the rate limiter keys off a unique creator UUID.
+
+    Each test uses a different creator UUID, ensuring no two tests share the same
+    rate-limit bucket even if Redis is available.
+    """
+    return {SESSION_COOKIE: create_session_token(creator.id)}
 
 
 def _fake_session(creator_id=None, token_row=None):
@@ -51,7 +60,7 @@ def test_delete_account_returns_204(client):
             patch("worker.storage.delete_prefix", return_value=0),
             patch("routers.auth.httpx.AsyncClient"),
         ):
-            resp = client.delete("/auth/me")
+            resp = client.delete("/auth/me", cookies=_session_cookie_for(creator))
     finally:
         app.dependency_overrides.clear()
 
@@ -77,7 +86,7 @@ def test_delete_account_purges_source_and_clips_prefixes(client):
             patch("worker.storage.delete_prefix", side_effect=fake_delete_prefix),
             patch("routers.auth.httpx.AsyncClient"),
         ):
-            client.delete("/auth/me")
+            client.delete("/auth/me", cookies=_session_cookie_for(creator))
     finally:
         app.dependency_overrides.clear()
 
@@ -95,7 +104,7 @@ def test_delete_account_continues_if_storage_purge_fails(client):
             patch("worker.storage.delete_prefix", side_effect=Exception("S3 error")),
             patch("routers.auth.httpx.AsyncClient"),
         ):
-            resp = client.delete("/auth/me")
+            resp = client.delete("/auth/me", cookies=_session_cookie_for(creator))
     finally:
         app.dependency_overrides.clear()
 
@@ -124,7 +133,7 @@ def test_delete_account_calls_session_delete(client):
             patch("worker.storage.delete_prefix", return_value=0),
             patch("routers.auth.httpx.AsyncClient"),
         ):
-            client.delete("/auth/me")
+            client.delete("/auth/me", cookies=_session_cookie_for(creator))
     finally:
         app.dependency_overrides.clear()
 
@@ -154,7 +163,7 @@ def test_delete_account_writes_audit_log(client):
             patch("worker.storage.delete_prefix", return_value=0),
             patch("routers.auth.httpx.AsyncClient"),
         ):
-            client.delete("/auth/me")
+            client.delete("/auth/me", cookies=_session_cookie_for(creator))
     finally:
         app.dependency_overrides.clear()
 
@@ -181,13 +190,12 @@ def test_delete_account_clears_session_cookie(client):
             patch("worker.storage.delete_prefix", return_value=0),
             patch("routers.auth.httpx.AsyncClient"),
         ):
-            resp = client.delete("/auth/me")
+            resp = client.delete("/auth/me", cookies=_session_cookie_for(creator))
     finally:
         app.dependency_overrides.clear()
-
-    from auth import SESSION_COOKIE
 
     # TestClient follows Set-Cookie; after a delete-cookie the cookie jar is empty
     # or the response header indicates the cookie was cleared (max-age=0 or expired)
     set_cookie = resp.headers.get("set-cookie", "")
     assert SESSION_COOKIE in set_cookie or SESSION_COOKIE not in client.cookies
+
