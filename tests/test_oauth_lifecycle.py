@@ -667,6 +667,7 @@ def test_callback_logs_no_token_plaintext(client, caplog):
     async def _fake_session():
         yield session_mock
 
+    prior_session_override = app.dependency_overrides.get(get_session)
     app.dependency_overrides[get_session] = _fake_session
 
     try:
@@ -688,7 +689,14 @@ def test_callback_logs_no_token_plaintext(client, caplog):
                 follow_redirects=False,
             )
     finally:
-        app.dependency_overrides.clear()
+        # The successful callback sets a cc_session JWT cookie in TestClient's
+        # session-scoped cookie jar. Clear it so subsequent tests don't
+        # inadvertently run authenticated against the real DB.
+        client.cookies.clear()
+        if prior_session_override is None:
+            app.dependency_overrides.pop(get_session, None)
+        else:
+            app.dependency_overrides[get_session] = prior_session_override
 
     # Callback completed (302 redirect to /).
     assert resp.status_code == 302
