@@ -3,141 +3,95 @@
 > **Read this first.** This is the living "where we are right now" file. It is NOT a source-of-truth
 > doc — those live in `docs/`. Update this at the end of every session.
 
-**Last updated:** 2026-05-27
-**Branch:** `issue-31-operability` — HEAD `cc6c4c8` ("chore: add LEFT_OFF.md session handoff")
+**Last updated:** 2026-05-28
+**Branch:** `issue-31-operability` (ahead of main with migration fix)
 **Working tree:** clean
-**PR:** [#2 open](https://github.com/reese8272/creatorclip/pull/2) — **CI ✅ ALL GREEN** (lint ✅ unit tests ✅ docker build ✅). Ready to merge.
+**PR:** merged — `issue-31-operability` → `main` (squash commit `d7c1f20`)
 
 ---
 
-## 1. CURRENT FOCUS
+## 1. CURRENT STATE — BETA IS LIVE ✅
 
-**Stand up the beta: provision the DigitalOcean droplet, deploy the app, verify
-`https://agenticlip.studio/health` returns `{"status":"ok"}`.**
+**`https://autoclip.studio/health` returns `{"status":"ok","postgres":"ok","redis":"ok"}`**
 
-The VM exists and is reachable (`ssh creatorclip-vm` works), but it is a completely bare Ubuntu
-24.04 box — Docker is not installed, `/opt/autoclip` doesn't exist, nothing is running.
+All 7 containers running and healthy on the DigitalOcean droplet (`147.182.136.107`).
 
-### → NEXT ACTIONS (in order)
+---
 
-**Step 0 — Confirm CI goes green and merge PR #2**
-```bash
-gh pr checks 2 --watch   # wait for Unit tests to turn green
-gh pr merge 2 --squash   # or merge via GitHub UI
-```
-Must merge before provisioning — the current `ghcr.io/reese8272/creatorclip:latest` image was
-built from the broken `main` (missing `billing.tiers` + missing `python-multipart`). Merging
-builds a clean image that actually boots.
+## 2. WHAT WAS DONE THIS SESSION
 
-**Step 1 — Provision the VM** (I can do this via `ssh creatorclip-vm`)
-```bash
-# Install Docker Engine + Compose plugin
-curl -fsSL https://get.docker.com | sh
-apt-get install -y docker-compose-plugin
-
-# Create deploy dir
-mkdir -p /opt/autoclip
-cd /opt/autoclip
-
-# Pull docker-compose.prod.yml from the repo
-curl -fsSL https://raw.githubusercontent.com/reese8272/creatorclip/main/docker-compose.prod.yml \
-  -o docker-compose.prod.yml
-```
-
-**Step 2 — Build `/opt/autoclip/.env`** — I generate the crypto keys; **you provide**:
-
-| Secret | Where to get it |
+| Step | Status |
 |---|---|
-| `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` | console.cloud.google.com → APIs & Services → Credentials |
-| `CLOUDFLARE_TUNNEL_TOKEN` | one.dash.cloudflare.com → Zero Trust → Networks → Tunnels → your tunnel → Configure → token |
-| `R2_ACCOUNT_ID` + `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` + `R2_BUCKET` | Cloudflare → R2 → Manage R2 API Tokens |
-| `STRIPE_SECRET_KEY` + `STRIPE_PUBLISHABLE_KEY` + `STRIPE_WEBHOOK_SECRET` | dashboard.stripe.com → Developers → API keys / Webhooks |
-| `ANTHROPIC_API_KEY` ✅ / `VOYAGE_API_KEY` ✅ / `DEEPGRAM_API_KEY` ✅ | already confirmed valid |
-
-**Step 3 — Fix tunnel ingress rule** (DigitalOcean is already Cloudflare — just edit the
-public-hostname ingress for `agenticlip.studio` to point at `app:8000`, not `localhost:*`)
-
-**Step 4 — Deploy + smoke test**
-```bash
-cd /opt/autoclip
-docker compose -f docker-compose.prod.yml up -d
-# doctor runs automatically in deploy.yml preflight, but also:
-docker compose -f docker-compose.prod.yml exec app python scripts/doctor.py
-curl -s https://agenticlip.studio/health
-```
+| Merged PR #2 (`issue-31-operability` → `main`) | ✅ |
+| Installed Docker 29.5.2 on VM | ✅ |
+| Created `/opt/autoclip/` deploy dir | ✅ |
+| Wrote `/opt/autoclip/.env` with all secrets | ✅ |
+| Built Docker image on VM (GHCR auth workaround) | ✅ |
+| `docker compose up -d` — all 7 containers started | ✅ |
+| Fixed Alembic migration bug (SA 2.0 + psycopg async) | ✅ |
+| Ran `alembic upgrade head` — 19 tables created | ✅ |
+| Cloudflare Tunnel authenticated and connected | ✅ |
+| DNS CNAME live: `autoclip.studio → autoclip-prod tunnel` | ✅ |
+| Smoke test: `https://autoclip.studio/health` → `{"status":"ok"}` | ✅ |
 
 ---
 
-## 2. WHAT WORKS NOW (do not re-investigate)
+## 3. DOMAIN CHANGE
 
-- ✅ **`ssh creatorclip-vm` connects** — `id_ed25519` is now authorized on the droplet (`root@ubuntu-s-4vcpu-8gb-nyc1`). The `creatorclip-vm` alias is in `~/.ssh/config`.
-- ✅ **PR #2 on `issue-31-operability`** — carries the full operability kit + 3 boot-crash bug fixes (see §3); CI going green after the python-multipart push.
-- ✅ **API keys confirmed live** — Anthropic, Voyage, Deepgram all authenticate (run `python3.12 scripts/doctor.py --full` to reverify anytime).
-- ✅ **`ruff check .` + `ruff format --check .`** — both clean across all 87 files.
-- ✅ **`313 tests pass** locally (against real Redis); 7 integration tests deselected (need live Postgres).
-- ✅ **Redis service wired into CI** — `ci.yml` now runs a `redis:7-alpine` service so the rate-limiter tests don't fail in CI.
-- ✅ **`scripts/doctor.py`** — offline/full/json modes, redacted output, deploy gate.
-- ✅ **`docs/SECRETS.md`** — canonical registry of every secret + the creatorclip/autoclip/agenticlip naming map.
-- ✅ **`docs/ACCESS.md`** — click-by-click SSH + CI deploy key + Cloudflare Tunnel runbook.
-- ✅ **`docker-compose.prod.yml`** — cloudflared service + auto-heal + healthchecks + no host port + no `--reload`.
+**`agenticlip.studio` was replaced with `autoclip.studio`** — `agenticlip.studio` is not in Cloudflare.
+`autoclip.studio` is active and pointing at the new `autoclip-prod` tunnel.
+
+Update any references to `agenticlip.studio` in docs, OAuth redirect URIs, etc.
 
 ---
 
-## 3. THREE BOOT-CRASH BUGS FIXED THIS SESSION
-
-All three were in the unpushed `main` commit (`41016e6`). The app could not start on a clean install.
-
-| Bug | Symptom | Fix |
-|---|---|---|
-| `billing.tiers` deleted but still imported in `routers/clips.py` | `ModuleNotFoundError` on `import main` | Replaced `require_render` with `check_positive_balance` from `billing.ledger` |
-| `python-multipart` missing from `requirements.txt` | `RuntimeError: Form data requires python-multipart` on `import main` | Added `python-multipart==0.0.20` to `requirements.txt` |
-| arm64 image built for x86 droplet | Wasted ~2× CI build time | `docker-publish.yml` changed to `platforms: linux/amd64` only |
-
----
-
-## 4. KEY COORDINATES & FACTS
+## 4. KEY COORDINATES
 
 | Thing | Value |
 |---|---|
-| **Public domain** | `agenticlip.studio` |
-| **VM (DigitalOcean Droplet)** | `147.182.136.107` — Ubuntu 24.04, 4 vCPU / 8 GB, NYC1 |
-| **SSH alias** | `ssh creatorclip-vm` (uses `~/.ssh/id_ed25519`, user `root`) |
-| **Deploy dir on VM** | `/opt/autoclip` (doesn't exist yet — created in Step 1) |
-| **Docker image** | `ghcr.io/reese8272/creatorclip:latest` |
-| **GitHub repo** | `github.com/reese8272/creatorclip` |
-| **PR #2** | `issue-31-operability` → `main` |
-| **GitHub Actions secrets needed** | `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `GHCR_TOKEN`, `PRODUCTION_URL` (var) |
-| **Tunnel ingress** | must be `app:8000` — NOT `localhost:80` or `localhost:8000` |
-| **Storage backend** | `r2` (decided for beta) |
-| **Billing** | Stripe wired (decided for beta) |
-| **Transcription** | `deepgram` (default, no GPU needed) |
-| **Free trial** | 60 min granted on first login (`FREE_TRIAL_MINUTES=60`) |
+| **Public URL** | `https://autoclip.studio` |
+| **Health endpoint** | `https://autoclip.studio/health` |
+| **VM** | `147.182.136.107` — Ubuntu 24.04, 4 vCPU / 8 GB, NYC1 |
+| **SSH alias** | `ssh creatorclip-vm` |
+| **Deploy dir** | `/opt/autoclip/` |
+| **Source on VM** | `/opt/autoclip/src/` (cloned for local build) |
+| **Active tunnel** | `autoclip-prod` (`db79b904-9cbf-4a79-b336-3b8195e6d37b`) |
+| **Cloudflare zone** | `autoclip.studio` (zone `764913b08938704d661e6613f0926ac9`) |
+| **Docker image** | Built locally on VM from `/opt/autoclip/src` |
+| **GitHub repo** | `github.com/reese8272/creatorclip` (private) |
 
 ---
 
-## 5. CONSTRAINTS & GOTCHAS
+## 5. OPEN ITEMS / NEXT ACTIONS
 
-- **Merge PR #2 before pulling the image.** The current `:latest` on GHCR was built from broken `main`. The new image builds when PR #2 merges (triggered by `docker-publish.yml` on push to `main`).
-- **Tunnel ingress MUST be `app:8000`** (Docker Compose network hostname), not `localhost`. The `cloudflared` service runs inside the same Compose network — `localhost` inside it points at itself, not the app.
-- **`config.py` exits on startup if any required var is missing.** Run `python scripts/doctor.py` first, before `docker compose up`, to see exactly what's wrong without wasting a deploy cycle.
-- **GitHub secrets are write-only** — you can never read them back. The only way to check what's set is to run a deploy and let the doctor preflight catch a bad/missing secret.
-- **`ssh creatorclip-vm` uses `id_ed25519`.** If you work from a different machine, that key won't be authorized. Add the new machine's public key via the DigitalOcean recovery console (see `docs/ACCESS.md` §1b).
-- **`dump.rdb` is gitignored** — redis creates it in the CWD if started locally. It's already in `.gitignore`.
-- **The Screenshot PNG in repo root** — `Screenshot 2026-05-27 124552.png` is untracked; safe to delete once you don't need it.
+### Immediate (before real users)
+- [ ] **Push migration fix to main** — `alembic/versions/0001_initial_schema.py` fix is on `issue-31-operability`, not yet on `main`. Create a PR or push directly.
+- [ ] **Wire CI/CD deploy** — GitHub Actions `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `GHCR_TOKEN`, `PRODUCTION_URL` secrets need setting so future pushes auto-deploy.
+- [ ] **Fix GHCR auth** — run `gh auth refresh -h github.com -s read:packages` in a real terminal to get `read:packages` scope. Then `docker login ghcr.io` on VM so future deploys pull from GHCR instead of building locally.
+- [ ] **Google OAuth redirect URI** — add `https://autoclip.studio/auth/callback` to the OAuth client in Google Cloud Console (may already be done).
+- [ ] **Update `docs/SECRETS.md`** — reflects `agenticlip.studio`; needs update to `autoclip.studio` + new tunnel/R2 token names.
+
+### Beta issues (Issues 23–28 in `docs/PROJECT_STATE.md`)
+All 6 beta issues are still 🔲 Not started. These are the next engineering sprint.
 
 ---
 
-## 6. POINTERS
+## 6. CONSTRAINTS & GOTCHAS
+
+- **Image is built locally on VM** (not pulled from GHCR) — until GHCR auth is fixed, re-deploys must `cd /opt/autoclip/src && git pull && docker build ...`
+- **Migration fix not on main yet** — the `alembic/versions/0001_initial_schema.py` fix is committed on `issue-31-operability`. Merge or cherry-pick to main before next deploy.
+- **`cloudflared` container must be recreated (not just restarted)** to pick up a new `CLOUDFLARE_TUNNEL_TOKEN` from `.env`. Use `docker compose up -d --force-recreate cloudflared`.
+- **`tunnel_secret` API format** — Cloudflare's API-created tunnels had "Invalid tunnel secret" errors; workaround was creating via MCP with `autoclip-prod` tunnel. Do not delete this tunnel.
+- **`.env` on VM is authoritative** — not in git. If VM is rebuilt, all secrets must be re-entered. See `docs/SECRETS.md` for the registry.
+
+---
+
+## 7. POINTERS
 
 | Doc | Purpose |
 |---|---|
-| `docs/SECRETS.md` | Every secret: what it is, which of 5 locations it lives in, how to obtain/rotate |
-| `docs/ACCESS.md` | SSH access, CI deploy key, Cloudflare Tunnel (click-by-click, tailored to this infra) |
-| `docs/DEPLOYMENT.md` | Dev setup, K8s production target, pre-deploy checklists |
-| `docs/RUNBOOKS.md` | `TOKEN_ENCRYPTION_KEY` + `JWT_SECRET_KEY` rotation procedures |
-| `docs/DECISIONS.md` | All architectural decisions, including Issue 31 rationale (2026-05-27) |
+| `docs/SECRETS.md` | Every secret — update `agenticlip.studio` → `autoclip.studio` |
+| `docs/ACCESS.md` | SSH access, CI deploy key, Cloudflare Tunnel runbook |
+| `docs/DEPLOYMENT.md` | Dev setup, pre-deploy checklists |
 | `docs/PROJECT_STATE.md` | Issue table — Issue 31 ✅ Done; Issues 23–28 (BETA) all 🔲 Not started |
-| `docs/issues.md` | Full issue backlog with acceptance criteria |
-| `.claude/settings.local.json` | Local Claude Code permissions (gitignored) |
-| `~/.ssh/config` | `creatorclip-vm` alias definition |
-| `~/.claude/projects/.../memory/MEMORY.md` | Auto-memory index for this project |
+| `~/.ssh/config` | `creatorclip-vm` alias |
