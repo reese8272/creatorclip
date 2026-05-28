@@ -136,6 +136,42 @@ def test_tempfile_deleted_after_413(upload_client, monkeypatch, tmp_path):
 # ── test 3: RSS does not balloon for a rejected large upload ──────────────────
 
 
+# ── Issue 55: just-over-max upload rejects 413 and never touches storage ─────
+
+
+def test_upload_just_over_max_rejects_413_and_writes_nothing(monkeypatch):
+    """A file one byte over UPLOAD_MAX_MB must yield 413 and must not call storage."""
+    monkeypatch.setattr("config.settings.UPLOAD_MAX_MB", _TEST_MAX_MB)
+
+    creator = _fake_creator()
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session()
+
+    storage_mock = MagicMock()
+
+    try:
+        with (
+            patch("routers.videos.check_positive_balance", new_callable=AsyncMock),
+            patch("routers.videos.upload_file", storage_mock),
+            patch("worker.tasks.start_pipeline"),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            oversized = b"x" * (_TEST_MAX_MB * _MB + 1)
+            resp = c.post(
+                "/videos/upload",
+                data={"youtube_video_id": "issue55_test"},
+                files={"file": ("video.mp4", io.BytesIO(oversized), "video/mp4")},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 413, (
+        f"Expected 413 for just-over-max upload, got {resp.status_code}: {resp.text}"
+    )
+    storage_mock.assert_not_called()
+
+
 @pytest.mark.skip(
     reason="TestClient runs in-process — the test-side 100 MB payload allocation "
     "dominates ru_maxrss and overwhelms whatever the server route allocates. "

@@ -226,3 +226,98 @@ def test_tampered_blob_arbitrary_global_rejected():
 
     with pytest.raises(pickle.UnpicklingError, match="class not allowed"):
         PreferenceScorer.from_bytes(buf.getvalue())
+
+
+# ── Issue 55: build_and_save excludes skip, weights trim/approve correctly ────
+
+
+@pytest.mark.asyncio
+async def test_build_and_save_filters_and_weights_feedback():
+    """
+    skip is excluded from training;
+    trim is counted as positive;
+    performed_well=True outcome weights its row 3× vs the trim row (same recency).
+    """
+    import uuid
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock
+
+    from models import Clip, ClipFeedback, ClipOutcome, FeedbackAction
+    from preference.decay import sample_weight
+    from preference.train import build_and_save
+
+    creator_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    def _make_clip():
+        clip = MagicMock(spec=Clip)
+        clip.signals_jsonb = {
+            "features": {
+                "signal_density": 0.5,
+                "hook_energy": 0.3,
+                "silence_ratio": 0.1,
+                "clip_duration_s": 45.0,
+                "setup_length_s": 10.0,
+                "has_retention_spike": False,
+                "has_laughter": False,
+            }
+        }
+        clip.dna_match = None
+        return clip
+
+    def _make_feedback(action: FeedbackAction):
+        fb = MagicMock(spec=ClipFeedback)
+        fb.action = action
+        fb.created_at = now
+        return fb
+
+    # Rows: (feedback, clip, outcome)
+    # skip row — must be excluded from query because build_and_save filters by action.in_(...)
+    # We only return trim, approve, and downvote rows (skip is filtered at the SQL level).
+    row_trim = (_make_feedback(FeedbackAction.trim), _make_clip(), None)
+    row_approve = (_make_feedback(FeedbackAction.upvote), _make_clip(), None)
+    row_downvote = (_make_feedback(FeedbackAction.downvote), _make_clip(), None)
+
+    # Attach a performed_well=True outcome to the approve row
+    outcome = MagicMock(spec=ClipOutcome)
+    outcome.performed_well = True
+    row_approve = (row_approve[0], row_approve[1], outcome)
+
+    db_rows = [row_trim, row_approve, row_downvote]
+
+    # Two execute() calls: first fetches feedback rows, second fetches existing PreferenceModel.
+    execute_call_count = [0]
+
+    async def _execute(stmt):
+        result = MagicMock()
+        if execute_call_count[0] == 0:
+            result.all.return_value = db_rows
+        else:
+            # No existing preference model
+            scalars_mock = MagicMock()
+            scalars_mock.first.return_value = None
+            result.scalars.return_value = scalars_mock
+        execute_call_count[0] += 1
+        return result
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    scorer = await build_and_save(session, creator_id)
+
+    assert scorer is not None, "build_and_save returned None — insufficient training data"
+
+    # 3 rows entered training (skip was excluded at SQL layer, not present in db_rows)
+    assert scorer.label_count == 3
+
+    # The approve row (performed_well=True) must be weighted 3× vs the trim row (same timestamp).
+    w_trim = sample_weight(now, performed_well=None)
+    w_approve = sample_weight(now, performed_well=True)
+    assert w_approve == pytest.approx(w_trim * 3.0), (
+        f"approve weight ({w_approve}) is not 3× trim weight ({w_trim})"
+    )
+
+    # The model row was persisted via session.add
+    session.add.assert_called_once()

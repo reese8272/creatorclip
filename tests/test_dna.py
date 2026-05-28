@@ -228,3 +228,75 @@ def test_generate_brief_uses_prompt_caching():
     system = call_kwargs.get("system", [])
     assert len(system) == 1
     assert system[0].get("cache_control") == {"type": "ephemeral"}
+
+
+# ── Issue 55: confirm_draft supersedes previous confirmed profile ──────────────
+
+
+@pytest.mark.asyncio
+async def test_confirm_draft_supersedes_previous_confirmed_profile():
+    """After confirm_draft, exactly one confirmed row must exist for the creator."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dna import profile
+    from models import CreatorDna, DnaStatus
+
+    creator_id = uuid.uuid4()
+
+    # Build two in-memory CreatorDna objects: one confirmed, one draft.
+    old_confirmed = CreatorDna(
+        id=uuid.uuid4(),
+        creator_id=creator_id,
+        version=1,
+        brief_text="old brief",
+        patterns_jsonb={},
+        top_video_ids_jsonb=[],
+        bottom_video_ids_jsonb=[],
+        status=DnaStatus.confirmed,
+    )
+    new_draft = CreatorDna(
+        id=uuid.uuid4(),
+        creator_id=creator_id,
+        version=2,
+        brief_text="new brief",
+        patterns_jsonb={},
+        top_video_ids_jsonb=[],
+        bottom_video_ids_jsonb=[],
+        status=DnaStatus.draft,
+    )
+
+    # Sequence of execute() calls:
+    #   1st call: select confirmed rows → returns [old_confirmed]
+    #   2nd call: select draft rows (order by version desc) → returns [new_draft]
+    execute_calls = []
+
+    async def _execute(stmt):
+        result = MagicMock()
+        if len(execute_calls) == 0:
+            # confirmed query
+            scalars_mock = MagicMock()
+            scalars_mock.__iter__ = MagicMock(return_value=iter([old_confirmed]))
+            result.scalars.return_value = scalars_mock
+        else:
+            # draft query
+            scalars_mock = MagicMock()
+            scalars_mock.first.return_value = new_draft
+            result.scalars.return_value = scalars_mock
+        execute_calls.append(stmt)
+        return result
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    session.get = AsyncMock(return_value=None)  # creator lookup → None (no onboarding update)
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+
+    await profile.confirm_draft(session, creator_id)
+
+    # The old confirmed row must now be superseded.
+    assert old_confirmed.status == DnaStatus.superseded, (
+        "Previously confirmed DNA row was not superseded"
+    )
+    # The draft must now be confirmed.
+    assert new_draft.status == DnaStatus.confirmed, "Draft DNA row was not promoted to confirmed"

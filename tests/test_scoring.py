@@ -246,3 +246,36 @@ def test_rank_candidates_assigns_all_ranks():
     candidates = [{"score": 0.8}, {"score": 0.6}, {"score": 0.4}]
     ranked = rank_candidates(candidates)
     assert {c["rank"] for c in ranked} == {1, 2, 3}
+
+
+# ── Issue 55: score clamping for out-of-range Claude scores ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_clamps_anthropic_scores_outside_unit_interval():
+    """Scores returned by Claude outside [0, 1] must be clamped before returning."""
+    candidates = [
+        _candidate(setup=5.0, peak=30.0, end=50.0),
+        _candidate(setup=60.0, peak=90.0, end=110.0),
+        _candidate(setup=120.0, peak=150.0, end=170.0),
+    ]
+    # Claude returns out-of-range scores: 1.5, -0.3, and a valid 0.8
+    claude_scores = [
+        {"index": 0, "score": 1.5, "principle": "Hook in the first 3 seconds", "reasoning": "x"},
+        {
+            "index": 1,
+            "score": -0.3,
+            "principle": "Clip the setup, not the aftermath",
+            "reasoning": "y",
+        },
+        {"index": 2, "score": 0.8, "principle": "Loop-ability", "reasoning": "z"},
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        result = await score_candidates(candidates, _timeline(), dna_brief="some dna brief")
+
+    for candidate in result:
+        score = candidate["score"]
+        assert 0.0 <= score <= 1.0, f"score {score} is outside [0.0, 1.0] — clamping did not apply"

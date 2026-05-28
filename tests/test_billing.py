@@ -190,3 +190,35 @@ def test_webhook_ignores_unknown_event_type(client):
         )
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
+
+
+# ── Issue 55: 503 when STRIPE_SECRET_KEY is empty ─────────────────────────────
+
+
+def test_checkout_returns_503_when_stripe_key_empty(monkeypatch):
+    """POST /billing/checkout must return 503 when STRIPE_SECRET_KEY is not configured."""
+    from auth import get_current_creator
+    from config import settings
+    from main import app
+
+    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "")
+
+    fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
+    app.dependency_overrides[get_current_creator] = lambda: fake_creator
+    try:
+        c = TestClient(app, raise_server_exceptions=False)
+        response = c.post(
+            "/billing/checkout",
+            json={
+                "pack_id": "creator",
+                "success_url": "http://example.com/ok",
+                "cancel_url": "http://example.com/no",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert response.status_code == 503, (
+        f"Expected 503 Service Unavailable when STRIPE_SECRET_KEY is empty, "
+        f"got {response.status_code}: {response.text}"
+    )
