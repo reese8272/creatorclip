@@ -198,4 +198,3 @@ def test_delete_account_clears_session_cookie(client):
     # or the response header indicates the cookie was cleared (max-age=0 or expired)
     set_cookie = resp.headers.get("set-cookie", "")
     assert SESSION_COOKIE in set_cookie or SESSION_COOKIE not in client.cookies
-

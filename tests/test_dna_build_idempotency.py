@@ -149,7 +149,8 @@ async def test_retry_after_voyage_failure_produces_exactly_one_draft(db_session:
             patch(
                 "dna.embeddings.embed_patterns",
                 side_effect=RuntimeError("Voyage API unavailable"),
-            ),pytest.raises(RuntimeError)
+            ),
+            pytest.raises(RuntimeError),
         ):
             from worker.tasks import _build_dna_async
 

@@ -38,7 +38,9 @@ def decrypt(ciphertext: str) -> str:
     try:
         return _fernet().decrypt(ciphertext.encode()).decode()
     except InvalidToken as exc:
-        raise TokenDecryptError("Token could not be decrypted — key mismatch or corrupt data") from exc
+        raise TokenDecryptError(
+            "Token could not be decrypted — key mismatch or corrupt data"
+        ) from exc
 
 
 def generate_key() -> str:

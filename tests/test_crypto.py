@@ -1,6 +1,5 @@
 """Unit tests for Fernet encryption helpers — no DB needed."""
 
-
 import pytest
 from cryptography.fernet import Fernet
 

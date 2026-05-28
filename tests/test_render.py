@@ -195,10 +195,13 @@ def test_render_clip_file_crop_centers_on_face(tmp_path):
 
 def test_run_raises_runtime_error_on_timeout():
     """`_run` converts `subprocess.TimeoutExpired` into a `RuntimeError` with message."""
-    with patch(
-        "subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=120),
-    ), pytest.raises(RuntimeError, match="timed out after 120"):
+    with (
+        patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=120),
+        ),
+        pytest.raises(RuntimeError, match="timed out after 120"),
+    ):
         _run(["ffmpeg", "-version"], "test label", timeout_s=120)
 
 
@@ -206,10 +209,13 @@ def test_frame_dimensions_raises_on_timeout(tmp_path):
     """`_frame_dimensions` raises `RuntimeError` when ffprobe hangs."""
     fake = tmp_path / "v.mp4"
     fake.touch()
-    with patch(
-        "subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30),
-    ), pytest.raises(RuntimeError, match="ffprobe timed out after 30s"):
+    with (
+        patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30),
+        ),
+        pytest.raises(RuntimeError, match="ffprobe timed out after 30s"),
+    ):
         _frame_dimensions(fake)
 
 

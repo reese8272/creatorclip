@@ -36,6 +36,7 @@ _TEST_MAX_MB = 2
 
 def _fake_session():
     """Return an async generator factory that yields a mocked AsyncSession."""
+
     async def _gen():
         session = AsyncMock()
         # No duplicate video found by default.

@@ -71,9 +71,7 @@ class _RestrictedUnpickler(_jnp.NumpyUnpickler):
     def find_class(self, module: str, name: str) -> Any:
         """Allow only pre-approved (module, name) pairs."""
         if (module, name) not in _ALLOWED_CLASSES:
-            raise pickle.UnpicklingError(
-                f"class not allowed: {module}.{name}"
-            )
+            raise pickle.UnpicklingError(f"class not allowed: {module}.{name}")
         return super().find_class(module, name)
 
 
@@ -120,9 +118,7 @@ class PreferenceScorer:
             _jnp.NumpyUnpickler = _original  # type: ignore[assignment]
 
         if not isinstance(obj, cls):
-            raise pickle.UnpicklingError(
-                f"expected PreferenceScorer, got {type(obj).__name__}"
-            )
+            raise pickle.UnpicklingError(f"expected PreferenceScorer, got {type(obj).__name__}")
         return obj
 
 
