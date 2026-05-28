@@ -117,3 +117,24 @@ def test_quota_redis_singleton():
     finally:
         # Restore original state so other tests in the suite are unaffected.
         redis_module._REDIS_CLIENT = original
+
+
+# ── Issue 55: consume raises (does not silent-allow) when Redis is unreachable ─
+
+
+@pytest.mark.asyncio
+async def test_consume_raises_when_redis_unreachable():
+    """consume() must propagate (not swallow) a Redis ConnectionError."""
+    import redis.exceptions
+
+    mock_redis = AsyncMock()
+    mock_redis.eval = AsyncMock(side_effect=redis.exceptions.ConnectionError("Connection refused"))
+
+    with (
+        patch("youtube.quota.get_redis_client", return_value=mock_redis),
+        pytest.raises(redis.exceptions.ConnectionError),
+    ):
+        await consume(COST_ANALYTICS_REPORT)
+
+    # Confirm the Redis client actually raised — not that we got a QuotaExhaustedError silently.
+    mock_redis.eval.assert_awaited_once()

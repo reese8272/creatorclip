@@ -275,6 +275,38 @@ def test_me_returns_creator_for_valid_session(client, mocker):
     assert data["email"] == "me@example.com"
 
 
+# ── Issue 55: stale JWT for deleted creator → 401 not 500 ────────────────────
+
+
+def test_get_current_creator_404_when_creator_deleted_after_token_issuance(client):
+    """A valid JWT whose creator no longer exists in DB must return 401, not 500."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from db import get_session
+    from main import app
+
+    ghost_creator_id = uuid.uuid4()
+    token = create_session_token(ghost_creator_id)
+
+    # Mock the DB session so the creator lookup returns None (deleted creator).
+    async def _empty_session():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        yield session
+
+    app.dependency_overrides[get_session] = _empty_session
+    try:
+        resp = client.get("/auth/me", cookies={SESSION_COOKIE: token})
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 401, (
+        f"Expected 401 for deleted creator, got {resp.status_code}: {resp.text}"
+    )
+
+
 @pytest.mark.integration
 def test_cross_creator_session_isolation(client, mocker):
     """Two creators can only access their own /auth/me data."""

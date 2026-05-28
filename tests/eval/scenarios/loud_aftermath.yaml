@@ -1,0 +1,26 @@
+scenario: loud_aftermath
+description: >
+  Adversarial scenario: the loudest signal (laughter) occurs AFTER the joke setup.
+  The peak is the laugh at 105s; the setup begins at the silence boundary at 80s,
+  well before the laugh. This verifies that the engine clips the SETUP (starting at
+  or before 80s) rather than the aftermath (starting at or after the laugh at 100s+).
+  Principle: "Clip the setup, not the aftermath".
+
+input:
+  timeline:
+    version: 1
+    duration_s: 180.0
+    events:
+      - {type: silence,         start_s: 78.0,  end_s: 81.0}
+      - {type: energy_spike,    start_s: 81.0,  end_s: 105.0, value: 0.85}
+      - {type: laughter,        start_s: 100.0, end_s: 107.0, value: 0.9}
+      - {type: retention_spike, start_s: 105.0, end_s: 108.0, value: 1.7}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 100.0
+      peak_s_max: 110.0
+      # setup_start_s must be at or before the silence end (81s),
+      # proving the clip begins at the setup — not at the loud aftermath laugh
+      setup_start_s_max: 81.5
