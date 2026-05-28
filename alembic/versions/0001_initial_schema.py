@@ -94,9 +94,7 @@ def upgrade() -> None:
         sa.Column("captions_available", sa.Boolean, nullable=False, server_default="false"),
         sa.Column(
             "ingest_status",
-            sa.Enum(
-                "pending", "running", "done", "failed", name="ingest_status_enum"
-            ),
+            sa.Enum("pending", "running", "done", "failed", name="ingest_status_enum"),
             nullable=False,
             server_default="pending",
         ),
