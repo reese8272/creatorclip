@@ -6,8 +6,8 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Issue 35 next (idempotent DNA build — prevent orphan drafts)
-**Last completed**: Issue 41 — Replace pickle in preference model (2026-05-28)
+**Active issue**: Phase 2 hardening — Issue 36 next (OAuth token lifecycle)
+**Last completed**: Issue 35 — Idempotent DNA build (SEV-0) (2026-05-28)
 **Blocked**: _(none)_
 
 > **Closed Issue 41**: `preference/model.py:35–40` used `pickle.dumps(self)` / `pickle.loads(data)`
@@ -82,6 +82,12 @@ Updated after every issue closes.
 > Note: CI lint (`ruff check .`) has ~11 pre-existing violations unrelated to this work — flagged,
 > not swept in. The local unprovisioned `.env` is missing most required vars (dev only).
 
+> **2026-05-28 session note**: Fixed SEV-0 Issue 35 — idempotent DNA build. `create_draft`,
+> `embed_patterns`, `embed_brief` all gained `commit=False` path; `_build_dna_async` now
+> issues a single atomic commit. 3 integration tests added in `tests/test_dna_build_idempotency.py`
+> (marked `integration`; excluded from default `pytest -q` run per pytest.ini). Non-integration
+> suite count unchanged at `313 passed`.
+
 ---
 
 ## Issue Progress
@@ -124,6 +130,7 @@ Updated after every issue closes.
 | 34 | Idempotent minute deduction on Celery retry | HARDENING | ✅ Done | New `MinuteDeduction` ledger with `UNIQUE(video_id)` idempotency key; `deduct_for_video` SAVEPOINT-atomic; 4 real-Postgres integration tests (sequential, concurrent race, 402-clean, audit fields); migration 0003; spawned Issue 57 (refund policy) |
 | 41 | Replace pickle in preference model (RCE surface) | HARDENING | ✅ Done | joblib + `_RestrictedUnpickler` allowlist (10 entries); `to_bytes`/`from_bytes` rewritten; 4 new tests (round-trip + 2 rejection tests); no schema change |
 | 42 | ffmpeg/subprocess timeouts | HARDENING | ✅ Done | `_run` accepts `timeout_s=120.0`; `_frame_dimensions` hardcodes `timeout=30`; `render_clip_file` computes `max(120, duration*4)`; 3 new timeout tests; DECISIONS.md entry |
+| 35 | Idempotent DNA build (SEV-0) | HARDENING | ✅ Done | Single-transaction commit in `_build_dna_async`; `commit=False` param on `create_draft`, `embed_patterns`, `embed_brief`; 3 integration tests; 313 non-integration tests pass |
 
 ---
 

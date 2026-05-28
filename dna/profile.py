@@ -27,8 +27,26 @@ async def create_draft(
     optimal_clip_len_s: float | None = None,
     best_source_region: str | None = None,
     optimal_upload_gap_h: float | None = None,
+    *,
+    commit: bool = True,
 ) -> CreatorDna:
-    """Create a new draft DNA profile at version max+1."""
+    """Create a new draft DNA profile at version max+1.
+
+    Args:
+        session: Active async database session.
+        creator_id: UUID of the owning creator.
+        patterns: DNA pattern dict from the builder.
+        top_video_ids: IDs of top-performing videos.
+        bottom_video_ids: IDs of bottom-performing videos.
+        brief_text: Plain-language creator brief text.
+        optimal_clip_len_s: Derived optimal clip length, if available.
+        best_source_region: Derived best source region, if available.
+        optimal_upload_gap_h: Derived optimal upload gap, if available.
+        commit: When True (default), commit immediately after adding the row.
+            Pass ``commit=False`` when the caller manages the transaction boundary
+            and will commit after additional writes (e.g. embeddings) so that the
+            draft INSERT and embedding INSERTs form a single atomic unit.
+    """
     result = await session.execute(
         select(sa.func.max(CreatorDna.version)).where(CreatorDna.creator_id == creator_id)
     )
@@ -47,9 +65,10 @@ async def create_draft(
         status=DnaStatus.draft,
     )
     session.add(dna)
-    await session.commit()
-    await session.refresh(dna)
-    logger.info("DNA draft v%d created for creator %s", dna.version, creator_id)
+    if commit:
+        await session.commit()
+        await session.refresh(dna)
+        logger.info("DNA draft v%d created for creator %s", dna.version, creator_id)
     return dna
 
 
