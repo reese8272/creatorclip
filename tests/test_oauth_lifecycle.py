@@ -52,6 +52,18 @@ def _session_cookie_for(creator) -> dict:
     return {SESSION_COOKIE: create_session_token(creator.id)}
 
 
+def _make_lock_redis() -> AsyncMock:
+    """Return a fake Redis client that always acquires the refresh lock.
+
+    Used by tests that exercise the refresh branch of get_valid_access_token
+    so they don't need a live Redis connection.
+    """
+    mock = AsyncMock()
+    mock.set = AsyncMock(return_value=True)  # lock acquired
+    mock.eval = AsyncMock(return_value=1)  # Lua release succeeds
+    return mock
+
+
 # ── (a) delete_account revokes the refresh token ──────────────────────────────
 
 
@@ -179,6 +191,7 @@ async def test_get_valid_access_token_deletes_row_on_invalid_grant():
         raise httpx.HTTPStatusError("400", request=resp.request, response=resp)
 
     with (
+        patch("youtube.oauth.get_redis_client", return_value=_make_lock_redis()),
         patch("youtube.oauth.refresh_access_token", side_effect=fake_refresh),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -212,6 +225,7 @@ async def test_get_valid_access_token_keeps_row_on_other_400():
         raise httpx.HTTPStatusError("400", request=resp.request, response=resp)
 
     with (
+        patch("youtube.oauth.get_redis_client", return_value=_make_lock_redis()),
         patch("youtube.oauth.refresh_access_token", side_effect=fake_refresh),
         pytest.raises(HTTPException),
     ):
@@ -415,3 +429,145 @@ async def test_refresh_analytics_deletes_token_row_on_auth_error():
         await tasks._refresh_youtube_analytics_async()
 
     assert delete_called["n"] >= 1
+
+
+# ── Issue 45: concurrent refresh lock ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refresh_only_calls_google_once():
+    """Two concurrent get_valid_access_token calls must only call Google once.
+
+    Coroutine A acquires the Redis lock and performs the refresh.
+    Coroutine B sees the lock is taken, waits, then reads the fresh token from DB.
+    """
+    import asyncio
+
+    from crypto import encrypt
+    from youtube.oauth import get_valid_access_token
+
+    creator_id = uuid.uuid4()
+    refresh_call_count = {"n": 0}
+
+    # Initial token row — expired, forces the refresh branch.
+    initial_expires = datetime.now(UTC) - timedelta(minutes=1)
+    # After refresh, coroutine B's re-read should see a future expiry.
+    refreshed_expires = datetime.now(UTC) + timedelta(hours=1)
+
+    def _make_row(expires_at):
+        row = MagicMock()
+        row.refresh_token_encrypted = encrypt("refresh-token")
+        row.access_token_encrypted = encrypt("fresh-access-token")
+        row.expires_at = expires_at
+        row.scope = "scope"
+        return row
+
+    # Fake session for coroutine A: returns an expired row on all execute() calls
+    # (store_or_update_tokens does a second SELECT inside it, so we need a more
+    # permissive mock that returns an existing row for the upsert path).
+    session_a = AsyncMock()
+    session_a.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=lambda: _make_row(initial_expires))
+    )
+    session_a.commit = AsyncMock()
+
+    # Fake session for coroutine B: first execute (initial read) returns expired row;
+    # subsequent executes (retries) return the refreshed row so B exits without 503.
+    session_b_call_count = {"n": 0}
+
+    async def _session_b_execute(_stmt):
+        session_b_call_count["n"] += 1
+        if session_b_call_count["n"] == 1:
+            # First read: token still expired (before A commits)
+            return MagicMock(scalar_one_or_none=lambda: _make_row(initial_expires))
+        # Subsequent reads: token refreshed
+        return MagicMock(scalar_one_or_none=lambda: _make_row(refreshed_expires))
+
+    session_b = AsyncMock()
+    session_b.execute = _session_b_execute
+    session_b.commit = AsyncMock()
+
+    # Redis mock: A acquires the lock (set returns True); B does not (set returns False).
+    lock_set_call_count = {"n": 0}
+
+    async def _fake_set(key, value, nx=False, ex=None):
+        lock_set_call_count["n"] += 1
+        # First caller acquires; second does not.
+        return lock_set_call_count["n"] == 1
+
+    async def _fake_eval(script, num_keys, key, token):
+        # Lua release — always succeeds for the test.
+        return 1
+
+    fake_redis = AsyncMock()
+    fake_redis.set = _fake_set
+    fake_redis.eval = _fake_eval
+
+    async def _slow_refresh(refresh_token: str) -> dict:
+        """Simulate a Google round-trip that takes 100 ms."""
+        refresh_call_count["n"] += 1
+        await asyncio.sleep(0.1)
+        return {
+            "access_token": "fresh-access-token",
+            "expires_in": 3600,
+            "scope": "scope",
+        }
+
+    with (
+        patch("youtube.oauth.get_redis_client", return_value=fake_redis),
+        patch("youtube.oauth.refresh_access_token", side_effect=_slow_refresh),
+        patch("youtube.oauth.asyncio.sleep", new=AsyncMock()),  # fast-forward B's poll sleep
+    ):
+        token_a, token_b = await asyncio.gather(
+            get_valid_access_token(creator_id, session_a),
+            get_valid_access_token(creator_id, session_b),
+        )
+
+    assert refresh_call_count["n"] == 1, "Google must be called exactly once"
+    assert token_a == "fresh-access-token"
+    assert token_b == "fresh-access-token"
+
+
+@pytest.mark.asyncio
+async def test_lock_releases_after_success():
+    """After a successful refresh the Redis lock key must be deleted."""
+    from crypto import encrypt
+    from youtube.oauth import get_valid_access_token
+
+    creator_id = uuid.uuid4()
+
+    row = MagicMock()
+    row.refresh_token_encrypted = encrypt("refresh-token")
+    row.access_token_encrypted = encrypt("access-token")
+    row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    row.scope = "scope"
+
+    session_mock = AsyncMock()
+    session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: row))
+    session_mock.commit = AsyncMock()
+
+    # Track eval (Lua release) calls.
+    eval_calls: list[tuple] = []
+
+    async def _fake_eval(script, num_keys, key, token):
+        eval_calls.append((key, token))
+        return 1  # 1 == deleted
+
+    fake_redis = AsyncMock()
+    fake_redis.set = AsyncMock(return_value=True)  # always acquires lock
+    fake_redis.eval = _fake_eval
+
+    async def _fake_refresh(_refresh_token: str) -> dict:
+        return {"access_token": "new-token", "expires_in": 3600, "scope": "scope"}
+
+    with (
+        patch("youtube.oauth.get_redis_client", return_value=fake_redis),
+        patch("youtube.oauth.refresh_access_token", side_effect=_fake_refresh),
+    ):
+        token = await get_valid_access_token(creator_id, session_mock)
+
+    assert token == "new-token"
+    # The Lua compare-and-delete must have been called exactly once.
+    assert len(eval_calls) == 1, "Lock release Lua script must be called after successful refresh"
+    released_key = eval_calls[0][0]
+    assert str(creator_id) in released_key, "Released key must reference the creator ID"

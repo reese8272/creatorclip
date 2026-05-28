@@ -725,3 +725,65 @@ creator. A future issue can add a UI-visible `disconnected` state if the product
 (`developers.google.com/youtube/v3/docs/errors`); Google APIs error model
 (`developers.google.com/identity/protocols/oauth2/openid-connect#errors`); existing
 worker skip-on-exception pattern in `worker/tasks.py:_refresh_youtube_analytics_async`.
+
+---
+
+## 2026-05-28 — Issue 45: Concurrent token refresh lock + Redis pool singleton (SEV-2)
+
+### Per-creator Redis advisory lock in `get_valid_access_token`
+
+**What changed**: `youtube/oauth.py::get_valid_access_token` now wraps the Google refresh
+call with a per-creator Redis advisory lock (`SET refresh-lock:{creator_id} <uuid> NX EX 10`).
+
+- **Lock acquired**: proceed with the existing refresh + DB commit, then release via a Lua
+  compare-and-delete script that only deletes the key if the value still matches our token.
+  This prevents a worker whose TTL expired mid-flight from deleting another worker's lock.
+- **Lock not acquired**: poll up to 3 times with 200 ms sleeps, re-reading the
+  `YoutubeToken` row each time. If the row's `expires_at` is now in the future by > 5 min,
+  return its decrypted access token. If still expired after all retries, raise
+  `HTTPException(503, "Token refresh in progress; please retry")`.
+
+**Why SET NX EX over Redlock**: SET NX + a reasonable TTL (10s) is the canonical
+single-node Redis distributed-lock pattern, documented in the official Redis SETNX page and
+in "The Redlock algorithm" article. Redlock (multi-node quorum) is appropriate when Redis
+itself is clustered; this project runs a single Redis instance so SET NX is correct and
+significantly simpler. The Lua compare-and-delete (KEYS[1] == ARGV[1] → DEL) is the
+canonical safe-release idiom from the Redis docs to prevent accidental release of another
+client's lock if our TTL expires.
+
+**Why 10s TTL**: One Google token-refresh round-trip completes in < 1s under normal
+conditions. 10s gives 10× headroom before the lock auto-expires, covering network hiccups
+and slow Google responses while still protecting against a worker crash leaving the lock
+indefinitely. A shorter TTL risks expiring mid-refresh; a longer TTL extends the worst-case
+stall for waiting workers.
+
+**Why 200ms / 3-retry poll**: Total worst-case wait is 600ms — acceptable for an interactive
+`/clips` request. Three retries avoids an infinite loop while giving the lock holder enough
+time to complete the Google round-trip and DB commit.
+
+**Source**: Redis SETNX docs (`redis.io/commands/setnx`); Redis "Distributed Locks with
+Redis" article (`redis.io/docs/manual/patterns/distributed-locks`). 2026-05-28.
+
+---
+
+### Module-level Redis singleton in `youtube/_redis.py`
+
+**What changed**: `youtube/quota.py` previously called `aioredis.from_url(...)` on every
+`consume()` and `remaining()` call, creating a new connection-pool per call. A new helper
+module `youtube/_redis.py` exposes `get_redis_client()` which initialises a single
+`redis.asyncio.Redis` instance at first call and reuses it on all subsequent calls.
+Both `youtube/quota.py` and `youtube/oauth.py` import from this module.
+
+**Why singleton over per-call `from_url`**: `redis-py` 4.2+ creates an internal
+`ConnectionPool` per `Redis` instance. Per-call `from_url` creates a new pool every time,
+leaking connections and adding latency. The singleton pattern ensures one pool is shared
+across the process — the standard recommendation in the redis-py docs and the pattern used
+by every production redis-py deployment.
+
+**Why a separate `_redis.py` module**: `oauth.py` and `quota.py` are separate concerns but
+both need Redis. Putting the singleton in either one and importing from the other creates a
+circular dependency risk. A dedicated `_redis.py` (underscore = package-internal) is the
+clean DRY solution.
+
+**Source**: redis-py docs "Connection Pools" section; PEP 8 on module naming conventions
+for package-internal helpers. 2026-05-28.
