@@ -72,12 +72,26 @@ async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
     await session.commit()
 
 
+async def _wipe_tokens(session: AsyncSession) -> None:
+    """Delete every row from youtube_tokens before a rotate test.
+
+    `scripts/rotate_token_key.py::_rotate` operates on the WHOLE table by design (a
+    real rotation must touch every creator). Other integration tests that leave
+    YoutubeToken rows behind would cause _rotate to error on them with the wrong
+    key. The rotation test must therefore own the entire table for its duration.
+    """
+    await session.execute(delete(YoutubeToken))
+    await session.commit()
+
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.integration
 async def test_rotation_re_encrypts_every_row(db_session: AsyncSession):
     """All rows are re-encrypted with the new key; old key can no longer decrypt."""
+    await _wipe_tokens(db_session)
+
     key_a = Fernet.generate_key().decode()
     key_b = Fernet.generate_key().decode()
     fernet_a = Fernet(key_a)
@@ -123,6 +137,8 @@ async def test_rotation_re_encrypts_every_row(db_session: AsyncSession):
 @pytest.mark.integration
 async def test_rotation_rolls_back_on_corrupt_row(db_session: AsyncSession):
     """If any row fails to decrypt, all rows remain encrypted under the original key."""
+    await _wipe_tokens(db_session)
+
     key_a = Fernet.generate_key().decode()
     key_b = Fernet.generate_key().decode()
     fernet_a = Fernet(key_a)
@@ -185,6 +201,8 @@ async def test_rotation_rolls_back_on_corrupt_row(db_session: AsyncSession):
 async def test_rotation_logs_no_plaintext_tokens(db_session: AsyncSession, caplog):
     """Rotation must not emit any plaintext token value to the log."""
     import logging
+
+    await _wipe_tokens(db_session)
 
     key_a = Fernet.generate_key().decode()
     key_b = Fernet.generate_key().decode()
