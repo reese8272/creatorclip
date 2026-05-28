@@ -101,7 +101,7 @@ class PreferenceScorer:
         return buf.getvalue()
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "PreferenceScorer":
+    def from_bytes(cls, data: bytes) -> PreferenceScorer:
         """Deserialise scorer, enforcing the class allowlist.
 
         Temporarily replaces `joblib.numpy_pickle.NumpyUnpickler` with

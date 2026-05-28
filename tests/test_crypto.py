@@ -1,14 +1,10 @@
 """Unit tests for Fernet encryption helpers — no DB needed."""
 
-import importlib
-import os
 
 import pytest
 from cryptography.fernet import Fernet
 
 from crypto import TokenDecryptError, decrypt, encrypt, generate_key
-
-
 
 
 def test_encrypt_decrypt_roundtrip():

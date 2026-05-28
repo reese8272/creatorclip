@@ -212,10 +212,10 @@ def test_tampered_blob_arbitrary_global_rejected():
     """Any arbitrary global embedded in a joblib blob is rejected by the allowlist."""
     import io as _io
 
-    import joblib as _joblib
-
     # subprocess.Popen is a common RCE gadget — must be blocked.
     import subprocess
+
+    import joblib as _joblib
 
     class _POpenGadget:
         def __reduce__(self) -> tuple:

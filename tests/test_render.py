@@ -198,9 +198,8 @@ def test_run_raises_runtime_error_on_timeout():
     with patch(
         "subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=120),
-    ):
-        with pytest.raises(RuntimeError, match="timed out after 120"):
-            _run(["ffmpeg", "-version"], "test label", timeout_s=120)
+    ), pytest.raises(RuntimeError, match="timed out after 120"):
+        _run(["ffmpeg", "-version"], "test label", timeout_s=120)
 
 
 def test_frame_dimensions_raises_on_timeout(tmp_path):
@@ -210,9 +209,8 @@ def test_frame_dimensions_raises_on_timeout(tmp_path):
     with patch(
         "subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30),
-    ):
-        with pytest.raises(RuntimeError, match="ffprobe timed out after 30s"):
-            _frame_dimensions(fake)
+    ), pytest.raises(RuntimeError, match="ffprobe timed out after 30s"):
+        _frame_dimensions(fake)
 
 
 def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):

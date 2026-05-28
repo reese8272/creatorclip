@@ -27,7 +27,6 @@ from models import (
     OnboardingState,
 )
 
-
 # ── DB session fixture ────────────────────────────────────────────────────────
 
 
@@ -116,11 +115,11 @@ async def test_voyage_failure_leaves_no_orphan_draft(db_session: AsyncSession):
                 "dna.embeddings.embed_patterns",
                 side_effect=RuntimeError("Voyage API unavailable"),
             ),
+            pytest.raises(RuntimeError, match="Voyage API unavailable"),
         ):
-            with pytest.raises(RuntimeError, match="Voyage API unavailable"):
-                from worker.tasks import _build_dna_async
+            from worker.tasks import _build_dna_async
 
-                await _build_dna_async(creator_id_str)
+            await _build_dna_async(creator_id_str)
 
         # The session context manager rolled back — no draft row should exist.
         assert await _draft_count(db_session, creator.id) == 0
@@ -150,12 +149,11 @@ async def test_retry_after_voyage_failure_produces_exactly_one_draft(db_session:
             patch(
                 "dna.embeddings.embed_patterns",
                 side_effect=RuntimeError("Voyage API unavailable"),
-            ),
+            ),pytest.raises(RuntimeError)
         ):
-            with pytest.raises(RuntimeError):
-                from worker.tasks import _build_dna_async
+            from worker.tasks import _build_dna_async
 
-                await _build_dna_async(creator_id_str)
+            await _build_dna_async(creator_id_str)
 
         # Confirm rollback — no orphan row.
         assert await _draft_count(db_session, creator.id) == 0

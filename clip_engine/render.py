@@ -21,8 +21,8 @@ _OUTPUT_H = 1920
 def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s") from exc
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg {label} failed: {result.stderr[:500]}")
 
@@ -70,8 +70,8 @@ def _frame_dimensions(source_path: Path) -> tuple[int, int]:
             text=True,
             timeout=30,
         )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("ffmpeg ffprobe timed out after 30s")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("ffmpeg ffprobe timed out after 30s") from exc
     try:
         parts = result.stdout.strip().split(",")
         return int(parts[0]), int(parts[1])
