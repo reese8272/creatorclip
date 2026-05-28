@@ -69,6 +69,14 @@ jobs:
       - name: Smoke test
         run: |
           sleep 15
-          curl -sf --retry 5 --retry-delay 10 --retry-connrefused --max-time 15 \
-            ${{ secrets.PRODUCTION_URL }}/health | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', f'Health check failed: {d}'; print('Deploy healthy:', d)"
+          for i in 1 2 3 4 5; do
+            HTTP=$(curl -s -o /tmp/health.json -w "%{http_code}" --max-time 15 \
+              ${{ secrets.PRODUCTION_URL }}/health || echo "000")
+            echo "Attempt $i: HTTP $HTTP — $(cat /tmp/health.json)"
+            if [ "$HTTP" = "200" ]; then
+              python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', f'Health check failed: {d}'; print('Deploy healthy:', d)"
+              break
+            fi
+            [ $i -lt 5 ] && sleep 10
+          done
+          [ "$HTTP" = "200" ] || { echo "Health check failed after 5 attempts"; exit 1; }
