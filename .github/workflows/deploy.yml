@@ -66,17 +66,18 @@ jobs:
             # Clean up old images to save disk space
             docker image prune -f
 
-            # Smoke test — hit the app container directly on localhost to bypass
-            # Cloudflare bot protection (GitHub Actions IPs trigger the challenge).
+            # Smoke test — exec into the app container to bypass Cloudflare
+            # (port 8000 is not exposed to the host, only to the Docker network).
             echo "Running smoke test..."
             for i in 1 2 3 4 5; do
-              BODY=$(curl -s --max-time 10 http://localhost:8000/health || true)
-              HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://localhost:8000/health || echo "000")
-              echo "Attempt $i: HTTP $HTTP — $BODY"
-              if [ "$HTTP" = "200" ]; then
-                echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', f'Health check failed: {d}'; print('Deploy healthy:', d)"
+              BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
+                curl -s --max-time 10 http://localhost:8000/health 2>/dev/null || true)
+              echo "Attempt $i: $BODY"
+              STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
+              if [ "$STATUS" = "ok" ]; then
+                echo "Deploy healthy: $BODY"
                 break
               fi
               [ $i -lt 5 ] && sleep 10
             done
-            [ "$HTTP" = "200" ] || { echo "Smoke test failed after 5 attempts"; exit 1; }
+            [ "$STATUS" = "ok" ] || { echo "Smoke test failed after 5 attempts"; exit 1; }
