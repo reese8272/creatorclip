@@ -4,7 +4,7 @@ Unit tests for youtube/quota.py.
 All Redis calls are patched — no live Redis required.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -19,30 +19,27 @@ from youtube.quota import (
 )
 
 
-def _make_redis(eval_return: int = 500, get_return: str | None = "500"):
+def _make_redis_mock(eval_return: int = 500, get_return: str | None = "500") -> AsyncMock:
     """Return a mock async Redis client that eval() and get() return the given values."""
     mock_redis = AsyncMock()
     mock_redis.eval = AsyncMock(return_value=eval_return)
     mock_redis.get = AsyncMock(return_value=get_return)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=mock_redis)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    return ctx, mock_redis
+    return mock_redis
 
 
 @pytest.mark.asyncio
 async def test_consume_success_does_not_raise():
-    ctx, mock_redis = _make_redis(eval_return=100)
-    with patch("youtube.quota.aioredis.from_url", return_value=ctx):
+    mock_redis = _make_redis_mock(eval_return=100)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
         await consume(COST_ANALYTICS_REPORT)
     mock_redis.eval.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_consume_exhausted_raises_quota_error():
-    ctx, _ = _make_redis(eval_return=-1)
+    mock_redis = _make_redis_mock(eval_return=-1)
     with (
-        patch("youtube.quota.aioredis.from_url", return_value=ctx),
+        patch("youtube.quota.get_redis_client", return_value=mock_redis),
         pytest.raises(QuotaExhaustedError),
     ):
         await consume(COST_ANALYTICS_REPORT)
@@ -50,8 +47,8 @@ async def test_consume_exhausted_raises_quota_error():
 
 @pytest.mark.asyncio
 async def test_consume_captions_cost_passed_to_lua():
-    ctx, mock_redis = _make_redis(eval_return=50)
-    with patch("youtube.quota.aioredis.from_url", return_value=ctx):
+    mock_redis = _make_redis_mock(eval_return=50)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
         await consume(COST_DATA_CAPTIONS)
     call_args = mock_redis.eval.call_args
     cost_arg = int(call_args.args[3])
@@ -60,8 +57,8 @@ async def test_consume_captions_cost_passed_to_lua():
 
 @pytest.mark.asyncio
 async def test_remaining_calculates_from_redis():
-    ctx, _ = _make_redis(get_return="3000")
-    with patch("youtube.quota.aioredis.from_url", return_value=ctx):
+    mock_redis = _make_redis_mock(get_return="3000")
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
         from config import settings
 
         left = await remaining()
@@ -70,8 +67,8 @@ async def test_remaining_calculates_from_redis():
 
 @pytest.mark.asyncio
 async def test_remaining_when_no_key_returns_full_budget():
-    ctx, _ = _make_redis(get_return=None)
-    with patch("youtube.quota.aioredis.from_url", return_value=ctx):
+    mock_redis = _make_redis_mock(get_return=None)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
         from config import settings
 
         left = await remaining()
@@ -80,8 +77,8 @@ async def test_remaining_when_no_key_returns_full_budget():
 
 @pytest.mark.asyncio
 async def test_remaining_never_negative():
-    ctx, _ = _make_redis(get_return="99999")
-    with patch("youtube.quota.aioredis.from_url", return_value=ctx):
+    mock_redis = _make_redis_mock(get_return="99999")
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
         left = await remaining()
     assert left == 0
 
@@ -99,3 +96,24 @@ def test_cost_constants_are_correct():
     assert COST_ANALYTICS_REPORT == 1
     assert COST_DATA_VIDEOS == 1
     assert COST_DATA_CAPTIONS == 50
+
+
+# ── Issue 45: singleton tests ─────────────────────────────────────────────────
+
+
+def test_quota_redis_singleton():
+    """Two get_redis_client() calls must return the exact same client instance."""
+    import youtube._redis as redis_module
+
+    # Reset the singleton so the test is deterministic regardless of import order.
+    original = redis_module._REDIS_CLIENT
+    redis_module._REDIS_CLIENT = None
+    try:
+        from youtube._redis import get_redis_client
+
+        client_a = get_redis_client()
+        client_b = get_redis_client()
+        assert client_a is client_b, "get_redis_client() must return the same instance each call"
+    finally:
+        # Restore original state so other tests in the suite are unaffected.
+        redis_module._REDIS_CLIENT = original

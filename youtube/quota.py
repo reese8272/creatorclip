@@ -17,9 +17,8 @@ Cost reference (Google official documentation, 2026):
 import logging
 from datetime import UTC, datetime
 
-import redis.asyncio as aioredis
-
 from config import settings
+from youtube._redis import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -61,15 +60,15 @@ async def consume(cost: int) -> None:
     Consume `cost` quota units atomically.
     Raises QuotaExhaustedError if the daily budget would be exceeded.
     """
-    async with aioredis.from_url(settings.REDIS_URL, decode_responses=True) as r:
-        result = await r.eval(
-            _LUA_CONSUME,
-            1,
-            _quota_key(),
-            cost,
-            settings.YOUTUBE_QUOTA_DAILY_UNITS,
-            _TTL_SECONDS,
-        )
+    r = get_redis_client()
+    result = await r.eval(
+        _LUA_CONSUME,
+        1,
+        _quota_key(),
+        cost,
+        settings.YOUTUBE_QUOTA_DAILY_UNITS,
+        _TTL_SECONDS,
+    )
 
     if result == -1:
         raise QuotaExhaustedError(
@@ -80,6 +79,6 @@ async def consume(cost: int) -> None:
 
 async def remaining() -> int:
     """Return remaining quota units available for today."""
-    async with aioredis.from_url(settings.REDIS_URL, decode_responses=True) as r:
-        used = await r.get(_quota_key())
+    r = get_redis_client()
+    used = await r.get(_quota_key())
     return max(0, settings.YOUTUBE_QUOTA_DAILY_UNITS - int(used or 0))

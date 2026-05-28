@@ -6,6 +6,7 @@ in tests without touching real Google endpoints. Never call Google URLs directly
 outside this module.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -19,8 +20,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from crypto import decrypt, encrypt
 from models import Creator, OnboardingState, YoutubeToken
+from youtube._redis import get_redis_client
 
 logger = logging.getLogger(__name__)
+
+# ── Refresh-lock constants ─────────────────────────────────────────────────────
+
+_LOCK_TTL_S = 10  # seconds — covers one Google token-refresh round trip
+_LOCK_RETRY_COUNT = 3
+_LOCK_RETRY_SLEEP_S = 0.2  # 200 ms between retries
+
+# Canonical Lua compare-and-delete: only release the lock if it is still ours.
+# Returns 1 on successful delete, 0 if the key has already expired or was
+# taken by another worker (our TTL lapsed mid-flight).
+_LUA_RELEASE_LOCK = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
 
 SCOPES = [
     "openid",
@@ -197,8 +216,59 @@ async def store_or_update_tokens(
         row.updated_at = datetime.now(UTC)
 
 
+async def _do_token_refresh(
+    creator_id: uuid.UUID,
+    session: AsyncSession,
+    row: YoutubeToken,
+) -> str:
+    """Perform the actual Google token refresh + DB commit.
+
+    Called only by the worker that holds the per-creator Redis advisory lock.
+    Returns the new plaintext access token.
+    """
+    stored_refresh = decrypt(row.refresh_token_encrypted)
+    try:
+        new_tokens = await refresh_access_token(stored_refresh)
+    except httpx.HTTPStatusError as exc:
+        # Per OAuth 2.0 RFC 6749 §5.2, invalid_grant is permanent — the refresh
+        # token has been revoked, expired (6mo unused), or invalidated by a
+        # password reset. Discard the row so we stop wasting quota retrying.
+        if exc.response.status_code == 400 and _is_invalid_grant(exc.response):
+            logger.warning(
+                "Refresh token invalid_grant for creator %s — deleting YoutubeToken row",
+                creator_id,
+            )
+            await session.execute(delete(YoutubeToken).where(YoutubeToken.creator_id == creator_id))
+            await session.commit()
+        else:
+            logger.warning("Token refresh failed for creator %s: %s", creator_id, exc)
+        raise HTTPException(
+            401, "OAuth token refresh failed — please reconnect your YouTube account"
+        ) from exc
+
+    await store_or_update_tokens(
+        session,
+        creator_id,
+        access_token=new_tokens["access_token"],
+        refresh_token=new_tokens.get("refresh_token"),
+        scope=new_tokens.get("scope", row.scope),
+        expires_in=new_tokens.get("expires_in", 3600),
+    )
+    await session.commit()
+    return new_tokens["access_token"]
+
+
 async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -> str:
-    """Returns a valid access token, refreshing from the DB if it expires within 5 minutes."""
+    """Return a valid access token, refreshing from Google if expiry is within 5 minutes.
+
+    A per-creator Redis advisory lock (SET NX EX 10) prevents concurrent Celery workers
+    or FastAPI requests from issuing duplicate refresh calls for the same creator.
+    The lock is released with a Lua compare-and-delete to avoid deleting another
+    worker's lock if our TTL expired mid-flight.
+
+    If another worker holds the lock we sleep 200 ms and re-read the token row up to
+    three times. If the row is still expired after all retries we return 503.
+    """
     result = await session.execute(
         select(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
     )
@@ -206,38 +276,46 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
     if row is None:
         raise HTTPException(401, "No OAuth tokens found — please reconnect your YouTube account")
 
-    if row.expires_at - datetime.now(UTC) < timedelta(minutes=5):
-        logger.info("Refreshing access token for creator %s", creator_id)
-        stored_refresh = decrypt(row.refresh_token_encrypted)
-        try:
-            new_tokens = await refresh_access_token(stored_refresh)
-        except httpx.HTTPStatusError as exc:
-            # Per OAuth 2.0 RFC 6749 §5.2, invalid_grant is permanent — the refresh
-            # token has been revoked, expired (6mo unused), or invalidated by a
-            # password reset. Discard the row so we stop wasting quota retrying.
-            if exc.response.status_code == 400 and _is_invalid_grant(exc.response):
-                logger.warning(
-                    "Refresh token invalid_grant for creator %s — deleting YoutubeToken row",
-                    creator_id,
-                )
-                await session.execute(
-                    delete(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
-                )
-                await session.commit()
-            else:
-                logger.warning("Token refresh failed for creator %s: %s", creator_id, exc)
-            raise HTTPException(
-                401, "OAuth token refresh failed — please reconnect your YouTube account"
-            ) from exc
-        await store_or_update_tokens(
-            session,
-            creator_id,
-            access_token=new_tokens["access_token"],
-            refresh_token=new_tokens.get("refresh_token"),
-            scope=new_tokens.get("scope", row.scope),
-            expires_in=new_tokens.get("expires_in", 3600),
-        )
-        await session.commit()
-        return new_tokens["access_token"]
+    if row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
+        # Token is still valid — fast path, no Redis involved.
+        return decrypt(row.access_token_encrypted)
 
-    return decrypt(row.access_token_encrypted)
+    logger.info("Refreshing access token for creator %s", creator_id)
+
+    redis_client = get_redis_client()
+    lock_key = f"refresh-lock:{creator_id}"
+    # A unique value lets the Lua script confirm we still own the lock before deleting it.
+    lock_token = str(uuid.uuid4())
+
+    acquired: bool = await redis_client.set(lock_key, lock_token, nx=True, ex=_LOCK_TTL_S)
+
+    if acquired:
+        try:
+            return await _do_token_refresh(creator_id, session, row)
+        finally:
+            # Only release if the value is still ours — Lua compare-and-delete.
+            await redis_client.eval(_LUA_RELEASE_LOCK, 1, lock_key, lock_token)
+    else:
+        # Another worker is refreshing. Poll until it finishes.
+        for attempt in range(_LOCK_RETRY_COUNT):
+            await asyncio.sleep(_LOCK_RETRY_SLEEP_S)
+            # Re-read the row so we see whatever the lock holder committed.
+            fresh_result = await session.execute(
+                select(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
+            )
+            fresh_row = fresh_result.scalar_one_or_none()
+            if fresh_row is None:
+                # The lock holder found invalid_grant and deleted the row.
+                raise HTTPException(
+                    401, "No OAuth tokens found — please reconnect your YouTube account"
+                )
+            if fresh_row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
+                return decrypt(fresh_row.access_token_encrypted)
+            logger.debug(
+                "Token still expired for creator %s after retry %d/%d",
+                creator_id,
+                attempt + 1,
+                _LOCK_RETRY_COUNT,
+            )
+
+        raise HTTPException(503, "Token refresh in progress; please retry")
