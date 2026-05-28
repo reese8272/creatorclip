@@ -24,7 +24,7 @@ from models import (
 )
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture
 async def db_session():
     engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
