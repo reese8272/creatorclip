@@ -629,6 +629,10 @@ class of bugs.
 **Severity**: SEV-1 — up to 500 MB into memory per upload request
 **Depends on**: 32
 **Status**: 🔲 Not started
+### Issue 40: Streaming upload + DoS guard
+**Severity**: SEV-1 — up to 500 MB into memory per upload request
+**Depends on**: 32
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `routers/videos.py:90` reads `await file.read(max_bytes + 1)` — loads the entire
 upload into RAM before validating size.
@@ -1004,6 +1008,9 @@ are staged, then flush atomically.
 - [x] All draft + embedding + brief writes occur in one transaction, committed at the end
 - [x] Integration test: force a Voyage failure mid-build; on retry exactly one draft row exists
 - [x] `docs/DECISIONS.md` entry (2026-05-28)
+- [x] Upload streams to a temp file in fixed chunks (e.g., 1 MB) with running byte-count check
+- [x] 413 returned as soon as max size is exceeded; partial upload deleted
+- [x] Test that the API container's RSS does not balloon for a rejected oversized upload
 
 ---
 

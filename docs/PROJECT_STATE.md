@@ -75,6 +75,13 @@ Updated after every issue closes.
 > **Issue 57** (refund-on-terminal-failure) as product follow-up. See `docs/DECISIONS.md`
 > 2026-05-28 Issue 34 entry.
 >
+> **2026-05-28 session note (Issue 40)**: Replaced `await file.read(max_bytes + 1)` bulk-read
+> (SEV-1: up to 500 MB into heap per request) with a 1 MB streaming chunk loop. Temp file is
+> always unlinked on the 413 rejection path via `except HTTPException`. 3 new tests in
+> `tests/test_videos_upload_streaming.py`: 413 on oversize, tempfile cleanup verified, RSS delta
+> asserted < 20 MB for a 100 MB rejected upload. Test count: **314 passed** (net +3).
+> See `docs/DECISIONS.md` 2026-05-28 Issue 40 entry.
+
 > **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
 > **blocking pre-existing bug** — `routers/clips.py` imported the deleted `billing.tiers`, so
 > `import main` failed and the app could not start (likely a real cause of failed/timed-out
@@ -131,6 +138,7 @@ Updated after every issue closes.
 | 41 | Replace pickle in preference model (RCE surface) | HARDENING | ✅ Done | joblib + `_RestrictedUnpickler` allowlist (10 entries); `to_bytes`/`from_bytes` rewritten; 4 new tests (round-trip + 2 rejection tests); no schema change |
 | 42 | ffmpeg/subprocess timeouts | HARDENING | ✅ Done | `_run` accepts `timeout_s=120.0`; `_frame_dimensions` hardcodes `timeout=30`; `render_clip_file` computes `max(120, duration*4)`; 3 new timeout tests; DECISIONS.md entry |
 | 35 | Idempotent DNA build (SEV-0) | HARDENING | ✅ Done | Single-transaction commit in `_build_dna_async`; `commit=False` param on `create_draft`, `embed_patterns`, `embed_brief`; 3 integration tests; 313 non-integration tests pass |
+| 40 | Streaming upload + DoS guard | HARDENING | ✅ Done | 1 MB streaming chunk loop in upload_video; 413 + tempfile unlink on oversize; RSS delta test; 3 new tests in test_videos_upload_streaming.py; 314 tests pass |
 
 ---
 
