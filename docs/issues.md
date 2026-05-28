@@ -551,7 +551,7 @@ leaving the previous draft as orphan.
 ### Issue 36: OAuth token lifecycle hardening
 **Severity**: SEV-1 — zombie tokens, wasted quota, incomplete ToS revocation
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Three related lifecycle gaps:
 1. `routers/auth.py:140–157 delete_account` revokes only the **access_token** at Google; the **refresh_token** stays valid until the user manually disconnects in their Google Account.
@@ -561,10 +561,12 @@ leaving the previous draft as orphan.
 **Files**: `routers/auth.py:140–157`, `youtube/oauth.py:201–230`, `youtube/data_api.py:55–76`, `youtube/analytics.py:42–57`.
 
 **Acceptance criteria**:
-- [ ] `delete_account` revokes the refresh_token via `https://oauth2.googleapis.com/revoke?token=<refresh>`; tolerates 400 `token_revoked`/`invalid_token` as success
-- [ ] `refresh_access_token` deletes the `YoutubeToken` row + commits on Google `invalid_grant`
-- [ ] `data_api` / `analytics` inspect the response body and only retry `quotaExceeded`; on auth-error 403 raise a typed exception so the worker can clean up the token + mark creator disconnected
-- [ ] Tests for all three branches with mocked Google responses
+- [x] `delete_account` revokes the refresh_token via `https://oauth2.googleapis.com/revoke?token=<refresh>`; tolerates 400 `token_revoked`/`invalid_token` as success
+- [x] `refresh_access_token` deletes the `YoutubeToken` row + commits on Google `invalid_grant`
+- [x] `data_api` / `analytics` inspect the response body and only retry `quotaExceeded`; on auth-error 403 raise a typed exception so the worker can clean up the token + mark creator disconnected
+- [x] Tests for all three branches with mocked Google responses
+
+**Implementation**: New `youtube/errors.py` (`YouTubeAuthError` + reason sets). See `docs/DECISIONS.md` (2026-05-28 — Issue 36). "Mark creator disconnected" is implemented as deletion of the `YoutubeToken` row, not a new `OnboardingState` value.
 
 ---
 

@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import secrets
 
@@ -138,7 +139,10 @@ async def delete_account(
     """Right-to-erasure: revoke OAuth, purge media, cascade-delete all creator data."""
     creator_id = creator.id
 
-    # Revoke Google OAuth token — best effort, don't abort on failure
+    # Revoke Google OAuth refresh token — best effort, don't abort on failure.
+    # Revoking the refresh token also invalidates any access tokens issued from it
+    # (per Google OAuth 2.0 docs); a 400 with invalid_token / token_revoked means
+    # the grant is already gone, which is success for our purposes.
     try:
         from sqlalchemy import select
 
@@ -149,11 +153,28 @@ async def delete_account(
             await session.execute(select(YoutubeToken).where(YoutubeToken.creator_id == creator_id))
         ).scalar_one_or_none()
         if token_row:
-            access_token = decrypt(token_row.access_token_encrypted)
+            refresh_token = decrypt(token_row.refresh_token_encrypted)
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(
+                resp = await client.post(
                     "https://oauth2.googleapis.com/revoke",
-                    params={"token": access_token},
+                    params={"token": refresh_token},
+                )
+            if resp.status_code == 400:
+                body = {}
+                with contextlib.suppress(ValueError):
+                    body = resp.json()
+                err = body.get("error", "")
+                if err not in ("invalid_token", "token_revoked"):
+                    logger.warning(
+                        "OAuth revocation 400 for creator %s with unexpected error=%r",
+                        creator_id,
+                        err,
+                    )
+            elif resp.status_code >= 400:
+                logger.warning(
+                    "OAuth revocation HTTP %s for creator %s",
+                    resp.status_code,
+                    creator_id,
                 )
     except Exception as exc:
         logger.warning("OAuth revocation failed for creator %s: %s", creator_id, exc)

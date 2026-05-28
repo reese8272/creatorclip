@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -52,6 +52,14 @@ def build_authorization_url(state: str) -> str:
 
 
 # ── Mockable HTTP helpers ─────────────────────────────────────────────────────
+
+
+def _is_invalid_grant(response: httpx.Response) -> bool:
+    """Detect Google's `{"error": "invalid_grant"}` payload on a 400 token response."""
+    try:
+        return response.json().get("error") == "invalid_grant"
+    except ValueError:
+        return False
 
 
 async def _call_token_endpoint(data: dict) -> dict:
@@ -204,7 +212,20 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
         try:
             new_tokens = await refresh_access_token(stored_refresh)
         except httpx.HTTPStatusError as exc:
-            logger.warning("Token refresh failed for creator %s: %s", creator_id, exc)
+            # Per OAuth 2.0 RFC 6749 §5.2, invalid_grant is permanent — the refresh
+            # token has been revoked, expired (6mo unused), or invalidated by a
+            # password reset. Discard the row so we stop wasting quota retrying.
+            if exc.response.status_code == 400 and _is_invalid_grant(exc.response):
+                logger.warning(
+                    "Refresh token invalid_grant for creator %s — deleting YoutubeToken row",
+                    creator_id,
+                )
+                await session.execute(
+                    delete(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
+                )
+                await session.commit()
+            else:
+                logger.warning("Token refresh failed for creator %s: %s", creator_id, exc)
             raise HTTPException(
                 401, "OAuth token refresh failed — please reconnect your YouTube account"
             ) from exc

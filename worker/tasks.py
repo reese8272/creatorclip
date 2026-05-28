@@ -28,6 +28,7 @@ from models import (
     VideoMetrics,
 )
 from worker.celery_app import celery
+from youtube.errors import YouTubeAuthError
 from youtube.quota import QuotaExhaustedError, remaining
 
 logger = logging.getLogger(__name__)
@@ -522,7 +523,7 @@ async def _purge_stale_source_media_async() -> None:
 
 
 async def _refresh_youtube_analytics_async() -> None:
-    from sqlalchemy import select
+    from sqlalchemy import delete, select
 
     from youtube.analytics import sync_audience_data, sync_video_analytics
     from youtube.oauth import get_valid_access_token
@@ -562,6 +563,24 @@ async def _refresh_youtube_analytics_async() -> None:
                 )
                 await session.rollback()
                 break
+            except YouTubeAuthError as exc:
+                # Grant is dead (revoked / suspended / forbidden). Drop the token row
+                # so subsequent beat ticks skip this creator via the existing
+                # get_valid_access_token "no tokens" path, instead of looping on 403s.
+                logger.warning(
+                    "YouTube auth error for creator %s (reason=%s, status=%s) — "
+                    "deleting YoutubeToken row",
+                    creator.id,
+                    exc.reason,
+                    exc.status_code,
+                )
+                await session.rollback()
+                from models import YoutubeToken
+
+                await session.execute(
+                    delete(YoutubeToken).where(YoutubeToken.creator_id == creator.id)
+                )
+                await session.commit()
             except Exception as exc:
                 logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
                 await session.rollback()

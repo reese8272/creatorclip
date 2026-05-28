@@ -6,9 +6,27 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Issue 36 next (OAuth token lifecycle)
-**Last completed**: Issue 44 — Auth boundary hardening (SEV-1) (2026-05-28)
+**Active issue**: Phase 2 hardening — Issue 37 next (External SDK timeouts + retry-with-backoff)
+**Last completed**: Issue 36 — OAuth token lifecycle hardening (SEV-1) (2026-05-28)
 **Blocked**: _(none)_
+
+> **Closed Issue 36** (2026-05-28): Three lifecycle gaps closed in one commit.
+> (a) `DELETE /auth/me` now revokes the **refresh** token at
+> `oauth2.googleapis.com/revoke` and tolerates 400 `invalid_token` / `token_revoked` as
+> success — completes the right-to-erasure path. (b) `get_valid_access_token` now deletes
+> the `YoutubeToken` row + commits on Google `invalid_grant` (RFC 6749 §5.2 permanent
+> error), so subsequent refresh attempts immediately surface the existing
+> "No OAuth tokens found — please reconnect" 401 instead of looping. (c) New
+> `youtube/errors.py` (`YouTubeAuthError` + `PERMANENT_403_REASONS` / `TRANSIENT_403_REASONS`
+> sets); `_get_json` and `_fetch_report` share a `_classify_error()` helper that retries
+> transient 403/429 with exponential backoff and raises `YouTubeAuthError` on permanent
+> 401 / 403 reasons (authError, forbidden, accountClosed, accountSuspended, channelClosed,
+> ...). `worker/tasks.py::_refresh_youtube_analytics_async` catches `YouTubeAuthError`,
+> deletes the offending `YoutubeToken` row, commits, and continues — eliminates the
+> hourly-wasted-quota loop against revoked creators. "Mark creator disconnected" is
+> represented as token-row absence (no `OnboardingState` enum change, no migration).
+> 9 new tests in `tests/test_oauth_lifecycle.py`. Test count: **335 passed, 1 skipped,
+> 16 deselected** (was 326; +9 new). See `docs/DECISIONS.md` 2026-05-28 Issue 36 entry.
 
 > **Closed Issue 41**: `preference/model.py:35–40` used `pickle.dumps(self)` / `pickle.loads(data)`
 > for `PreferenceScorer.to_bytes` / `from_bytes`.  Any future write to `preference_models.weights_blob`

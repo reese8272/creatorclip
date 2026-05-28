@@ -12,6 +12,11 @@ import re
 import httpx
 
 from models import VideoKind
+from youtube.errors import (
+    PERMANENT_403_REASONS,
+    TRANSIENT_403_REASONS,
+    YouTubeAuthError,
+)
 from youtube.quota import (
     COST_DATA_CAPTIONS,
     COST_DATA_CHANNELS,
@@ -45,6 +50,31 @@ def classify_video_kind(duration_s: float) -> VideoKind:
     return VideoKind.short if duration_s <= 60 else VideoKind.long
 
 
+def _classify_error(resp: httpx.Response) -> tuple[str, bool]:
+    """Return (reason, is_transient) for a non-2xx YouTube API response.
+
+    is_transient=True ⇒ retry with backoff. False ⇒ raise YouTubeAuthError.
+    """
+    try:
+        reason = resp.json()["error"]["errors"][0]["reason"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        reason = ""
+
+    if resp.status_code == 429:
+        return reason or "rateLimitExceeded", True
+    if resp.status_code == 401:
+        return reason or "authError", False
+    if resp.status_code == 403:
+        if reason in TRANSIENT_403_REASONS:
+            return reason, True
+        if reason in PERMANENT_403_REASONS:
+            return reason, False
+        # Unknown 403 reason — treat conservatively as permanent so we don't
+        # spin on a misconfigured grant.
+        return reason or "forbidden", False
+    return reason, False
+
+
 async def _get_json(
     access_token: str, url: str, params: dict, cost: int = COST_DATA_VIDEOS
 ) -> dict:
@@ -56,21 +86,28 @@ async def _get_json(
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, headers=headers, params=params)
 
-        if resp.status_code not in (403, 429):
-            resp.raise_for_status()
+        if resp.status_code < 400:
             return resp.json()
 
-        if attempt < _MAX_RETRIES - 1:
-            jitter = random.uniform(0, delay * 0.3)
-            await asyncio.sleep(delay + jitter)
-            delay *= 2
-        else:
+        if resp.status_code in (401, 403, 429):
+            reason, is_transient = _classify_error(resp)
+            if not is_transient:
+                raise YouTubeAuthError(reason, resp.status_code)
+            if attempt < _MAX_RETRIES - 1:
+                jitter = random.uniform(0, delay * 0.3)
+                await asyncio.sleep(delay + jitter)
+                delay *= 2
+                continue
             logger.warning(
-                "YouTube Data API %s returned %s after %d retries",
+                "YouTube Data API %s returned %s (reason=%s) after %d retries",
                 url,
                 resp.status_code,
+                reason,
                 _MAX_RETRIES,
             )
+
+        resp.raise_for_status()
+        return resp.json()
 
     resp.raise_for_status()
     return {}  # unreachable

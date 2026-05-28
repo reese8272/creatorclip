@@ -26,7 +26,8 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
-from youtube.data_api import get_videos_metadata, list_channel_videos
+from youtube.data_api import _classify_error, get_videos_metadata, list_channel_videos
+from youtube.errors import YouTubeAuthError
 from youtube.quota import COST_ANALYTICS_REPORT, consume
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,27 @@ async def _fetch_report(access_token: str, params: dict) -> dict:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(_ANALYTICS_V2, headers=headers, params=params)
 
-        if resp.status_code not in (403, 429):
-            resp.raise_for_status()
+        if resp.status_code < 400:
             return resp.json()
 
-        if attempt < _MAX_RETRIES - 1:
-            jitter = random.uniform(0, delay * 0.3)
-            await asyncio.sleep(delay + jitter)
-            delay *= 2
+        if resp.status_code in (401, 403, 429):
+            reason, is_transient = _classify_error(resp)
+            if not is_transient:
+                raise YouTubeAuthError(reason, resp.status_code)
+            if attempt < _MAX_RETRIES - 1:
+                jitter = random.uniform(0, delay * 0.3)
+                await asyncio.sleep(delay + jitter)
+                delay *= 2
+                continue
+            logger.warning(
+                "YouTube Analytics API returned %s (reason=%s) after %d retries",
+                resp.status_code,
+                reason,
+                _MAX_RETRIES,
+            )
+
+        resp.raise_for_status()
+        return resp.json()
 
     resp.raise_for_status()
     return {}  # unreachable

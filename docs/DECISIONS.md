@@ -662,3 +662,66 @@ runtime overhead. This is a conservative bound; in practice the delta observed i
 
 **Source**: `resource.getrusage` documentation (Linux: kilobytes, macOS: bytes); empirical
 observation during implementation. 2026-05-28.
+
+---
+
+## 2026-05-28 — Issue 36: OAuth token lifecycle hardening (SEV-1)
+
+### Revoke the refresh token, not the access token
+
+**What**: `DELETE /auth/me` now POSTs the decrypted **refresh_token** to
+`https://oauth2.googleapis.com/revoke`. A `400` with body `{"error": "invalid_token"}` or
+`{"error": "token_revoked"}` is treated as success; other 4xx is logged but does not abort
+account deletion.
+
+**Why**: Revoking only the access token leaves the refresh token usable until the user
+manually visits `myaccount.google.com/permissions` — an incomplete right-to-erasure and a
+YouTube ToS gap. Google's OAuth 2.0 docs explicitly state revoking a refresh token
+invalidates every access token derived from it, so one call suffices.
+
+**Source**: Google OAuth 2.0 — Revoking a Token
+(`developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke`); OAuth 2.0
+RFC 6749 §2.3.1.
+
+### Discard the token row on `invalid_grant`
+
+**What**: `youtube/oauth.py::get_valid_access_token` now deletes the `YoutubeToken` row +
+commits when `refresh_access_token` returns `400 {"error": "invalid_grant"}`. Other 4xx
+during refresh leaves the row in place (could be transient client misconfig).
+
+**Why**: Per RFC 6749 §5.2, `invalid_grant` is a permanent error — the user has revoked
+consent, the grant expired (6 mo unused), or a password reset with reauth invalidated it.
+Re-attempting the refresh hourly was wasted quota and noisy logs. Deleting the row makes
+the next call surface the existing "No OAuth tokens found — please reconnect" 401.
+
+**Source**: OAuth 2.0 RFC 6749 §5.2; Google identity docs on refresh-token expiration.
+
+### Classify 403 errors by `error.errors[].reason`
+
+**What**: New `youtube/errors.py` defines `YouTubeAuthError(reason, status_code)` plus
+`PERMANENT_403_REASONS` (authError, forbidden, accountClosed, accountSuspended,
+accountDelegationForbidden, channelClosed, channelSuspended) and `TRANSIENT_403_REASONS`
+(quotaExceeded, rateLimitExceeded, userRateLimitExceeded). `_get_json` in
+`youtube/data_api.py` and `_fetch_report` in `youtube/analytics.py` now share a
+`_classify_error()` helper: transient reasons + 429 still retry with exponential backoff;
+permanent reasons + 401 raise `YouTubeAuthError` immediately, no retries.
+`worker/tasks.py::_refresh_youtube_analytics_async` catches `YouTubeAuthError`, deletes
+the creator's `YoutubeToken` row, commits, and continues to the next creator.
+
+**Why**: Previously every 403 triggered four backoff retries — 7+ seconds of blocking and
+four wasted quota hits per beat tick per revoked creator. Over time the daily beat loop
+would consume a meaningful slice of the channel quota on creators who had revoked access.
+The reason-based branching mirrors how `google-api-python-client` exposes
+`HttpError.error_details` and how official YouTube samples branch on `reason`.
+
+**"Mark creator disconnected" via token-row absence**: Rather than add a new
+`OnboardingState.disconnected` enum value (which would require an Alembic migration), we
+delete the `YoutubeToken` row. The existing `get_valid_access_token` already raises
+`HTTPException(401, "No OAuth tokens found — please reconnect")`, and the beat loop's
+prefix `try: get_valid_access_token ... except: continue` block then silently skips that
+creator. A future issue can add a UI-visible `disconnected` state if the product needs it.
+
+**Source**: YouTube Data API v3 — Errors reference
+(`developers.google.com/youtube/v3/docs/errors`); Google APIs error model
+(`developers.google.com/identity/protocols/oauth2/openid-connect#errors`); existing
+worker skip-on-exception pattern in `worker/tasks.py:_refresh_youtube_analytics_async`.
