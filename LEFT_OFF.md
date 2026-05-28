@@ -4,10 +4,9 @@
 > doc — those live in `docs/`. Update this at the end of every session.
 
 **Last updated:** 2026-05-27
-**Branch:** `issue-31-operability` — HEAD `84a02c1` ("fix: add python-multipart to requirements")
-**Working tree:** clean (screenshot PNG untracked — safe to ignore)
-**PR:** [#2 open](https://github.com/reese8272/creatorclip/pull/2) — CI was red (missing dep, now fixed),
-re-running now; lint ✅ docker build ✅ unit tests ⏳ (should go green after the python-multipart push)
+**Branch:** `issue-31-operability` — HEAD `cc6c4c8` ("chore: add LEFT_OFF.md session handoff")
+**Working tree:** clean
+**PR:** [#2 open](https://github.com/reese8272/creatorclip/pull/2) — **CI ✅ ALL GREEN** (lint ✅ unit tests ✅ docker build ✅). Ready to merge.
 
 ---
 
