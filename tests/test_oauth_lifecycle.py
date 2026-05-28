@@ -571,3 +571,190 @@ async def test_lock_releases_after_success():
     assert len(eval_calls) == 1, "Lock release Lua script must be called after successful refresh"
     released_key = eval_calls[0][0]
     assert str(creator_id) in released_key, "Released key must reference the creator ID"
+
+
+# ── Issue 51: Expanded OAuth lifecycle tests ──────────────────────────────────
+
+
+# ── Test 1: refresh happy path ────────────────────────────────────────────────
+
+
+async def test_refresh_path_success():
+    """get_valid_access_token calls Google once and persists the new token."""
+    from crypto import decrypt, encrypt
+    from youtube.oauth import get_valid_access_token
+
+    creator_id = uuid.uuid4()
+
+    row = MagicMock()
+    row.refresh_token_encrypted = encrypt("stored-refresh-token")
+    row.access_token_encrypted = encrypt("old-access-token")
+    row.expires_at = datetime.now(UTC) - timedelta(minutes=1)  # expired — triggers refresh
+    row.scope = "openid https://www.googleapis.com/auth/youtube.readonly"
+
+    session_mock = AsyncMock()
+    # First execute: SELECT for get_valid_access_token
+    # Second execute: SELECT inside store_or_update_tokens (upsert path)
+    session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: row))
+    session_mock.commit = AsyncMock()
+
+    new_payload = {
+        "access_token": "brand-new-access-token",
+        "refresh_token": "brand-new-refresh-token",
+        "expires_in": 3600,
+        "scope": row.scope,
+    }
+
+    refresh_mock = AsyncMock(return_value=new_payload)
+
+    with (
+        patch("youtube.oauth.get_redis_client", return_value=_make_lock_redis()),
+        patch("youtube.oauth.refresh_access_token", refresh_mock),
+    ):
+        result = await get_valid_access_token(creator_id, session_mock)
+
+    # Google was called exactly once with the decrypted stored refresh token.
+    refresh_mock.assert_awaited_once_with("stored-refresh-token")
+
+    # The returned value is the new plaintext access token.
+    assert result == "brand-new-access-token"
+
+    # session.commit was called (tokens persisted).
+    session_mock.commit.assert_awaited()
+
+    # The DB row's access_token_encrypted was updated with the new value.
+    assert row.access_token_encrypted != encrypt("old-access-token"), (
+        "access_token_encrypted should have been updated on the row"
+    )
+    assert decrypt(row.access_token_encrypted) == "brand-new-access-token"
+
+
+# ── Test 2: callback logs no token plaintext ──────────────────────────────────
+
+
+def test_callback_logs_no_token_plaintext(client, caplog):
+    """The OAuth callback must never log plaintext access or refresh tokens."""
+    import logging
+
+    from db import get_session
+    from main import app
+
+    state = "test-state-for-log-check"
+
+    # A full token payload whose values would be obviously detectable in logs.
+    fake_tokens = {
+        "access_token": "plaintext-access-LEAK",
+        "refresh_token": "plaintext-refresh-LEAK",
+        "expires_in": 3600,
+        "scope": "openid",
+    }
+    fake_identity = {
+        "google_sub": "sub-12345",
+        "email": "creator@example.com",
+        "channel_id": "UCtest",
+        "channel_title": "Test Channel",
+    }
+
+    creator = _make_creator()
+    creator.id = uuid.uuid4()
+
+    session_mock = AsyncMock()
+    session_mock.flush = AsyncMock()
+    session_mock.commit = AsyncMock()
+    session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+    session_mock.add = MagicMock()
+
+    async def _fake_session():
+        yield session_mock
+
+    app.dependency_overrides[get_session] = _fake_session
+
+    try:
+        with (
+            patch("routers.auth.exchange_code", AsyncMock(return_value=fake_tokens)),
+            patch("routers.auth.fetch_creator_identity", AsyncMock(return_value=fake_identity)),
+            patch(
+                "routers.auth.upsert_creator",
+                AsyncMock(return_value=(creator, False)),
+            ),
+            patch("routers.auth.store_or_update_tokens", AsyncMock()),
+            patch("billing.ledger.grant_minutes", AsyncMock()),
+            caplog.at_level(logging.DEBUG, logger="routers.auth"),
+            caplog.at_level(logging.DEBUG, logger="youtube.oauth"),
+        ):
+            resp = client.get(
+                f"/auth/callback?code=authcode&state={state}",
+                cookies={"cc_oauth_state": state},
+                follow_redirects=False,
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    # Callback completed (302 redirect to /).
+    assert resp.status_code == 302
+
+    # Neither token plaintext must appear anywhere in the captured log output.
+    assert "plaintext-access-LEAK" not in caplog.text, (
+        "access_token plaintext leaked into log output"
+    )
+    assert "plaintext-refresh-LEAK" not in caplog.text, (
+        "refresh_token plaintext leaked into log output"
+    )
+
+
+# ── Test 3: authorization URL — exact scopes ──────────────────────────────────
+
+
+def test_authorization_url_exact_scopes():
+    """build_authorization_url includes exactly the five required scopes — no extras."""
+    import urllib.parse
+
+    from youtube.oauth import build_authorization_url
+
+    url = build_authorization_url(state="test-state")
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+
+    # parse_qs returns lists; scope is a single space-separated string.
+    raw_scope = qs["scope"][0]
+    actual_scopes = set(raw_scope.split())
+
+    expected_scopes = {
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "https://www.googleapis.com/auth/yt-analytics.readonly",
+    }
+
+    assert actual_scopes == expected_scopes, (
+        f"Scope set mismatch.\nExpected: {expected_scopes}\nGot:      {actual_scopes}"
+    )
+
+    # Explicitly assert the write scope is absent — critical compliance boundary.
+    assert "youtube.upload" not in raw_scope, (
+        "youtube.upload must NOT appear in the authorization scope"
+    )
+
+
+# ── Test 4: authorization URL forces consent + offline access ─────────────────
+
+
+def test_authorization_url_forces_consent_for_refresh_token():
+    """build_authorization_url must set prompt=consent and access_type=offline."""
+    import urllib.parse
+
+    from youtube.oauth import build_authorization_url
+
+    url = build_authorization_url(state="test-state")
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+
+    # access_type=offline is required for Google to issue a refresh_token.
+    assert qs.get("access_type") == ["offline"], (
+        f"Expected access_type=offline, got {qs.get('access_type')}"
+    )
+
+    # prompt=consent forces re-issuance of the refresh_token even on reconnect.
+    assert qs.get("prompt") == ["consent"], f"Expected prompt=consent, got {qs.get('prompt')}"
+
+    # state must round-trip through the URL unchanged.
+    assert qs.get("state") == ["test-state"], f"Expected state=test-state, got {qs.get('state')}"
