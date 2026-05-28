@@ -39,6 +39,11 @@ jobs:
             set -e
             cd /opt/autoclip
 
+            # Sync secrets from GitHub → server .env
+            grep -q '^STRIPE_SECRET_KEY=' .env \
+              && sed -i "s|^STRIPE_SECRET_KEY=.*|STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}|" .env \
+              || echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env
+
             # Authenticate with GHCR so we can pull the private image
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
 
