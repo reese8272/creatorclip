@@ -189,8 +189,14 @@ async def test_webhook_idempotency_same_session_id(db_session: AsyncSession):
     The application-level idempotency check (SELECT before INSERT) prevents a second
     grant. The UNIQUE(stripe_session_id) constraint on minute_packs is the DB-level
     safety net against a concurrent race on this path.
+
+    Important: do NOT override get_session — TestClient runs the handler in its own
+    event loop, and sharing the test's AsyncSession across loops triggers
+    SQLAlchemy's MissingGreenlet. Let production get_session() build a fresh
+    AsyncSessionLocal-backed session per request. For post-call verification, use
+    a fresh session from AsyncSessionLocal directly.
     """
-    from db import get_session
+    from db import AsyncSessionLocal
     from main import app
 
     creator = await _seed_creator(db_session, minutes_balance=0)
@@ -201,12 +207,7 @@ async def test_webhook_idempotency_same_session_id(db_session: AsyncSession):
         pack_id="starter",
     )
 
-    async def _override_session():
-        yield db_session
-
     try:
-        app.dependency_overrides[get_session] = _override_session
-
         with (
             patch("routers.billing.construct_webhook_event", return_value=event),
             TestClient(app) as client,
@@ -216,8 +217,6 @@ async def test_webhook_idempotency_same_session_id(db_session: AsyncSession):
                 content=json.dumps(event).encode(),
                 headers={"stripe-signature": "mocked"},
             )
-            # After first call the session has committed — refresh so scalar() sees new rows.
-            await db_session.rollback()
 
             r2 = client.post(
                 "/billing/webhook",
@@ -231,13 +230,13 @@ async def test_webhook_idempotency_same_session_id(db_session: AsyncSession):
         assert r2.json()["status"] == "already_fulfilled"
 
         # Exactly one MinutePack row for this Stripe session.
-        await db_session.rollback()
-        count = await _minute_pack_count(db_session, stripe_session_id)
-        assert count == 1, (
-            f"Expected 1 MinutePack row for stripe_session_id={stripe_session_id!r}, got {count}"
-        )
+        async with AsyncSessionLocal() as verify:
+            count = await _minute_pack_count(verify, stripe_session_id)
+            assert count == 1, (
+                f"Expected 1 MinutePack row for stripe_session_id={stripe_session_id!r}, "
+                f"got {count}"
+            )
     finally:
-        app.dependency_overrides.pop(get_session, None)
         await _cleanup_creator(db_session, creator.id)
 
 
@@ -252,7 +251,7 @@ async def test_webhook_unknown_pack_id(db_session: AsyncSession):
     This follows Stripe best practice: always return 2xx so Stripe does not retry the
     webhook; handle the anomaly internally via logger.error().
     """
-    from db import get_session
+    from db import AsyncSessionLocal
     from main import app
 
     creator = await _seed_creator(db_session, minutes_balance=0)
@@ -263,12 +262,7 @@ async def test_webhook_unknown_pack_id(db_session: AsyncSession):
         pack_id="nonexistent_pack_xyz",
     )
 
-    async def _override_session():
-        yield db_session
-
     try:
-        app.dependency_overrides[get_session] = _override_session
-
         with (
             patch("routers.billing.construct_webhook_event", return_value=event),
             TestClient(app) as client,
@@ -284,10 +278,10 @@ async def test_webhook_unknown_pack_id(db_session: AsyncSession):
         assert response.json()["status"] == "ignored"
 
         # No MinutePack row was created.
-        count = await _minute_pack_count(db_session, stripe_session_id)
-        assert count == 0, f"Expected 0 MinutePack rows, got {count}"
+        async with AsyncSessionLocal() as verify:
+            count = await _minute_pack_count(verify, stripe_session_id)
+            assert count == 0, f"Expected 0 MinutePack rows, got {count}"
     finally:
-        app.dependency_overrides.pop(get_session, None)
         await _cleanup_creator(db_session, creator.id)
 
 
@@ -301,14 +295,11 @@ async def test_webhook_missing_metadata(db_session: AsyncSession):
     Covers both: (a) metadata key absent from the dict, and (b) metadata field null.
     FINDING: Returns HTTP 200 {"status": "ignored"} — same reasoning as Test 3.
     """
-    from db import get_session
+    from db import AsyncSessionLocal
     from main import app
 
     creator = await _seed_creator(db_session, minutes_balance=0)
     stripe_session_id = f"cs_test_{uuid.uuid4().hex}"
-
-    async def _override_session():
-        yield db_session
 
     # Case (a): metadata present but missing both required keys.
     event_missing_keys = _make_webhook_event(
@@ -322,8 +313,6 @@ async def test_webhook_missing_metadata(db_session: AsyncSession):
     )
 
     try:
-        app.dependency_overrides[get_session] = _override_session
-
         with (
             patch("routers.billing.construct_webhook_event") as mock_event,
             TestClient(app) as client,
@@ -348,10 +337,10 @@ async def test_webhook_missing_metadata(db_session: AsyncSession):
         assert r_null.json()["status"] == "ignored"
 
         # Neither call should have created any MinutePack rows for this creator.
-        row_count = await db_session.scalar(
-            select(func.count(MinutePack.id)).where(MinutePack.creator_id == creator.id)
-        )
-        assert row_count == 0, f"Expected 0 MinutePack rows, got {row_count}"
+        async with AsyncSessionLocal() as verify:
+            row_count = await verify.scalar(
+                select(func.count(MinutePack.id)).where(MinutePack.creator_id == creator.id)
+            )
+            assert row_count == 0, f"Expected 0 MinutePack rows, got {row_count}"
     finally:
-        app.dependency_overrides.pop(get_session, None)
         await _cleanup_creator(db_session, creator.id)
