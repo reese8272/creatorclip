@@ -24,7 +24,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Video processing | ffmpeg | Cut + 9:16 active-speaker reframe |
 | YouTube | YouTube Analytics API + Data API v3 (OAuth 2.0) | Retention curves, demographics, activity windows, metadata, captions |
 | Auth | Google OAuth 2.0 (YouTube scopes) + server-side session JWT | PyJWT; bcrypt where local creds needed |
-| Token encryption at rest | `cryptography` Fernet on token columns | Key from `TOKEN_ENCRYPTION_KEY` |
+| Token encryption at rest | `cryptography` MultiFernet on token columns | Primary key from `TOKEN_ENCRYPTION_KEY`; optional previous key for zero-downtime rotation |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
 | Frontend | Vanilla HTML/CSS/JS, player-first | No build step. **Review-UI framework is a flagged DECISIONS.md candidate — resolve before Issue 10.** |
 | Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
@@ -43,7 +43,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `GOOGLE_OAUTH_CLIENT_ID` | Yes | Google OAuth client ID |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Yes | Google OAuth client secret |
 | `OAUTH_REDIRECT_URI` | Yes | OAuth callback URL |
-| `TOKEN_ENCRYPTION_KEY` | Yes | Fernet key for YouTube token columns; rotation runbook needed before public launch |
+| `TOKEN_ENCRYPTION_KEY` | Yes | Primary Fernet key for YouTube token columns; rotation runbook in `docs/RUNBOOKS.md` |
+| `TOKEN_ENCRYPTION_KEY_PREVIOUS` | No | Previous Fernet key; set during zero-downtime rotation so old tokens remain readable. Clear after `scripts/rotate_token_key.py` completes. |
 | `JWT_SECRET_KEY` | Yes | Session JWT secret (32-byte random) |
 | `ALLOWED_ORIGINS` | Yes | Comma-separated list. Lock to production domain; never `*` in prod |
 | `JWT_EXPIRY_MINUTES` | No | Default `60` |

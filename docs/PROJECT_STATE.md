@@ -7,8 +7,17 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Issue 23 — VM provisioning + Cloudflare DNS + HTTPS (BETA_DEPLOYMENT start)
-**Last completed**: Issue 31 — Operability kit: secrets registry, preflight doctor, deploy hardening, auto-heal (2026-05-27)
+**Last completed**: Issue 44 — Auth boundary hardening (SEV-1, three sub-fixes) (2026-05-28)
 **Blocked**: _(none)_
+
+> **2026-05-28 session note**: Completed Issue 44 (auth boundary hardening). Three security
+> fixes: (1) `auth.py` `get_current_creator` now catches `ValueError`/`KeyError` alongside
+> `PyJWTError` so a malformed JWT `sub` returns 401 instead of 500; (2) `DELETE /auth/me` rate-
+> limited to 5/hour via the existing slowapi limiter; (3) `crypto.py` rewritten to use
+> `MultiFernet` for zero-downtime key rotation + typed `TokenDecryptError`. Added
+> `TOKEN_ENCRYPTION_KEY_PREVIOUS` optional setting. Test count delta: +8 tests (2 in
+> `test_auth.py`, 6 in `test_crypto.py` replacing 1 old test). All existing tests updated for
+> the new rate-limit requirement on `DELETE /me`.
 
 > **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
 > **blocking pre-existing bug** — `routers/clips.py` imported the deleted `billing.tiers`, so
@@ -54,6 +63,7 @@ Updated after every issue closes.
 | 29 | Google OAuth app verification | PROD | 🔲 Not started | Submit for Google review; ~1–4 weeks external |
 | 30 | Production hardening + public go-live | PROD | 🔲 Not started | Load test; all gates green; v1.0.0 tag |
 | 31 | Operability kit — secrets registry, preflight doctor, deploy hardening, auto-heal | BETA | ✅ Done | docs/SECRETS.md + docs/ACCESS.md; scripts/doctor.py (14 tests); cloudflared+autoheal+healthchecks; amd64-only build; fixed blocking billing.tiers import; 313 tests pass |
+| 44 | Auth boundary hardening — malformed sub 401, DELETE /me rate limit, MultiFernet rotation | SEC | ✅ Done | auth.py ValueError/KeyError catch; routers/auth.py 5/hour on DELETE /me; crypto.py MultiFernet + TokenDecryptError; +8 tests |
 
 ---
 

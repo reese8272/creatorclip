@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     ALLOWED_ORIGINS: str
 
+    # --- Key rotation ---
+    # Set to the old TOKEN_ENCRYPTION_KEY during rotation to allow decryption of
+    # tokens encrypted under the previous key. MultiFernet tries the primary key
+    # first; previous key is only used as a fallback. Remove after re-encryption is
+    # complete (run scripts/rotate_token_key.py, then clear this variable).
+    TOKEN_ENCRYPTION_KEY_PREVIOUS: str | None = None
+
     # --- Optional with defaults ---
     VOYAGE_API_KEY: str = ""
     JWT_EXPIRY_MINUTES: int = 60

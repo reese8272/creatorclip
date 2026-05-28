@@ -128,7 +128,9 @@ async def me(request: Request, creator: Creator = Depends(get_current_creator)) 
 
 
 @router.delete("/me", status_code=204)
+@limiter.limit("5/hour")
 async def delete_account(
+    request: Request,
     response: Response,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),

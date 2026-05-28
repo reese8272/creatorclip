@@ -432,6 +432,24 @@ preflight validator, faster/more-consistent deploys, and container auto-recovery
 
 ---
 
+---
+
+## Issue 44: Auth boundary hardening (SEV-1)
+**Depends on**: 3, 18, 19
+**Status**: ✅ Done (2026-05-28)
+
+**What**: Three security sub-fixes: (1) malformed JWT `sub` returns 401 not 500,
+(2) `DELETE /me` rate-limited to 5/hour, (3) `crypto.py` MultiFernet + typed exception.
+
+**Acceptance criteria**:
+- [x] Malformed sub → 401 (not 500); test asserts
+- [x] 6th `DELETE /me` in an hour → 429; test asserts rate limit registered
+- [x] Encrypt with primary, set previous-only-key, decrypt with previous; round-trip works
+- [x] Decrypt of garbage → `TokenDecryptError` (not raw `InvalidToken`)
+- [x] All existing tests still pass
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
