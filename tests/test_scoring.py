@@ -147,10 +147,10 @@ def test_transcript_excerpt_empty_segments():
 async def test_score_candidates_cold_start_no_llm():
     """Cold-start path must not call Claude at all."""
     candidates = [_candidate()]
-    with patch("clip_engine.scoring.AsyncAnthropic") as mock_cls:
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
         result = await score_candidates(candidates, _timeline(), dna_brief=None)
 
-    mock_cls.assert_not_called()
+    mock_client.messages.create.assert_not_called()
     assert len(result) == 1
     assert 0.0 <= result[0]["score"] <= 1.0
     assert result[0]["principle"] == "Retention curve is ground truth"
@@ -178,10 +178,8 @@ async def test_score_candidates_with_dna_calls_claude():
     ]
     mock_resp = _mock_claude_response(claude_scores)
 
-    with patch("clip_engine.scoring.AsyncAnthropic") as mock_cls:
-        mock_client = MagicMock()
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
         mock_client.messages.create = AsyncMock(return_value=mock_resp)
-        mock_cls.return_value = mock_client
         result = await score_candidates(candidates, _timeline(), dna_brief="DNA brief text")
 
     mock_client.messages.create.assert_called_once()
@@ -196,10 +194,8 @@ async def test_score_candidates_dna_uses_prompt_caching():
     mock_resp = _mock_claude_response(
         [{"index": 0, "score": 0.7, "principle": "Loop-ability", "reasoning": "Clean loop."}]
     )
-    with patch("clip_engine.scoring.AsyncAnthropic") as mock_cls:
-        mock_client = MagicMock()
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
         mock_client.messages.create = AsyncMock(return_value=mock_resp)
-        mock_cls.return_value = mock_client
         await score_candidates(candidates, _timeline(), dna_brief="some dna")
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -220,10 +216,8 @@ async def test_score_candidates_falls_back_on_bad_json():
     del resp.usage.cache_read_input_tokens
     del resp.usage.cache_creation_input_tokens
 
-    with patch("clip_engine.scoring.AsyncAnthropic") as mock_cls:
-        mock_client = MagicMock()
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
         mock_client.messages.create = AsyncMock(return_value=resp)
-        mock_cls.return_value = mock_client
         result = await score_candidates(candidates, _timeline(), dna_brief="dna")
 
     assert 0.0 <= result[0]["score"] <= 1.0  # signal fallback

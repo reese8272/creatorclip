@@ -94,10 +94,8 @@ def _mock_brief_response(text: str) -> MagicMock:
 
 def test_improvement_brief_disclaimer_always_present():
     mock_resp = _mock_brief_response("Here are 3 improvements.")
-    with patch("improvement.brief._get_client") as mock_get:
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_resp
-        mock_get.return_value = mock_client
+    with patch("improvement.brief._ANTHROPIC") as mock_client:
+        mock_client.with_options.return_value.messages.create.return_value = mock_resp
         result = generate_improvement_brief("TestChannel", {})
 
     assert _DISCLAIMER in result
@@ -107,13 +105,11 @@ def test_improvement_brief_disclaimer_always_present():
 def test_improvement_brief_uses_web_search_tool():
     """Must pass web_search tool to Claude per the approved plan."""
     mock_resp = _mock_brief_response("Recommendations here.")
-    with patch("improvement.brief._get_client") as mock_get:
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_resp
-        mock_get.return_value = mock_client
+    with patch("improvement.brief._ANTHROPIC") as mock_client:
+        mock_client.with_options.return_value.messages.create.return_value = mock_resp
         generate_improvement_brief("TestChannel", {"avg_views": 5000})
 
-    call_kwargs = mock_client.messages.create.call_args.kwargs
+    call_kwargs = mock_client.with_options.return_value.messages.create.call_args.kwargs
     tools = call_kwargs.get("tools", [])
     tool_types = [t.get("type") for t in tools]
     assert "web_search_20250305" in tool_types
@@ -121,13 +117,11 @@ def test_improvement_brief_uses_web_search_tool():
 
 def test_improvement_brief_uses_prompt_caching():
     mock_resp = _mock_brief_response("Content here.")
-    with patch("improvement.brief._get_client") as mock_get:
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_resp
-        mock_get.return_value = mock_client
+    with patch("improvement.brief._ANTHROPIC") as mock_client:
+        mock_client.with_options.return_value.messages.create.return_value = mock_resp
         generate_improvement_brief("TestChannel", {})
 
-    call_kwargs = mock_client.messages.create.call_args.kwargs
+    call_kwargs = mock_client.with_options.return_value.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
     assert system[0].get("cache_control") == {"type": "ephemeral"}
 
@@ -136,9 +130,7 @@ def test_improvement_brief_raises_on_empty_response():
     resp = MagicMock()
     resp.content = []
     resp.usage = MagicMock(input_tokens=0, output_tokens=0)
-    with patch("improvement.brief._get_client") as mock_get:
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = resp
-        mock_get.return_value = mock_client
+    with patch("improvement.brief._ANTHROPIC") as mock_client:
+        mock_client.with_options.return_value.messages.create.return_value = resp
         with pytest.raises(RuntimeError, match="no text"):
             generate_improvement_brief("TestChannel", {})

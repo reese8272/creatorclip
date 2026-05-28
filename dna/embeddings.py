@@ -5,7 +5,9 @@ Store DNA pattern embeddings via Voyage AI → pgvector.
 import logging
 import uuid
 
+import voyageai
 from sqlalchemy.ext.asyncio import AsyncSession
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import settings
 from models import DnaEmbedding, DnaEmbeddingKind
@@ -14,11 +16,19 @@ logger = logging.getLogger(__name__)
 
 _VOYAGE_MAX_TEXT = 2000  # conservative character limit per text
 
+_VOYAGE: voyageai.Client | None = None  # lazy singleton; populated on first embed call
 
-def _client():
-    import voyageai
 
-    return voyageai.Client(api_key=settings.VOYAGE_API_KEY)
+def _voyage() -> voyageai.Client:
+    global _VOYAGE
+    if _VOYAGE is None:
+        _VOYAGE = voyageai.Client(api_key=settings.VOYAGE_API_KEY, timeout=30)
+    return _VOYAGE
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+def _embed(texts: list[str], model: str, input_type: str):
+    return _voyage().embed(texts, model=model, input_type=input_type)
 
 
 async def embed_patterns(
@@ -57,7 +67,7 @@ async def embed_patterns(
     if not texts:
         return
 
-    result = _client().embed(texts, model="voyage-3.5", input_type="document")
+    result = _embed(texts, model="voyage-3.5", input_type="document")
 
     for i, embedding in enumerate(result.embeddings):
         session.add(
@@ -93,9 +103,7 @@ async def embed_brief(
     if not settings.VOYAGE_API_KEY:
         return
 
-    result = _client().embed(
-        [brief_text[:_VOYAGE_MAX_TEXT]], model="voyage-3.5", input_type="document"
-    )
+    result = _embed([brief_text[:_VOYAGE_MAX_TEXT]], model="voyage-3.5", input_type="document")
     session.add(
         DnaEmbedding(
             creator_id=creator_id,
