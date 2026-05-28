@@ -303,6 +303,15 @@ async def _render_clip_async(clip_id: str) -> None:
 
 
 async def _build_dna_async(creator_id: str) -> None:
+    """Build creator DNA patterns, brief, draft profile, and embeddings atomically.
+
+    All DB writes — draft INSERT, onboarding state update, and embedding INSERTs —
+    occur inside a single transaction committed at the end. This prevents orphan draft
+    rows on Celery retry: if the Voyage embedding call or any subsequent write fails,
+    the session is rolled back (via the context manager exit) and no draft row is
+    persisted. The next retry therefore computes max(version) without an orphan row and
+    assigns the same version number again.
+    """
     from dna.brief import generate_brief
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
@@ -325,8 +334,11 @@ async def _build_dna_async(creator_id: str) -> None:
             upload_gap_h,
         ) = await build_patterns(session, creator_uuid)
 
+        # Generate the brief outside the DB — pure LLM call; no session writes yet.
         brief_text = generate_brief(patterns, channel_title)
 
+        # Stage the draft row without committing.  commit=False keeps the INSERT
+        # pending in this transaction so all writes land atomically below.
         dna = await create_draft(
             session,
             creator_id=creator_uuid,
@@ -337,15 +349,21 @@ async def _build_dna_async(creator_id: str) -> None:
             optimal_clip_len_s=clip_len_s,
             best_source_region=source_region,
             optimal_upload_gap_h=upload_gap_h,
+            commit=False,
         )
 
+        # Stage onboarding state update in the same transaction.
         if creator.onboarding_state == OnboardingState.awaiting_data:
             creator.onboarding_state = OnboardingState.dna_pending
-            await session.commit()
 
-        await embed_patterns(session, creator_uuid, patterns)
-        await embed_brief(session, creator_uuid, brief_text)
+        # Stage embedding rows without committing — all writes flush in the single
+        # commit below.  Both helpers accept commit=False for exactly this purpose.
+        await embed_patterns(session, creator_uuid, patterns, commit=False)
+        await embed_brief(session, creator_uuid, brief_text, commit=False)
 
+        # Single atomic commit: draft row + onboarding state + all embeddings.
+        await session.commit()
+        await session.refresh(dna)
         logger.info(
             "DNA draft v%d built for creator %s (%s)", dna.version, creator_id, channel_title
         )

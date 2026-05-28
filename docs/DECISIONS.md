@@ -284,3 +284,37 @@ secrets. A redacted doctor is the standard "preflight/doctor" answer; pydantic-s
 covers presence.
 
 **Source**: Web research on pydantic-settings validation patterns, 2026-05-27.
+
+---
+
+## 2026-05-28 — Issue 35: Idempotent DNA build (SEV-0)
+
+### Single-transaction commit for draft + embeddings + onboarding state
+
+**What changed**: `dna/profile.create_draft`, `dna/embeddings.embed_patterns`, and
+`dna/embeddings.embed_brief` each gained a keyword-only `commit: bool = True` parameter.
+`worker/tasks._build_dna_async` now calls all three helpers with `commit=False` and issues
+a single `await session.commit()` at the end of the function, after all three `session.add()`
+chains are staged.
+
+**Why**: The original code committed inside `create_draft` before calling the Voyage API for
+embeddings. If the Voyage call raised (network error, quota exhaustion, etc.), Celery retried
+the whole task. On retry, `create_draft` queried `max(version)` — which now returned the orphan
+draft row — and inserted a new row at version+1. The root cause is a partial commit that left a
+permanent row before the unit of work was complete.
+
+The fix makes the database write atomic: if the Voyage call or any subsequent write fails, the
+`AsyncSessionLocal` context manager's `__aexit__` calls `session.rollback()`, and no draft row
+exists for the next retry to bump the version against.
+
+**Alternatives ruled out**: Deleting the orphan on retry detection (fragile — requires detecting
+partial state; race-prone). Using a SAVEPOINT to wrap the embeddings (overkill — the entire
+`_build_dna_async` function is one logical unit of work; a single outer transaction is the
+idiomatic choice).
+
+**Backward compatibility**: `commit=True` is the default on all three helpers, so all existing
+callers (`confirm_draft`, `routers/creators.py`, any future standalone call) continue to commit
+immediately without code changes.
+
+**Source**: Standard SQLAlchemy async unit-of-work pattern (defer commit to the outermost
+caller that owns the transaction boundary). 2026-05-28.

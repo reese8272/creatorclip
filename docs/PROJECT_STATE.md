@@ -7,7 +7,7 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Issue 23 — VM provisioning + Cloudflare DNS + HTTPS (BETA_DEPLOYMENT start)
-**Last completed**: Issue 31 — Operability kit: secrets registry, preflight doctor, deploy hardening, auto-heal (2026-05-27)
+**Last completed**: Issue 35 — Idempotent DNA build (SEV-0) (2026-05-28)
 **Blocked**: _(none)_
 
 > **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
@@ -16,6 +16,12 @@ Updated after every issue closes.
 > deploys). Fixed to the minute-packs `check_positive_balance` guard. Full suite now `313 passed`.
 > Note: CI lint (`ruff check .`) has ~11 pre-existing violations unrelated to this work — flagged,
 > not swept in. The local unprovisioned `.env` is missing most required vars (dev only).
+
+> **2026-05-28 session note**: Fixed SEV-0 Issue 35 — idempotent DNA build. `create_draft`,
+> `embed_patterns`, `embed_brief` all gained `commit=False` path; `_build_dna_async` now
+> issues a single atomic commit. 3 integration tests added in `tests/test_dna_build_idempotency.py`
+> (marked `integration`; excluded from default `pytest -q` run per pytest.ini). Non-integration
+> suite count unchanged at `313 passed`.
 
 ---
 
@@ -54,6 +60,7 @@ Updated after every issue closes.
 | 29 | Google OAuth app verification | PROD | 🔲 Not started | Submit for Google review; ~1–4 weeks external |
 | 30 | Production hardening + public go-live | PROD | 🔲 Not started | Load test; all gates green; v1.0.0 tag |
 | 31 | Operability kit — secrets registry, preflight doctor, deploy hardening, auto-heal | BETA | ✅ Done | docs/SECRETS.md + docs/ACCESS.md; scripts/doctor.py (14 tests); cloudflared+autoheal+healthchecks; amd64-only build; fixed blocking billing.tiers import; 313 tests pass |
+| 35 | Idempotent DNA build (SEV-0) | Core | ✅ Done | Single-transaction commit in `_build_dna_async`; `commit=False` param on `create_draft`, `embed_patterns`, `embed_brief`; 3 integration tests; 313 non-integration tests pass |
 
 ---
 

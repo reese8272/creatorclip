@@ -432,6 +432,22 @@ preflight validator, faster/more-consistent deploys, and container auto-recovery
 
 ---
 
+## Issue 35: Idempotent DNA build (SEV-0)
+**Depends on**: 6
+**Status**: ✅ Done (2026-05-28)
+
+**What**: `_build_dna_async` committed the draft row inside `create_draft`, then made Voyage
+embedding calls. On retry, `create_draft` inserted another row at version+1, leaving the prior
+draft as an orphan. Fix: defer commit until all writes (draft + embeddings + onboarding state)
+are staged, then flush atomically.
+
+**Acceptance criteria**:
+- [x] All draft + embedding + brief writes occur in one transaction, committed at the end
+- [x] Integration test: force a Voyage failure mid-build; on retry exactly one draft row exists
+- [x] `docs/DECISIONS.md` entry (2026-05-28)
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
