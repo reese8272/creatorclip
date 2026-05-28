@@ -158,7 +158,11 @@ def check_field(
 def _section_core(env: dict[str, str]) -> list[Result]:
     return [
         check_field(
-            env, "DATABASE_URL", required=True, secret=True, fmt=fmt_url("postgresql", "postgres")
+            env,
+            "DATABASE_URL",
+            required=True,
+            secret=True,
+            fmt=fmt_url("postgresql", "postgres", "postgresql+psycopg", "postgresql+asyncpg"),
         ),
         check_field(env, "REDIS_URL", required=True, secret=False, fmt=fmt_url("redis", "rediss")),
         check_field(env, "POSTGRES_PASSWORD", required=False, secret=True),
