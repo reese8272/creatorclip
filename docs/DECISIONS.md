@@ -5,6 +5,50 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 37: External SDK Timeouts + Retry-with-Backoff
+
+### Anthropic SDK (`anthropic==0.40.0`)
+
+**What**: Replaced per-call `Anthropic(...)` / `AsyncAnthropic(...)` construction in `dna/brief.py`, `improvement/brief.py`, and `clip_engine/scoring.py` with module-level singletons (`_ANTHROPIC`) constructed once from `config.settings`. Configured `timeout=httpx.Timeout(60.0, connect=10.0)` and `max_retries=2`. For `improvement/brief.py`, the web_search call uses `_ANTHROPIC.with_options(timeout=120.0)` per-call because web_search tool agentic loops routinely exceed 60s.
+
+**Why**: The Anthropic Python SDK docs (sdk.anthropic.com/python) recommend constructing the client once and reusing it. Per-call construction wastes connection pool setup on every invocation. The 60s read timeout covers standard Claude calls; 120s override on the web_search path is needed because the tool loop typically takes 30–90s per the Anthropic docs on `web_search_20250305`. connect_timeout of 10s is an industry-standard value for TLS handshakes. `max_retries=2` uses the SDK's built-in exponential backoff on transient 529/500 errors.
+
+**Source**: Anthropic SDK docs — `httpx.Timeout`, `max_retries`, `with_options`; Anthropic web_search tool docs noting agentic loop latency.
+
+### Stripe SDK (`stripe==11.4.0`)
+
+**What**: Added `stripe.max_network_retries = 3` at module level in `billing/stripe_client.py` and promoted `StripeClient` to a module-level singleton `_STRIPE`.
+
+**Why**: Stripe's official Python library docs state that `max_network_retries` enables automatic retry with exponential backoff on 429 and 5xx errors. The default is 0 (no retries). Setting 3 is the Stripe-recommended value for production. The default 80s socket timeout is appropriate for Checkout session creation and is not overridden.
+
+**Source**: Stripe Python library docs — `stripe.max_network_retries`; Stripe best practices guide.
+
+### Voyage AI (`voyageai==0.3.2`)
+
+**What**: Added lazy-initialized module-level singleton `_VOYAGE` (via `_voyage()` accessor) in `dna/embeddings.py` with `timeout=30`. Wrapped embedding calls in a `_embed()` function decorated with `@tenacity.retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))`. Added `tenacity==9.1.4` to `requirements.txt`.
+
+**Why**: The voyageai SDK does not support built-in retries. Tenacity is the Python community standard for retry-with-backoff (used by Google, LangChain, etc.). Exponential backoff with min=1s/max=10s is the standard pattern for rate-limit-friendly API retries. The singleton is lazy (not eager at import time) because voyageai.Client validates the API key at construction, which would fail in test environments without `VOYAGE_API_KEY` set.
+
+**Source**: Tenacity docs (tenacity.readthedocs.io); voyageai Python client source (`voyageai/_base.py`).
+
+### boto3 / Cloudflare R2 (`boto3==1.35.54`)
+
+**What**: Replaced per-call `boto3.client(...)` with a lazy module-level singleton `_R2` (via `_r2()` accessor) in `worker/storage.py`. Configured `botocore.config.Config(retries={"mode": "adaptive", "max_attempts": 5}, connect_timeout=10, read_timeout=60)`.
+
+**Why**: boto3 docs recommend reusing the client to share the connection pool. Adaptive retry mode (botocore docs) uses a token bucket to avoid retry storms on throttling; `max_attempts=5` is the botocore recommended value for production S3 workloads. `connect_timeout=10` / `read_timeout=60` match AWS SDK best practices. The singleton is lazy because boto3 validates the endpoint URL at construction, which fails if `R2_ACCOUNT_ID` is empty (test environment).
+
+**Source**: botocore Config docs; AWS SDK best practices guide for S3 retry configuration.
+
+### Deepgram / WhisperX (`ingestion/transcribe.py`)
+
+**What**: No change made. WhisperX is local-only (no network timeout relevant). The Deepgram fallback path uses `deepgram-sdk` which is commented out of `requirements.txt` and unreachable in all environments. There is no httpx-based fallback path.
+
+**Why**: Implementing a timeout on an unreachable code path would be dead code. Noted here to close the loop on the Issue 37 audit.
+
+**Date**: 2026-05-28
+
+---
+
 ## 2026-05-25 — Project Kickoff Decisions
 
 ### North Star Sentence

@@ -8,11 +8,18 @@ cache hit is reused by the clip scorer (Issue 8) for the same profile version.
 import json
 import logging
 
+import httpx
 from anthropic import Anthropic
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+_ANTHROPIC = Anthropic(
+    api_key=settings.ANTHROPIC_API_KEY,
+    timeout=httpx.Timeout(60.0, connect=10.0),
+    max_retries=2,
+)
 
 _DISCLAIMER = (
     "\n\n---\n"
@@ -40,16 +47,6 @@ CREATOR PERFORMANCE DATA:
 {corpus}"""
 
 
-_anthropic_client: Anthropic | None = None
-
-
-def _get_client() -> Anthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _anthropic_client
-
-
 def generate_brief(patterns: dict, channel_title: str) -> str:
     """
     Call Claude to synthesise a Creator Brief from computed patterns.
@@ -64,7 +61,7 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
     )
     system_text = _SYSTEM_TEMPLATE.format(corpus=corpus)
 
-    response = _get_client().messages.create(
+    response = _ANTHROPIC.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
         system=[

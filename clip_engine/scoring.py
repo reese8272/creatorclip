@@ -11,12 +11,19 @@ Every returned candidate includes a named principle from CLIPPING_PRINCIPLES.md.
 import json
 import logging
 
+import httpx
 from anthropic import AsyncAnthropic
 
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+_ANTHROPIC = AsyncAnthropic(
+    api_key=settings.ANTHROPIC_API_KEY,
+    timeout=httpx.Timeout(60.0, connect=10.0),
+    max_retries=2,
+)
 
 _PRINCIPLES = [
     "Hook in the first 3 seconds",
@@ -178,8 +185,7 @@ async def score_candidates(
     )
     user_text = _USER_TEMPLATE.format(candidates_json=json.dumps(payload, indent=2))
 
-    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    response = await client.messages.create(
+    response = await _ANTHROPIC.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1200,
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],

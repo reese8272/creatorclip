@@ -11,11 +11,18 @@ The honesty disclaimer is always appended by Python — never left to the LLM.
 import json
 import logging
 
+import httpx
 from anthropic import Anthropic
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+_ANTHROPIC = Anthropic(
+    api_key=settings.ANTHROPIC_API_KEY,
+    timeout=httpx.Timeout(60.0, connect=10.0),
+    max_retries=2,
+)
 
 _DISCLAIMER = (
     "\n\n---\n"
@@ -45,16 +52,6 @@ CREATOR ANALYTICS DATA:
 """
 
 
-_anthropic_client: Anthropic | None = None
-
-
-def _get_client() -> Anthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _anthropic_client
-
-
 def generate_improvement_brief(
     channel_title: str,
     analytics: dict,
@@ -71,7 +68,8 @@ def generate_improvement_brief(
     analytics_json = json.dumps(payload, indent=2, default=str)
     system_text = _SYSTEM.format(analytics_json=analytics_json)
 
-    response = _get_client().messages.create(
+    # web_search tool can take 60-120s; override the default 60s timeout per-call.
+    response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
         system=[

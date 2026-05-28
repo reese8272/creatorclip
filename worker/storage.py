@@ -11,18 +11,29 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
+import boto3
+from botocore.config import Config
+
 from config import settings
 
+_R2 = None  # lazy singleton; populated on first R2 call via _r2()
 
-def _r2_client():
-    import boto3
 
-    return boto3.client(
-        "s3",
-        endpoint_url=f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
-        aws_access_key_id=settings.R2_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
-    )
+def _r2():
+    global _R2
+    if _R2 is None:
+        _R2 = boto3.client(
+            "s3",
+            endpoint_url=f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            aws_access_key_id=settings.R2_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+            config=Config(
+                retries={"mode": "adaptive", "max_attempts": 5},
+                connect_timeout=10,
+                read_timeout=60,
+            ),
+        )
+    return _R2
 
 
 def _local_root() -> Path:
@@ -34,7 +45,7 @@ def _local_root() -> Path:
 def upload_file(src: str | Path, key: str) -> str:
     """Store src at key, return an opaque URI."""
     if settings.STORAGE_BACKEND == "r2":
-        _r2_client().upload_file(str(src), settings.R2_BUCKET, key)
+        _r2().upload_file(str(src), settings.R2_BUCKET, key)
         return f"s3://{settings.R2_BUCKET}/{key}"
     dest = _local_root() / key
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +56,7 @@ def upload_file(src: str | Path, key: str) -> str:
 def delete_file(uri: str) -> None:
     if uri.startswith("s3://"):
         parts = uri[5:].split("/", 1)
-        _r2_client().delete_object(Bucket=parts[0], Key=parts[1])
+        _r2().delete_object(Bucket=parts[0], Key=parts[1])
     else:
         p = Path(uri)
         if p.exists():
@@ -55,14 +66,13 @@ def delete_file(uri: str) -> None:
 def delete_prefix(prefix: str) -> int:
     """Delete all objects whose key starts with prefix. Returns count deleted."""
     if settings.STORAGE_BACKEND == "r2":
-        client = _r2_client()
         bucket = settings.R2_BUCKET
         deleted = 0
-        paginator = client.get_paginator("list_objects_v2")
+        paginator = _r2().get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
             if objects:
-                client.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+                _r2().delete_objects(Bucket=bucket, Delete={"Objects": objects})
                 deleted += len(objects)
         return deleted
     else:
@@ -85,7 +95,7 @@ def local_path(uri: str) -> Generator[Path, None, None]:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp_path = Path(tmp.name)
         try:
-            _r2_client().download_file(parts[0], parts[1], str(tmp_path))
+            _r2().download_file(parts[0], parts[1], str(tmp_path))
             yield tmp_path
         finally:
             tmp_path.unlink(missing_ok=True)

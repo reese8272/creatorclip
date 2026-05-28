@@ -189,10 +189,8 @@ def _mock_anthropic_response(text: str) -> MagicMock:
 
 def test_generate_brief_calls_claude_and_appends_disclaimer(monkeypatch):
     mock_response = _mock_anthropic_response("Channel insight text here.")
-    with patch("dna.brief._get_client") as mock_get_client:
-        mock_client = MagicMock()
+    with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
-        mock_get_client.return_value = mock_client
         result = generate_brief({"top_videos": []}, "TestChannel")
 
     assert "Channel insight text here." in result
@@ -202,10 +200,8 @@ def test_generate_brief_calls_claude_and_appends_disclaimer(monkeypatch):
 def test_generate_brief_disclaimer_always_present(monkeypatch):
     """Honesty constraint: disclaimer must be in every brief regardless of LLM output."""
     mock_response = _mock_anthropic_response("Some brief content.")
-    with patch("dna.brief._get_client") as mock_get_client:
-        mock_client = MagicMock()
+    with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
-        mock_get_client.return_value = mock_client
         result = generate_brief({}, "AnyChannel")
 
     assert "does not promise virality" in result
@@ -215,10 +211,8 @@ def test_generate_brief_raises_on_empty_response():
     resp = MagicMock()
     resp.content = []
     resp.usage = MagicMock(input_tokens=0, output_tokens=0)
-    with patch("dna.brief._get_client") as mock_get_client:
-        mock_client = MagicMock()
+    with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = resp
-        mock_get_client.return_value = mock_client
         with pytest.raises(RuntimeError, match="no text block"):
             generate_brief({}, "BadChannel")
 
@@ -226,10 +220,8 @@ def test_generate_brief_raises_on_empty_response():
 def test_generate_brief_uses_prompt_caching():
     """The system block must carry cache_control so the corpus is cached."""
     mock_response = _mock_anthropic_response("Brief here.")
-    with patch("dna.brief._get_client") as mock_get_client:
-        mock_client = MagicMock()
+    with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
-        mock_get_client.return_value = mock_client
         generate_brief({"top_videos": []}, "TestChannel")
 
     call_kwargs = mock_client.messages.create.call_args.kwargs

@@ -15,9 +15,9 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+stripe.max_network_retries = 3
 
-def _client() -> stripe.StripeClient:
-    return stripe.StripeClient(settings.STRIPE_SECRET_KEY)
+_STRIPE = stripe.StripeClient(settings.STRIPE_SECRET_KEY)
 
 
 def create_checkout_session(
@@ -62,7 +62,7 @@ def create_checkout_session(
     else:
         params["customer_creation"] = "always"
 
-    session = _client().checkout.sessions.create(params)
+    session = _STRIPE.checkout.sessions.create(params)
     logger.info("billing checkout_session pack=%s creator=%s", pack_id, creator_id)
     return session.url
 
