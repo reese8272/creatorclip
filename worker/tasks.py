@@ -184,9 +184,9 @@ async def _ingest_async(video_id: str) -> None:
             if duration_s and not video.duration_s:
                 video.duration_s = duration_s
             if duration_s:
-                from billing.ledger import deduct_minutes
+                from billing.ledger import deduct_for_video
 
-                await deduct_minutes(video.creator_id, duration_s, session)
+                await deduct_for_video(video.id, video.creator_id, duration_s, session)
             await session.commit()
 
 

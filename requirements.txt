@@ -1,5 +1,11 @@
 # ── Web Framework ───────────────────────────────────────────────────────────
 fastapi==0.115.4
+# starlette is a transitive dep of fastapi but MUST be pinned explicitly: an
+# unpinned install will pull starlette 1.x (Kludex maintainership line, released
+# 2026-03-22) which dropped on_startup/on_shutdown kwargs from Router.__init__
+# and is incompatible with FastAPI 0.115.x's >=0.40.0,<0.42.0 constraint.
+# See docs/DECISIONS.md 2026-05-28 entry.
+starlette==0.41.3
 stripe==11.4.0
 uvicorn[standard]==0.32.1
 httpx==0.28.0

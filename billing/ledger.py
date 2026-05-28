@@ -3,6 +3,10 @@ Minute balance management.
 
 All mutations use an atomic UPDATE … WHERE … RETURNING pattern so concurrent
 Celery tasks cannot double-spend or over-grant without a DB-level race.
+
+Deductions are additionally guarded by the MinuteDeduction ledger's UNIQUE(video_id)
+constraint — Celery's at-least-once delivery (task_acks_late=True) can re-invoke an
+ingest task; the constraint prevents a second deduction from inserting (Issue 34).
 """
 
 import logging
@@ -12,9 +16,10 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Creator, MinutePack
+from models import Creator, MinuteDeduction, MinutePack
 
 logger = logging.getLogger(__name__)
 
@@ -61,33 +66,73 @@ async def grant_minutes(
     logger.info("billing grant creator=%s minutes=%d reason=%s", creator_id, minutes, reason)
 
 
-async def deduct_minutes(
+async def deduct_for_video(
+    video_id: uuid.UUID,
     creator_id: uuid.UUID,
     duration_s: float,
     session: AsyncSession,
 ) -> int:
-    """
-    Atomically deduct minutes for a processed video.
+    """Idempotently deduct minutes for a video.
 
-    Raises HTTP 402 if the balance is insufficient. Returns the number of
-    minutes deducted.
+    The UNIQUE(video_id) constraint on MinuteDeduction is the idempotency key.
+    Returns minutes deducted on the first call; 0 on every subsequent call for the
+    same video_id (whether sequential or concurrent).
+
+    Raises HTTPException(402) if the balance is insufficient — the deduction
+    record is rolled back via SAVEPOINT, so a 402 leaves the ledger clean.
+
+    Both the deduction-record INSERT and the balance UPDATE occur inside a
+    SAVEPOINT (session.begin_nested) — either both succeed or neither does.
+    Caller is responsible for committing the outer transaction.
     """
     minutes = video_minutes(duration_s)
-    result = await session.execute(
-        update(Creator)
-        .where(Creator.id == creator_id, Creator.minutes_balance >= minutes)
-        .values(minutes_balance=Creator.minutes_balance - minutes)
-        .returning(Creator.minutes_balance)
+
+    # Fast-path: already charged? Skip without opening a SAVEPOINT.
+    existing = await session.scalar(
+        select(MinuteDeduction.id).where(MinuteDeduction.video_id == video_id)
     )
-    row = result.fetchone()
-    if row is None:
-        raise HTTPException(
-            status_code=402,
-            detail=(
-                "Insufficient minutes balance. Purchase a pack at /pricing to continue processing."
-            ),
-        )
-    logger.info("billing deduct creator=%s minutes=%d remaining=%d", creator_id, minutes, row[0])
+    if existing is not None:
+        return 0
+
+    try:
+        async with session.begin_nested():
+            session.add(
+                MinuteDeduction(
+                    video_id=video_id,
+                    creator_id=creator_id,
+                    minutes_deducted=minutes,
+                    duration_s=duration_s,
+                )
+            )
+            await session.flush()  # forces the INSERT — surfaces UNIQUE conflicts now
+
+            result = await session.execute(
+                update(Creator)
+                .where(Creator.id == creator_id, Creator.minutes_balance >= minutes)
+                .values(minutes_balance=Creator.minutes_balance - minutes)
+                .returning(Creator.minutes_balance)
+            )
+            row = result.fetchone()
+            if row is None:
+                # Insufficient balance — SAVEPOINT rolls back on exception, undoing the INSERT.
+                raise HTTPException(
+                    status_code=402,
+                    detail=(
+                        "Insufficient minutes balance. "
+                        "Purchase a pack at /pricing to continue processing."
+                    ),
+                )
+    except IntegrityError:
+        # Concurrent retry won the UNIQUE(video_id) race — idempotent skip.
+        return 0
+
+    logger.info(
+        "billing deduct video=%s creator=%s minutes=%d remaining=%d",
+        video_id,
+        creator_id,
+        minutes,
+        row[0],
+    )
     return minutes
 
 

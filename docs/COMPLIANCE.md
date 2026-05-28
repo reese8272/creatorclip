@@ -88,3 +88,37 @@ the blast radius of a token compromise.
 - [ ] Account-deletion endpoint implemented (right-to-erasure: tokens + media + data)
 - [ ] Token revocation handler implemented
 - [ ] Scope review: no unnecessary scopes requested
+
+---
+
+## Findings & Fixes Log
+
+Cross-creator isolation, ToS, and privacy issues caught after the original kickoff —
+documented here so the compliance trail is auditable.
+
+### 2026-05-28 — SEV-0 cross-creator data leak in `/creators/me/improvement-brief` (Issue 33)
+
+**What**: `routers/improvement.py` was calling `select(VideoMetrics).limit(50)` with **no
+`creator_id` filter**. The averages built from that query (`avg_views`,
+`avg_engagement_rate`, `avg_view_duration_s`) and embedded in the Claude prompt mixed
+**every creator's** metrics together. Direct violation of the per-creator isolation rule
+stated in `CLAUDE.md` and a leak of analytics data that creators have not consented to
+sharing.
+
+**Discovered**: 2026-05-28 project-wide audit (filed as Phase 2 Issue 33 in `docs/issues.md`).
+
+**Fix**: query now joins `Video` and filters `Video.creator_id == creator.id`, ordered by
+`fetched_at DESC` for determinism, limited to the most recent 50 of the requesting
+creator's metrics. A zero-data short-circuit (`HTTP 400 "Not enough data — link some
+videos first."`) prevents brand-new creators from hitting the LLM with `None` averages.
+
+**Verification**: `tests/test_improvement_isolation.py` — integration test seeds two
+creators with disjoint metrics and asserts creator A's analytics dict receives only A's
+data (no blend, no B leak). Test runs in the `integration.yml` CI workflow against a real
+Postgres + pgvector instance with full Alembic schema.
+
+**Defense-in-depth follow-up**: filed as **Issue 56 — Evaluate Postgres Row-Level Security
+for tenant-owned tables** in the Phase 2 backlog. Postgres RLS would have prevented this
+class of bug structurally (the database refuses to return cross-tenant rows even when the
+application forgets the WHERE), and is the industry-standard safety net underneath
+always-filter for compliance-sensitive multi-tenant SaaS.

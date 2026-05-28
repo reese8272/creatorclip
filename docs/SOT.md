@@ -244,6 +244,10 @@ clip_outcomes                        -- strongest positive signal
 preference_models
   creator_id (FK), version, weights_blob, feature_schema_jsonb, updated_at
 
+minute_deductions                     -- cost-side ledger (Issue 34)
+  id, video_id (FK, UNIQUE — idempotency key), creator_id (FK),
+  minutes_deducted, duration_s, deducted_at
+
 usage
   creator_id (FK), period, videos_processed, clips_generated,
   tokens_in, tokens_out

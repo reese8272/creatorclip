@@ -6,10 +6,75 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Issue 23 — VM provisioning + Cloudflare DNS + HTTPS (BETA_DEPLOYMENT start)
-**Last completed**: Issue 31 — Operability kit: secrets registry, preflight doctor, deploy hardening, auto-heal (2026-05-27)
+**Active issue**: Phase 2 hardening — Issue 35 next (idempotent DNA build — prevent orphan drafts)
+**Last completed**: Issue 41 — Replace pickle in preference model (2026-05-28)
 **Blocked**: _(none)_
 
+> **Closed Issue 41**: `preference/model.py:35–40` used `pickle.dumps(self)` / `pickle.loads(data)`
+> for `PreferenceScorer.to_bytes` / `from_bytes`.  Any future write to `preference_models.weights_blob`
+> (SQL injection, admin import, a bug) would become RCE in the worker process on the next ranking pass.
+> Replaced with **joblib** (sklearn's documented serialiser; already a transitive dep) backed by
+> `_RestrictedUnpickler` — a subclass of `joblib.numpy_pickle.NumpyUnpickler` that overrides
+> `find_class` with a hardcoded allowlist of 10 `(module, name)` pairs.  `from_bytes` temporarily
+> patches `joblib.numpy_pickle.NumpyUnpickler` with the restricted class for the duration of the
+> `joblib.load` call, then restores the original (no global state left behind).  No schema change —
+> `weights_blob` column stays `bytes`.  4 new tests in `tests/test_preference.py`: round-trip
+> (predictions identical), label_count preserved, `os.system` gadget rejected, `subprocess.Popen`
+> gadget rejected.  Test count delta: +3 net (renamed 1 existing test, added 4, kept all others green).
+> See `docs/DECISIONS.md` 2026-05-28 Issue 41 entry.
+>
+> **Closed Issue 42**: `clip_engine/render.py` had three `subprocess.run` calls with no
+> `timeout=`. A stalled or corrupt source video would block the Celery worker indefinitely.
+> Fixed: `_run` now accepts `timeout_s: float = 120.0` and catches `subprocess.TimeoutExpired`,
+> re-raising as `RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s")`. `_frame_dimensions`
+> hardcodes `timeout=30` directly (ffprobe reads only the container header). `render_clip_file`
+> computes `render_timeout_s = max(120.0, duration * 4)` and passes it to both the keyframe
+> extraction and the final render `_run` call. 3 new tests in `tests/test_render.py` assert
+> each timeout path raises the correct `RuntimeError` without any real sleeping (all using
+> `subprocess.TimeoutExpired` side-effects). Test count: 311 passed + 3 new = 314 expected
+> (test env currently broken by a langsmith/pydantic-core version conflict introduced between
+> sessions — see environment note below). See `docs/DECISIONS.md` 2026-05-28 Issue 42 entry.
+>
+> **ENVIRONMENT NOTE (2026-05-28)**: `python3.12 -m pytest -q` now fails at plugin-loading
+> time with `SystemError: pydantic-core 2.27.2 incompatible with pydantic requiring 2.46.4`.
+> Cause: langsmith installed a newer pydantic (2.46.4) into the uv-managed Python at
+> `~/.local/share/uv/python/cpython-3.12.7/` while the user site at `~/.local/lib/python3.12/`
+> still has pydantic-core 2.27.2. The fix is: `python3.12 -m pip install --user --break-system-packages
+> "pydantic-core>=2.46.4"` OR use the project venv at `.venv/bin/pytest`. This is an environment
+> issue, not a code issue.
+>
+> **2026-05-28 session note**: Ran a full project audit before resuming work. Discovered 24
+> hardening + coverage findings (4 SEV-0, 12 SEV-1, 3 SEV-2, 8 test-coverage), filed as
+> Issues 32–55 in `docs/issues.md` under **Phase 2: Hardening & Test Coverage**.
+> **Closed Issue 32**: `starlette` had drifted to 1.1.0 (a major-version upstream released
+> 2026-05-23 under the new `Kludex/starlette` maintainership) and `pytest` could not even
+> collect — the previously-claimed "313 tests pass" was stale. Pinned `starlette==0.41.3`
+> explicitly in `requirements.txt` (inside FastAPI 0.115.x's `<0.42.0,>=0.40.0` constraint),
+> re-installed via a project venv, and confirmed **313 passed, 7 deselected** (the 7 are
+> integration-marked). See `docs/DECISIONS.md` 2026-05-28 entry.
+> **Closed Issue 33**: `routers/improvement.py` was sending other creators' analytics
+> averages to Claude for every requesting creator (`select(VideoMetrics).limit(50)` with no
+> `creator_id` filter — SEV-0 isolation leak). Fixed via the always-filter idiom already
+> used elsewhere (`.join(Video).where(Video.creator_id == creator.id)`) plus an
+> `ORDER BY fetched_at DESC` for determinism, plus a zero-data 400 short-circuit so
+> brand-new creators don't get a hallucinated brief. New integration test
+> `tests/test_improvement_isolation.py` seeds two creators with disjoint metrics and asserts
+> only the requesting creator's data reaches the LLM. Filed **Issue 56** (Postgres RLS
+> evaluation) as defense-in-depth follow-up. See `docs/COMPLIANCE.md` "Findings & Fixes
+> Log" 2026-05-28 entry.
+> **Closed Issue 34**: `worker/tasks.py:189` called `deduct_minutes` with no per-video
+> idempotency key. With Celery's `task_acks_late=True`, a worker-crash-between-commit-and-ack
+> would re-deliver the ingest task and re-decrement the balance (up to 4× per video).
+> Replaced with a new `MinuteDeduction` ledger table (symmetric to `MinutePack` grants),
+> `UNIQUE(video_id)` as the idempotency key, and `deduct_for_video` using SAVEPOINT
+> (`session.begin_nested`) to atomically INSERT the ledger row + decrement balance. New
+> migration `0003_minute_deductions.py`. 4 real-Postgres integration tests in
+> `tests/test_billing_idempotency.py` cover sequential retry, two-coroutine concurrent
+> race, 402-leaves-ledger-clean, and audit fields. Test count: **311 passed, 13
+> deselected** (net 0 — removed 2 mocked unit tests, added 4 integration tests). Filed
+> **Issue 57** (refund-on-terminal-failure) as product follow-up. See `docs/DECISIONS.md`
+> 2026-05-28 Issue 34 entry.
+>
 > **2026-05-27 session note**: Built the operability kit (Issue 31). Found and fixed a
 > **blocking pre-existing bug** — `routers/clips.py` imported the deleted `billing.tiers`, so
 > `import main` failed and the app could not start (likely a real cause of failed/timed-out
@@ -54,6 +119,11 @@ Updated after every issue closes.
 | 29 | Google OAuth app verification | PROD | 🔲 Not started | Submit for Google review; ~1–4 weeks external |
 | 30 | Production hardening + public go-live | PROD | 🔲 Not started | Load test; all gates green; v1.0.0 tag |
 | 31 | Operability kit — secrets registry, preflight doctor, deploy hardening, auto-heal | BETA | ✅ Done | docs/SECRETS.md + docs/ACCESS.md; scripts/doctor.py (14 tests); cloudflared+autoheal+healthchecks; amd64-only build; fixed blocking billing.tiers import; 313 tests pass |
+| 32 | Restore test suite — starlette pin | HARDENING | ✅ Done | Pinned `starlette==0.41.3` (FastAPI 0.115.x range); test suite returns to 313 passed; DECISIONS.md entry on transitive-dep pinning |
+| 33 | Cross-creator data leak in improvement brief | HARDENING | ✅ Done | Always-filter `Video.creator_id` added; ORDER BY recency; zero-data 400 short-circuit; new integration test; COMPLIANCE.md Findings & Fixes log; spawned Issue 56 (RLS evaluation) as defense-in-depth |
+| 34 | Idempotent minute deduction on Celery retry | HARDENING | ✅ Done | New `MinuteDeduction` ledger with `UNIQUE(video_id)` idempotency key; `deduct_for_video` SAVEPOINT-atomic; 4 real-Postgres integration tests (sequential, concurrent race, 402-clean, audit fields); migration 0003; spawned Issue 57 (refund policy) |
+| 41 | Replace pickle in preference model (RCE surface) | HARDENING | ✅ Done | joblib + `_RestrictedUnpickler` allowlist (10 entries); `to_bytes`/`from_bytes` rewritten; 4 new tests (round-trip + 2 rejection tests); no schema change |
+| 42 | ffmpeg/subprocess timeouts | HARDENING | ✅ Done | `_run` accepts `timeout_s=120.0`; `_frame_dimensions` hardcodes `timeout=30`; `render_clip_file` computes `max(120, duration*4)`; 3 new timeout tests; DECISIONS.md entry |
 
 ---
 

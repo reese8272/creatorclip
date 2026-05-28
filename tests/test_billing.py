@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from billing.ledger import (
     check_positive_balance,
-    deduct_minutes,
     grant_minutes,
     video_minutes,
 )
@@ -87,29 +86,10 @@ async def test_grant_minutes_adds_to_balance(mock_session):
     mock_session.execute.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_deduct_minutes_raises_402_on_zero_balance(mock_session):
-    from fastapi import HTTPException
-
-    creator_id = uuid.uuid4()
-    result_mock = MagicMock()
-    result_mock.fetchone.return_value = None  # simulate failed WHERE clause
-    mock_session.execute = AsyncMock(return_value=result_mock)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await deduct_minutes(creator_id, 300.0, mock_session)
-    assert exc_info.value.status_code == 402
-
-
-@pytest.mark.asyncio
-async def test_deduct_minutes_returns_minutes_used(mock_session):
-    creator_id = uuid.uuid4()
-    result_mock = MagicMock()
-    result_mock.fetchone.return_value = (140,)  # remaining after deduction
-    mock_session.execute = AsyncMock(return_value=result_mock)
-
-    used = await deduct_minutes(creator_id, 600.0, mock_session)  # 10 minutes
-    assert used == 10
+# Note: deduct_minutes was replaced by the idempotent deduct_for_video (Issue 34).
+# Its behavior is covered by real-DB integration tests in test_billing_idempotency.py,
+# not by mocked unit tests — the load-bearing guarantees (UNIQUE(video_id) idempotency,
+# SAVEPOINT atomicity, concurrent-retry race) cannot be asserted against AsyncMock.
 
 
 @pytest.mark.asyncio

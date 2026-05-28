@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from db import get_session
 from limiter import limiter
-from models import Creator, VideoMetrics
+from models import Creator, Video, VideoMetrics
 
 router = APIRouter(prefix="/creators", tags=["improvement"])
 logger = logging.getLogger(__name__)
@@ -24,9 +24,21 @@ async def get_improvement_brief(
     if not creator.channel_id:
         raise HTTPException(status_code=400, detail="Channel not connected")
 
-    # Build analytics summary for the prompt
-    metrics_result = await session.execute(select(VideoMetrics).limit(50))
+    # Build analytics summary for the prompt. Scoped to THIS creator only —
+    # the prior unscoped query was a SEV-0 cross-creator leak (Issue 33).
+    metrics_result = await session.execute(
+        select(VideoMetrics)
+        .join(Video, VideoMetrics.video_id == Video.id)
+        .where(Video.creator_id == creator.id)
+        .order_by(VideoMetrics.fetched_at.desc())
+        .limit(50)
+    )
     all_metrics = list(metrics_result.scalars())
+    if not all_metrics:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough data yet — link some videos first.",
+        )
     views_list = [m.views for m in all_metrics if m.views]
     eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
     dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]

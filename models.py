@@ -444,6 +444,34 @@ class MinutePack(Base):
     )
 
 
+class MinuteDeduction(Base):
+    """Immutable record of every minute deduction — keyed UNIQUE on video_id.
+
+    The UNIQUE(video_id) constraint is the idempotency key: Celery's at-least-once
+    delivery (with task_acks_late=True) can re-invoke an ingest task after the
+    deduction commits, and the constraint prevents a second deduction from inserting.
+    See docs/DECISIONS.md 2026-05-28 entry on per-video idempotency.
+    """
+
+    __tablename__ = "minute_deductions"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("videos.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    minutes_deducted: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    duration_s: Mapped[float] = mapped_column(sa.Float, nullable=False)
+    deducted_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 # ── Usage & audit ─────────────────────────────────────────────────────────────
 
 

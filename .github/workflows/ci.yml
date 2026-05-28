@@ -57,6 +57,13 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
+      - name: Import smoke (fail fast on dep drift)
+        # Catches transitive-dep drift before running the full suite — e.g. a
+        # 2026-05-28 regression where unpinned starlette resolved to 1.x (incompatible
+        # with FastAPI 0.115.x). pytest --collect-only imports every test module and
+        # surfaces TypeError/ImportError in ~2s rather than 30s.
+        run: pytest --collect-only -q
+
       - name: Run unit tests
         # pytest.ini already applies -m "not integration"
         run: pytest --tb=short -q

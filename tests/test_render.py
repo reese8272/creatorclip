@@ -4,6 +4,7 @@ Unit tests for clip_engine/render.py.
 ffmpeg / ffprobe / cv2 calls are patched — no video files needed.
 """
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from clip_engine.render import (
     _detect_face_center_x,
     _extract_keyframe,
     _frame_dimensions,
+    _run,
     render_clip_file,
 )
 
@@ -186,3 +188,63 @@ def test_render_clip_file_crop_centers_on_face(tmp_path):
     vf_arg = render_cmd[vf_idx + 1]
     # x_offset should not be the default center (960-304=656); face at 1500 pushes it right
     assert "crop=" in vf_arg
+
+
+# ── timeout tests ─────────────────────────────────────────────────────────────
+
+
+def test_run_raises_runtime_error_on_timeout():
+    """`_run` converts `subprocess.TimeoutExpired` into a `RuntimeError` with message."""
+    with patch(
+        "subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=120),
+    ):
+        with pytest.raises(RuntimeError, match="timed out after 120"):
+            _run(["ffmpeg", "-version"], "test label", timeout_s=120)
+
+
+def test_frame_dimensions_raises_on_timeout(tmp_path):
+    """`_frame_dimensions` raises `RuntimeError` when ffprobe hangs."""
+    fake = tmp_path / "v.mp4"
+    fake.touch()
+    with patch(
+        "subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=30),
+    ):
+        with pytest.raises(RuntimeError, match="ffprobe timed out after 30s"):
+            _frame_dimensions(fake)
+
+
+def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):
+    """`render_clip_file` surfaces a `RuntimeError` when the render ffmpeg call stalls."""
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    call_count = 0
+
+    def fake_subprocess_run(cmd, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First call: ffprobe returns dimensions normally.
+        # Second call: keyframe extraction returns normally.
+        # Third call: the render ffmpeg stalls → TimeoutExpired.
+        if call_count <= 2:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "1920,1080\n"
+            m.stderr = ""
+            return m
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 120))
+
+    with (
+        patch("subprocess.run", side_effect=fake_subprocess_run),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        with pytest.raises(RuntimeError, match="timed out after"):
+            render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)

@@ -432,6 +432,568 @@ preflight validator, faster/more-consistent deploys, and container auto-recovery
 
 ---
 
+---
+
+## Phase 2: Hardening & Test Coverage (Issues 32–55)
+
+Discovered in the **2026-05-28 project-wide audit** (router-by-router read, parallel
+subagent reads of `worker/`, `billing/`, `clip_engine/`, `dna/`, `ingestion/`, `preference/`,
+`youtube/`, `crypto.py`, `scripts/`, plus a test-coverage gap audit).
+
+Same Check → Approve → Build → Review loop applies; **Phase 1 must research the current
+industry standard** for each fix before changing code. Dependency-ordered. Severities:
+**SEV-0** blocks the app or causes data loss / cross-creator leak;
+**SEV-1** security, ToS, billing, or availability gap;
+**SEV-2** robustness / race / completeness;
+**TESTS** missing load-bearing coverage per the 80/20 + 100%-on-load-bearing target.
+
+> **Coverage target**: ~80% line overall, **100% line + branch on load-bearing modules**
+> (`auth.py`, `crypto.py`, `routers/auth.py`, `routers/billing.py`, `routers/clips.py` render
+> path, `billing/ledger.py`, `billing/stripe_client.py`, `worker/tasks.py` ingest+render+outcomes,
+> `clip_engine/scoring.py`, `clip_engine/candidates.py` setup-before-peak, `youtube/oauth.py`,
+> `youtube/quota.py`, every per-creator-isolation path). Not 99% — the global CLAUDE.md
+> 80/20 rule explicitly bans over-testing.
+
+---
+
+### Issue 32: Restore test suite — `starlette` / FastAPI version mismatch
+**Severity**: SEV-0 — pytest cannot collect; deploy validation impossible
+**Depends on**: nothing
+**Status**: ✅ Done (2026-05-28)
+
+**What**: `python3.12 -m pytest -q` fails at import with
+`TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'`.
+Cause: installed `starlette==1.1.0` (published under the new `Kludex/starlette` maintainership;
+starlette graduated from ZeroVer to 1.0 on 2026-03-22 — a legitimate breaking release, not a
+typosquat) is incompatible with FastAPI 0.115.x which forwards `on_startup`/`on_shutdown` to
+starlette's Router. The 1.x line removed those kwargs.
+
+**Files**: `requirements.txt`, plus a `docs/DECISIONS.md` entry.
+
+**Acceptance criteria**:
+- [x] Phase 1 research: confirmed FastAPI 0.115.4's `Requires-Dist` is `starlette>=0.40.0,<0.42.0`; pinned `starlette==0.41.3` (highest within constraint); rejected uv/pip-tools migration as scope-creep for an SEV-0 hotfix
+- [x] `requirements.txt` pins **both** fastapi and starlette explicitly with `==`
+- [x] Fresh install in clean venv resolves to compatible versions
+- [x] `pytest -q` collects and runs every test — **313 passed, 7 deselected** (the 7 are integration-marked, excluded by `pytest.ini`)
+- [x] `docs/DECISIONS.md` entry — "2026-05-28 — Pin starlette explicitly to defend against transitive shadowing"
+- [x] `docs/PROJECT_STATE.md` updated with current pass count
+
+---
+
+### Issue 33: Cross-creator data leak in `/creators/me/improvement-brief`
+**Severity**: SEV-0 — other creators' analytics sent to Claude for the requesting creator
+**Depends on**: 32
+**Status**: ✅ Done (2026-05-28)
+
+**What**: `routers/improvement.py:28` ran `select(VideoMetrics).limit(50)` with **no
+`creator_id` filter**. The averages built at lines 30–43 and embedded in the Claude prompt
+mixed all creators' data into one creator's brief.
+
+**Files**: `routers/improvement.py`, `tests/test_improvement_isolation.py` (new),
+`docs/COMPLIANCE.md`.
+
+**Acceptance criteria**:
+- [x] Query is `select(VideoMetrics).join(Video).where(Video.creator_id == creator.id).order_by(VideoMetrics.fetched_at.desc()).limit(50)` — ORDER BY added for determinism (was non-deterministic too)
+- [x] Integration test (real Postgres): seeds creator A (avg_views=1,000, 5 videos) + creator B (avg_views=999,999, 5 videos); asserts creator A's analytics dict to Claude receives `videos_in_db=5` and `avg_views≈1,000` (not 10 / not 500,500 / not 999,999)
+- [x] Second integration test: zero-data creator → HTTP 400 `"Not enough data — link some videos first."` instead of feeding `None` averages to Claude
+- [x] `docs/COMPLIANCE.md` "Findings & Fixes Log" section added with the 2026-05-28 entry
+- [x] Defense-in-depth RLS follow-up filed as **Issue 56** below
+- ~~Audit-log entry on every improvement-brief call~~ — **dropped in Phase 1 brief**: audit-log-per-LLM-call is observability, not security. The security guarantee is the filter + the test. Adding rows to `audit_log` (currently reserved for security-critical events like `creator.deleted`) would dilute the table without strengthening isolation. If LLM observability is needed, do it uniformly across all LLM endpoints in a separate issue.
+
+---
+
+### Issue 34: Idempotent minute deduction on Celery retry
+**Severity**: SEV-0 — billing double-charge on transient ingest failures
+**Depends on**: 32
+**Status**: ✅ Done (2026-05-28)
+
+**What**: `worker/tasks.py:189` called `deduct_minutes` inside `_ingest_async` with no
+per-video key. Celery's at-least-once delivery (`task_acks_late=True` + worker-crash-before-ack)
+could re-run ingest and re-decrement the balance, charging up to 4× per video.
+
+**Files**: `models.py`, `alembic/versions/0003_minute_deductions.py` (new), `billing/ledger.py`,
+`worker/tasks.py`, `tests/test_billing.py`, `tests/test_billing_idempotency.py` (new),
+`docs/SOT.md`, `docs/DECISIONS.md`.
+
+**Resolution chose a ledger table over a column** for symmetry with the existing
+`MinutePack` grants ledger and to enable a real billing-history surface later.
+
+**Acceptance criteria**:
+- [x] Phase 1: confirmed industry standard — Stripe `Idempotency-Key` pattern + Postgres `UNIQUE` constraint + SAVEPOINT for atomic two-write (see `docs/DECISIONS.md` 2026-05-28 entry on Issue 34)
+- [x] New `MinuteDeduction` model + `0003_minute_deductions.py` migration with `UNIQUE(video_id)` idempotency key + `(creator_id, deducted_at)` index for usage queries
+- [x] `deduct_for_video(video_id, creator_id, duration_s, session)` uses fast-path existence check, then SAVEPOINT-wrapped INSERT + atomic balance `WHERE balance >= n RETURNING`; rolls back on insufficient balance OR concurrent `IntegrityError`
+- [x] 4 integration tests against real Postgres: sequential retry idempotency, two-coroutine concurrent race, 402-leaves-ledger-clean, audit fields persisted
+- [x] `docs/SOT.md` data model section updated; `docs/DECISIONS.md` entry written
+- [x] `tests/test_billing.py` mocked unit tests of the old `deduct_minutes` removed (replaced by real-DB integration tests — see comment block in the file)
+- [x] Refund-on-terminal-failure spawned as new **Issue 57** below
+
+---
+
+### Issue 35: Idempotent DNA build — prevent orphan draft accumulation
+**Severity**: SEV-0 — versioned DNA table accumulates orphans on Celery retry
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: `_build_dna_async` (worker/tasks.py:127–139) commits a draft via `dna/profile.create_draft`
+then makes Voyage embedding + Anthropic brief calls. If anything after the draft commit
+fails, Celery retries the whole task and `create_draft` inserts another row at version+1,
+leaving the previous draft as orphan.
+
+**Files**: `worker/tasks.py:127–139`, `dna/profile.py:30–60`.
+
+**Acceptance criteria**:
+- [ ] Either: (a) all draft + embedding + brief writes occur in one transaction, committed at the end; OR (b) task checks for an existing draft for this build-attempt-id before inserting
+- [ ] Integration test: force a Voyage failure mid-build; on retry exactly one draft row exists
+- [ ] `docs/DECISIONS.md` entry
+
+---
+
+### Issue 36: OAuth token lifecycle hardening
+**Severity**: SEV-1 — zombie tokens, wasted quota, incomplete ToS revocation
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: Three related lifecycle gaps:
+1. `routers/auth.py:140–157 delete_account` revokes only the **access_token** at Google; the **refresh_token** stays valid until the user manually disconnects in their Google Account.
+2. `youtube/oauth.py:206–210 refresh_access_token` doesn't delete the `YoutubeToken` row on Google `invalid_grant` (HTTP 400 at refresh).
+3. `youtube/data_api.py:55–76` and `youtube/analytics.py:42–57` retry-with-backoff on **every 403** regardless of whether `error.errors[].reason` is `quotaExceeded` (transient) or `authError`/`forbidden` (permanent). The beat loop keeps hitting Google for revoked creators forever.
+
+**Files**: `routers/auth.py:140–157`, `youtube/oauth.py:201–230`, `youtube/data_api.py:55–76`, `youtube/analytics.py:42–57`.
+
+**Acceptance criteria**:
+- [ ] `delete_account` revokes the refresh_token via `https://oauth2.googleapis.com/revoke?token=<refresh>`; tolerates 400 `token_revoked`/`invalid_token` as success
+- [ ] `refresh_access_token` deletes the `YoutubeToken` row + commits on Google `invalid_grant`
+- [ ] `data_api` / `analytics` inspect the response body and only retry `quotaExceeded`; on auth-error 403 raise a typed exception so the worker can clean up the token + mark creator disconnected
+- [ ] Tests for all three branches with mocked Google responses
+
+---
+
+### Issue 37: External SDK timeouts + retry-with-backoff
+**Severity**: SEV-1 — worker hangs on a stuck remote call
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: Anthropic, Stripe, Voyage, Deepgram, R2 (boto3) clients are constructed per-call
+with no `timeout=` and no retry policy. Each SDK call can hang the worker indefinitely.
+
+**Files**: `clip_engine/scoring.py:181`, `dna/brief.py:43–50`, `improvement/brief.py:48–55`,
+`dna/embeddings.py:50,74`, `ingestion/transcribe.py:44–48`, `billing/stripe_client.py:19–20`,
+`worker/storage.py:34–42`.
+
+**Acceptance criteria**:
+- [ ] Phase 1 (per `/claude-api` skill): research Anthropic SDK recommended `timeout=` / `max_retries=`; same for Stripe (`max_network_retries`), boto3 adaptive retry, Voyage tenacity-wrap, Deepgram httpx timeout
+- [ ] Module-level singleton per SDK, constructed once from `config.settings`
+- [ ] Per-call timeout override for known-long calls (improvement_brief with web_search may need 120s)
+- [ ] Test that asserts each client config has a positive timeout
+
+---
+
+### Issue 38: Sync external calls inside `async def` + held DB sessions
+**Severity**: SEV-1 — DB connection pool starvation under LLM load
+**Depends on**: 32, 37
+**Status**: 🔲 Not started
+
+**What**: Sync calls (sync Anthropic, sync Voyage, sync Deepgram, boto3, subprocess) run
+inside `async def` while an AsyncSession is open. The connection is pinned for the entire
+LLM round-trip (often 10–40 s). Under any concurrent load this exhausts the pool.
+
+**Files**: `routers/improvement.py:53`, `worker/tasks.py:264–302`, `dna/brief.py`, `dna/embeddings.py`, `ingestion/transcribe.py`.
+
+**Acceptance criteria**:
+- [ ] Sync calls wrapped in `await asyncio.to_thread(...)`, **OR** the DB session is released before the LLM call (read what you need, close, then call)
+- [ ] Where Anthropic supports it, switch to `AsyncAnthropic`
+- [ ] Load test: 10 concurrent improvement-brief calls do not exhaust the connection pool
+
+---
+
+### Issue 39: Celery event-loop strategy
+**Severity**: SEV-1 — pool churn + `Future attached to a different loop` errors under load
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: Every Celery task body calls `asyncio.run(...)`, spinning up a fresh event loop
+and binding the SQLAlchemy async engine pool to whichever loop touched it first. Under
+concurrency this causes connection-pool churn and the "Future attached to a different loop"
+class of bugs.
+
+**Files**: `worker/tasks.py:50,60,70,82,92,105,114,124,134`, `db.py:8`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research current best practice (celery-pool-asyncio, asgiref.async_to_sync, per-worker-process singleton loop)
+- [ ] Single shared loop per worker process OR per-worker engine that is bound at worker init
+- [ ] `docs/DECISIONS.md` entry with the chosen pattern + tradeoffs
+
+---
+
+### Issue 40: Streaming upload + DoS guard
+**Severity**: SEV-1 — up to 500 MB into memory per upload request
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: `routers/videos.py:90` reads `await file.read(max_bytes + 1)` — loads the entire
+upload into RAM before validating size.
+
+**Files**: `routers/videos.py:77–129`.
+
+**Acceptance criteria**:
+- [ ] Upload streams to a temp file in fixed chunks (e.g., 1 MB) with running byte-count check
+- [ ] 413 returned as soon as max size is exceeded; partial upload deleted
+- [ ] Test that the API container's RSS does not balloon for a rejected oversized upload
+
+---
+
+### Issue 41: Replace pickle in preference model (RCE surface)
+**Severity**: SEV-1 — `pickle.loads()` from a DB blob = RCE if blob is ever attacker-controlled
+**Depends on**: 32
+**Status**: ✅ Done
+
+**What**: `preference/model.py:39–40` calls `pickle.loads(weights_blob)` on
+`preference_models.weights_blob`. Any future write path to that column (admin import, SQL
+injection elsewhere, a bug) becomes RCE in the worker.
+
+**Files**: `preference/model.py`, `models.py PreferenceModel`.
+
+**Acceptance criteria**:
+- [x] Replace pickle with joblib + allowlist, sklearn JSON, or LightGBM native `.txt` format
+- [x] If pickle truly cannot be removed, wrap the blob in an HMAC envelope (key in env) and verify before load
+- [x] Test that a tampered blob is rejected
+
+---
+
+### Issue 42: ffmpeg / subprocess timeouts
+**Severity**: SEV-1 — corrupt source file hangs a worker forever
+**Depends on**: 32
+**Status**: ✅ Done (2026-05-28)
+
+**What**: `clip_engine/render.py:22–24, 49–63` call `subprocess.run(cmd, ...)` with no
+`timeout=`. A malformed source video can stall ffmpeg until the Celery hard timeout (if
+configured) — or indefinitely (if not).
+
+**Files**: `clip_engine/render.py:22, 49`.
+
+**Acceptance criteria**:
+- [x] Every `subprocess.run` gets `timeout=max(120, clip_length_s * 4)`
+- [x] `subprocess.TimeoutExpired` caught and surfaced as render `failed`
+- [x] Test with a fake `sleep`-ing ffmpeg confirms the timeout fires
+
+---
+
+### Issue 43: Source-media purge correctness
+**Severity**: SEV-1 — in-progress ingest can have its source deleted out from under it
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: `_purge_stale_source_media_async` (worker/tasks.py:471–503) filters by
+`Video.created_at < cutoff`. A long-pending or in-progress ingest of an old upload will
+have its source purged mid-pipeline.
+
+**Files**: `worker/tasks.py:471–503`, `models.py Video` (new column + migration).
+
+**Acceptance criteria**:
+- [ ] `Video.ingest_done_at: datetime | None` column + migration; set on successful ingest
+- [ ] Purge filter uses `ingest_done_at IS NOT NULL AND ingest_done_at < cutoff`
+- [ ] Test: video created 100h ago, `ingest_done_at = NULL` → NOT purged; video done 100h ago → purged
+
+---
+
+### Issue 44: Auth boundary hardening
+**Severity**: SEV-1 — 500 disclosure, deletion DoS surface, no zero-downtime key rotation
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: Three related fixes:
+1. `auth.py:43` — `uuid.UUID(payload["sub"])` raises `ValueError` on malformed sub → 500 (with stack trace in dev `ENV`).
+2. `routers/auth.py:130 DELETE /me` — **no rate limit** on right-to-erasure.
+3. `crypto.py:6–15` — single `Fernet`; no `MultiFernet` for zero-downtime rotation; `decrypt()` raises raw `InvalidToken` that callers handle inconsistently.
+
+**Files**: `auth.py:43`, `routers/auth.py:130`, `crypto.py:6–15`.
+
+**Acceptance criteria**:
+- [ ] `get_current_creator` returns 401 (not 500) for any sub parse failure
+- [ ] `DELETE /me` has `@limiter.limit("5/hour")`
+- [ ] `crypto.py` switches to `MultiFernet([primary, previous])` keyed on `TOKEN_ENCRYPTION_KEY` + new `TOKEN_ENCRYPTION_KEY_PREVIOUS`
+- [ ] `decrypt()` wraps `InvalidToken` in a typed `TokenDecryptError`
+- [ ] Tests for all three branches
+
+---
+
+### Issue 45: Concurrent token refresh lock + Redis pool
+**Severity**: SEV-2 — refresh-token race; per-call aioredis connections
+**Depends on**: 32, 36
+**Status**: 🔲 Not started
+
+**What**:
+- `youtube/oauth.py:201` — two concurrent worker tasks can race a refresh; Google rotates the refresh_token on some flows, so last-write-wins can invalidate the in-flight token.
+- `youtube/quota.py:64` — `aioredis.from_url(...)` opens a new connection per `consume()` call.
+
+**Files**: `youtube/oauth.py:201`, `youtube/quota.py:64`.
+
+**Acceptance criteria**:
+- [ ] Per-creator Redis advisory lock around the refresh branch (`SET NX` with 10 s TTL)
+- [ ] Module-level singleton aioredis pool for quota
+- [ ] Tests with two concurrent refreshes assert only one Google call
+
+---
+
+### Issue 46: Generate-clips retry safety + outcomes time-window bug
+**Severity**: SEV-2 — stale retry wipes rendered clips; outcomes query grows forever
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**:
+- `worker/tasks.py:78–85` retries `generate_clips`, which calls `ranking.py:89` `DELETE FROM clips WHERE video_id = ...`. A stale retry from an old failed task wipes already-rendered clips.
+- `worker/tasks.py:367–431` defines `cutoff_48h` but the actual WHERE only uses `cutoff_7d`; the query refetches every clip past 7d on every hourly run forever.
+
+**Files**: `worker/tasks.py:78–85, 367–431`, `clip_engine/ranking.py:89`.
+
+**Acceptance criteria**:
+- [ ] Generate-clips guards on `Clip.render_status != RenderStatus.done` before delete
+- [ ] Poll-outcomes WHERE bounds: `created_at > now() - interval '30 days'`
+- [ ] Tests for both regressions
+
+---
+
+### Issue 47: Beat-job fairness on quota exhaustion
+**Severity**: SEV-2 — first-by-id creators starve later ones forever
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: `_refresh_youtube_analytics_async` iterates creators in `id` order, breaks on
+`QuotaExhaustedError`; next day's run starts from the same order, perpetually starving later
+creators.
+
+**Files**: `worker/tasks.py:506–549, 367–431`.
+
+**Acceptance criteria**:
+- [ ] Order by `Creator.last_analytics_refreshed_at NULLS FIRST` (new column + migration)
+- [ ] On quota exhaustion the loop records progress and resumes from the unrefreshed slice
+- [ ] Test: 5 creators, quota cap of 2; over 3 runs all 5 refresh
+
+---
+
+### Issue 48: Per-creator isolation tests across all protected routes
+**Severity**: TESTS — load-bearing isolation guarantee
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: Only 3 of ~12 protected routes have an explicit cross-creator isolation test.
+
+**Files**: `tests/test_isolation.py` (new; integration-marked, uses real Postgres).
+
+**Acceptance criteria**:
+- [ ] Cover: `GET /videos`, `POST /videos/link`, `POST /videos/upload`, `GET /videos/{id}/status`, `POST /videos/{id}/clips/generate`, `GET /videos/{id}/clips`, `GET /clips/{id}`, `POST /clips/{id}/render`, `POST /clips/{id}/feedback`, `GET /creators/me/dna`, `POST /creators/me/dna/confirm`, `GET /creators/me/upload-intel`, `GET /creators/me/improvement-brief`, `GET /billing/balance`
+- [ ] Each: seed creators A and B, assert A authenticated cannot read/modify B's row — 404 (never 200 with sanitized data)
+- [ ] Run under docker-compose real Postgres
+
+---
+
+### Issue 49: Billing race + Stripe webhook idempotency against real Postgres
+**Severity**: TESTS — load-bearing money path
+**Depends on**: 32, 34
+**Status**: 🔲 Not started
+
+**What**: Existing `test_billing.py` uses `AsyncMock` for sessions; SEV-0 "double-deduct"
+and "double-fulfill" cases cannot be caught.
+
+**Files**: `tests/test_billing_integration.py` (new), real Postgres.
+
+**Acceptance criteria**:
+- [ ] Two concurrent `deduct_minutes` calls on a balance < their combined need — exactly one succeeds, the other 402s
+- [ ] Stripe webhook called twice with the same `stripe_session_id` — `MinutePack` ledger has exactly one row
+- [ ] Webhook with unknown `pack_id` — no ledger row
+- [ ] Webhook with missing metadata — no ledger row
+
+---
+
+### Issue 50: Account-deletion cascade tests against real Postgres
+**Severity**: TESTS — load-bearing privacy / right-to-erasure
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: `test_account_deletion.py` uses MagicMock; FK cascade behavior is never verified.
+A weakened cascade in a future migration would silently leave PII behind.
+
+**Files**: `tests/test_account_deletion_integration.py` (new) or expand existing.
+
+**Acceptance criteria**:
+- [ ] Real Postgres: seed creator with rows in every dependent table (`YoutubeToken`, `Video`, `VideoMetrics`, `Clip`, `ClipFeedback`, `ClipOutcome`, `RetentionCurve`, `AudienceActivity`, `Demographics`, `Transcript`, `Signals`, `CreatorDna`, `DnaEmbedding`, `PreferenceModel`, `MinutePack`, `Usage`)
+- [ ] After `DELETE /me`: every dependent table has zero rows for that creator_id
+- [ ] Audit-log row recorded
+- [ ] Storage purge called for `source/` AND `clips/` prefixes
+- [ ] Google revoke failure path: deletion still succeeds; audit + cascade still occur
+
+---
+
+### Issue 51: OAuth lifecycle tests
+**Severity**: TESTS — load-bearing auth + ToS
+**Depends on**: 32, 36
+**Status**: 🔲 Not started
+
+**Files**: `tests/test_oauth_lifecycle.py` (new).
+
+**Acceptance criteria**:
+- [ ] Token <5 min from expiry triggers refresh, persists re-encrypted blob, returns new access_token
+- [ ] Google 400 `invalid_grant` → YoutubeToken row deleted, 401 raised
+- [ ] Google 403 `quotaExceeded` → backoff and retry
+- [ ] Google 403 `authError` → token deleted, no retry
+- [ ] OAuth callback logs at INFO and DEBUG contain neither access_token nor refresh_token (use `caplog`)
+- [ ] Authorization URL requests exactly the four documented scopes; no `youtube.upload`
+
+---
+
+### Issue 52: Worker pipeline integration tests
+**Severity**: TESTS — load-bearing pipeline
+**Depends on**: 32, 34, 39
+**Status**: 🔲 Not started
+
+**What**: `_ingest_async`, `_transcribe_async`, `_signals_async`, `_render_clip_async`,
+`_generate_clips_async`, `_build_dna_async`, `_poll_clip_outcomes_async` have no direct
+tests; `test_pipeline_trigger.py` calls the mock itself rather than the real task.
+
+**Files**: `tests/test_worker_pipeline.py` (new), Celery eager mode + real Postgres.
+
+**Acceptance criteria**:
+- [ ] Ingest task on a 5 s test video → storage + DB state correct, minutes deducted exactly once
+- [ ] Render task retried twice → `render_uri` set, `render_status=done`, no duplicate clip rows
+- [ ] generate_clips retried after partial success → no rendered clips lost
+- [ ] poll_clip_outcomes computes `performed_well` against per-creator median, NOT global
+- [ ] build_dna below `MIN_VIDEOS_FOR_DNA` → `ValueError` surfaces without incrementing retry counter
+
+---
+
+### Issue 53: Compliance structural scan — no virality across all surfaces
+**Severity**: TESTS — load-bearing honesty / ToS
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: `tests/test_compliance.py` is misnamed — it actually covers retention tasks. The
+"no response promises virality" constraint is asserted only in two LLM-output paths. Need a
+structural scan across every JSON response, every static HTML/CSS/JS, every Pydantic schema
+description.
+
+**Files**: rename existing `tests/test_compliance.py` → `tests/test_retention_tasks.py`;
+add new `tests/test_compliance_no_virality.py`.
+
+**Acceptance criteria**:
+- [ ] Walk every public route from the OpenAPI schema; hit each with an authed test creator; assert no response body contains `viral`, `virality`, `guaranteed views`, `promise`
+- [ ] Same scan across every file under `static/` and every Pydantic schema description in the OpenAPI doc
+- [ ] Whitelist the named principle `Audience-fit over generic virality` by exact-match exclusion
+
+---
+
+### Issue 54: `scripts/rotate_token_key.py` integration test
+**Severity**: TESTS — pre-public-launch gate
+**Depends on**: 32, 44
+**Status**: 🔲 Not started
+
+**Files**: `tests/test_rotate_token_key.py` (new), real Postgres.
+
+**Acceptance criteria**:
+- [ ] Seed `YoutubeToken` rows encrypted with key A; run rotate A → B; assert all rows decrypt with B
+- [ ] Inject a corrupted ciphertext mid-run; script rolls back, exits non-zero, zero rows mutated
+- [ ] Script logs never contain plaintext token (verify with `caplog`)
+
+---
+
+### Issue 55: Bundled load-bearing test gaps
+**Severity**: TESTS
+**Depends on**: 32
+**Status**: 🔲 Not started
+
+**What**: Cluster of smaller load-bearing assertions, one test each — appended to the
+existing test files rather than a new file per item.
+
+**Acceptance criteria** (each item = one test):
+- [ ] `auth.get_current_creator` returns 401 (not 500) when JWT sub UUID points to a creator deleted after token issuance
+- [ ] `clip_engine.scoring.score_candidates` clamps Claude scores outside `[0, 1]`
+- [ ] `routers.billing.checkout` returns 503 when `STRIPE_SECRET_KEY` is empty
+- [ ] `dna.profile.confirm_draft` supersedes the previously confirmed profile (only one row in `confirmed` after confirm)
+- [ ] `routers.videos.upload_video` rejects with 413 a file just over `UPLOAD_MAX_MB` and writes nothing to storage
+- [ ] `preference.train.build_and_save` excludes `skip` feedback, includes `trim` as positive, weights `performed_well=True` rows 3×
+- [ ] Account deletion writes audit log row even when storage purge raises
+- [ ] `youtube.quota.consume` raises (not silent-allows) when Redis is unreachable
+- [ ] Adversarial clip-engine eval: "loud aftermath" scenario asserts `setup_start_s` precedes the climax, not the post-peak laugh
+
+---
+
+### Issue 56: Evaluate Postgres Row-Level Security for tenant-owned tables
+**Severity**: SEV-2 — defense-in-depth against future missed creator_id filters
+**Depends on**: 32, 48
+**Status**: 🔲 Not started
+
+**What**: The current isolation model is application-layer always-filter — every protected
+query carries `where(creator_id == ...)`. This is the 2026 industry-standard foundation,
+but it failed once already (Issue 33: a missed filter leaked cross-creator analytics into
+a Claude prompt). Postgres Row-Level Security (RLS) is the recommended defense-in-depth
+"safety net underneath" the application filter: the database refuses to return cross-tenant
+rows even when application code forgets the WHERE.
+
+This is a **research-and-decide** issue, not a foregone implementation. The trade-offs
+(per the 2026 industry surveys cited in `docs/COMPLIANCE.md`'s 2026-05-28 entry) are real:
+
+- **Pros**: structural guarantee against missed-filter regressions; AWS / PlanetScale /
+  techbuddies all recommend it for compliance-sensitive multi-tenant SaaS; properly indexed,
+  it has no measurable perf cost vs. application filtering.
+- **Cons**: requires `SET LOCAL app.creator_id = ...` middleware at request entry,
+  alembic `CREATE POLICY` DDL on every tenant-owned table, BYPASSRLS lockdown on the
+  migration role, and RLS-aware integration tests (the Issue 48 prototype needs to verify
+  that with RLS enabled, an *unfiltered* query in test code also returns zero rows).
+
+**Files (if we proceed)**: new alembic migration, request-entry middleware in `main.py`,
+RLS-aware test updates, `docs/SOT.md` + `docs/DECISIONS.md` + `docs/COMPLIANCE.md` entries.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research current production patterns for RLS + SQLAlchemy 2.0 + async (`SET LOCAL` is per-transaction so it interacts with connection pooling — confirm pgbouncer compatibility is honored)
+- [ ] Decision documented in `docs/DECISIONS.md`: adopt now / defer to production-scale / decline with reason
+- [ ] If adopted: RLS policies cover every table with a `creator_id` column; migration role retains BYPASSRLS for alembic upgrades
+- [ ] If adopted: Issue 48 isolation tests extended to assert "unfiltered query returns zero rows for non-current creator"
+- [ ] If deferred: revisit at Issue 30 (production go-live) — close as "deferred" only after explicit owner sign-off
+
+---
+
+### Issue 57: Refund on terminal ingest failure
+**Severity**: SEV-2 — creator paid for a permanently-failed ingest
+**Depends on**: 34
+**Status**: 🔲 Not started
+
+**What**: Issue 34 made minute deduction per-video-idempotent — the creator can no longer
+be double-charged. But if `_ingest_async` deducts minutes and then ingest fails on every
+Celery retry (max_retries=3 → 4 total attempts), the deduction sticks for a permanently-
+failed ingest. The product needs a policy for this.
+
+**Open questions to research / decide in Phase 1**:
+- Automatic refund on terminal failure vs. support-initiated only?
+- Which failure classes refund? (ffmpeg error on corrupt source = yes; insufficient-balance
+  = N/A; storage 5xx = yes; user-provided corrupted file = ??)
+- UX: how does the creator know they were refunded? notification? email? in-app history?
+- Do we need a `MinuteDeduction.refunded_at` column, or a `MinutePack` row with
+  `reason="refund"` and `pack_id="refund:<video_id>"`?
+
+**Files (if we proceed)**: `worker/tasks.py` (Celery `on_failure` hook), `billing/ledger.py`
+(refund helper), `tests/test_billing_refund.py` (new), notification surface TBD,
+`docs/COMPLIANCE.md` (refund policy disclosure).
+
+**Acceptance criteria**:
+- [ ] Phase 1: decide refund policy + UX surface; document in `docs/DECISIONS.md`
+- [ ] If automatic: Celery `on_failure` hook (after final retry) refunds via
+      `grant_minutes(..., reason="refund", pack_id=f"refund:{video_id}")` — idempotent
+      via the existing `stripe_session_id IS NULL` clause or a new keyed approach
+- [ ] Integration test: ingest fails 4× → 1 `MinuteDeduction` row + 1 refund `MinutePack`
+      row → net balance change = 0
+- [ ] User-visible disclosure of refund policy in TOS / pricing page
+
+---
+
+### Phase 2 close-out gates
+
+- [ ] Every SEV-0 and SEV-1 issue above resolved (32–47)
+- [ ] Overall `pytest --cov` line coverage ≥ 80%
+- [ ] Load-bearing modules (listed at top of Phase 2) ≥ 95% line + 100% branch
+- [ ] Phase 2 declared done in `docs/PROJECT_STATE.md`
+- [ ] `docs/DECISIONS.md` updated for every implementation choice that diverged from the obvious path
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

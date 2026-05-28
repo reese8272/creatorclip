@@ -3,6 +3,7 @@ Unit tests for preference/decay.py, preference/features.py, preference/model.py.
 """
 
 import math
+import pickle
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
@@ -142,10 +143,86 @@ def test_predict_score_positive_features_higher():
     assert high >= low
 
 
-def test_scorer_round_trips_pickle():
+def test_scorer_round_trips_joblib():
+    """A legitimate scorer survives to_bytes → from_bytes with identical predictions."""
     X, y, w = _training_data()
     scorer = fit(X, y, w, threshold=20)
     blob = scorer.to_bytes()
     reloaded = PreferenceScorer.from_bytes(blob)
     feats = clip_features(signal_density=0.5)
     assert reloaded.predict_score(feats) == pytest.approx(scorer.predict_score(feats))
+
+
+def test_scorer_round_trips_preserves_label_count():
+    """label_count attribute survives the serialisation round-trip."""
+    X, y, w = _training_data(n_pos=7, n_neg=3)
+    scorer = fit(X, y, w, threshold=20)
+    reloaded = PreferenceScorer.from_bytes(scorer.to_bytes())
+    assert reloaded.label_count == scorer.label_count
+
+
+def _make_malicious_joblib_blob() -> bytes:
+    """Return a joblib-format blob whose pickle payload references os.system.
+
+    joblib.dump writes a NumpyPickler stream.  We craft a legitimate scorer
+    blob, then append an extra pickle GLOBAL opcode that references a
+    disallowed class, simulating an attacker who controls the DB row.
+
+    The appended opcode makes the pickle stream invalid *after* the first
+    object, but joblib calls unpickler.load() exactly once — so the GLOBAL
+    opcode fires during that load if we embed it inside the serialised object's
+    __reduce__ output instead.
+
+    Simpler approach: create a tiny object whose __reduce__ references os.system
+    and wrap it in a joblib dump.
+    """
+    import io as _io
+
+    import joblib as _joblib
+
+    class _Malicious:
+        """Object whose pickle reduction calls os.system."""
+
+        def __reduce__(self) -> tuple:
+            # This tells pickle: "reconstruct me by calling os.system('')"
+            import os
+
+            return (os.system, ("",))
+
+    buf = _io.BytesIO()
+    _joblib.dump(_Malicious(), buf)
+    return buf.getvalue()
+
+
+def test_tampered_blob_is_rejected():
+    """A joblib blob containing a disallowed class raises pickle.UnpicklingError.
+
+    This tests the real attack vector: an attacker who can write crafted bytes
+    to `preference_models.weights_blob` cannot execute arbitrary code because
+    `_RestrictedUnpickler.find_class` rejects unknown modules before any
+    `__reduce__` output is invoked.
+    """
+    blob = _make_malicious_joblib_blob()
+
+    with pytest.raises(pickle.UnpicklingError, match="class not allowed"):
+        PreferenceScorer.from_bytes(blob)
+
+
+def test_tampered_blob_arbitrary_global_rejected():
+    """Any arbitrary global embedded in a joblib blob is rejected by the allowlist."""
+    import io as _io
+
+    import joblib as _joblib
+
+    # subprocess.Popen is a common RCE gadget — must be blocked.
+    import subprocess
+
+    class _POpenGadget:
+        def __reduce__(self) -> tuple:
+            return (subprocess.Popen, (["id"],))
+
+    buf = _io.BytesIO()
+    _joblib.dump(_POpenGadget(), buf)
+
+    with pytest.raises(pickle.UnpicklingError, match="class not allowed"):
+        PreferenceScorer.from_bytes(buf.getvalue())

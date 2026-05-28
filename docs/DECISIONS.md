@@ -284,3 +284,256 @@ secrets. A redacted doctor is the standard "preflight/doctor" answer; pydantic-s
 covers presence.
 
 **Source**: Web research on pydantic-settings validation patterns, 2026-05-27.
+
+---
+
+## 2026-05-28 — Issue 32: Pin `starlette` explicitly to defend against transitive shadowing
+
+### What changed
+`requirements.txt` now pins `starlette==0.41.3` directly, in addition to the existing
+`fastapi==0.115.4` pin. Previously starlette was an unpinned transitive dep.
+
+### Why
+On 2026-05-28 the test suite failed to collect with
+`TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'`.
+Root cause: the installed environment had drifted to `starlette==1.1.0`, the published
+upstream **on the same day** (starlette 1.2.0 was released earlier in the day; 1.1.0 was
+2026-05-23). `starlette` graduated from ZeroVer to 1.0 on 2026-03-22, with the package
+moving from `encode/starlette` to `Kludex/starlette` on PyPI (Marcelo Trylesinski now
+primary maintainer; Tom Christie co-maintainer). The 1.x line **removed**
+`on_startup`/`on_shutdown` from `Router.__init__`, which FastAPI 0.115.x still forwards.
+
+FastAPI 0.115.4 declares `starlette>=0.40.0,<0.42.0` in its `Requires-Dist`, so the broken
+install can only happen on an env where pip ran without that constraint applied (drift via
+an unrelated `pip install` that didn't reference the requirements file). The explicit pin
+on starlette closes that drift path.
+
+### Why not pip-tools / uv lockfile right now
+The 2026 industry-standard answer for production Python dep management is `uv` with
+`uv.lock` (cross-platform, auto-maintained, 10–100× faster than pip-tools), or `pip-tools`
+(`requirements.in` → compiled `requirements.txt`) as the lower-friction alternative. Both
+would prevent this category of bug structurally. We're deferring the tooling migration:
+a hotfix for an SEV-0 collection failure shouldn't carry a CI/Dockerfile/dev-workflow
+overhaul with it. **Re-evaluate when production K8s deployment lands (Issue 30)** — at
+that point the operational case for a lockfile is unambiguous.
+
+Until then, the rule is **explicit `==` pinning of every runtime-affecting transitive dep
+in `requirements.txt`** as the minimum bar.
+
+### Source / evidence
+- `python3.12 -m pip show fastapi` reports `Requires-Dist: starlette<0.42.0,>=0.40.0`
+- FastAPI 0.115.4 `pyproject.toml` on GitHub confirms the same constraint
+- PyPI `starlette` project page (2026-05-28): latest 1.2.0, source repo
+  `https://github.com/Kludex/starlette`, maintainers Marcelo Trylesinski + Tom Christie
+- Industry references on 2026 dependency-management practice: Astral `uv` docs;
+  Real Python "uv vs pip"; Cuttlesoft "Python Dependency Management in 2026";
+  pydevtools handbook on pip-tools
+
+### Verification
+With `starlette==0.41.3` pinned and `pip install -r requirements.txt` re-run in a clean
+venv, `pytest -q` runs the full suite to **313 passed, 7 deselected** (the 7 are
+integration-marked tests excluded by `pytest.ini`'s `-m "not integration"`).
+
+---
+
+## 2026-05-28 — Issue 34: Per-video idempotency for minute deduction (SAVEPOINT + UNIQUE)
+
+### What changed
+A new `minute_deductions` ledger table (migration `0003_minute_deductions.py`,
+model `MinuteDeduction`) is added with **`UNIQUE(video_id)`** as the idempotency key.
+`billing.ledger.deduct_minutes(creator_id, duration_s, session)` is replaced by
+`deduct_for_video(video_id, creator_id, duration_s, session)`, and `worker/tasks._ingest_async`
+calls the new function with `video.id` + `video.creator_id`.
+
+The new function:
+1. Fast-checks for an existing deduction row (skip without opening a savepoint if found).
+2. Opens `session.begin_nested()` (SAVEPOINT) wrapping two writes:
+   - INSERT into `minute_deductions` + `session.flush()` to surface UNIQUE conflicts now.
+   - `UPDATE creators SET minutes_balance = minutes_balance - n WHERE id = :cid AND minutes_balance >= n RETURNING`.
+3. On `IntegrityError` (concurrent retry won the race) → roll back savepoint, return 0.
+4. On insufficient balance → raise `HTTPException(402)` inside the savepoint, which auto-rolls back the INSERT.
+
+### Why
+Celery is configured with `task_acks_late=True` in `worker/celery_app.py`, which makes
+delivery at-least-once: if a worker crashes after the deduction commits but before
+acking the message, the broker redelivers and the task runs again. The previous
+`deduct_minutes` had no per-video key — each retry just re-decremented the balance,
+charging the creator 2–4× for a single video. The `UNIQUE(video_id)` constraint moves
+the idempotency guarantee from "the application remembers" to "the database refuses",
+which is the only durable place for a money primitive.
+
+### Why a ledger table instead of `Video.minutes_charged_at`
+`MinutePack` (existing) ledgers **grants in**. `MinuteDeduction` (new) ledgers **costs
+out**. `Creator.minutes_balance` is the running total of both. This is the symmetric
+design used by every customer-facing billing system (Stripe usage records, AWS billing,
+Adyen). It also lets us answer "show my usage history for the last 30 days" with one
+indexed query — `Video.minutes_charged_at` would have lost that audit trail.
+
+### Why SAVEPOINT (`session.begin_nested`)
+Two writes (deduction record + balance decrement) must succeed atomically. SAVEPOINT
+makes them an undo unit *inside* the caller's larger transaction — the caller can
+continue doing other work in the same transaction even when our two writes roll back.
+This is the SQLAlchemy-2.0-async idiomatic pattern for "atomic sub-operation within
+a larger flow."
+
+### Industry standard checked
+- **Stripe Idempotency-Key pattern** — store key + result on first call; replay returns
+  stored result. The `MinuteDeduction.video_id UNIQUE` is the same pattern with
+  `video_id` as the natural opaque key.
+- **AWS "Designing Idempotent APIs"** — same model: client supplies an idempotency token,
+  server uses a unique constraint to short-circuit duplicates.
+- **Celery docs** explicitly state task idempotency is the caller's responsibility;
+  `task_acks_late=True` + worker crashes make duplicates a *normal* occurrence, not an
+  edge case.
+- **Postgres UNIQUE + SAVEPOINT** vs. application-level locking — UNIQUE is the
+  database's natural primitive when a key exists. We use both: UNIQUE for the
+  idempotency guarantee, SAVEPOINT for atomicity between the two writes.
+
+### Refund-on-permanent-failure deferred
+If `_ingest_async` eventually exhausts all Celery retries after the deduction lands,
+the creator paid for a permanently-failed ingest. That refund policy is a product
+decision (refund threshold? automatic vs. support-initiated?) and is filed as
+**Issue 57** in `docs/issues.md`. Today's exposure is small — ingest failures are
+observable in logs and support can manually refund via `grant_minutes`.
+
+### Verification
+- `pytest -q`: **311 passed, 13 deselected** (was 313/9 — net -2 mocked deduct_minutes
+  unit tests, +4 real-DB integration tests in `tests/test_billing_idempotency.py`).
+- Integration tests assert: (a) sequential retry is idempotent, (b) two concurrent
+  coroutines for the same video_id charge exactly once, (c) insufficient balance leaves
+  zero ledger rows, (d) deduction record carries minutes + duration + timestamp.
+
+### Source / evidence
+- Stripe Idempotency docs; AWS Best Practices "Designing Idempotent APIs"
+- SQLAlchemy 2.0 async docs: "Using SAVEPOINT with begin_nested"
+- Celery docs: at-least-once delivery + `task_acks_late`
+- Existing project precedent: `MinutePack` grants ledger (Issue 21)
+
+---
+
+## 2026-05-28 — Issue 42: ffmpeg/subprocess timeout formula
+
+### What changed
+Every `subprocess.run` call in `clip_engine/render.py` now has an explicit `timeout=`:
+
+- `_run(cmd, label, timeout_s=120.0)` — optional float arg, passed directly to
+  `subprocess.run(timeout=timeout_s)`; catches `subprocess.TimeoutExpired` and re-raises
+  as `RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s")`.
+- `_frame_dimensions` — direct `subprocess.run(..., timeout=30)` hardcoded; ffprobe
+  reads only container headers and should return in milliseconds on a healthy file.
+- `_extract_keyframe` — threads `timeout_s: float = 120.0` through to `_run` so callers
+  can pass the same budget as the render.
+- `render_clip_file` — computes `render_timeout_s = max(120.0, duration * 4)` and passes
+  it to both `_extract_keyframe` and the final render `_run` call.
+
+### Timeout formula: `max(120, clip_duration_s * 4)`
+
+**Why 4×**: libx264 `fast` preset on 1080p encodes at approximately real-time speed on
+modern consumer hardware (i7/Ryzen with AVX2). 4× gives 3 full "real-time equivalents" of
+headroom above the encode itself, covering disk I/O, container muxing, startup overhead,
+and moderate system load. A 30s clip → 120s ceiling (floor kicks in). A 60s clip → 240s.
+A 90s clip → 360s.
+
+**Why floor at 120s**: Very short clips (< 30s) would get absurdly tight budgets with 4×
+alone (e.g. a 10s clip would get only 40s). 120s is ample for any short ffmpeg invocation
+regardless of clip length and matches the existing `LLM_TIMEOUT_SECONDS` default, making
+it the project's "standard slow-operation timeout".
+
+**Why ffprobe = 30s hardcoded**: ffprobe reads only the container header — it finishes in
+milliseconds on any non-corrupt file. 30s is already 2–3 orders of magnitude more generous
+than needed; threading the render timeout through would be misleading (the ffprobe call is
+not proportional to clip length).
+
+### What the error surfaces to
+`_run` raises `RuntimeError` on timeout. The Celery render task's existing error handler
+catches `RuntimeError` and sets `clip.render_status = failed`. No new error handling path
+was needed.
+
+### Source / evidence
+- Python docs: `subprocess.run(..., timeout=N)` raises `subprocess.TimeoutExpired` after N
+  seconds, which also sends `SIGKILL` to the child process.
+- ffmpeg wiki on encode speed: "fast" preset encodes near 1× real-time for 1080p H.264 on
+  modern x86 CPUs.
+- Project precedent: `LLM_TIMEOUT_SECONDS` defaults to 120s in `config.py`.
+
+---
+
+## 2026-05-28 — Issue 41: Replace pickle with joblib + restricted unpickler allowlist
+
+### What changed
+`preference/model.py` — `to_bytes` / `from_bytes` now use **joblib** for serialisation
+instead of raw `pickle`.  A new `_RestrictedUnpickler` class (subclass of
+`joblib.numpy_pickle.NumpyUnpickler`) overrides `find_class` to enforce an explicit
+allowlist of permitted `(module, name)` pairs.  `from_bytes` temporarily patches
+`joblib.numpy_pickle.NumpyUnpickler` with `_RestrictedUnpickler` for the duration of
+the `joblib.load` call, then restores the original.
+
+No schema change — `preference_models.weights_blob` remains `bytes`.
+
+### Why joblib over raw pickle
+joblib is sklearn's officially documented serialisation format:
+> "joblib.dump / joblib.load — use this for sklearn estimators as it handles
+> large numpy arrays more efficiently than pickle" — scikit-learn User Guide §Model
+> persistence.
+
+It is already a transitive dependency (`scikit-learn → joblib`), so no new package
+is needed.  Blobs written by `joblib.dump` are forward-compatible across
+minor sklearn/joblib versions; raw pickle blobs are not.
+
+### Why the allowlist is the load-bearing defence
+joblib uses pickle internally — `joblib.load` without the restricted unpickler is
+functionally identical to `pickle.loads` from a security standpoint.  The allowlist
+closes the RCE surface by ensuring that `find_class` rejects any module or class
+that is not in the pre-approved set, **before** any `__reduce__` / `__setstate__`
+output is invoked.
+
+### Allowlist derivation
+The full `(module, name)` set was determined empirically by running a subclass of
+`pickle.Unpickler` against real `joblib.dump` outputs for both `LogisticRegression`
+and `LGBMClassifier`:
+
+| Entry | Reason |
+|-------|--------|
+| `preference.model.PreferenceScorer` | The wrapper class itself |
+| `sklearn.linear_model._logistic.LogisticRegression` | Cold-start model |
+| `lightgbm.sklearn.LGBMClassifier` | Warm-start model |
+| `lightgbm.basic.Booster` | LightGBM's internal tree model |
+| `joblib.numpy_pickle.NumpyArrayWrapper` | joblib emits this for every ndarray |
+| `numpy.ndarray` | Model weight arrays |
+| `numpy.dtype` | Array dtypes |
+| `numpy._core.multiarray.scalar` | Scalar numpy values |
+| `collections.defaultdict` | LightGBM's internal param dict |
+| `collections.OrderedDict` | LightGBM's internal param dict |
+
+### Alternatives ruled out
+- **HMAC envelope around raw pickle**: defers the attack surface instead of closing it.
+  The blob still becomes RCE if the HMAC key leaks.  HMAC-only is the "if pickle truly
+  cannot be removed" fallback the issue specified — joblib + allowlist is strictly
+  stronger.
+- **LightGBM native `.txt` format + sklearn JSON**: requires separate serialisation
+  paths per model type, custom re-assembly of the `PreferenceScorer` wrapper, and
+  additional validation of the sklearn JSON format.  More code surface for the same
+  security property.
+
+### Thread-safety note
+The temporary `_jnp.NumpyUnpickler` patch is not thread-safe if two `from_bytes`
+calls execute concurrently in the same process.  Celery workers are single-threaded
+per-task (one task per process with the `prefork` pool), so this is safe in the
+current architecture.  If the project ever switches to a threaded Celery pool or
+calls `from_bytes` from async code, replace the patch with a thread lock.
+
+### Verification
+- `tests/test_preference.py` — 4 new tests:
+  - `test_scorer_round_trips_joblib`: legitimate scorer survives to_bytes → from_bytes
+    with identical `predict_score` output
+  - `test_scorer_round_trips_preserves_label_count`: `label_count` attribute preserved
+  - `test_tampered_blob_is_rejected`: joblib blob with `os.system` `__reduce__` raises
+    `pickle.UnpicklingError("class not allowed: posix.system")`
+  - `test_tampered_blob_arbitrary_global_rejected`: joblib blob with `subprocess.Popen`
+    gadget raises `pickle.UnpicklingError("class not allowed: subprocess.Popen")`
+
+### Source / evidence
+- scikit-learn User Guide "Model persistence": https://scikit-learn.org/stable/model_persistence.html
+- Python docs `pickle.Unpickler.find_class`: https://docs.python.org/3/library/pickle.html#pickle.Unpickler.find_class
+- Python HOWTO "Restricting globals" pattern for safe unpickling
+- joblib source: `joblib.numpy_pickle.NumpyUnpickler`, `_unpickle` (joblib 1.5.3)

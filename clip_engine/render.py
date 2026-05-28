@@ -18,13 +18,18 @@ _OUTPUT_W = 1080
 _OUTPUT_H = 1920
 
 
-def _run(cmd: list[str], label: str) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s")
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg {label} failed: {result.stderr[:500]}")
 
 
-def _extract_keyframe(source_path: Path, seek_s: float, out_path: Path) -> None:
+def _extract_keyframe(
+    source_path: Path, seek_s: float, out_path: Path, timeout_s: float = 120.0
+) -> None:
     """Pull one frame at seek_s from source into out_path (JPEG)."""
     _run(
         [
@@ -41,27 +46,32 @@ def _extract_keyframe(source_path: Path, seek_s: float, out_path: Path) -> None:
             str(out_path),
         ],
         "keyframe extraction",
+        timeout_s=timeout_s,
     )
 
 
 def _frame_dimensions(source_path: Path) -> tuple[int, int]:
     """Return (width, height) of the video stream using ffprobe."""
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=p=0",
-            str(source_path),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+                str(source_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffmpeg ffprobe timed out after 30s")
     try:
         parts = result.stdout.strip().split(",")
         return int(parts[0]), int(parts[1])
@@ -109,6 +119,11 @@ def render_clip_file(
     if duration <= 0:
         raise ValueError(f"Invalid clip range: {start_s}s–{end_s}s")
 
+    # Give ffmpeg generous headroom: libx264 fast preset encodes near real-time on
+    # 1080p; 4× the clip duration is a safe ceiling for any reasonable hardware.
+    # Floor at 120s so short clips don't get an absurdly tight budget.
+    render_timeout_s = max(120.0, duration * 4)
+
     frame_w, frame_h = _frame_dimensions(source_path)
 
     # Crop width for 9:16: keep full height, compute matching width
@@ -120,7 +135,7 @@ def render_clip_file(
         kf_path = Path(tmp.name)
     try:
         mid_s = start_s + duration / 2
-        _extract_keyframe(source_path, mid_s, kf_path)
+        _extract_keyframe(source_path, mid_s, kf_path, timeout_s=render_timeout_s)
         face_x = _detect_face_center_x(kf_path, frame_w)
     finally:
         kf_path.unlink(missing_ok=True)
@@ -157,5 +172,6 @@ def render_clip_file(
             str(out_path),
         ],
         "render",
+        timeout_s=render_timeout_s,
     )
     logger.info("Rendered clip %s→%s (%s)", source_path.name, out_path.name, vf)
