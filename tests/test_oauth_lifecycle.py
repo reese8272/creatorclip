@@ -246,32 +246,18 @@ async def test_get_json_retries_on_quota_exceeded():
 
     call_count = {"n": 0}
 
-    class FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
+    class _FakeClient:
         async def get(self, url, headers=None, params=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return _FakeResponse(
                     403,
-                    {
-                        "error": {
-                            "errors": [{"reason": "quotaExceeded"}],
-                            "code": 403,
-                        }
-                    },
+                    {"error": {"errors": [{"reason": "quotaExceeded"}], "code": 403}},
                 )
             return _FakeResponse(200, {"items": [{"id": "ok"}]})
 
     with (
-        patch("youtube.data_api.httpx.AsyncClient", FakeAsyncClient),
+        patch("youtube._http.client", return_value=_FakeClient()),
         patch("youtube.data_api.consume", new=AsyncMock()),
         patch("youtube.data_api.asyncio.sleep", new=AsyncMock()),
     ):
@@ -288,16 +274,7 @@ async def test_get_json_raises_auth_error_without_retry():
 
     call_count = {"n": 0}
 
-    class FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
+    class _FakeClient:
         async def get(self, url, headers=None, params=None):
             call_count["n"] += 1
             return _FakeResponse(
@@ -306,7 +283,7 @@ async def test_get_json_raises_auth_error_without_retry():
             )
 
     with (
-        patch("youtube.data_api.httpx.AsyncClient", FakeAsyncClient),
+        patch("youtube._http.client", return_value=_FakeClient()),
         patch("youtube.data_api.consume", new=AsyncMock()),
         patch("youtube.data_api.asyncio.sleep", new=AsyncMock()),
         pytest.raises(YouTubeAuthError) as exc_info,
@@ -323,21 +300,12 @@ async def test_get_json_raises_on_401():
     """401 should also raise YouTubeAuthError without retrying."""
     from youtube import data_api
 
-    class FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
+    class _FakeClient:
         async def get(self, url, headers=None, params=None):
             return _FakeResponse(401, {})
 
     with (
-        patch("youtube.data_api.httpx.AsyncClient", FakeAsyncClient),
+        patch("youtube._http.client", return_value=_FakeClient()),
         patch("youtube.data_api.consume", new=AsyncMock()),
         pytest.raises(YouTubeAuthError) as exc_info,
     ):
@@ -354,16 +322,7 @@ async def test_fetch_report_raises_on_account_closed():
     """Permanent 403 reasons other than authError must also raise YouTubeAuthError."""
     from youtube import analytics
 
-    class FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
+    class _FakeClient:
         async def get(self, url, headers=None, params=None):
             return _FakeResponse(
                 403,
@@ -371,7 +330,7 @@ async def test_fetch_report_raises_on_account_closed():
             )
 
     with (
-        patch("youtube.analytics.httpx.AsyncClient", FakeAsyncClient),
+        patch("youtube._http.client", return_value=_FakeClient()),
         patch("youtube.analytics.consume", new=AsyncMock()),
         pytest.raises(YouTubeAuthError) as exc_info,
     ):

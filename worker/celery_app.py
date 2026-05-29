@@ -83,7 +83,10 @@ def _shutdown_worker_loop(**_: Any) -> None:
         return
     try:
         if not _LOOP.is_closed():
+            from youtube import _http
+
             _LOOP.run_until_complete(db.dispose_engine())
+            _LOOP.run_until_complete(_http.aclose())  # close shared HTTP client (Issue 72)
     finally:
         if not _LOOP.is_closed():
             _LOOP.close()

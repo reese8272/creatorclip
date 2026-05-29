@@ -5,6 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 72 (Batch 4b): Shared YouTube HTTP client + 5xx backoff
+
+### What changed
+- New `youtube/_http.py`: lazy per-process singleton `httpx.AsyncClient`
+  (`Timeout(15, connect=5)`) + `aclose()`. All three OAuth helpers, `_get_json`,
+  and `_fetch_report` reuse it. `aclose()` wired into the API lifespan
+  (`main.py`) and worker shutdown (`worker/celery_app.py`).
+- `_get_json`/`_fetch_report` retry transient 5xx with jittered backoff.
+
+### Why
+Per-call `httpx.AsyncClient()` with no timeout on the token-refresh hot path could
+hang a request/worker indefinitely if Google stalls; per-call construction also
+defeats connection pooling under the analytics fan-out (axes B/E).
+
+### Decisions / standard checked
+- **Lazy singleton** (not import-time) so the connection pool binds to the loop
+  that first uses it — the API app loop and the worker's post-fork singleton loop
+  (Issue 39) are different; lazy avoids a cross-loop binding bug.
+- httpx guidance: reuse one `AsyncClient` for pooling; always set timeouts. 5xx on
+  idempotent GETs → backoff+retry (axis E).
+
+### Test-isolation note
+The existing `test_oauth_lifecycle` `_get_json`/`_fetch_report` tests mocked
+`httpx.AsyncClient` directly; rebased them onto the new `youtube._http.client`
+boundary. (The per-test event loop + a module singleton is the same class of
+hazard as Issue 39 — but in tests every patch targets `_http.client`, and the one
+test that builds the real client `aclose()`s it, so nothing leaks across loops.)
+
+---
+
 ## 2026-05-29 — Issue 68 (Batch 4b): Worker-loop offload + transcription timeout
 
 ### What changed

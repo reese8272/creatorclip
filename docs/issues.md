@@ -1229,16 +1229,17 @@ errors into `0.5` (a broken model still moves rankings).
 
 ## Issue 72: OAuth httpx singleton + timeouts (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 4b)
 
-**What**: `youtube/oauth.py:84-109` builds a fresh `httpx.AsyncClient` per call with no
-timeout on the token-refresh hot path (every authenticated request near token expiry).
-`data_api.py:86`/`analytics.py:45` construct the client inside the retry loop. (axes B/E)
+**What**: `youtube/oauth.py` built a fresh `httpx.AsyncClient` per call with no timeout on
+the token-refresh hot path; `data_api`/`analytics` constructed the client inside the retry
+loop (no connection reuse). (axes B/E)
 
 **Acceptance criteria**:
-- [ ] One module-level `httpx.AsyncClient` with explicit timeout, reused across calls/retries, closed on shutdown
-- [ ] 5xx responses get backoff-retry before `raise_for_status`
-- [ ] Token-refresh failure logs only `status_code`, never the exception object
+- [x] New `youtube/_http.py`: lazy per-process singleton `client()` (`Timeout(15, connect=5)`) + `aclose()`; reused by all three OAuth helpers + `_get_json` + `_fetch_report`; closed in the API lifespan and worker shutdown
+- [x] 5xx responses get backoff-retry before `raise_for_status` (idempotent GETs)
+- [x] Unit tests: singleton identity + recreate-after-close; 503-then-200 backoff via httpx MockTransport. Existing oauth-lifecycle tests rebased onto the `_http.client` boundary
+- Note: token-refresh logging already emits only a message + creator id (no exception object) — verified, no change needed
 
 ## Issue 73: Pydantic response_model + input validation on routes (SEV-2)
 **Depends on**: —

@@ -6,9 +6,18 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–68 ✅ done. Next (finishing Batch 4b): Issue 72 (OAuth httpx singleton + timeouts + 5xx backoff).
-**Last completed**: Issue 68 — offloaded sync Anthropic/Voyage/transcription/audio calls off the worker's singleton event loop + a job-level transcription timeout.
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–68 + 72 ✅ done. Next: Batch 5 = Issue 69 (fix prompt caching — split static/volatile blocks in both briefs).
+**Last completed**: Issue 72 — shared lazy-singleton YouTube HTTP client with timeouts + 5xx backoff (completes Batch 4b).
 **Blocked**: _(none)_
+
+> **Closed Issue 72** (2026-05-29, Batch 4b): Per-call `httpx.AsyncClient()` with no
+> timeout on the token-refresh hot path; client built inside the retry loop in
+> data_api/analytics. New `youtube/_http.py` lazy per-process singleton
+> (`Timeout(15, connect=5)`) + `aclose()` reused everywhere and closed on API/worker
+> shutdown; 5xx now backs off + retries. Rebased the oauth-lifecycle tests onto the
+> `_http.client` boundary (they'd mocked the old per-call httpx). Test count: **392
+> passed, 1 skipped, 54 deselected** (+2). Gates: ruff 0, mypy 30, bandit 0/0,
+> coverage 70.49%.
 
 > **Closed Issue 68** (2026-05-29, Batch 4b): Sync `generate_brief`, Voyage `_embed`
 > (tenacity sleeping on the loop), `transcribe_audio`, and `extract_audio_events` ran
