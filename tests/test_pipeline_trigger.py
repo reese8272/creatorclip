@@ -29,7 +29,7 @@ def test_build_signals_chains_generate_clips():
     ):
         mock_signals.return_value = None
 
-        with patch("worker.tasks.asyncio.run", side_effect=lambda coro: None):
+        with patch("worker.tasks.run_async", side_effect=lambda coro: None):
             # Simulate successful build_signals call
             mock_gen.delay = MagicMock()
             # Call the underlying logic without Celery machinery

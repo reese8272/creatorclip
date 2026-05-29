@@ -3,17 +3,18 @@ Celery pipeline tasks: ingest_video → transcribe_video → build_signals → b
 
 Design: each task accepts only a UUID string — never large payloads —
 so Redis messages stay small. Each task is idempotent and safe to retry.
-asyncio.run() bridges Celery's sync execution model and the async SQLAlchemy session.
+run_async() dispatches each coroutine onto the worker-process singleton loop
+installed by worker_process_init (Issue 39), so the SQLAlchemy async engine
+pool stays bound to a single loop across task invocations.
 """
 
-import asyncio
 import logging
 import tempfile
 import uuid
 from datetime import UTC
 from pathlib import Path
 
-from db import AsyncSessionLocal
+import db
 from models import (
     Clip,
     ClipOutcome,
@@ -27,7 +28,7 @@ from models import (
     Video,
     VideoMetrics,
 )
-from worker.celery_app import celery
+from worker.celery_app import celery, run_async
 from youtube.errors import YouTubeAuthError
 from youtube.quota import QuotaExhaustedError, remaining
 
@@ -48,9 +49,9 @@ def start_pipeline(video_id: str) -> None:
 @celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.tasks.ingest_video")
 def ingest_video(self, video_id: str) -> str:
     try:
-        asyncio.run(_ingest_async(video_id))
+        run_async(_ingest_async(video_id))
     except Exception as exc:
-        asyncio.run(_set_status(video_id, IngestStatus.failed))
+        run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
     return video_id
 
@@ -58,9 +59,9 @@ def ingest_video(self, video_id: str) -> str:
 @celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.tasks.transcribe_video")
 def transcribe_video(self, video_id: str) -> str:
     try:
-        asyncio.run(_transcribe_async(video_id))
+        run_async(_transcribe_async(video_id))
     except Exception as exc:
-        asyncio.run(_set_status(video_id, IngestStatus.failed))
+        run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
     return video_id
 
@@ -68,9 +69,9 @@ def transcribe_video(self, video_id: str) -> str:
 @celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.tasks.build_signals")
 def build_signals(self, video_id: str) -> str:
     try:
-        asyncio.run(_signals_async(video_id))
+        run_async(_signals_async(video_id))
     except Exception as exc:
-        asyncio.run(_set_status(video_id, IngestStatus.failed))
+        run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
     generate_clips.delay(video_id)
     return video_id
@@ -80,7 +81,7 @@ def build_signals(self, video_id: str) -> str:
 def generate_clips(self, video_id: str) -> str:
     """Score and rank clip candidates for a fully-ingested video."""
     try:
-        asyncio.run(_generate_clips_async(video_id))
+        run_async(_generate_clips_async(video_id))
     except Exception as exc:
         raise self.retry(exc=exc) from exc
     return video_id
@@ -90,9 +91,9 @@ def generate_clips(self, video_id: str) -> str:
 def render_clip(self, clip_id: str) -> str:
     """Render a clip to 9:16 and upload to storage."""
     try:
-        asyncio.run(_render_clip_async(clip_id))
+        run_async(_render_clip_async(clip_id))
     except Exception as exc:
-        asyncio.run(_set_clip_render_status(clip_id, RenderStatus.failed))
+        run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
         raise self.retry(exc=exc) from exc
     return clip_id
 
@@ -103,7 +104,7 @@ def purge_stale_source_media() -> None:
     Celery Beat task: delete source video files older than SOURCE_MEDIA_RETENTION_HOURS
     and null their source_uri, complying with the YouTube API data retention policy.
     """
-    asyncio.run(_purge_stale_source_media_async())
+    run_async(_purge_stale_source_media_async())
 
 
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
@@ -112,7 +113,7 @@ def refresh_youtube_analytics() -> None:
     Celery Beat task: re-fetch video_metrics and audience_activity for all creators
     with valid tokens. Keeps analytics fresh per YouTube API ToS (no indefinite caching).
     """
-    asyncio.run(_refresh_youtube_analytics_async())
+    run_async(_refresh_youtube_analytics_async())
 
 
 @celery.task(name="worker.tasks.poll_clip_outcomes")
@@ -122,7 +123,7 @@ def poll_clip_outcomes() -> None:
     Sets performed_well = views >= channel_median_views; used as a 3× weight multiplier
     in preference model retraining.
     """
-    asyncio.run(_poll_clip_outcomes_async())
+    run_async(_poll_clip_outcomes_async())
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.build_dna")
@@ -132,7 +133,7 @@ def build_dna(self, creator_id: str) -> str:
     ValueError (data gate failure) is re-raised without retry — it is a permanent error.
     """
     try:
-        asyncio.run(_build_dna_async(creator_id))
+        run_async(_build_dna_async(creator_id))
     except ValueError:
         raise
     except Exception as exc:
@@ -144,7 +145,7 @@ def build_dna(self, creator_id: str) -> str:
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.ingest_status = status
@@ -155,7 +156,7 @@ async def _ingest_async(video_id: str) -> None:
     from worker.storage import local_path, upload_file
     from youtube.ingest import extract_audio_wav
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video:
             raise ValueError(f"Video {video_id} not found")
@@ -178,7 +179,7 @@ async def _ingest_async(video_id: str) -> None:
         finally:
             wav_path.unlink(missing_ok=True)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.source_uri = audio_uri
@@ -195,7 +196,7 @@ async def _transcribe_async(video_id: str) -> None:
     from ingestion.transcribe import transcribe_audio
     from worker.storage import local_path
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video or not video.source_uri:
             raise ValueError(f"Video {video_id} not ready for transcription")
@@ -204,7 +205,7 @@ async def _transcribe_async(video_id: str) -> None:
     with local_path(source_uri) as audio_path:
         result = transcribe_audio(str(audio_path))
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         existing = await session.get(Transcript, uuid.UUID(video_id))
         if existing:
             existing.source = result["source"]
@@ -227,7 +228,7 @@ async def _signals_async(video_id: str) -> None:
     from ingestion.signals import build_signal_timeline
     from worker.storage import local_path
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video or not video.source_uri:
             raise ValueError(f"Video {video_id} not ready for signal extraction")
@@ -242,7 +243,7 @@ async def _signals_async(video_id: str) -> None:
 
     timeline = build_signal_timeline(audio_events, retention_points)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         existing = await session.get(Signals, uuid.UUID(video_id))
         if existing:
             existing.timeline_jsonb = timeline
@@ -255,7 +256,7 @@ async def _signals_async(video_id: str) -> None:
 
 
 async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
             clip.render_status = status
@@ -266,7 +267,7 @@ async def _render_clip_async(clip_id: str) -> None:
     from clip_engine.render import render_clip_file
     from worker.storage import local_path, upload_file
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if not clip:
             raise ValueError(f"Clip {clip_id} not found")
@@ -293,7 +294,7 @@ async def _render_clip_async(clip_id: str) -> None:
         finally:
             out_path.unlink(missing_ok=True)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
             clip.render_uri = render_uri
@@ -320,7 +321,7 @@ async def _build_dna_async(creator_id: str) -> None:
 
     creator_uuid = uuid.UUID(creator_id)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         creator = await session.get(Creator, creator_uuid)
         if not creator:
             raise ValueError(f"Creator {creator_id} not found")
@@ -388,7 +389,7 @@ async def _poll_clip_outcomes_async() -> None:
     cutoff_48h = now - timedelta(hours=48)
     cutoff_7d = now - timedelta(days=7)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         result = await session.execute(
             select(ClipOutcome, Clip)
             .join(Clip, Clip.id == ClipOutcome.clip_id)
@@ -459,7 +460,7 @@ async def _generate_clips_async(video_id: str) -> None:
 
     video_uuid = uuid.UUID(video_id)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, video_uuid)
         if not video:
             raise ValueError(f"Video {video_id} not found")
@@ -497,7 +498,7 @@ async def _purge_stale_source_media_async() -> None:
 
     cutoff = datetime.now(UTC) - timedelta(hours=settings.SOURCE_MEDIA_RETENTION_HOURS)
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         result = await session.execute(
             select(Video).where(
                 and_(
@@ -528,7 +529,7 @@ async def _refresh_youtube_analytics_async() -> None:
     from youtube.analytics import sync_audience_data, sync_video_analytics
     from youtube.oauth import get_valid_access_token
 
-    async with AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
         result = await session.execute(select(Creator))
         creators = list(result.scalars())
 

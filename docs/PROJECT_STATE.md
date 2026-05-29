@@ -6,9 +6,24 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 3 next (worker/tasks.py-heavy: Issues 39, 43, 46, 47, 57, must serialize)
-**Last completed**: Batch 2 — Issues 49, 51, 55 (three parallel agents, 2026-05-28 PM session 3)
+**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issue 39 ✅ done; next: 43 / 47 / 46 / 57.
+**Last completed**: Issue 39 — Celery event-loop strategy (per-worker singleton loop + engine rebind on `worker_process_init`)
 **Blocked**: _(none)_
+
+> **Closed Issue 39** (2026-05-28 — Batch 3 kickoff): Celery event-loop strategy.
+> Every task previously called `asyncio.run(...)`, creating a fresh loop per
+> invocation and rebinding the SQLAlchemy async engine pool to whichever loop
+> touched it first — the textbook cause of "Future attached to a different loop"
+> + pool churn under concurrency. Fix: per-worker singleton `asyncio` loop installed
+> by the `worker_process_init` Celery signal, and the engine rebound to that loop
+> via new `db.recreate_engine()` (uses `engine.sync_engine.dispose(close=False)`
+> to abandon inherited parent connections without yanking parent FDs). All 11 task
+> bodies in `worker/tasks.py` now route through `worker.celery_app.run_async(coro)`.
+> Switched `worker/tasks.py` from `from db import AsyncSessionLocal` to `import db`
+> + `db.AsyncSessionLocal(...)` so the rebound sessionmaker is picked up at call time.
+> Test count: **367 passed, 1 skipped, 41 deselected** (+5 new event-loop tests).
+> Adjusted patch targets in `test_retention_tasks.py` / `test_pipeline_trigger.py` /
+> `test_oauth_lifecycle.py` to match the new import surface.
 
 > **Closed Batch 2** (2026-05-28 PM): Three TEST-ONLY issues via parallel agents.
 >

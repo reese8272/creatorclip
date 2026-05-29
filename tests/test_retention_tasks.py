@@ -56,7 +56,7 @@ def test_purge_task_registered():
 
 
 def test_purge_task_calls_async_impl():
-    with patch("worker.tasks.asyncio.run") as mock_run:
+    with patch("worker.tasks.run_async") as mock_run:
         from worker.tasks import purge_stale_source_media
 
         purge_stale_source_media()
@@ -77,7 +77,7 @@ def test_purge_clears_source_uri_past_retention():
 
     async def run():
         with (
-            patch("worker.tasks.AsyncSessionLocal") as mock_ctx,
+            patch("db.AsyncSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file") as mock_delete,
         ):
             session = AsyncMock()
@@ -104,7 +104,7 @@ def test_purge_noop_when_nothing_stale():
 
     async def run():
         with (
-            patch("worker.tasks.AsyncSessionLocal") as mock_ctx,
+            patch("db.AsyncSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file") as mock_delete,
         ):
             session = AsyncMock()
@@ -147,7 +147,7 @@ def test_purge_continues_on_delete_error():
 
     async def run():
         with (
-            patch("worker.tasks.AsyncSessionLocal") as mock_ctx,
+            patch("db.AsyncSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file", side_effect=delete_side_effect),
         ):
             session = AsyncMock()
@@ -174,7 +174,7 @@ def test_analytics_task_registered():
 
 
 def test_analytics_task_calls_async_impl():
-    with patch("worker.tasks.asyncio.run") as mock_run:
+    with patch("worker.tasks.run_async") as mock_run:
         from worker.tasks import refresh_youtube_analytics
 
         refresh_youtube_analytics()
@@ -199,7 +199,7 @@ def test_analytics_refresh_iterates_creators():
 
     async def run():
         with (
-            patch("worker.tasks.AsyncSessionLocal") as mock_ctx,
+            patch("db.AsyncSessionLocal") as mock_ctx,
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),
@@ -237,7 +237,7 @@ def test_analytics_refresh_skips_creator_on_token_error():
 
     async def run():
         with (
-            patch("worker.tasks.AsyncSessionLocal") as mock_ctx,
+            patch("db.AsyncSessionLocal") as mock_ctx,
             patch(
                 "youtube.oauth.get_valid_access_token",
                 new_callable=AsyncMock,

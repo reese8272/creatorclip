@@ -46,3 +46,6 @@ local_storage/
 *.swo
 .DS_Store
 "Screenshot 2026-05-27 124552.png"
+
+# Claude Code per-project state (worktrees, agent caches, session metadata)
+.claude/

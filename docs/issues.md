@@ -611,7 +611,7 @@ LLM round-trip (often 10–40 s). Under any concurrent load this exhausts the po
 ### Issue 39: Celery event-loop strategy
 **Severity**: SEV-1 — pool churn + `Future attached to a different loop` errors under load
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Every Celery task body calls `asyncio.run(...)`, spinning up a fresh event loop
 and binding the SQLAlchemy async engine pool to whichever loop touched it first. Under
@@ -621,9 +621,9 @@ class of bugs.
 **Files**: `worker/tasks.py:50,60,70,82,92,105,114,124,134`, `db.py:8`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research current best practice (celery-pool-asyncio, asgiref.async_to_sync, per-worker-process singleton loop)
-- [ ] Single shared loop per worker process OR per-worker engine that is bound at worker init
-- [ ] `docs/DECISIONS.md` entry with the chosen pattern + tradeoffs
+- [x] Phase 1: research current best practice (celery-pool-asyncio, asgiref.async_to_sync, per-worker-process singleton loop)
+- [x] Single shared loop per worker process OR per-worker engine that is bound at worker init
+- [x] `docs/DECISIONS.md` entry with the chosen pattern + tradeoffs
 
 ---
 

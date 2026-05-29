@@ -5,6 +5,81 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 39: Celery event-loop strategy
+
+### What changed
+- Replaced per-task `asyncio.run(...)` with a per-worker-process singleton event loop
+  installed by the `worker_process_init` Celery signal.
+- Added `db.recreate_engine()` and `db.dispose_engine()` so the SQLAlchemy async engine
+  + asyncpg pool can be rebound to the worker child's loop after fork, and cleanly
+  disposed on `worker_process_shutdown`.
+- Added `worker.celery_app.run_async(coro)` — used by every task in `worker/tasks.py`
+  (11 sites) instead of `asyncio.run`. Falls back to `asyncio.run` when no worker loop
+  is installed (unit-test invocation path).
+- `worker/tasks.py` now does `import db` and uses `db.AsyncSessionLocal(...)` so that
+  rebinding the module-global sessionmaker in `db.recreate_engine()` is visible to
+  task bodies at call time (`from db import AsyncSessionLocal` would capture the
+  stale reference).
+
+### Why
+Every Celery task used to call `asyncio.run(_some_async(...))`, which creates a fresh
+event loop per task. The first task in a worker process would bind the engine's
+asyncpg pool to its loop; subsequent tasks would receive a *different* loop and hit
+the classic `Future attached to a different loop` errors plus pool churn (each loop
+discarded, connections re-handshaked). Under concurrent load this was a SEV-1 because
+it manifests as intermittent worker failures rather than a single reproducible bug.
+
+The fix pins one loop per worker process for the worker's lifetime and binds the
+engine to it once. This is the canonical FastAPI + Celery + async-SQLAlchemy pattern;
+SQLAlchemy's own docs spell out that async engines must be created *after* fork
+because the asyncpg connection pool cannot survive across processes.
+
+### Alternatives ruled out
+- **`celery-pool-asyncio` / `celery-aio-pool`**: third-party pool replacements. Smaller
+  community, replace the entire pool model, and unnecessary — our concurrency model is
+  per-process prefork and we don't need cooperative I/O multiplexing inside a task.
+- **`asgiref.async_to_sync`**: caches a loop per thread but does not address the
+  engine-binding-on-fork problem. Same bug class would resurface.
+- **Lazy `get_engine()` inside every coroutine**: scatters the fix across every task
+  body and makes the contract implicit; one init signal is far easier to audit.
+- **`gevent` / `eventlet` worker pool**: would require monkey-patching the entire
+  stack; out of scope.
+
+### Tradeoffs
+- Each worker child holds a long-lived loop + pool. Trivial memory cost vs. eliminating
+  the pool-rebind cost on every task.
+- Engine pool sizing budget is unchanged: `concurrency × (pool_size + max_overflow)`,
+  currently `concurrency × 30`. If we raise Celery concurrency, we must size the
+  Postgres `max_connections` accordingly. Not a regression — the pre-fix code had the
+  same upper bound; it just churned the pool more.
+- `worker_process_init` calls `db.recreate_engine()` after fork. We use
+  `engine.sync_engine.dispose(close=False)` to abandon (not close) any inherited
+  parent connections so we don't yank file descriptors out from under the parent.
+  In practice the parent has no open connections at fork time (it only imports the
+  modules), but this is the SQLAlchemy-blessed safe default.
+
+### Source / evidence
+- SQLAlchemy 2.0 docs — "Using asyncio with multiprocessing":
+  https://docs.sqlalchemy.org/en/20/core/pooling.html#using-connection-pools-with-multiprocessing-or-os-fork
+- Celery worker signals reference:
+  https://docs.celeryq.dev/en/stable/userguide/signals.html#worker-process-init
+- Prior incident pattern: `Future attached to a different loop` is the symptom called
+  out in Issue 39's spec; verified the cause by reading `worker/tasks.py:49–135` and
+  `db.py:8` before the fix.
+
+### Files
+- `db.py` — added `_make_engine`, `recreate_engine`, `dispose_engine`.
+- `worker/celery_app.py` — singleton `_LOOP`, `run_async`, init/shutdown signal hooks.
+- `worker/tasks.py` — 11 × `asyncio.run` → `run_async`, 16 × `AsyncSessionLocal` →
+  `db.AsyncSessionLocal`.
+- `tests/test_celery_event_loop.py` — pins loop-reuse, fallback, init/shutdown,
+  engine-rebind invariants (5 tests).
+- `tests/test_retention_tasks.py`, `tests/test_pipeline_trigger.py`,
+  `tests/test_oauth_lifecycle.py` — updated patch targets from `worker.tasks.*` to
+  `db.AsyncSessionLocal` / `worker.tasks.run_async` to match the new import surface.
+
+---
+
 ## 2026-05-28 — Issue 37: External SDK Timeouts + Retry-with-Backoff
 
 ### Anthropic SDK (`anthropic==0.40.0`)
