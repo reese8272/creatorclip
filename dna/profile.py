@@ -10,6 +10,7 @@ import uuid
 
 import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Creator, CreatorDna, DnaStatus, OnboardingState
@@ -27,6 +28,7 @@ async def create_draft(
     optimal_clip_len_s: float | None = None,
     best_source_region: str | None = None,
     optimal_upload_gap_h: float | None = None,
+    build_job_id: str | None = None,
     *,
     commit: bool = True,
 ) -> CreatorDna:
@@ -62,6 +64,7 @@ async def create_draft(
         optimal_clip_len_s=optimal_clip_len_s,
         best_source_region=best_source_region,
         optimal_upload_gap_h=optimal_upload_gap_h,
+        build_job_id=build_job_id,
         status=DnaStatus.draft,
     )
     session.add(dna)
@@ -77,40 +80,70 @@ async def confirm_draft(session: AsyncSession, creator_id: uuid.UUID) -> Creator
     Confirm the latest draft, superseding any previously confirmed profile.
     Advances creator onboarding_state from dna_pending → active.
 
-    Raises ValueError if no draft exists.
-    """
-    # Supersede existing confirmed profiles
-    result = await session.execute(
-        select(CreatorDna).where(
-            CreatorDna.creator_id == creator_id,
-            CreatorDna.status == DnaStatus.confirmed,
-        )
-    )
-    for old in result.scalars():
-        old.status = DnaStatus.superseded
+    Idempotent + concurrency-safe (Issue 63): the creator's DNA rows are locked
+    `FOR UPDATE` so two concurrent confirmations serialize; the
+    `uq_one_confirmed_dna_per_creator` partial unique index is the DB-level backstop.
+    A double-confirm (no newer draft, already confirmed) is a no-op returning the
+    confirmed row.
 
-    # Promote latest draft
-    result = await session.execute(
-        select(CreatorDna)
-        .where(
-            CreatorDna.creator_id == creator_id,
-            CreatorDna.status == DnaStatus.draft,
+    Raises ValueError only if there is neither a draft to confirm nor an existing
+    confirmed profile.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(CreatorDna)
+                .where(CreatorDna.creator_id == creator_id)
+                .order_by(CreatorDna.version.desc())
+                .with_for_update()
+            )
         )
-        .order_by(CreatorDna.version.desc())
+        .scalars()
+        .all()
     )
-    draft = result.scalars().first()
-    if not draft:
+    latest_draft = next((r for r in rows if r.status == DnaStatus.draft), None)
+    confirmed = next((r for r in rows if r.status == DnaStatus.confirmed), None)
+
+    if latest_draft is None:
+        if confirmed is not None:
+            return confirmed  # already confirmed — idempotent no-op
         raise ValueError(f"No draft DNA profile to confirm for creator {creator_id}")
-    draft.status = DnaStatus.confirmed
+
+    # Supersede the current confirmed BEFORE promoting — the partial unique index is
+    # non-deferrable, so there must never be two 'confirmed' rows even transiently.
+    if confirmed is not None:
+        confirmed.status = DnaStatus.superseded
+        await session.flush()
+    latest_draft.status = DnaStatus.confirmed
 
     creator = await session.get(Creator, creator_id)
     if creator and creator.onboarding_state == OnboardingState.dna_pending:
         creator.onboarding_state = OnboardingState.active
 
-    await session.commit()
-    await session.refresh(draft)
-    logger.info("DNA v%d confirmed for creator %s", draft.version, creator_id)
-    return draft
+    try:
+        await session.commit()
+    except IntegrityError:
+        # A concurrent confirm won the partial-unique race — return its confirmed row.
+        await session.rollback()
+        existing = (
+            (
+                await session.execute(
+                    select(CreatorDna).where(
+                        CreatorDna.creator_id == creator_id,
+                        CreatorDna.status == DnaStatus.confirmed,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if existing is None:
+            raise
+        return existing
+
+    await session.refresh(latest_draft)
+    logger.info("DNA v%d confirmed for creator %s", latest_draft.version, creator_id)
+    return latest_draft
 
 
 async def get_active(session: AsyncSession, creator_id: uuid.UUID) -> CreatorDna | None:

@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 import secrets
@@ -184,7 +185,8 @@ async def delete_account(
 
     for prefix in (f"source/{creator_id}/", f"clips/{creator_id}/"):
         try:
-            n = delete_prefix(prefix)
+            # Offload the paginated boto3 list+delete off the event loop. (Issue 67)
+            n = await asyncio.to_thread(delete_prefix, prefix)
             if n:
                 logger.info("Purged %d object(s) at %s", n, prefix)
         except Exception as exc:

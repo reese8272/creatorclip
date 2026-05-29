@@ -72,9 +72,15 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── CLAUDE.md
 ├── .env / .env.example
 ├── requirements.txt
+├── requirements-dev.txt        # assessment/dev tooling: mypy, pytest-cov, bandit, pip-audit, mutmut, locust
 ├── pytest.ini
 ├── docker-compose.yml
 ├── Dockerfile
+│
+├── .claude/skills/production-assessment/  # /assess harness (Layer 0 gates + per-module rubric + scale checklist)
+├── .github/workflows/quality.yml          # ratcheted CI gates (types/coverage/SAST/CVEs)
+├── docs/assessment/            # production-readiness register: baselines + per-module findings + report history
+├── tests/perf/                 # Locust load-test scaffold (concurrency evidence)
 │
 ├── main.py                     # FastAPI entrypoint, /health
 ├── config.py                   # Pydantic Settings; fail-fast on missing required

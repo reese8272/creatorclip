@@ -26,6 +26,18 @@ celery.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # At-least-once safety (Issue 62). acks_late alone drops a task whose worker
+    # is killed mid-run (routine OOM during ffmpeg/WhisperX); reject_on_worker_lost
+    # requeues it instead. Safe only because the tasks are idempotent (Issue 61).
+    task_reject_on_worker_lost=True,
+    # The invariant: soft < hard time limit < broker visibility_timeout. A task is
+    # killed *before* Redis would redeliver a still-running copy, so no double-run;
+    # genuine crashes still redeliver via reject_on_worker_lost. Long-form sources
+    # on CPU WhisperX may need a per-task override or the hosted backend — see
+    # docs/DECISIONS.md.
+    task_soft_time_limit=3000,
+    task_time_limit=3300,
+    broker_transport_options={"visibility_timeout": 3600},
 )
 
 
@@ -71,7 +83,10 @@ def _shutdown_worker_loop(**_: Any) -> None:
         return
     try:
         if not _LOOP.is_closed():
+            from youtube import _http
+
             _LOOP.run_until_complete(db.dispose_engine())
+            _LOOP.run_until_complete(_http.aclose())  # close shared HTTP client (Issue 72)
     finally:
         if not _LOOP.is_closed():
             _LOOP.close()

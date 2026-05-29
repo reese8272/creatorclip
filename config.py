@@ -1,6 +1,6 @@
 import sys
 
-from pydantic import ValidationError
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,7 +28,17 @@ class Settings(BaseSettings):
     # --- Optional with defaults ---
     VOYAGE_API_KEY: str = ""
     JWT_EXPIRY_MINUTES: int = 60
+    # Anthropic model + tool versions live here (single source of truth) rather
+    # than hardcoded at call sites — see docs/SKILL_FRESHNESS.md. These are
+    # perishable: verify against the live Anthropic model/tool catalog
+    # (via the /claude-api skill) before each launch.
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+    ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20250305"
     TRANSCRIPTION_BACKEND: str = "deepgram"
+    # Job-level upper bound for a single transcription (Issue 68). A hung provider
+    # fails the task after this many seconds (→ Celery retry) instead of stalling
+    # the worker forever.
+    TRANSCRIPTION_TIMEOUT_S: int = 300
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"
@@ -42,6 +52,10 @@ class Settings(BaseSettings):
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
+    # Max weight the preference model gets in the rerank blend once mature. Below
+    # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);
+    # it ramps linearly to this cap by 2× the threshold. (Issue 60)
+    PREFERENCE_WEIGHT_CAP: float = 0.5
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
@@ -56,6 +70,21 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = ""
     APP_BASE_URL: str = "http://localhost:8000"
     FREE_TRIAL_MINUTES: int = 60
+
+    @model_validator(mode="after")
+    def _require_prod_secrets(self) -> "Settings":
+        # Fail fast in production if billing secrets are unset — otherwise the gap
+        # surfaces only at first checkout/webhook (Issue 75). Dev/test (ENV defaults
+        # to "development") is unaffected.
+        if self.ENV == "production":
+            missing = [
+                name
+                for name in ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(f"In production these must be set: {', '.join(missing)}")
+        return self
 
 
 try:

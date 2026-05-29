@@ -143,7 +143,11 @@ def render_clip_file(
     # Clamp crop x-offset
     x_offset = max(0, min(face_x - crop_w // 2, frame_w - crop_w))
 
-    # ffmpeg: cut segment → crop → scale
+    # ffmpeg: cut segment → crop → scale.
+    # `-ss` before `-i` is fast (seeks to the nearest keyframe first); `-accurate_seek`
+    # then decodes to the exact start frame. With re-encoding (libx264) accurate_seek is
+    # already the ffmpeg default, but we set it explicitly so the cut stays frame-accurate
+    # even if anyone introduces `-c copy` later — the clip MUST start exactly at the setup.
     vf = f"crop={crop_w}:{frame_h}:{x_offset}:0,scale={_OUTPUT_W}:{_OUTPUT_H}"
     _run(
         [
@@ -151,6 +155,7 @@ def render_clip_file(
             "-y",
             "-ss",
             str(start_s),
+            "-accurate_seek",
             "-i",
             str(source_path),
             "-t",

@@ -23,3 +23,27 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+# --- Assessment gates (see docs/assessment/README.md for the ratchet) ---------
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true   # gradual: don't fail on untyped third-party stubs
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = ['^alembic/', '^tests/']
+# Ratchet ON once mypy_errors reaches 0 — this makes CLAUDE.md's "type hints on
+# every signature" rule mechanically enforced:
+# disallow_untyped_defs = true
+# disallow_incomplete_defs = true
+
+[tool.coverage.run]
+branch = true
+omit = ["tests/*", "alembic/*", "*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.bandit]
+exclude_dirs = ["tests", "alembic", ".venv"]

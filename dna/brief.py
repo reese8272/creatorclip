@@ -1,8 +1,11 @@
 """
 Generate a plain-language Creator Brief via Claude.
 
-The DNA corpus is embedded as a prompt-cached system block so the same
-cache hit is reused by the clip scorer (Issue 8) for the same profile version.
+Prompt structure (Issue 69): a STATIC instruction block carries the
+``cache_control: ephemeral`` breakpoint; the per-creator corpus is a SEPARATE,
+uncached system block after it. This is the correct split, but note the static
+prefix is well below Sonnet 4.6's 2048-token minimum cacheable prefix, so the
+cache does not actually engage for this low-frequency call — see docs/DECISIONS.md.
 """
 
 import json
@@ -27,10 +30,12 @@ _DISCLAIMER = (
     "CreatorClip predicts fit with your style and audience — it does not promise virality.*"
 )
 
-_SYSTEM_TEMPLATE = """\
+# Static instruction block — no per-creator data, so it is identical across all
+# calls and carries the cache_control breakpoint. (Issue 69)
+_SYSTEM_INSTRUCTIONS = """\
 You are an expert YouTube channel analyst helping a creator understand their channel's performance patterns.
 
-Analyse the creator's performance data below and write a concise, actionable Creator Brief in plain Markdown.
+Analyse the creator's performance data (provided in the next block) and write a concise, actionable Creator Brief in plain Markdown.
 
 Structure it with exactly these five sections:
 1. **Channel Signature** — 2-3 sentences on what makes this creator's best content work
@@ -40,11 +45,7 @@ Structure it with exactly these five sections:
 5. **Shorts Strategy** — if Shorts data is available, what's working vs not
 
 Be specific: reference actual video titles where relevant. Keep total length under 500 words.
-Phrase all predictions as likelihood estimates grounded in their data — never promise virality.
-
----
-CREATOR PERFORMANCE DATA:
-{corpus}"""
+Phrase all predictions as likelihood estimates grounded in their data — never promise virality."""
 
 
 def generate_brief(patterns: dict, channel_title: str) -> str:
@@ -59,17 +60,19 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
         indent=2,
         default=str,
     )
-    system_text = _SYSTEM_TEMPLATE.format(corpus=corpus)
 
     response = _ANTHROPIC.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
+            # Stable prefix — carries the cache breakpoint.
             {
                 "type": "text",
-                "text": system_text,
+                "text": _SYSTEM_INSTRUCTIONS,
                 "cache_control": {"type": "ephemeral"},
-            }
+            },
+            # Volatile per-creator data — AFTER the breakpoint, never cached.
+            {"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"},
         ],
         messages=[
             {
@@ -91,4 +94,5 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
     if not text_blocks:
         raise RuntimeError("Claude returned no text block in DNA brief generation")
 
-    return text_blocks[0].text + _DISCLAIMER
+    # Final text block is the answer (consistent with the web_search path). (Issue 69)
+    return text_blocks[-1].text + _DISCLAIMER

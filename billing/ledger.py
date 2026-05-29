@@ -46,23 +46,51 @@ async def grant_minutes(
     stripe_session_id: str | None = None,
     price_cents: int = 0,
 ) -> None:
-    """Add minutes to a creator's balance and record the grant."""
-    session.add(
-        MinutePack(
-            creator_id=creator_id,
-            pack_id=pack_id,
-            minutes_granted=minutes,
-            price_cents=price_cents,
-            stripe_session_id=stripe_session_id,
-            reason=reason,
-            granted_at=datetime.now(UTC),
+    """Idempotently add minutes to a creator's balance and record the grant.
+
+    Money-credit idempotency mirrors deduct_for_video (Issue 64): when
+    ``stripe_session_id`` is set it is the idempotency key (UNIQUE on MinutePack).
+    Stripe delivers ``checkout.session.completed`` at-least-once and can deliver it
+    concurrently; a fast-path check plus a SAVEPOINT with IntegrityError-catch makes
+    a duplicate delivery a clean no-op instead of an uncaught 500. Non-keyed grants
+    (free trial, manual; stripe_session_id=None) are one-shot and unaffected.
+
+    Both the MinutePack INSERT and the balance UPDATE occur inside a SAVEPOINT —
+    either both land or neither does. Caller commits the outer transaction.
+    """
+    # Fast-path: already granted for this Stripe session? Skip without a SAVEPOINT.
+    if stripe_session_id is not None:
+        existing = await session.scalar(
+            select(MinutePack.id).where(MinutePack.stripe_session_id == stripe_session_id)
         )
-    )
-    await session.execute(
-        update(Creator)
-        .where(Creator.id == creator_id)
-        .values(minutes_balance=Creator.minutes_balance + minutes)
-    )
+        if existing is not None:
+            logger.info("billing grant skip (already granted) session=%s", stripe_session_id)
+            return
+
+    try:
+        async with session.begin_nested():
+            session.add(
+                MinutePack(
+                    creator_id=creator_id,
+                    pack_id=pack_id,
+                    minutes_granted=minutes,
+                    price_cents=price_cents,
+                    stripe_session_id=stripe_session_id,
+                    reason=reason,
+                    granted_at=datetime.now(UTC),
+                )
+            )
+            await session.flush()  # forces the INSERT — surfaces UNIQUE conflicts now
+            await session.execute(
+                update(Creator)
+                .where(Creator.id == creator_id)
+                .values(minutes_balance=Creator.minutes_balance + minutes)
+            )
+    except IntegrityError:
+        # Concurrent duplicate delivery won the UNIQUE(stripe_session_id) race — no-op.
+        logger.info("billing grant race skip session=%s", stripe_session_id)
+        return
+
     logger.info("billing grant creator=%s minutes=%d reason=%s", creator_id, minutes, reason)
 
 

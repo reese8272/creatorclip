@@ -291,6 +291,9 @@ class CreatorDna(Base):
     optimal_clip_len_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     best_source_region: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     optimal_upload_gap_h: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    # Celery task id of the build that created this draft — the idempotency key for
+    # at-least-once redelivery (Issue 63). Nullable: legacy rows + non-task callers.
+    build_job_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     status: Mapped[DnaStatus] = mapped_column(
         sa.Enum(DnaStatus, name="dna_status_enum"),
         nullable=False,
@@ -404,6 +407,9 @@ class ClipOutcome(Base):
     retention: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     performed_well: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    # Terminal marker: once the 7d checkpoint is recorded the outcome is never
+    # re-polled (bounds the YouTube-quota drain). (Issue 70)
+    final: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
 
     clip: Mapped["Clip"] = relationship("Clip", back_populates="outcome")
 

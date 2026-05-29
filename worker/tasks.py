@@ -8,6 +8,7 @@ installed by worker_process_init (Issue 39), so the SQLAlchemy async engine
 pool stays bound to a single loop across task invocations.
 """
 
+import asyncio
 import logging
 import tempfile
 import uuid
@@ -17,10 +18,13 @@ from pathlib import Path
 import db
 from models import (
     Clip,
+    ClipFeedback,
     ClipOutcome,
     Creator,
+    CreatorDna,
     IngestStatus,
     OnboardingState,
+    PreferenceModel,
     RenderStatus,
     RetentionCurve,
     Signals,
@@ -133,7 +137,9 @@ def build_dna(self, creator_id: str) -> str:
     ValueError (data gate failure) is re-raised without retry — it is a permanent error.
     """
     try:
-        run_async(_build_dna_async(creator_id))
+        # self.request.id is the stable idempotency key across at-least-once
+        # redelivery of THIS task; a new user-triggered build gets a new id. (Issue 63)
+        run_async(_build_dna_async(creator_id, self.request.id))
     except ValueError:
         raise
     except Exception as exc:
@@ -141,7 +147,68 @@ def build_dna(self, creator_id: str) -> str:
     return creator_id
 
 
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.retrain_preference"
+)
+def retrain_preference(self, creator_id: str) -> str:
+    """Retrain the creator's preference model from their clip feedback (Issue 60).
+
+    Idempotent + self-debouncing: a no-op when no new trainable feedback has arrived
+    since the latest model version, so repeated feedback clicks collapse to cheap
+    no-ops. The version-assignment race is hardened in Issue 71.
+    """
+    try:
+        run_async(_retrain_preference_async(creator_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
 # ── Async implementations ─────────────────────────────────────────────────────
+
+
+async def _retrain_preference_async(creator_id: str) -> None:
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    from preference.train import TRAINABLE_ACTIONS, build_and_save
+
+    cid = uuid.UUID(creator_id)
+    async with db.AsyncSessionLocal() as session:
+        latest = (
+            (
+                await session.execute(
+                    select(PreferenceModel)
+                    .where(PreferenceModel.creator_id == cid)
+                    .order_by(PreferenceModel.version.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if latest is not None:
+            # Self-debounce: only retrain if trainable feedback arrived since the
+            # last model was saved. Repeated clicks otherwise collapse to no-ops.
+            new_labels = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ClipFeedback)
+                    .where(
+                        ClipFeedback.creator_id == cid,
+                        ClipFeedback.action.in_(TRAINABLE_ACTIONS),
+                        ClipFeedback.created_at > latest.updated_at,
+                    )
+                )
+            ).scalar_one()
+            if not new_labels:
+                logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
+                return
+        try:
+            await build_and_save(session, cid)
+        except IntegrityError:
+            # Concurrent retrain won the version race (hardened in Issue 71).
+            await session.rollback()
+            logger.info("retrain_preference: version race for creator %s, skip", cid)
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:
@@ -193,6 +260,7 @@ async def _ingest_async(video_id: str) -> None:
 
 
 async def _transcribe_async(video_id: str) -> None:
+    from config import settings
     from ingestion.transcribe import transcribe_audio
     from worker.storage import local_path
 
@@ -203,7 +271,12 @@ async def _transcribe_async(video_id: str) -> None:
         source_uri = video.source_uri
 
     with local_path(source_uri) as audio_path:
-        result = transcribe_audio(str(audio_path))
+        # Blocking SDK call off the worker loop, with a job-level upper bound so a
+        # hung provider fails (→ retry) instead of stalling forever. (Issue 68)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(transcribe_audio, str(audio_path)),
+            timeout=settings.TRANSCRIPTION_TIMEOUT_S,
+        )
 
     async with db.AsyncSessionLocal() as session:
         existing = await session.get(Transcript, uuid.UUID(video_id))
@@ -239,7 +312,7 @@ async def _signals_async(video_id: str) -> None:
         retention_points = list(retention_result.scalars())
 
     with local_path(source_uri) as audio_path:
-        audio_events = extract_audio_events(str(audio_path))
+        audio_events = await asyncio.to_thread(extract_audio_events, str(audio_path))
 
     timeline = build_signal_timeline(audio_events, retention_points)
 
@@ -265,6 +338,18 @@ async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
             await session.commit()
 
 
+def _render_start_for(clip: Clip) -> float:
+    """The timestamp the clip is rendered from.
+
+    Render from the computed setup boundary (CLIPPING_PRINCIPLE #2 — "clip the
+    setup, not the aftermath"), NOT the fixed peak−window `start_s` fallback;
+    scoring, the API, and the eval all key on setup_start_s, so the rendered bytes
+    must match. setup_start_s is nullable — fall back to the start_s clamp only if
+    it was never computed, so a legacy/edge clip still renders a valid range. (Issue 59)
+    """
+    return clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+
+
 async def _render_clip_async(clip_id: str) -> None:
     from clip_engine.render import render_clip_file
     from worker.storage import local_path, upload_file
@@ -273,6 +358,11 @@ async def _render_clip_async(clip_id: str) -> None:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if not clip:
             raise ValueError(f"Clip {clip_id} not found")
+        # Idempotent under at-least-once delivery (Issue 62): a redelivered render
+        # must not re-encode and last-writer-win the URI. Skip if already done.
+        if clip.render_status == RenderStatus.done and clip.render_uri:
+            logger.info("Clip %s already rendered — skipping", clip_id)
+            return
         video = await session.get(Video, clip.video_id)
         if not video or not video.source_uri:
             raise ValueError(f"Source video not available for clip {clip_id}")
@@ -288,7 +378,7 @@ async def _render_clip_async(clip_id: str) -> None:
         try:
             render_clip_file(
                 source_path=src,
-                start_s=clip.start_s,
+                start_s=_render_start_for(clip),
                 end_s=clip.end_s,
                 out_path=out_path,
             )
@@ -306,7 +396,7 @@ async def _render_clip_async(clip_id: str) -> None:
     logger.info("Clip %s rendered → %s", clip_id, render_uri)
 
 
-async def _build_dna_async(creator_id: str) -> None:
+async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     """Build creator DNA patterns, brief, draft profile, and embeddings atomically.
 
     All DB writes — draft INSERT, onboarding state update, and embedding INSERTs —
@@ -315,13 +405,29 @@ async def _build_dna_async(creator_id: str) -> None:
     the session is rolled back (via the context manager exit) and no draft row is
     persisted. The next retry therefore computes max(version) without an orphan row and
     assigns the same version number again.
+
+    Idempotent across at-least-once redelivery (Issue 63): ``job_id`` is the Celery
+    task id, stamped onto the draft (build_job_id). If a draft for this job_id already
+    exists the build is a no-op — this short-circuits BEFORE the paid Anthropic brief
+    and Voyage embedding calls, so a redelivery costs nothing.
     """
+    from sqlalchemy import select
+
     from dna.brief import generate_brief
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
     from dna.profile import create_draft
 
     creator_uuid = uuid.UUID(creator_id)
+
+    if job_id is not None:
+        async with db.AsyncSessionLocal() as session:
+            already = await session.scalar(
+                select(CreatorDna.id).where(CreatorDna.build_job_id == job_id)
+            )
+        if already is not None:
+            logger.info("DNA build for job %s already completed — skipping (idempotent)", job_id)
+            return
 
     async with db.AsyncSessionLocal() as session:
         creator = await session.get(Creator, creator_uuid)
@@ -339,7 +445,7 @@ async def _build_dna_async(creator_id: str) -> None:
         ) = await build_patterns(session, creator_uuid)
 
         # Generate the brief outside the DB — pure LLM call; no session writes yet.
-        brief_text = generate_brief(patterns, channel_title)
+        brief_text = await asyncio.to_thread(generate_brief, patterns, channel_title)
 
         # Stage the draft row without committing.  commit=False keeps the INSERT
         # pending in this transaction so all writes land atomically below.
@@ -353,6 +459,7 @@ async def _build_dna_async(creator_id: str) -> None:
             optimal_clip_len_s=clip_len_s,
             best_source_region=source_region,
             optimal_upload_gap_h=upload_gap_h,
+            build_job_id=job_id,
             commit=False,
         )
 
@@ -390,6 +497,10 @@ async def _poll_clip_outcomes_async() -> None:
     now = datetime.now(UTC)
     cutoff_48h = now - timedelta(hours=48)
     cutoff_7d = now - timedelta(days=7)
+    # Bound the candidate set: a clip's measurement lifecycle is the 48h + 7d
+    # checkpoints, so nothing created >10 days ago should still be polled. Combined
+    # with `final`, this stops the unbounded quota drain. (Issue 70)
+    cutoff_created = now - timedelta(days=10)
 
     async with db.AsyncSessionLocal() as session:
         result = await session.execute(
@@ -397,6 +508,8 @@ async def _poll_clip_outcomes_async() -> None:
             .join(Clip, Clip.id == ClipOutcome.clip_id)
             .where(
                 ClipOutcome.published_youtube_id.isnot(None),
+                ClipOutcome.final.is_(False),  # never re-poll a finalized outcome
+                Clip.created_at >= cutoff_created,
                 or_(
                     and_(ClipOutcome.performed_well.is_(None), ClipOutcome.fetched_at < cutoff_48h),
                     ClipOutcome.fetched_at < cutoff_7d,
@@ -428,6 +541,9 @@ async def _poll_clip_outcomes_async() -> None:
             channel_median = statistics.median(all_views) if all_views else 0
 
             for outcome in outcomes:
+                # Whether this row qualified via the 7d (terminal) checkpoint —
+                # captured BEFORE we overwrite fetched_at. (Issue 70)
+                is_terminal_poll = outcome.fetched_at < cutoff_7d
                 try:
                     stats = await get_video_stats(access_token, outcome.published_youtube_id)
                 except Exception as exc:
@@ -443,14 +559,20 @@ async def _poll_clip_outcomes_async() -> None:
                     outcome.views = views
                     outcome.performed_well = views >= channel_median
                 outcome.fetched_at = now
+                if is_terminal_poll:
+                    # 7d checkpoint recorded — never poll this outcome again.
+                    outcome.final = True
                 logger.info(
-                    "ClipOutcome clip=%s views=%s performed_well=%s",
+                    "ClipOutcome clip=%s views=%s performed_well=%s final=%s",
                     outcome.clip_id,
                     views,
                     outcome.performed_well,
+                    outcome.final,
                 )
 
-        await session.commit()
+            # Commit per creator so a slow YouTube call can't hold one transaction
+            # across the whole batch, and partial progress survives a mid-batch failure.
+            await session.commit()
 
 
 async def _generate_clips_async(video_id: str) -> None:

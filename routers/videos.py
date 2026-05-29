@@ -1,3 +1,5 @@
+import asyncio
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -16,6 +18,15 @@ from worker.storage import upload_file
 from worker.tasks import start_pipeline
 
 router = APIRouter(prefix="/videos", tags=["videos"])
+
+# YouTube video IDs are exactly 11 chars of [A-Za-z0-9_-]. Validate before the value
+# is interpolated into a storage key, so `../` or `/` can't reshape the object path. (Issue 73)
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _validate_youtube_id(youtube_video_id: str) -> None:
+    if not _YT_ID_RE.match(youtube_video_id):
+        raise HTTPException(status_code=422, detail="Invalid youtube_video_id")
 
 
 @router.get("")
@@ -53,6 +64,7 @@ async def link_video(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Register a YouTube video by ID. Does not download any content."""
+    _validate_youtube_id(youtube_video_id)
     existing = await session.execute(
         select(Video).where(
             Video.creator_id == creator.id,
@@ -88,6 +100,7 @@ async def upload_video(
     Streams to a temp file in 1 MB chunks, enforcing the size limit without
     loading the full upload into memory.
     """
+    _validate_youtube_id(youtube_video_id)
     await check_positive_balance(creator.id, session)
 
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
@@ -129,7 +142,9 @@ async def upload_video(
 
     try:
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"
-        source_uri = upload_file(tmp_path, key)
+        # Offload the (possibly multi-hundred-MB) R2 PUT / disk copy so it never
+        # blocks the API event loop and stalls other requests. (Issue 67)
+        source_uri = await asyncio.to_thread(upload_file, tmp_path, key)
     finally:
         tmp_path.unlink(missing_ok=True)
 

@@ -91,7 +91,7 @@ def test_413_returned_for_oversized_upload(upload_client, monkeypatch):
     with patch("worker.tasks.start_pipeline"):
         resp = upload_client.post(
             "/videos/upload",
-            data={"youtube_video_id": "abc123"},
+            data={"youtube_video_id": "abc12345678"},
             files={"file": ("video.mp4", io.BytesIO(oversized), "video/mp4")},
         )
 
@@ -123,7 +123,7 @@ def test_tempfile_deleted_after_413(upload_client, monkeypatch, tmp_path):
     ):
         resp = upload_client.post(
             "/videos/upload",
-            data={"youtube_video_id": "abc456"},
+            data={"youtube_video_id": "abc45678901"},
             files={"file": ("video.mp4", io.BytesIO(oversized), "video/mp4")},
         )
 
@@ -159,7 +159,7 @@ def test_upload_just_over_max_rejects_413_and_writes_nothing(monkeypatch):
             oversized = b"x" * (_TEST_MAX_MB * _MB + 1)
             resp = c.post(
                 "/videos/upload",
-                data={"youtube_video_id": "issue55_test"},
+                data={"youtube_video_id": "issue55test"},
                 files={"file": ("video.mp4", io.BytesIO(oversized), "video/mp4")},
             )
     finally:
@@ -202,7 +202,7 @@ def test_rss_delta_bounded_for_rejected_upload(upload_client, monkeypatch):
     with patch("worker.tasks.start_pipeline"):
         resp = upload_client.post(
             "/videos/upload",
-            data={"youtube_video_id": "dos_test"},
+            data={"youtube_video_id": "dos12345678"},
             files={"file": ("video.mp4", io.BytesIO(payload), "video/mp4")},
         )
 

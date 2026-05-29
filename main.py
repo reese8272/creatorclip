@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("CreatorClip starting (env=%s)", settings.ENV)
     yield
+    # Close the shared YouTube/Google HTTP client (Issue 72).
+    from youtube import _http
+
+    await _http.aclose()
     logger.info("CreatorClip shutdown")
 
 
