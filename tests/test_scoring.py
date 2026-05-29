@@ -200,7 +200,8 @@ async def test_score_candidates_dna_uses_prompt_caching():
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    # 1h TTL keeps the per-creator prefix warm across a backlog-scoring burst (Issue 75).
+    assert system[0].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
 
 
 @pytest.mark.asyncio

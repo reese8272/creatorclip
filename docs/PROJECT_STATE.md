@@ -7,8 +7,15 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75/71 — per-(creator,version) preference-scorer cache (deserialise once per version, off the rerank hot path).
+**Last completed**: Issue 75/69 — clip-scorer prompt caching (1h TTL keeps the per-creator prefix warm across a backfill burst).
 **Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Closed Issue 75/69 — clip-scorer prompt caching** (2026-05-29): clip_engine/scoring.py's per-creator
+> system block now uses cache_control ttl=1h (was 5-min default). The prefix (instructions + DNA brief +
+> principles) is identical across a creator's videos; their backlog is scored as a burst when the worker
+> drains the ingest queue, which exceeds 5 min for 10+ videos — 1h keeps it warm across the backfill. Via
+> /claude-api: Sonnet 4.6 needs a >=2048-token prefix to cache at all (DNA-brief-size dependent); a
+> static-global breakpoint was rejected (static ~230 tokens). 429 passed; gates all green. DECISIONS 2026-05-29.
 
 > **Closed Issue 75/71 — preference-scorer cache** (2026-05-29): preference/model.load_scorer_cached —
 > an LRU (OrderedDict, max 128, lock-guarded) of deserialised PreferenceScorers keyed by (creator_id,

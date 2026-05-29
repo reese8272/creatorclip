@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75/69: clip-scorer prompt caching (1h TTL)
+
+### What changed
+`clip_engine/scoring.py`'s per-creator system block now uses
+`cache_control: {"type": "ephemeral", "ttl": "1h"}` (was the 5-minute default).
+
+### Why
+The system prefix (static instructions + this creator's DNA brief + principles) is
+byte-identical across all of one creator's videos, so it prompt-caches and is reused
+video-to-video. A creator's backlog is scored as a **burst** when the worker drains
+their ingest queue (onboarding/backfill) — for 10+ videos that routinely exceeds the
+5-minute default TTL, so the cache was expiring mid-burst. The 1h TTL keeps the
+prefix warm across the whole backfill (2× write cost, but a backfill is many reads).
+
+### `/claude-api` findings (verified, not from memory)
+- **Sonnet 4.6's minimum cacheable prefix is 2048 tokens.** The cache only engages
+  once instructions + DNA brief + principles clear that floor — driven by the DNA
+  brief's size, which we don't control. Below it, caching silently no-ops
+  (`cache_creation_input_tokens: 0`); the token-usage log line surfaces this.
+- **A static-global breakpoint was rejected.** The static instructions + principles
+  are ~230 tokens — far under 2048 — so a static-only prefix would never cache and a
+  second breakpoint buys nothing. The per-creator prefix (one breakpoint) is the only
+  worthwhile cache point here. This confirms the Issue 69 note rather than restructuring.
+- Volatile per-video candidates are already in the (uncached) user message — correct.
+- Model/thinking left unchanged: Sonnet 4.6 is the deliberate cost choice for scoring,
+  `max_tokens=1200` is small, no thinking needed for the JSON extraction.
+
+### Verification
+`test_score_candidates_dna_uses_prompt_caching` updated to assert the 1h TTL. Full
+suite **429 passed**; gates ruff 0 / mypy 0 / bandit 0,0 / pip_audit 0.
+
+---
+
 ## 2026-05-29 — Issue 75/71: per-(creator, version) preference-scorer cache
 
 ### What changed

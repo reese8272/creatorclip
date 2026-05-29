@@ -1299,7 +1299,7 @@ vector; WhisperX model + SDK clients reconstructed per call.
   2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
 - [x] **Full `response_model` coverage** — DONE (2026-05-29). `routers/schemas.py` + `response_model=` on every JSON endpoint (auth/creators/clips/review/upload_intel/improvement/videos; billing already had models). Mirrors each handler's exact return; OpenAPI builds 26 typed 2xx responses; `tests/test_response_models.py` guards the integration-only shapes. See DECISIONS 2026-05-29.
 - [ ] **Deepgram file-stream** upload (from Issue 74)
-- [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
+- [x] **Clip-scorer prompt caching** — DONE 2026-05-29. Per-creator system prefix now uses the 1h cache TTL to stay warm across a creator's backfill burst; static-global breakpoint rejected (static ~230 tokens < Sonnet 4.6's 2048 floor). Verified via /claude-api; see DECISIONS.
 - [x] **Per-(creator, version) scorer cache** — DONE 2026-05-29. `preference.model.load_scorer_cached` (LRU keyed by (creator_id, version)); `from_bytes` now runs once per version, not per rerank. See DECISIONS.
 - [x] **Improvement-brief 202/poll** — DONE (2026-05-29). `POST` enqueues a Celery job
   (debounced, 400 fast-fail on no data/channel) → 202; `GET` polls Redis-backed status

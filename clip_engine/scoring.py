@@ -188,9 +188,24 @@ async def score_candidates(
     response = await _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=1200,
+        # The system prefix (instructions + this creator's DNA brief + principles) is
+        # byte-identical across all of one creator's videos, so it prompt-caches and
+        # is reused video-to-video. A creator's backlog is scored as a burst when the
+        # worker drains their ingest queue (onboarding/backfill), which routinely spans
+        # more than the 5-minute default TTL — so use the 1h TTL to keep the prefix warm
+        # across the whole burst. (cache only engages once the prefix clears Sonnet 4.6's
+        # 2048-token floor; a static-only breakpoint wouldn't — the static text is ~230
+        # tokens — so the per-creator prefix is the only worthwhile cache point. See
+        # docs/DECISIONS.md 2026-05-29, verified via /claude-api.)
         # cache_control is valid on the wire API for prompt caching but absent from
         # the SDK's TextBlockParam TypedDict.
-        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],  # type: ignore[typeddict-unknown-key]
+        system=[
+            {  # type: ignore[typeddict-unknown-key]
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
         messages=[{"role": "user", "content": user_text}],
     )
 
