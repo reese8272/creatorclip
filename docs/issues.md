@@ -1285,7 +1285,12 @@ vector; WhisperX model + SDK clients reconstructed per call.
   from the ignore-list — a major-line bump; do as its own issue with a full test run.
 - [ ] (b) YouTube **analytics retention/refresh cadence** vs ToS (`youtube/analytics.py`, COMPLIANCE.md §2) — needs the actual ToS cadence figure, then a scheduled refresh/purge
 - [ ] (e) ratchet `mypy_errors` 30→0, then enable `disallow_untyped_defs`
-- [ ] (f) observability: request/correlation id in logs + golden-signal metrics
+- [x] (f) observability — DONE (2026-05-29). `observability.py`: pure-ASGI
+  `RequestIDMiddleware` (mint/echo `X-Request-ID`, ContextVar) + JSON structured logs
+  with `request_id` + Prometheus golden signals (`http_request_duration_seconds`,
+  `celery_task_*`) at `/metrics`; correlation id propagated API→Celery via
+  before_task_publish/task_prerun/task_postrun signals. +9 tests. See DECISIONS
+  2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
 - [ ] **Full `response_model` coverage** across the ~16 endpoints (from Issue 73)
 - [ ] **Deepgram file-stream** upload (from Issue 74)
 - [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69

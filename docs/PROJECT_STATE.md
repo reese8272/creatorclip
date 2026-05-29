@@ -7,8 +7,21 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75(a) — pip-audit CVE remediation: 14→0 (6 packages patched, 2 accepted-risk in the gate ignore-list).
+**Last completed**: Issue 75(f) — observability (correlation ids + JSON structured logs + Prometheus golden signals + Celery propagation).
 **Blocked**: _(none)_
+
+> **Closed Issue 75(f) — observability** (2026-05-29): new observability.py — a pure-ASGI
+> RequestIDMiddleware (reads/mints X-Request-ID into a ContextVar, echoes it on the response;
+> added outermost in main.py); JSON structured logs via JsonLogFormatter + RequestIDLogFilter
+> (request_id on every line; configure_logging replaces basicConfig, idempotent, text fallback
+> for dev); Prometheus golden signals (http_request_duration_seconds labelled by route template;
+> celery_task_duration_seconds + celery_tasks_total) at /metrics gated by METRICS_ENABLED. The
+> correlation id propagates API→Celery via before_task_publish/task_prerun/task_postrun signals
+> (weak=False — Celery connects weakly by default). Added prometheus-client==0.25.0 (single CVE-clean
+> dep; the correlation layer is hand-rolled to add zero new surface). Config: LOG_JSON,
+> REQUEST_ID_HEADER, METRICS_ENABLED (+ .env.example). Deferred: OpenTelemetry distributed tracing.
+> +9 DB-free tests; **410 passed, 1 skipped, 55 deselected**; gates ruff 0 / mypy 30 / bandit 0,0 /
+> pip_audit 0. Rationale + sources in DECISIONS (2026-05-29).
 
 > **Closed Issue 75(a) — pip-audit CVE remediation** (2026-05-29): 14 known vulns → 0.
 > Patched 6 packages in requirements.txt: cryptography 43.0.3→46.0.7, python-multipart

@@ -49,6 +49,11 @@ scikit-learn==1.5.2
 numpy==2.1.3
 scipy==1.14.1
 
+# ── Observability ────────────────────────────────────────────────────────────
+# Golden-signal metrics (Prometheus exposition at /metrics). Official client; the
+# correlation-id + structured-logging layer is hand-rolled in observability.py.
+prometheus-client==0.25.0
+
 # ── Storage (S3-compatible / Cloudflare R2) ──────────────────────────────────
 boto3==1.35.54
 

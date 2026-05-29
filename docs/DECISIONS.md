@@ -5,6 +5,63 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75(f): Observability (correlation ids + structured logs + metrics)
+
+### What changed
+New `observability.py` wires three things, integrated in `main.py` (API) and
+`worker/celery_app.py` (worker):
+- **Correlation id** — a `request_id_ctx: ContextVar[str]`; a pure-ASGI
+  `RequestIDMiddleware` (added last → outermost) reads an inbound
+  `REQUEST_ID_HEADER` (default `X-Request-ID`) or mints a UUID4, binds it, and
+  echoes it on the response. A `RequestIDLogFilter` injects `request_id` onto every
+  log record.
+- **Structured logs** — `JsonLogFormatter` emits one JSON object per line (incl.
+  `request_id` + any `extra` fields); `configure_logging(json_logs=settings.LOG_JSON)`
+  replaces `logging.basicConfig`, idempotent, text fallback for local dev.
+- **Golden signals** — `prometheus-client==0.25.0`: `http_request_duration_seconds`
+  (latency + traffic/errors via the `_count` by status, labelled by route template
+  to bound cardinality) recorded in the same middleware; `celery_task_duration_seconds`
+  + `celery_tasks_total` recorded via task signals; exposed at `/metrics`
+  (gated by `METRICS_ENABLED`, `include_in_schema=False`).
+- **Celery propagation** — `before_task_publish` stamps the id onto task headers;
+  `task_prerun` binds it (+ starts the task timer); `task_postrun` records the task
+  metrics and clears the id. Connected with `weak=False`.
+
+### Why
+Assessment axis G was the last ⚠️ blocking *operability*: no request id meant a
+failed render couldn't be traced API→worker, and there were no golden signals for
+p99 / error rate. This is a pre-deploy operational gate, not polish.
+
+### Decisions / deviations
+- **Hand-rolled correlation layer, not `asgi-correlation-id`.** Same documented
+  pattern (ContextVar + ASGI middleware + echo header + logging filter + Celery
+  signals) in ~60 lines we own, adding **zero** new dependency/CVE surface right
+  after ratcheting pip-audit to 0. One new dep (prometheus-client, the canonical
+  metrics client) is justified; a second for ~60 lines is not.
+- **Prometheus metrics now; OpenTelemetry tracing deferred.** Full OTel needs a
+  collector to operate; golden-signals-before-launch is the standard MVP and is
+  k8s-native (our deploy target). Distributed tracing is a tracked follow-up.
+- **`weak=False` on the Celery signal connects** — Celery connects receivers weakly
+  by default, so module-level handlers held by no other ref would be GC'd and never
+  fire (caught by a failing test before it shipped).
+- **Pure-ASGI middleware, not `BaseHTTPMiddleware`** — avoids the known
+  streaming/background-task pitfalls; reads `scope["route"]` in the `finally` (set by
+  the inner router by then) so the latency label is the route template.
+
+### Industry standard checked (live, 2026-05-29)
+The de-facto pattern across `snok/asgi-correlation-id`, `django-structlog`'s Celery
+integration, and current FastAPI observability guides: ContextVar + ASGI middleware
++ echo-header + logging filter, Celery signal propagation, Prometheus for metrics,
+OTel for tracing as a later layer. Sources in the session research.
+
+### Verification
+Full suite **410 passed, 1 skipped, 55 deselected** (+9 DB-free observability tests:
+id validation/mint, log-filter injection, JSON format, idempotent config, mint+echo
++ inbound-respect via TestClient, `/metrics` exposition, Celery publish→run→clear +
+task-counter increment). Gates unchanged: ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0.
+
+---
+
 ## 2026-05-29 — Issue 75(a): pip-audit CVE remediation (14 → 0)
 
 ### What changed

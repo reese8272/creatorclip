@@ -3,7 +3,7 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-29 (Issue 75(a) — pip-audit CVE remediation)
+**Last updated:** 2026-05-29 (Issue 75(a) CVEs + 75(f) observability)
 **Branch:** `claude/busy-mendel-1r2oZ` (contains all merged assessment work; this is the active
 dev branch this session). NOTE: in this fresh container, local `main` is just the initial commit
 — the real history lives on this branch (HEAD was `017b65f` at session start).
@@ -62,8 +62,12 @@ This session shipped (19 commits, all green on CI before merge):
      (pytest dev-cascade; starlette Host-header — needs starlette-1.x). See DECISIONS 2026-05-29.
    - **starlette-1.x migration** (FastAPI→0.136.x) to close PYSEC-2026-161 and drop it from the
      ignore-list — its own issue (major-line bump, full test run; mind the on_startup landmine).
+   - ~~observability~~ ✅ **DONE this session** (Issue 75(f)): `observability.py` — correlation
+     id (X-Request-ID ContextVar + ASGI middleware, echoed), JSON structured logs, Prometheus
+     golden signals at `/metrics`, propagated API→Celery via signals. Follow-up: OpenTelemetry
+     distributed tracing (deferred). See DECISIONS 2026-05-29.
    - YouTube **analytics-retention cadence** vs ToS (needs the actual ToS figure) — compliance.
-   - Full `response_model` coverage; Deepgram file-stream; observability; `mypy_errors`→0;
+   - Full `response_model` coverage; Deepgram file-stream; `mypy_errors`→0;
      clip-scorer prompt caching; per-(creator,version) scorer cache; improvement-brief 202/poll.
 
 4. **Re-run `/assess`** for a fresh diff of the remaining SEV-2/cleanup tail (it diffs against
@@ -128,9 +132,9 @@ This session shipped (19 commits, all green on CI before merge):
 | **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. **CI ruff is 0.15.x**; `requirements-dev.txt` pins `ruff==0.15.15` to match (an older pin disagrees on formatting). |
 | **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` (add `--update-baseline` to recapture, `--require-fresh` for the freshness gate) |
 | **Active issue** | _(none in flight)_ — remaining work is the **Issue 75** tracking list |
-| **Last completed** | Assessment Issues 58–72 + 73/74/75 partial; PR #3 merged (2026-05-29) |
+| **Last completed** | Issue 75(a) CVEs (14→0) + 75(f) observability (this session) |
 | **Latest alembic revision** | `a7b8c9d0e1f2` — `0007_clip_outcome_final` (this session added 0005, 0006, 0007) |
-| **Test count** | 401 passed, 1 skipped, 55 deselected |
+| **Test count** | 410 passed, 1 skipped, 55 deselected |
 
 ---
 
@@ -178,7 +182,7 @@ This session shipped (19 commits, all green on CI before merge):
 | ~~14 pip-audit CVEs~~ ✅ done | Patched; `pip_audit_vulns`→0. Residual: **starlette-1.x migration** to close PYSEC-2026-161 |
 | YouTube **analytics-retention cadence** | ToS exposure (compliance) — needs the cadence figure, then a scheduled purge |
 | Full **`response_model`** coverage | API hygiene across ~16 endpoints |
-| **observability** (request id + golden signals), **mypy→0**, **Deepgram stream**, **clip-scorer caching**, **scorer LRU cache**, **brief 202/poll** | Each enumerated under Issue 75 |
+| ~~observability~~ ✅ done (75f); **mypy→0**, **Deepgram stream**, **clip-scorer caching**, **scorer LRU cache**, **brief 202/poll**, **OTel tracing** | Each enumerated under Issue 75 |
 | ~37 SEV-2 + ~34 cleanup | In `docs/assessment/modules/*.md`; re-run `/assess` to triage as a diff |
 
 **Older Phase-2 remainder to reconcile:** **56** (RLS, research/decide) and **57** (refund

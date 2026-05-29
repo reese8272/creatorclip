@@ -82,11 +82,12 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── docs/assessment/            # production-readiness register: baselines + per-module findings + report history
 ├── tests/perf/                 # Locust load-test scaffold (concurrency evidence)
 │
-├── main.py                     # FastAPI entrypoint, /health
+├── main.py                     # FastAPI entrypoint, /health, /metrics (Issue 75f)
 ├── config.py                   # Pydantic Settings; fail-fast on missing required
 ├── db.py                       # SQLAlchemy async engine + session (Issue 2)
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
 ├── crypto.py                   # Fernet helpers for token columns
+├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
 ├── clients.py                  # Anthropic singleton, Voyage client, YouTube client factory, storage client
 │
 ├── youtube/

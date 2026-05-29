@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     UPLOAD_MAX_MB: int = 500
     LOCAL_MEDIA_DIR: str = "./media"
 
+    # ── Observability (Issue 75f) ───────────────────────────────────────────────
+    # JSON structured logs (one object per line) for log aggregators. Defaults on;
+    # set false for human-readable text in local dev.
+    LOG_JSON: bool = True
+    # Inbound header carrying a correlation id from an upstream proxy/gateway. If
+    # absent or malformed, the middleware mints a UUID4. Echoed back on the response.
+    REQUEST_ID_HEADER: str = "X-Request-ID"
+    # Expose Prometheus golden-signal metrics at /metrics. Disable to drop the
+    # endpoint entirely (the scrape surface) without touching the rest.
+    METRICS_ENABLED: bool = True
+
     # ── Stripe billing ────────────────────────────────────────────────────────
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
