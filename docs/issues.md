@@ -209,7 +209,7 @@ All code is written. These issues are infrastructure + configuration only.
 
 ## Issue 23: VM provisioning + Cloudflare DNS + HTTPS
 **Depends on**: nothing (external setup)
-**Status**: 🔲 Not started
+**Status**: ✅ Done (production live on `autoclip.studio` via Cloudflare Tunnel)
 
 **What**: Provision a cloud VM (DigitalOcean Droplet at `147.182.136.107`), install Docker
 + Docker Compose, point `agenticlip.studio` at it via Cloudflare Tunnel (no open inbound
@@ -532,7 +532,7 @@ could re-run ingest and re-decrement the balance, charging up to 4× per video.
 ### Issue 35: Idempotent DNA build — prevent orphan draft accumulation
 **Severity**: SEV-0 — versioned DNA table accumulates orphans on Celery retry
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `_build_dna_async` (worker/tasks.py:127–139) commits a draft via `dna/profile.create_draft`
 then makes Voyage embedding + Anthropic brief calls. If anything after the draft commit
@@ -573,7 +573,7 @@ leaving the previous draft as orphan.
 ### Issue 37: External SDK timeouts + retry-with-backoff
 **Severity**: SEV-1 — worker hangs on a stuck remote call
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Anthropic, Stripe, Voyage, Deepgram, R2 (boto3) clients are constructed per-call
 with no `timeout=` and no retry policy. Each SDK call can hang the worker indefinitely.
@@ -627,10 +627,6 @@ class of bugs.
 
 ---
 
-### Issue 40: Streaming upload + DoS guard
-**Severity**: SEV-1 — up to 500 MB into memory per upload request
-**Depends on**: 32
-**Status**: 🔲 Not started
 ### Issue 40: Streaming upload + DoS guard
 **Severity**: SEV-1 — up to 500 MB into memory per upload request
 **Depends on**: 32
@@ -705,7 +701,7 @@ have its source purged mid-pipeline.
 ### Issue 44: Auth boundary hardening
 **Severity**: SEV-1 — 500 disclosure, deletion DoS surface, no zero-downtime key rotation
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Three related fixes:
 1. `auth.py:43` — `uuid.UUID(payload["sub"])` raises `ValueError` on malformed sub → 500 (with stack trace in dev `ENV`).
