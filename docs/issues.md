@@ -1108,28 +1108,28 @@ override → a long task redelivered while still running → double execution. (
 
 ## Issue 63: Idempotent build_dna on redelivery (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 2)
 
-**What**: `dna/profile.py:50` derives the new version via `max(version)+1`; a post-commit
-redelivery inserts a second draft (duplicate DNA + double Anthropic/Voyage spend).
-`confirm_draft` (profile.py:75) also lacks row locking (two confirms → two `confirmed`).
+**What**: `create_draft` derived version via `max(version)+1`; a post-commit redelivery
+inserted a second draft (duplicate DNA + double Anthropic/Voyage spend). `confirm_draft`
+also lacked locking (two confirms → two `confirmed`).
 
 **Acceptance criteria**:
-- [ ] `build_dna` idempotent on a stable key (e.g. `(creator_id, source_fingerprint)`)
-- [ ] Partial unique index `creator_dna(creator_id) WHERE status='confirmed'` or `FOR UPDATE` in `confirm_draft`
-- [ ] Test: fire `build_dna` twice; exactly one draft + one Anthropic call
+- [x] `build_dna` idempotent on a stable key — the Celery `task_id` (`self.request.id`) is stamped as `creator_dna.build_job_id`; `_build_dna_async` early-returns before the paid LLM/Voyage calls when a draft for that job already exists (migration `0005`)
+- [x] Partial unique index `uq_one_confirmed_dna_per_creator ON creator_dna(creator_id) WHERE status='confirmed'` + `with_for_update()` in `confirm_draft` (ordered flush: supersede before promote, since the index is non-deferrable; `IntegrityError` backstop)
+- [x] Integration tests (`tests/test_dna_idempotency_integration.py`): same job_id twice → one draft + one brief call; confirm twice / new draft → exactly one confirmed
 
 ## Issue 64: Self-idempotent grant_minutes (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 2)
 
-**What**: `billing/ledger.py:39` `grant_minutes` is not self-idempotent; money-credit
-idempotency rides on a caller TOCTOU check backstopped only by `UNIQUE(stripe_session_id)`,
-and the race loser raises an uncaught 500. Harden at the source like `deduct_for_video`.
+**What**: `grant_minutes` was not self-idempotent; money-credit idempotency rode on a caller
+TOCTOU check backstopped only by `UNIQUE(stripe_session_id)`, and the race loser raised an
+uncaught 500. Hardened at the source, mirroring `deduct_for_video`.
 
 **Acceptance criteria**:
-- [ ] Grant wrapped in `begin_nested()` SAVEPOINT, catches `IntegrityError` on the UNIQUE → no-op
-- [ ] Concurrent-grant test (two sessions, same `stripe_session_id` via `asyncio.gather`): one MinutePack, one balance increment
+- [x] Fast-path existence check (keyed grants) + `begin_nested()` SAVEPOINT + `flush()` + `IntegrityError` catch → idempotent no-op on duplicate delivery
+- [x] Concurrent-grant integration test (`tests/test_billing_grant_idempotency_integration.py`): two sessions, same `stripe_session_id` via `asyncio.gather` → one MinutePack, balance credited once
 
 ## Issue 65: pgvector HNSW index + missing FK indexes (SEV-1)
 **Depends on**: —

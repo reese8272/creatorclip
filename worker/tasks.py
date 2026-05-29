@@ -20,6 +20,7 @@ from models import (
     ClipFeedback,
     ClipOutcome,
     Creator,
+    CreatorDna,
     IngestStatus,
     OnboardingState,
     PreferenceModel,
@@ -135,7 +136,9 @@ def build_dna(self, creator_id: str) -> str:
     ValueError (data gate failure) is re-raised without retry — it is a permanent error.
     """
     try:
-        run_async(_build_dna_async(creator_id))
+        # self.request.id is the stable idempotency key across at-least-once
+        # redelivery of THIS task; a new user-triggered build gets a new id. (Issue 63)
+        run_async(_build_dna_async(creator_id, self.request.id))
     except ValueError:
         raise
     except Exception as exc:
@@ -386,7 +389,7 @@ async def _render_clip_async(clip_id: str) -> None:
     logger.info("Clip %s rendered → %s", clip_id, render_uri)
 
 
-async def _build_dna_async(creator_id: str) -> None:
+async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     """Build creator DNA patterns, brief, draft profile, and embeddings atomically.
 
     All DB writes — draft INSERT, onboarding state update, and embedding INSERTs —
@@ -395,13 +398,29 @@ async def _build_dna_async(creator_id: str) -> None:
     the session is rolled back (via the context manager exit) and no draft row is
     persisted. The next retry therefore computes max(version) without an orphan row and
     assigns the same version number again.
+
+    Idempotent across at-least-once redelivery (Issue 63): ``job_id`` is the Celery
+    task id, stamped onto the draft (build_job_id). If a draft for this job_id already
+    exists the build is a no-op — this short-circuits BEFORE the paid Anthropic brief
+    and Voyage embedding calls, so a redelivery costs nothing.
     """
+    from sqlalchemy import select
+
     from dna.brief import generate_brief
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
     from dna.profile import create_draft
 
     creator_uuid = uuid.UUID(creator_id)
+
+    if job_id is not None:
+        async with db.AsyncSessionLocal() as session:
+            already = await session.scalar(
+                select(CreatorDna.id).where(CreatorDna.build_job_id == job_id)
+            )
+        if already is not None:
+            logger.info("DNA build for job %s already completed — skipping (idempotent)", job_id)
+            return
 
     async with db.AsyncSessionLocal() as session:
         creator = await session.get(Creator, creator_uuid)
@@ -433,6 +452,7 @@ async def _build_dna_async(creator_id: str) -> None:
             optimal_clip_len_s=clip_len_s,
             best_source_region=source_region,
             optimal_upload_gap_h=upload_gap_h,
+            build_job_id=job_id,
             commit=False,
         )
 

@@ -266,28 +266,20 @@ async def test_confirm_draft_supersedes_previous_confirmed_profile():
         status=DnaStatus.draft,
     )
 
-    # Sequence of execute() calls:
-    #   1st call: select confirmed rows → returns [old_confirmed]
-    #   2nd call: select draft rows (order by version desc) → returns [new_draft]
-    execute_calls = []
-
+    # confirm_draft now issues ONE locked select returning all of the creator's DNA
+    # rows (version desc); see the real-DB coverage in
+    # tests/test_dna_idempotency_integration.py. Here the single execute() returns
+    # [new_draft (v2), old_confirmed (v1)].
     async def _execute(stmt):
         result = MagicMock()
-        if len(execute_calls) == 0:
-            # confirmed query
-            scalars_mock = MagicMock()
-            scalars_mock.__iter__ = MagicMock(return_value=iter([old_confirmed]))
-            result.scalars.return_value = scalars_mock
-        else:
-            # draft query
-            scalars_mock = MagicMock()
-            scalars_mock.first.return_value = new_draft
-            result.scalars.return_value = scalars_mock
-        execute_calls.append(stmt)
+        scalars_mock = MagicMock()
+        scalars_mock.all.return_value = [new_draft, old_confirmed]
+        result.scalars.return_value = scalars_mock
         return result
 
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=_execute)
+    session.flush = AsyncMock()
     session.get = AsyncMock(return_value=None)  # creator lookup → None (no onboarding update)
     session.commit = AsyncMock()
     session.refresh = AsyncMock()

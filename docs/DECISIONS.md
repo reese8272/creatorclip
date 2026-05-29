@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Batch 2 (Issues 63 + 64): Idempotent unique-keyed writes
+
+### What changed
+- `billing/ledger.py`: `grant_minutes` is now self-idempotent — fast-path
+  existence check (keyed grants) + `begin_nested()` SAVEPOINT + `flush()` +
+  `IntegrityError` catch, mirroring `deduct_for_video`.
+- `dna/profile.py`: `create_draft` accepts `build_job_id`; `confirm_draft` locks the
+  creator's DNA rows `with_for_update()`, supersedes-before-promotes with an explicit
+  `flush()`, and catches `IntegrityError`.
+- `worker/tasks.py`: `build_dna` passes `self.request.id`; `_build_dna_async`
+  early-returns before the paid LLM/Voyage calls when a draft for that job_id exists.
+- Migration `0005`: `creator_dna.build_job_id` (nullable) + index, and partial unique
+  index `uq_one_confirmed_dna_per_creator ON creator_dna(creator_id) WHERE status='confirmed'`.
+
+### Why
+At-least-once delivery + concurrent Stripe/worker delivery duplicated money records,
+re-spent paid Anthropic/Voyage calls (duplicate DNA drafts), and could leave two
+`confirmed` DNA rows. The idempotency key for DNA builds is the Celery `task_id`
+(stable across redelivery, new per user re-request); for grants it is
+`stripe_session_id` (UNIQUE).
+
+### Standard / precedent
+In-repo precedent `deduct_for_video` (UNIQUE + SAVEPOINT + IntegrityError); Celery
+idempotency (Batch 1 research). Partial unique index is non-deferrable, hence the
+ordered flush (supersede → flush → promote) so two 'confirmed' rows never coexist
+even transiently.
+
+### Coverage baseline moved: 69.97% → 69.54% (justified)
+These three fixes are DB-mutating logic. The project rule (CLAUDE.md Testing Rules)
+forbids mocking the DB, so they are covered by integration tests
+(`test_dna_idempotency_integration.py`, `test_billing_grant_idempotency_integration.py`)
+which run in the integration CI, not the unit-coverage gate. Their unit-invisible
+lines lowered the unit-only floor. Per the README ratchet + Phase-4 rule, the floor
+moves to current reality (69.54%) with this justification; it climbs back as
+unit-coverable code lands in later batches.
+
+---
+
 ## 2026-05-29 — Batch 1 (Issues 61 + 62): Worker at-least-once safety
 
 ### What changed

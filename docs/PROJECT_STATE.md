@@ -6,9 +6,22 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59, 60, 61, 62 ✅ done. Next: Batch 2 = Issues 63 + 64 (idempotent unique-keyed writes: build_dna + grant_minutes).
-**Last completed**: Batch 1 — Issues 61 + 62 (worker at-least-once safety: idempotent generate_clips + acks_late/reject_on_worker_lost + time/visibility limits + render skip).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–64 ✅ done. Next: Batch 3 = Issue 65 (pgvector HNSW + FK indexes).
+**Last completed**: Batch 2 — Issues 63 + 64 (idempotent unique-keyed writes: build_dna via Celery task_id + confirm_draft single-confirmed; grant_minutes self-idempotent).
 **Blocked**: _(none)_
+
+> **Closed Batch 2 / Issues 63 + 64** (2026-05-29): Idempotent unique-keyed writes.
+> 63: `build_dna` stamps the Celery `task_id` as `creator_dna.build_job_id` and
+> `_build_dna_async` early-returns before the paid LLM/Voyage calls on redelivery;
+> `confirm_draft` locks `with_for_update()` + partial unique index
+> `uq_one_confirmed_dna_per_creator` (ordered flush, non-deferrable). 64:
+> `grant_minutes` now mirrors `deduct_for_video` (fast-path + SAVEPOINT +
+> IntegrityError) so duplicate Stripe deliveries credit once. Migration `0005`.
+> Integration tests for both. **Coverage floor moved 69.97→69.54%** (justified:
+> DB-only idempotency code is integration-tested, not visible to the unit-coverage
+> gate — see DECISIONS). Test count: **388 passed, 1 skipped, 50 deselected** (+3
+> integration; updated 1 mocked unit test). Gates: ruff 0, mypy 30, bandit 0/0,
+> coverage 69.54%.
 
 > **Closed Batch 1 / Issues 61 + 62** (2026-05-29): Celery is at-least-once. A
 > redelivered `build_signals`→`generate_clips` wiped feedback/outcomes via
