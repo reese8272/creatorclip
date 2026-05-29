@@ -5,6 +5,45 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 60: Wire the personalization loop + maturity-gated blend
+
+### What changed
+- `clip_engine/ranking.py`: `generate_and_rank_clips` now calls
+  `rerank_with_preference` after persisting (and re-commits the blended score/rank).
+- `preference/model.py`: new `preference_weight(label_count)` — the rerank blend
+  weight. `rerank_with_preference` uses `(1-w)*dna + w*pref` instead of fixed 50/50.
+- `worker/tasks.py`: new idempotent, self-debouncing `retrain_preference(creator_id)`
+  Celery task (no-op when no trainable feedback since the latest model version).
+- `routers/review.py`: enqueues `retrain_preference` after each feedback write.
+- `config.py`/`.env.example`: `PREFERENCE_WEIGHT_CAP` (default 0.5).
+- `preference/train.py`: exposed `TRAINABLE_ACTIONS` (DRY for the debounce filter).
+
+### Why
+Two subagents independently found personalization was dead code — never trained,
+never applied. This is half the North Star ("learns your style, adapts as you
+evolve"). The flat 50/50 blend also gave a 2-label cold-start model equal authority
+over ranking, violating the CLAUDE.md honesty rule ("below the threshold, ranking
+falls back to DNA + signals").
+
+### Decisions
+- **Blend curve:** weight 0 below `PERSONALIZATION_THRESHOLD_LABELS` (honest DNA
+  fallback), linear ramp to `PREFERENCE_WEIGHT_CAP` by 2× the threshold. This is the
+  standard hybrid cold-start strategy — start content-based, grow personalization as
+  the creator's own feedback accumulates. `label_count` already lives on
+  `PreferenceScorer`, so no migration. Sources: hybrid/cold-start recommender
+  practice — expressanalytics.com/blog/cold-start-problem; arxiv 1808.10664.
+- **Retrain trigger:** enqueue-on-feedback (responsive, matches "adapts as you
+  evolve") with an in-task new-labels guard, over a Beat-only cadence (laggy).
+  Repeated clicks collapse to cheap no-ops.
+
+### Scope boundaries (deferred, tracked)
+- `build_and_save` version-race (`max()+1` → IntegrityError) and unpickler
+  thread-safety → **Issue 71**; the retrain task catches `IntegrityError` as a
+  minimal guard meanwhile.
+- `from_bytes` runs sync on the worker loop (bounded by prefork) → **Issues 68/71**.
+
+---
+
 ## 2026-05-29 — Issue 59: Render from setup_start_s + ffmpeg accurate-seek finding
 
 ### What changed

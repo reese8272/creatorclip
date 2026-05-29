@@ -33,10 +33,18 @@ async def rerank_with_preference(
     Falls back silently if no model is trained yet (below threshold).
     """
     from preference.features import clip_features
+    from preference.model import preference_weight
     from preference.train import load_latest
 
     scorer = await load_latest(session, creator_id)
     if scorer is None:
+        return clips
+
+    # Honest personalization threshold: below it the model gets weight 0, so the
+    # DNA + signal ranking is returned unchanged (no false personalization). The
+    # weight ramps with the creator's own feedback volume. (Issue 60)
+    weight = preference_weight(scorer.label_count)
+    if weight == 0.0:
         return clips
 
     for clip in clips:
@@ -52,8 +60,7 @@ async def rerank_with_preference(
             has_laughter=feats_dict.get("has_laughter", False),
         )
         pref_score = scorer.predict_score(feats)
-        # Blend DNA score with preference score (equal weight)
-        clip.score = 0.5 * (clip.score or 0.0) + 0.5 * pref_score
+        clip.score = (1.0 - weight) * (clip.score or 0.0) + weight * pref_score
 
     clips.sort(key=lambda c: c.score or 0.0, reverse=True)
     for i, clip in enumerate(clips):
@@ -114,6 +121,11 @@ async def generate_and_rank_clips(
     await session.commit()
     for clip in clips:
         await session.refresh(clip)
+
+    # Apply the creator's preference model on top of the DNA/signal ranking.
+    # No-ops below the personalization threshold or when no model is trained. (Issue 60)
+    clips = await rerank_with_preference(clips, session, creator_id)
+    await session.commit()
 
     logger.info("Generated %d ranked clips for video %s", len(clips), video_id)
     return clips

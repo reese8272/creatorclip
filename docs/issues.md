@@ -1064,19 +1064,20 @@ defeated CLIPPING_PRINCIPLE #2, the core differentiator.
 
 ## Issue 60: Wire the personalization loop (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29)
 
-**What**: Personalization is unshipped. `preference/train.py:28 build_and_save` has no
+**What**: Personalization was unshipped. `preference/train.py:28 build_and_save` had no
 caller (model never trained → `load_latest` always None), and
-`clip_engine/ranking.py:26 rerank_with_preference` is never invoked (model never applied).
-Ranking is DNA-only; the North-Star "learns your style" loop does not run. Also: fixed
+`clip_engine/ranking.py:26 rerank_with_preference` was never invoked (model never applied).
+Ranking was DNA-only; the North-Star "learns your style" loop did not run. Also: fixed
 50/50 blend with no maturity gating (no honest below-threshold fallback per CLAUDE.md).
 
 **Acceptance criteria**:
-- [ ] Idempotent `retrain_preference(creator_id)` Celery task, enqueued on feedback (debounced) and/or Beat cadence
-- [ ] `rerank_with_preference` called in `generate_and_rank_clips`, gated on a trained model
-- [ ] Preference weight ramps on `label_count` vs `PERSONALIZATION_THRESHOLD_LABELS`; blend recorded in `docs/DECISIONS.md`
-- [ ] Integration test: trained model reorders clips; untrained creator falls back to DNA order
+- [x] Idempotent, self-debouncing `retrain_preference(creator_id)` Celery task (`worker/tasks.py`), enqueued from the feedback endpoint (`routers/review.py`) after each write; no-op when no new trainable feedback since the latest model version
+- [x] `rerank_with_preference` called at the end of `generate_and_rank_clips`, gated on a trained model
+- [x] `preference_weight(label_count)` ramps the blend: 0 below `PERSONALIZATION_THRESHOLD_LABELS`, linear to `PREFERENCE_WEIGHT_CAP` (new config) by 2× threshold; blend `(1-w)*dna + w*pref` recorded in `docs/DECISIONS.md`
+- [x] DB-free unit tests (weight curve + rerank gating below/above threshold + no-model) + integration test (`tests/test_retrain_preference_integration.py`): trains v1 then self-debounces
+- Deferred (explicit): `build_and_save` version-race hardening → **Issue 71**; `from_bytes` off-loop/caching → **Issues 68/71** (retrain task catches `IntegrityError` as a minimal guard meanwhile)
 
 ## Issue 61: generate_clips idempotency — stop wiping feedback/outcomes (SEV-1)
 **Depends on**: —

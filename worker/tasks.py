@@ -17,10 +17,12 @@ from pathlib import Path
 import db
 from models import (
     Clip,
+    ClipFeedback,
     ClipOutcome,
     Creator,
     IngestStatus,
     OnboardingState,
+    PreferenceModel,
     RenderStatus,
     RetentionCurve,
     Signals,
@@ -141,7 +143,68 @@ def build_dna(self, creator_id: str) -> str:
     return creator_id
 
 
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.retrain_preference"
+)
+def retrain_preference(self, creator_id: str) -> str:
+    """Retrain the creator's preference model from their clip feedback (Issue 60).
+
+    Idempotent + self-debouncing: a no-op when no new trainable feedback has arrived
+    since the latest model version, so repeated feedback clicks collapse to cheap
+    no-ops. The version-assignment race is hardened in Issue 71.
+    """
+    try:
+        run_async(_retrain_preference_async(creator_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
 # ── Async implementations ─────────────────────────────────────────────────────
+
+
+async def _retrain_preference_async(creator_id: str) -> None:
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    from preference.train import TRAINABLE_ACTIONS, build_and_save
+
+    cid = uuid.UUID(creator_id)
+    async with db.AsyncSessionLocal() as session:
+        latest = (
+            (
+                await session.execute(
+                    select(PreferenceModel)
+                    .where(PreferenceModel.creator_id == cid)
+                    .order_by(PreferenceModel.version.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if latest is not None:
+            # Self-debounce: only retrain if trainable feedback arrived since the
+            # last model was saved. Repeated clicks otherwise collapse to no-ops.
+            new_labels = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ClipFeedback)
+                    .where(
+                        ClipFeedback.creator_id == cid,
+                        ClipFeedback.action.in_(TRAINABLE_ACTIONS),
+                        ClipFeedback.created_at > latest.updated_at,
+                    )
+                )
+            ).scalar_one()
+            if not new_labels:
+                logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
+                return
+        try:
+            await build_and_save(session, cid)
+        except IntegrityError:
+            # Concurrent retrain won the version race (hardened in Issue 71).
+            await session.rollback()
+            logger.info("retrain_preference: version race for creator %s, skip", cid)
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:

@@ -122,6 +122,24 @@ class PreferenceScorer:
         return obj
 
 
+def preference_weight(label_count: int) -> float:
+    """Weight the preference model gets in the rerank blend, by data maturity.
+
+    Honest personalization threshold (CLAUDE.md Clip-Engine Rules): below
+    PERSONALIZATION_THRESHOLD_LABELS the model gets weight 0 — ranking falls back
+    to DNA + signals. At/above the threshold the weight ramps linearly to
+    PREFERENCE_WEIGHT_CAP, reaching the cap at 2× the threshold. This is the
+    standard hybrid cold-start strategy: start content-based, grow personalization
+    as the creator's own feedback accumulates. (Issue 60)
+    """
+    threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
+    cap = settings.PREFERENCE_WEIGHT_CAP
+    if label_count < threshold:
+        return 0.0
+    ramp = (label_count - threshold) / threshold  # 0 at threshold → 1 at 2× threshold
+    return round(min(cap, cap * ramp), 4)
+
+
 def fit(
     X: np.ndarray,
     y: np.ndarray,

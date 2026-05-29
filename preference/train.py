@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 _POSITIVE_ACTIONS = {FeedbackAction.upvote, FeedbackAction.trim}
 _NEGATIVE_ACTIONS = {FeedbackAction.downvote}
+# Feedback actions that contribute a training label (skip/format are excluded).
+TRAINABLE_ACTIONS = _POSITIVE_ACTIONS | _NEGATIVE_ACTIONS
 
 
 async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> PreferenceScorer | None:

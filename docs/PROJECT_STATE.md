@@ -6,9 +6,22 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, one at a time, CHECK-first). 58 code-complete, 59 ✅ done; next: 60 (wire personalization loop).
-**Last completed**: Issue 59 — render from `setup_start_s` (not the `start_s` fallback) so delivered Shorts actually clip the setup (CLIPPING_PRINCIPLE #2).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, one at a time, CHECK-first). 58 code-complete, 59 + 60 ✅ done; next: 61 (generate_clips idempotency).
+**Last completed**: Issue 60 — wired the personalization loop (train task enqueued on feedback + reranker called in ranking + maturity-gated blend).
 **Blocked**: _(none)_
+
+> **Closed Issue 60** (2026-05-29): Personalization was dead code — `build_and_save`
+> had no caller and `rerank_with_preference` was never invoked, so ranking was
+> DNA-only (the North-Star "learns your style" loop never ran). Fix: idempotent,
+> self-debouncing `retrain_preference` Celery task enqueued from the feedback
+> endpoint; `rerank_with_preference` now called at the end of `generate_and_rank_clips`;
+> flat 50/50 blend replaced with `preference_weight(label_count)` — 0 below
+> PERSONALIZATION_THRESHOLD_LABELS (honest DNA fallback), ramping to
+> PREFERENCE_WEIGHT_CAP by 2× the threshold (hybrid cold-start standard). Version-race
+> + unpickler thread-safety deferred to Issue 71 (retrain catches IntegrityError
+> meanwhile). DB-free unit tests (weight curve + rerank gating) + integration test
+> (trains v1 then self-debounces). Test count: **385 passed, 1 skipped, 45 deselected**
+> (+6 unit, +1 integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.18%.
 
 > **Closed Issue 59** (2026-05-29): The render cut from `clip.start_s` (fixed
 > peak−75s) while scoring/API/eval all key on `setup_start_s` → delivered Shorts

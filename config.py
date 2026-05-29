@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
+    # Max weight the preference model gets in the rerank blend once mature. Below
+    # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);
+    # it ramps linearly to this cap by 2× the threshold. (Issue 60)
+    PREFERENCE_WEIGHT_CAP: float = 0.5
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
