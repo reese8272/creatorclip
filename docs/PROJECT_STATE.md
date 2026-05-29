@@ -6,9 +6,27 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issues 39 + 43 + 47 ✅ done; next: 46 → 57.
-**Last completed**: Issue 47 — Beat-job fairness via `creators.last_analytics_refreshed_at` + `ORDER BY ... NULLS FIRST` (bundled into alembic `0004_video_done_creator_refreshed`)
+**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issues 39 + 43 + 46 + 47 ✅ done; next: 57 (needs policy decision) → Batch 4 (38, 52, 56).
+**Last completed**: Issue 46 — generate-clips retry safety (selective DELETE + idempotency guard) + 30-day floor on `_poll_clip_outcomes_async`.
 **Blocked**: _(none)_
+
+> **Closed Issue 46** (2026-05-28): Generate-clips retry safety + outcomes time-window
+> bug. Two regressions in one issue. (1) `clip_engine/ranking.py:generate_and_rank_clips`
+> unconditionally `DELETE FROM clips WHERE video_id = ...` before reinserting candidates;
+> a late retry of `generate_clips` after `render_clip` had already completed wiped the
+> `done` Clip rows, orphaning R2 objects and breaking the `ClipOutcome` FK chain. Fix:
+> narrowed the DELETE WHERE to exclude `done` and `running` rows, and added an
+> idempotency guard at the top of `_generate_clips_async` — if any `done` clip already
+> exists for this video, log and return without re-extracting candidates. (2)
+> `_poll_clip_outcomes_async`'s 7d arm had no upper bound on `Clip.created_at`, so every
+> clip past its 7d checkpoint re-polled YouTube Data API every hour forever. Fix: added
+> `Clip.created_at > now() - interval '30 days'` to the WHERE — after 30 days the
+> `performed_well` label is stale enough that flipping it retroactively offers no
+> preference-model signal. No migration needed. Predicate logic pinned via two unit
+> tests in `tests/test_outcomes.py`; all three regressions pinned end-to-end against a
+> real Postgres in `tests/test_generate_clips_retry_integration.py` (marker:
+> `integration`).
+> Test count: **375 passed, 1 skipped, 46 deselected** (+2 unit, +3 integration).
 
 > **Closed Issue 47** (2026-05-28): Beat-job fairness on quota exhaustion. Old refresh
 > task did `select(Creator)` with no ORDER BY and `break` on `QuotaExhaustedError` —

@@ -130,3 +130,20 @@ def test_7d_cutoff_triggers_recheck():
     o = _make_outcome(performed_well=True, hours_old=200)  # >8 days
     cutoff_7d = datetime.now(UTC) - timedelta(days=7)
     assert o.fetched_at < cutoff_7d
+
+
+# ── Issue 46: 30-day floor on clip age ────────────────────────────────────────
+# The 7d-recheck arm has no upper bound on Clip.created_at, so without a floor
+# every clip past its 7d checkpoint would be re-polled forever, burning quota.
+
+
+def test_clip_older_than_30d_fails_poll_floor():
+    clip_created_at = datetime.now(UTC) - timedelta(days=35)
+    poll_floor = datetime.now(UTC) - timedelta(days=30)
+    assert clip_created_at < poll_floor  # excluded by the new predicate
+
+
+def test_clip_within_30d_passes_poll_floor():
+    clip_created_at = datetime.now(UTC) - timedelta(days=10)
+    poll_floor = datetime.now(UTC) - timedelta(days=30)
+    assert clip_created_at > poll_floor  # included

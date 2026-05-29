@@ -740,7 +740,7 @@ have its source purged mid-pipeline.
 ### Issue 46: Generate-clips retry safety + outcomes time-window bug
 **Severity**: SEV-2 — stale retry wipes rendered clips; outcomes query grows forever
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**:
 - `worker/tasks.py:78–85` retries `generate_clips`, which calls `ranking.py:89` `DELETE FROM clips WHERE video_id = ...`. A stale retry from an old failed task wipes already-rendered clips.
@@ -749,9 +749,9 @@ have its source purged mid-pipeline.
 **Files**: `worker/tasks.py:78–85, 367–431`, `clip_engine/ranking.py:89`.
 
 **Acceptance criteria**:
-- [ ] Generate-clips guards on `Clip.render_status != RenderStatus.done` before delete
-- [ ] Poll-outcomes WHERE bounds: `created_at > now() - interval '30 days'`
-- [ ] Tests for both regressions
+- [x] Generate-clips guards on `Clip.render_status != RenderStatus.done` before delete (DELETE excludes both `done` and `running`; idempotency early-return in `_generate_clips_async` if any `done` clip already exists for the video)
+- [x] Poll-outcomes WHERE bounds: `Clip.created_at > now() - interval '30 days'`
+- [x] Tests for both regressions (2 unit predicates in `tests/test_outcomes.py`; 3 integration tests in `tests/test_generate_clips_retry_integration.py`)
 
 ---
 

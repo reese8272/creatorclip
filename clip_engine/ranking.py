@@ -85,8 +85,15 @@ async def generate_and_rank_clips(
     scored = await score_candidates(candidates, timeline, dna_brief, transcript_segments)
     ranked = rank_candidates(scored)
 
-    # Replace existing clips for this video
-    await session.execute(delete(Clip).where(Clip.video_id == video_id))
+    # Replace existing clips for this video — but preserve any clip that is
+    # already rendering or rendered (Issue 46). A late retry of generate_clips
+    # must not orphan R2 objects or break the ClipOutcome FK chain on done rows.
+    await session.execute(
+        delete(Clip).where(
+            Clip.video_id == video_id,
+            Clip.render_status.notin_([RenderStatus.done, RenderStatus.running]),
+        )
+    )
 
     clips: list[Clip] = []
     for c in ranked:

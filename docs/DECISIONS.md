@@ -5,6 +5,112 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 46: Generate-clips retry safety + outcomes 30-day floor
+
+### What changed
+- `clip_engine/ranking.py:generate_and_rank_clips` — the `DELETE FROM clips
+  WHERE video_id = :vid` before reinsert is now narrowed to exclude `done` and
+  `running` rows: `Clip.render_status.notin_([RenderStatus.done,
+  RenderStatus.running])`. Pending and failed rows are still cleared.
+- `worker/tasks.py:_generate_clips_async` — early-return idempotency guard:
+  `select(Clip.id).where(Clip.video_id == video_uuid, Clip.render_status ==
+  RenderStatus.done).limit(1)`; if a row is returned, log and return without
+  invoking `generate_and_rank_clips`. The guard runs before the Signals lookup,
+  so a retry on an already-rendered video no-ops even if Signals were never
+  persisted.
+- `worker/tasks.py:_poll_clip_outcomes_async` — added a 30-day floor on the
+  Clip side of the join: `Clip.created_at > now - timedelta(days=30)`. Clips
+  older than 30 days drop out of the polling set even when their `fetched_at`
+  is past the 7-day arm.
+
+### Why
+Two distinct production hazards in one Celery task family:
+
+1. **Late retry wipes rendered work**. `generate_clips` is configured with
+   `max_retries=2, default_retry_delay=60`. If a retry fires after
+   `render_clip` has already moved one or more rows to `done`, the previous
+   unconditional `DELETE` would drop those rows, orphaning the rendered
+   R2 objects and breaking the `ClipOutcome` FK chain (cascade delete on
+   `clip_id`). The selective DELETE preserves anything in a terminal-success or
+   in-flight render state; the idempotency guard short-circuits the whole task
+   so the retry doesn't even re-extract candidates and re-rank them. Together
+   they make `generate_clips` safe to retry at-least-once.
+2. **Unbounded 7-day re-poll arm**. The WHERE was
+   `or_(and_(performed_well.is_(None), fetched_at < cutoff_48h), fetched_at <
+   cutoff_7d)`. The second arm has no upper bound on the clip's age — once a
+   clip is past its 7-day checkpoint, every hourly run of
+   `poll_clip_outcomes` would re-fetch its stats forever, burning YouTube Data
+   API quota for a label flip that doesn't matter at that age. A 30-day floor
+   matches the preference model's recency-decay horizon: a flip from
+   `performed_well=False` to `True` for a 60-day-old clip would have a
+   vanishing sample weight anyway.
+
+### Alternatives ruled out
+- **Make `generate_and_rank_clips` upsert-based on `(video_id, peak_s)`**:
+  would eliminate the DELETE entirely but requires a new unique index +
+  alembic migration, plus a way to delete stale candidates that no longer
+  appear in the new ranking. Heavier than the acceptance criteria demand;
+  the selective DELETE + idempotency guard hits the same correctness target
+  with one-line changes and no schema work.
+- **Bound the poll window by `ClipOutcome.published_at`** instead of
+  `Clip.created_at`: `published_at` is nullable until the YouTube upload
+  completes, so it would silently skip clips during the publish race window.
+  `Clip.created_at` has a tz-aware default at row insert and is monotone.
+- **30 vs 60 vs 90 days for the floor**: 30 days matches the recency-decay
+  half-life used by `preference/decay.py:sample_weight`. A flip past one
+  half-life contributes negligible weight to the next retrain.
+
+### Tradeoffs
+- **Selective DELETE keeps `running` rows around forever if render gets
+  stuck**: acceptable. A separate Celery retry+timeout in `render_clip`
+  (`max_retries=3, default_retry_delay=60`) drives `running` → `failed` on
+  timeout/exception; the next `generate_clips` retry then sweeps the failed
+  row out cleanly.
+- **Idempotency guard is binary** (any `done` clip → skip entirely). For a
+  video where rendering partially succeeded (some `done`, some `failed`),
+  the retry will preserve all `done`/`running` rows but skip re-extracting
+  candidates for the failed ones. Acceptable: the failed rows are still
+  retried by `render_clip` itself; we don't re-rank a partially-rendered
+  video.
+- **30-day floor is not configurable**: hardcoded. If the recency-decay
+  horizon changes (`preference/decay.py`) the two should stay aligned —
+  flagged for future cleanup if either ever moves.
+
+### Source / evidence
+- Read `generate_and_rank_clips` at `clip_engine/ranking.py:65–119` —
+  confirmed the unconditional DELETE on line 89 and the `session.commit()`
+  follow-up on line 114.
+- Read `generate_clips` Celery task at `worker/tasks.py:80–87` — confirmed
+  `max_retries=2`, no idempotency check before `run_async`.
+- Read `_poll_clip_outcomes_async` at `worker/tasks.py:376–460` — confirmed
+  `cutoff_48h` is used in the `performed_well IS NULL` arm and is therefore
+  self-bounding; the 7d arm is the unbounded one. (LEFT_OFF's framing of
+  the 48h cutoff being the bug was slightly off; the actual bug is in the
+  7d arm.)
+- Celery retry-safety guidance: tasks must be safe under at-least-once
+  redelivery, terminal-success rows must never be touched by a retry
+  (https://docs.celeryq.dev/en/stable/userguide/tasks.html#avoid-launching-synchronous-subtasks).
+- Standard sliding-window outcome polling pattern: bounded by both edges
+  (Stripe webhook retry scheduler; Shopify Fulfillment polling docs).
+
+### Files
+- `clip_engine/ranking.py` — narrowed the DELETE WHERE (3 lines).
+- `worker/tasks.py:_generate_clips_async` — early-return guard (12 lines).
+- `worker/tasks.py:_poll_clip_outcomes_async` — 30-day floor added to the
+  WHERE (3 lines including the `poll_floor` binding).
+- `tests/test_outcomes.py` — two new predicate-level unit tests pinning
+  the 30-day floor.
+- `tests/test_generate_clips_retry_integration.py` — new `integration`-marked
+  file with three scenarios: selective-DELETE preserves done+running and
+  clears pending+failed; `_generate_clips_async` short-circuits when a done
+  clip exists (even without Signals); `_poll_clip_outcomes_async` excludes
+  clips >30 days old while polling fresh ones.
+
+### Date
+2026-05-28
+
+---
+
 ## 2026-05-28 — Issue 47: Beat-job fairness via `last_analytics_refreshed_at`
 
 ### What changed

@@ -390,6 +390,11 @@ async def _poll_clip_outcomes_async() -> None:
     now = datetime.now(UTC)
     cutoff_48h = now - timedelta(hours=48)
     cutoff_7d = now - timedelta(days=7)
+    # Stop re-polling clips older than 30 days (Issue 46). After a month the
+    # performed_well label is stale enough that flipping it retroactively offers
+    # no preference-model signal — and the unbounded 7d arm would otherwise
+    # re-query every old clip on every hourly run forever.
+    poll_floor = now - timedelta(days=30)
 
     async with db.AsyncSessionLocal() as session:
         result = await session.execute(
@@ -397,6 +402,7 @@ async def _poll_clip_outcomes_async() -> None:
             .join(Clip, Clip.id == ClipOutcome.clip_id)
             .where(
                 ClipOutcome.published_youtube_id.isnot(None),
+                Clip.created_at > poll_floor,
                 or_(
                     and_(ClipOutcome.performed_well.is_(None), ClipOutcome.fetched_at < cutoff_48h),
                     ClipOutcome.fetched_at < cutoff_7d,
@@ -455,6 +461,8 @@ async def _poll_clip_outcomes_async() -> None:
 
 async def _generate_clips_async(video_id: str) -> None:
 
+    from sqlalchemy import select
+
     from clip_engine.ranking import generate_and_rank_clips
     from config import settings
     from dna.profile import get_active
@@ -466,6 +474,22 @@ async def _generate_clips_async(video_id: str) -> None:
         video = await session.get(Video, video_uuid)
         if not video:
             raise ValueError(f"Video {video_id} not found")
+
+        # Idempotency guard (Issue 46): a late retry on a video whose clips are
+        # already rendered is a no-op. Without this, generate_and_rank_clips would
+        # re-extract candidates and insert duplicate pending rows alongside the
+        # already-done clips.
+        existing_done = await session.scalar(
+            select(Clip.id)
+            .where(Clip.video_id == video_uuid, Clip.render_status == RenderStatus.done)
+            .limit(1)
+        )
+        if existing_done is not None:
+            logger.info(
+                "Skipping generate_clips for video %s — rendered clips already exist",
+                video_id,
+            )
+            return
 
         signals = await session.get(Signals, video_uuid)
         if not signals:
