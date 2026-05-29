@@ -3,9 +3,11 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-29 (production-readiness assessment session + merge to main)
-**Branch:** `main` — HEAD `ac46f96` (merge commit of PR #3)
-**Working tree:** clean
+**Last updated:** 2026-05-29 (Issue 75(a) — pip-audit CVE remediation)
+**Branch:** `claude/busy-mendel-1r2oZ` (contains all merged assessment work; this is the active
+dev branch this session). NOTE: in this fresh container, local `main` is just the initial commit
+— the real history lives on this branch (HEAD was `017b65f` at session start).
+**Working tree:** clean (after the CVE-remediation commit below)
 **Sync with `origin/main`:** **0 / 0** (fully pushed; `main` is the only local branch)
 **Production:** ⚠️ **UNVERIFIED this session.** The merge to `main` (and this commit) trigger the
 CD pipeline (`deploy.yml` on push to main) and three new alembic migrations. **Verifying the
@@ -55,7 +57,11 @@ This session shipped (19 commits, all green on CI before merge):
    first:
    - **Staging Locust run behind PgBouncer** to verify the BLOCKER fix (Issue 58) — it's
      code-complete but unprovable without a real pooler. Scaffold is in `tests/perf/`.
-   - **14 pip-audit CVEs** — triage, patch critical/high, then ratchet `pip_audit_vulns`→0.
+   - ~~14 pip-audit CVEs~~ ✅ **DONE this session** (Issue 75(a)): patched 6 packages, ratcheted
+     `pip_audit_vulns`→0; 2 residuals accepted-risk in `run_layer0.py:PIP_AUDIT_IGNORES`
+     (pytest dev-cascade; starlette Host-header — needs starlette-1.x). See DECISIONS 2026-05-29.
+   - **starlette-1.x migration** (FastAPI→0.136.x) to close PYSEC-2026-161 and drop it from the
+     ignore-list — its own issue (major-line bump, full test run; mind the on_startup landmine).
    - YouTube **analytics-retention cadence** vs ToS (needs the actual ToS figure) — compliance.
    - Full `response_model` coverage; Deepgram file-stream; observability; `mypy_errors`→0;
      clip-scorer prompt caching; per-(creator,version) scorer cache; improvement-brief 202/poll.
@@ -169,7 +175,7 @@ This session shipped (19 commits, all green on CI before merge):
 | Item | Why it matters |
 |---|---|
 | Staging **Locust run behind PgBouncer** | The only way to *verify* the BLOCKER fix (58) and axes A/B/E under load |
-| **14 pip-audit CVEs** | Vulnerable deps; ratchet `pip_audit_vulns`→0 after patching |
+| ~~14 pip-audit CVEs~~ ✅ done | Patched; `pip_audit_vulns`→0. Residual: **starlette-1.x migration** to close PYSEC-2026-161 |
 | YouTube **analytics-retention cadence** | ToS exposure (compliance) — needs the cadence figure, then a scheduled purge |
 | Full **`response_model`** coverage | API hygiene across ~16 endpoints |
 | **observability** (request id + golden signals), **mypy→0**, **Deepgram stream**, **clip-scorer caching**, **scorer LRU cache**, **brief 202/poll** | Each enumerated under Issue 75 |

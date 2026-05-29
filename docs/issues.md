@@ -1272,8 +1272,17 @@ vector; WhisperX model + SDK clients reconstructed per call.
 - [x] (c) Stripe-key **prod fail-fast** — `config.py` `model_validator` requires `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` when `ENV=production` (DB-free unit test)
 - [x] (d) `upload_intel/timing.py` `IndexError`→500 — out-of-range `day_of_week`/`hour` rows skipped (DB-free unit test)
 
+**Done 2026-05-29 (CVE remediation session):**
+- [x] (a) **14 pip-audit CVEs → 0.** Patched 6 packages (cryptography→46.0.7,
+  python-multipart→0.0.27, PyJWT→2.12.0, lightgbm→4.6.0, python-dotenv→1.2.2,
+  starlette→0.49.1 via FastAPI→0.120.4); 2 residuals accepted-risk in
+  `gate_pip_audit`'s `--ignore-vuln` allowlist (pytest dev-cascade GHSA-6w46-j5rx-g56g;
+  starlette Host-header PYSEC-2026-161, fixable only on the starlette-1.x line) with
+  DECISIONS justification. `pip_audit_vulns` baseline ratcheted 14→0; full suite green.
+
 **Remaining (each its own focused effort — not single-commit changes):**
-- [ ] (a) **14 pip-audit CVEs** — triage each, patch critical/high within 7 days, then ratchet `pip_audit_vulns` baseline → 0
+- [ ] **starlette-1.x migration** (FastAPI→0.136.x) to close PYSEC-2026-161 and drop it
+  from the ignore-list — a major-line bump; do as its own issue with a full test run.
 - [ ] (b) YouTube **analytics retention/refresh cadence** vs ToS (`youtube/analytics.py`, COMPLIANCE.md §2) — needs the actual ToS cadence figure, then a scheduled refresh/purge
 - [ ] (e) ratchet `mypy_errors` 30→0, then enable `disallow_untyped_defs`
 - [ ] (f) observability: request/correlation id in logs + golden-signal metrics

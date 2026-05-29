@@ -165,10 +165,30 @@ def gate_bandit() -> dict:
     }
 
 
+# Accepted-risk CVEs: advisories with no clean fix in our compatible range. Each
+# entry is justified in docs/DECISIONS.md (2026-05-29, "pip-audit CVE remediation")
+# and MUST stay in lockstep with that entry. Revisit on every dependency bump — an
+# ID drops off this list the moment a compatible fix ships.
+PIP_AUDIT_IGNORES = {
+    # Local /tmp predictable-name priv/DoS. Fixed only in pytest 9, but
+    # pytest-asyncio<0.25 caps pytest<9 — a test-stack cascade, not a runtime
+    # exposure (dev/CI only). Lift when the test stack is bumped together.
+    "GHSA-6w46-j5rx-g56g",
+    # Starlette Host-header path injection. Fixed only in starlette 1.0.1, which
+    # needs FastAPI 0.136.x (the documented on_startup/on_shutdown 1.x landmine).
+    # Routing is on the actual path and we sit behind Cloudflare + locked
+    # ALLOWED_ORIGINS; tracked as a starlette-1.x migration follow-up.
+    "PYSEC-2026-161",
+}
+
+
 def gate_pip_audit() -> dict:
     if not _have("pip-audit"):
         return {"status": "skipped", "detail": "pip-audit not installed"}
-    proc = _run(["pip-audit", "-f", "json"])
+    cmd = ["pip-audit", "-f", "json"]
+    for vuln_id in sorted(PIP_AUDIT_IGNORES):
+        cmd += ["--ignore-vuln", vuln_id]
+    proc = _run(cmd)
     try:
         data = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:

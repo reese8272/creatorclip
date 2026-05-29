@@ -5,6 +5,55 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75(a): pip-audit CVE remediation (14 → 0)
+
+### What changed
+Patched every CVE with a fix in our compatible range; pinned in `requirements.txt`:
+- **cryptography** 43.0.3 → **46.0.7** — OpenSSL secadv (GHSA-79v4-65xg-pq4g), EC
+  subgroup check (GHSA-r6ph-v2qm-q3c2), DNS name-constraint (PYSEC-2026-35), and the
+  46.0.6-only PYSEC-2026-36 found after the first bump.
+- **python-multipart** 0.0.20 → **0.0.27** — path-traversal + 2 DoS.
+- **PyJWT** 2.9.0 → **2.12.0** — `crit`-header validation bypass (PYSEC-2026-120). The
+  disputed PYSEC-2025-183 ("weak encryption") dropped off entirely: it was scoped to
+  2.10.1 and 2.12.0 is outside its affected range.
+- **lightgbm** 4.5.0 → **4.6.0** — RCE (PYSEC-2024-231).
+- **python-dotenv** 1.0.1 → **1.2.2** — symlink-follow file overwrite.
+- **starlette** 0.41.3 → **0.49.1** (the newest under FastAPI 0.120.x's `<0.50.0`
+  pin) — multipart-blocks-the-loop (GHSA-2c2j-9gv5-cj73) + Range-header quadratic DoS
+  (GHSA-7f5h-v6xp-fcq8). Required bumping **FastAPI** 0.115.4 → **0.120.4**, the
+  smallest bump whose starlette pin admits 0.49.1.
+
+The gate (`run_layer0.py:gate_pip_audit`) now passes a curated `--ignore-vuln`
+allowlist (`PIP_AUDIT_IGNORES`); baseline `pip_audit_vulns` ratcheted **14 → 0**.
+
+### Accepted-risk (2 residuals, in `PIP_AUDIT_IGNORES`)
+- **pytest GHSA-6w46-j5rx-g56g** — local `/tmp/pytest-of-*` predictable-name
+  priv/DoS. Fixed only in pytest 9, but `pytest-asyncio==0.24.0` caps `pytest<9`, so
+  it's a test-stack cascade, not a runtime exposure (dev/CI only). Lift when the test
+  stack is bumped as a unit.
+- **starlette PYSEC-2026-161** — Host-header path injection, fixed only in starlette
+  **1.0.1**, which needs FastAPI 0.136.x (the documented `on_startup/on_shutdown`
+  1.x landmine). The advisory itself notes routing matches on the *actual* path; we
+  also sit behind Cloudflare + locked `ALLOWED_ORIGINS`. Tracked as a starlette-1.x
+  migration follow-up under Issue 75.
+
+### Why these chosen versions / why not literal-0 without ignores
+Going to starlette 1.x / FastAPI 0.136 to close the last starlette CVE is a
+major-line jump with a documented breakage surface — out of scope for a CVE-patch
+task. The standard posture for a `pip-audit` CI gate is patch-to-nearest-fix plus a
+*justified* ignore-list for no-fix/disputed/major-line-only advisories, kept in
+lockstep with this entry. Verified each fix version and the FastAPI↔starlette pin
+coupling against live PyPI metadata, not memory.
+
+### Verification
+`pip check` clean; full suite **401 passed, 1 skipped, 55 deselected** on the bumped
+deps (auth/crypto/upload/preference/lifespan all green); `run_layer0.py` reports
+`pip_audit 0`, no other gate regression (ruff 0, mypy 30, bandit 0/0). PyJWT 2.12
+emits an `InsecureKeyLengthWarning` only on a short-key test fixture — production
+uses a full-length configured secret.
+
+---
+
 ## 2026-05-29 — Batch 8 (Issues 73 + 74 + 75): input/memory/config hardening
 
 ### What changed
