@@ -3,8 +3,8 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-28 (PM session 4 close-out)
-**Branch:** `main` — HEAD `2890f4d`
+**Last updated:** 2026-05-28 (PM session 4 close-out + doc drift cleanup)
+**Branch:** `main` — HEAD `9f1d4cd`
 **Working tree:** clean (`.claude/` now gitignored — see Constraints)
 **Sync with `origin/main`:** **0 / 0** (fully pushed)
 **Production:** ✅ green on `autoclip.studio` — last successful deploy at `0f02077` (Issue 39);
@@ -65,10 +65,8 @@ This session shipped:
    Issue 46 is the unblocked engineering work; 57 needs a product call before Phase 1
    research starts.
 
-4. **Optional cleanup — `docs/issues.md` has stale `Status: 🔲 Not started` markers** on
-   Issues **35, 37, 44** even though they're closed (per `docs/PROJECT_STATE.md` /
-   `docs/DECISIONS.md`). One-shot doc fix; not blocking. Possibly other Done issues are
-   stale-marked too.
+4. _(Doc drift on `docs/issues.md` cleaned up in `9f1d4cd` — Issues 23/35/37/40/44 markers
+   corrected, duplicate Issue 40 stub removed. Only 38/46/52/56/57 remain Not started.)_
 
 ---
 
@@ -163,9 +161,9 @@ This session shipped:
 - **Postgres is not running locally on this WSL machine** — integration tests
   (`@pytest.mark.integration`, 43 deselected) only run in CI / with a live Postgres.
   Default `pytest -q` excludes them via `pytest.ini` `addopts = -m "not integration"`.
-- **`docs/issues.md` has stale `Status: 🔲 Not started` markers** on Issues 35, 37, 44 even
-  though they're done (per `PROJECT_STATE.md` and `DECISIONS.md`). Trust PROJECT_STATE
-  / DECISIONS as the source of truth. Worth a one-shot cleanup pass.
+- **Source-of-truth ordering for issue status:** `docs/PROJECT_STATE.md` and
+  `docs/DECISIONS.md` lead; `docs/issues.md` follows. The drift cleanup in `9f1d4cd`
+  aligned them; if they diverge again, trust PROJECT_STATE/DECISIONS.
 - **Issue 39's `db.recreate_engine()` rebinds module globals**, but `from db import
   AsyncSessionLocal` captures a stale reference. `worker/tasks.py` was switched to
   `import db` + `db.AsyncSessionLocal(...)`. **Other consumers** (`scripts/rotate_token_key.py`,
@@ -219,7 +217,7 @@ endpoint hardening, billing tiers, eval-harness adversarial expansion. See
 | Doc | Purpose |
 |---|---|
 | `docs/PROJECT_STATE.md` | Issue table + closed-batch summaries (Phase 2: 21/26 done) |
-| `docs/issues.md` | Full issue backlog with acceptance criteria — **caveat**: stale `Status` markers on 35/37/44 (they're done) |
+| `docs/issues.md` | Full issue backlog with acceptance criteria — aligned with PROJECT_STATE as of `9f1d4cd` |
 | `docs/DECISIONS.md` | Architectural decisions — 2026-05-28 entries for Issues 32–37, 39, 40–45, 47 |
 | `docs/SOT.md` | Architecture + data model |
 | `docs/COMPLIANCE.md` | YouTube ToS + Findings & Fixes Log (retention-clock row updated for Issue 43) |
