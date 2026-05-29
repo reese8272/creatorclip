@@ -6,9 +6,16 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–69 + 72 ✅ done. Next: Batch 6 = Issue 70 (bound the poll_clip_outcomes quota drain + terminal-marker migration).
-**Last completed**: Issue 69 — prompt-cache static/volatile split in both briefs + web_search final-block extraction.
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–70 + 72 ✅ done. Next: Batch 7 = Issue 71 (preference hardening: unpickler thread-safety + version race + honest fallback).
+**Last completed**: Issue 70 — bounded poll_clip_outcomes via a `final` terminal marker (migration 0007) + created-at cap + per-creator commit.
 **Blocked**: _(none)_
+
+> **Closed Issue 70** (2026-05-29, Batch 6): poll_clip_outcomes re-polled every published
+> clip every 7 days forever (no terminal guard) -> unbounded YouTube-quota drain. Added
+> `clip_outcomes.final` (migration 0007) + partial index; the 7d checkpoint sets final and
+> the query excludes final rows + caps candidates to clips created within 10 days; commit
+> per creator. Integration test: 7d poll marks final, finalized outcome skipped. Test count:
+> **395 passed, 1 skipped, 55 deselected** (+1 integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.38%.
 
 > **Closed Issue 69** (2026-05-29, Batch 5): Both briefs interpolated per-creator
 > data into the cached system block (prefix changed every call); improvement returned

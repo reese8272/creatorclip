@@ -407,6 +407,9 @@ class ClipOutcome(Base):
     retention: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     performed_well: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    # Terminal marker: once the 7d checkpoint is recorded the outcome is never
+    # re-polled (bounds the YouTube-quota drain). (Issue 70)
+    final: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
 
     clip: Mapped["Clip"] = relationship("Clip", back_populates="outcome")
 

@@ -5,6 +5,29 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 70 (Batch 6): Bound poll_clip_outcomes
+
+### What changed
+- Migration `0007`: `clip_outcomes.final BOOLEAN NOT NULL DEFAULT FALSE` + a partial
+  index on `fetched_at WHERE final=false AND published_youtube_id IS NOT NULL`.
+- `_poll_clip_outcomes_async`: query excludes `final IS TRUE` and caps candidates to
+  `Clip.created_at >= now-10d`; the 7d-checkpoint poll sets `final=True`; commits per
+  creator.
+
+### Why
+The `fetched_at < cutoff_7d` branch had no terminal guard, so every published clip
+re-qualified for a quota-costing re-poll every 7 days forever — an unbounded drain
+that would eventually starve the daily analytics refresh (axes E/F). One session was
+also held across the whole N×M network loop.
+
+### Decision
+`final` terminal marker is the primary fix; the 10-day created-at cap is
+defense-in-depth so the scan is bounded even before `final` propagates to legacy
+rows (which self-finalize on their next 7d poll — no backfill needed). Per-creator
+commit bounds the transaction/connection hold to one creator's network calls.
+
+---
+
 ## 2026-05-29 — Issue 69 (Batch 5): Prompt-cache split + web_search extraction
 
 ### What changed

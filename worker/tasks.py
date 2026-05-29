@@ -497,6 +497,10 @@ async def _poll_clip_outcomes_async() -> None:
     now = datetime.now(UTC)
     cutoff_48h = now - timedelta(hours=48)
     cutoff_7d = now - timedelta(days=7)
+    # Bound the candidate set: a clip's measurement lifecycle is the 48h + 7d
+    # checkpoints, so nothing created >10 days ago should still be polled. Combined
+    # with `final`, this stops the unbounded quota drain. (Issue 70)
+    cutoff_created = now - timedelta(days=10)
 
     async with db.AsyncSessionLocal() as session:
         result = await session.execute(
@@ -504,6 +508,8 @@ async def _poll_clip_outcomes_async() -> None:
             .join(Clip, Clip.id == ClipOutcome.clip_id)
             .where(
                 ClipOutcome.published_youtube_id.isnot(None),
+                ClipOutcome.final.is_(False),  # never re-poll a finalized outcome
+                Clip.created_at >= cutoff_created,
                 or_(
                     and_(ClipOutcome.performed_well.is_(None), ClipOutcome.fetched_at < cutoff_48h),
                     ClipOutcome.fetched_at < cutoff_7d,
@@ -535,6 +541,9 @@ async def _poll_clip_outcomes_async() -> None:
             channel_median = statistics.median(all_views) if all_views else 0
 
             for outcome in outcomes:
+                # Whether this row qualified via the 7d (terminal) checkpoint —
+                # captured BEFORE we overwrite fetched_at. (Issue 70)
+                is_terminal_poll = outcome.fetched_at < cutoff_7d
                 try:
                     stats = await get_video_stats(access_token, outcome.published_youtube_id)
                 except Exception as exc:
@@ -550,14 +559,20 @@ async def _poll_clip_outcomes_async() -> None:
                     outcome.views = views
                     outcome.performed_well = views >= channel_median
                 outcome.fetched_at = now
+                if is_terminal_poll:
+                    # 7d checkpoint recorded — never poll this outcome again.
+                    outcome.final = True
                 logger.info(
-                    "ClipOutcome clip=%s views=%s performed_well=%s",
+                    "ClipOutcome clip=%s views=%s performed_well=%s final=%s",
                     outcome.clip_id,
                     views,
                     outcome.performed_well,
+                    outcome.final,
                 )
 
-        await session.commit()
+            # Commit per creator so a slow YouTube call can't hold one transaction
+            # across the whole batch, and partial progress survives a mid-batch failure.
+            await session.commit()
 
 
 async def _generate_clips_async(video_id: str) -> None:

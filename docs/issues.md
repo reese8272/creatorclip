@@ -1201,17 +1201,17 @@ web_search that's the "let me search…" preamble, not the answer.
 
 ## Issue 70: Bound poll_clip_outcomes quota drain (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 6)
 
-**What**: `worker/tasks.py:401` re-polls every `ClipOutcome` 7 days after its last fetch
-with no terminal marker → unbounded, ever-growing YouTube quota drain that eventually
-starves the daily refresh. Also holds one session across an N×M awaited-network loop
-(tasks.py:415-453). (axes E/F)
+**What**: `poll_clip_outcomes` re-polled every `ClipOutcome` 7 days after its last fetch
+with no terminal marker → unbounded YouTube-quota drain; also held one session across an
+N×M awaited-network loop. (axes E/F)
 
 **Acceptance criteria**:
-- [ ] `final`/`checkpoint` column on `ClipOutcome`; 7d branch sets it and the query excludes finalized rows
-- [ ] Candidate set capped (e.g. `published_at` within 8 days)
-- [ ] Per-creator session/commit so a slow call doesn't hold a connection across the batch
+- [x] `clip_outcomes.final` column (migration `0007`) + partial index; the 7d checkpoint poll sets `final=True` and the query excludes `final IS TRUE`
+- [x] Candidate set capped to clips created within ~10 days (`Clip.created_at >= now-10d`)
+- [x] Commit per creator so a slow YouTube call can't hold one transaction across the batch
+- [x] Integration test: a 7d poll marks `final`; a finalized outcome is never polled again
 
 ## Issue 71: Preference unpickler thread-safety + version race (SEV-1)
 **Depends on**: —
