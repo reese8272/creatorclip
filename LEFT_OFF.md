@@ -3,214 +3,164 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-29 (75(a) CVEs + 75(f) observability + Tier-1 pre-beta launch readiness)
-**Branch:** `claude/busy-mendel-1r2oZ` (contains all merged assessment work; this is the active
-dev branch this session). NOTE: in this fresh container, local `main` is just the initial commit
-— the real history lives on this branch (HEAD was `017b65f` at session start).
-**Working tree:** clean (after the CVE-remediation commit below)
-**Sync with `origin/main`:** **0 / 0** (fully pushed; `main` is the only local branch)
-**Production:** ⚠️ **UNVERIFIED this session.** The merge to `main` (and this commit) trigger the
-CD pipeline (`deploy.yml` on push to main) and three new alembic migrations. **Verifying the
-deploy + migrations is NEXT ACTION #1 below.** This session ran in an ephemeral assessment
-container with no prod access.
+**Last updated:** 2026-05-29 (Issue-75 hardening session — 10 commits)
+**Branch:** `claude/busy-mendel-1r2oZ` — HEAD `9922a82`. **NOT merged to `main`.** This branch
+holds *all* the merged assessment work **plus** this session's 10 commits. In a fresh container,
+local `main` is just the initial commit — the real history lives on this branch.
+**Working tree:** clean; everything pushed to `origin/claude/busy-mendel-1r2oZ`.
+**Tests:** `431 passed, 1 skipped, 58 deselected` (default run). **Gates ALL at floor:**
+ruff 0 · mypy **0** · bandit 0/0 · pip_audit **0**.
+**Production:** ⚠️ **Running OLD code.** `deploy.yml` fires on push to **`main`**, and this
+branch is not merged — so none of this session's 10 commits are live yet. **Merging → deploy →
+verify is the beta gate (see NEXT ACTION).** This session ran in an ephemeral container, no prod access.
 
 ---
 
 ## 1. CURRENT FOCUS
 
-**A full production-readiness assessment was built, run, and acted on. PR #3 is MERGED to
-`main`.** The assessment found 1 BLOCKER + many SEV-1/SEV-2 issues (tracked as **Issues
-58–75**, a separate track from the older Phase-2 numbering). **15 of 18 are closed**; the rest
-are deliberately deferred and enumerated under **Issue 75** in `docs/issues.md`.
+The product is **functionally beta-ready**. This session cleared the bulk of the **Issue 75**
+tail and every launch-config gate; what remains is *operational* (deploy/verify) + a smaller
+SEV-2/cleanup tail best triaged by **re-running `/assess`** (the planned next action).
 
-This session shipped (19 commits, all green on CI before merge):
-- A repeatable **`/assess` harness** (`.claude/skills/production-assessment/`) + **ratcheted CI
-  gates** (`.github/workflows/quality.yml`: mypy, pytest-cov floor, bandit, pip-audit) + a
-  **`best-practices` skill** and **freshness convention** (`docs/SKILL_FRESHNESS.md` +
-  `.github/workflows/freshness.yml`).
-- Fixes for the BLOCKER (58) and every SEV-1 (59–72), plus security-relevant SEV-2s (73/74/75).
-- Three migrations: **0005** (dna build_job_id + one-confirmed index), **0006** (pgvector HNSW
-  + clip_feedback FK index), **0007** (clip_outcomes.final terminal marker).
+**This session shipped (10 commits, all pushed, each green: ruff 0 / mypy 0 / bandit 0,0 / pip_audit 0):**
+
+| # | Commit | What |
+|---|---|---|
+| 1 | `78ee3d5` | **75(a)** pip-audit CVEs **14→0** (6 pkgs patched; 2 accepted-risk in `run_layer0.PIP_AUDIT_IGNORES`: pytest dev-cascade, starlette Host-header) |
+| 2 | `7f72d10` | **75(f)** observability — `observability.py`: X-Request-ID ASGI mw + JSON logs + Prometheus `/metrics` + API→Celery propagation |
+| 3 | `82d005c` | **Tier-1** legal routes `/privacy` `/terms` + Google Limited-Use disclosure + footer; CORS prod fail-fast; `scripts/verify_deploy.sh` |
+| 4 | `3a72263` | **Tier-1** turnkey PgBouncer load harness (`tests/perf/run.sh` + `docker-compose.perf.yml`) to verify the BLOCKER (58) |
+| 5 | `1eb6484` | **75** improvement-brief **202 + poll** (kills the 120s Cloudflare-524) — `improvement/jobs.py` Redis status, Celery task |
+| 6 | `7ee5006` | **75/73** full `response_model` coverage — `routers/schemas.py` on every JSON endpoint |
+| 7 | `8cddf32` | **75** `mypy_errors` **30→0** (pydantic mypy plugin + targeted fixes); baseline ratcheted to 0 |
+| 8 | `9764ead` | **75/71** per-(creator,version) preference-scorer cache (`load_scorer_cached`) |
+| 9 | `3ad8c23` | **75/69** clip-scorer prompt caching → **1h cache TTL** (verified via `/claude-api`) |
+| 10 | `9922a82` | **75(b)** YouTube analytics retention purge — daily `purge_stale_analytics`, 30-day ToS |
 
 ### → NEXT ACTION
 
-1. **Verify the prod deploy + that migrations 0005/0006/0007 applied.** The merge to main
-   should have triggered `deploy.yml`. Confirm:
-   ```bash
-   ./scripts/verify_deploy.sh   # turnkey: /health, /privacy, /terms, /metrics, /docs=404, alembic head
-   # or manually:  curl -fsS https://agenticlip.studio/health   # {"status":"ok",...}
-   ssh creatorclip-vm "cd /opt/autoclip && docker compose exec app .venv/bin/alembic current"
-   # expect: a7b8c9d0e1f2 (head = 0007)
-   ```
-   If alembic shows an earlier head, the deploy didn't run `alembic upgrade` — check
-   `docker compose logs --tail 100 app`. **Watch 0006 specifically:** it builds two
-   `CREATE INDEX CONCURRENTLY` inside an alembic `autocommit_block` — if the prod DB already
-   had a duplicate-`confirmed` row, **0005**'s partial unique index would fail loudly (that's
-   the correct signal — clean up the dup, then re-run).
+1. **Run `/assess`** (the reason for this fresh context). It diffs against `docs/assessment/`
+   so the report is incremental — it will resurface the remaining **~37 SEV-2 + ~34 cleanup**
+   tail now that the BLOCKER + all SEV-1s + the high-value SEV-2s are cleared. First set up the
+   env (see §5) — Layer 0 needs the 3.12 venv + Redis; bandit/pip-audit must be on PATH.
+   Update `docs/assessment/baselines.json` is already current (mypy 0, pip_audit 0).
 
-2. **Delete the remote feature branch — REQUIRES YOU (the human).** The agent could NOT delete
-   `origin/claude/codebase-quality-assessment-I0Tcg`: this environment's git proxy returns
-   **HTTP 403 on branch-delete pushes**, and no GitHub delete-branch API tool is available here.
-   Delete it via the merged PR #3's **"Delete branch"** button, or enable repo Settings →
-   **"Automatically delete head branches."** Local is already clean (only `main`).
+2. **Beta-deploy gate (operational — needs the human / prod access; no more code required):**
+   1. **Merge `claude/busy-mendel-1r2oZ` → `main`** → triggers `deploy.yml` (this is what makes
+      the 10 commits live; nothing above is in prod yet).
+   2. `./scripts/verify_deploy.sh` — checks `/health`, `/privacy`, `/terms`, `/metrics`,
+      `/docs`=404, and `alembic current` == head (`a7b8c9d0e1f2`) over SSH.
+   3. Confirm prod env vars: `ENV=production`, `ALLOWED_ORIGINS=https://agenticlip.studio`
+      (the CORS guard fails boot otherwise), `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`,
+      Deepgram/AssemblyAI, R2 creds, Google OAuth creds, Stripe (or `COMPED_EMAILS`).
+   4. Add beta testers' Google emails in the OAuth consent screen (Testing mode, ≤100 — no full
+      verification needed for a closed beta; that's a public-launch gate).
+   5. *(Optional, load certainty)* `./tests/perf/run.sh` on a Docker host to prove the PgBouncer
+      fix (58) — code-complete in `db.py`, harness ready, just unrun (no registry egress here).
 
-3. **Pick up the remaining work — Issue 75 tracking list** (`docs/issues.md`), highest-value
-   first:
-   - **Run the BLOCKER verification** (Issue 58): harness is now turnkey —
-     `./tests/perf/run.sh` brings up PgBouncer (transaction mode) + app + seed + Locust and
-     fails if `prepared statement … does not exist` appears. **Just needs running on staging/a
-     Docker host** (the build sandbox has no registry egress).
-   - ~~14 pip-audit CVEs~~ ✅ **DONE this session** (Issue 75(a)): patched 6 packages, ratcheted
-     `pip_audit_vulns`→0; 2 residuals accepted-risk in `run_layer0.py:PIP_AUDIT_IGNORES`
-     (pytest dev-cascade; starlette Host-header — needs starlette-1.x). See DECISIONS 2026-05-29.
-   - **starlette-1.x migration** (FastAPI→0.136.x) to close PYSEC-2026-161 and drop it from the
-     ignore-list — its own issue (major-line bump, full test run; mind the on_startup landmine).
-   - ~~observability~~ ✅ **DONE this session** (Issue 75(f)): `observability.py` — correlation
-     id (X-Request-ID ContextVar + ASGI middleware, echoed), JSON structured logs, Prometheus
-     golden signals at `/metrics`, propagated API→Celery via signals. Follow-up: OpenTelemetry
-     distributed tracing (deferred). See DECISIONS 2026-05-29.
-   - Full `response_model` coverage; Deepgram file-stream; `mypy_errors`→0;
-     (clip-scorer prompt caching + scorer cache ✅ done).
-     (✅ done this session: observability, improvement-brief 202/poll, response_model coverage, mypy→0, scorer cache, clip-scorer caching, analytics-retention purge.)
-
-4. **Re-run `/assess`** for a fresh diff of the remaining SEV-2/cleanup tail (it diffs against
-   `docs/assessment/` so each run is incremental).
+3. **Delete stale remote feature branches — REQUIRES YOU (human).** This env's git proxy returns
+   **403 on branch-delete pushes**. Use the GitHub UI / "Automatically delete head branches".
 
 ---
 
 ## 2. WHAT WORKS NOW (do not re-investigate)
 
-- ✅ **Assessment Issues 58–72 closed + 73(partial)/74/75(partial)**. Per-issue rationale in
-  `docs/DECISIONS.md` (2026-05-29 entries) and close log in `docs/PROJECT_STATE.md`.
-- ✅ **Test suite green**: `401 passed, 1 skipped, 55 deselected`. All gates green on real CI
-  in PR #3 (ruff, unit tests, docker build, **quality.yml** types/SAST/deps + coverage floor).
-- ✅ **The `/assess` harness works end-to-end** (locally and on GitHub runners). Layer 0 =
-  `run_layer0.py` deterministic gates; Layer 1 = parallel per-module subagents writing to
-  `docs/assessment/modules/`; Layer 2 = `REPORT.md` verdict. Baselines in
-  `docs/assessment/baselines.json` (ruff 0, mypy 30, coverage 69.54 floor, bandit 0/0,
-  pip-audit 0; mypy now 0) — ratchet down over time per `docs/assessment/README.md`.
-- ✅ **Core product promise now actually ships** (Issues 59 + 60): clips render from
-  `setup_start_s`; the personalization loop is wired (retrain task on feedback + reranker
-  called in `generate_and_rank_clips` + maturity-gated blend).
-- ✅ **Celery at-least-once safety** (Issues 61/62): `generate_and_rank_clips` is idempotent
-  (skips if clips exist — never cascade-wipes feedback); `task_reject_on_worker_lost` +
-  `soft(3000)<hard(3300)<visibility(3600)` invariant; `render_clip` skips when done.
-- ✅ **Idempotent money/data writes** (63/64): `build_dna` keyed on Celery task_id; `grant_minutes`
-  SAVEPOINT + IntegrityError; advisory-lock for preference version race (71).
-- ✅ **Event loops are clean** (66/67/68): no sync LLM/upload/transcription/Voyage calls on the
-  API or worker loops — all `asyncio.to_thread`; transcription has a `wait_for` job timeout.
-- ✅ **YouTube HTTP** (72): one lazy per-process `youtube/_http.py` client w/ timeouts + 5xx
-  backoff. **pgvector HNSW index** (65). **poll_clip_outcomes bounded** (70, `final` marker).
-- ✅ **All prior Phase-1/Phase-2 work** still intact (see `docs/PROJECT_STATE.md`).
+- ✅ **All assessment SEV-0/SEV-1 fixed** (58–72, prior) + this session's SEV-2/quality tail.
+  Per-item rationale in `docs/DECISIONS.md` (2026-05-29 entries), close log in `docs/PROJECT_STATE.md`.
+- ✅ **Gates at floor**: ruff 0 / **mypy 0** / bandit 0,0 / **pip_audit 0**. `baselines.json`
+  updated (mypy_errors 0, pip_audit_vulns 0, coverage floor 69.54). CI enforces no regression.
+- ✅ **`/assess` harness** works end-to-end: Layer 0 = `run_layer0.py`; Layer 1 = per-module
+  subagents → `docs/assessment/modules/`; Layer 2 = `REPORT.md`.
+- ✅ **Core product ships** (59+60): clips render from `setup_start_s`; personalization loop wired.
+- ✅ **Celery at-least-once safe** (61/62), **idempotent money/data** (63/64/71), **clean event
+  loops** (66/67/68), **YouTube HTTP singleton + backoff** (72), **pgvector HNSW** (65),
+  **bounded poll_clip_outcomes** (70).
+- ✅ **This session's adds (all tested):** observability (`/metrics` + request-id), brief 202/poll
+  (no more 524), `response_model` on every endpoint, the two scorer caches, 1h clip-scorer TTL,
+  daily analytics-retention purge (30-day ToS), legal pages + Limited-Use + CORS prod lockdown.
 
 ---
 
-## 3. THE ARC THAT LED HERE
-
-1. **Phases 1–2** closed in earlier sessions; beta live on `agenticlip.studio`. (See the prior
-   LEFT_OFF history in git if needed — that work is in `docs/PROJECT_STATE.md`.)
-2. **2026-05-29 (this session)** — a standalone **production-readiness assessment**:
-   - Built the `/assess` harness + standards/freshness layer + CI gates.
-   - Ran the full assessment → verdict **PRODUCTION-READY: NO** (1 BLOCKER, 25 SEV-1, ...).
-   - Tracked findings as **Issues 58–75**; fixed the BLOCKER + all SEV-1s + security SEV-2s,
-     one issue/batch at a time (CHECK → BUILD → REVIEW, each committed green).
-   - **Three assessment claims were corrected against the actual code** (documented in
-     DECISIONS): the ffmpeg "GOP drift" (false positive — re-encode accurate-seeks by default);
-     "missing" pgvector/FK indexes (two already existed); the prompt-caching "cost win"
-     (the brief prompts are below Sonnet 4.6's 2048-token cache floor, so the split is
-     correct-structure only). **Trust the code over the register.**
-   - Opened PR #3, CI green, **merged to `main`**.
-
----
-
-## 4. KEY COORDINATES & FACTS
+## 3. KEY COORDINATES & FACTS
 
 | Thing | Value |
 |---|---|
-| **Public URL / health** | `https://agenticlip.studio` · `/health` (note: SECRETS.md/ACCESS.md are canonical; older notes said "autoclip" — stale) |
+| **Public URL / health** | `https://agenticlip.studio` · `/health` (SECRETS.md/ACCESS.md canonical; "autoclip" in old notes is stale) |
 | **VM / SSH / deploy dir** | `147.182.136.107` (Ubuntu 24.04) · `ssh creatorclip-vm` · `/opt/autoclip/` |
 | **R2 bucket / image** | `creatorclip-beta` · `ghcr.io/reese8272/creatorclip:latest` |
-| **GitHub repo** | `github.com/reese8272/creatorclip` (private) — `main` is the only branch (after you delete the remote feature branch) |
-| **Test runner** | `.venv/bin/python -m pytest -q` — **venv MUST be Python 3.12** (the codebase uses 3.12 syntax; a 3.11 interpreter can't even parse it). Needs a running **Redis** (slowapi limiter has no in-memory fallback). |
-| **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. **CI ruff is 0.15.x**; `requirements-dev.txt` pins `ruff==0.15.15` to match (an older pin disagrees on formatting). |
-| **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` (add `--update-baseline` to recapture, `--require-fresh` for the freshness gate) |
-| **Active issue** | _(none in flight)_ — remaining work is the **Issue 75** tracking list |
-| **Last completed** | This session: 75(a) CVEs (14→0); 75(f) observability; Tier-1 legal/CORS + verify_deploy.sh; PgBouncer load harness; improvement-brief 202/poll; response_model coverage; mypy→0; scorer cache; clip-scorer caching; analytics-retention purge (75b) |
-| **Latest alembic revision** | `a7b8c9d0e1f2` — `0007_clip_outcome_final` (this session added 0005, 0006, 0007) |
-| **Test count** | 427 passed, 1 skipped, 56 deselected (default run) |
+| **GitHub repo** | `github.com/reese8272/creatorclip` (private). Active dev branch: `claude/busy-mendel-1r2oZ` (HEAD `9922a82`, **not merged to main**) |
+| **Deploy trigger** | `deploy.yml` on push to **`main`** — so the beta needs this branch merged first |
+| **Test runner** | `.venv/bin/python -m pytest -q` — venv **MUST be Python 3.12** (3.12 syntax; 3.11 can't parse). Needs **Redis** running (slowapi limiter has no in-memory fallback). |
+| **Lint runner** | `ruff check .` AND `ruff format --check .` (CI runs both). `requirements-dev.txt` pins `ruff==0.15.15`. |
+| **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` (bandit/pip-audit must be on PATH — put `.venv/bin` on PATH) |
+| **Last completed** | Issue 75(b) analytics retention purge (`9922a82`) |
+| **Latest alembic revision** | `a7b8c9d0e1f2` = `0007_clip_outcome_final` (no new migrations this session — 75b reuses existing tables) |
+| **Test count** | 431 passed, 1 skipped, 58 deselected (default run) |
+| **New config this session** | `LOG_JSON`, `REQUEST_ID_HEADER`, `METRICS_ENABLED`, `ANALYTICS_RETENTION_DAYS` (all in `.env.example`) |
+| **New deps** | `prometheus-client==0.25.0`; bumped: cryptography 46.0.7, PyJWT 2.12.0, starlette 0.49.1, fastapi 0.120.4, python-multipart 0.0.27, lightgbm 4.6.0, python-dotenv 1.2.2 |
 
 ---
 
-## 5. CONSTRAINTS & GOTCHAS
+## 4. CONSTRAINTS & GOTCHAS
 
-- **Fresh-container setup (this assessment env):** the default `python3` was **3.11** and could
-  not parse the 3.12 codebase. Do: `python3.12 -m venv .venv && . .venv/bin/activate &&
-  pip install -U pip setuptools wheel && pip install -r requirements.txt -r requirements-dev.txt`,
-  then `redis-server --daemonize yes --save "" --appendonly no`. `ffmpeg` may also be missing
-  (`apt-get install -y ffmpeg`).
-- **Cannot delete remote branches from the agent env** — git proxy returns **403 on
-  delete-refspec pushes** (create/update is fine). Branch cleanup is a human action via the
-  GitHub UI. (This is why the merged feature branch may still be on the remote.)
-- **Coverage is a regression floor, not an absolute bar** (`baselines.json` = 69.54). DB-only
-  code is integration-tested (not seen by the unit-coverage gate), so the floor moved down
-  once (justified in DECISIONS) — that's expected, not a smell.
-- **Deploy is gated on Docker publish, NOT on lint/CI** (existing) — a green CI is not a deploy
-  gate. Pushing docs to `main` (like this LEFT_OFF update) still triggers a redeploy of
-  identical code; harmless.
-- **Issue 60 ↔ 71 coupling:** the preference reranker (60) relies on the hardening in 71
-  (lock-guarded unpickler, advisory-lock version race, schema-drift → DNA fallback). Don't
-  weaken `from_bytes`'s lock or `load_latest`'s schema check.
-- **Issue 70's `final` marker** is set only on the 7d-checkpoint poll; the query excludes
-  `final` + caps to clips created <10 days. Don't remove either or the quota drain returns.
-- **Integration tests** (`@pytest.mark.integration`, 55 deselected) need a real Postgres with
-  migrations applied; default `pytest -q` excludes them (`pytest.ini`).
-- **Existing constraints still apply:** TestClient cookie jar is session-scoped (clear in
-  teardown); SQLAlchemy async sessions can't cross event loops; Google OAuth app still in
-  Testing mode (verification needed before public launch).
-- **Two issue-numbering tracks exist.** The older Phase-2 remainder (38/46/52/56/57) overlaps
-  the assessment: old **38** ≈ new 66/67/68 (done), old **46** ≈ new 61+70 (done). Genuinely
-  still open: **56** (Postgres RLS — the assessment's structural tenant-isolation
-  defense-in-depth) and **57** (refund on terminal ingest failure — needs a policy call).
-  Reconcile these in `docs/issues.md` next session.
+- **Fresh-container setup (do this first every session):** default `python3` is **3.11** and
+  cannot parse the 3.12 codebase, and `.venv` is wiped when the container is recreated. Run:
+  `python3.12 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -r
+  requirements.txt -r requirements-dev.txt`, then `redis-server --daemonize yes --save "" --appendonly no`.
+  `ffmpeg` may be missing (`apt-get install -y ffmpeg`). For `/assess` Layer 0, run with
+  `PATH="$PWD/.venv/bin:$PATH"` so bandit/pip-audit/mypy resolve.
+- **The container's Redis dies on session interruption** — if a broad sweep of tests suddenly
+  fails with `Connection refused`/limiter 500s, just restart redis-server; it's not the code.
+- **No Docker registry egress in this sandbox** — `docker compose` config validates but can't
+  pull images, so `tests/perf/run.sh` and integration tests (real Postgres) only run on real
+  infra / CI (`integration.yml`). Default `pytest -q` excludes `@pytest.mark.integration`.
+- **mypy is ratcheted to 0** — any new type error fails CI. The pydantic mypy plugin is enabled
+  (`pyproject.toml`). `disallow_untyped_defs` is NOT on yet (17 left, mostly Celery bound-task
+  `self`) — tracked as a follow-up.
+- **pip-audit ignore-list** (`run_layer0.PIP_AUDIT_IGNORES`): pytest GHSA-6w46-j5rx-g56g (dev
+  cascade) + starlette PYSEC-2026-161 (needs starlette-1.x). Keep in lockstep with DECISIONS.
+- **Coverage is a regression floor** (`baselines.json` 69.54), not an absolute bar — DB-only code
+  is integration-tested, invisible to the unit-coverage gate.
+- **Issue 60↔71 coupling:** don't weaken `from_bytes`'s lock or `load_latest`'s schema check.
+- **Google OAuth still in Testing mode** — fine for ≤100 beta testers; full verification is a
+  public-launch gate.
+- **Two issue-numbering tracks:** still genuinely open from the old Phase-2 track — **56**
+  (Postgres RLS, structural tenant isolation) and **57** (refund on terminal ingest failure —
+  needs a product/policy call). Reconcile in `docs/issues.md`.
 
 ---
 
-## 6. WHAT'S LEFT
+## 5. WHAT'S LEFT (Issue 75 tail — none beta-blocking)
 
-**Assessment tail — Issue 75 (`docs/issues.md`), in rough priority:**
-
-| Item | Why it matters |
+| Item | Notes |
 |---|---|
-| **Run** `tests/perf/run.sh` on a Docker host | Harness now turnkey (PgBouncer txn mode + log-scan pass/fail); just needs executing to *prove* the BLOCKER fix (58) + capture p95/p99 |
-| ~~14 pip-audit CVEs~~ ✅ done | Patched; `pip_audit_vulns`→0. Residual: **starlette-1.x migration** to close PYSEC-2026-161 |
-| YouTube **analytics-retention cadence** | ToS exposure (compliance) — needs the cadence figure, then a scheduled purge |
-| Full **`response_model`** coverage | API hygiene across ~16 endpoints |
-| ~~observability~~ ✅ (75f); ~~brief 202/poll~~ ✅; **mypy→0**, **Deepgram stream**, **clip-scorer caching**, **scorer LRU cache**, **OTel tracing** | Each enumerated under Issue 75 |
-| ~37 SEV-2 + ~34 cleanup | In `docs/assessment/modules/*.md`; re-run `/assess` to triage as a diff |
+| **Run `/assess`** (next action) | Incremental diff of the remaining ~37 SEV-2 + ~34 cleanup in `docs/assessment/modules/*.md` |
+| **starlette-1.x migration** (FastAPI→0.136.x) | Closes the last accepted-risk CVE (PYSEC-2026-161); major-line bump — mind the on_startup/on_shutdown landmine |
+| **`disallow_untyped_defs`** | ~17 errors, mostly Celery bound-task `self` — needs a typed Task base/override decision |
+| **Deepgram file-stream** | Needs the Deepgram SDK installed to verify the streaming API (74 deferral) |
+| **OpenTelemetry tracing** | Distributed tracing on top of the Prometheus metrics (75f follow-up) |
+| **Run the BLOCKER verification** | `./tests/perf/run.sh` on a Docker host — proves Issue 58 + captures p95/p99 |
+| **Older Phase-2: 56 (RLS), 57 (refund policy)** | 56 = research/decide; 57 = needs a product call |
 
-**Older Phase-2 remainder to reconcile:** **56** (RLS, research/decide) and **57** (refund
-policy — needs Phase-1 product call). 38/46/52 are effectively covered by the assessment work.
-
-**Then Phase 3** = pre-public-launch gates (OAuth verification, ToS/Privacy pages, billing
-tiers, eval adversarial expansion) — see `docs/PROJECT_STATE.md` and `CLAUDE.md`
-"Pre-Public-Launch Requirements".
+**Then Phase 3** = pre-public-launch gates (OAuth verification, ToS/Privacy legal review, billing
+tiers, eval adversarial expansion) — see `CLAUDE.md` "Pre-Public-Launch Requirements".
 
 ---
 
-## 7. POINTERS
+## 6. POINTERS
 
 | Doc / path | Purpose |
 |---|---|
-| `docs/PROJECT_STATE.md` | Per-issue close log (this session's 58–75 entries at top) |
+| `docs/PROJECT_STATE.md` | Per-issue close log (this session's 10 entries at top) |
 | `docs/issues.md` | Issue backlog incl. **Issues 58–75** with acceptance criteria |
-| `docs/DECISIONS.md` | Architecture decisions — 2026-05-29 entries + the 3 assessment corrections |
-| `docs/assessment/REPORT.md` + `modules/*.md` | The assessment verdict + per-module findings register |
-| `docs/SKILL_FRESHNESS.md` | The evergreen-vs-perishable convention + `last_verified` ritual |
-| `.claude/skills/production-assessment/` | The `/assess` harness (SKILL.md, rubric, scale-checklist, run_layer0.py) |
+| `docs/DECISIONS.md` | Architecture decisions — all 2026-05-29 entries |
+| `docs/assessment/REPORT.md` + `modules/*.md` | The assessment verdict + per-module findings register (re-run `/assess` to diff) |
+| `docs/assessment/baselines.json` | Gate baselines (ruff 0, mypy 0, coverage 69.54, bandit 0/0, pip_audit 0) |
+| `docs/COMPLIANCE.md` | YouTube ToS / data classes / retention (75b filled the cadence: 30 days) |
+| `.claude/skills/production-assessment/` | The `/assess` harness (SKILL.md, rubric, scale-checklist, `run_layer0.py`) |
 | `.claude/skills/best-practices/` | Process-first standards gate (Phase-1 CHECK) |
-| `.github/workflows/quality.yml` | Ratcheted CI gates (types/coverage/SAST/CVEs) |
-| `.github/workflows/freshness.yml` | Quarterly skill-staleness check |
-| `tests/perf/` | Locust load-test scaffold (for the BLOCKER verification) |
-| `alembic/versions/0005..0007` | This session's migrations (dna idempotency; vector/FK indexes; clip_outcome.final) |
+| `scripts/verify_deploy.sh` | Turnkey prod deploy/migration verification |
+| `tests/perf/` | PgBouncer load harness — `run.sh` proves the BLOCKER (58) under transaction pooling |
+| `observability.py`, `improvement/jobs.py`, `routers/schemas.py` | This session's new modules |
 | `CLAUDE.md` | Project rules + Check→Approve→Build→Review workflow |
-| `docs/SOT.md`, `docs/COMPLIANCE.md`, `docs/SECRETS.md`, `docs/ACCESS.md`, `docs/DEPLOYMENT.md` | Architecture / compliance / secrets / access / deploy |
+| `docs/SOT.md`, `docs/SECRETS.md`, `docs/ACCESS.md`, `docs/DEPLOYMENT.md` | Architecture / secrets / access / deploy |
