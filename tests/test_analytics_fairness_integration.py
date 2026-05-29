@@ -105,9 +105,7 @@ async def test_quota_exhaustion_does_not_starve_creators(db_session):
         engine = create_async_engine(settings.DATABASE_URL)
         factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with factory() as s:
-            rows = (
-                await s.execute(select(Creator).where(Creator.id.in_(ids)))
-            ).scalars().all()
+            rows = (await s.execute(select(Creator).where(Creator.id.in_(ids)))).scalars().all()
             stamped = {c.id for c in rows if c.last_analytics_refreshed_at is not None}
         await engine.dispose()
 

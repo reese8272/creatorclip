@@ -118,18 +118,16 @@ async def test_purge_respects_ingest_done_at_gate(db_session):
         factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with factory() as s:
             ids = {done_old.id, in_progress_old.id, done_recent.id}
-            rows = (
-                await s.execute(select(Video).where(Video.id.in_(ids)))
-            ).scalars().all()
+            rows = (await s.execute(select(Video).where(Video.id.in_(ids)))).scalars().all()
             uris = {v.id: v.source_uri for v in rows}
         await engine.dispose()
 
         assert uris[done_old.id] is None, "done 100h ago should be purged"
-        assert (
-            uris[in_progress_old.id] == "s3://test/in_progress_old.mp4"
-        ), "in-progress old upload must NOT be purged (Issue 43)"
-        assert (
-            uris[done_recent.id] == "s3://test/done_recent.mp4"
-        ), "done 1h ago is within cutoff — not purged"
+        assert uris[in_progress_old.id] == "s3://test/in_progress_old.mp4", (
+            "in-progress old upload must NOT be purged (Issue 43)"
+        )
+        assert uris[done_recent.id] == "s3://test/done_recent.mp4", (
+            "done 1h ago is within cutoff — not purged"
+        )
     finally:
         await _cleanup_creator(db_session, creator.id)
