@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import uuid
 from pathlib import Path
@@ -129,7 +130,9 @@ async def upload_video(
 
     try:
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"
-        source_uri = upload_file(tmp_path, key)
+        # Offload the (possibly multi-hundred-MB) R2 PUT / disk copy so it never
+        # blocks the API event loop and stalls other requests. (Issue 67)
+        source_uri = await asyncio.to_thread(upload_file, tmp_path, key)
     finally:
         tmp_path.unlink(missing_ok=True)
 

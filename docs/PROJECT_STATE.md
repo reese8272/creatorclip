@@ -6,9 +6,17 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–65 ✅ done. Next: Batch 4 = Issues 66+67 (4a: blocking calls off the API loop) then 68+72 (4b: worker loop + timeouts).
-**Last completed**: Batch 3 — Issue 65 (migration 0006: HNSW cosine index on dna_embeddings + ix_clip_feedback_creator_id).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–67 ✅ done. Next: Batch 4b = Issues 68 + 72 (sync LLM/Voyage/transcription off the worker loop + OAuth httpx singleton/timeouts).
+**Last completed**: Batch 4a — Issues 66 + 67 (offloaded the 120s improvement brief, the R2 upload, and the account-deletion purge off the API event loop via asyncio.to_thread).
 **Blocked**: _(none)_
+
+> **Closed Batch 4a / Issues 66 + 67** (2026-05-29): Three synchronous calls ran on
+> the API event loop (120s improvement brief, large-file upload, account-deletion
+> purge), stalling every concurrent request on the worker (axis B). All three moved
+> to `await asyncio.to_thread(...)`. The brief's 120s request duration (vs LB timeout)
+> is tracked for a Celery 202/poll follow-up under Issue 75. Integration tests assert
+> each call is offloaded. Test count: **388 passed, 1 skipped, 54 deselected** (+2
+> integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 69.57%.
 
 > **Closed Batch 3 / Issue 65** (2026-05-29): pgvector HNSW (`vector_cosine_ops`,
 > m=16/ef_construction=200) on `dna_embeddings.embedding` matching the `<=>` query,

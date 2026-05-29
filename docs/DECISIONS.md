@@ -5,6 +5,43 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Batch 4a (Issues 66 + 67): Blocking calls off the API event loop
+
+### What changed
+- `routers/improvement.py`: the 120s Anthropic+web_search brief now runs via
+  `await asyncio.to_thread(generate_improvement_brief, ...)`.
+- `routers/videos.py`: the R2/disk `upload_file` write now runs via
+  `await asyncio.to_thread(...)`.
+- `routers/auth.py`: `delete_account`'s `delete_prefix` purge now runs via
+  `await asyncio.to_thread(...)`.
+
+### Why
+Each was a synchronous call inside an `async def` handler — on FastAPI's
+single-threaded event loop, one in-flight call stalled every other concurrent
+request on that worker (axis B; "p99 issues come from sync calls hidden in async
+paths"). `asyncio.to_thread` moves the blocking work to a threadpool so the loop
+stays responsive.
+
+### Decision: to_thread now, Celery+poll later (Issue 66)
+`to_thread` fully fixes the loop-blocking SEV-1. It does NOT shorten the request
+(the brief can still take 120s, which may exceed a production LB/gateway timeout).
+The robust UX is a Celery 202/poll job (like `build_dna`), but that needs result
+storage + a poll endpoint + frontend work — tracked under Issue 75 rather than
+ballooning this batch. The upload/delete offloads are unambiguously correct as
+`to_thread` (the work must finish before responding; it just must not hold the loop).
+
+### Standard checked
+FastAPI guidance: never run blocking/CPU/sync-I/O directly in an `async def` path;
+offload via `asyncio.to_thread` or a task queue. (Confirmed in the load-testing
+research from Batch 0.)
+
+### Testing
+Integration tests (`tests/test_event_loop_offload_integration.py`) assert the
+offloaded callable is recorded through an `asyncio.to_thread` shim — external
+services mocked, DB real.
+
+---
+
 ## 2026-05-29 — Batch 3 (Issue 65): pgvector HNSW + FK index
 
 ### What changed

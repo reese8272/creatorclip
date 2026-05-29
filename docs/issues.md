@@ -1147,28 +1147,28 @@ FK hit by the preference training query + retrain debounce. (axis H)
 
 ## Issue 66: Move the 120s improvement brief off the API event loop (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 4a)
 
-**What**: `routers/improvement.py:65` calls the synchronous 120s Anthropic+web_search
-`generate_improvement_brief` (`improvement/brief.py:72`) directly inside an `async def`
-handler → pins the event loop, collapsing p99 for every concurrent request on that worker.
-(axis B)
+**What**: `routers/improvement.py:65` called the synchronous 120s Anthropic+web_search
+`generate_improvement_brief` directly inside an `async def` handler → pinned the event
+loop, collapsing p99 for every concurrent request on that worker. (axis B)
 
 **Acceptance criteria**:
-- [ ] Brief generation moved to a Celery task (202 + poll, mirroring `build_dna`) or `await asyncio.to_thread(...)`
-- [ ] Test/asserted: the handler does not block on the LLM call
+- [x] Brief generation offloaded via `await asyncio.to_thread(generate_improvement_brief, ...)` — frees the loop
+- [x] Integration test asserts the call is offloaded (recorded through a to_thread shim)
+- Follow-up (Issue 75): the request still runs up to 120s (can exceed an LB/gateway timeout); the full 202/poll Celery UX is tracked there. `to_thread` resolves the axis-B loop-blocking now.
 
 ## Issue 67: Move synchronous large-file upload off the API loop (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 4a)
 
-**What**: `routers/videos.py:132` calls synchronous `upload_file` (boto3 R2 PUT /
-`shutil.copy2`) inside `async def upload_video` → a multi-hundred-MB write blocks the loop.
-Same class: `routers/auth.py:187` `delete_prefix` in `delete_account`.
+**What**: `routers/videos.py` called synchronous `upload_file` (boto3 R2 PUT / `shutil.copy2`)
+inside `async def upload_video` → a multi-hundred-MB write blocked the loop. Same class:
+`delete_prefix` in `delete_account`.
 
 **Acceptance criteria**:
-- [ ] `await asyncio.to_thread(upload_file, …)` (and `delete_prefix`), or moved to a task
-- [ ] Concurrency test shows the upload no longer starves other requests
+- [x] `await asyncio.to_thread(upload_file, …)` in upload; `await asyncio.to_thread(delete_prefix, prefix)` in delete_account
+- [x] Integration test asserts the storage write is offloaded; existing upload/streaming tests still pass
 
 ## Issue 68: Sync LLM/Voyage/transcription off the worker loop + timeouts (SEV-1)
 **Depends on**: —

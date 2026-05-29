@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -62,7 +63,10 @@ async def get_improvement_brief(
     from improvement.brief import generate_improvement_brief
 
     try:
-        brief_text = generate_improvement_brief(
+        # 120s Anthropic+web_search call — offload so it never pins the API event
+        # loop and stall other concurrent requests on this worker. (Issue 66)
+        brief_text = await asyncio.to_thread(
+            generate_improvement_brief,
             channel_title=creator.channel_title or "Unknown Channel",
             analytics=analytics,
             dna_brief=dna_brief,
