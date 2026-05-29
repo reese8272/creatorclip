@@ -1289,7 +1289,7 @@ vector; WhisperX model + SDK clients reconstructed per call.
 **Remaining (each its own focused effort — not single-commit changes):**
 - [ ] **starlette-1.x migration** (FastAPI→0.136.x) to close PYSEC-2026-161 and drop it
   from the ignore-list — a major-line bump; do as its own issue with a full test run.
-- [ ] (b) YouTube **analytics retention/refresh cadence** vs ToS (`youtube/analytics.py`, COMPLIANCE.md §2) — needs the actual ToS cadence figure, then a scheduled refresh/purge
+- [x] (b) YouTube **analytics retention/refresh cadence** — DONE 2026-05-29. ToS figure confirmed (30 calendar days, Developer Policies III.E); daily refresh + new daily `purge_stale_analytics` Beat task deletes Authorized Data for creators not re-verified within `ANALYTICS_RETENTION_DAYS` (30). See DECISIONS/COMPLIANCE.
 - [x] (e) `mypy_errors` 30→0 — DONE 2026-05-29 (pydantic mypy plugin + targeted fixes; baseline ratcheted to 0). `disallow_untyped_defs` deferred: 17 remain, mostly Celery bound-task `self` — needs a typed Task base/override first. See DECISIONS.
 - [x] (f) observability — DONE (2026-05-29). `observability.py`: pure-ASGI
   `RequestIDMiddleware` (mint/echo `X-Request-ID`, ContextVar) + JSON structured logs

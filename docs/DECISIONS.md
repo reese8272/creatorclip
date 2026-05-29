@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75b: YouTube analytics retention purge (30-day ToS)
+
+### What changed
+New daily Beat task `purge_stale_analytics` (`worker/tasks.py` +
+`worker/schedule.py`) deletes the four YouTube-origin Authorized Data classes —
+`video_metrics`, `retention_curves`, `audience_activity`, `demographics` — for any
+creator where `COALESCE(last_analytics_refreshed_at, created_at) < now −
+ANALYTICS_RETENTION_DAYS` (default 30). Config `ANALYTICS_RETENTION_DAYS`.
+
+### Why / the ToS figure (researched, not memory)
+[YouTube API Services Developer Policies §III.E](https://developers.google.com/youtube/terms/developer-policies):
+stored Authorized Data must be **refreshed or deleted within 30 calendar days**, and
+*"if you're unable to verify [the user's] authorization, you must [delete] within 30
+days."* `refresh_youtube_analytics` already re-fetched daily for active creators (well
+inside the window), but it **skips creators on a token error** (revoked/expired) and
+their stored analytics then sat indefinitely — the compliance gap. The new task closes it.
+
+### Why `last_analytics_refreshed_at` is the right signal
+That column is stamped **only on a successful refresh**, and a successful refresh *is*
+the authorization re-verification (it uses the creator's token). So "not refreshed
+within 30 days" == "authorization not re-verifiable within 30 days" — exactly the ToS
+trigger. `COALESCE(..., created_at)` protects brand-new creators whose first daily
+refresh hasn't run yet (their data is fresh from onboarding).
+
+### Scope decision
+Only YouTube-origin Authorized Data is purged. Derivative/creator-owned data
+(transcripts, DNA, clips, feedback) is **not** touched — that's the account-deletion
+/ right-to-erasure path, and the retention table classifies it as "until creator
+deletes." Video *rows* (metadata shell) are also left so creator-owned clips/feedback
+don't cascade-delete; the bulk of stored YouTube analytics is the four classes purged.
+
+### Verification
+2 DB-free Beat-schedule tests + 2 real-Postgres integration tests (stale creator's
+four classes deleted; fresh creator's kept; new-creator NULL-refresh protected via
+COALESCE). Full suite **431 passed**; gates ruff 0 / mypy 0 / bandit 0,0 / pip_audit 0.
+
+---
+
 ## 2026-05-29 — Issue 75/69: clip-scorer prompt caching (1h TTL)
 
 ### What changed

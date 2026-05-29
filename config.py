@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     R2_SECRET_ACCESS_KEY: str = ""
     R2_BUCKET: str = ""
     SOURCE_MEDIA_RETENTION_HOURS: int = 72
+    # YouTube ToS: stored Authorized Data (metrics/retention/activity/demographics) must
+    # be refreshed or deleted within 30 days, and deleted if authorization can't be
+    # re-verified in that window. Active creators refresh daily; the purge_stale_analytics
+    # Beat task deletes analytics for creators not re-verified within this many days.
+    ANALYTICS_RETENTION_DAYS: int = 30
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5

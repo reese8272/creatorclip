@@ -111,6 +111,19 @@ def purge_stale_source_media() -> None:
     run_async(_purge_stale_source_media_async())
 
 
+@celery.task(name="worker.tasks.purge_stale_analytics")
+def purge_stale_analytics() -> None:
+    """
+    Celery Beat task: delete stored YouTube Authorized Data (video metrics, retention
+    curves, audience activity, demographics) for creators whose authorization could not
+    be re-verified within ANALYTICS_RETENTION_DAYS. YouTube API Services Developer
+    Policies require Authorized Data to be refreshed or deleted within 30 days, and
+    deleted if authorization can't be verified. Active creators refresh daily; this
+    closes the gap for revoked/expired tokens. See docs/COMPLIANCE.md.
+    """
+    run_async(_purge_stale_analytics_async())
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """
@@ -683,6 +696,53 @@ async def _generate_clips_async(video_id: str) -> None:
         )
 
         logger.info("Generated %d clips for video %s", len(clips), video_id)
+
+
+async def _purge_stale_analytics_async() -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import delete, func, select
+
+    from config import settings
+    from models import AudienceActivity, Demographics
+
+    # YouTube ToS: Authorized Data must be refreshed or deleted within 30 days, and
+    # deleted if authorization can't be re-verified. last_analytics_refreshed_at is
+    # stamped only on a *successful* refresh (which re-verifies the token), so a creator
+    # we haven't refreshed within the window is one we can no longer verify — delete
+    # their stored analytics. COALESCE with created_at protects brand-new creators whose
+    # daily refresh hasn't run yet. (Issue 75b)
+    cutoff = datetime.now(UTC) - timedelta(days=settings.ANALYTICS_RETENTION_DAYS)
+
+    async with db.AsyncSessionLocal() as session:
+        stale_ids = list(
+            (
+                await session.execute(
+                    select(Creator.id).where(
+                        func.coalesce(Creator.last_analytics_refreshed_at, Creator.created_at)
+                        < cutoff
+                    )
+                )
+            ).scalars()
+        )
+        if not stale_ids:
+            return
+
+        video_ids = select(Video.id).where(Video.creator_id.in_(stale_ids))
+        # Only YouTube-origin Authorized Data — NOT derivative/creator-owned data
+        # (transcripts, DNA, clips, feedback), which the account-deletion path handles.
+        await session.execute(delete(RetentionCurve).where(RetentionCurve.video_id.in_(video_ids)))
+        await session.execute(delete(VideoMetrics).where(VideoMetrics.video_id.in_(video_ids)))
+        await session.execute(
+            delete(AudienceActivity).where(AudienceActivity.creator_id.in_(stale_ids))
+        )
+        await session.execute(delete(Demographics).where(Demographics.creator_id.in_(stale_ids)))
+        await session.commit()
+        logger.info(
+            "Purged stale analytics for %d creator(s) past the %d-day window",
+            len(stale_ids),
+            settings.ANALYTICS_RETENTION_DAYS,
+        )
 
 
 async def _purge_stale_source_media_async() -> None:

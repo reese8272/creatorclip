@@ -32,6 +32,23 @@ def test_analytics_beat_schedule_registered():
     assert "refresh-youtube-analytics-daily" in celery.conf.beat_schedule
 
 
+def test_purge_stale_analytics_beat_schedule_registered():
+    import worker.schedule  # noqa: F401
+    from worker.celery_app import celery
+
+    assert "purge-stale-analytics-daily" in celery.conf.beat_schedule
+
+
+def test_purge_stale_analytics_runs_daily():
+    from celery.schedules import timedelta as ctd
+
+    import worker.schedule  # noqa: F401
+    from worker.celery_app import celery
+
+    entry = celery.conf.beat_schedule["purge-stale-analytics-daily"]
+    assert entry["schedule"] == ctd(hours=24)
+
+
 def test_purge_beat_runs_hourly():
     from celery.schedules import timedelta as ctd
 

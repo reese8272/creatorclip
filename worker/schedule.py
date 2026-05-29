@@ -9,6 +9,10 @@ SOURCE_MEDIA_RETENTION_HOURS to comply with YouTube ToS data-retention requireme
 
 refresh_youtube_analytics runs daily: re-fetches video metrics and audience data
 for all creators to keep analytics current.
+
+purge_stale_analytics runs daily: deletes stored YouTube Authorized Data for creators
+not re-verified within ANALYTICS_RETENTION_DAYS (30), satisfying the YouTube ToS
+"refresh or delete within 30 days" requirement for revoked/expired-token creators.
 """
 
 from celery.schedules import timedelta
@@ -26,6 +30,10 @@ celery.conf.beat_schedule = {
     },
     "refresh-youtube-analytics-daily": {
         "task": "worker.tasks.refresh_youtube_analytics",
+        "schedule": timedelta(hours=24),
+    },
+    "purge-stale-analytics-daily": {
+        "task": "worker.tasks.purge_stale_analytics",
         "schedule": timedelta(hours=24),
     },
 }

@@ -7,8 +7,17 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75/69 — clip-scorer prompt caching (1h TTL keeps the per-creator prefix warm across a backfill burst).
+**Last completed**: Issue 75b — YouTube analytics retention purge (daily; deletes Authorized Data for creators not re-verified within 30 days, per ToS).
 **Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Closed Issue 75b — analytics retention purge** (2026-05-29): YouTube ToS (Developer Policies III.E)
+> requires stored Authorized Data refreshed-or-deleted within 30 calendar days. refresh_youtube_analytics
+> re-fetches daily for active creators but skips revoked/expired tokens, whose data then sat forever — the
+> gap. New daily purge_stale_analytics deletes video_metrics/retention_curves/audience_activity/demographics
+> for creators where COALESCE(last_analytics_refreshed_at, created_at) < now-ANALYTICS_RETENTION_DAYS (30).
+> last_analytics_refreshed_at is stamped only on a successful refresh = the authorization re-verification, so
+> it's the exact ToS trigger; COALESCE protects new creators. Derivative/creator-owned data untouched (that's
+> account-deletion). 2 schedule + 2 PG integration tests; 431 passed; gates all green. DECISIONS 2026-05-29.
 
 > **Closed Issue 75/69 — clip-scorer prompt caching** (2026-05-29): clip_engine/scoring.py's per-creator
 > system block now uses cache_control ttl=1h (was 5-min default). The prefix (instructions + DNA brief +

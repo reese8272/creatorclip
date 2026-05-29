@@ -44,10 +44,10 @@ the ToS would result in API access revocation, destroying the product.
 | Data class | What we store | Retention | Notes |
 |-----------|--------------|-----------|-------|
 | YouTube OAuth tokens | access_token_encrypted, refresh_token_encrypted | Until revocation | Fernet-encrypted; never logged |
-| Video metrics | views, watch time, engagement rate, fetched_at | Refresh per YouTube policy | Refresh cadence TBD — confirm from ToS |
-| Retention curves | timestamp-level audience_watch_ratio | Refresh per YouTube policy | |
-| Audience activity | day/hour activity windows | Refresh per YouTube policy | |
-| Demographics | Aggregated payload JSON | Refresh per YouTube policy | |
+| Video metrics | views, watch time, engagement rate, fetched_at | Refreshed daily; deleted at 30d if unrefreshable | ToS: refresh-or-delete within 30 calendar days (Issue 75b) |
+| Retention curves | timestamp-level audience_watch_ratio | Refreshed daily; deleted at 30d if unrefreshable | |
+| Audience activity | day/hour activity windows | Refreshed daily; deleted at 30d if unrefreshable | |
+| Demographics | Aggregated payload JSON | Refreshed daily; deleted at 30d if unrefreshable | |
 | Source media | Raw video bytes | Purged `SOURCE_MEDIA_RETENTION_HOURS` (default 72h) after ingest completion (`videos.ingest_done_at`), not upload time — see Issue 43 | Never stored longer than needed for processing |
 | Rendered clips | 9:16 Short output | Until creator deletes | Stored in R2 |
 | Transcripts | Word-level segments | Until video deleted | Derived from source; not YouTube-origin data |
@@ -89,7 +89,11 @@ the blast radius of a token compromise.
 
 ## Pre-Public-Launch Compliance Gates
 
-- [ ] YouTube data-retention refresh cadence confirmed and implemented
+- [x] YouTube data-retention refresh cadence confirmed and implemented — **30 days**
+  ([Developer Policies III.E](https://developers.google.com/youtube/terms/developer-policies)):
+  `refresh_youtube_analytics` re-fetches daily; `purge_stale_analytics` (daily Beat task)
+  deletes stored Authorized Data for creators not re-verified within `ANALYTICS_RETENTION_DAYS`
+  (30). Issue 75b; see DECISIONS 2026-05-29.
 - [ ] Google OAuth app verification submitted (requires ToS + Privacy Policy pages)
 - [ ] `yt-dlp` guard verified in code (off by default; own-content-only path documented)
 - [ ] Account-deletion endpoint implemented (right-to-erasure: tokens + media + data)
