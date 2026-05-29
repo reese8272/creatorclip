@@ -5,6 +5,112 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75(f): Observability (correlation ids + structured logs + metrics)
+
+### What changed
+New `observability.py` wires three things, integrated in `main.py` (API) and
+`worker/celery_app.py` (worker):
+- **Correlation id** — a `request_id_ctx: ContextVar[str]`; a pure-ASGI
+  `RequestIDMiddleware` (added last → outermost) reads an inbound
+  `REQUEST_ID_HEADER` (default `X-Request-ID`) or mints a UUID4, binds it, and
+  echoes it on the response. A `RequestIDLogFilter` injects `request_id` onto every
+  log record.
+- **Structured logs** — `JsonLogFormatter` emits one JSON object per line (incl.
+  `request_id` + any `extra` fields); `configure_logging(json_logs=settings.LOG_JSON)`
+  replaces `logging.basicConfig`, idempotent, text fallback for local dev.
+- **Golden signals** — `prometheus-client==0.25.0`: `http_request_duration_seconds`
+  (latency + traffic/errors via the `_count` by status, labelled by route template
+  to bound cardinality) recorded in the same middleware; `celery_task_duration_seconds`
+  + `celery_tasks_total` recorded via task signals; exposed at `/metrics`
+  (gated by `METRICS_ENABLED`, `include_in_schema=False`).
+- **Celery propagation** — `before_task_publish` stamps the id onto task headers;
+  `task_prerun` binds it (+ starts the task timer); `task_postrun` records the task
+  metrics and clears the id. Connected with `weak=False`.
+
+### Why
+Assessment axis G was the last ⚠️ blocking *operability*: no request id meant a
+failed render couldn't be traced API→worker, and there were no golden signals for
+p99 / error rate. This is a pre-deploy operational gate, not polish.
+
+### Decisions / deviations
+- **Hand-rolled correlation layer, not `asgi-correlation-id`.** Same documented
+  pattern (ContextVar + ASGI middleware + echo header + logging filter + Celery
+  signals) in ~60 lines we own, adding **zero** new dependency/CVE surface right
+  after ratcheting pip-audit to 0. One new dep (prometheus-client, the canonical
+  metrics client) is justified; a second for ~60 lines is not.
+- **Prometheus metrics now; OpenTelemetry tracing deferred.** Full OTel needs a
+  collector to operate; golden-signals-before-launch is the standard MVP and is
+  k8s-native (our deploy target). Distributed tracing is a tracked follow-up.
+- **`weak=False` on the Celery signal connects** — Celery connects receivers weakly
+  by default, so module-level handlers held by no other ref would be GC'd and never
+  fire (caught by a failing test before it shipped).
+- **Pure-ASGI middleware, not `BaseHTTPMiddleware`** — avoids the known
+  streaming/background-task pitfalls; reads `scope["route"]` in the `finally` (set by
+  the inner router by then) so the latency label is the route template.
+
+### Industry standard checked (live, 2026-05-29)
+The de-facto pattern across `snok/asgi-correlation-id`, `django-structlog`'s Celery
+integration, and current FastAPI observability guides: ContextVar + ASGI middleware
++ echo-header + logging filter, Celery signal propagation, Prometheus for metrics,
+OTel for tracing as a later layer. Sources in the session research.
+
+### Verification
+Full suite **410 passed, 1 skipped, 55 deselected** (+9 DB-free observability tests:
+id validation/mint, log-filter injection, JSON format, idempotent config, mint+echo
++ inbound-respect via TestClient, `/metrics` exposition, Celery publish→run→clear +
+task-counter increment). Gates unchanged: ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0.
+
+---
+
+## 2026-05-29 — Issue 75(a): pip-audit CVE remediation (14 → 0)
+
+### What changed
+Patched every CVE with a fix in our compatible range; pinned in `requirements.txt`:
+- **cryptography** 43.0.3 → **46.0.7** — OpenSSL secadv (GHSA-79v4-65xg-pq4g), EC
+  subgroup check (GHSA-r6ph-v2qm-q3c2), DNS name-constraint (PYSEC-2026-35), and the
+  46.0.6-only PYSEC-2026-36 found after the first bump.
+- **python-multipart** 0.0.20 → **0.0.27** — path-traversal + 2 DoS.
+- **PyJWT** 2.9.0 → **2.12.0** — `crit`-header validation bypass (PYSEC-2026-120). The
+  disputed PYSEC-2025-183 ("weak encryption") dropped off entirely: it was scoped to
+  2.10.1 and 2.12.0 is outside its affected range.
+- **lightgbm** 4.5.0 → **4.6.0** — RCE (PYSEC-2024-231).
+- **python-dotenv** 1.0.1 → **1.2.2** — symlink-follow file overwrite.
+- **starlette** 0.41.3 → **0.49.1** (the newest under FastAPI 0.120.x's `<0.50.0`
+  pin) — multipart-blocks-the-loop (GHSA-2c2j-9gv5-cj73) + Range-header quadratic DoS
+  (GHSA-7f5h-v6xp-fcq8). Required bumping **FastAPI** 0.115.4 → **0.120.4**, the
+  smallest bump whose starlette pin admits 0.49.1.
+
+The gate (`run_layer0.py:gate_pip_audit`) now passes a curated `--ignore-vuln`
+allowlist (`PIP_AUDIT_IGNORES`); baseline `pip_audit_vulns` ratcheted **14 → 0**.
+
+### Accepted-risk (2 residuals, in `PIP_AUDIT_IGNORES`)
+- **pytest GHSA-6w46-j5rx-g56g** — local `/tmp/pytest-of-*` predictable-name
+  priv/DoS. Fixed only in pytest 9, but `pytest-asyncio==0.24.0` caps `pytest<9`, so
+  it's a test-stack cascade, not a runtime exposure (dev/CI only). Lift when the test
+  stack is bumped as a unit.
+- **starlette PYSEC-2026-161** — Host-header path injection, fixed only in starlette
+  **1.0.1**, which needs FastAPI 0.136.x (the documented `on_startup/on_shutdown`
+  1.x landmine). The advisory itself notes routing matches on the *actual* path; we
+  also sit behind Cloudflare + locked `ALLOWED_ORIGINS`. Tracked as a starlette-1.x
+  migration follow-up under Issue 75.
+
+### Why these chosen versions / why not literal-0 without ignores
+Going to starlette 1.x / FastAPI 0.136 to close the last starlette CVE is a
+major-line jump with a documented breakage surface — out of scope for a CVE-patch
+task. The standard posture for a `pip-audit` CI gate is patch-to-nearest-fix plus a
+*justified* ignore-list for no-fix/disputed/major-line-only advisories, kept in
+lockstep with this entry. Verified each fix version and the FastAPI↔starlette pin
+coupling against live PyPI metadata, not memory.
+
+### Verification
+`pip check` clean; full suite **401 passed, 1 skipped, 55 deselected** on the bumped
+deps (auth/crypto/upload/preference/lifespan all green); `run_layer0.py` reports
+`pip_audit 0`, no other gate regression (ruff 0, mypy 30, bandit 0/0). PyJWT 2.12
+emits an `InsecureKeyLengthWarning` only on a short-key test fixture — production
+uses a full-length configured secret.
+
+---
+
 ## 2026-05-29 — Batch 8 (Issues 73 + 74 + 75): input/memory/config hardening
 
 ### What changed

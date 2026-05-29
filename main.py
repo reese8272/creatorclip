@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psycopg
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,11 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from config import settings
 from limiter import limiter
+from observability import (
+    RequestIDMiddleware,
+    configure_logging,
+    metrics_response,
+)
 from routers import auth as auth_router
 from routers import billing as billing_router
 from routers import clips as clips_module
@@ -24,10 +29,7 @@ from routers import review as review_router
 from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
+configure_logging(json_logs=settings.LOG_JSON)
 logger = logging.getLogger(__name__)
 
 
@@ -87,6 +89,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Added last → outermost layer, so the correlation id is bound before any other
+# middleware runs and the latency metric spans the whole request (Issue 75f).
+app.add_middleware(
+    RequestIDMiddleware,
+    header=settings.REQUEST_ID_HEADER,
+    metrics_enabled=settings.METRICS_ENABLED,
+)
+
+
+if settings.METRICS_ENABLED:
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        payload, content_type = metrics_response()
+        return Response(content=payload, media_type=content_type)
 
 
 def _pg_dsn() -> str:

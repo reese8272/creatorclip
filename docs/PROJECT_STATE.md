@@ -6,9 +6,35 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (2 concrete items done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (CVE triage, analytics-retention compliance, full response_models, observability, mypy→0) + the staging Locust run for 58.
-**Last completed**: Batch 8 — librosa sr=16000 + transcription singletons (74); youtube_video_id validation (73); Stripe prod fail-fast + upload_intel IndexError guard (75).
+**Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
+**Last completed**: Issue 75(f) — observability (correlation ids + JSON structured logs + Prometheus golden signals + Celery propagation).
 **Blocked**: _(none)_
+
+> **Closed Issue 75(f) — observability** (2026-05-29): new observability.py — a pure-ASGI
+> RequestIDMiddleware (reads/mints X-Request-ID into a ContextVar, echoes it on the response;
+> added outermost in main.py); JSON structured logs via JsonLogFormatter + RequestIDLogFilter
+> (request_id on every line; configure_logging replaces basicConfig, idempotent, text fallback
+> for dev); Prometheus golden signals (http_request_duration_seconds labelled by route template;
+> celery_task_duration_seconds + celery_tasks_total) at /metrics gated by METRICS_ENABLED. The
+> correlation id propagates API→Celery via before_task_publish/task_prerun/task_postrun signals
+> (weak=False — Celery connects weakly by default). Added prometheus-client==0.25.0 (single CVE-clean
+> dep; the correlation layer is hand-rolled to add zero new surface). Config: LOG_JSON,
+> REQUEST_ID_HEADER, METRICS_ENABLED (+ .env.example). Deferred: OpenTelemetry distributed tracing.
+> +9 DB-free tests; **410 passed, 1 skipped, 55 deselected**; gates ruff 0 / mypy 30 / bandit 0,0 /
+> pip_audit 0. Rationale + sources in DECISIONS (2026-05-29).
+
+> **Closed Issue 75(a) — pip-audit CVE remediation** (2026-05-29): 14 known vulns → 0.
+> Patched 6 packages in requirements.txt: cryptography 43.0.3→46.0.7, python-multipart
+> 0.0.20→0.0.27, PyJWT 2.9.0→2.12.0, lightgbm 4.5.0→4.6.0, python-dotenv 1.0.1→1.2.2,
+> starlette 0.41.3→0.49.1 (forced FastAPI 0.115.4→0.120.4, smallest bump whose pin admits
+> starlette 0.49.1). The disputed PyJWT PYSEC-2025-183 dropped off (2.12.0 out of its
+> affected range). 2 residuals accepted-risk in run_layer0.py's PIP_AUDIT_IGNORES allowlist:
+> pytest GHSA-6w46-j5rx-g56g (dev-only; pytest-asyncio caps pytest<9 — a test-stack cascade)
+> and starlette PYSEC-2026-161 (Host header, fixable only on the starlette-1.x line / FastAPI
+> 0.136.x). baselines.json pip_audit_vulns ratcheted 14→0. Verification: pip check clean;
+> **401 passed, 1 skipped, 55 deselected** on bumped deps; run_layer0 gates ruff 0 / mypy 30 /
+> bandit 0/0 / pip_audit 0. Justification + version evidence in DECISIONS (2026-05-29).
+> Follow-up: starlette-1.x migration to close PYSEC-2026-161 (tracked in issues.md).
 
 > **Closed Batch 8 / Issues 73(partial) + 74 + 75(partial)** (2026-05-29): Memory: librosa
 > loads at sr=16000 (~3x less RAM) + WhisperX/SDK-client singletons. Security: youtube_video_id
