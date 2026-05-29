@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 59: Render from setup_start_s + ffmpeg accurate-seek finding
+
+### What changed
+- `worker/tasks.py` renders from `setup_start_s` via a new pure helper
+  `_render_start_for(clip)` (coalesces to `start_s` only when the nullable
+  `setup_start_s` is unset), instead of the fixed peak−window `start_s`.
+- `clip_engine/render.py` sets `-accurate_seek` explicitly before `-i`.
+- Tests: DB-free unit guards for `_render_start_for` + the seek flag, plus an
+  end-to-end integration test.
+
+### Why
+The render cut from `start_s` (fixed peak−75s) while scoring, the API response,
+and the eval all key on `setup_start_s` — so the delivered Short did not actually
+"clip the setup" (CLIPPING_PRINCIPLE #2), the product's core differentiator.
+
+### Finding: the assessment's "inaccurate seek" SEV-2 was a false positive
+`clip_engine.md` flagged `-ss` before `-i` as drifting up to one GOP. That is true
+for **stream copy**, but this pipeline **re-encodes with libx264**, and ffmpeg
+applies `accurate_seek` by default when encoding — so the existing cut was already
+frame-accurate. We set `-accurate_seek` explicitly as a self-documenting guard (a
+no-op today) so the cut stays accurate if anyone later switches to `-c copy`. We
+did NOT restructure to output-seek (`-ss` after `-i`), which decodes from 0 and
+could blow the render timeout for clips deep in a long source.
+Source: ffmpeg seek semantics — `-noaccurate_seek` "only applies when encoding"
+(github.com/mifi/lossless-cut/pull/13 discussion); accurate seek is the default
+when transcoding.
+
+### Note
+`setup_start_s` is a nullable column; the coalesce keeps legacy/edge clips
+rendering a valid range rather than passing `None` to ffmpeg.
+
+---
+
 ## 2026-05-29 — Issue 58: psycopg3 prepared statements + pool sizing for PgBouncer
 
 ### What changed

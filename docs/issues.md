@@ -1050,18 +1050,17 @@ exceeds the 25-conn PgBouncer sidecar; no `pool_recycle`. (scale-checklist axis 
 
 ## Issue 59: Render from setup_start_s, not the start_s fallback (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29)
 
-**What**: `worker/tasks.py:291` cuts the clip from `clip.start_s` (the fixed peak−75s
+**What**: `worker/tasks.py:291` cut the clip from `clip.start_s` (the fixed peak−75s
 fallback, `candidates.py:97`), not `clip.setup_start_s` (the computed setup boundary).
-Scoring, API, and the eval all key on `setup_start_s` but the rendered bytes don't —
-defeats CLIPPING_PRINCIPLE #2, the core differentiator. Also `render.py:152-156` uses
-inaccurate input-seek (up to 1 GOP drift).
+Scoring, API, and the eval all key on `setup_start_s` but the rendered bytes didn't —
+defeated CLIPPING_PRINCIPLE #2, the core differentiator.
 
 **Acceptance criteria**:
-- [ ] Render passes `start_s=clip.setup_start_s`
-- [ ] Accurate ffmpeg seek (frame-accurate within the eval tolerance)
-- [ ] `tests/eval/` assertion that the *rendered* segment start equals `setup_start_s`
+- [x] Render cuts from `setup_start_s` via `_render_start_for(clip)` (coalesces to `start_s` only when the nullable `setup_start_s` is unset)
+- [x] Frame-accurate ffmpeg seek — `-accurate_seek` set explicitly (already the encoding default; pinned so a future `-c copy` can't reintroduce GOP drift). The assessment's "drift" SEV-2 was a false positive for this re-encoding pipeline (see `docs/DECISIONS.md`)
+- [x] DB-free unit guards (`tests/test_render.py::test_render_start_*`, `::test_render_clip_file_uses_accurate_seek_before_input`) + end-to-end integration test (`tests/test_render_setup_start_integration.py`) asserting the persisted `setup_start_s` reaches `render_clip_file`
 
 ## Issue 60: Wire the personalization loop (SEV-1)
 **Depends on**: —

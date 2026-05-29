@@ -6,9 +6,19 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, one at a time, CHECK-first). Issue 58 code-complete; next: 59 (render from `setup_start_s`).
-**Last completed**: Issue 58 — psycopg3 `prepare_threshold=None` + pool sizing (15+5 ≤ 25 sidecar) + `pool_recycle` for PgBouncer transaction mode (code complete; staging Locust verification pending).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, one at a time, CHECK-first). 58 code-complete, 59 ✅ done; next: 60 (wire personalization loop).
+**Last completed**: Issue 59 — render from `setup_start_s` (not the `start_s` fallback) so delivered Shorts actually clip the setup (CLIPPING_PRINCIPLE #2).
 **Blocked**: _(none)_
+
+> **Closed Issue 59** (2026-05-29): The render cut from `clip.start_s` (fixed
+> peak−75s) while scoring/API/eval all key on `setup_start_s` → delivered Shorts
+> didn't clip the setup. Fix: render via `_render_start_for(clip)` (pure helper,
+> coalesces to `start_s` only when nullable `setup_start_s` is unset); set
+> `-accurate_seek` explicitly. The assessment's "GOP drift" SEV-2 was a false
+> positive — re-encode pipelines accurate-seek by default (DECISIONS). DB-free unit
+> guards + an integration test that the persisted setup_start_s reaches the render.
+> Test count: **379 passed, 1 skipped, 44 deselected** (+3 unit, +1 integration).
+> Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.06%.
 
 > **Production assessment run** (2026-05-29): `/assess` across all 11 modules →
 > verdict **PRODUCTION-READY = NO**. 1 BLOCKER, 25 SEV-1, 39 SEV-2, 34 cleanup;

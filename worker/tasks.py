@@ -265,6 +265,18 @@ async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
             await session.commit()
 
 
+def _render_start_for(clip: Clip) -> float:
+    """The timestamp the clip is rendered from.
+
+    Render from the computed setup boundary (CLIPPING_PRINCIPLE #2 — "clip the
+    setup, not the aftermath"), NOT the fixed peak−window `start_s` fallback;
+    scoring, the API, and the eval all key on setup_start_s, so the rendered bytes
+    must match. setup_start_s is nullable — fall back to the start_s clamp only if
+    it was never computed, so a legacy/edge clip still renders a valid range. (Issue 59)
+    """
+    return clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+
+
 async def _render_clip_async(clip_id: str) -> None:
     from clip_engine.render import render_clip_file
     from worker.storage import local_path, upload_file
@@ -288,7 +300,7 @@ async def _render_clip_async(clip_id: str) -> None:
         try:
             render_clip_file(
                 source_path=src,
-                start_s=clip.start_s,
+                start_s=_render_start_for(clip),
                 end_s=clip.end_s,
                 out_path=out_path,
             )
