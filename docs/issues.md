@@ -1187,17 +1187,17 @@ loop), `transcribe_audio` (Deepgram/AssemblyAI/WhisperX), `extract_audio_events`
 
 ## Issue 69: Fix prompt caching — split static/volatile blocks (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 5)
 
-**What**: `dna/brief.py:62-72` and `improvement/brief.py:69` interpolate per-creator data
-INTO the `cache_control: ephemeral` system block → cache prefix changes every call (~0%
-hit). Mandatory caching buys nothing. Also `improvement/brief.py:103` returns
-`text_blocks[0]` (often the web_search preamble) instead of the final answer.
+**What**: both briefs interpolated per-creator data INTO the `cache_control` system block
+(prefix changed every call); `improvement/brief.py` returned `text_blocks[0]` — with
+web_search that's the "let me search…" preamble, not the answer.
 
 **Acceptance criteria**:
-- [ ] System split into a static cached prefix + a separate uncached volatile block (both briefs); verify via `/claude-api`
-- [ ] Return the final text block (`[-1]`) after the last tool_use; multi-block fixture test
-- [ ] `cache_read_input_tokens` non-zero after warmup (observability assertion)
+- [x] System split into a static cached prefix + a separate uncached volatile block (both briefs); verified via `/claude-api`
+- [x] `improvement` returns the final text block (`[-1]`) after the last tool_use; dna uses `[-1]` for consistency; multi-block fixture test
+- [x] DB-free unit tests assert the split shape (no creator data in the cached block) + the final-block extraction; existing `test_generate_brief_uses_prompt_caching` updated to the 2-block contract
+- **Finding (`/claude-api`):** Sonnet 4.6's minimum cacheable prefix is 2048 tokens; these static prefixes are ~350-450 tokens, so the cache does NOT engage for these low-frequency calls regardless of structure. The split is correct-structure, not a cost win here. The real caching beneficiary — the clip scorer's large per-creator prefix reused across videos — is tracked under Issue 75. (see `docs/DECISIONS.md`)
 
 ## Issue 70: Bound poll_clip_outcomes quota drain (SEV-1)
 **Depends on**: —

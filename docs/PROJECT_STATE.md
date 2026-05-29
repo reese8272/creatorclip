@@ -6,9 +6,21 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–68 + 72 ✅ done. Next: Batch 5 = Issue 69 (fix prompt caching — split static/volatile blocks in both briefs).
-**Last completed**: Issue 72 — shared lazy-singleton YouTube HTTP client with timeouts + 5xx backoff (completes Batch 4b).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–69 + 72 ✅ done. Next: Batch 6 = Issue 70 (bound the poll_clip_outcomes quota drain + terminal-marker migration).
+**Last completed**: Issue 69 — prompt-cache static/volatile split in both briefs + web_search final-block extraction.
 **Blocked**: _(none)_
+
+> **Closed Issue 69** (2026-05-29, Batch 5): Both briefs interpolated per-creator
+> data into the cached system block (prefix changed every call); improvement returned
+> the web_search preamble instead of the answer. Split system into static-cached +
+> volatile-uncached blocks; return `text_blocks[-1]`. `/claude-api` finding: Sonnet
+> 4.6's min cacheable prefix is 2048 tokens and these static prefixes are ~400 — so
+> caching can't engage for these low-frequency calls regardless; the split is
+> correct-structure, and the real caching win (clip scorer's reused per-creator
+> prefix) is tracked under Issue 75. DB-free unit tests for the split + final-block
+> extraction; updated the existing 1-block test to the 2-block contract. Test count:
+> **395 passed, 1 skipped, 54 deselected** (+4). Gates: ruff 0, mypy 30, bandit 0/0,
+> coverage 70.47%.
 
 > **Closed Issue 72** (2026-05-29, Batch 4b): Per-call `httpx.AsyncClient()` with no
 > timeout on the token-refresh hot path; client built inside the retry loop in

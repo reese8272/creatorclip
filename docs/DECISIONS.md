@@ -5,6 +5,46 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 69 (Batch 5): Prompt-cache split + web_search extraction
+
+### What changed
+- `dna/brief.py` and `improvement/brief.py`: `system` is now two blocks — a static
+  instruction block carrying `cache_control: ephemeral`, then a separate uncached
+  block holding the per-creator corpus/analytics.
+- `improvement/brief.py` returns `text_blocks[-1].text` (final answer after the
+  last web_search `tool_use`), not `text_blocks[0]` (the preamble). `dna/brief.py`
+  uses `[-1]` for consistency.
+- Corrected misleading docstrings (the DNA brief does not share a cache with the
+  clip scorer — separate prompts never share a cache entry).
+
+### Why
+The volatile data was interpolated into the cached block, so the prefix changed
+every call (the assessment's "~0% hit"). The `improvement` extraction bug returned
+the model's "let me search…" preamble instead of the synthesised brief.
+
+### Finding: caching can't engage at this prompt size (the real correction)
+Per the `/claude-api` skill, the **minimum cacheable prefix is 2048 tokens on
+Sonnet 4.6** (4096 on Opus); below it the cache silently no-ops. Both static
+instruction blocks are ~350-450 tokens — far below the floor — and both calls are
+low-frequency (DNA build once per build; improvement 10/hour), so there is no
+repeated-prefix-within-window to cache either. **The split is the correct
+structure but is NOT a cost win for these two endpoints.** The acceptance
+criterion "cache_read_input_tokens non-zero after warmup" was therefore replaced
+with a structural assertion (volatile data is out of the cached block).
+
+### Follow-up (Issue 75)
+The genuine caching beneficiary is `clip_engine/scoring.py`: a large per-creator
+prefix (DNA brief + the 11 principles) reused across all of a creator's videos in
+a window. Splitting static/volatile + `cache_control` there, with a prefix above
+the 2048-token floor, is where caching actually pays off.
+
+### Standard checked
+`/claude-api` prompt-caching: stable-prefix-first, breakpoint on the last stable
+block, volatile after; minimum cacheable prefix 2048 (Sonnet 4.6) / 4096 (Opus);
+web_search interleaves text/tool_use — take the final text block.
+
+---
+
 ## 2026-05-29 — Issue 72 (Batch 4b): Shared YouTube HTTP client + 5xx backoff
 
 ### What changed

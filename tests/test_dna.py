@@ -218,7 +218,8 @@ def test_generate_brief_raises_on_empty_response():
 
 
 def test_generate_brief_uses_prompt_caching():
-    """The system block must carry cache_control so the corpus is cached."""
+    """System is split (Issue 69): a static cached prefix + a volatile uncached
+    block carrying the per-creator corpus."""
     mock_response = _mock_anthropic_response("Brief here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
@@ -226,8 +227,13 @@ def test_generate_brief_uses_prompt_caching():
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
-    assert len(system) == 1
+    assert len(system) == 2
+    # Static prefix carries the breakpoint and holds no per-creator data.
     assert system[0].get("cache_control") == {"type": "ephemeral"}
+    assert "TestChannel" not in system[0]["text"]
+    # Volatile block carries the corpus and is NOT cached.
+    assert "cache_control" not in system[1]
+    assert "TestChannel" in system[1]["text"]
 
 
 # ── Issue 55: confirm_draft supersedes previous confirmed profile ──────────────
