@@ -69,6 +69,26 @@ Canonical layout is enforced. Do not create files outside it without updating
 | `docs/issues.md` | Work queue | Check `[ ]` → `[x]` when an issue is done |
 | `docs/COMPLIANCE.md` | YouTube ToS + data handling | Any time data classes / retention / scopes change |
 | `docs/CLIPPING_PRINCIPLES.md` | Named principles registry | Any time a new principle is cited |
+| `docs/OFF_COURSE_BUGS.md` | Incidental-defect log | Any time a bug is found outside the current task's scope |
+
+---
+
+## Off-Course Bugs (stay on-course without brushing things off)
+
+When you discover a bug, fragility, or surprising behavior that is **outside the scope
+of the task in flight**, do NOT silently fix it inline and do NOT abandon your current
+task to chase it. Instead:
+
+1. **Log it** in `docs/OFF_COURSE_BUGS.md` — one row: date, what you were doing, the
+   bug, a severity guess, and where it's tracked. This takes seconds and guarantees it
+   is not lost.
+2. **Keep going** on the original task. Fix the off-course bug inline ONLY if it blocks
+   that task (e.g. it makes the tests un-runnable); otherwise leave it logged.
+3. **Triage later**: promote real defects from the log into `docs/issues.md` when
+   scheduled, and remove entries that turn out to be non-issues.
+
+This is the explicit guard against the two failure modes: brushing a real bug off, and
+letting a side-quest derail the main pipeline.
 
 ---
 
