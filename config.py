@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     # fails the task after this many seconds (→ Celery retry) instead of stalling
     # the worker forever.
     TRANSCRIPTION_TIMEOUT_S: int = 300
+    # Per-request socket timeout for the hosted backends (Deepgram / AssemblyAI).
+    # Keep < TRANSCRIPTION_TIMEOUT_S: a hung provider socket must make the blocking
+    # SDK call return — unwinding the leaked worker thread — BEFORE the job-level
+    # wait_for gives up (wait_for cannot cancel the OS thread it spawned). (Issue 76)
+    TRANSCRIPTION_HTTP_TIMEOUT_S: int = 120
+    # Reject an audio file larger than this before sending it to a hosted backend —
+    # fail fast with a clear error rather than buffer a pathological file. A normal
+    # 16 kHz mono WAV is ~115 MB/hour, so the default allows ~9h. (Issue 76)
+    TRANSCRIPTION_MAX_MB: int = 1024
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"

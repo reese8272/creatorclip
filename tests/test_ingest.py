@@ -7,6 +7,7 @@ Transcription backend calls are patched at the SDK boundary.
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from ingestion.transcribe import (
@@ -145,6 +146,85 @@ def test_transcribe_deepgram_raises_on_missing_sdk(monkeypatch):
         pytest.raises((ImportError, Exception)),
     ):
         transcribe_audio("/tmp/audio.wav")
+
+
+# ── transcription hardening (Issue 76: memory + SDK timeout) ───────────────────
+
+
+def test_transcribe_rejects_oversize_audio(tmp_path, monkeypatch):
+    """A file over TRANSCRIPTION_MAX_MB fails fast before any backend dispatch."""
+    monkeypatch.setattr("config.settings.TRANSCRIPTION_BACKEND", "deepgram")
+    monkeypatch.setattr("config.settings.TRANSCRIPTION_MAX_MB", 0)
+    wav = tmp_path / "big.wav"
+    wav.write_bytes(b"x" * 4096)  # > 0 MB cap
+    with (
+        patch("ingestion.transcribe._transcribe_deepgram") as mock_dg,
+        pytest.raises(ValueError, match="transcription cap"),
+    ):
+        transcribe_audio(str(wav))
+    mock_dg.assert_not_called()  # guard fires before the backend
+
+
+def test_deepgram_streams_handle_and_passes_timeout(tmp_path, monkeypatch):
+    """Deepgram gets the open file handle (not f.read() bytes) + an httpx timeout."""
+    import sys
+    import types
+
+    fake_dg = types.ModuleType("deepgram")
+    fake_dg.PrerecordedOptions = lambda **kw: object()
+    monkeypatch.setitem(sys.modules, "deepgram", fake_dg)
+
+    captured: dict = {}
+
+    class _Resp:
+        def to_dict(self):
+            return {}
+
+    class _RestV:
+        def transcribe_file(self, source, opts, timeout=None):
+            captured["buffer"] = source["buffer"]
+            captured["timeout"] = timeout
+            return _Resp()
+
+    class _Client:
+        listen = types.SimpleNamespace(rest=types.SimpleNamespace(v=lambda _v: _RestV()))
+
+    monkeypatch.setattr("ingestion.transcribe._deepgram_client", lambda: _Client())
+
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFFxxxx")
+    from ingestion.transcribe import _transcribe_deepgram
+
+    _transcribe_deepgram(str(wav))
+
+    buf = captured["buffer"]
+    assert hasattr(buf, "read")  # a streamed file handle …
+    assert not isinstance(buf, (bytes, bytearray))  # … not the whole file in RAM
+    assert isinstance(captured["timeout"], httpx.Timeout)
+
+
+def test_assemblyai_sets_sdk_http_timeout(monkeypatch):
+    """AssemblyAI's SDK-native http_timeout is set from config (bounds a hung socket)."""
+    import sys
+    import types
+
+    fake_aai = types.ModuleType("assemblyai")
+    fake_aai.settings = types.SimpleNamespace(api_key=None, http_timeout=None)
+
+    class _Transcript:
+        words: list = []
+        text = ""
+
+    fake_aai.Transcriber = lambda: types.SimpleNamespace(transcribe=lambda _p: _Transcript())
+    monkeypatch.setitem(sys.modules, "assemblyai", fake_aai)
+    monkeypatch.setattr("config.settings.ASSEMBLYAI_API_KEY", "k")
+    monkeypatch.setattr("config.settings.TRANSCRIPTION_HTTP_TIMEOUT_S", 99)
+    monkeypatch.setattr("ingestion.transcribe._ASSEMBLYAI_READY", False)
+
+    from ingestion.transcribe import _transcribe_assemblyai
+
+    _transcribe_assemblyai("/tmp/whatever.wav")
+    assert fake_aai.settings.http_timeout == 99.0
 
 
 # ── extract_audio_wav ─────────────────────────────────────────────────────────

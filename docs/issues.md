@@ -1293,11 +1293,14 @@ vector; WhisperX model + SDK clients reconstructed per call.
   2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
 - [ ] **Full `response_model` coverage** across the 18 endpoints (from Issue 73) — SEV1 in the
   re-run register (`docs/assessment/modules/routers.md`)
-- [ ] **Deepgram file-stream** upload (from Issue 74) — SEV1: `transcribe.py:61-62` still buffers
-  the whole WAV into RAM (OOM vector under warm concurrency)
-- [ ] **SDK-native transcription timeout** (Deepgram/AssemblyAI) — SEV1: `transcribe.py:54-64,117-131`
-  have no request timeout, so a hung provider leaks the worker thread the job-level `wait_for`
-  cannot cancel (`ingestion/transcribe.py`)
+- [x] **Deepgram file-stream** upload (from Issue 74) — DONE (action #2). `transcribe.py`
+  streams the open file handle (`FileSource.buffer` accepts a `BufferedReader`) instead of
+  `f.read()`, so httpx uploads in chunks and the ~115 MB/hr WAV is never held in a Python
+  bytes object. Plus a `TRANSCRIPTION_MAX_MB` fail-fast size guard before any read/upload.
+- [x] **SDK-native transcription timeout** (Deepgram/AssemblyAI) — DONE (action #2). New
+  `TRANSCRIPTION_HTTP_TIMEOUT_S` (default 120, kept < the 300s job `wait_for`): Deepgram gets
+  an `httpx.Timeout` per `transcribe_file`; AssemblyAI sets `aai.settings.http_timeout`. A hung
+  provider socket now returns the blocking thread before the job timeout (which can't cancel it).
 - [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69. Re-run also flagged the cheap prefix-ordering win: put the static principles block BEFORE `{dna_brief}` in `clip_engine/scoring.py:182-191` so the long static prefix is shared across creators
 - [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71) — confirmed still absent: `preference/train.py:116` deserializes on every rerank (`clip_engine/ranking.py:39`)
 - [ ] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66)
@@ -1313,12 +1316,13 @@ backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; sn
 `docs/assessment/history/2026-05-29-rerun-post-hardening-REPORT.md`.
 
 **SEV1**
-- [ ] **`build_dna` concurrent-redelivery double-spend** (`worker/tasks.py:423-430` + `dna/profile.py:52-55`).
-  The idempotency re-check runs in its own closed session, not serialized against the draft INSERT;
-  `build_job_id` is non-unique. Serial redelivery is safe (Issue 63), but two *concurrent* same-`job_id`
-  deliveries both run the paid Anthropic brief + Voyage embeddings before the version UNIQUE collides,
-  and the loser raises → Celery retries. **← IN PROGRESS (action #1):** advisory xact lock keyed on
-  creator at the top of the build txn + partial UNIQUE on `build_job_id WHERE NOT NULL` + IntegrityError→no-op.
+- [x] **`build_dna` concurrent-redelivery double-spend** (`worker/tasks.py:423-430` + `dna/profile.py:52-55`).
+  The idempotency re-check ran in its own closed session, not serialized against the draft INSERT;
+  `build_job_id` was non-unique. Serial redelivery was safe (Issue 63), but two *concurrent* same-`job_id`
+  deliveries both ran the paid Anthropic brief + Voyage embeddings before the version UNIQUE collided,
+  and the loser raised → Celery retries. **DONE (action #1):** per-creator `pg_advisory_xact_lock` at
+  the top of the build txn with the re-check under it + partial UNIQUE on `build_job_id WHERE NOT NULL`
+  (migration 0008) + IntegrityError→no-op. Concurrent-redelivery regression test verified on real PG.
 
 **SEV2 (net-new)**
 - [ ] clip_engine `ranking.py:129` — `dna_match` seeded to the composite score, never refined →
