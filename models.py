@@ -98,6 +98,10 @@ class Creator(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
+    last_analytics_refreshed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
 
     tokens: Mapped[Optional["YoutubeToken"]] = relationship(
         "YoutubeToken", back_populates="creator", uselist=False, cascade="all, delete-orphan"
@@ -159,6 +163,10 @@ class Video(Base):
         sa.DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+    )
+    ingest_done_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
     )
 
     __table_args__ = (

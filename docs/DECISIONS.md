@@ -5,6 +5,191 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 47: Beat-job fairness via `last_analytics_refreshed_at`
+
+### What changed
+- Added `creators.last_analytics_refreshed_at: timestamptz NULL` (bundled with
+  Issue 43 into alembic revision `d4e5f6a7b8c9`, file renamed to
+  `0004_video_done_creator_refreshed.py`).
+- Added B-tree index `ix_creators_refresh_order ON creators(last_analytics_refreshed_at, id)`
+  to make the daily sweep cheap.
+- `_refresh_youtube_analytics_async` now orders creators by
+  `Creator.last_analytics_refreshed_at.asc().nulls_first(), Creator.id`.
+- On successful per-creator refresh (after `sync_audience_data` returns,
+  inside the same transaction as the analytics writes), set
+  `creator.last_analytics_refreshed_at = datetime.now(UTC)` before
+  `session.commit()`. On `QuotaExhaustedError` the existing
+  `await session.rollback()` un-stamps the timestamp by design, so the
+  starved creator stays at the front of the queue next cycle.
+
+### Why
+The previous loop iterated `select(Creator)` with no `ORDER BY`. On
+`QuotaExhaustedError` the loop broke. Quota resets daily; next beat run
+started the same scan in the same heap order. For e.g. 50 creators with
+quota for ~30 per day, creators 31–50 starved forever — they would never
+even have analytics fetched once. Classic FIFO-fairness bug.
+
+The fix is a single nullable timestamp + an `ORDER BY` clause. NULLS FIRST
+means newly-connected creators (never refreshed) jump the queue, which
+matches user expectation: "I just connected my channel, I expect to see
+data fast." Once they're refreshed they stamp and drop to the back; the
+oldest stamp goes next.
+
+### Alternatives ruled out
+- **`ORDER BY RANDOM()`**: non-deterministic, hard to debug. Probabilistically
+  still starves unlucky creators across consecutive runs (any randomized
+  scan with a cutoff has a non-zero starvation tail).
+- **Round-robin pointer in Redis**: extra distributed state; doesn't survive
+  worker restart cleanly; loses the "newly connected creator jumps first"
+  property.
+- **Process all creators in parallel via Celery groups**: multiplexes the
+  quota faster but does nothing for fairness — same starvation curve,
+  compressed in time.
+- **Per-creator quota allocation (1/N of total)**: punishes power users
+  with many videos who legitimately need more quota; doesn't solve the
+  "new creator never appears in the scan" failure mode.
+
+### Tradeoffs
+- **Partial-refresh starvation (acknowledged)**: if a creator's refresh
+  partially succeeds (e.g. 5 of 12 videos processed) and then
+  `sync_video_analytics` raises `QuotaExhaustedError`, we rollback the
+  whole creator and don't stamp the timestamp. They retry first next run.
+  A creator who *always* trips quota mid-refresh would never advance —
+  but that's actually correct behavior (no partial credit). Out of scope
+  for Issue 47.
+- **Migration coupling**: bundled with Issue 43's `videos.ingest_done_at`
+  into one alembic revision (`0004_video_done_creator_refreshed.py`) per
+  LEFT_OFF's explicit suggestion. Pro: one alembic step at deploy. Con:
+  reverting one change reverts both. Both are nullable-additive,
+  low-blast-radius, so the coupling is acceptable.
+- **No backfill**: existing creators have `last_analytics_refreshed_at IS
+  NULL`, which by `NULLS FIRST` puts them at the front on day 1 (tied
+  break by `id` — same as today's order). Self-bootstrapping fairness
+  after the first daily sweep.
+- **Index cost**: tiny B-tree on `(last_analytics_refreshed_at, id)`.
+  Bounded by creator count.
+
+### Source / evidence
+- Read `_refresh_youtube_analytics_async` at `worker/tasks.py:532–572` and
+  confirmed: `select(Creator)` with no `ORDER BY`; `break` on
+  `QuotaExhaustedError`; per-creator commit inside the inner try.
+- SQLAlchemy `.nulls_first()` documented at
+  https://docs.sqlalchemy.org/en/20/core/sqlelement.html#sqlalchemy.sql.expression.nulls_first
+- Canonical time-based fairness pattern: Crunchy Data's `SKIP LOCKED`
+  job-queue writeups, Stripe's webhook re-delivery scheduler design, every
+  CRM batch-syncer paginator.
+
+### Files
+- `alembic/versions/0004_video_done_creator_refreshed.py` — added
+  `creators.last_analytics_refreshed_at` + `ix_creators_refresh_order`;
+  broadened docstring + filename to reflect the bundle.
+- `models.py` — `Creator.last_analytics_refreshed_at` Mapped column.
+- `worker/tasks.py` — `ORDER BY` clause on the creator SELECT; stamp +
+  commit on successful refresh.
+- `tests/test_retention_tasks.py` — three new mock-level tests pinning
+  the load-bearing contracts: ORDER BY whereclause inspection,
+  stamp-on-success, no-stamp-on-quota-exhaustion.
+- `tests/test_analytics_fairness_integration.py` — new `integration`-marked
+  scenario: 5 creators × 2-budget × 3 cycles → no starvation; verifies
+  both attempt sequence and DB timestamp stamping.
+
+---
+
+## 2026-05-28 — Issue 43: Source-media retention clock = ingest completion, not upload
+
+### What changed
+- Added `videos.ingest_done_at: timestamptz NULL` (alembic revision `d4e5f6a7b8c9`)
+  + partial index `ix_videos_purge_candidates ON videos(ingest_done_at) WHERE
+  ingest_done_at IS NOT NULL AND source_uri IS NOT NULL` to keep the hourly purge
+  sweep cheap.
+- Set `Video.ingest_done_at = datetime.now(UTC)` in `_signals_async` at the same
+  point we flip `ingest_status` to `done`. Guarded by `if video.ingest_done_at
+  is None:` so a retry of an already-completed task preserves the original
+  completion stamp (Celery is at-least-once; without the guard, retries would
+  silently extend the retention window).
+- Changed `_purge_stale_source_media_async` filter from `Video.created_at <
+  cutoff` to `Video.ingest_done_at.is_not(None) AND Video.ingest_done_at <
+  cutoff`. Kept the `source_uri IS NOT NULL` predicate.
+- Backfill (one-shot in the migration): every existing row with `ingest_status
+  = 'done'` AND `ingest_done_at IS NULL` gets `ingest_done_at = created_at`. This
+  preserves the pre-migration retention semantics for already-completed videos.
+
+### Why
+The previous filter `Video.created_at < cutoff` started the retention clock at
+upload time. A video uploaded 30h ago but still mid-ingest (slow Whisper, retry
+backoff, beat-cycle race) would have its `source_uri` nulled out from under the
+pipeline; the next stage would crash trying to read the file. This is SEV-1
+because under any concurrency / queue depth it shows up as flapping ingests
+that "just sometimes fail" — exactly the kind of bug that's expensive to
+diagnose post-launch.
+
+The new filter gates on a soft-completion timestamp: ingest is "done with
+the source" precisely when the signals-build commits successfully. That's the
+right moment to start the YouTube ToS retention clock.
+
+### Alternatives ruled out
+- **Gate on `ingest_status = IngestStatus.done`**: works, but couples retention
+  to a status enum that's also used for failure states. With the timestamp we
+  can later say "retain failed videos longer for debugging" without a schema
+  change.
+- **Bigger retention window (e.g. 72h → 168h)**: pushes the problem out but
+  doesn't fix it; a stuck pipeline still races on day 4.
+- **Skip purge while a task is in-flight (Redis lock check)**: orthogonal
+  mechanism, much more complex, doesn't help the case where a task crashed and
+  left `source_uri` set without `ingest_done_at`.
+- **Use a `Video.updated_at`**: don't have one, and `updated_at` would tick on
+  retries/status flips/score writes — fuzzy semantics for a retention cutoff.
+
+### Tradeoffs
+- **Backfill semantics**: existing already-completed videos use `created_at` as
+  a stand-in for `ingest_done_at`. Slightly off (the original completion was
+  later than upload), but bounded by the ingest pipeline runtime (~minutes)
+  and only matters at the edges of the cutoff. Net effect: a handful of
+  already-completed videos get a few minutes of extra retention. Acceptable.
+- **Failed-ingest rows**: `ingest_done_at` stays NULL for rows with
+  `ingest_status = failed`. Those rows are NEVER purged by this sweep. Their
+  source media is small (failed ingests = nothing rendered) and they're useful
+  for debugging. If they pile up they can be cleaned via a separate retention
+  job; out of scope for Issue 43.
+- **Idempotency**: the `if video.ingest_done_at is None` guard is load-bearing.
+  Without it, Celery's at-least-once redelivery could refresh the timestamp on
+  retry, silently pushing the cutoff forward by hours/days.
+- **Partial index cost**: adds one B-tree of (`ingest_done_at`) filtered to
+  source-still-on-disk rows. Roughly O(videos with source_uri set). At our
+  scale this is a few thousand rows max — negligible storage; meaningful
+  speedup for the hourly Beat sweep.
+
+### Source / evidence
+- Read `_purge_stale_source_media_async` at `worker/tasks.py:491–525` and
+  confirmed the bug: filter is `Video.created_at < cutoff`, not gated on
+  status. Confirmed `IngestStatus.done` is set exactly once at line 254 inside
+  `_signals_async`.
+- SQLAlchemy partial index pattern:
+  https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#partial-indexes
+- Standard pattern across event/job systems: gate retention on a
+  "soft-completion" timestamp (Stripe `processed_at`, S3 lifecycle
+  `LastModified`, DLQ `last_completed_at`).
+
+### Files
+- `alembic/versions/0004_video_ingest_done_at.py` — schema + backfill +
+  partial index.
+- `models.py` — `ingest_done_at` Mapped column on `Video`.
+- `worker/tasks.py` — `datetime` added to top-level import; `_signals_async`
+  stamps `ingest_done_at` under the NULL guard; `_purge_stale_source_media_async`
+  filter swapped.
+- `tests/test_retention_tasks.py` — semantic-aligned existing tests
+  (`created_at` → `ingest_done_at` on mocks); new `test_purge_filter_gates_on_ingest_done_at`
+  inspects the SQL `whereclause` to pin the new predicate; new
+  `test_signals_async_stamps_ingest_done_at_when_null` +
+  `test_signals_async_preserves_ingest_done_at_on_retry` pin the idempotent
+  write contract.
+- `tests/test_purge_integration.py` — `@pytest.mark.integration` real-DB
+  scenario: done-100h purged, in-progress-100h preserved, done-1h preserved.
+- `docs/COMPLIANCE.md` — retention-clock row updated to reflect the new
+  semantic for the YouTube ToS posture.
+
+---
+
 ## 2026-05-28 — Issue 39: Celery event-loop strategy
 
 ### What changed

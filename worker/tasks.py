@@ -11,7 +11,7 @@ pool stays bound to a single loop across task invocations.
 import logging
 import tempfile
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import db
@@ -252,6 +252,8 @@ async def _signals_async(video_id: str) -> None:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.ingest_status = IngestStatus.done
+            if video.ingest_done_at is None:
+                video.ingest_done_at = datetime.now(UTC)
         await session.commit()
 
 
@@ -489,13 +491,16 @@ async def _generate_clips_async(video_id: str) -> None:
 
 
 async def _purge_stale_source_media_async() -> None:
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from sqlalchemy import and_, select
 
     from config import settings
     from worker.storage import delete_file
 
+    # Retention clock starts at ingest completion, not upload time (Issue 43).
+    # A long-running or stuck ingest of an old upload must not have its source
+    # purged mid-pipeline — gate on ingest_done_at instead of created_at.
     cutoff = datetime.now(UTC) - timedelta(hours=settings.SOURCE_MEDIA_RETENTION_HOURS)
 
     async with db.AsyncSessionLocal() as session:
@@ -503,7 +508,8 @@ async def _purge_stale_source_media_async() -> None:
             select(Video).where(
                 and_(
                     Video.source_uri.isnot(None),
-                    Video.created_at < cutoff,
+                    Video.ingest_done_at.is_not(None),
+                    Video.ingest_done_at < cutoff,
                 )
             )
         )
@@ -530,7 +536,16 @@ async def _refresh_youtube_analytics_async() -> None:
     from youtube.oauth import get_valid_access_token
 
     async with db.AsyncSessionLocal() as session:
-        result = await session.execute(select(Creator))
+        # Issue 47: ORDER BY last_analytics_refreshed_at NULLS FIRST, id so
+        # creators that starved past quota in earlier runs go first next time.
+        # New creators (NULL) jump the queue, matching user expectation that a
+        # just-connected creator sees data fast.
+        result = await session.execute(
+            select(Creator).order_by(
+                Creator.last_analytics_refreshed_at.asc().nulls_first(),
+                Creator.id,
+            )
+        )
         creators = list(result.scalars())
 
         quota_left = await remaining()
@@ -555,6 +570,7 @@ async def _refresh_youtube_analytics_async() -> None:
                     await sync_video_analytics(session, video, creator, access_token)
 
                 await sync_audience_data(session, creator, access_token)
+                creator.last_analytics_refreshed_at = datetime.now(UTC)
                 await session.commit()
                 logger.info("Refreshed analytics for creator %s", creator.id)
             except QuotaExhaustedError:

@@ -687,7 +687,7 @@ configured) — or indefinitely (if not).
 ### Issue 43: Source-media purge correctness
 **Severity**: SEV-1 — in-progress ingest can have its source deleted out from under it
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `_purge_stale_source_media_async` (worker/tasks.py:471–503) filters by
 `Video.created_at < cutoff`. A long-pending or in-progress ingest of an old upload will
@@ -696,9 +696,9 @@ have its source purged mid-pipeline.
 **Files**: `worker/tasks.py:471–503`, `models.py Video` (new column + migration).
 
 **Acceptance criteria**:
-- [ ] `Video.ingest_done_at: datetime | None` column + migration; set on successful ingest
-- [ ] Purge filter uses `ingest_done_at IS NOT NULL AND ingest_done_at < cutoff`
-- [ ] Test: video created 100h ago, `ingest_done_at = NULL` → NOT purged; video done 100h ago → purged
+- [x] `Video.ingest_done_at: datetime | None` column + migration; set on successful ingest
+- [x] Purge filter uses `ingest_done_at IS NOT NULL AND ingest_done_at < cutoff`
+- [x] Test: video created 100h ago, `ingest_done_at = NULL` → NOT purged; video done 100h ago → purged
 
 ---
 
@@ -762,7 +762,7 @@ have its source purged mid-pipeline.
 ### Issue 47: Beat-job fairness on quota exhaustion
 **Severity**: SEV-2 — first-by-id creators starve later ones forever
 **Depends on**: 32
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `_refresh_youtube_analytics_async` iterates creators in `id` order, breaks on
 `QuotaExhaustedError`; next day's run starts from the same order, perpetually starving later
@@ -771,9 +771,9 @@ creators.
 **Files**: `worker/tasks.py:506–549, 367–431`.
 
 **Acceptance criteria**:
-- [ ] Order by `Creator.last_analytics_refreshed_at NULLS FIRST` (new column + migration)
-- [ ] On quota exhaustion the loop records progress and resumes from the unrefreshed slice
-- [ ] Test: 5 creators, quota cap of 2; over 3 runs all 5 refresh
+- [x] Order by `Creator.last_analytics_refreshed_at NULLS FIRST` (new column + migration)
+- [x] On quota exhaustion the loop records progress and resumes from the unrefreshed slice
+- [x] Test: 5 creators, quota cap of 2; over 3 runs all 5 refresh
 
 ---
 

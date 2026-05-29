@@ -6,9 +6,43 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issue 39 ✅ done; next: 43 / 47 / 46 / 57.
-**Last completed**: Issue 39 — Celery event-loop strategy (per-worker singleton loop + engine rebind on `worker_process_init`)
+**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issues 39 + 43 + 47 ✅ done; next: 46 → 57.
+**Last completed**: Issue 47 — Beat-job fairness via `creators.last_analytics_refreshed_at` + `ORDER BY ... NULLS FIRST` (bundled into alembic `0004_video_done_creator_refreshed`)
 **Blocked**: _(none)_
+
+> **Closed Issue 47** (2026-05-28): Beat-job fairness on quota exhaustion. Old refresh
+> task did `select(Creator)` with no ORDER BY and `break` on `QuotaExhaustedError` —
+> next day's run started the same scan in the same heap order, so creators past the
+> daily cutoff index never refreshed (SEV-2 starvation). Fix: added nullable
+> `creators.last_analytics_refreshed_at` + `ix_creators_refresh_order` index;
+> `ORDER BY last_analytics_refreshed_at NULLS FIRST, id` so newly-connected creators
+> jump the queue and yesterday's starved creators go first today. Stamp set inside
+> the successful inner try (commits with analytics writes); rollback on
+> `QuotaExhaustedError` un-stamps by design, keeping the starved creator at the
+> front. No backfill — NULL = "never refreshed" puts existing rows at the head on
+> day 1, self-bootstrapping. Bundled into alembic `0004_video_done_creator_refreshed`
+> per LEFT_OFF's explicit suggestion (one deploy step for both Issue 43 + 47 schema).
+> Filter contract pinned via select-statement inspection (`order_by` clauses); stamp
+> + no-stamp idempotency pinned via two unit tests; real-DB 5×3-cycle scenario in
+> `tests/test_analytics_fairness_integration.py` (marker: `integration`).
+> Test count: **373 passed, 1 skipped, 43 deselected** (+3 unit, +1 integration).
+
+> **Closed Issue 43** (2026-05-28): Source-media purge correctness. Old filter was
+> `Video.created_at < cutoff` — a stuck/in-progress ingest of an old upload would have
+> its `source_uri` nulled mid-pipeline (SEV-1). Fix: added `videos.ingest_done_at`
+> (nullable timestamptz) stamped exactly once in `_signals_async` under a
+> `if video.ingest_done_at is None:` guard (Celery is at-least-once — retries must NOT
+> refresh the stamp); swapped the purge filter to gate on
+> `ingest_done_at IS NOT NULL AND ingest_done_at < cutoff`. Migration backfills
+> existing `done` rows with `created_at` so already-completed videos keep their
+> pre-migration retention window. Added partial index
+> `ix_videos_purge_candidates ON videos(ingest_done_at) WHERE
+> ingest_done_at IS NOT NULL AND source_uri IS NOT NULL` for cheap hourly sweeps.
+> Filter contract pinned via SQL-whereclause inspection test;
+> stamp idempotency pinned via two unit tests; real-DB three-row scenario in
+> `tests/test_purge_integration.py` (marker: `integration`). `docs/COMPLIANCE.md`
+> retention-clock row updated.
+> Test count: **370 passed, 1 skipped, 42 deselected** (+3 unit, +1 integration).
 
 > **Closed Issue 39** (2026-05-28 — Batch 3 kickoff): Celery event-loop strategy.
 > Every task previously called `asyncio.run(...)`, creating a fresh loop per

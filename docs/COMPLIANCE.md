@@ -48,7 +48,7 @@ the ToS would result in API access revocation, destroying the product.
 | Retention curves | timestamp-level audience_watch_ratio | Refresh per YouTube policy | |
 | Audience activity | day/hour activity windows | Refresh per YouTube policy | |
 | Demographics | Aggregated payload JSON | Refresh per YouTube policy | |
-| Source media | Raw video bytes | Purged after `SOURCE_MEDIA_RETENTION_HOURS` (default 72h) | Never stored longer than needed for processing |
+| Source media | Raw video bytes | Purged `SOURCE_MEDIA_RETENTION_HOURS` (default 72h) after ingest completion (`videos.ingest_done_at`), not upload time — see Issue 43 | Never stored longer than needed for processing |
 | Rendered clips | 9:16 Short output | Until creator deletes | Stored in R2 |
 | Transcripts | Word-level segments | Until video deleted | Derived from source; not YouTube-origin data |
 | Creator DNA | Pattern profiles, brief text | Until creator deletes | Creator-owned derivative data |
