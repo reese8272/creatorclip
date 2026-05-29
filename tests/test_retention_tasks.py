@@ -74,13 +74,19 @@ def test_purge_clears_source_uri_past_retention():
     The retention clock is ingest_done_at (Issue 43), not created_at."""
     from worker.tasks import _purge_stale_source_media_async
 
-    vid = MagicMock()
-    vid.id = uuid.uuid4()
-    vid.source_uri = "s3://bucket/source/vid.mp4"
-    vid.ingest_done_at = datetime.now(UTC) - timedelta(hours=100)
+    vid_id = uuid.uuid4()
+    # Issue 38 W1: the purge now selects (Video.id, Video.source_uri) tuples,
+    # releases the session during the boto3 delete loop, then reopens a
+    # session to issue an UPDATE. Tests assert the new shape.
+    select_result = MagicMock()
+    select_result.all.return_value = [(vid_id, "s3://bucket/source/vid.mp4")]
+    update_result = MagicMock()  # the second session's UPDATE
+    execute_calls: list = []
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value = [vid]
+    async def fake_execute(stmt):
+        execute_calls.append(stmt)
+        # First call is SELECT, second is UPDATE.
+        return select_result if len(execute_calls) == 1 else update_result
 
     async def run():
         with (
@@ -88,15 +94,21 @@ def test_purge_clears_source_uri_past_retention():
             patch("worker.storage.delete_file") as mock_delete,
         ):
             session = AsyncMock()
-            session.execute = AsyncMock(return_value=mock_result)
+            session.execute = AsyncMock(side_effect=fake_execute)
             session.commit = AsyncMock()
             mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
             await _purge_stale_source_media_async()
 
+            # delete_file is called via asyncio.to_thread inside adelete_file.
             mock_delete.assert_called_once_with("s3://bucket/source/vid.mp4")
-            assert vid.source_uri is None
+            # Two execute() calls: the SELECT and the UPDATE.
+            assert len(execute_calls) == 2
+            # The UPDATE statement targets the right Video.id and sets source_uri=None.
+            update_stmt_str = str(execute_calls[1]).lower()
+            assert "update videos" in update_stmt_str
+            assert "source_uri" in update_stmt_str
             session.commit.assert_called_once()
 
     asyncio.run(run())
@@ -132,18 +144,20 @@ def test_purge_continues_on_delete_error():
     """A failed delete should log a warning but not abort processing remaining videos."""
     from worker.tasks import _purge_stale_source_media_async
 
-    vid1 = MagicMock()
-    vid1.id = uuid.uuid4()
-    vid1.source_uri = "s3://bucket/bad.mp4"
-    vid1.ingest_done_at = datetime.now(UTC) - timedelta(hours=200)
+    vid1_id = uuid.uuid4()
+    vid2_id = uuid.uuid4()
 
-    vid2 = MagicMock()
-    vid2.id = uuid.uuid4()
-    vid2.source_uri = "s3://bucket/good.mp4"
-    vid2.ingest_done_at = datetime.now(UTC) - timedelta(hours=200)
+    select_result = MagicMock()
+    select_result.all.return_value = [
+        (vid1_id, "s3://bucket/bad.mp4"),
+        (vid2_id, "s3://bucket/good.mp4"),
+    ]
+    update_result = MagicMock()
+    execute_calls: list = []
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value = [vid1, vid2]
+    async def fake_execute(stmt):
+        execute_calls.append(stmt)
+        return select_result if len(execute_calls) == 1 else update_result
 
     call_count = {"n": 0}
 
@@ -158,15 +172,27 @@ def test_purge_continues_on_delete_error():
             patch("worker.storage.delete_file", side_effect=delete_side_effect),
         ):
             session = AsyncMock()
-            session.execute = AsyncMock(return_value=mock_result)
+            session.execute = AsyncMock(side_effect=fake_execute)
             session.commit = AsyncMock()
             mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
 
             await _purge_stale_source_media_async()
 
+        # Both URIs were attempted (the bad one raised, the good one succeeded).
         assert call_count["n"] == 2
-        assert vid2.source_uri is None
+        # The UPDATE statement was issued with only the successful (vid2) id —
+        # the failed delete is excluded from purged_ids.
+        update_stmt = execute_calls[1]
+        update_sql = str(update_stmt).lower()
+        assert "update videos" in update_sql
+        # The vid2 id appears in the bound parameters; vid1 does not. SQLAlchemy
+        # binds the IN clause as a single list-valued parameter.
+        params = update_stmt.compile().params
+        in_ids = [v for k, v in params.items() if k.startswith("id_")]
+        flat_ids = [v for inner in in_ids for v in (inner if isinstance(inner, list) else [inner])]
+        assert vid2_id in flat_ids
+        assert vid1_id not in flat_ids
 
     asyncio.run(run())
 
@@ -239,19 +265,21 @@ def _signals_async_runner(video, *, retention_rows=()):
     session.commit = AsyncMock()
 
     class FakeLocalPath:
+        """Async context manager for alocal_path (Issue 38 W1)."""
+
         def __init__(self, _uri):
             pass
 
-        def __enter__(self):
+        async def __aenter__(self):
             return "/tmp/fake.mp4"
 
-        def __exit__(self, *exc):
+        async def __aexit__(self, *exc):
             return False
 
     async def run():
         with (
             patch("db.AsyncSessionLocal") as mock_ctx,
-            patch("worker.storage.local_path", FakeLocalPath),
+            patch("worker.storage.alocal_path", FakeLocalPath),
             patch("ingestion.audio.extract_audio_events", return_value={}),
             patch("ingestion.signals.build_signal_timeline", return_value={}),
         ):

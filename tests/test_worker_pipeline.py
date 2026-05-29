@@ -16,7 +16,7 @@ codebase pattern is to never hit real external services from tests.
 
 import tempfile
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -161,9 +161,9 @@ async def _cleanup_creator(session: AsyncSession, creator_id: uuid.UUID) -> None
     await session.commit()
 
 
-@contextmanager
-def _dummy_local_path(_source_uri):
-    """Stand-in for worker.storage.local_path — yields a real (empty) temp file."""
+@asynccontextmanager
+async def _dummy_local_path(_source_uri):
+    """Stand-in for worker.storage.alocal_path — yields a real (empty) temp file."""
     with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
         yield Path(tmp.name)
 
@@ -188,7 +188,7 @@ async def test_ingest_async_deducts_minutes_exactly_once(db_session):
 
     try:
         with (
-            patch("worker.storage.local_path", _dummy_local_path),
+            patch("worker.storage.alocal_path", _dummy_local_path),
             patch("youtube.ingest.probe_duration_s", return_value=300.0),
             patch("youtube.ingest.extract_audio_wav", side_effect=_touch_wav),
             patch(
@@ -246,7 +246,7 @@ async def test_render_clip_async_retried_does_not_duplicate(db_session):
 
     try:
         with (
-            patch("worker.storage.local_path", _dummy_local_path),
+            patch("worker.storage.alocal_path", _dummy_local_path),
             patch("clip_engine.render.render_clip_file", side_effect=_touch_clip),
             patch(
                 "worker.storage.upload_file",

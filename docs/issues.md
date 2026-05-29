@@ -593,18 +593,33 @@ with no `timeout=` and no retry policy. Each SDK call can hang the worker indefi
 ### Issue 38: Sync external calls inside `async def` + held DB sessions
 **Severity**: SEV-1 — DB connection pool starvation under LLM load
 **Depends on**: 32, 37
-**Status**: 🔲 Not started
+**Status**: ✅ Wave 1 Done (2026-05-28) — Wave 2 tracked as Issue 61
 
 **What**: Sync calls (sync Anthropic, sync Voyage, sync Deepgram, boto3, subprocess) run
 inside `async def` while an AsyncSession is open. The connection is pinned for the entire
 LLM round-trip (often 10–40 s). Under any concurrent load this exhausts the pool.
 
-**Files**: `routers/improvement.py:53`, `worker/tasks.py:264–302`, `dna/brief.py`, `dna/embeddings.py`, `ingestion/transcribe.py`.
+**Scope split (2026-05-28)**: a full-codebase audit found 23 instances across both
+class (1) sync-in-async and class (2) await-while-session-open patterns. Split into
+two waves to keep PRs reviewable:
+
+- **Wave 1 (this issue)** — Celery hot-path class (1) fixes. ✅ Done.
+- **Wave 2 (Issue 61)** — AsyncAnthropic / AsyncVoyage migration in `dna/brief.py`,
+  `improvement/brief.py`, `clip_engine/ranking.py`; router session-order refactor in
+  `routers/auth.py`, `routers/videos.py`, `routers/clips.py`; the load test.
+
+**Files (Wave 1)**: `worker/storage.py` (new async wrappers — `aupload_file`,
+`adelete_file`, `adelete_prefix`, `alocal_path`); `worker/tasks.py`
+(`_ingest_async` / `_transcribe_async` / `_signals_async` / `_render_clip_async` /
+`_build_dna_async` / `_purge_stale_source_media_async` — sync calls offloaded via
+`asyncio.to_thread`); `dna/embeddings.py` (`_aembed` wrapper); `tests/test_retention_tasks.py`
+(patches updated for new async surface); `tests/test_worker_pipeline.py` (Issue 52
+integration test patches updated for `alocal_path`).
 
 **Acceptance criteria**:
-- [ ] Sync calls wrapped in `await asyncio.to_thread(...)`, **OR** the DB session is released before the LLM call (read what you need, close, then call)
-- [ ] Where Anthropic supports it, switch to `AsyncAnthropic`
-- [ ] Load test: 10 concurrent improvement-brief calls do not exhaust the connection pool
+- [x] Sync calls in the Celery ingest pipeline wrapped in `asyncio.to_thread` (Wave 1: probe_duration_s, extract_audio_wav, transcribe_audio, extract_audio_events, render_clip_file, upload_file, delete_file, Voyage `_embed`, sync Anthropic `generate_brief`)
+- [→] Where Anthropic supports it, switch to `AsyncAnthropic` → **tracked as Issue 61**
+- [→] Load test: 10 concurrent improvement-brief calls do not exhaust the connection pool → **tracked as Issue 61** (depends on routers/improvement.py refactor which is also in Wave 2)
 
 ---
 
@@ -1051,6 +1066,45 @@ warnings, "your trial expires in N days", and YouTube re-auth prompts.
 - [ ] `GET /api/notifications` + `POST /api/notifications/:id/dismiss` endpoints
 - [ ] Dashboard renders pending notifications as a dismissible banner
 - [ ] Refund event emits a notification when an ingest is terminally refunded
+
+---
+
+### Issue 61: Issue 38 Wave 2 — AsyncAnthropic + AsyncVoyage migration + router session-order refactor
+**Severity**: SEV-2 — closes remaining ~9 of 23 findings from the Issue 38 audit; pool starvation under web-request load
+**Depends on**: 38 ✅ (Wave 1)
+**Status**: 🔲 Not started
+
+**What**: Wave 2 of the async-correctness work split from Issue 38. Closes the
+findings that require an SDK swap (sync Anthropic → `AsyncAnthropic`, sync Voyage →
+async-native if available, otherwise keep the `_aembed` thread wrap) and the router
+session-order refactors where the FastAPI request session is held through external
+HTTP calls.
+
+Findings carry-over from Issue 38 audit:
+- **AsyncAnthropic migration**: `dna/brief.py` (`_ANTHROPIC` singleton + `generate_brief`),
+  `improvement/brief.py` (`_ANTHROPIC` + `generate_improvement_brief`); `clip_engine/scoring.py`
+  if it uses sync Anthropic.
+- **Router session-order**: `routers/auth.py` (`/callback` holds session through 3 Google
+  HTTP round-trips; `delete_account` holds session through Google revoke + boto3 prefix delete);
+  `routers/videos.py:upload_video` (holds session through stream + boto3 upload);
+  `routers/clips.py:generate_clips` (holds request-scoped session through LLM scoring);
+  `routers/billing.py:checkout` (sync Stripe call).
+- **clip_engine/ranking.py**: `generate_and_rank_clips` holds session through async LLM scoring —
+  refactor into `score_and_rank` + `persist_ranked_clips` so callers can release session during
+  the LLM phase.
+- **Load test (carry-over Issue 38 AC)**: 10 concurrent `/creators/me/improvement-brief` calls
+  must not exhaust the DB connection pool.
+
+**Files (if we proceed)**: `dna/brief.py`, `improvement/brief.py`, `clip_engine/ranking.py`,
+`clip_engine/scoring.py`, `routers/auth.py`, `routers/videos.py`, `routers/clips.py`,
+`routers/billing.py`, new `tests/test_pool_starvation_load.py`,
+`docs/DECISIONS.md` (entry for the AsyncAnthropic migration choice + Stripe sync-call disposition).
+
+**Acceptance criteria**:
+- [ ] All Anthropic call sites use `AsyncAnthropic`; sync `Anthropic` import removed
+- [ ] All routers acquire the DB session AFTER any external HTTP / LLM round-trip — read inputs first, close, then call
+- [ ] `clip_engine/ranking.py` split into compute-phase (no session) + persist-phase (own session)
+- [ ] Load test: 10 concurrent improvement-brief calls under default pool size produce zero pool-exhaustion errors
 
 ---
 

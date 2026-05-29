@@ -3,12 +3,19 @@ Storage adapter: local disk (dev) or Cloudflare R2 / S3 (prod).
 
 Callers always work with local file paths and opaque URIs.
 Only this module imports boto3.
+
+Sync vs. async surface (Issue 38 Wave 1): boto3 has no native async client,
+so the sync functions below are wrapped via `asyncio.to_thread` in the
+``a*`` async counterparts. Async code paths (Celery tasks, FastAPI handlers)
+should prefer the async variants so the event loop is not blocked for the
+duration of the multi-second upload / download / delete round-trip.
 """
 
+import asyncio
 import shutil
 import tempfile
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import boto3
@@ -96,6 +103,46 @@ def local_path(uri: str) -> Generator[Path, None, None]:
             tmp_path = Path(tmp.name)
         try:
             _r2().download_file(parts[0], parts[1], str(tmp_path))
+            yield tmp_path
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    else:
+        yield Path(uri)
+
+
+# ── Async wrappers (Issue 38 Wave 1) ──────────────────────────────────────────
+#
+# boto3 has no native async client. These wrappers run the sync boto3 calls in
+# a thread pool via asyncio.to_thread so async callers (Celery task bodies,
+# FastAPI handlers) do not block the event loop while a multi-second upload /
+# download / delete is in flight.
+
+
+async def aupload_file(src: str | Path, key: str) -> str:
+    return await asyncio.to_thread(upload_file, src, key)
+
+
+async def adelete_file(uri: str) -> None:
+    await asyncio.to_thread(delete_file, uri)
+
+
+async def adelete_prefix(prefix: str) -> int:
+    return await asyncio.to_thread(delete_prefix, prefix)
+
+
+@asynccontextmanager
+async def alocal_path(uri: str) -> AsyncGenerator[Path, None]:
+    """Async counterpart of `local_path` — the boto3 download is offloaded to a
+    worker thread. For non-s3 URIs this is a thin async wrapper around yielding
+    the existing path.
+    """
+    if uri.startswith("s3://"):
+        parts = uri[5:].split("/", 1)
+        suffix = Path(parts[1]).suffix
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            await asyncio.to_thread(_r2().download_file, parts[0], parts[1], str(tmp_path))
             yield tmp_path
         finally:
             tmp_path.unlink(missing_ok=True)

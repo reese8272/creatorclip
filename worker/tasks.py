@@ -8,6 +8,7 @@ installed by worker_process_init (Issue 39), so the SQLAlchemy async engine
 pool stays bound to a single loop across task invocations.
 """
 
+import asyncio
 import logging
 import tempfile
 import uuid
@@ -208,7 +209,7 @@ async def _set_status(video_id: str, status: IngestStatus) -> None:
 
 
 async def _ingest_async(video_id: str) -> None:
-    from worker.storage import local_path, upload_file
+    from worker.storage import alocal_path, aupload_file
     from youtube.ingest import extract_audio_wav
 
     async with db.AsyncSessionLocal() as session:
@@ -222,15 +223,17 @@ async def _ingest_async(video_id: str) -> None:
         await session.commit()
 
     duration_s: float | None = None
-    with local_path(source_uri) as src:
+    async with alocal_path(source_uri) as src:
         from youtube.ingest import probe_duration_s
 
-        duration_s = probe_duration_s(src)
+        # Offload sync subprocess + ffmpeg + boto3 work to a worker thread so the
+        # event loop is not blocked for the duration of the call (Issue 38 Wave 1).
+        duration_s = await asyncio.to_thread(probe_duration_s, src)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = Path(tmp.name)
         try:
-            extract_audio_wav(src, wav_path)
-            audio_uri = upload_file(wav_path, f"audio/{video_id}.wav")
+            await asyncio.to_thread(extract_audio_wav, src, wav_path)
+            audio_uri = await aupload_file(wav_path, f"audio/{video_id}.wav")
         finally:
             wav_path.unlink(missing_ok=True)
 
@@ -249,7 +252,7 @@ async def _ingest_async(video_id: str) -> None:
 
 async def _transcribe_async(video_id: str) -> None:
     from ingestion.transcribe import transcribe_audio
-    from worker.storage import local_path
+    from worker.storage import alocal_path
 
     async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
@@ -257,8 +260,11 @@ async def _transcribe_async(video_id: str) -> None:
             raise ValueError(f"Video {video_id} not ready for transcription")
         source_uri = video.source_uri
 
-    with local_path(source_uri) as audio_path:
-        result = transcribe_audio(str(audio_path))
+    async with alocal_path(source_uri) as audio_path:
+        # transcribe_audio dispatches to sync Deepgram / AssemblyAI / WhisperX
+        # SDKs — offload to a thread so the event loop is free during the
+        # multi-second transcription round-trip (Issue 38 Wave 1).
+        result = await asyncio.to_thread(transcribe_audio, str(audio_path))
 
     async with db.AsyncSessionLocal() as session:
         existing = await session.get(Transcript, uuid.UUID(video_id))
@@ -281,7 +287,7 @@ async def _signals_async(video_id: str) -> None:
 
     from ingestion.audio import extract_audio_events
     from ingestion.signals import build_signal_timeline
-    from worker.storage import local_path
+    from worker.storage import alocal_path
 
     async with db.AsyncSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
@@ -293,8 +299,10 @@ async def _signals_async(video_id: str) -> None:
         )
         retention_points = list(retention_result.scalars())
 
-    with local_path(source_uri) as audio_path:
-        audio_events = extract_audio_events(str(audio_path))
+    async with alocal_path(source_uri) as audio_path:
+        # extract_audio_events is librosa-backed (sync, CPU + IO heavy).
+        # Offload so the event loop stays responsive (Issue 38 Wave 1).
+        audio_events = await asyncio.to_thread(extract_audio_events, str(audio_path))
 
     timeline = build_signal_timeline(audio_events, retention_points)
 
@@ -322,7 +330,7 @@ async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
 
 async def _render_clip_async(clip_id: str) -> None:
     from clip_engine.render import render_clip_file
-    from worker.storage import local_path, upload_file
+    from worker.storage import alocal_path, aupload_file
 
     async with db.AsyncSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
@@ -332,22 +340,31 @@ async def _render_clip_async(clip_id: str) -> None:
         if not video or not video.source_uri:
             raise ValueError(f"Source video not available for clip {clip_id}")
         source_uri = video.source_uri
+        # Snapshot the timing fields into locals — session closes at the end of
+        # this with-block, after which `clip.start_s` would emit an implicit
+        # SELECT to refresh the expired attribute (Issue 38 Wave 1).
+        start_s = clip.start_s
+        end_s = clip.end_s
         clip.render_status = RenderStatus.running
         await session.commit()
 
-    with local_path(source_uri) as src:
+    async with alocal_path(source_uri) as src:
         import tempfile
 
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             out_path = Path(tmp.name)
         try:
-            render_clip_file(
+            # render_clip_file shells out to ffmpeg via subprocess.run; upload_file
+            # is sync boto3. Both go to a worker thread so the event loop stays
+            # free during the multi-second render + upload (Issue 38 Wave 1).
+            await asyncio.to_thread(
+                render_clip_file,
                 source_path=src,
-                start_s=clip.start_s,
-                end_s=clip.end_s,
+                start_s=start_s,
+                end_s=end_s,
                 out_path=out_path,
             )
-            render_uri = upload_file(out_path, f"clips/{clip_id}.mp4")
+            render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
         finally:
             out_path.unlink(missing_ok=True)
 
@@ -394,7 +411,10 @@ async def _build_dna_async(creator_id: str) -> None:
         ) = await build_patterns(session, creator_uuid)
 
         # Generate the brief outside the DB — pure LLM call; no session writes yet.
-        brief_text = generate_brief(patterns, channel_title)
+        # `generate_brief` uses the sync Anthropic client; offload to a worker
+        # thread so the event loop is not blocked for the duration of the LLM
+        # round-trip (Issue 38 Wave 1).
+        brief_text = await asyncio.to_thread(generate_brief, patterns, channel_title)
 
         # Stage the draft row without committing.  commit=False keeps the INSERT
         # pending in this transaction so all writes land atomically below.
@@ -572,19 +592,24 @@ async def _generate_clips_async(video_id: str) -> None:
 async def _purge_stale_source_media_async() -> None:
     from datetime import timedelta
 
-    from sqlalchemy import and_, select
+    from sqlalchemy import and_, select, update
 
     from config import settings
-    from worker.storage import delete_file
+    from worker.storage import adelete_file
 
     # Retention clock starts at ingest completion, not upload time (Issue 43).
     # A long-running or stuck ingest of an old upload must not have its source
     # purged mid-pipeline — gate on ingest_done_at instead of created_at.
     cutoff = datetime.now(UTC) - timedelta(hours=settings.SOURCE_MEDIA_RETENTION_HOURS)
 
+    # Issue 38 Wave 1: collect URIs in a short read transaction, release the
+    # session during the sync boto3 delete loop (now offloaded via to_thread),
+    # then reopen a short write transaction to null source_uri. Previously the
+    # session was held across every delete_file call — N round-trips to R2
+    # pinned a DB connection for the entire sweep.
     async with db.AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Video).where(
+            select(Video.id, Video.source_uri).where(
                 and_(
                     Video.source_uri.isnot(None),
                     Video.ingest_done_at.is_not(None),
@@ -592,20 +617,26 @@ async def _purge_stale_source_media_async() -> None:
                 )
             )
         )
-        videos = list(result.scalars())
+        targets: list[tuple[uuid.UUID, str]] = list(result.all())
 
-        purged = 0
-        for video in videos:
-            try:
-                delete_file(video.source_uri)
-                video.source_uri = None
-                purged += 1
-            except Exception as exc:
-                logger.warning("Failed to purge source media for video %s: %s", video.id, exc)
+    if not targets:
+        return
 
-        if purged:
-            await session.commit()
-            logger.info("Purged source media for %d video(s)", purged)
+    purged_ids: list[uuid.UUID] = []
+    for video_id, source_uri in targets:
+        try:
+            await adelete_file(source_uri)
+            purged_ids.append(video_id)
+        except Exception as exc:
+            logger.warning("Failed to purge source media for video %s: %s", video_id, exc)
+
+    if not purged_ids:
+        return
+
+    async with db.AsyncSessionLocal() as session:
+        await session.execute(update(Video).where(Video.id.in_(purged_ids)).values(source_uri=None))
+        await session.commit()
+        logger.info("Purged source media for %d video(s)", len(purged_ids))
 
 
 async def _refresh_youtube_analytics_async() -> None:

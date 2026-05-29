@@ -6,9 +6,37 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 4 in progress. Issues 52 + 56 closed. Issue 38 W1 next (Wave 2 will be filed as Issue 61).
-**Last completed**: Issue 52 — worker pipeline integration tests (`tests/test_worker_pipeline.py`).
+**Active issue**: Phase 2 hardening — Batch 4 fully closed (Issues 38 W1, 52, 56). Three follow-up issues filed: 58 (transactional email infra), 59 (in-app notifications surface), 60 (RLS implementation), 61 (Issue 38 Wave 2).
+**Last completed**: Issue 38 Wave 1 — Celery hot-path sync-in-async fixes via `asyncio.to_thread` + new `worker/storage.py` async wrappers.
 **Blocked**: _(none)_
+
+> **Closed Issue 38 Wave 1** (2026-05-28): Sync-in-async fixes for the Celery
+> ingest pipeline. A full-codebase audit found 23 instances of sync external calls
+> inside `async def` (class 1) or `await` while a DB session was open (class 2);
+> Wave 1 closed all the class (1) findings in the Celery hot path (~14 of 23).
+> Wave 2 is filed as Issue 61 — covers the AsyncAnthropic/AsyncVoyage SDK swap
+> across `dna/brief.py` / `improvement/brief.py` / `clip_engine/scoring.py`, the
+> router session-order refactor (`routers/auth.py` / `videos.py` / `clips.py` /
+> `billing.py`), the `clip_engine/ranking.py` compute/persist split, and the
+> 10-concurrent-improvement-brief load test.
+>
+> Wave 1 changes: new async wrappers in `worker/storage.py` (`aupload_file`,
+> `adelete_file`, `adelete_prefix`, `alocal_path` — all dispatch to boto3 via
+> `asyncio.to_thread`); the four Celery pipeline tasks
+> (`_ingest_async` / `_transcribe_async` / `_signals_async` / `_render_clip_async`)
+> now use the async wrappers + offload sync subprocess (ffmpeg / probe), librosa,
+> WhisperX/Deepgram, and `render_clip_file` to threads; `_build_dna_async` wraps
+> the sync Anthropic `generate_brief` call in `to_thread`; `dna/embeddings.py`
+> gets a new `_aembed` async wrapper around the sync Voyage `_embed`;
+> `_purge_stale_source_media_async` was restructured to release the session
+> during the boto3 delete loop (select tuples → close → loop deletes via
+> `adelete_file` → reopen session for a single UPDATE) — previously held one
+> session across every R2 round-trip in the sweep.
+>
+> Test patches updated: `test_retention_tasks.py` for the new purge two-session
+> + tuple shape and for `alocal_path`; `test_worker_pipeline.py` (Issue 52 file
+> shipped earlier the same session) for `alocal_path`. Renamed worker tests
+> still pass at 381 / 1 skipped / 54 deselected.
 
 > **Closed Issue 52** (2026-05-28): Worker pipeline integration tests. The seven
 > Celery async functions in `worker/tasks.py` (`_ingest_async`, `_transcribe_async`,
