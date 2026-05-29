@@ -96,6 +96,11 @@ Wait for explicit confirmation. Capture changed approaches in `docs/DECISIONS.md
 
 ### Phase 4 — REVIEW & ASSESS
 
+**Automated gates (Layer 0 — must be green before close)**
+- [ ] `python3 .claude/skills/production-assessment/scripts/run_layer0.py` passes
+      (ruff, mypy, coverage floor, bandit, pip-audit — no regression vs baseline)
+- [ ] If coverage dropped, tests added; if a gate baseline moved, justified here
+
 **Resource lifecycle**
 - [ ] DB sessions via context manager, guaranteed to close
 - [ ] External clients (Anthropic, Voyage, YouTube, storage) module-level singletons

@@ -5,6 +5,71 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Production-assessment harness + quality gates
+
+### What changed
+- Added a committed project skill `.claude/skills/production-assessment/`
+  (`SKILL.md` + `rubric.md` + `scale-checklist.md` + `subagent-contract.md` +
+  `report-template.md` + `scripts/run_layer0.py`) and a `/assess` slash command.
+- Added four ratcheted CI gates in `.github/workflows/quality.yml`, all driven by
+  the single `run_layer0.py` harness: **mypy** (types), **pytest-cov** (coverage
+  floor), **bandit** (SAST), **pip-audit** (dependency CVEs).
+- Added `requirements-dev.txt` (pinned), `[tool.mypy|coverage|bandit]` config in
+  `pyproject.toml`, `docs/assessment/` register (baselines + per-module findings +
+  report history), and a Locust load-test scaffold in `tests/perf/`.
+- Un-ignored `.claude/skills/` and `.claude/commands/` in `.gitignore` (session
+  state stays ignored; intentional skills/commands are now committed).
+- Added one line to the CLAUDE.md Phase-4 checklist requiring the Layer-0 gates
+  to be green before an issue closes.
+
+### Why
+Assessing a codebase aimed at hundreds of concurrent users needs to be (a)
+exhaustive, (b) repeatable, and (c) bounded in context as the repo grows. A
+single full-codebase Claude sweep satisfies none of these — it is
+non-deterministic, unrepeatable, and its recall drops as the repo grows. The
+governing split is **tools provide exhaustiveness; Claude provides judgment**:
+deterministic gates run in CI with perfect recall at zero context cost, and the
+model is reserved for per-module judgment via parallel subagents that write
+findings to disk, so the orchestrator reads short summaries rather than source.
+This keeps assessment context flat from 16k LOC upward.
+
+### Tool choices (industry standard checked, 2026)
+- **Type checker: mypy** over pyright/ty. `ty` only reached FastAPI in 3/2026 —
+  too new for a load-bearing gate; pyright needs Node in CI. mypy is pip-native
+  and mypyc-compiled builds are fast. Sources: pydevtools.com type-checker
+  comparison; "Migrating from mypy to ty" (FastAPI).
+- **SAST: bandit** — AST-based, Python-specific, ~88% issue recall, <5s scans.
+  Semgrep (92%, semantic) noted as a future add; heavier and needs rule curation.
+  Source: dev.to "Semgrep vs Bandit (2026)".
+- **Dependency CVEs: pip-audit** over safety (safety now gates behind an account).
+  Critical/high CVEs to be fixed within 7 days. Source: aikido.dev Python tools.
+- **Coverage: pytest-cov as a self-baselining ratchet** (regression gate, not an
+  absolute bar) so it doesn't red-wall 16k existing LOC. Mutation testing via
+  **mutmut** (most-active tool; target score 75%→85%) is cadence-only because it
+  is slow. Source: johal.in mutmut 2026; ieeexplore mutation-tool comparison.
+- **Load testing: Locust** over k6 — Python-first, reuses the project's JWT/auth
+  scheme and is maintained in-language. k6 documented as the alternative for
+  >10k RPS/Grafana streaming. Source: dev.to "Best Load Testing Tools 2025".
+
+### Ratchet posture
+Gates are seeded permissively in `docs/assessment/baselines.json` and only fail
+on regression; `run_layer0.py --update-baseline` captures current reality, then
+the targets are tightened over time (bandit_high→0, pip_audit_vulns→0,
+mypy_errors→0 then enable `disallow_untyped_defs`). Rationale and steps in
+`docs/assessment/README.md`.
+
+### Alternatives ruled out
+- **One big Claude sweep**: non-deterministic, unrepeatable, recall degrades with
+  size, context blows up — the exact failure mode this design avoids.
+- **Strict gates from day one** (mypy --strict, 90% coverage): would block every
+  PR against existing code; the ratchet reaches the same end state without a
+  flag-day rewrite.
+- **Folding the full assessment into every issue's Phase 4**: too heavy for
+  day-to-day; instead only the cheap Layer-0 floor-check is per-issue, and the
+  deep sweep is the milestone-cadence `/assess`.
+
+---
+
 ## 2026-05-28 — Issue 47: Beat-job fairness via `last_analytics_refreshed_at`
 
 ### What changed
