@@ -5,7 +5,7 @@ Rank scored clip candidates and persist them to the clips table.
 import logging
 import uuid
 
-from sqlalchemy import delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clip_engine.candidates import extract_candidates
@@ -81,9 +81,24 @@ async def generate_and_rank_clips(
     """
     Extract candidates → score → rank → persist to the clips table.
 
-    Any existing clips for this video are replaced.
+    Idempotent: if clips already exist for this video the call is a no-op and the
+    existing clips are returned in rank order. The pipeline generates clips exactly
+    once; a Celery redelivery (at-least-once) must NOT delete+reinsert, because
+    Clip.feedback / Clip.outcome cascade-delete and that would destroy the creator's
+    feedback labels and published-clip outcomes (Issue 61).
     Returns persisted Clip ORM objects in rank order.
     """
+    existing = (
+        (await session.execute(select(Clip).where(Clip.video_id == video_id).order_by(Clip.rank)))
+        .scalars()
+        .all()
+    )
+    if existing:
+        logger.info(
+            "Clips already exist for video %s (%d) — skipping regeneration", video_id, len(existing)
+        )
+        return list(existing)
+
     candidates = extract_candidates(timeline, max_candidates=max_candidates)
     if not candidates:
         logger.info("No candidates found for video %s", video_id)
@@ -91,9 +106,6 @@ async def generate_and_rank_clips(
 
     scored = await score_candidates(candidates, timeline, dna_brief, transcript_segments)
     ranked = rank_candidates(scored)
-
-    # Replace existing clips for this video
-    await session.execute(delete(Clip).where(Clip.video_id == video_id))
 
     clips: list[Clip] = []
     for c in ranked:

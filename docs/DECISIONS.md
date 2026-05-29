@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Batch 1 (Issues 61 + 62): Worker at-least-once safety
+
+### What changed
+- `clip_engine/ranking.py`: `generate_and_rank_clips` is now idempotent — it
+  early-returns the existing clips (rank order) when any exist for the video,
+  instead of `delete(Clip)` + reinsert.
+- `worker/celery_app.py`: added `task_reject_on_worker_lost=True`,
+  `task_soft_time_limit=3000`, `task_time_limit=3300`, and
+  `broker_transport_options={"visibility_timeout": 3600}`.
+- `worker/tasks.py`: `_render_clip_async` early-returns when the clip is already
+  `render_status==done` with a `render_uri`.
+
+### Why
+Celery delivers at-least-once. With `acks_late` and cascade-delete on
+`Clip.feedback`/`Clip.outcome`, a redelivered `build_signals`→`generate_clips`
+silently wiped a creator's feedback labels and outcomes (data loss; and post-Issue-60
+the preference training signal). `acks_late` without `reject_on_worker_lost` also
+dropped tasks whose worker was OOM-killed, and with no time limit a task exceeding
+the broker visibility timeout was redelivered while still running (double execution).
+
+### Decisions / standard checked
+- Pair `task_acks_late` with `task_reject_on_worker_lost`; the **invariant
+  soft < hard time_limit < visibility_timeout** ensures a task is killed before
+  Redis redelivers a running copy. Assume tasks run twice → design idempotent.
+  Sources: francoisvoron.com/blog/configure-celery-for-reliable-delivery;
+  dev.to "Celery + Redis at Scale"; celery/celery#5935.
+- **Idempotency strategy = skip-if-exists** (KISS) over "replace only pending
+  zero-feedback clips" — there is no regenerate trigger today, and skip-if-exists
+  can never wipe feedback. The finer-grained replacement is noted as a future
+  enhancement if a re-generate feature is ever added.
+
+### Caveat
+`task_time_limit=3300` (55m) covers normal media jobs; a very long source on CPU
+WhisperX could exceed it → use the hosted transcription backend or add a per-task
+`time_limit` override. Documented here rather than guessed at a larger global ceiling.
+
+---
+
 ## 2026-05-29 — Issue 60: Wire the personalization loop + maturity-gated blend
 
 ### What changed

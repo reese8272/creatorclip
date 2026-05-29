@@ -6,9 +6,21 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, one at a time, CHECK-first). 58 code-complete, 59 + 60 ✅ done; next: 61 (generate_clips idempotency).
-**Last completed**: Issue 60 — wired the personalization loop (train task enqueued on feedback + reranker called in ranking + maturity-gated blend).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59, 60, 61, 62 ✅ done. Next: Batch 2 = Issues 63 + 64 (idempotent unique-keyed writes: build_dna + grant_minutes).
+**Last completed**: Batch 1 — Issues 61 + 62 (worker at-least-once safety: idempotent generate_clips + acks_late/reject_on_worker_lost + time/visibility limits + render skip).
 **Blocked**: _(none)_
+
+> **Closed Batch 1 / Issues 61 + 62** (2026-05-29): Celery is at-least-once. A
+> redelivered `build_signals`→`generate_clips` wiped feedback/outcomes via
+> cascade-delete (data loss; corrupted the Issue-60 training signal), `acks_late`
+> without `reject_on_worker_lost` dropped OOM-killed jobs, and no time limit meant a
+> long task redelivered while still running. Fix: `generate_and_rank_clips`
+> early-returns existing clips (idempotent, never cascade-wipes); added
+> `task_reject_on_worker_lost` + the `soft(3000)<hard(3300)<visibility(3600)`
+> invariant; `_render_clip_async` skips when already done. DB-free config-invariant
+> test + integration tests (feedback survives re-gen; render skips when done).
+> Test count: **388 passed, 1 skipped, 47 deselected** (+3 unit, +2 integration).
+> Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.02%.
 
 > **Closed Issue 60** (2026-05-29): Personalization was dead code — `build_and_save`
 > had no caller and `rerank_with_preference` was never invoked, so ranking was

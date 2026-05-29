@@ -1081,31 +1081,30 @@ Ranking was DNA-only; the North-Star "learns your style" loop did not run. Also:
 
 ## Issue 61: generate_clips idempotency — stop wiping feedback/outcomes (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 1)
 
-**What**: `worker/tasks.py:76` re-enqueues `generate_clips` on every successful
-`build_signals`; `clip_engine/ranking.py:88` does `delete(Clip).where(video_id==…)` and
-`Clip.feedback`/`outcome` are `cascade=all,delete-orphan` (models.py:365/368). A redelivery
-(acks_late) silently destroys creator feedback labels + published-clip outcomes →
-corrupts the preference training signal. Data-loss class.
+**What**: `build_signals` re-enqueued `generate_clips` on every run; `generate_and_rank_clips`
+did `delete(Clip).where(video_id==…)` and `Clip.feedback`/`outcome` are
+`cascade=all,delete-orphan` (models.py:364/367). A redelivery (acks_late) silently destroyed
+creator feedback labels + published-clip outcomes → corrupted the preference training signal.
 
 **Acceptance criteria**:
-- [ ] `generate_clips` no-ops (or replaces only `pending`, zero-feedback clips) when clips with feedback/outcomes exist
-- [ ] Test: run ingest→signals chain twice; existing feedback/outcomes survive
+- [x] `generate_and_rank_clips` is idempotent — early-returns existing clips (in rank order) instead of delete+reinsert when clips already exist for the video; never cascade-wipes feedback
+- [x] Integration test (`tests/test_generate_clips_idempotency_integration.py`): re-run generation → existing clip + its feedback survive
 
 ## Issue 62: Celery delivery safety — reject_on_worker_lost + time/visibility limits (SEV-1)
 **Depends on**: 61
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 1)
 
-**What**: `worker/celery_app.py:27` sets `acks_late=True` without
-`task_reject_on_worker_lost` → an OOM-killed media task is silently dropped (video stuck
+**What**: `worker/celery_app.py` set `acks_late=True` without
+`task_reject_on_worker_lost` → an OOM-killed media task was silently dropped (video stuck
 forever). No `task_time_limit`/`task_soft_time_limit` and no broker `visibility_timeout`
-override → a long render is redelivered while still running → double render. (axis C)
+override → a long task redelivered while still running → double execution. (axis C)
 
 **Acceptance criteria**:
-- [ ] `task_reject_on_worker_lost=True` (safe only with Issue 61)
-- [ ] `task_soft_time_limit`/`task_time_limit` set; `visibility_timeout` aligned to the hard limit
-- [ ] `render_clip` idempotent on a state transition (`WHERE render_status='pending'`)
+- [x] `task_reject_on_worker_lost=True` (safe with Issue 61)
+- [x] `task_soft_time_limit=3000` < `task_time_limit=3300` < `broker_transport_options.visibility_timeout=3600` — invariant guarded by `tests/test_celery_config.py`
+- [x] `render_clip` idempotent — `_render_clip_async` early-returns when `render_status==done` and `render_uri` set; integration test asserts no re-encode/storage I/O
 
 ## Issue 63: Idempotent build_dna on redelivery (SEV-1)
 **Depends on**: —

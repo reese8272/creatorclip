@@ -348,6 +348,11 @@ async def _render_clip_async(clip_id: str) -> None:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if not clip:
             raise ValueError(f"Clip {clip_id} not found")
+        # Idempotent under at-least-once delivery (Issue 62): a redelivered render
+        # must not re-encode and last-writer-win the URI. Skip if already done.
+        if clip.render_status == RenderStatus.done and clip.render_uri:
+            logger.info("Clip %s already rendered — skipping", clip_id)
+            return
         video = await session.get(Video, clip.video_id)
         if not video or not video.source_uri:
             raise ValueError(f"Source video not available for clip {clip_id}")
