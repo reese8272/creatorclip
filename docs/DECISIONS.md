@@ -5,6 +5,45 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 58: psycopg3 prepared statements + pool sizing for PgBouncer
+
+### What changed
+- `db.py:_make_engine()` now passes `connect_args={"prepare_threshold": None}` to
+  `create_async_engine`, disabling psycopg3 server-side prepared statements.
+- Pool ceiling lowered from `pool_size=10, max_overflow=20` (30/pod) to
+  `pool_size=15, max_overflow=5` (20/pod) to stay under the 25-conn PgBouncer
+  sidecar; added `pool_recycle=1800`. Values are module constants
+  (`_CONNECT_ARGS`, `_POOL_SIZE`, `_MAX_OVERFLOW`, `_POOL_RECYCLE_S`) for testability.
+- `docs/DEPLOYMENT.md` records the connection-budget inequality.
+- `tests/test_db_engine_config.py` introspects the engine to guard all three.
+
+### Why
+psycopg3 auto-prepares a statement after its 5th execution. PgBouncer in
+transaction-pooling mode (the chosen production pooler, `DEPLOYMENT.md`) reuses
+server connections across clients, so the prepared statement vanishes on the next
+checkout → `prepared statement "_pg3_…" does not exist`. CI never catches this
+because it connects to Postgres directly. The per-pod pool (30) also exceeded the
+25-conn sidecar, causing checkout timeouts at p99 under load.
+
+### Source / evidence
+- psycopg3 docs: *"Unless a pooling middleware explicitly declares otherwise…
+  disable prepared statements by setting `Connection.prepare_threshold` to `None`."*
+  (psycopg.org/psycopg3 — prepared statements).
+- SQLAlchemy issue #6467 / discussion #10246 (pooler + prepared-statement handling).
+
+### Alternatives ruled out
+- **Rely on PgBouncer ≥1.22 + psycopg ≥3.2 named-prepared support:** couples
+  correctness to exact infra versions; a downgrade silently reintroduces the outage.
+- **Session-mode pooling:** defeats pooling benefit at hundreds of clients.
+- **Drop PgBouncer:** contradicts the documented 10k-scale K8s target.
+
+### Verification status
+Code complete + unit-tested. The green-under-load proof (no `prepared statement`
+errors at target concurrency) is deferred to a `tests/perf/` Locust run behind a
+real PgBouncer in staging — not reproducible in the CI/dev container.
+
+---
+
 ## 2026-05-29 — Skill freshness convention + standards SSOT
 
 ### What changed

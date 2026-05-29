@@ -6,9 +6,26 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issues 39 + 43 + 47 ✅ done; next: 46 → 57.
-**Last completed**: Issue 47 — Beat-job fairness via `creators.last_analytics_refreshed_at` + `ORDER BY ... NULLS FIRST` (bundled into alembic `0004_video_done_creator_refreshed`)
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, one at a time, CHECK-first). Issue 58 code-complete; next: 59 (render from `setup_start_s`).
+**Last completed**: Issue 58 — psycopg3 `prepare_threshold=None` + pool sizing (15+5 ≤ 25 sidecar) + `pool_recycle` for PgBouncer transaction mode (code complete; staging Locust verification pending).
 **Blocked**: _(none)_
+
+> **Production assessment run** (2026-05-29): `/assess` across all 11 modules →
+> verdict **PRODUCTION-READY = NO**. 1 BLOCKER, 25 SEV-1, 39 SEV-2, 34 cleanup;
+> no cross-tenant leak, bandit 0/0. Findings tracked as Issues 58–75; full register
+> in `docs/assessment/`. Also shipped the repeatable harness (`/assess` skill +
+> ratcheted CI gates in `quality.yml` + baselines), the `best-practices` skill +
+> freshness convention (`docs/SKILL_FRESHNESS.md`), and SSOT model-id config.
+
+> **Closed Issue 58** (2026-05-29): psycopg3 prepared statements are incompatible
+> with PgBouncer transaction-pooling mode (the production pooler) → would throw
+> `prepared statement "_pg3_…" does not exist`; CI never caught it (direct
+> Postgres). Fix: `connect_args={"prepare_threshold": None}`; pool ceiling cut
+> 30→20/pod to stay under the 25-conn sidecar; `pool_recycle=1800`. Connection-
+> budget inequality recorded in DEPLOYMENT.md; engine config guarded by
+> `tests/test_db_engine_config.py`. Load-proof behind real PgBouncer deferred to
+> staging Locust. Test count: **376 passed, 1 skipped** (+3). Gates: ruff 0, mypy 30,
+> bandit 0/0, coverage 70.03%.
 
 > **Closed Issue 47** (2026-05-28): Beat-job fairness on quota exhaustion. Old refresh
 > task did `select(Creator)` with no ORDER BY and `break` on `QuotaExhaustedError` —

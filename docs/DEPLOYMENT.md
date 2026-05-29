@@ -44,6 +44,16 @@ Docker Compose is **dev/test only**. Production at 10k+ scale requires Kubernete
 - [x] **Helm charts**: Written in `deploy/charts/creatorclip/`. See `deploy/README.md`.
 - [x] **Secrets management**: GCP Secret Manager + External Secrets Operator syncs to K8s.
 - [x] **Connection pooling**: PgBouncer sidecar in the app pod, transaction mode, 25 conns/pod.
+  - **psycopg3 + transaction pooling (Issue 58):** the SQLAlchemy engine sets
+    `connect_args={"prepare_threshold": None}` (`db.py`) — psycopg3 server-side
+    prepared statements are incompatible with transaction-mode pooling and would
+    raise `prepared statement "_pg3_…" does not exist` in production.
+  - **Connection budget (must hold before raising replica counts):**
+    `app_pool_per_pod (pool_size 15 + max_overflow 5 = 20) ≤ PgBouncer sidecar (25)`.
+    Across the fleet, the PgBouncer→Postgres server pool must satisfy:
+    `Σ(PgBouncer default_pool_size) + Σ(celery_pool × worker_concurrency × worker_replicas)
+    ≤ Postgres max_connections − superuser_reserved`. Re-check this inequality and
+    record the chosen numbers whenever API/worker replica counts change.
 
 ### Preliminary Production Architecture (subject to research)
 

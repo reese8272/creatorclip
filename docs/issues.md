@@ -1034,7 +1034,7 @@ REVIEW). Re-run `/assess` after each batch to confirm the finding clears.
 
 ## Issue 58: psycopg3 prepared statements break under PgBouncer + pool math (SEV-0)
 **Depends on**: —
-**Status**: Open
+**Status**: Code complete (2026-05-29) — staging Locust verification pending
 
 **What**: `db.py:14-20` `create_async_engine` does not disable psycopg3 server-side
 prepared statements, but `docs/DEPLOYMENT.md:46` runs PgBouncer in transaction-pooling
@@ -1043,10 +1043,10 @@ hits Postgres directly). Also: per-pod pool ceiling `pool_size=10 + max_overflow
 exceeds the 25-conn PgBouncer sidecar; no `pool_recycle`. (scale-checklist axis A)
 
 **Acceptance criteria**:
-- [ ] `connect_args={"prepare_threshold": None}` passed to the engine
-- [ ] `pool_size`+`max_overflow` ≤ PgBouncer `default_pool_size`; total-connections inequality recorded in `docs/DEPLOYMENT.md`
-- [ ] `pool_recycle=1800` set
-- [ ] Verified behind PgBouncer via a Locust run (`tests/perf/`)
+- [x] `connect_args={"prepare_threshold": None}` passed to the engine (`db.py`, asserted by `tests/test_db_engine_config.py`)
+- [x] `pool_size`+`max_overflow` (15+5=20) ≤ PgBouncer sidecar (25); total-connections inequality recorded in `docs/DEPLOYMENT.md`
+- [x] `pool_recycle=1800` set
+- [ ] Verified behind PgBouncer via a Locust run (`tests/perf/`) — **deferred to staging** (no PgBouncer in CI/dev container; the misconfiguration is certain by inspection + library docs, but the green-under-load proof needs the real pooler)
 
 ## Issue 59: Render from setup_start_s, not the start_s fallback (SEV-1)
 **Depends on**: —
