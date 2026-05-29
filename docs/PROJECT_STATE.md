@@ -7,8 +7,20 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75(f) — observability (correlation ids + JSON structured logs + Prometheus golden signals + Celery propagation).
-**Blocked**: _(none)_
+**Last completed**: Tier-1 pre-beta launch readiness — legal-page routes + Google Limited-Use disclosure + CORS prod fail-fast + `verify_deploy.sh`.
+**Blocked**: _(none)_ — remaining Tier-1 items (staging Locust run, prod deploy verify, OAuth verification) need infra/prod access or Google Console, not code.
+
+> **Tier-1 pre-beta launch readiness** (2026-05-29): routed the existing legal pages at clean
+> URLs (main.py /privacy → privacy.html, /terms → tos.html); added the Google-mandated Limited Use
+> affirmative disclosure to privacy.html + a homepage footer linking both pages (Google requires the
+> privacy policy be discoverable from home — prerequisite for OAuth verification). Added a CORS
+> production fail-fast (config.py _lock_prod_cors: ENV=production rejects empty/`*`/localhost/http
+> ALLOWED_ORIGINS). Added scripts/verify_deploy.sh — turnkey check of /health, /privacy, /terms,
+> /metrics, /docs=404, and alembic current == head (a7b8c9d0e1f2) over SSH; fully parameterized.
+> Key reframe: a closed beta needs NO full OAuth verification — Google's Testing mode allows ≤100
+> test users with unverified sensitive scopes; verification is a public-launch gate. Legal text
+> stays draft-pending-review (banner kept). +8 DB-free tests; **418 passed, 1 skipped, 55 deselected**;
+> gates ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0. Detail in DECISIONS (2026-05-29).
 
 > **Closed Issue 75(f) — observability** (2026-05-29): new observability.py — a pure-ASGI
 > RequestIDMiddleware (reads/mints X-Request-ID into a ContextVar, echoes it on the response;

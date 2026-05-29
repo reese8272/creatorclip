@@ -59,6 +59,35 @@ def test_static_privacy_served(client):
     assert b"Privacy Policy" in resp.content
 
 
+# ── Tier-1 pre-launch: clean legal routes + required Google disclosure ──────────
+
+
+def test_privacy_route_served(client):
+    resp = client.get("/privacy")
+    assert resp.status_code == 200
+    assert b"Privacy Policy" in resp.content
+
+
+def test_terms_route_served(client):
+    resp = client.get("/terms")
+    assert resp.status_code == 200
+    assert b"Terms of Service" in resp.content
+
+
+def test_privacy_has_google_limited_use_disclosure(client):
+    # Required affirmative statement for Google OAuth verification of YouTube scopes.
+    resp = client.get("/privacy")
+    assert b"Limited Use requirements" in resp.content
+    assert b"Google API Services User Data Policy" in resp.content
+
+
+def test_homepage_links_to_legal_pages(client):
+    # Google requires the privacy policy be discoverable from the app home.
+    resp = client.get("/")
+    assert b'href="/privacy"' in resp.content
+    assert b'href="/terms"' in resp.content
+
+
 # ── GET /videos list endpoint ─────────────────────────────────────────────────
 
 

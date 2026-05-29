@@ -97,6 +97,28 @@ class Settings(BaseSettings):
                 raise ValueError(f"In production these must be set: {', '.join(missing)}")
         return self
 
+    @model_validator(mode="after")
+    def _lock_prod_cors(self) -> "Settings":
+        # Pre-launch gate: ALLOWED_ORIGINS must be locked to the production
+        # domain. CORS with allow_credentials=True + a wildcard is invalid per the
+        # Fetch spec AND a credential-leak risk; localhost in prod means a
+        # misconfigured deploy. Fail at boot rather than ship an open CORS policy.
+        if self.ENV == "production":
+            origins = [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+            if not origins:
+                raise ValueError("In production ALLOWED_ORIGINS must be set to the public domain")
+            bad = [
+                o
+                for o in origins
+                if o == "*" or "localhost" in o or "127.0.0.1" in o or o.startswith("http://")
+            ]
+            if bad:
+                raise ValueError(
+                    "In production ALLOWED_ORIGINS must be HTTPS and domain-locked "
+                    f"(no '*', localhost, or http://): {', '.join(bad)}"
+                )
+        return self
+
 
 try:
     settings = Settings()

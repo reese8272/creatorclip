@@ -77,6 +77,13 @@ the blast radius of a token compromise.
 - Account-deletion endpoint must purge: tokens, analytics, source media, rendered clips,
   DNA profile, feedback labels. Required before public launch.
 - Demographics data: aggregated payloads only; no individual viewer data is stored.
+- **Google API *Limited Use* disclosure** (2026-05-29): the affirmative statement that
+  CreatorClip's use of Google API data adheres to the Google API Services User Data Policy
+  (incl. the Limited Use requirements) is live in `static/privacy.html` and restated in the
+  homepage footer (`static/index.html`). Served at the stable URL `/privacy`. This is the
+  mandatory prerequisite for Google OAuth verification of YouTube scopes.
+- **CORS is domain-locked in production** (`config.py` `_lock_prod_cors`): boots-fail on
+  `*`/localhost/`http://` `ALLOWED_ORIGINS` when `ENV=production`; `/docs` disabled outside dev.
 
 ---
 

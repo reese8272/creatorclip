@@ -56,3 +56,38 @@ def test_development_ok_without_stripe_secrets():
 
     settings = Settings(ENV="development")
     assert settings.ENV == "development"
+
+
+# ── Tier-1 pre-launch: production locks ALLOWED_ORIGINS ─────────────────────────
+
+# Both prod secrets passed so these isolate the CORS validator (Stripe is satisfied).
+_PROD = {"STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_WEBHOOK_SECRET": "whsec_x"}
+
+
+def test_production_rejects_localhost_origin():
+    from config import Settings
+
+    # conftest's default ALLOWED_ORIGINS is http://localhost:8000 — invalid for prod.
+    with pytest.raises(ValidationError):
+        Settings(ENV="production", **_PROD)
+
+
+def test_production_rejects_wildcard_origin():
+    from config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(ENV="production", ALLOWED_ORIGINS="*", **_PROD)
+
+
+def test_production_rejects_plain_http_origin():
+    from config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(ENV="production", ALLOWED_ORIGINS="http://agenticlip.studio", **_PROD)
+
+
+def test_production_accepts_https_domain_origin():
+    from config import Settings
+
+    settings = Settings(ENV="production", ALLOWED_ORIGINS="https://agenticlip.studio", **_PROD)
+    assert settings.ALLOWED_ORIGINS == "https://agenticlip.studio"

@@ -3,7 +3,7 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-29 (Issue 75(a) CVEs + 75(f) observability)
+**Last updated:** 2026-05-29 (75(a) CVEs + 75(f) observability + Tier-1 pre-beta launch readiness)
 **Branch:** `claude/busy-mendel-1r2oZ` (contains all merged assessment work; this is the active
 dev branch this session). NOTE: in this fresh container, local `main` is just the initial commit
 — the real history lives on this branch (HEAD was `017b65f` at session start).
@@ -37,7 +37,8 @@ This session shipped (19 commits, all green on CI before merge):
 1. **Verify the prod deploy + that migrations 0005/0006/0007 applied.** The merge to main
    should have triggered `deploy.yml`. Confirm:
    ```bash
-   curl -fsS https://autoclip.studio/health     # {"status":"ok","postgres":"ok","redis":"ok"}
+   ./scripts/verify_deploy.sh   # turnkey: /health, /privacy, /terms, /metrics, /docs=404, alembic head
+   # or manually:  curl -fsS https://agenticlip.studio/health   # {"status":"ok",...}
    ssh creatorclip-vm "cd /opt/autoclip && docker compose exec app .venv/bin/alembic current"
    # expect: a7b8c9d0e1f2 (head = 0007)
    ```
@@ -104,7 +105,7 @@ This session shipped (19 commits, all green on CI before merge):
 
 ## 3. THE ARC THAT LED HERE
 
-1. **Phases 1–2** closed in earlier sessions; beta live on `autoclip.studio`. (See the prior
+1. **Phases 1–2** closed in earlier sessions; beta live on `agenticlip.studio`. (See the prior
    LEFT_OFF history in git if needed — that work is in `docs/PROJECT_STATE.md`.)
 2. **2026-05-29 (this session)** — a standalone **production-readiness assessment**:
    - Built the `/assess` harness + standards/freshness layer + CI gates.
@@ -124,7 +125,7 @@ This session shipped (19 commits, all green on CI before merge):
 
 | Thing | Value |
 |---|---|
-| **Public URL / health** | `https://autoclip.studio` · `/health` |
+| **Public URL / health** | `https://agenticlip.studio` · `/health` (note: SECRETS.md/ACCESS.md are canonical; older notes said "autoclip" — stale) |
 | **VM / SSH / deploy dir** | `147.182.136.107` (Ubuntu 24.04) · `ssh creatorclip-vm` · `/opt/autoclip/` |
 | **R2 bucket / image** | `creatorclip-beta` · `ghcr.io/reese8272/creatorclip:latest` |
 | **GitHub repo** | `github.com/reese8272/creatorclip` (private) — `main` is the only branch (after you delete the remote feature branch) |
@@ -132,9 +133,9 @@ This session shipped (19 commits, all green on CI before merge):
 | **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. **CI ruff is 0.15.x**; `requirements-dev.txt` pins `ruff==0.15.15` to match (an older pin disagrees on formatting). |
 | **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` (add `--update-baseline` to recapture, `--require-fresh` for the freshness gate) |
 | **Active issue** | _(none in flight)_ — remaining work is the **Issue 75** tracking list |
-| **Last completed** | Issue 75(a) CVEs (14→0) + 75(f) observability (this session) |
+| **Last completed** | 75(a) CVEs (14→0) + 75(f) observability + Tier-1 pre-beta launch readiness (this session) |
 | **Latest alembic revision** | `a7b8c9d0e1f2` — `0007_clip_outcome_final` (this session added 0005, 0006, 0007) |
-| **Test count** | 410 passed, 1 skipped, 55 deselected |
+| **Test count** | 418 passed, 1 skipped, 55 deselected |
 
 ---
 

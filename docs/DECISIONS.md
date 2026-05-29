@@ -5,6 +5,60 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Tier-1 pre-beta launch readiness (legal pages + CORS lockdown + deploy verify)
+
+### What changed
+- **Clean legal routes** `main.py` `/privacy` → `static/privacy.html`, `/terms` →
+  `static/tos.html` (`include_in_schema=False`). The pages existed but were only
+  reachable at `/static/*.html` and were unrouted/undiscoverable.
+- **Google API *Limited Use* affirmative disclosure** added to `privacy.html` (a
+  dedicated section) — the exact statement Google requires for OAuth verification of
+  YouTube scopes: *"CreatorClip's use of information received from Google APIs will
+  adhere to the Google API Services User Data Policy, including the Limited Use
+  requirements."* + the no-transfer / no-ads / no-human-reads specifics.
+- **Homepage footer** (`index.html`) now links `/privacy` + `/terms` and restates the
+  Limited Use line — Google requires the privacy policy be discoverable from the app
+  home.
+- **CORS production fail-fast** (`config.py` new `_lock_prod_cors` validator): when
+  `ENV=production`, `ALLOWED_ORIGINS` must be non-empty, HTTPS, domain-locked — no
+  `*`, no `localhost`/`127.0.0.1`, no `http://`. Boots-fail rather than shipping an
+  open CORS policy. (`/docs` was already disabled outside development.)
+- **`scripts/verify_deploy.sh`** — turnkey Tier-1.2 check: `/health` ok, `/privacy`
+  + `/terms` + `/metrics` = 200, `/docs` = 404 in prod, and `alembic current` ==
+  the expected head (`a7b8c9d0e1f2` / 0007) over SSH. Fully parameterized
+  (DOMAIN/SSH_HOST/DEPLOY_DIR/EXPECTED_HEAD).
+
+### Why
+This is the buildable slice of the Tier-1 launch gate. A **closed beta does not need
+full Google OAuth verification** — the consent screen's *Testing* mode allows up to
+100 explicitly-added test users with unverified sensitive scopes — so verification
+(1.3) is a *public-launch* gate, not a *beta* gate. What a beta does need: correct,
+locked prod config; routed, discoverable legal pages with the mandatory Limited Use
+disclosure (so the consent screen and login flow are legitimate); and a way to
+confirm the deploy actually landed.
+
+### Industry standard checked (live, 2026-05-29)
+Google API Services User Data Policy — the affirmative Limited Use statement must
+appear in the privacy policy *and* be linked from the homepage; the recommended
+wording is the one used verbatim above. CORS with `allow_credentials=True` + a
+wildcard origin is invalid per the Fetch spec, hence the hard prod guard.
+Sources: Google API Services User Data Policy; YouTube API Services Developer Policies.
+
+### Legal-text caveat
+The privacy/ToS bodies remain a **draft pending legal review** (banner retained).
+The text added is the Google-mandated compliance disclosure grounded in the actual
+data practices (`docs/COMPLIANCE.md`), not legal advice; have counsel review before
+public launch.
+
+### Verification
+Full suite **418 passed, 1 skipped, 55 deselected** (+8 DB-free tests: `/privacy`
++ `/terms` routes, Limited-Use disclosure present, homepage links present, and four
+CORS-validator cases — reject localhost / `*` / `http://`, accept HTTPS domain).
+Gates unchanged: ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0. `verify_deploy.sh`
+syntax-checked (`bash -n`).
+
+---
+
 ## 2026-05-29 — Issue 75(f): Observability (correlation ids + structured logs + metrics)
 
 ### What changed

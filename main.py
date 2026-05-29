@@ -82,6 +82,19 @@ async def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html")
 
 
+# Clean, stable URLs for the legal pages — required for Google OAuth verification
+# (the privacy policy URL must be public and discoverable) and friendlier than the
+# raw /static path. (Tier-1 pre-launch.)
+@app.get("/privacy", include_in_schema=False)
+async def privacy() -> FileResponse:
+    return FileResponse(_STATIC / "privacy.html")
+
+
+@app.get("/terms", include_in_schema=False)
+async def terms() -> FileResponse:
+    return FileResponse(_STATIC / "tos.html")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()],
