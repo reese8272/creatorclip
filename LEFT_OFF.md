@@ -3,118 +3,122 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-28 (PM session 3 close-out)
-**Branch:** `main` — HEAD `97f6475`
-**Working tree:** clean (one untracked `.claude/` dir, gitignored)
+**Last updated:** 2026-05-28 (PM session 4 close-out)
+**Branch:** `main` — HEAD `2890f4d`
+**Working tree:** clean (`.claude/` now gitignored — see Constraints)
 **Sync with `origin/main`:** **0 / 0** (fully pushed)
-**Production:** ✅ green on `autoclip.studio` (last successful deploy at `6be61fb`, 23:45 UTC)
+**Production:** ✅ green on `autoclip.studio` — last successful deploy at `0f02077` (Issue 39);
+deploy for `3365224` (Issues 43+47) completed at 01:24 UTC. Format-only `2890f4d` will redeploy
+shortly.
 
 ---
 
 ## 1. CURRENT FOCUS
 
-**Batch 2 of Phase 2 hardening is shipped; the green-CI stamp on the most recent commit
-(`97f6475`) is still pending because GitHub Actions runners are queue-starved.**
+**Batch 3 of Phase 2 hardening is 3 of 5 closed (Issues 39, 43, 47). Two issues remain in the
+batch: 46 (generate-clips retry safety + outcomes time-window bug) and 57 (refund on terminal
+ingest failure — needs a Phase 1 policy decision).**
 
-`97f6475` is a TEST-ONLY fix for Issue 49's webhook integration tests (greenlet bug —
-test infra only, no source change). Production is already running the correct source.
+This session shipped:
+
+- **`0f02077` Issue 39** — Celery event-loop strategy (per-worker singleton loop + engine rebind
+  on `worker_process_init`).
+- **`3365224` Issues 43 + 47** — bundled into alembic `0004_video_done_creator_refreshed`:
+  `videos.ingest_done_at` retention clock + `creators.last_analytics_refreshed_at` fairness
+  ordering.
+- **`2890f4d`** — `ruff format` on the two new integration test files (CI uses `ruff format
+  --check`, my local pre-commit only ran `ruff check`).
 
 ### → NEXT ACTION
 
-1. **Verify the queued CI eventually picks up (or accept it as wedged).**
+1. **Confirm CI is green on `2890f4d`.**
    ```bash
    gh run list --branch main --limit 4
    ```
-   - If the 3 runs on `97f6475` (CI / Integration tests / Docker publish) have completed
-     and Integration tests is **success** — done. Nothing to do.
-   - If still `queued` after ≥2h: most likely cause is **free-tier GitHub Actions
-     minutes cap** (we ran ~25 CI cycles today). Check
-     `github.com/settings/billing/summary` in browser; reset on the next billing cycle.
-   - If `failure` on Integration tests: read `gh run view <id> --log-failed | tail -60`.
-     The fix touches `tests/test_billing_integration.py`; the pattern is "fresh
-     `AsyncSessionLocal()` for verification, never share `db_session` with TestClient."
+   The Issue 43+47 commit (`3365224`) failed CI's `ruff format --check` but Docker publish +
+   Integration tests + Deploy all succeeded; deploy is gated on Docker publish only.
+   `2890f4d` is the format fix — should pass clean.
 
-2. **Confirm production health.**
+2. **Verify the alembic migration landed on prod Postgres.**
+   The deploy at `3365224` shipped the new migration. Confirm:
    ```bash
-   curl -fsS https://autoclip.studio/health     # expect {"status":"ok","postgres":"ok","redis":"ok"}
+   curl -fsS https://autoclip.studio/health    # expect {"status":"ok","postgres":"ok","redis":"ok"}
+   ssh creatorclip-vm "cd /opt/autoclip && docker compose exec app .venv/bin/alembic current"
+   # expect: d4e5f6a7b8c9 (head)
    ```
+   If alembic shows the prior head (`c3d4e5f6a7b8`) the deploy didn't run `alembic upgrade`.
+   The Dockerfile entrypoint runs migrations on container start, so the most likely cause
+   would be a startup failure — check `docker compose logs --tail 100 app`.
 
-3. **Clean up the 7 locked agent worktrees** (deferred from this session — harness
-   process-locked them; should be GC'd by now but verify):
-   ```bash
-   for wt in agent-a02705a60354e96b1 agent-a0485b2967d2669d0 agent-a79712a3fdaa7f0ba \
-             agent-a82d5d6d0a8b1ff37 agent-a93a13e675c3e7eb0 agent-a95d613a38698708c \
-             agent-aa3da9fd2d7ebd988; do
-     git worktree remove -f -f ".claude/worktrees/$wt" 2>/dev/null || true
-   done
-   git branch -D worktree-agent-a02705a60354e96b1 worktree-agent-a0485b2967d2669d0 \
-                  worktree-agent-a79712a3fdaa7f0ba worktree-agent-a82d5d6d0a8b1ff37 \
-                  worktree-agent-a93a13e675c3e7eb0 worktree-agent-a95d613a38698708c \
-                  worktree-agent-aa3da9fd2d7ebd988 2>/dev/null || true
-   git worktree prune
-   ```
+3. **Pick the next issue.**
+   - **Issue 46 — generate-clips retry safety + outcomes time-window bug** (SEV-1):
+     `_poll_clip_outcomes_async` uses `now - timedelta(hours=48)` as the floor for "48h
+     checkpoints" but doesn't bound the *upper* end, so clips published >48h ago re-poll
+     every cycle. `generate_clips` retry path doesn't dedupe candidates — a retry can
+     double-create clip rows.
+   - **Issue 57 — Refund on terminal ingest failure** (SEV-2, needs Phase 1 policy
+     decision): `_set_status(IngestStatus.failed)` doesn't refund the minutes deducted
+     for the failed video. Need to decide refund policy first: always refund on `failed`?
+     Refund only after N retries exhausted? Refund minus a "we tried" overhead? Bring
+     this to alignment before Phase 3.
 
-4. **Pick the next batch of work.**
-   - **Batch 3 (serial — all touch `worker/tasks.py` and/or `models.py` migrations):**
-     Issues **39** (Celery event-loop strategy — foundational, do first),
-     **43** (`Video.ingest_done_at` + purge filter, migration),
-     **47** (`Creator.last_analytics_refreshed_at` + beat fairness, migration),
-     **46** (generate-clips retry safety + outcomes time-window bug),
-     **57** (refund on terminal ingest failure — needs Phase 1 policy decision).
-     43 + 47 can share a single alembic revision if you want.
-   - **Batch 4 (unblocked now):** **38** (sync-in-async + held DB sessions — needed 37 ✅),
-     **56** (Postgres RLS evaluation — needed 48 ✅; research-and-decide issue),
-     **52** (worker pipeline integration tests — still blocked on 39).
+   Issue 46 is the unblocked engineering work; 57 needs a product call before Phase 1
+   research starts.
+
+4. **Optional cleanup — `docs/issues.md` has stale `Status: 🔲 Not started` markers** on
+   Issues **35, 37, 44** even though they're closed (per `docs/PROJECT_STATE.md` /
+   `docs/DECISIONS.md`). One-shot doc fix; not blocking. Possibly other Done issues are
+   stale-marked too.
 
 ---
 
 ## 2. WHAT WORKS NOW (do not re-investigate)
 
-- ✅ **18 of 26 Phase 2 hardening issues closed**: Issues 32–37, 40–45, 48–51, 53–55.
-- ✅ **Test suite green locally**: `362 passed, 1 skipped, 41 deselected` (was 326 at
-  session start → +36 net this session across two parallel batches + Issue 36).
-- ✅ **Ruff clean** across the repo.
+- ✅ **21 of 26 Phase 2 hardening issues closed**: 32, 33, 34, 35, 36, 37, 39, 40, 41, 42, 43,
+  44, 45, 47, 48, 49, 50, 51, 53, 54, 55.
+- ✅ **Test suite green locally**: `373 passed, 1 skipped, 43 deselected` (was 362 at session
+  start → +11 unit, +2 integration this session).
+- ✅ **Ruff clean** (`ruff check` AND `ruff format --check`) across the repo.
 - ✅ **Production health verified**: `{"status":"ok","postgres":"ok","redis":"ok"}` on
-  `autoclip.studio`. Last successful deploy at `6be61fb` (23:45 UTC); `97f6475` source
-  is identical (test-only delta).
-- ✅ **OAuth lifecycle** (Issues 36, 45, 51): refresh-token revocation, invalid_grant
-  row deletion, reason-based 403 classification, per-creator refresh lock with Lua
-  release, scope set verified exact (no `youtube.upload`), no token plaintext in logs.
-- ✅ **SDK singletons + timeouts** (Issue 37): Anthropic, Stripe, Voyage, boto3 all
-  module-level singletons with production-grade timeout + retry config. `tenacity==9.1.4`
-  added to requirements.
-- ✅ **Redis singleton** at `youtube/_redis.py::get_redis_client()` shared by oauth + quota.
-- ✅ **Compliance scan** (Issue 53): structural no-virality scan across OpenAPI bodies,
-  static assets, schema descriptions. Codebase clean.
-- ✅ **Isolation tests** (Issue 48): 14 protected routes verified; zero SEV-0 findings.
-- ✅ **Cascade tests** (Issue 50): all 17 dependent tables verified.
-- ✅ **Billing integration tests** (Issue 49): concurrent race + webhook idempotency
-  + unknown-pack + missing-metadata covered against real Postgres.
-- ✅ **Bundled load-bearing gaps closed** (Issue 55): 9 surgical tests + 1 adversarial
-  YAML scenario (`loud_aftermath.yaml`).
-- ✅ **`scripts/rotate_token_key.py` coverage** (Issue 54): happy path + rollback +
-  no-plaintext.
-- ✅ **Two real test-infra bugs caught + fixed at merge time** (kept out of prod):
-  TestClient cookie jar leakage in OAuth callback test; SQLAlchemy `MissingGreenlet`
-  from sharing a session across event loops in webhook tests.
+  `autoclip.studio`. Deploys for Issues 39 and 43+47 both succeeded.
+- ✅ **Celery event loop** (Issue 39): one `asyncio` loop per worker process installed by
+  `worker_process_init`; engine rebound via `db.recreate_engine()` with
+  `sync_engine.dispose(close=False)` so parent FDs aren't yanked. `run_async[T]` helper
+  with `asyncio.run` fallback for unit tests. All 11 task bodies use it; all 16
+  `AsyncSessionLocal()` sites now `db.AsyncSessionLocal()` so the rebind is picked up at
+  call time.
+- ✅ **Source-media retention clock** (Issue 43): `videos.ingest_done_at` is the canonical
+  "ingest complete" boundary. Stamped exactly once in `_signals_async` under an
+  `if video.ingest_done_at is None:` guard (Celery is at-least-once — retries must not
+  refresh the stamp). Purge filter gates on `ingest_done_at IS NOT NULL AND ingest_done_at
+  < cutoff`. Alembic backfilled existing `done` rows with `created_at`.
+  `docs/COMPLIANCE.md` row updated.
+- ✅ **Analytics-refresh fairness** (Issue 47): `creators.last_analytics_refreshed_at` +
+  `ORDER BY ... NULLS FIRST, id`. Newly-connected creators jump first; yesterday's starved
+  creators go first today. Stamp inside the successful inner try; rollback on
+  `QuotaExhaustedError` un-stamps by design.
+- ✅ **Alembic 0004 deployed**: revision `d4e5f6a7b8c9` (`0004_video_done_creator_refreshed`)
+  bundles both Issue 43 + 47 schema changes. Partial index `ix_videos_purge_candidates`,
+  ordering index `ix_creators_refresh_order`. Single transaction.
+- ✅ **All prior session work** (see `docs/PROJECT_STATE.md` for Batches 1 + 2 + Issue 36).
 
 ---
 
 ## 3. THE ARC THAT LED HERE
 
 1. **Phase 1 (Issues 1–31)** closed in earlier sessions; beta live on `autoclip.studio`.
-2. **Earlier Phase 2 batch** (Issues 32–35, 40–42, 44) closed in prior sessions.
-3. **2026-05-28 PM session 1** — Issue 36 OAuth lifecycle (3-prong fix: revoke refresh,
-   invalid_grant row deletion, 403 reason classification). Shipped at `b282786`.
-4. **2026-05-28 PM session 2 (Batch 1)** — 6 parallel agents in isolated worktrees
-   closed Issues 37, 45, 48, 50, 53, 54. CI failure on first push (rotate_token_key test
-   assumed empty table) fixed in `c2ff63b`.
-5. **2026-05-28 PM session 3 (Batch 2, this session)** — 3 parallel agents closed
-   Issues 49, 51, 55. Two real bugs caught during merge:
-   - Issue 51's callback test set `cc_session` cookie in TestClient's session-scoped
-     jar, breaking `test_static::test_list_videos_requires_auth`. Fixed in `ad74b5f`.
-   - Issue 49's webhook tests shared `db_session` across event loops →
-     `MissingGreenlet`. Fixed in `97f6475`.
+2. **Earlier Phase 2** (Issues 32–35, 40–42, 44) closed in prior sessions.
+3. **2026-05-28 PM session 1** — Issue 36 OAuth lifecycle.
+4. **2026-05-28 PM session 2 (Batch 1)** — Issues 37, 45, 48, 50, 53, 54 via parallel agents.
+5. **2026-05-28 PM session 3 (Batch 2)** — Issues 49, 51, 55 via parallel agents; two real
+   test-infra bugs caught at merge time.
+6. **2026-05-28 PM session 4 (this session)** — Batch 3 kickoff:
+   - Issue 39 (Celery event-loop strategy) — foundational; unblocks Issue 52.
+   - Issue 43 (source-media purge correctness) — SEV-1 retention-window race.
+   - Issue 47 (analytics-refresh fairness) — SEV-2 starvation; bundled migration with 43.
+   - One CI hiccup: ruff *format* (not just `check`) failed on the new integration test
+     files. Fixed in `2890f4d`. Production unaffected because Deploy is gated on Docker
+     publish, not on the lint job.
 
 ---
 
@@ -134,70 +138,96 @@ test infra only, no source change). Production is already running the correct so
 | **App secrets on VM** | `/opt/autoclip/.env` (chmod 600 — see `docs/SECRETS.md` for the key list) |
 | **GH Actions secret names** | `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `GHCR_TOKEN`, `PRODUCTION_URL` |
 | **Test runner** | **`.venv/bin/python -m pytest -q`** (system `python3.12` is broken — see Gotchas) |
-| **Active issue** | _(none in flight)_ — Batch 3 (serial: 39, 43, 46, 47, 57) queued next |
-| **Last completed** | Batch 2 — Issues 49, 51, 55 (2026-05-28 PM session 3) |
-| **Phase 2 progress** | 18 of 26 hardening issues closed |
-| **Test count** | 362 passed, 1 skipped, 41 deselected (403 collected) |
+| **Lint runner** | **BOTH `.venv/bin/python -m ruff check .` AND `.venv/bin/python -m ruff format --check .`** — CI runs both. |
+| **Active issue** | _(none in flight)_ — Batch 3 remainder: Issues 46 + 57 |
+| **Last completed** | Issues 39, 43, 47 (2026-05-28 PM session 4) |
+| **Latest alembic revision** | `d4e5f6a7b8c9` — `0004_video_done_creator_refreshed` (bundles Issues 43 + 47) |
+| **Phase 2 progress** | 21 of 26 hardening issues closed |
+| **Test count** | 373 passed, 1 skipped, 43 deselected (416 collected) |
 
 ---
 
 ## 5. CONSTRAINTS & GOTCHAS
 
-- **GitHub Actions free-tier minutes may be capped.** 3 runs on `97f6475` have been
-  `queued` for 37+ min. If usage is the cause, monthly reset clears it; otherwise
-  GitHub capacity. Prod is already deployed on equivalent source, so this is
-  cosmetic-only.
-- **System `python3.12` cannot run pytest** — uv-managed Python has pydantic 2.46.4
-  but user-site has pydantic-core 2.27.2 → `SystemError` at plugin load. Always use
+- **`ruff check` ≠ `ruff format --check`.** CI runs both; my local pre-commit only ran the
+  first. Always run `ruff format --check .` before pushing, or `ruff format .` to apply.
+- **Deploy is gated on Docker publish, NOT on CI.** A lint or unit-test regression won't
+  block production. The Issue 43+47 commit `3365224` shipped to prod even with a lint
+  failure. (Open question for a future hardening issue — should CI gate deploy?)
+- **`.claude/` is now gitignored** (added in `0f02077`). LEFT_OFF previously claimed this;
+  it wasn't actually true until this session.
+- **System `python3.12` cannot run pytest** — uv-managed Python has pydantic 2.46.4 but
+  user-site has pydantic-core 2.27.2 → `SystemError` at plugin load. Always use
   `.venv/bin/python`. Fix (deferred):
   `python3.12 -m pip install --user --break-system-packages "pydantic-core>=2.46.4"`.
-- **Pushing to `main` triggers CI + production deploy.** Deploy is gated on Docker
-  publish success — NOT integration tests. So a test failure won't block production
-  if Docker publish passes. (Considered for a future hardening issue.)
-- **TestClient cookie jar is session-scoped** (`@pytest.fixture(scope="session")` in
-  `tests/conftest.py`). Any test that completes an OAuth callback / login / cookie-
-  setting flow MUST call `client.cookies.clear()` in teardown.
-- **SQLAlchemy 2.0 async sessions cannot cross event loops.** TestClient runs handlers
-  in its own loop — never share the test's `db_session` (an `AsyncSession`) with a
-  TestClient request via `dependency_overrides`. Pattern: let production `get_session()`
-  build a fresh `AsyncSessionLocal`-backed session per request; for post-call
-  verification open a separate `async with AsyncSessionLocal() as ...:` in the test's
-  loop.
-- **`app.dependency_overrides.clear()` (project convention) wipes ALL overrides.** This
-  works as long as tests are ordered such that one test's setup compensates for
-  another's teardown. A correctly-cleaning test can EXPOSE upstream pollution.
-  Surgical alternative: `app.dependency_overrides.pop(KEY, None)`.
-- **OAuth "disconnected" = `YoutubeToken` row absence** (no `OnboardingState` enum
-  value; no migration). See `docs/DECISIONS.md` 2026-05-28 Issue 36 entry.
-- **`scripts/rotate_token_key.py` operates on the whole `youtube_tokens` table by
-  design.** Any integration test for it must `DELETE FROM youtube_tokens` first
-  because other integration tests leave rows behind with ephemeral keys.
-- **Module-level Redis singleton lives at `youtube/_redis.py::get_redis_client()`**
-  (Issue 45). Batch 3 worker/tasks.py work should reuse it.
-- **Agents in isolated worktrees must use relative paths.** Absolute paths starting
-  with `/home/reese/workspace/Youtube-Video-AI-Editor/...` will leak into the primary
-  repo (happened with Issues 50 and 54 in Batch 1; mitigated in Batch 2 with explicit
-  prompts).
-- **7 agent worktrees are harness-process-locked** at session close — see Phase 1
-  Action 3 for cleanup commands. They block `git worktree remove` without `-f -f`.
+- **Postgres is not running locally on this WSL machine** — integration tests
+  (`@pytest.mark.integration`, 43 deselected) only run in CI / with a live Postgres.
+  Default `pytest -q` excludes them via `pytest.ini` `addopts = -m "not integration"`.
+- **`docs/issues.md` has stale `Status: 🔲 Not started` markers** on Issues 35, 37, 44 even
+  though they're done (per `PROJECT_STATE.md` and `DECISIONS.md`). Trust PROJECT_STATE
+  / DECISIONS as the source of truth. Worth a one-shot cleanup pass.
+- **Issue 39's `db.recreate_engine()` rebinds module globals**, but `from db import
+  AsyncSessionLocal` captures a stale reference. `worker/tasks.py` was switched to
+  `import db` + `db.AsyncSessionLocal(...)`. **Other consumers** (`scripts/rotate_token_key.py`,
+  tests that `from db import AsyncSessionLocal`) are OK because they call only in the
+  main process (no fork). New Celery code MUST use `import db` style.
+- **Issue 43's `ingest_done_at` write is idempotent**: `if video.ingest_done_at is None`
+  guard. Without it, Celery's at-least-once redelivery would silently extend retention.
+  Don't remove that guard.
+- **Issue 47's stamp must stay inside the successful inner try, before commit.** Moving
+  it outside (e.g. into a finally) would advance the timestamp on quota exhaustion,
+  re-introducing the starvation bug.
+- **Alembic migration `d4e5f6a7b8c9` is bundled** (Issues 43 + 47). Rolling back one
+  rolls back both. Acceptable: both columns are nullable-additive and low-blast-radius.
+- **TestClient cookie jar is session-scoped** (existing constraint). Any test that
+  completes an OAuth callback / cookie-setting flow MUST `client.cookies.clear()` in
+  teardown.
+- **SQLAlchemy 2.0 async sessions cannot cross event loops** (existing constraint).
+  TestClient runs handlers in its own loop — never share the test's `db_session` with a
+  TestClient request via `dependency_overrides`.
 - **Google OAuth app is still in Testing mode.** Verification required before public
   launch (Issue 29).
 
 ---
 
-## 6. POINTERS
+## 6. WHAT'S LEFT — PHASE 2 REMAINDER
+
+**5 issues remaining (out of 26 in Phase 2 hardening + test coverage):**
+
+| Issue | Severity | Title | Notes |
+|---|---|---|---|
+| **38** | SEV-1 | Sync external calls inside `async def` + held DB sessions | Unblocked by Issue 37 ✅. Batch 4 |
+| **46** | SEV-1 | Generate-clips retry safety + outcomes time-window bug | Batch 3. Next engineering pick |
+| **52** | TESTS | Worker pipeline integration tests | Was blocked on Issue 39 — now UNBLOCKED. Batch 4 |
+| **56** | RESEARCH | Evaluate Postgres Row-Level Security for tenant-owned tables | Decide-and-document, no code. Batch 4 |
+| **57** | SEV-2 | Refund on terminal ingest failure | Needs Phase 1 policy decision before research starts. Batch 3 |
+
+**Batch 3 (worker/tasks.py-heavy, serial):** 46, 57. Both touch the worker pipeline; 57 also
+needs a policy call.
+
+**Batch 4 (now unblocked, parallel-safe):** 38, 52, 56.
+
+After Phase 2 closes (all 26 done), the open work is **Phase 3** = pre-public-launch gates:
+public-go-live (Issue 30), OAuth app verification, ToS/Privacy pages live, account-deletion
+endpoint hardening, billing tiers, eval-harness adversarial expansion. See
+`docs/PROJECT_STATE.md` "Pre-Public-Launch Gates" table.
+
+---
+
+## 7. POINTERS
 
 | Doc | Purpose |
 |---|---|
-| `docs/PROJECT_STATE.md` | Issue table + closed-batch summaries (Phase 2: 18/26 done) |
-| `docs/issues.md` | Full issue backlog with acceptance criteria — Batches 3/4 queued |
-| `docs/DECISIONS.md` | Architectural decisions — 2026-05-28 entries for Issues 32–37, 40–42, 44, 45 |
+| `docs/PROJECT_STATE.md` | Issue table + closed-batch summaries (Phase 2: 21/26 done) |
+| `docs/issues.md` | Full issue backlog with acceptance criteria — **caveat**: stale `Status` markers on 35/37/44 (they're done) |
+| `docs/DECISIONS.md` | Architectural decisions — 2026-05-28 entries for Issues 32–37, 39, 40–45, 47 |
 | `docs/SOT.md` | Architecture + data model |
-| `docs/COMPLIANCE.md` | YouTube ToS + Findings & Fixes Log |
+| `docs/COMPLIANCE.md` | YouTube ToS + Findings & Fixes Log (retention-clock row updated for Issue 43) |
 | `docs/SECRETS.md` | Every secret by NAME (no values) |
 | `docs/ACCESS.md` | SSH access, CI deploy key, Cloudflare Tunnel runbook |
 | `docs/DEPLOYMENT.md` | Dev setup + pre-deploy checklists |
 | `docs/CLIPPING_PRINCIPLES.md` | Named principles registry cited by the clip engine |
 | `CLAUDE.md` | Project rules + Check→Approve→Build→Review workflow |
-| `.github/workflows/deploy.yml` | CD pipeline (gated on Docker publish, not integration) |
+| `.github/workflows/deploy.yml` | CD pipeline (gated on Docker publish, not lint/CI) |
+| `alembic/versions/0004_video_done_creator_refreshed.py` | Latest migration — Issues 43 + 47 |
 | `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` | Auto-memory index for this project |
