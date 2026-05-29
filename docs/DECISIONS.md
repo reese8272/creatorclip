@@ -5,6 +5,37 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Batch 8 (Issues 73 + 74 + 75): input/memory/config hardening
+
+### What changed
+- **74:** `ingestion/audio.py` loads at `sr=16000` (≈3× less memory than the native
+  rate); `ingestion/transcribe.py` caches the WhisperX model + align model
+  (`lru_cache`) and makes the Deepgram client + AssemblyAI key module-level singletons.
+- **73:** `routers/videos.py` validates `youtube_video_id` against `^[A-Za-z0-9_-]{11}$`
+  (422) on `/link` and `/upload`, before it reaches a storage key.
+- **75:** `config.py` fails fast in production when Stripe secrets are unset;
+  `upload_intel/timing.py` skips out-of-range `day_of_week`/`hour` rows instead of
+  `IndexError`→500.
+
+### Why
+Memory: the librosa full-rate decode was the dominant OOM vector under concurrency.
+Security: an unvalidated `youtube_video_id` could reshape the R2 object key (`../`).
+Robustness: a missing Stripe secret should fail at boot, not at first webhook; one
+bad activity row shouldn't 500 the upload-intel endpoint.
+
+### Scope decisions (honest deferrals, tracked in Issue 75)
+- **Full `response_model` coverage (73)** is mechanical hygiene across ~16 endpoints
+  with no security/correctness risk; rushing accurate schemas for every dict in one
+  commit risks runtime 500s. Deferred to Issue 75. The *security* part (input
+  validation) shipped here.
+- **Deepgram file-stream (74)** deferred: the deepgram SDK isn't installed in this
+  environment to verify the streaming API, and `sr=16000` already removes the main
+  memory vector.
+- **CVE triage, analytics-retention cadence, observability, mypy→0** are each
+  research/infra efforts, not single commits — enumerated in Issue 75.
+
+---
+
 ## 2026-05-29 — Issue 71 (Batch 7): Preference hardening
 
 ### What changed

@@ -1243,45 +1243,46 @@ loop (no connection reuse). (axes B/E)
 
 ## Issue 73: Pydantic response_model + input validation on routes (SEV-2)
 **Depends on**: —
-**Status**: Open
+**Status**: Partially done (2026-05-29, Batch 8) — security item done; response_model coverage tracked in Issue 75
 
-**What**: Nearly every endpoint returns a bare `dict` with no `response_model`
-(`routers/*` — list in `docs/assessment/modules/routers.md`); only `billing` declares one.
-`youtube_video_id` is an unvalidated `Form(...)` interpolated into a storage key.
+**What**: `youtube_video_id` was an unvalidated `Form(...)` interpolated into a storage key;
+most endpoints return a bare `dict` with no `response_model`.
 
 **Acceptance criteria**:
-- [ ] A Pydantic `*Out` model + `response_model=` on every endpoint
-- [ ] `youtube_video_id` validated against `^[A-Za-z0-9_-]{11}$` (422 on bad input)
+- [x] `youtube_video_id` validated against `^[A-Za-z0-9_-]{11}$` (422 on bad input) on both `/videos/link` and `/videos/upload`, before the value reaches a storage key — DB-free unit test
+- [ ] A Pydantic `*Out` model + `response_model=` on every endpoint — **mechanical hygiene (no security/correctness risk), ~16 endpoints; tracked under Issue 75** rather than rushed into one commit
 
 ## Issue 74: Bound transcription/audio memory (SEV-2)
 **Depends on**: —
-**Status**: Open
+**Status**: Done (2026-05-29, Batch 8) — Deepgram-stream item deferred to Issue 75
 
-**What**: `ingestion/transcribe.py:45` reads the entire WAV into RAM; `ingestion/audio.py:37`
-`librosa.load(sr=None)` decodes the full waveform (≈690 MB/hr) → OOM vector at concurrency.
-WhisperX model + SDK clients reconstructed per call (not singletons).
+**What**: `librosa.load(sr=None)` decoded the full waveform at native rate (≈690 MB/hr) → OOM
+vector; WhisperX model + SDK clients reconstructed per call.
 
 **Acceptance criteria**:
-- [ ] Stream/upload-by-URL for Deepgram; `librosa.load(sr=16000)` or block streaming
-- [ ] WhisperX model + transcription clients cached as module-level singletons
+- [x] `librosa.load(sr=16000)` — ~3× less memory; heuristics need no more fidelity (the universal path; verified locally)
+- [x] WhisperX model + align model cached via `lru_cache`; Deepgram client + AssemblyAI key as module-level singletons
+- [ ] Deepgram full-file `f.read()` → file-stream — **deferred (Issue 75)**: the deepgram SDK isn't installed here to verify the streaming API, and `sr=16000` already removes the dominant memory vector
 
 ## Issue 75: SEV-2 / cleanup long tail + dependency CVEs + compliance (tracking)
 **Depends on**: —
-**Status**: Open
+**Status**: Open (tracking) — two concrete items done; research/infra items remain
 
-**What**: Remaining ~37 SEV-2 + ~34 cleanup items catalogued in
-`docs/assessment/modules/*.md`, plus: (a) **14 pip-audit CVEs** — triage, patch
-critical/high within 7 days, then ratchet `pip_audit_vulns` baseline to 0; (b) YouTube
-**analytics retention/refresh cadence** unenforced (`youtube/analytics.py`, COMPLIANCE.md
-§2 — ToS exposure); (c) Stripe-key prod fail-fast; (d) `upload_intel/timing.py:33`
-IndexError → 500; (e) ratchet `mypy_errors` 30→0 then enable `disallow_untyped_defs`;
-(f) observability: request/correlation id + golden-signal metrics.
+**Done in Batch 8:**
+- [x] (c) Stripe-key **prod fail-fast** — `config.py` `model_validator` requires `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` when `ENV=production` (DB-free unit test)
+- [x] (d) `upload_intel/timing.py` `IndexError`→500 — out-of-range `day_of_week`/`hour` rows skipped (DB-free unit test)
 
-**Acceptance criteria**:
-- [ ] 14 CVEs triaged; criticals/highs patched; `pip_audit_vulns` baseline → 0
-- [ ] Analytics retention cadence confirmed + scheduled refresh/purge (COMPLIANCE.md updated)
-- [ ] Per-module SEV-2/cleanup items closed or explicitly deferred in the next `/assess` diff
-- [ ] `mypy_errors` ratcheted toward 0
+**Remaining (each its own focused effort — not single-commit changes):**
+- [ ] (a) **14 pip-audit CVEs** — triage each, patch critical/high within 7 days, then ratchet `pip_audit_vulns` baseline → 0
+- [ ] (b) YouTube **analytics retention/refresh cadence** vs ToS (`youtube/analytics.py`, COMPLIANCE.md §2) — needs the actual ToS cadence figure, then a scheduled refresh/purge
+- [ ] (e) ratchet `mypy_errors` 30→0, then enable `disallow_untyped_defs`
+- [ ] (f) observability: request/correlation id in logs + golden-signal metrics
+- [ ] **Full `response_model` coverage** across the ~16 endpoints (from Issue 73)
+- [ ] **Deepgram file-stream** upload (from Issue 74)
+- [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
+- [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71)
+- [ ] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66)
+- [ ] ~37 remaining SEV-2 + ~34 cleanup items in `docs/assessment/modules/*.md` — re-run `/assess` to triage as a diff
 
 ---
 

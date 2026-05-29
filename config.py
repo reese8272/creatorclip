@@ -1,6 +1,6 @@
 import sys
 
-from pydantic import ValidationError
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,6 +70,21 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = ""
     APP_BASE_URL: str = "http://localhost:8000"
     FREE_TRIAL_MINUTES: int = 60
+
+    @model_validator(mode="after")
+    def _require_prod_secrets(self) -> "Settings":
+        # Fail fast in production if billing secrets are unset — otherwise the gap
+        # surfaces only at first checkout/webhook (Issue 75). Dev/test (ENV defaults
+        # to "development") is unaffected.
+        if self.ENV == "production":
+            missing = [
+                name
+                for name in ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(f"In production these must be set: {', '.join(missing)}")
+        return self
 
 
 try:

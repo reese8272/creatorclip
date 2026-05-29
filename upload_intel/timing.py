@@ -23,16 +23,21 @@ def best_upload_windows(
 
     results = []
     for row in sorted_rows:
+        dow = int(row.day_of_week)
         hour = int(row.hour)
+        # Skip malformed rows rather than IndexError → 500 on the endpoint (Issue 73/75):
+        # a single bad ingest must not break the whole upload-intel response.
+        if not (0 <= dow <= 6) or not (0 <= hour <= 23):
+            continue
         period = "AM" if hour < 12 else "PM"
         display_hour = hour if hour <= 12 else hour - 12
         display_hour = 12 if display_hour == 0 else display_hour
         results.append(
             {
-                "day_of_week": int(row.day_of_week),
-                "day_name": _DAY_NAMES[int(row.day_of_week)],
+                "day_of_week": dow,
+                "day_name": _DAY_NAMES[dow],
                 "hour": hour,
-                "label": f"{_DAY_NAMES[int(row.day_of_week)]} {display_hour}:00 {period}",
+                "label": f"{_DAY_NAMES[dow]} {display_hour}:00 {period}",
                 "activity_index": float(row.activity_index),
             }
         )

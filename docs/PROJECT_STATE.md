@@ -6,9 +6,19 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–72 ✅ done. Next: Batch 8 = Issues 73 + 74 + 75 (SEV-2 response_models/input validation, transcription memory bounds, tracking items).
-**Last completed**: Issue 71 — preference hardening: lock-guarded unpickler, advisory-lock version race, honest schema-drift/predict_score fallback.
+**Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (2 concrete items done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (CVE triage, analytics-retention compliance, full response_models, observability, mypy→0) + the staging Locust run for 58.
+**Last completed**: Batch 8 — librosa sr=16000 + transcription singletons (74); youtube_video_id validation (73); Stripe prod fail-fast + upload_intel IndexError guard (75).
 **Blocked**: _(none)_
+
+> **Closed Batch 8 / Issues 73(partial) + 74 + 75(partial)** (2026-05-29): Memory: librosa
+> loads at sr=16000 (~3x less RAM) + WhisperX/SDK-client singletons. Security: youtube_video_id
+> validated (^[A-Za-z0-9_-]{11}$ -> 422) before reaching a storage key. Robustness: Stripe
+> prod fail-fast config validator; upload_intel skips out-of-range rows instead of 500.
+> Deferred to Issue 75 tracking (with rationale in DECISIONS): full response_model coverage,
+> Deepgram file-stream, 14 CVEs, analytics-retention cadence, observability, mypy->0, clip-scorer
+> caching, scorer cache, brief 202/poll. DB-free unit tests for all four hardening items; updated
+> 3 upload-streaming tests to valid 11-char IDs. Test count: **401 passed, 1 skipped, 55 deselected**
+> (+4). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.45%.
 
 > **Closed Issue 71** (2026-05-29, Batch 7): from_bytes monkeypatched a joblib global
 > (not thread-safe -> RCE allowlist defeatable under concurrent loads); build_and_save

@@ -12,12 +12,18 @@ All backends are normalized to the same internal schema:
   }
 """
 
+import functools
 import logging
 from pathlib import Path
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Module-level singletons (Issue 74): the SDK clients and the WhisperX model were
+# being reconstructed/reloaded on every call. A warm worker now reuses them.
+_DEEPGRAM_CLIENT = None
+_ASSEMBLYAI_READY = False
 
 
 def transcribe_audio(audio_path: str | Path) -> dict:
@@ -33,15 +39,25 @@ def transcribe_audio(audio_path: str | Path) -> dict:
 # ── Deepgram ──────────────────────────────────────────────────────────────────
 
 
+def _deepgram_client():
+    """Lazy module-level DeepgramClient singleton (Issue 74)."""
+    global _DEEPGRAM_CLIENT
+    if _DEEPGRAM_CLIENT is None:
+        from deepgram import DeepgramClient
+
+        if not settings.DEEPGRAM_API_KEY:
+            raise ValueError("DEEPGRAM_API_KEY is not set")
+        _DEEPGRAM_CLIENT = DeepgramClient(settings.DEEPGRAM_API_KEY)
+    return _DEEPGRAM_CLIENT
+
+
 def _transcribe_deepgram(audio_path: str) -> dict:
     try:
-        from deepgram import DeepgramClient, PrerecordedOptions
+        from deepgram import PrerecordedOptions
     except ImportError as exc:
         raise ImportError("deepgram-sdk not installed. Run: pip install deepgram-sdk") from exc
-    if not settings.DEEPGRAM_API_KEY:
-        raise ValueError("DEEPGRAM_API_KEY is not set")
 
-    client = DeepgramClient(settings.DEEPGRAM_API_KEY)
+    client = _deepgram_client()
     with open(audio_path, "rb") as f:
         payload = {"buffer": f.read(), "mimetype": "audio/wav"}
     opts = PrerecordedOptions(model="nova-3", smart_format=True, utterances=True, words=True)
@@ -106,7 +122,11 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
     if not settings.ASSEMBLYAI_API_KEY:
         raise ValueError("ASSEMBLYAI_API_KEY is not set")
 
-    aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
+    global _ASSEMBLYAI_READY
+    if not _ASSEMBLYAI_READY:
+        # Set the global API key once, not on every call (Issue 74).
+        aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
+        _ASSEMBLYAI_READY = True
     transcript = aai.Transcriber().transcribe(audio_path)
     return _normalize_assemblyai(transcript)
 
@@ -134,6 +154,21 @@ def _normalize_assemblyai(transcript) -> dict:
 # ── WhisperX ──────────────────────────────────────────────────────────────────
 
 
+@functools.lru_cache(maxsize=2)
+def _whisperx_model(model_name: str, device: str, compute_type: str):
+    """Cache the loaded WhisperX model — it was reloaded from disk every call (Issue 74)."""
+    import whisperx
+
+    return whisperx.load_model(model_name, device=device, compute_type=compute_type)
+
+
+@functools.lru_cache(maxsize=4)
+def _whisperx_align_model(language_code: str, device: str):
+    import whisperx
+
+    return whisperx.load_align_model(language_code=language_code, device=device)
+
+
 def _transcribe_whisperx(audio_path: str) -> dict:
     try:
         import whisperx
@@ -141,12 +176,10 @@ def _transcribe_whisperx(audio_path: str) -> dict:
         raise ImportError(
             "whisperx is not installed. Run: pip install git+https://github.com/m-bain/whisperX.git"
         ) from exc
-    model = whisperx.load_model(settings.WHISPER_MODEL, device="cpu", compute_type="int8")
+    model = _whisperx_model(settings.WHISPER_MODEL, "cpu", "int8")
     audio = whisperx.load_audio(audio_path)
     result = model.transcribe(audio, batch_size=16)
-    align_model, metadata = whisperx.load_align_model(
-        language_code=result["language"], device="cpu"
-    )
+    align_model, metadata = _whisperx_align_model(result["language"], "cpu")
     result = whisperx.align(result["segments"], align_model, metadata, audio, device="cpu")
     return _normalize_whisperx(result)
 
