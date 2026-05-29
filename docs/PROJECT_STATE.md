@@ -6,9 +6,31 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 3 closed (Issues 39 + 43 + 46 + 47 + 57). Next: Batch 4 (38, 52, 56), parallel-safe.
-**Last completed**: Issue 57 — automatic refund on terminal ingest failure via Celery `on_failure` hook + compensating `MinutePack` row.
+**Active issue**: Phase 2 hardening — Batch 4 in progress. Issue 56 closed (RLS adopt-now decision); Issue 38 W1 + Issue 52 next. Issue 60 filed for the RLS implementation work split from Issue 56.
+**Last completed**: Issue 56 — Postgres Row-Level Security decision (adopt now; implementation tracked as new Issue 60).
 **Blocked**: _(none)_
+
+> **Closed Issue 56** (2026-05-28): Postgres Row-Level Security research-and-decide.
+> Decision: **adopt RLS** as defense-in-depth underneath the existing
+> application-layer always-filter for every tenant-owned table. Trigger context:
+> the SEV-0 Issue 33 leak (a missed `creator_id` filter exposed cross-creator
+> analytics to a Claude prompt) demonstrated that application-layer filtering is a
+> linting problem disguised as a security property. RLS converts that into a
+> structural guarantee: the database refuses to return cross-tenant rows even when
+> application code forgets the WHERE. Implementation sketch pinned in
+> `docs/DECISIONS.md`: 12 tables with direct `creator_id` columns get policies;
+> two-role split (`creatorclip_app` no-BYPASSRLS + `creatorclip_migrate` BYPASSRLS;
+> new `DATABASE_MIGRATION_URL`); `SET LOCAL app.creator_id` injected via
+> SQLAlchemy `after_begin` event listener sourcing from FastAPI auth context;
+> `FORCE ROW LEVEL SECURITY` on every covered table; mutation paths audit
+> rowcount-zero-→-404. pgbouncer-future answer pinned: safe with transaction
+> pooling, unsafe with statement pooling (we don't run pgbouncer today). Sources:
+> Crunchy Data, pganalyze, Bytebase footguns writeup, SQLAlchemy 2.0 async docs
+> + discussion #10469, Microsoft Azure multi-tenant guidance. **Implementation
+> split to new Issue 60** — the Issue 56 spec was explicitly "research-and-decide",
+> and the implementation is substantial enough (alembic migration + role split +
+> middleware + mutation audit) to warrant its own focused PR. The decision
+> ships now and Issue 60 inherits the carry-over ACs.
 
 > **Closed Issue 57** (2026-05-28): Automatic refund on terminal ingest failure.
 > Issue 34 made minute deduction per-video-idempotent, but a terminally-failing ingest

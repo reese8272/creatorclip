@@ -5,6 +5,149 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 56: Postgres Row-Level Security — adopt now
+
+### What was decided
+**Adopt Postgres RLS as the defense-in-depth layer underneath the existing
+application-level always-filter for every tenant-owned table.** The
+implementation lands in a separate issue (filed as **Issue 60**); this entry
+closes the Issue 56 "research-and-decide" deliverable.
+
+### Why
+Application-layer filtering is the foundation but is a linting problem
+disguised as a security property — it depends on every developer, every PR,
+every query author, forever, never forgetting `WHERE creator_id = :id`. We
+already had one SEV-0 leak (Issue 33) where the filter was missed and
+cross-creator analytics flowed into a Claude prompt. RLS converts the
+guarantee from "every query author must remember" into a structural property
+of the database: the row never leaves Postgres for the wrong tenant, even
+when application code forgets the WHERE.
+
+We are about to enter Google OAuth verification (Phase 3) where auditable
+multi-tenant isolation posture is load-bearing for approval; the right
+time to pay the implementation cost is before public launch, not during a
+post-launch incident.
+
+### Implementation sketch (for Issue 60)
+
+**Tables needing CREATE POLICY** — every table with a direct `creator_id`
+column, 12 in total: `videos`, `audience_activity`, `demographics`,
+`creator_dna`, `dna_embeddings`, `clips`, `clip_feedback`,
+`preference_models`, `minute_packs`, `minute_deductions`, `usage`,
+`youtube_tokens`. Child-only tables (`video_metrics`, `retention_curves`,
+`transcripts`, `signals`, `clip_outcomes`) reach tenant via FK to a parent
+that already has a policy; explicit policies on them are belt-and-suspenders
+and can land in a follow-up if a query path ever bypasses the parent join.
+`creators` and `audit_log` are explicitly exempt (self-identifying;
+append-only ops log).
+
+**Role split** — application connects as `creatorclip_app` (no `BYPASSRLS`,
+not the table owner). Alembic migrations connect as `creatorclip_migrate`
+with `ALTER ROLE creatorclip_migrate BYPASSRLS`. Adds a new
+`DATABASE_MIGRATION_URL` env var alongside the existing `DATABASE_URL`.
+Without this split the app role would bypass policies as the owner,
+defeating the entire mechanism.
+
+**`SET LOCAL app.creator_id` injection** — register an SQLAlchemy
+`after_begin` event listener on the `Session` class that calls
+`connection.execute(text("SET LOCAL app.creator_id = :id"), {"id": str(creator_id)})`
+inside every transaction. Source the creator UUID from the existing FastAPI
+auth dependency (`current_creator`). The `after_begin` hook fires
+per-transaction, matching `SET LOCAL`'s transaction scope: when the
+transaction commits or rolls back, the GUC disappears and the next
+transaction on a recycled pool connection starts clean.
+
+**`FORCE ROW LEVEL SECURITY`** — apply to every policy-covered table in
+the migration. By default Postgres lets the table *owner* bypass RLS
+regardless of policies; `FORCE` closes that gap.
+
+**Issue 48 isolation test extension** — for every existing isolation test,
+add a "with RLS active, an unfiltered `SELECT *` returns zero rows for
+non-current creator" assertion. This converts the test suite from "the
+application filtered correctly" into "the database refused to leak even
+without the application filter" — exactly the property RLS is purchased to
+provide.
+
+### pgbouncer-future answer (pinned)
+We do not run pgbouncer today. When we add it:
+- **Transaction pooling**: SAFE. `SET LOCAL` is scoped to the transaction
+  and cleared on commit, so the next request on a recycled connection
+  starts clean.
+- **Statement pooling**: UNSAFE. pgbouncer can hand off mid-transaction
+  to a different connection, leaking the GUC across tenants.
+- **Session pooling**: SAFE but loses most of pgbouncer's benefit.
+
+Decision: when we add pgbouncer, configure transaction pooling only. This
+is the industry-standard pairing for RLS-enabled stacks.
+
+### Alternatives ruled out
+- **Defer to production-scale**: would tolerate Issue-33-class regressions
+  until launch. The Issue 33 leak motivated this issue. Deferring is not
+  defensible given that history.
+- **Decline (rely on application filter only)**: leaves the bug class
+  structurally open. Even with the Issue 48 isolation test suite (which is
+  excellent for what it tests), nothing prevents the next missed filter from
+  shipping.
+- **Connection `checkout` pool event for SET LOCAL**: fires too early —
+  the tenant UUID is not yet in scope at pool-checkout time. Use
+  `after_begin` per Crunchy Data + SQLAlchemy 2.0 guidance.
+- **Per-tenant Postgres schema**: a tenant-per-schema approach is the
+  alternative defense-in-depth pattern. It scales poorly past a few
+  hundred tenants (`pg_class` bloat; introspection cost) and adds heavy
+  migration complexity. Not the right shape for a B2C-leaning SaaS.
+
+### Tradeoffs
+- **Open question on child tables**: child-only tables (`video_metrics`,
+  etc.) are reachable through parent tables that DO have policies, so
+  application JOINs naturally filter them. The Issue 56 spec says "every
+  table with a `creator_id` column" — honored literally; child tables get
+  RLS in a future hardening if a query ever bypasses the parent join.
+- **Silent UPDATE/DELETE failures**: with RLS, a mutation touching a row
+  the current tenant doesn't own returns 0 rows affected with no error.
+  Mutation paths must check rowcount and raise 404 rather than silently
+  succeeding. Issue 60 implementation must audit every mutation path.
+- **pgvector ANN index queries on `dna_embeddings`**: RLS policies are
+  evaluated post-index-scan, so cross-tenant embeddings could briefly
+  appear in ANN candidates before filtering. For current scale (closed
+  beta, few hundred rows per creator) this is correctness-and-performance
+  neutral; revisit at scale.
+- **Migration role lockdown**: requires SSH access to the prod Postgres
+  to grant `BYPASSRLS` to the migration role one time. Captured in
+  `docs/DEPLOYMENT.md` for Issue 60.
+
+### Source / evidence (RLS pattern + pgbouncer compatibility)
+- Crunchy Data — Row Level Security for Tenants in Postgres:
+  https://www.crunchydata.com/blog/row-level-security-for-tenants-in-postgres
+- pganalyze — Using Postgres Row-Level Security in Ruby on Rails (pgbouncer
+  transaction-mode compatibility):
+  https://pganalyze.com/blog/postgres-row-level-security-ruby-rails
+- Daniel Imfeld — PostgreSQL Row Level Security notes (pgbouncer
+  statement-vs-transaction pooling):
+  https://imfeld.dev/notes/postgresql_row_level_security
+- Bytebase — Postgres RLS Footguns (FORCE RLS, owner bypass, silent
+  failures): https://www.bytebase.com/blog/postgres-row-level-security-footguns/
+- SQLAlchemy 2.0 Async I/O docs (sync_engine event listener pattern):
+  https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html
+- SQLAlchemy Discussion #10469 (after_begin requires `connection.execute`,
+  not `session.execute`, since 2.0.17):
+  https://github.com/sqlalchemy/sqlalchemy/discussions/10469
+- techbuddies.io — PostgreSQL RLS for Multi-Tenant SaaS:
+  https://www.techbuddies.io/2026/02/04/how-to-implement-postgresql-row-level-security-for-multi-tenant-saas-2/
+- Microsoft Azure Architecture — Postgres in Multi-Tenant Solutions:
+  https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/service/postgresql
+- Thenile — Shipping multi-tenant SaaS using Postgres RLS:
+  https://www.thenile.dev/blog/multi-tenant-rls
+
+### Files (this issue, decision-only)
+- `docs/DECISIONS.md` — this entry.
+- `docs/issues.md` — Issue 56 closed; new Issue 60 filed for the
+  implementation.
+
+### Date
+2026-05-28
+
+---
+
 ## 2026-05-28 — Issue 57: Automatic refund on terminal ingest failure
 
 ### What changed

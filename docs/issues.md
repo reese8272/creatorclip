@@ -921,7 +921,7 @@ existing test files rather than a new file per item.
 ### Issue 56: Evaluate Postgres Row-Level Security for tenant-owned tables
 **Severity**: SEV-2 — defense-in-depth against future missed creator_id filters
 **Depends on**: 32, 48
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28) — decision: **adopt now**; implementation tracked as new Issue 60
 
 **What**: The current isolation model is application-layer always-filter — every protected
 query carries `where(creator_id == ...)`. This is the 2026 industry-standard foundation,
@@ -945,11 +945,10 @@ This is a **research-and-decide** issue, not a foregone implementation. The trad
 RLS-aware test updates, `docs/SOT.md` + `docs/DECISIONS.md` + `docs/COMPLIANCE.md` entries.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research current production patterns for RLS + SQLAlchemy 2.0 + async (`SET LOCAL` is per-transaction so it interacts with connection pooling — confirm pgbouncer compatibility is honored)
-- [ ] Decision documented in `docs/DECISIONS.md`: adopt now / defer to production-scale / decline with reason
-- [ ] If adopted: RLS policies cover every table with a `creator_id` column; migration role retains BYPASSRLS for alembic upgrades
-- [ ] If adopted: Issue 48 isolation tests extended to assert "unfiltered query returns zero rows for non-current creator"
-- [ ] If deferred: revisit at Issue 30 (production go-live) — close as "deferred" only after explicit owner sign-off
+- [x] Phase 1: research current production patterns for RLS + SQLAlchemy 2.0 + async (pgbouncer compatibility pinned in DECISIONS: safe with transaction pooling, unsafe with statement pooling; we don't run pgbouncer today)
+- [x] Decision documented in `docs/DECISIONS.md`: **adopt now**
+- [→] If adopted: RLS policies cover every table with a `creator_id` column; migration role retains BYPASSRLS for alembic upgrades → **tracked as Issue 60**
+- [→] If adopted: Issue 48 isolation tests extended to assert "unfiltered query returns zero rows for non-current creator" → **tracked as Issue 60**
 
 ---
 
@@ -1047,6 +1046,43 @@ warnings, "your trial expires in N days", and YouTube re-auth prompts.
 - [ ] `GET /api/notifications` + `POST /api/notifications/:id/dismiss` endpoints
 - [ ] Dashboard renders pending notifications as a dismissible banner
 - [ ] Refund event emits a notification when an ingest is terminally refunded
+
+---
+
+### Issue 60: Implement Postgres Row-Level Security per Issue 56 decision
+**Severity**: SEV-2 — structural defense-in-depth against cross-tenant leaks
+**Depends on**: 56 ✅
+**Status**: 🔲 Not started
+
+**What**: Implement the RLS adopt-now decision from Issue 56. See
+`docs/DECISIONS.md` 2026-05-28 entry on Issue 56 for the full implementation
+sketch (table list, role split, SET LOCAL injection point, FORCE RLS,
+pgbouncer-future compatibility, silent UPDATE/DELETE gotchas).
+
+**Files (if we proceed)**: new alembic migration (CREATE POLICY on 12
+tables + FORCE RLS + role grants), `db.py` (after_begin event listener
+sourcing `current_creator` from FastAPI context), `config.py` +
+`.env.example` (new `DATABASE_MIGRATION_URL`), `alembic/env.py` (use the
+migration URL), `routers/*.py` (audit every UPDATE/DELETE for rowcount
+checks), `tests/test_isolation.py` (extend per AC4),
+`docs/SOT.md` + `docs/DEPLOYMENT.md` (role-split runbook).
+
+**Acceptance criteria**:
+- [ ] Alembic migration creates SELECT policies on all 12 tables listed in
+      Issue 56's DECISIONS entry; `FORCE ROW LEVEL SECURITY` on each
+- [ ] Role split: `creatorclip_app` (no BYPASSRLS, not table owner);
+      `creatorclip_migrate` with BYPASSRLS; new env var
+      `DATABASE_MIGRATION_URL` documented in `docs/SECRETS.md`
+- [ ] `after_begin` event listener on `Session` sources `current_creator`
+      from FastAPI request context and emits `SET LOCAL app.creator_id`
+- [ ] Every UPDATE / DELETE that targets a tenant-owned table checks
+      `result.rowcount` and raises 404 on 0 (silent-failure guard)
+- [ ] Issue 48 isolation tests extended: with RLS active and Creator A in
+      context, an unfiltered `SELECT * FROM <each table>` returns zero
+      Creator B rows
+- [ ] Production runbook in `docs/DEPLOYMENT.md` covers the one-time
+      `BYPASSRLS` grant on the migration role
+- [ ] No regression in existing test suite under RLS-enabled CI
 
 ---
 
