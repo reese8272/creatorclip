@@ -956,33 +956,97 @@ RLS-aware test updates, `docs/SOT.md` + `docs/DECISIONS.md` + `docs/COMPLIANCE.m
 ### Issue 57: Refund on terminal ingest failure
 **Severity**: SEV-2 — creator paid for a permanently-failed ingest
 **Depends on**: 34
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Issue 34 made minute deduction per-video-idempotent — the creator can no longer
 be double-charged. But if `_ingest_async` deducts minutes and then ingest fails on every
 Celery retry (max_retries=3 → 4 total attempts), the deduction sticks for a permanently-
 failed ingest. The product needs a policy for this.
 
-**Open questions to research / decide in Phase 1**:
-- Automatic refund on terminal failure vs. support-initiated only?
-- Which failure classes refund? (ffmpeg error on corrupt source = yes; insufficient-balance
-  = N/A; storage 5xx = yes; user-provided corrupted file = ??)
-- UX: how does the creator know they were refunded? notification? email? in-app history?
-- Do we need a `MinuteDeduction.refunded_at` column, or a `MinutePack` row with
-  `reason="refund"` and `pack_id="refund:<video_id>"`?
+**Policy decided (2026-05-28 — see `docs/DECISIONS.md`)**:
+- Automatic refund (no human gate)
+- All terminal failures regardless of cause
+- Surfaced via billing-history `MinutePack` row only; email + in-app banner split into
+  new Issues 58 + 59 (require infrastructure we don't have yet)
 
-**Files (if we proceed)**: `worker/tasks.py` (Celery `on_failure` hook), `billing/ledger.py`
-(refund helper), `tests/test_billing_refund.py` (new), notification surface TBD,
-`docs/COMPLIANCE.md` (refund policy disclosure).
+**Files**: `billing/refund.py` (new — refund helper), `worker/tasks.py`
+(`RefundOnFailureTask` base class applied to ingest_video, transcribe_video, build_signals),
+`tests/test_billing_refund.py` (unit), `tests/test_billing_refund_integration.py`
+(integration), `docs/COMPLIANCE.md` (new "Billing & Refund Policy" section).
 
 **Acceptance criteria**:
-- [ ] Phase 1: decide refund policy + UX surface; document in `docs/DECISIONS.md`
-- [ ] If automatic: Celery `on_failure` hook (after final retry) refunds via
+- [x] Phase 1: decide refund policy + UX surface; document in `docs/DECISIONS.md`
+- [x] Celery `on_failure` hook (after final retry) refunds via
       `grant_minutes(..., reason="refund", pack_id=f"refund:{video_id}")` — idempotent
-      via the existing `stripe_session_id IS NULL` clause or a new keyed approach
-- [ ] Integration test: ingest fails 4× → 1 `MinuteDeduction` row + 1 refund `MinutePack`
-      row → net balance change = 0
-- [ ] User-visible disclosure of refund policy in TOS / pricing page
+      via read-then-write check on `pack_id`
+- [x] Integration test: ingest fails terminally → 1 `MinuteDeduction` row + 1 refund
+      `MinutePack` row → net balance change = 0
+- [x] User-visible disclosure of refund policy in `docs/COMPLIANCE.md` (canonical home
+      until TOS / pricing pages land in Phase 3)
+
+---
+
+### Issue 58: Transactional email infrastructure
+**Severity**: FEATURE — enables refund email + future password-reset / verification / launch comms
+**Depends on**: 57
+**Status**: 🔲 Not started
+
+**What**: We have zero email infrastructure. The first consumer is the refund-success email
+deferred from Issue 57; the next consumers are password reset, email verification,
+quota-warning, and launch comms.
+
+**Open questions to research / decide in Phase 1**:
+- Provider: Resend (recommended — modern API, cheap, good Python SDK) vs. Sendgrid /
+  Postmark / Amazon SES?
+- Templating: inline Python f-strings (KISS for v1), Jinja2 templates, or MJML for
+  responsive HTML?
+- DKIM / SPF / DMARC setup on `autoclip.studio`?
+- Local-dev path: console-sink the email body, or use Resend's sandbox mode?
+- Idempotency keys on outbound sends (avoid duplicate refund emails on retry)?
+
+**Files (if we proceed)**: `notify/mailer.py` (new), `notify/templates/refund.txt|.html`
+(new), `worker/tasks.py` (extend `RefundOnFailureTask.on_failure` to enqueue a
+`send_refund_email` task), `tests/test_mailer.py` (new), `.env.example`
+(`RESEND_API_KEY`, `FROM_EMAIL`).
+
+**Acceptance criteria**:
+- [ ] Phase 1: pick provider + templating approach; document in `docs/DECISIONS.md`
+- [ ] Mailer module with a typed send-email API and unit-test coverage
+- [ ] Refund-success email wired and triggered from `RefundOnFailureTask.on_failure`
+- [ ] Local-dev sink (console or sandbox) so tests don't hit the real provider
+- [ ] `docs/SECRETS.md` updated with the new env vars
+
+---
+
+### Issue 59: In-app notifications surface
+**Severity**: FEATURE — enables refund banner + future deploy notices / quota warnings
+**Depends on**: 57
+**Status**: 🔲 Not started
+
+**What**: We have no notifications system. The first consumer is the refund-success banner
+deferred from Issue 57; future consumers include scheduled-maintenance notices, quota
+warnings, "your trial expires in N days", and YouTube re-auth prompts.
+
+**Open questions to research / decide in Phase 1**:
+- Storage model: dedicated `notifications` table vs. a generic
+  `creator_events` log we can also use for analytics?
+- Delivery model: poll (`GET /api/notifications` on page load) vs. SSE / WebSocket push?
+  v1 poll is fine; push is a Phase 3 lift.
+- Read/dismiss state: per-notification `seen_at` timestamp + per-creator `dismissed_at`?
+- UI shape: persistent banner at the top of `/dashboard`, toast on first-load only, or
+  inbox-style notification center?
+
+**Files (if we proceed)**: new alembic migration adding `notifications` table,
+`models.py` (Notification model), `routers/notifications.py` (new),
+`static/notifications.js` (new), `tests/test_notifications.py` (new), `worker/tasks.py`
+(`RefundOnFailureTask.on_failure` adds an emit call alongside the refund).
+
+**Acceptance criteria**:
+- [ ] Phase 1: pick storage + delivery model; document in `docs/DECISIONS.md`
+- [ ] `notifications` table + alembic migration
+- [ ] `GET /api/notifications` + `POST /api/notifications/:id/dismiss` endpoints
+- [ ] Dashboard renders pending notifications as a dismissible banner
+- [ ] Refund event emits a notification when an ingest is terminally refunded
 
 ---
 

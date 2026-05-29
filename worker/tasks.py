@@ -14,6 +14,8 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from celery import Task
+
 import db
 from models import (
     Clip,
@@ -43,10 +45,51 @@ def start_pipeline(video_id: str) -> None:
     (ingest_video.s(video_id) | transcribe_video.s() | build_signals.s()).apply_async()
 
 
+# ── Refund-on-terminal-failure base class (Issue 57) ──────────────────────────
+
+
+class RefundOnFailureTask(Task):
+    """Celery Task base that auto-refunds deducted minutes on terminal failure.
+
+    `on_failure` fires only when retries are exhausted (Celery does NOT call it
+    on intermediate `Retry` exceptions). The refund helper is idempotent on
+    `pack_id=refund:<video_id>` so a duplicate on_failure invocation is safe.
+    """
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):  # type: ignore[override]
+        from billing.refund import refund_for_video
+
+        video_id_raw = args[0] if args else kwargs.get("video_id")
+        if not video_id_raw:
+            return
+        try:
+            video_uuid = uuid.UUID(str(video_id_raw))
+        except (ValueError, TypeError):
+            return
+        try:
+            run_async(refund_for_video(video_uuid))
+        except Exception as refund_exc:
+            # Refund must never crash the failure path — log and let the
+            # task's terminal failure stand. Manual recovery is supported via
+            # the same refund_for_video helper.
+            logger.warning(
+                "Auto-refund failed for video %s (task %s): %s",
+                video_uuid,
+                task_id,
+                refund_exc,
+            )
+
+
 # ── Tasks ─────────────────────────────────────────────────────────────────────
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.tasks.ingest_video")
+@celery.task(
+    base=RefundOnFailureTask,
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="worker.tasks.ingest_video",
+)
 def ingest_video(self, video_id: str) -> str:
     try:
         run_async(_ingest_async(video_id))
@@ -56,7 +99,13 @@ def ingest_video(self, video_id: str) -> str:
     return video_id
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.tasks.transcribe_video")
+@celery.task(
+    base=RefundOnFailureTask,
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="worker.tasks.transcribe_video",
+)
 def transcribe_video(self, video_id: str) -> str:
     try:
         run_async(_transcribe_async(video_id))
@@ -66,7 +115,13 @@ def transcribe_video(self, video_id: str) -> str:
     return video_id
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=30, name="worker.tasks.build_signals")
+@celery.task(
+    base=RefundOnFailureTask,
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="worker.tasks.build_signals",
+)
 def build_signals(self, video_id: str) -> str:
     try:
         run_async(_signals_async(video_id))

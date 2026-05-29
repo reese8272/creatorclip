@@ -5,6 +5,139 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 57: Automatic refund on terminal ingest failure
+
+### What changed
+- New module `billing/refund.py` with `refund_for_video(video_id)`. Looks up
+  the `MinuteDeduction` for the video; if a refund `MinutePack`
+  (`pack_id=f"refund:{video_id}"`) already exists, no-op; otherwise grant
+  the same minute count back via `grant_minutes(reason="refund",
+  pack_id=f"refund:{video_id}", price_cents=0)`.
+- New Celery base class `RefundOnFailureTask` in `worker/tasks.py`. Its
+  `on_failure` hook fires only when retries are exhausted; it extracts
+  `video_id` from `args[0]`, refuses to crash the failure path on any
+  internal exception, and dispatches `refund_for_video` via `run_async`.
+- The three ingest-chain tasks — `ingest_video`, `transcribe_video`,
+  `build_signals` — now use `base=RefundOnFailureTask`. `generate_clips`
+  and `render_clip` do NOT — neither path deducts minutes, so refund is
+  not applicable.
+- `docs/COMPLIANCE.md` now includes a "Billing & Refund Policy" section
+  with the disclosure language; this is the canonical user-facing
+  disclosure until pricing / ToS pages land.
+
+### Why
+The product needed a policy. The choice between "automatic", "support-only",
+and "hybrid (auto for our errors, manual for user-source errors)" was open;
+the user delegated the call. The peer SaaS pay-per-use refund pattern is
+unambiguous:
+
+- **Stripe metered billing** auto-credits usage-record errors and surfaces
+  them only in the customer portal billing history.
+- **AWS service credits** auto-issue on SLA breach; visible in console,
+  email is opt-in.
+- **OpenAI compute charges** auto-refund on server-side API failures; usage
+  dashboard surfaces them; per-call emails would create alert fatigue.
+- **Twilio failed-message refunds** auto-credit, usage log only.
+
+Convergent pattern: **automatic, immutable ledger entry, per-event email
+only when material**. Honesty-constraint friendly ("you pay for what we
+deliver"), low support burden, no abuse vector that isn't already bounded
+by `max_retries=3` + per-video idempotency.
+
+"All terminal failures" over "system errors only" because the classification
+carve-out creates real edge cases (corrupt-but-decodable codec? DRM stripped
+halfway?), demands a failure-reason taxonomy we don't have, and erodes trust
+on the failure event itself. The abuse model — a user deliberately uploading
+broken files to game the trial — costs us minutes that we'd refund anyway
+(zero additional loss) plus compute we'd incur on retries (small dollar
+amount; bounded by `max_retries`); the right knob for that is rate limiting
+or per-creator quotas, not the refund policy.
+
+### Alternatives ruled out
+- **Support-initiated refunds**: high friction, doesn't match peer SaaS,
+  creates a support queue we don't staff. Failure-mode UX would be: video
+  shows "failed", balance reflects the deduction, creator has to find a
+  support contact and email. Bad.
+- **Hybrid policy (auto for system errors only)**: requires a
+  `failure_reason` taxonomy plumbed through the three ingest tasks; demands
+  a confidence call ("is this codec failure 'our fault' because we should
+  support it, or 'their fault' because it's exotic?") that we can't make
+  cleanly today. Revisit if/when we have meaningful corpus on real
+  failures.
+- **Refund minus a "we tried" overhead**: hard to communicate; erodes
+  trust on the failure event; saves a trivial amount per failure relative
+  to the support cost of explaining it.
+- **`MinuteDeduction.refunded_at` column instead of compensating `MinutePack`
+  row**: row mutation breaks the existing "immutable ledger" invariant.
+  Both `MinuteDeduction` and `MinutePack` carry inline docstrings calling
+  out immutability; the compensating-grant pattern preserves the
+  event-sourcing audit trail; the schema already supports it (the `reason`
+  column is a free-text label, and `pack_id` accepts arbitrary keys).
+- **Per-video email + in-app banner notification (originally requested by
+  the user)**: we have ZERO email infrastructure and ZERO notification
+  surface. Bundling both into Issue 57 would explode a one-day refund-ledger
+  PR into three separate systems. **Split out into Issues 58 (transactional
+  email infrastructure) and 59 (in-app notifications surface)**, filed in
+  `docs/issues.md`. Issue 57 ships with the immutable billing-history row
+  as the only user-visible surface; the refund email and banner follow once
+  the underlying infrastructure lands.
+
+### Tradeoffs
+- **Idempotency is read-then-write, not enforced by a UNIQUE constraint**.
+  `MinutePack.pack_id` is not unique by itself. Two concurrent `on_failure`
+  invocations for the same `video_id` could in principle race past the
+  pre-check and both INSERT a refund row. This is not reachable in the
+  current pipeline (the ingest chain is single-runner per video; Celery
+  doesn't double-fire `on_failure` for one task instance), but if real
+  concurrency emerges (e.g. a manual reprocessing endpoint) we should add
+  a partial unique index `UNIQUE (pack_id) WHERE reason = 'refund'`
+  via a future migration. Flagged in `billing/refund.py` module docstring.
+- **`on_failure` swallows exceptions raised by the refund itself**. The
+  worker's terminal failure must stand even if the refund crashes (e.g.
+  transient DB outage at the precise moment the refund tries to write).
+  Manual remediation via direct call to `refund_for_video(video_id)` is
+  supported. A future hardening could add Celery retry semantics to the
+  refund itself, but that adds complexity for a path that should already
+  be rare.
+- **Refund triggers on `failed` ingest only, not on Stripe purchase
+  failures**: out of scope. Failed purchases never deduct minutes in the
+  first place (the deduct happens on ingest, not on purchase).
+
+### Source / evidence
+- Read `MinutePack` / `MinuteDeduction` definitions at `models.py:434–480`
+  — confirmed immutability docstrings, `reason` field shape, `pack_id` not
+  unique, `stripe_session_id` unique-but-nullable.
+- Read `billing/ledger.py:39–66` `grant_minutes` — confirmed it accepts
+  arbitrary `reason` + `pack_id` kwargs and writes a `MinutePack` row +
+  balance update in one session.
+- Read the existing ingest chain at `worker/tasks.py:49–87` to confirm
+  the failure path: `_set_status(failed)` + `self.retry(exc)`. The retry
+  raises `MaxRetriesExceededError` on the final attempt; Celery's
+  `on_failure` then fires exactly once.
+- Celery `Task.on_failure` semantics: https://docs.celeryq.dev/en/stable/userguide/tasks.html#handlers
+  ("Run by the worker when the task fails", fires only on final failure).
+- Industry pattern confirmed against Stripe Billing credit balance docs,
+  AWS Cost Anomaly Detection notification surfaces, OpenAI usage dashboard,
+  Twilio Programmable Messaging usage logs.
+
+### Files
+- `billing/refund.py` — new (refund helper).
+- `worker/tasks.py` — `RefundOnFailureTask` base; applied to `ingest_video`,
+  `transcribe_video`, `build_signals`.
+- `tests/test_billing_refund.py` — unit tests for `_refund_pack_id` and
+  `RefundOnFailureTask.on_failure` dispatch/safety.
+- `tests/test_billing_refund_integration.py` — three real-Postgres scenarios
+  (deduct → refund net zero; idempotent on duplicate; pre-deduct failure is
+  clean no-op).
+- `docs/COMPLIANCE.md` — new "Billing & Refund Policy" section with
+  user-facing disclosure language.
+- `docs/issues.md` — Issue 57 closed; new Issues 58 + 59 filed as stubs.
+
+### Date
+2026-05-28
+
+---
+
 ## 2026-05-28 — Issue 46: Generate-clips retry safety + outcomes 30-day floor
 
 ### What changed

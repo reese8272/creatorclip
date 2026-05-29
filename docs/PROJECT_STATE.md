@@ -6,9 +6,26 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 3 (worker/tasks.py-heavy; serial). Issues 39 + 43 + 46 + 47 ✅ done; next: 57 (needs policy decision) → Batch 4 (38, 52, 56).
-**Last completed**: Issue 46 — generate-clips retry safety (selective DELETE + idempotency guard) + 30-day floor on `_poll_clip_outcomes_async`.
+**Active issue**: Phase 2 hardening — Batch 3 closed (Issues 39 + 43 + 46 + 47 + 57). Next: Batch 4 (38, 52, 56), parallel-safe.
+**Last completed**: Issue 57 — automatic refund on terminal ingest failure via Celery `on_failure` hook + compensating `MinutePack` row.
 **Blocked**: _(none)_
+
+> **Closed Issue 57** (2026-05-28): Automatic refund on terminal ingest failure.
+> Issue 34 made minute deduction per-video-idempotent, but a terminally-failing ingest
+> still left the deduction in place. Policy decided (see DECISIONS): automatic refund,
+> all terminal failure classes, surfaced via billing-history `MinutePack` row only
+> (email + in-app banner split to new Issues 58 + 59 — both require infrastructure
+> we don't have yet). New `billing/refund.py:refund_for_video` is idempotent on
+> `pack_id="refund:<video_id>"`; new Celery base class `RefundOnFailureTask` in
+> `worker/tasks.py` fires only when retries are exhausted, extracts `video_id` from
+> `args[0]`, dispatches via `run_async`, and swallows internal exceptions so the
+> task's original terminal failure stands. Applied to `ingest_video`,
+> `transcribe_video`, `build_signals` (the three tasks where minutes can have been
+> deducted by the time failure terminates). No alembic migration — `MinutePack`
+> already supports the compensating-grant pattern. Disclosure language added to
+> `docs/COMPLIANCE.md` as the canonical user-facing copy until pricing / ToS pages
+> land in Phase 3.
+> Test count: **381 passed, 1 skipped, 49 deselected** (+3 unit, +3 integration).
 
 > **Closed Issue 46** (2026-05-28): Generate-clips retry safety + outcomes time-window
 > bug. Two regressions in one issue. (1) `clip_engine/ranking.py:generate_and_rank_clips`

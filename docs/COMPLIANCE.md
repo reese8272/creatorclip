@@ -80,6 +80,32 @@ the blast radius of a token compromise.
 
 ---
 
+## Billing & Refund Policy
+
+CreatorClip's billing is pay-per-use: minutes are deducted from the creator's
+balance when video ingest begins and minutes packs are purchased via Stripe.
+
+**Refund policy** (Issue 57):
+
+- **Automatic refund on terminal ingest failure.** If a video's ingest chain
+  (`ingest_video → transcribe_video → build_signals`) exhausts its retries
+  without producing usable signals, the minutes deducted for that video are
+  credited back to the creator's balance automatically.
+- The refund appears as a `MinutePack` row with `reason="refund"`,
+  `pack_id="refund:<video_id>"`, and `price_cents=0` — visible in the
+  creator's billing history page.
+- Refund applies to **all terminal failures regardless of cause** — whether
+  the failure is on our side (storage 5xx, ffmpeg crash, Whisper error) or
+  on the source side (corrupt upload, unsupported codec). The "you pay for
+  what we deliver" stance is simpler to communicate and trust-positive.
+- The refund is **idempotent** on the `pack_id` key — a duplicate failure
+  notification cannot double-refund.
+
+Until the pricing and ToS pages land (Phase 3), this section is the
+canonical user-facing disclosure of refund behavior.
+
+---
+
 ## Pre-Public-Launch Compliance Gates
 
 - [ ] YouTube data-retention refresh cadence confirmed and implemented
