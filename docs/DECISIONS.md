@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75: mypy_errors 30 → 0
+
+### What changed
+Cleared all 30 mypy errors and ratcheted the `mypy_errors` baseline 30→0 (CI now
+fails on any new type error). By bucket:
+- **9 — `config.py` `Settings()` call-arg** false-positives → enabled the **pydantic
+  v2 mypy plugin** (`plugins=["pydantic.mypy"]`); it understands `BaseSettings`
+  (fields come from env), so the no-arg construct is correctly typed. The proper
+  fix, not a suppression. Plugin added zero new errors.
+- **4 — `youtube/oauth.py upsert_creator`** union-attr/return → changed `if is_new:`
+  to `if creator is None:` so mypy narrows `Creator | None` through the branch
+  (runtime-identical, `is_new == (creator is None)`).
+- **4 — `youtube/quota.py` EVAL** int args → `str()` them (redis stringifies on the
+  wire and the Lua `tonumber()`s, so behaviour is unchanged) + one await-union ignore.
+- **5 — Anthropic SDK TypedDicts** (`cache_control` on text blocks ×4, the
+  server-side web_search tool shape ×1) → targeted `# type: ignore[...]` with a
+  comment: these are valid on the wire API but absent from / stricter than the SDK's
+  `TextBlockParam`/`ToolParam` TypedDicts.
+- **2 — `preference/model.py`** unused `type: ignore` → removed.
+- **2 — `preference/train.py`** numpy collision → renamed the scalar loop var `w` →
+  `weight` so `w = np.array(...)` is its first binding.
+- **`worker/tasks.py`** `delete_file(str|None)` → skip `None` source_uri (also more
+  correct); **`main.py`** slowapi handler + **`clip_engine/render.py`** `cv2.data`
+  → one documented ignore each (runtime-safe; stubs lag the API).
+
+### disallow_untyped_defs — deferred (tested, not clean)
+Tried `--disallow-untyped-defs`: **17 errors**, mostly Celery **bound-task `self`**
+params (`def ingest_video(self, …)`) which are non-idiomatic to annotate, plus a few
+genuinely-untyped helpers (`worker/storage.py`, `ingestion/transcribe.py`,
+`dna/embeddings.py`, `youtube/analytics.py`). Enabling needs a per-module override or
+a typed `Task` base first — kept as a tracked follow-up (note in `pyproject.toml`).
+
+### Verification
+Gate `mypy 0`; full suite **427 passed**; ruff 0 / bandit 0,0 / pip_audit 0. All
+fixes behaviour-preserving (verified by the suite).
+
+---
+
 ## 2026-05-29 — Issue 75 / 73: full response_model coverage
 
 ### What changed

@@ -60,7 +60,9 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# slowapi's handler is typed (Request, RateLimitExceeded) -> Response; Starlette wants
+# (Request, Exception). RateLimitExceeded is an Exception subclass, so this is safe.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(auth_router.router)

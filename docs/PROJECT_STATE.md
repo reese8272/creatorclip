@@ -7,8 +7,16 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75/73 — full response_model coverage (`routers/schemas.py` + `response_model=` on every JSON endpoint).
+**Last completed**: Issue 75 — `mypy_errors` 30→0 (pydantic mypy plugin + targeted fixes; baseline ratcheted to 0).
 **Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Closed Issue 75 — mypy_errors 30→0** (2026-05-29): pydantic v2 mypy plugin cleared the 9
+> config.py Settings() call-arg false-positives; oauth upsert_creator narrowed via `if creator is
+> None`; quota EVAL int args str()'d; preference/train w→weight rename; 2 unused ignores removed;
+> tasks source_uri None-skip; Anthropic SDK TypedDicts (cache_control/web_search) + slowapi handler
+> + cv2.data given documented targeted ignores. Baseline mypy_errors ratcheted 30→0 (CI fails on any
+> new type error). disallow_untyped_defs deferred (17 left, mostly Celery bound-task self). 427
+> passed; ruff 0 / bandit 0,0 / pip_audit 0. DECISIONS 2026-05-29.
 
 > **Closed Issue 75/73 — response_model coverage** (2026-05-29): new routers/schemas.py with Pydantic
 > *Out models; response_model= on every JSON endpoint (auth/creators/clips/review/upload_intel/

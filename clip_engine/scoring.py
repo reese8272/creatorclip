@@ -188,7 +188,9 @@ async def score_candidates(
     response = await _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=1200,
-        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+        # cache_control is valid on the wire API for prompt caching but absent from
+        # the SDK's TextBlockParam TypedDict.
+        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],  # type: ignore[typeddict-unknown-key]
         messages=[{"role": "user", "content": user_text}],
     )
 

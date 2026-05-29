@@ -712,6 +712,8 @@ async def _purge_stale_source_media_async() -> None:
 
         purged = 0
         for video in videos:
+            if video.source_uri is None:
+                continue
             try:
                 delete_file(video.source_uri)
                 video.source_uri = None

@@ -60,11 +60,11 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
         )
         label = 1 if feedback.action in _POSITIVE_ACTIONS else 0
         performed_well = outcome.performed_well if outcome else None
-        w = sample_weight(feedback.created_at, performed_well=performed_well)
+        weight = sample_weight(feedback.created_at, performed_well=performed_well)
 
         X_list.append(feats)
         y_list.append(label)
-        w_list.append(w)
+        w_list.append(weight)
 
     if len(X_list) < 2 or len(set(y_list)) < 2:
         logger.info(

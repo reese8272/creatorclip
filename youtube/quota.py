@@ -61,13 +61,17 @@ async def consume(cost: int) -> None:
     Raises QuotaExhaustedError if the daily budget would be exceeded.
     """
     r = get_redis_client()
-    result = await r.eval(
+    # redis-py types EVAL args as str; ints are stringified on the wire anyway and
+    # the Lua script tonumber()s them. Pass str explicitly to satisfy the types.
+    # (.eval() is typed Awaitable[str] | str for the sync+async union; always
+    # awaitable on the async client.)
+    result = await r.eval(  # type: ignore[misc]
         _LUA_CONSUME,
         1,
         _quota_key(),
-        cost,
-        settings.YOUTUBE_QUOTA_DAILY_UNITS,
-        _TTL_SECONDS,
+        str(cost),
+        str(settings.YOUTUBE_QUOTA_DAILY_UNITS),
+        str(_TTL_SECONDS),
     )
 
     if result == -1:

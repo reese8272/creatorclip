@@ -1290,7 +1290,7 @@ vector; WhisperX model + SDK clients reconstructed per call.
 - [ ] **starlette-1.x migration** (FastAPI→0.136.x) to close PYSEC-2026-161 and drop it
   from the ignore-list — a major-line bump; do as its own issue with a full test run.
 - [ ] (b) YouTube **analytics retention/refresh cadence** vs ToS (`youtube/analytics.py`, COMPLIANCE.md §2) — needs the actual ToS cadence figure, then a scheduled refresh/purge
-- [ ] (e) ratchet `mypy_errors` 30→0, then enable `disallow_untyped_defs`
+- [x] (e) `mypy_errors` 30→0 — DONE 2026-05-29 (pydantic mypy plugin + targeted fixes; baseline ratcheted to 0). `disallow_untyped_defs` deferred: 17 remain, mostly Celery bound-task `self` — needs a typed Task base/override first. See DECISIONS.
 - [x] (f) observability — DONE (2026-05-29). `observability.py`: pure-ASGI
   `RequestIDMiddleware` (mint/echo `X-Request-ID`, ContextVar) + JSON structured logs
   with `request_id` + Prometheus golden signals (`http_request_duration_seconds`,

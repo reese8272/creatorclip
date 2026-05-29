@@ -28,12 +28,20 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.12"
+# The pydantic v2 mypy plugin understands BaseSettings (fields are populated from
+# the environment), so `Settings()` with no args is correctly typed — without it
+# mypy flags every required field as a missing call-arg.
+plugins = ["pydantic.mypy"]
 ignore_missing_imports = true   # gradual: don't fail on untyped third-party stubs
 warn_unused_ignores = true
 warn_redundant_casts = true
 exclude = ['^alembic/', '^tests/']
-# Ratchet ON once mypy_errors reaches 0 — this makes CLAUDE.md's "type hints on
-# every signature" rule mechanically enforced:
+# mypy_errors is at 0 (baseline). Follow-up to ratchet ON (CLAUDE.md "type hints on
+# every signature", mechanically enforced): ~17 remaining, mostly Celery bound-task
+# `self` params (def task(self, ...)) plus a handful of genuinely-untyped helpers
+# (worker/storage.py, ingestion/transcribe.py, dna/embeddings.py, youtube/analytics.py).
+# Annotating Celery `self` is non-idiomatic — decide on a per-module override or a
+# typed Task base before enabling. Tracked under Issue 75.
 # disallow_untyped_defs = true
 # disallow_incomplete_defs = true
 

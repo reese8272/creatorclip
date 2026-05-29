@@ -72,8 +72,9 @@ def generate_improvement_brief(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
-            # Stable prefix — carries the cache breakpoint.
-            {
+            # Stable prefix — carries the cache breakpoint. cache_control is valid on
+            # the wire API for prompt caching but absent from the SDK's TextBlockParam.
+            {  # type: ignore[typeddict-unknown-key]
                 "type": "text",
                 "text": _SYSTEM_INSTRUCTIONS,
                 "cache_control": {"type": "ephemeral"},
@@ -81,7 +82,9 @@ def generate_improvement_brief(
             # Volatile per-creator analytics — AFTER the breakpoint, never cached.
             {"type": "text", "text": f"CREATOR ANALYTICS DATA:\n{analytics_json}"},
         ],
-        tools=[{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}],
+        # Server-side web_search tool — its param shape differs from a custom ToolParam
+        # (no input_schema; carries a `type`), which the SDK's ToolParam TypedDict rejects.
+        tools=[{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}],  # type: ignore[typeddict-item,typeddict-unknown-key]
         messages=[
             {
                 "role": "user",

@@ -72,7 +72,7 @@ This session shipped (19 commits, all green on CI before merge):
    - YouTube **analytics-retention cadence** vs ToS (needs the actual ToS figure) — compliance.
    - Full `response_model` coverage; Deepgram file-stream; `mypy_errors`→0;
      clip-scorer prompt caching; per-(creator,version) scorer cache.
-     (✅ done this session: observability, improvement-brief 202/poll, full response_model coverage.)
+     (✅ done this session: observability, improvement-brief 202/poll, response_model coverage, mypy→0.)
 
 4. **Re-run `/assess`** for a fresh diff of the remaining SEV-2/cleanup tail (it diffs against
    `docs/assessment/` so each run is incremental).
@@ -89,7 +89,7 @@ This session shipped (19 commits, all green on CI before merge):
   `run_layer0.py` deterministic gates; Layer 1 = parallel per-module subagents writing to
   `docs/assessment/modules/`; Layer 2 = `REPORT.md` verdict. Baselines in
   `docs/assessment/baselines.json` (ruff 0, mypy 30, coverage 69.54 floor, bandit 0/0,
-  pip-audit 14) — ratchet down over time per `docs/assessment/README.md`.
+  pip-audit 0; mypy now 0) — ratchet down over time per `docs/assessment/README.md`.
 - ✅ **Core product promise now actually ships** (Issues 59 + 60): clips render from
   `setup_start_s`; the personalization loop is wired (retrain task on feedback + reranker
   called in `generate_and_rank_clips` + maturity-gated blend).
@@ -136,7 +136,7 @@ This session shipped (19 commits, all green on CI before merge):
 | **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. **CI ruff is 0.15.x**; `requirements-dev.txt` pins `ruff==0.15.15` to match (an older pin disagrees on formatting). |
 | **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` (add `--update-baseline` to recapture, `--require-fresh` for the freshness gate) |
 | **Active issue** | _(none in flight)_ — remaining work is the **Issue 75** tracking list |
-| **Last completed** | This session: 75(a) CVEs (14→0); 75(f) observability; Tier-1 legal/CORS + verify_deploy.sh; PgBouncer load harness; improvement-brief 202/poll; full response_model coverage |
+| **Last completed** | This session: 75(a) CVEs (14→0); 75(f) observability; Tier-1 legal/CORS + verify_deploy.sh; PgBouncer load harness; improvement-brief 202/poll; response_model coverage; mypy→0 |
 | **Latest alembic revision** | `a7b8c9d0e1f2` — `0007_clip_outcome_final` (this session added 0005, 0006, 0007) |
 | **Test count** | 427 passed, 1 skipped, 56 deselected (default run) |
 

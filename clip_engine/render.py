@@ -91,7 +91,7 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
         if img is None:
             return frame_width // 2
         cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
         )
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))

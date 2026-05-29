@@ -125,11 +125,11 @@ class PreferenceScorer:
         """
         with _UNPICKLER_LOCK:
             _original = _jnp.NumpyUnpickler
-            _jnp.NumpyUnpickler = _RestrictedUnpickler  # type: ignore[assignment]
+            _jnp.NumpyUnpickler = _RestrictedUnpickler
             try:
                 obj = joblib.load(io.BytesIO(data))
             finally:
-                _jnp.NumpyUnpickler = _original  # type: ignore[assignment]
+                _jnp.NumpyUnpickler = _original
 
         if not isinstance(obj, cls):
             raise pickle.UnpicklingError(f"expected PreferenceScorer, got {type(obj).__name__}")

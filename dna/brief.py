@@ -65,8 +65,9 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
-            # Stable prefix — carries the cache breakpoint.
-            {
+            # Stable prefix — carries the cache breakpoint. cache_control is valid on
+            # the wire API for prompt caching but absent from the SDK's TextBlockParam.
+            {  # type: ignore[typeddict-unknown-key]
                 "type": "text",
                 "text": _SYSTEM_INSTRUCTIONS,
                 "cache_control": {"type": "ephemeral"},
