@@ -846,20 +846,25 @@ A weakened cascade in a future migration would silently leave PII behind.
 ### Issue 52: Worker pipeline integration tests
 **Severity**: TESTS — load-bearing pipeline
 **Depends on**: 32, 34, 39
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: `_ingest_async`, `_transcribe_async`, `_signals_async`, `_render_clip_async`,
 `_generate_clips_async`, `_build_dna_async`, `_poll_clip_outcomes_async` have no direct
 tests; `test_pipeline_trigger.py` calls the mock itself rather than the real task.
 
-**Files**: `tests/test_worker_pipeline.py` (new), Celery eager mode + real Postgres.
+**Files**: `tests/test_worker_pipeline.py` (new) — 5 integration tests against real
+Postgres, mocks at the storage / external-SDK boundary per the established codebase
+pattern (no real fixture media files needed; `local_path` is mocked to yield a temp
+file, external SDKs mocked at their entry points). No Celery eager mode needed —
+direct `await _<task>_async(...)` invocation matches the pattern in
+`test_dna_build_idempotency.py` / `test_generate_clips_retry_integration.py`.
 
 **Acceptance criteria**:
-- [ ] Ingest task on a 5 s test video → storage + DB state correct, minutes deducted exactly once
-- [ ] Render task retried twice → `render_uri` set, `render_status=done`, no duplicate clip rows
-- [ ] generate_clips retried after partial success → no rendered clips lost
-- [ ] poll_clip_outcomes computes `performed_well` against per-creator median, NOT global
-- [ ] build_dna below `MIN_VIDEOS_FOR_DNA` → `ValueError` surfaces without incrementing retry counter
+- [x] Ingest task → storage + DB state correct, minutes deducted exactly once (2 invocations → 1 `MinuteDeduction` row, balance decremented by ceil(duration/60))
+- [x] Render task retried 3× → `render_uri` set, `render_status=done`, exactly 1 Clip row
+- [x] generate_clips retried after partial success → done clip preserved, no new pending rows (covers Issue 46 idempotency guard end-to-end with Signals + Transcript context)
+- [x] poll_clip_outcomes computes `performed_well` against per-creator median, NOT global (Creator A median=500 → False; Creator B median=20 → True; both fed the same fetched views=100; global median would label both identically)
+- [x] build_dna below `MIN_VIDEOS_FOR_DNA` → `ValueError` propagates, no `CreatorDna` draft row created (task wrapper at `worker/tasks.py:184-196` re-raises ValueError without `self.retry` — pinned by inspection; integration test calls `_build_dna_async` directly per existing `test_dna_build_idempotency.py` pattern)
 
 ---
 

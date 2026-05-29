@@ -6,9 +6,28 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 4 in progress. Issue 56 closed (RLS adopt-now decision); Issue 38 W1 + Issue 52 next. Issue 60 filed for the RLS implementation work split from Issue 56.
-**Last completed**: Issue 56 — Postgres Row-Level Security decision (adopt now; implementation tracked as new Issue 60).
+**Active issue**: Phase 2 hardening — Batch 4 in progress. Issues 52 + 56 closed. Issue 38 W1 next (Wave 2 will be filed as Issue 61).
+**Last completed**: Issue 52 — worker pipeline integration tests (`tests/test_worker_pipeline.py`).
 **Blocked**: _(none)_
+
+> **Closed Issue 52** (2026-05-28): Worker pipeline integration tests. The seven
+> Celery async functions in `worker/tasks.py` (`_ingest_async`, `_transcribe_async`,
+> `_signals_async`, `_render_clip_async`, `_generate_clips_async`, `_build_dna_async`,
+> `_poll_clip_outcomes_async`) had no direct end-to-end coverage —
+> `test_pipeline_trigger.py` only asserted registration / task chaining. New
+> `tests/test_worker_pipeline.py` pins all 5 ACs against real Postgres with mocks at
+> the storage (R2 / boto3) and external-SDK (YouTube Data API, ffmpeg) boundaries.
+> Notable design: AC4 (per-creator median) seeds two creators with disjoint
+> VideoMetrics — same fetched view count (100) yields opposite `performed_well`
+> labels (A=False because 100 < 500 median, B=True because 100 ≥ 20 median) —
+> a global-median computation would label both identically. AC5 (build_dna ValueError
+> bypasses retry) calls `_build_dna_async` directly per the established
+> `test_dna_build_idempotency.py` pattern; the task wrapper's `except ValueError:
+> raise` is pinned by inspection because `build_dna.apply()` would call `asyncio.run`
+> from inside the running pytest-asyncio loop (RuntimeError). No real fixture media
+> files needed — `local_path` is mocked to yield a temp file, matching the existing
+> `test_purge_integration.py` / `test_generate_clips_retry_integration.py` pattern.
+> Test count: **381 passed, 1 skipped, 54 deselected** (+5 integration).
 
 > **Closed Issue 56** (2026-05-28): Postgres Row-Level Security research-and-decide.
 > Decision: **adopt RLS** as defense-in-depth underneath the existing
