@@ -5,6 +5,58 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75: improvement brief → 202 + poll (async Celery job)
+
+### What changed
+The improvement brief was a synchronous `GET /creators/me/improvement-brief` that
+blocked up to 120s on an Anthropic + web_search call. Behind Cloudflare (~100s
+proxy timeout) that 524s the user — a feature broken in production. Converted to
+the standard async-job pattern:
+- **`POST /creators/me/improvement-brief`** (202) — validates channel + has-data
+  (immediate 400 if not), debounces (returns the in-flight status instead of
+  enqueuing a duplicate — no double LLM spend), sets `pending`, enqueues a Celery
+  task. Keeps the 10/hour limit (the expensive op).
+- **`GET /creators/me/improvement-brief`** — non-blocking poll; returns
+  `{"status": none|pending|running|done|failed}` (+ `brief` / `error`). 60/hour.
+- **`worker.tasks.generate_improvement_brief`** — builds the analytics (moved out of
+  the router) and runs the LLM call off the worker loop (`asyncio.to_thread`, Issue
+  68), writing `done`/`failed`. No Celery retry (a failure is surfaced as `failed`
+  for the user to re-trigger, not silently re-run → no surprise double spend).
+- **`improvement/jobs.py`** — Redis-backed status keyed by `creator_id` (1h TTL).
+- Frontend `insights.html` POSTs then polls every 3s to a 180s deadline.
+
+### Why this shape
+202 + poll is the canonical REST pattern for long jobs; the codebase already polls
+(`/videos/{id}/status`). **Status in Redis, keyed by creator id** — no migration
+(the brief is ephemeral/regenerable, not durable data; avoids deploy risk before
+beta) and **isolation is by construction** (the key *is* the creator id, so a
+creator can only ever read its own job — satisfies the strict per-creator rule
+without a task→owner map). The Issue-33 SEV-0 scoping (analytics filtered to the
+requesting creator) moved intact into the worker task; its isolation tests now
+assert it there.
+
+### Alternatives ruled out
+- **Celery `AsyncResult` by task_id:** weaker isolation (`PENDING` is ambiguous;
+  needs a task→creator map) — rejected for the creator-keyed Redis approach.
+- **New DB table:** migration deploy-risk for ephemeral data — rejected.
+- **SSE/WebSocket streaming:** overkill for a vanilla-JS frontend (KISS) — rejected
+  for simple polling.
+- **Raise the proxy timeout:** Cloudflare's ~100s isn't configurable off Enterprise,
+  and a 120s request is bad practice regardless.
+
+### Note
+Debounce is best-effort (a rare concurrent double-POST could enqueue twice); bounded
+by the 10/hour limit and harmless beyond a little extra spend — not worth a Redis
+`SET NX` lock for beta.
+
+### Verification
+3 DB-free router unit tests (channel check, debounce-no-duplicate-enqueue, GET
+passthrough) + integration tests repointed to the worker helper (SEV-0 scoping,
+done/failed, offload, 202-pending-enqueue). Default suite **421 passed** (+3);
+gates ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0.
+
+---
+
 ## 2026-05-29 — Tier-1: runnable PgBouncer load harness to verify the BLOCKER (Issue 58)
 
 ### What changed

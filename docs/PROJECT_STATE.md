@@ -7,8 +7,18 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Tier-1 PgBouncer load harness — `tests/perf/run.sh` + `docker-compose.perf.yml` make the Issue-58 BLOCKER verification one command (PgBouncer txn mode + log-scan pass/fail).
+**Last completed**: Issue 75 — improvement brief converted to 202 + poll (Celery job + Redis status), killing the 120s synchronous request / Cloudflare 524.
 **Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Closed Issue 75 — improvement-brief 202/poll** (2026-05-29): the brief was a synchronous GET
+> blocking ~120s on Anthropic+web_search → Cloudflare 524 in prod. Now: POST enqueues a Celery task
+> (debounced; 400 fast-fail on no channel/data) → 202; GET polls Redis-backed status
+> (improvement/jobs.py, keyed by creator_id → isolation by construction); worker task builds analytics
+> + runs the LLM off-loop (asyncio.to_thread), writes done/failed (no retry → no surprise double LLM
+> spend). Frontend insights.html POST-then-poll (3s, 180s deadline). The Issue-33 SEV-0 scoping moved
+> intact into the worker task; isolation tests repointed there. No migration (ephemeral data → Redis).
+> +3 DB-free router tests; default suite 421 passed; gates ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0.
+> DECISIONS 2026-05-29.
 
 > **Tier-1 PgBouncer load harness** (2026-05-29): turned tests/perf/ into a one-command BLOCKER
 > verifier — docker-compose.perf.yml (Postgres + PgBouncer POOL_MODE=transaction + Redis + app with

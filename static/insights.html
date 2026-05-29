@@ -132,16 +132,36 @@
       btn.textContent = 'Generating…';
       out.textContent = '';
 
-      const resp = await fetch('/creators/me/improvement-brief', { credentials: 'include' });
-      if (!resp.ok) {
-        out.innerHTML = '<span class="error">Failed to generate brief — try again.</span>';
+      // The brief runs ~120s on the server — enqueue (202), then poll for the result.
+      const start = await fetch('/creators/me/improvement-brief', {
+        method: 'POST', credentials: 'include'
+      });
+      if (!start.ok) {
+        const err = await start.json().catch(() => ({}));
+        out.innerHTML = `<span class="error">${err.detail || 'Failed to start brief — try again.'}</span>`;
         btn.disabled = false; btn.textContent = 'Retry';
         return;
       }
-      const data = await resp.json();
-      out.textContent = data.brief;
-      btn.textContent = 'Regenerate';
-      btn.disabled = false;
+
+      const deadline = Date.now() + 180000;  // give the 120s job headroom
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 3000));
+        const resp = await fetch('/creators/me/improvement-brief', { credentials: 'include' });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (data.status === 'done') {
+          out.textContent = data.brief;
+          btn.textContent = 'Regenerate'; btn.disabled = false;
+          return;
+        }
+        if (data.status === 'failed') {
+          out.innerHTML = `<span class="error">${data.error || 'Brief generation failed — try again.'}</span>`;
+          btn.textContent = 'Retry'; btn.disabled = false;
+          return;
+        }
+      }
+      out.innerHTML = '<span class="error">Brief is taking longer than expected — try polling again shortly.</span>';
+      btn.textContent = 'Retry'; btn.disabled = false;
     }
 
     document.addEventListener('auth:ready', init);

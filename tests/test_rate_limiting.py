@@ -86,8 +86,9 @@ def _has_limit(func_qualname: str, count: str, period: str) -> bool:
 def test_improvement_brief_has_10_per_hour_limit():
     import routers.improvement  # noqa: F401 — ensure module is imported
 
-    assert _has_limit("routers.improvement.get_improvement_brief", "10", "hour"), (
-        f"Expected 10/hour, got: {_limits_for('routers.improvement.get_improvement_brief')}"
+    # The expensive operation (enqueue → LLM job) is the POST; it keeps the 10/hour cap.
+    assert _has_limit("routers.improvement.start_improvement_brief", "10", "hour"), (
+        f"Expected 10/hour, got: {_limits_for('routers.improvement.start_improvement_brief')}"
     )
 
 

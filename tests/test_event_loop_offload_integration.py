@@ -11,6 +11,7 @@ Marked `integration` (excluded from the default run — see pytest.ini).
 
 import io
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -46,7 +47,12 @@ def _offload_recorder():
 
 
 @pytest.mark.asyncio
-async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, mocker):
+async def test_improvement_brief_is_offloaded(db_session: AsyncSession, mocker):
+    # The brief now runs in the Celery worker (202 + poll, Issue 75); assert the
+    # 120s LLM call is offloaded there, not run on the worker's event loop.
+    from improvement import jobs
+    from worker.tasks import _improvement_brief_async
+
     creator = Creator(
         google_sub=f"test_off_{uuid.uuid4().hex[:8]}",
         channel_id=f"UC_off_{uuid.uuid4().hex[:6]}",
@@ -63,7 +69,11 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
     )
     db_session.add(video)
     await db_session.flush()
-    db_session.add(VideoMetrics(video_id=video.id, views=1000, engagement_rate=0.05))
+    db_session.add(
+        VideoMetrics(
+            video_id=video.id, views=1000, engagement_rate=0.05, fetched_at=datetime.now(UTC)
+        )
+    )
     await db_session.commit()
 
     brief_mock = mocker.patch(
@@ -72,14 +82,15 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
     calls, fake_to_thread = _offload_recorder()
     mocker.patch("asyncio.to_thread", new=fake_to_thread)
 
-    token = create_session_token(creator.id)
     try:
-        resp = client.get("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["brief"] == "stub brief"
+        await _improvement_brief_async(str(creator.id))
+        status = await jobs.get_status(str(creator.id))
+        assert status["status"] == "done"
+        assert status["brief"] == "stub brief"
         # The 120s LLM call was offloaded, not run on the loop.
         assert brief_mock in calls
     finally:
+        await jobs.get_redis_client().delete(f"improvement_brief:{creator.id}")
         await db_session.execute(delete(Creator).where(Creator.id == creator.id))
         await db_session.commit()
 

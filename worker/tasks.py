@@ -164,6 +164,19 @@ def retrain_preference(self, creator_id: str) -> str:
     return creator_id
 
 
+@celery.task(name="worker.tasks.generate_improvement_brief")
+def generate_improvement_brief(creator_id: str) -> str:
+    """Generate the improvement brief off the request path (202 + poll, Issue 75).
+
+    The 120s Anthropic+web_search call can't run inside an HTTP request (Cloudflare
+    524s it). Status is written to Redis (improvement.jobs) for the poll endpoint.
+    No Celery retry: a failure is surfaced to the user as a `failed` status to act
+    on, not silently re-run (which would double the LLM spend).
+    """
+    run_async(_improvement_brief_async(creator_id))
+    return creator_id
+
+
 # ── Async implementations ─────────────────────────────────────────────────────
 
 
@@ -209,6 +222,66 @@ async def _retrain_preference_async(creator_id: str) -> None:
             # Concurrent retrain won the version race (hardened in Issue 71).
             await session.rollback()
             logger.info("retrain_preference: version race for creator %s, skip", cid)
+
+
+async def _improvement_brief_async(creator_id: str) -> None:
+    from sqlalchemy import select
+
+    from dna.profile import get_active
+    from improvement import jobs
+    from improvement.brief import generate_improvement_brief as _gen
+
+    cid = uuid.UUID(creator_id)
+    await jobs.set_status(creator_id, "running")
+    try:
+        async with db.AsyncSessionLocal() as session:
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                await jobs.set_status(creator_id, "failed", error="Creator not found.")
+                return
+            metrics = list(
+                (
+                    await session.execute(
+                        select(VideoMetrics)
+                        .join(Video, VideoMetrics.video_id == Video.id)
+                        .where(Video.creator_id == cid)
+                        .order_by(VideoMetrics.fetched_at.desc())
+                        .limit(50)
+                    )
+                ).scalars()
+            )
+            if not metrics:
+                await jobs.set_status(
+                    creator_id, "failed", error="Not enough data yet — link some videos first."
+                )
+                return
+
+            def _avg(values: list[float]) -> float | None:
+                return sum(values) / len(values) if values else None
+
+            analytics = {
+                "channel_title": creator.channel_title,
+                "videos_in_db": len(metrics),
+                "avg_views": _avg([m.views for m in metrics if m.views]),
+                "avg_engagement_rate": _avg(
+                    [m.engagement_rate for m in metrics if m.engagement_rate]
+                ),
+                "avg_view_duration_s": _avg(
+                    [m.avg_view_duration_s for m in metrics if m.avg_view_duration_s]
+                ),
+            }
+            dna_profile = await get_active(session, cid)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+            channel_title = creator.channel_title or "Unknown Channel"
+
+        # Off the worker loop — the 120s LLM/web_search call must not pin it (Issue 68).
+        brief_text = await asyncio.to_thread(
+            _gen, channel_title=channel_title, analytics=analytics, dna_brief=dna_brief
+        )
+        await jobs.set_status(creator_id, "done", brief=brief_text)
+    except Exception as exc:
+        logger.error("improvement brief failed for creator %s: %s", cid, exc)
+        await jobs.set_status(creator_id, "failed", error="Brief generation failed — try again.")
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:

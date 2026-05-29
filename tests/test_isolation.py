@@ -413,11 +413,13 @@ async def test_upload_intel_scoped_to_creator(db_session: AsyncSession, client):
 
 
 @pytest.mark.integration
-async def test_improvement_brief_scoped_to_creator(db_session: AsyncSession, client, mocker):
-    """GET /creators/me/improvement-brief feeds only the requesting creator's metrics."""
+async def test_improvement_brief_scoped_to_creator(db_session: AsyncSession, mocker):
+    """The brief (now a Celery job — Issue 75) feeds only the requesting creator's metrics."""
     from datetime import datetime as _dt
 
+    from improvement import jobs
     from models import VideoMetrics
+    from worker.tasks import _improvement_brief_async
 
     creator_a = await _make_creator(db_session, suffix="a_ib")
     creator_b = await _make_creator(db_session, suffix="b_ib")
@@ -457,11 +459,11 @@ async def test_improvement_brief_scoped_to_creator(db_session: AsyncSession, cli
     mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_stub)
 
     try:
-        resp = client.get("/creators/me/improvement-brief", cookies=_cookie(creator_a))
-        assert resp.status_code == 200
+        await _improvement_brief_async(str(creator_a.id))
         assert captured["analytics"]["avg_views"] == pytest.approx(1_000.0)
         assert captured["analytics"]["videos_in_db"] == 1
     finally:
+        await jobs.get_redis_client().delete(f"improvement_brief:{creator_a.id}")
         await db_session.execute(
             delete(Creator).where(Creator.id.in_([creator_a.id, creator_b.id]))
         )

@@ -1161,7 +1161,8 @@ loop, collapsing p99 for every concurrent request on that worker. (axis B)
 **Acceptance criteria**:
 - [x] Brief generation offloaded via `await asyncio.to_thread(generate_improvement_brief, ...)` — frees the loop
 - [x] Integration test asserts the call is offloaded (recorded through a to_thread shim)
-- Follow-up (Issue 75): the request still runs up to 120s (can exceed an LB/gateway timeout); the full 202/poll Celery UX is tracked there. `to_thread` resolves the axis-B loop-blocking now.
+- Follow-up (Issue 75): ✅ RESOLVED 2026-05-29 — the brief is now a Celery job behind a 202 + poll
+  endpoint (no more 120s synchronous request / Cloudflare 524). See Issue 75 list + DECISIONS.
 
 ## Issue 67: Move synchronous large-file upload off the API loop (SEV-1)
 **Depends on**: —
@@ -1300,7 +1301,11 @@ vector; WhisperX model + SDK clients reconstructed per call.
 - [ ] **Deepgram file-stream** upload (from Issue 74)
 - [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
 - [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71)
-- [ ] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66)
+- [x] **Improvement-brief 202/poll** — DONE (2026-05-29). `POST` enqueues a Celery job
+  (debounced, 400 fast-fail on no data/channel) → 202; `GET` polls Redis-backed status
+  (`improvement/jobs.py`, keyed by creator id → isolation by construction); worker task runs
+  the LLM off-loop. Frontend POST-then-poll. Kills the Cloudflare 524 on the 120s request.
+  See DECISIONS 2026-05-29.
 - [ ] ~37 remaining SEV-2 + ~34 cleanup items in `docs/assessment/modules/*.md` — re-run `/assess` to triage as a diff
 
 ---
