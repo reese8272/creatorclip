@@ -1300,7 +1300,7 @@ vector; WhisperX model + SDK clients reconstructed per call.
 - [x] **Full `response_model` coverage** — DONE (2026-05-29). `routers/schemas.py` + `response_model=` on every JSON endpoint (auth/creators/clips/review/upload_intel/improvement/videos; billing already had models). Mirrors each handler's exact return; OpenAPI builds 26 typed 2xx responses; `tests/test_response_models.py` guards the integration-only shapes. See DECISIONS 2026-05-29.
 - [ ] **Deepgram file-stream** upload (from Issue 74)
 - [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
-- [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71)
+- [x] **Per-(creator, version) scorer cache** — DONE 2026-05-29. `preference.model.load_scorer_cached` (LRU keyed by (creator_id, version)); `from_bytes` now runs once per version, not per rerank. See DECISIONS.
 - [x] **Improvement-brief 202/poll** — DONE (2026-05-29). `POST` enqueues a Celery job
   (debounced, 400 fast-fail on no data/channel) → 202; `GET` polls Redis-backed status
   (`improvement/jobs.py`, keyed by creator id → isolation by construction); worker task runs

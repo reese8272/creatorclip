@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import Clip, ClipFeedback, ClipOutcome, FeedbackAction, PreferenceModel
 from preference.decay import sample_weight
 from preference.features import FEATURE_NAMES, clip_features
-from preference.model import PreferenceScorer, fit
+from preference.model import PreferenceScorer, fit, load_scorer_cached
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ async def load_latest(session: AsyncSession, creator_id: uuid.UUID) -> Preferenc
         )
         return None
     try:
-        return PreferenceScorer.from_bytes(row.weights_blob)
+        return load_scorer_cached(str(creator_id), row.version, row.weights_blob)
     except Exception as exc:
         logger.warning("Failed to deserialize preference model: %s", exc)
         return None

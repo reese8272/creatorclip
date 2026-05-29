@@ -323,3 +323,48 @@ async def test_build_and_save_filters_and_weights_feedback():
 
     # The model row was persisted via session.add
     session.add.assert_called_once()
+
+
+# ── load_scorer_cached: deserialize once per (creator, version) (Issue 71/75) ───
+
+
+def test_load_scorer_cached_deserializes_once_per_version(monkeypatch):
+    import preference.model as m
+
+    calls = {"n": 0}
+
+    def fake_from_bytes(data):
+        calls["n"] += 1
+        return f"scorer:{data.decode()}"
+
+    monkeypatch.setattr(m.PreferenceScorer, "from_bytes", staticmethod(fake_from_bytes))
+    m._SCORER_CACHE.clear()
+
+    s1 = m.load_scorer_cached("c1", 1, b"A")
+    s2 = m.load_scorer_cached("c1", 1, b"A")
+    assert s1 == s2 == "scorer:A"
+    assert calls["n"] == 1  # second call served from cache
+
+    # A new version for the same creator misses and loads once.
+    m.load_scorer_cached("c1", 2, b"B")
+    assert calls["n"] == 2
+    # A different creator misses too.
+    m.load_scorer_cached("c2", 1, b"A")
+    assert calls["n"] == 3
+
+
+def test_load_scorer_cached_evicts_lru(monkeypatch):
+    import preference.model as m
+
+    monkeypatch.setattr(m.PreferenceScorer, "from_bytes", staticmethod(lambda data: object()))
+    monkeypatch.setattr(m, "_SCORER_CACHE_MAX", 2)
+    m._SCORER_CACHE.clear()
+
+    m.load_scorer_cached("c", 1, b"x")
+    m.load_scorer_cached("c", 2, b"x")
+    m.load_scorer_cached("c", 1, b"x")  # touch v1 so v2 is the LRU
+    m.load_scorer_cached("c", 3, b"x")  # evicts the least-recently-used (v2)
+
+    keys = set(m._SCORER_CACHE.keys())
+    assert keys == {("c", 1), ("c", 3)}
+    assert len(m._SCORER_CACHE) == 2

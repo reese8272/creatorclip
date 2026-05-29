@@ -5,6 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75/71: per-(creator, version) preference-scorer cache
+
+### What changed
+`preference/model.py` adds `load_scorer_cached(creator_id, version, data)` — an
+LRU (`OrderedDict`, max 128, lock-guarded) of deserialised `PreferenceScorer`s keyed
+by `(creator_id, version)`. `preference/train.load_latest` now goes through it
+instead of calling `PreferenceScorer.from_bytes` on every load.
+
+### Why
+`rerank_with_preference` runs on the clip-generation hot path and called
+`from_bytes` every time — a joblib unpickle behind a process-global lock (the RCE
+allowlist swap, Issue 71). That deserialise + lock now runs **once per (creator,
+version)**, not once per rerank.
+
+### Correctness
+A version's `weights_blob` is immutable — `build_and_save` assigns a fresh
+monotonic version each retrain — so a cache hit is always valid and needs no
+invalidation: a retrain just produces a new version that misses and loads once;
+the old entry ages out via LRU. `from_bytes` runs outside the cache lock (it has
+its own), so a rare double-miss simply deserialises twice to the same result. The
+cached scorer is read-only (`predict_score` only reads), safe to share. The
+query still fetches the row (cheap, indexed) so the schema-drift guard (Issue 71)
+is unchanged; only the expensive unpickle is cached.
+
+### Verification
+DB-free unit tests: deserialise-once-per-version, miss on new version/creator, LRU
+eviction. Full suite **429 passed**; gates ruff 0 / mypy 0 / bandit 0,0 / pip_audit 0.
+
+---
+
 ## 2026-05-29 — Issue 75: mypy_errors 30 → 0
 
 ### What changed

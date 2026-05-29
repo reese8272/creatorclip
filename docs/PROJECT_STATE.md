@@ -7,8 +7,15 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75 — `mypy_errors` 30→0 (pydantic mypy plugin + targeted fixes; baseline ratcheted to 0).
+**Last completed**: Issue 75/71 — per-(creator,version) preference-scorer cache (deserialise once per version, off the rerank hot path).
 **Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Closed Issue 75/71 — preference-scorer cache** (2026-05-29): preference/model.load_scorer_cached —
+> an LRU (OrderedDict, max 128, lock-guarded) of deserialised PreferenceScorers keyed by (creator_id,
+> version); load_latest uses it so the joblib unpickle behind the global RCE-allowlist lock runs once
+> per (creator, version), not per rerank. A version's blob is immutable (monotonic versions), so hits
+> are always valid and need no invalidation; from_bytes runs outside the cache lock. DB-free unit
+> tests (once-per-version, miss on new version/creator, LRU eviction). 429 passed; gates all green.
 
 > **Closed Issue 75 — mypy_errors 30→0** (2026-05-29): pydantic v2 mypy plugin cleared the 9
 > config.py Settings() call-arg false-positives; oauth upsert_creator narrowed via `if creator is

@@ -71,8 +71,8 @@ This session shipped (19 commits, all green on CI before merge):
      distributed tracing (deferred). See DECISIONS 2026-05-29.
    - YouTube **analytics-retention cadence** vs ToS (needs the actual ToS figure) — compliance.
    - Full `response_model` coverage; Deepgram file-stream; `mypy_errors`→0;
-     clip-scorer prompt caching; per-(creator,version) scorer cache.
-     (✅ done this session: observability, improvement-brief 202/poll, response_model coverage, mypy→0.)
+     clip-scorer prompt caching (scorer cache ✅ done).
+     (✅ done this session: observability, improvement-brief 202/poll, response_model coverage, mypy→0, preference-scorer cache.)
 
 4. **Re-run `/assess`** for a fresh diff of the remaining SEV-2/cleanup tail (it diffs against
    `docs/assessment/` so each run is incremental).
@@ -136,7 +136,7 @@ This session shipped (19 commits, all green on CI before merge):
 | **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. **CI ruff is 0.15.x**; `requirements-dev.txt` pins `ruff==0.15.15` to match (an older pin disagrees on formatting). |
 | **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` (add `--update-baseline` to recapture, `--require-fresh` for the freshness gate) |
 | **Active issue** | _(none in flight)_ — remaining work is the **Issue 75** tracking list |
-| **Last completed** | This session: 75(a) CVEs (14→0); 75(f) observability; Tier-1 legal/CORS + verify_deploy.sh; PgBouncer load harness; improvement-brief 202/poll; response_model coverage; mypy→0 |
+| **Last completed** | This session: 75(a) CVEs (14→0); 75(f) observability; Tier-1 legal/CORS + verify_deploy.sh; PgBouncer load harness; improvement-brief 202/poll; response_model coverage; mypy→0; scorer cache |
 | **Latest alembic revision** | `a7b8c9d0e1f2` — `0007_clip_outcome_final` (this session added 0005, 0006, 0007) |
 | **Test count** | 427 passed, 1 skipped, 56 deselected (default run) |
 

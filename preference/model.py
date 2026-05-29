@@ -20,6 +20,7 @@ import io
 import logging
 import pickle
 import threading
+from collections import OrderedDict
 from typing import Any
 
 import joblib
@@ -134,6 +135,39 @@ class PreferenceScorer:
         if not isinstance(obj, cls):
             raise pickle.UnpicklingError(f"expected PreferenceScorer, got {type(obj).__name__}")
         return obj
+
+
+# Deserialised-scorer cache, keyed by (creator_id, version). A given version's
+# weights_blob is immutable (build_and_save assigns a fresh version each retrain),
+# so a hit is always valid and never needs invalidation — a new version simply
+# misses and loads once. This keeps the locked joblib unpickle (from_bytes) off the
+# rerank hot path: it runs once per (creator, version), not once per rerank. (Issue 71)
+_SCORER_CACHE: OrderedDict[tuple[str, int], PreferenceScorer] = OrderedDict()
+_SCORER_CACHE_MAX = 128
+_SCORER_CACHE_LOCK = threading.Lock()
+
+
+def load_scorer_cached(creator_id: str, version: int, data: bytes) -> PreferenceScorer:
+    """Return the deserialised scorer for (creator_id, version), unpickling once.
+
+    The expensive `from_bytes` runs only on a cache miss (and outside the cache
+    lock — a rare double-miss just deserialises twice to the same result).
+    """
+    key = (creator_id, version)
+    with _SCORER_CACHE_LOCK:
+        cached = _SCORER_CACHE.get(key)
+        if cached is not None:
+            _SCORER_CACHE.move_to_end(key)
+            return cached
+
+    scorer = PreferenceScorer.from_bytes(data)
+
+    with _SCORER_CACHE_LOCK:
+        _SCORER_CACHE[key] = scorer
+        _SCORER_CACHE.move_to_end(key)
+        while len(_SCORER_CACHE) > _SCORER_CACHE_MAX:
+            _SCORER_CACHE.popitem(last=False)
+    return scorer
 
 
 def preference_weight(label_count: int) -> float:
