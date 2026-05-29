@@ -14,6 +14,7 @@ from auth import get_current_creator
 from db import get_session
 from limiter import limiter
 from models import Clip, ClipFeedback, Creator, FeedbackAction
+from routers.schemas import FeedbackOut
 
 router = APIRouter(prefix="/clips", tags=["review"])
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class FeedbackRequest(BaseModel):
         return FeedbackAction(v)
 
 
-@router.post("/{clip_id}/feedback", status_code=201)
+@router.post("/{clip_id}/feedback", status_code=201, response_model=FeedbackOut)
 @limiter.limit("120/minute")
 async def submit_feedback(
     request: Request,

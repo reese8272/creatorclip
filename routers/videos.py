@@ -14,6 +14,7 @@ from config import settings
 from db import get_session
 from limiter import limiter
 from models import Creator, IngestStatus, Video, VideoKind
+from routers.schemas import VideoLinkOut, VideoOut, VideoStatusOut
 from worker.storage import upload_file
 from worker.tasks import start_pipeline
 
@@ -29,7 +30,7 @@ def _validate_youtube_id(youtube_video_id: str) -> None:
         raise HTTPException(status_code=422, detail="Invalid youtube_video_id")
 
 
-@router.get("")
+@router.get("", response_model=list[VideoOut])
 @limiter.limit("120/minute")
 async def list_videos(
     request: Request,
@@ -55,7 +56,7 @@ async def list_videos(
     ]
 
 
-@router.post("/link")
+@router.post("/link", response_model=VideoLinkOut)
 @limiter.limit("120/minute")
 async def link_video(
     request: Request,
@@ -86,7 +87,7 @@ async def link_video(
     return {"video_id": str(video.id), "status": video.ingest_status.value}
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=VideoLinkOut)
 @limiter.limit("120/minute")
 async def upload_video(
     request: Request,
@@ -164,7 +165,7 @@ async def upload_video(
     return {"video_id": str(video.id), "status": video.ingest_status.value}
 
 
-@router.get("/{video_id}/status")
+@router.get("/{video_id}/status", response_model=VideoStatusOut)
 @limiter.limit("120/minute")
 async def get_video_status(
     request: Request,

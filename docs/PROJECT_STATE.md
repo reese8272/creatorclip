@@ -7,8 +7,17 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75 — improvement brief converted to 202 + poll (Celery job + Redis status), killing the 120s synchronous request / Cloudflare 524.
+**Last completed**: Issue 75/73 — full response_model coverage (`routers/schemas.py` + `response_model=` on every JSON endpoint).
 **Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Closed Issue 75/73 — response_model coverage** (2026-05-29): new routers/schemas.py with Pydantic
+> *Out models; response_model= on every JSON endpoint (auth/creators/clips/review/upload_intel/
+> improvement/videos; billing already had inline models). Documents + validates + filters each
+> response (no accidental field over-exposure). Models mirror each handler's exact return dict;
+> validated by the full suite (zero ResponseValidationErrors on tested endpoints) + a new
+> test_response_models.py constructing each Out from the literal handler dict for integration-only
+> endpoints. OpenAPI builds 26 typed 2xx responses. 427 passed; gates ruff 0 / mypy 30 / bandit 0,0 /
+> pip_audit 0. DECISIONS 2026-05-29.
 
 > **Closed Issue 75 — improvement-brief 202/poll** (2026-05-29): the brief was a synchronous GET
 > blocking ~120s on Anthropic+web_search → Cloudflare 524 in prod. Now: POST enqueues a Celery task

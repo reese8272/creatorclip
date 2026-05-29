@@ -5,12 +5,19 @@ from auth import get_current_creator
 from db import get_session
 from limiter import limiter
 from models import Creator
+from routers.schemas import (
+    CreatorMeOut,
+    DataGateOut,
+    DnaConfirmOut,
+    DnaOut,
+    TaskQueuedOut,
+)
 from youtube.analytics import check_data_gate
 
 router = APIRouter(prefix="/creators", tags=["creators"])
 
 
-@router.get("/me")
+@router.get("/me", response_model=CreatorMeOut)
 @limiter.limit("120/minute")
 async def get_me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     return {
@@ -23,7 +30,7 @@ async def get_me(request: Request, creator: Creator = Depends(get_current_creato
     }
 
 
-@router.get("/me/data-gate")
+@router.get("/me/data-gate", response_model=DataGateOut)
 @limiter.limit("120/minute")
 async def get_data_gate(
     request: Request,
@@ -33,7 +40,7 @@ async def get_data_gate(
     return await check_data_gate(session, creator.id)
 
 
-@router.post("/me/dna/build", status_code=202)
+@router.post("/me/dna/build", status_code=202, response_model=TaskQueuedOut)
 @limiter.limit("120/minute")
 async def build_dna(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Queue a DNA build for the current creator. Returns a Celery task_id."""
@@ -43,7 +50,7 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     return {"task_id": task.id, "status": "queued"}
 
 
-@router.get("/me/dna")
+@router.get("/me/dna", response_model=DnaOut)
 @limiter.limit("120/minute")
 async def get_dna(
     request: Request,
@@ -73,7 +80,7 @@ async def get_dna(
     }
 
 
-@router.post("/me/dna/confirm")
+@router.post("/me/dna/confirm", response_model=DnaConfirmOut)
 @limiter.limit("120/minute")
 async def confirm_dna(
     request: Request,

@@ -11,6 +11,7 @@ from config import settings
 from db import get_session
 from limiter import limiter
 from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcript, Video
+from routers.schemas import ClipOut, ClipsOut, TaskQueuedOut
 
 router = APIRouter(prefix="/videos", tags=["clips"])
 clips_router = APIRouter(prefix="/clips", tags=["clips"])
@@ -35,7 +36,7 @@ def _clip_response(clip: Clip) -> dict:
     }
 
 
-@router.post("/{video_id}/clips/generate")
+@router.post("/{video_id}/clips/generate", response_model=ClipsOut)
 @limiter.limit("10/hour")
 async def generate_clips(
     request: Request,
@@ -77,7 +78,7 @@ async def generate_clips(
     return {"clips": [_clip_response(c) for c in clips]}
 
 
-@router.get("/{video_id}/clips")
+@router.get("/{video_id}/clips", response_model=ClipsOut)
 @limiter.limit("120/minute")
 async def list_clips(
     request: Request,
@@ -102,7 +103,7 @@ async def list_clips(
 # ── Clip-level actions ────────────────────────────────────────────────────────
 
 
-@clips_router.post("/{clip_id}/render", status_code=202)
+@clips_router.post("/{clip_id}/render", status_code=202, response_model=TaskQueuedOut)
 @limiter.limit("20/hour")
 async def render_clip(
     request: Request,
@@ -125,7 +126,7 @@ async def render_clip(
     return {"task_id": task.id, "status": "queued"}
 
 
-@clips_router.get("/{clip_id}")
+@clips_router.get("/{clip_id}", response_model=ClipOut)
 @limiter.limit("120/minute")
 async def get_clip(
     request: Request,

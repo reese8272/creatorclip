@@ -6,12 +6,13 @@ from auth import get_current_creator
 from db import get_session
 from limiter import limiter
 from models import AudienceActivity, Creator
+from routers.schemas import UploadIntelOut
 from upload_intel.timing import best_upload_windows, optimal_gap_hours
 
 router = APIRouter(prefix="/creators", tags=["upload-intel"])
 
 
-@router.get("/me/upload-intel")
+@router.get("/me/upload-intel", response_model=UploadIntelOut)
 @limiter.limit("120/minute")
 async def get_upload_intel(
     request: Request,

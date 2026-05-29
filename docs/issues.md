@@ -1256,7 +1256,7 @@ most endpoints return a bare `dict` with no `response_model`.
 
 **Acceptance criteria**:
 - [x] `youtube_video_id` validated against `^[A-Za-z0-9_-]{11}$` (422 on bad input) on both `/videos/link` and `/videos/upload`, before the value reaches a storage key — DB-free unit test
-- [ ] A Pydantic `*Out` model + `response_model=` on every endpoint — **mechanical hygiene (no security/correctness risk), ~16 endpoints; tracked under Issue 75** rather than rushed into one commit
+- [x] A Pydantic `*Out` model + `response_model=` on every endpoint — DONE 2026-05-29 (`routers/schemas.py`; see Issue 75 list)
 
 ## Issue 74: Bound transcription/audio memory (SEV-2)
 **Depends on**: —
@@ -1297,7 +1297,7 @@ vector; WhisperX model + SDK clients reconstructed per call.
   `celery_task_*`) at `/metrics`; correlation id propagated API→Celery via
   before_task_publish/task_prerun/task_postrun signals. +9 tests. See DECISIONS
   2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
-- [ ] **Full `response_model` coverage** across the ~16 endpoints (from Issue 73)
+- [x] **Full `response_model` coverage** — DONE (2026-05-29). `routers/schemas.py` + `response_model=` on every JSON endpoint (auth/creators/clips/review/upload_intel/improvement/videos; billing already had models). Mirrors each handler's exact return; OpenAPI builds 26 typed 2xx responses; `tests/test_response_models.py` guards the integration-only shapes. See DECISIONS 2026-05-29.
 - [ ] **Deepgram file-stream** upload (from Issue 74)
 - [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
 - [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71)

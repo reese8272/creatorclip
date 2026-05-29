@@ -88,6 +88,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
 ├── crypto.py                   # Fernet helpers for token columns
 ├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
+│   # routers/schemas.py         # Pydantic *Out response models (response_model coverage, Issue 75/73)
 ├── clients.py                  # Anthropic singleton, Voyage client, YouTube client factory, storage client
 │
 ├── youtube/

@@ -9,12 +9,15 @@ from db import get_session
 from improvement import jobs
 from limiter import limiter
 from models import Creator, Video, VideoMetrics
+from routers.schemas import BriefStatusOut
 
 router = APIRouter(prefix="/creators", tags=["improvement"])
 logger = logging.getLogger(__name__)
 
 
-@router.post("/me/improvement-brief", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/me/improvement-brief", status_code=status.HTTP_202_ACCEPTED, response_model=BriefStatusOut
+)
 @limiter.limit("10/hour")
 async def start_improvement_brief(
     request: Request,
@@ -53,7 +56,7 @@ async def start_improvement_brief(
     return {"status": "pending"}
 
 
-@router.get("/me/improvement-brief")
+@router.get("/me/improvement-brief", response_model=BriefStatusOut)
 @limiter.limit("60/hour")
 async def get_improvement_brief(
     request: Request,

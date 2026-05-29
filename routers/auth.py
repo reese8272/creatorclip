@@ -13,6 +13,7 @@ from config import settings
 from db import get_session
 from limiter import limiter
 from models import Creator, append_audit
+from routers.schemas import AuthMeOut, StatusOut
 from youtube.oauth import (
     build_authorization_url,
     exchange_code,
@@ -110,13 +111,13 @@ async def callback(
     return resp
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=StatusOut)
 async def logout(response: Response) -> dict:
     response.delete_cookie(SESSION_COOKIE)
     return {"status": "logged out"}
 
 
-@router.get("/me")
+@router.get("/me", response_model=AuthMeOut)
 @limiter.limit("120/minute")
 async def me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Returns the authenticated creator's profile. No virality predictions made here."""

@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 75 / 73: full response_model coverage
+
+### What changed
+Every JSON endpoint now declares a Pydantic `response_model` (the deferred half of
+Issue 73). New `routers/schemas.py` holds the `*Out` models; wired into auth,
+creators, clips, review, upload_intel, improvement, and videos (billing already
+had its own inline models — left as-is to minimise churn). Each model mirrors the
+exact dict its handler already returns.
+
+### Why
+response_model documents the contract in OpenAPI, validates what we return, and
+**filters the payload to declared fields** — so an endpoint can't accidentally
+over-expose an internal field as the surface grows. A pre-beta hygiene + safety
+pass across ~20 endpoints.
+
+### Approach / risk control
+The deferral reason was "rushing schemas risks runtime 500s" (a mismatched model
+→ `ResponseValidationError`). Mitigated by reading each handler's literal return
+and mirroring it, then leaning on the test suite: the full run exercises the
+tested endpoints (zero 500s — models match), and `tests/test_response_models.py`
+constructs each Out model from the exact handler dict for the integration-only
+endpoints (data-gate, dna both branches, upload-intel, video list/status, clip),
+so shape drift fails in the default run rather than in prod. Models use Optional +
+defaults where a field can be absent/None (e.g. `DnaOut.profile|message` covers
+both return branches; `BriefStatusOut` covers none/pending/done/failed).
+
+### Notes
+- `routers/schemas.py` is a new module (within the canonical `routers/` package) —
+  recorded in SOT.
+- response_model includes declared-but-null fields by default, so a couple of
+  responses now carry explicit `null`s (e.g. the brief poll). Harmless; the schema
+  is the contract. One own-test assertion was loosened from exact-dict to field
+  checks accordingly.
+- Verification: **427 passed** (+6 model tests); OpenAPI builds with 26 typed 2xx
+  JSON responses; gates ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0.
+
+---
+
 ## 2026-05-29 — Issue 75: improvement brief → 202 + poll (async Celery job)
 
 ### What changed

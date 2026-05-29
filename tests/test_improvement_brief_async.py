@@ -72,4 +72,7 @@ def test_get_returns_job_status(client, override_creator, mocker):
     )
     resp = client.get("/creators/me/improvement-brief")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "done", "brief": "hello"}
+    body = resp.json()
+    # response_model=BriefStatusOut now declares the full shape (error/updated_at as null).
+    assert body["status"] == "done"
+    assert body["brief"] == "hello"
