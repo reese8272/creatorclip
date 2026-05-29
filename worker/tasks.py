@@ -201,7 +201,7 @@ def build_dna(self, creator_id: str) -> str:
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.ingest_status = status
@@ -212,7 +212,7 @@ async def _ingest_async(video_id: str) -> None:
     from worker.storage import alocal_path, aupload_file
     from youtube.ingest import extract_audio_wav
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video:
             raise ValueError(f"Video {video_id} not found")
@@ -237,7 +237,7 @@ async def _ingest_async(video_id: str) -> None:
         finally:
             wav_path.unlink(missing_ok=True)
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.source_uri = audio_uri
@@ -254,7 +254,7 @@ async def _transcribe_async(video_id: str) -> None:
     from ingestion.transcribe import transcribe_audio
     from worker.storage import alocal_path
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video or not video.source_uri:
             raise ValueError(f"Video {video_id} not ready for transcription")
@@ -266,7 +266,7 @@ async def _transcribe_async(video_id: str) -> None:
         # multi-second transcription round-trip (Issue 38 Wave 1).
         result = await asyncio.to_thread(transcribe_audio, str(audio_path))
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         existing = await session.get(Transcript, uuid.UUID(video_id))
         if existing:
             existing.source = result["source"]
@@ -289,7 +289,7 @@ async def _signals_async(video_id: str) -> None:
     from ingestion.signals import build_signal_timeline
     from worker.storage import alocal_path
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video or not video.source_uri:
             raise ValueError(f"Video {video_id} not ready for signal extraction")
@@ -306,7 +306,7 @@ async def _signals_async(video_id: str) -> None:
 
     timeline = build_signal_timeline(audio_events, retention_points)
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         existing = await session.get(Signals, uuid.UUID(video_id))
         if existing:
             existing.timeline_jsonb = timeline
@@ -321,7 +321,7 @@ async def _signals_async(video_id: str) -> None:
 
 
 async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
             clip.render_status = status
@@ -332,7 +332,7 @@ async def _render_clip_async(clip_id: str) -> None:
     from clip_engine.render import render_clip_file
     from worker.storage import alocal_path, aupload_file
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if not clip:
             raise ValueError(f"Clip {clip_id} not found")
@@ -368,7 +368,7 @@ async def _render_clip_async(clip_id: str) -> None:
         finally:
             out_path.unlink(missing_ok=True)
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
             clip.render_uri = render_uri
@@ -395,7 +395,7 @@ async def _build_dna_async(creator_id: str) -> None:
 
     creator_uuid = uuid.UUID(creator_id)
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         creator = await session.get(Creator, creator_uuid)
         if not creator:
             raise ValueError(f"Creator {creator_id} not found")
@@ -471,7 +471,7 @@ async def _poll_clip_outcomes_async() -> None:
     # re-query every old clip on every hourly run forever.
     poll_floor = now - timedelta(days=30)
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         result = await session.execute(
             select(ClipOutcome, Clip)
             .join(Clip, Clip.id == ClipOutcome.clip_id)
@@ -545,7 +545,7 @@ async def _generate_clips_async(video_id: str) -> None:
 
     video_uuid = uuid.UUID(video_id)
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         video = await session.get(Video, video_uuid)
         if not video:
             raise ValueError(f"Video {video_id} not found")
@@ -607,7 +607,7 @@ async def _purge_stale_source_media_async() -> None:
     # then reopen a short write transaction to null source_uri. Previously the
     # session was held across every delete_file call — N round-trips to R2
     # pinned a DB connection for the entire sweep.
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         result = await session.execute(
             select(Video.id, Video.source_uri).where(
                 and_(
@@ -633,7 +633,7 @@ async def _purge_stale_source_media_async() -> None:
     if not purged_ids:
         return
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         await session.execute(update(Video).where(Video.id.in_(purged_ids)).values(source_uri=None))
         await session.commit()
         logger.info("Purged source media for %d video(s)", len(purged_ids))
@@ -645,7 +645,7 @@ async def _refresh_youtube_analytics_async() -> None:
     from youtube.analytics import sync_audience_data, sync_video_analytics
     from youtube.oauth import get_valid_access_token
 
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         # Issue 47: ORDER BY last_analytics_refreshed_at NULLS FIRST, id so
         # creators that starved past quota in earlier runs go first next time.
         # New creators (NULL) jump the queue, matching user expectation that a

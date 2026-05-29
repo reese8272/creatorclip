@@ -5,6 +5,176 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-28 — Issue 60: Postgres RLS implementation per Issue 56 decision
+
+### What was built
+Implements the Issue 56 adopt-now decision. New alembic revision
+`e5f6a7b8c9d0` (`0005_rls_policies`) creates roles, grants, and policies:
+
+- **Roles**: `creatorclip_app` (LOGIN, no BYPASSRLS — the application
+  connects as this) and `creatorclip_migrate` (LOGIN, BYPASSRLS granted out
+  of band — alembic and Celery worker tasks connect as this). Both are
+  created idempotently inside `DO $$ ... $$` blocks.
+- **Grants**: `creatorclip_app` gets `USAGE` on `schema public` and
+  `SELECT, INSERT, UPDATE, DELETE` on all tables + `USAGE, SELECT` on all
+  sequences. `ALTER DEFAULT PRIVILEGES` extends the same grants to future
+  tables created in `public` so we don't lose access after the next
+  migration.
+- **Policies** on 12 tables (every table with a direct `creator_id`
+  column): `videos`, `audience_activity`, `demographics`, `youtube_tokens`,
+  `creator_dna`, `dna_embeddings`, `clips`, `clip_feedback`,
+  `preference_models`, `minute_packs`, `minute_deductions`, `usage`. Each
+  policy is `USING (creator_id = current_setting('app.creator_id',
+  true)::uuid) WITH CHECK (...)`. Both `ENABLE` and `FORCE ROW LEVEL
+  SECURITY` are applied so the table owner cannot bypass.
+
+Application wiring (Issue 60 code changes):
+
+- `config.py`: new optional `DATABASE_MIGRATION_URL` env var (falls back to
+  `DATABASE_URL` for single-role dev/CI).
+- `db.py`: two engines / sessionmakers — `engine` + `AsyncSessionLocal`
+  (app role, used by FastAPI request path) and `admin_engine` +
+  `AdminSessionLocal` (migration role, used by Celery worker tasks).
+  Registers a global `after_begin` listener on the `Session` class that
+  emits `SET LOCAL app.creator_id = :cid` from `session.info["creator_id"]`
+  when present.
+- `auth.py:get_current_creator`: after resolving the Creator from the JWT,
+  attaches `creator.id` to `session.info["creator_id"]`. The bootstrap
+  Creator lookup runs cleanly because the `creators` table is exempt from
+  RLS.
+- `worker/tasks.py`: every `db.AsyncSessionLocal()` site switched to
+  `db.AdminSessionLocal()` (16 call sites). Worker tasks are trusted
+  internal code that performs cross-tenant sweeps; the admin role bypass
+  is the correct shape.
+- `alembic/env.py`: uses `settings.database_migration_url`.
+
+Tests:
+
+- `tests/test_retention_tasks.py` and `tests/test_oauth_lifecycle.py`:
+  patches of `db.AsyncSessionLocal` switched to `db.AdminSessionLocal`
+  (only worker-task tests were affected).
+- New `tests/test_rls_isolation_integration.py` (marker: `integration`):
+  seeds Creator A + Creator B with one row per tenant table each, then
+  opens a transaction, issues `SET LOCAL ROLE creatorclip_app` + `SET LOCAL
+  app.creator_id = :A`, and asserts that an unfiltered `SELECT creator_id
+  FROM <each tenant table>` returns zero rows owned by B. A second test
+  asserts the `creators` table remains visible to the app role with no GUC
+  set, validating the auth-bootstrap exemption.
+
+Operations runbook in `docs/DEPLOYMENT.md` covers the one-time prod ops:
+`ALTER ROLE creatorclip_migrate BYPASSRLS`, role passwords, table ownership
+transfer to `creatorclip_migrate`, and the two-URL env update.
+
+### Why
+Implements the Issue 56 decision without re-deliberating. See that
+DECISIONS entry for the rationale; this entry documents the chosen
+implementation shape.
+
+### Two minor decisions surfaced during implementation
+
+**1. JWT-to-creator bootstrap via `creators` table exemption.** The auth
+dependency must look up Creator by JWT `sub` before `app.creator_id` is set.
+Option B from the CHECK brief (pre-parse JWT in middleware → request.state)
+was ruled out as heavier than needed. Option A (rely on the existing
+`creators`-table RLS exemption) works because the `creators` table has no
+policy — the bootstrap SELECT runs without a gate, then `auth.py` attaches
+the resolved id to `session.info` so every subsequent transaction in the
+request emits SET LOCAL via the listener.
+
+**2. Test fixture role strategy.** Existing integration tests use
+`settings.DATABASE_URL` to create their own engines for setup/teardown.
+Rather than touching ~15 test files, the strategy is: dev / CI Postgres
+connects as a SUPERUSER (which bypasses RLS regardless of FORCE), and the
+new RLS-guarantee tests use `SET LOCAL ROLE creatorclip_app` within a
+transaction to assume the non-BYPASSRLS role for the visibility assertion.
+This keeps existing tests untouched and makes the RLS guarantee
+independently verifiable.
+
+### Mutation rowcount audit (AC carry-over)
+
+Issue 56's acceptance criteria included "every UPDATE/DELETE on tenant
+tables checks rowcount and raises 404 on 0". The audit found:
+
+- Routers: only two `session.execute(update/delete)` calls outside the
+  ORM session pattern (`routers/billing.py:154` updating `creators`,
+  `routers/auth.py:204` deleting `creator`). Both target the `creators`
+  table, which is exempt from RLS — no rowcount-zero failure mode.
+- All other router mutations go through ORM `session.get(Model, id)` →
+  mutate → commit. Under RLS, `session.get` returns `None` for rows the
+  current creator cannot see → the existing `if not video: raise 404`
+  pattern is the rowcount guard.
+- Worker tasks (the one bulk UPDATE in `_purge_stale_source_media_async`)
+  run via `AdminSessionLocal` and bypass RLS — no failure mode there.
+
+The audit AC is therefore satisfied by construction. If a future change
+introduces a router-side bulk UPDATE/DELETE on tenant tables, the
+rowcount-zero check must be added at the call site; this is documented
+in the runbook.
+
+### Alternatives ruled out (Issue 60-specific)
+- **Drop FORCE RLS to make dev/CI Just Work**: would let the table owner
+  bypass policies — defeats the purpose. The chosen role-assumption test
+  strategy keeps FORCE on without needing to change CI.
+- **Bypass-flag policy pattern** (`OR current_setting('app.bypass_rls',
+  true) = 'on'`): rejected per Issue 56 — industry-standard is BYPASSRLS
+  role, not in-policy bypass logic.
+- **Worker tasks with per-creator `SET LOCAL`** (instead of admin role):
+  would require restructuring every Celery task to scope to one creator.
+  `purge_stale_source_media` and `poll_clip_outcomes` are inherently
+  cross-tenant; the admin role + BYPASSRLS is the correct shape for those.
+  Per-creator scoping in workers is a possible future hardening if we
+  ever need to defend against compromised worker code.
+
+### Tradeoffs
+- **First-deploy ops burden**: the runbook requires SUPERUSER access to
+  prod Postgres for one-time `ALTER ROLE BYPASSRLS` + ownership transfer.
+  Documented but unavoidable.
+- **Child tables not yet covered**: `video_metrics`, `retention_curves`,
+  `transcripts`, `signals`, `clip_outcomes` reach tenant via FK to a
+  policy-protected parent. Per Issue 56, this is acceptable for now; a
+  raw `SELECT * FROM signals` in a future code path would bypass the
+  parent policy. Flagged for future hardening.
+- **Mutation rowcount audit**: the AC is satisfied by construction today
+  but the codebase pattern (`session.get → mutate → commit`) is not
+  enforced — a future bulk `session.execute(update(...))` on a tenant
+  table would silently 0-row under RLS without raising 404. A static check
+  could be added but is overkill for current surface.
+
+### Source / evidence
+Same sources as Issue 56's DECISIONS entry (Crunchy Data, pganalyze,
+Bytebase footguns, SQLAlchemy 2.0 docs + discussion #10469, Microsoft
+Azure multi-tenant guidance). Re-validated against the actual codebase:
+
+- Read `auth.py:31-47` to confirm the bootstrap query shape and apply the
+  exemption-based fix.
+- Read `models.py` to enumerate every direct `creator_id` column (12,
+  matches Issue 56's count exactly).
+- Read every router for mutation patterns; confirmed two raw mutations on
+  the exempt `creators` table.
+
+### Files
+- `alembic/versions/0005_rls_policies.py` — new migration.
+- `config.py` — new `DATABASE_MIGRATION_URL` + `database_migration_url`
+  property with fallback.
+- `db.py` — admin engine/sessionmaker; `after_begin` listener.
+- `auth.py:get_current_creator` — `session.info["creator_id"]` injection.
+- `worker/tasks.py` — 16 `db.AsyncSessionLocal()` → `db.AdminSessionLocal()`
+  replacements.
+- `alembic/env.py` — uses migration URL.
+- `tests/test_retention_tasks.py` — patches updated to
+  `db.AdminSessionLocal`.
+- `tests/test_oauth_lifecycle.py` — patch updated to
+  `db.AdminSessionLocal`.
+- `tests/test_rls_isolation_integration.py` — new file: 2 tests
+  (cross-tenant leak block + creators-table exemption).
+- `docs/DEPLOYMENT.md` — RLS one-time setup runbook.
+- `docs/SECRETS.md` — `DATABASE_MIGRATION_URL` row added.
+
+### Date
+2026-05-28
+
+---
+
 ## 2026-05-28 — Issue 56: Postgres Row-Level Security — adopt now
 
 ### What was decided

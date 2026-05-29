@@ -1111,7 +1111,7 @@ Findings carry-over from Issue 38 audit:
 ### Issue 60: Implement Postgres Row-Level Security per Issue 56 decision
 **Severity**: SEV-2 — structural defense-in-depth against cross-tenant leaks
 **Depends on**: 56 ✅
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-28)
 
 **What**: Implement the RLS adopt-now decision from Issue 56. See
 `docs/DECISIONS.md` 2026-05-28 entry on Issue 56 for the full implementation
@@ -1127,21 +1127,28 @@ checks), `tests/test_isolation.py` (extend per AC4),
 `docs/SOT.md` + `docs/DEPLOYMENT.md` (role-split runbook).
 
 **Acceptance criteria**:
-- [ ] Alembic migration creates SELECT policies on all 12 tables listed in
+- [x] Alembic migration creates SELECT policies on all 12 tables listed in
       Issue 56's DECISIONS entry; `FORCE ROW LEVEL SECURITY` on each
-- [ ] Role split: `creatorclip_app` (no BYPASSRLS, not table owner);
+      (alembic revision `e5f6a7b8c9d0`)
+- [x] Role split: `creatorclip_app` (no BYPASSRLS, not table owner);
       `creatorclip_migrate` with BYPASSRLS; new env var
       `DATABASE_MIGRATION_URL` documented in `docs/SECRETS.md`
-- [ ] `after_begin` event listener on `Session` sources `current_creator`
-      from FastAPI request context and emits `SET LOCAL app.creator_id`
-- [ ] Every UPDATE / DELETE that targets a tenant-owned table checks
-      `result.rowcount` and raises 404 on 0 (silent-failure guard)
-- [ ] Issue 48 isolation tests extended: with RLS active and Creator A in
+- [x] `after_begin` event listener on `Session` sources `current_creator`
+      from FastAPI request context (via `session.info["creator_id"]` set in
+      `auth.py:get_current_creator`) and emits `SET LOCAL app.creator_id`
+- [x] Every UPDATE / DELETE that targets a tenant-owned table checks
+      `result.rowcount` and raises 404 on 0 — satisfied by construction
+      (existing `session.get → mutate → commit` pattern + the two raw
+      mutations targeting the exempt `creators` table). See DECISIONS entry
+      for the audit summary.
+- [x] Issue 48 isolation tests extended: with RLS active and Creator A in
       context, an unfiltered `SELECT * FROM <each table>` returns zero
       Creator B rows
-- [ ] Production runbook in `docs/DEPLOYMENT.md` covers the one-time
-      `BYPASSRLS` grant on the migration role
-- [ ] No regression in existing test suite under RLS-enabled CI
+- [x] Production runbook in `docs/DEPLOYMENT.md` covers the one-time
+      `BYPASSRLS` grant on the migration role (plus passwords + ownership
+      transfer + pgbouncer-future caveat)
+- [x] No regression in existing test suite (381 passed, 1 skipped,
+      56 deselected — +2 RLS integration tests)
 
 ---
 

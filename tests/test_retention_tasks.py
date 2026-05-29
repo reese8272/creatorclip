@@ -90,7 +90,7 @@ def test_purge_clears_source_uri_past_retention():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file") as mock_delete,
         ):
             session = AsyncMock()
@@ -123,7 +123,7 @@ def test_purge_noop_when_nothing_stale():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file") as mock_delete,
         ):
             session = AsyncMock()
@@ -168,7 +168,7 @@ def test_purge_continues_on_delete_error():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file", side_effect=delete_side_effect),
         ):
             session = AsyncMock()
@@ -214,7 +214,7 @@ def test_purge_filter_gates_on_ingest_done_at():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch("worker.storage.delete_file"),
         ):
             session = AsyncMock()
@@ -278,7 +278,7 @@ def _signals_async_runner(video, *, retention_rows=()):
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch("worker.storage.alocal_path", FakeLocalPath),
             patch("ingestion.audio.extract_audio_events", return_value={}),
             patch("ingestion.signals.build_signal_timeline", return_value={}),
@@ -362,7 +362,7 @@ def test_analytics_refresh_iterates_creators():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),
@@ -400,7 +400,7 @@ def test_analytics_refresh_skips_creator_on_token_error():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch(
                 "youtube.oauth.get_valid_access_token",
                 new_callable=AsyncMock,
@@ -444,7 +444,7 @@ def test_analytics_refresh_orders_by_last_refreshed_nulls_first():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch("worker.tasks.remaining", new_callable=AsyncMock, return_value=5000),
         ):
             session = AsyncMock()
@@ -481,7 +481,7 @@ def test_analytics_refresh_stamps_last_refreshed_on_success():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),
@@ -520,7 +520,7 @@ def test_analytics_refresh_does_not_stamp_on_quota_exhaustion():
 
     async def run():
         with (
-            patch("db.AsyncSessionLocal") as mock_ctx,
+            patch("db.AdminSessionLocal") as mock_ctx,
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),

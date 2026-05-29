@@ -6,9 +6,63 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 hardening — Batch 4 fully closed (Issues 38 W1, 52, 56). Three follow-up issues filed: 58 (transactional email infra), 59 (in-app notifications surface), 60 (RLS implementation), 61 (Issue 38 Wave 2).
-**Last completed**: Issue 38 Wave 1 — Celery hot-path sync-in-async fixes via `asyncio.to_thread` + new `worker/storage.py` async wrappers.
+**Active issue**: Phase 2 closed (26/26); Issue 60 (RLS implementation) shipped as the first Phase 2-carryover work. Three follow-up issues remain: 58 (email infra), 59 (notifications surface), 61 (Issue 38 W2).
+**Last completed**: Issue 60 — Postgres RLS implementation: roles + policies + FORCE on 12 tables + `after_begin` listener + `AdminSessionLocal` for worker tasks.
 **Blocked**: _(none)_
+
+> **Closed Issue 60** (2026-05-28): Postgres RLS implementation. Closes the
+> structural defense-in-depth gap that allowed Issue 33 (missed `creator_id`
+> filter → cross-creator analytics in a Claude prompt). New alembic revision
+> `e5f6a7b8c9d0` creates roles `creatorclip_app` (LOGIN, no BYPASSRLS) +
+> `creatorclip_migrate` (LOGIN, BYPASSRLS granted out of band), grants the
+> app role full DML on `public` (plus `ALTER DEFAULT PRIVILEGES` for future
+> tables), and enables + forces RLS on the 12 tenant-owned tables
+> (`videos`, `audience_activity`, `demographics`, `youtube_tokens`,
+> `creator_dna`, `dna_embeddings`, `clips`, `clip_feedback`,
+> `preference_models`, `minute_packs`, `minute_deductions`, `usage`). Policies
+> read `current_setting('app.creator_id', true)::uuid` on USING + WITH CHECK.
+> `creators` and `audit_log` are exempt — the former because the FastAPI
+> auth dependency must resolve the current creator before the GUC is set,
+> the latter because ops/oncall need to read all rows.
+>
+> Application wiring: new optional `DATABASE_MIGRATION_URL` env var (falls
+> back to `DATABASE_URL` for single-role dev/CI); `db.py` now exposes
+> `AsyncSessionLocal` (app role) AND `AdminSessionLocal` (admin role) — a
+> global `after_begin` event listener on `Session` emits `SET LOCAL
+> app.creator_id` whenever `session.info["creator_id"]` is set;
+> `auth.get_current_creator` attaches the resolved creator id to
+> `session.info` after the (exempt) Creator lookup. Worker tasks all moved
+> from `db.AsyncSessionLocal()` to `db.AdminSessionLocal()` (16 sites) —
+> worker code is trusted internal and many tasks are inherently
+> cross-tenant (purge, poll_clip_outcomes, analytics refresh).
+>
+> Two minor implementation decisions surfaced and resolved (see DECISIONS):
+> (a) JWT-to-creator bootstrap via the `creators` table exemption rather
+> than a middleware pre-parse; (b) RLS-guarantee tests use `SET LOCAL ROLE
+> creatorclip_app` within a transaction to assume the non-BYPASSRLS role
+> for the visibility assertion — keeps existing integration tests
+> untouched.
+>
+> New `tests/test_rls_isolation_integration.py` (marker: `integration`)
+> seeds Creator A + B with one row per tenant table, then under
+> `creatorclip_app` role + Creator A's GUC asserts that unfiltered
+> `SELECT creator_id FROM <each tenant table>` returns zero Creator B rows.
+> Second test verifies the `creators` table remains visible to the app role
+> with no GUC set (auth-bootstrap path).
+>
+> Mutation rowcount audit (AC carry-over): satisfied by construction — the
+> only two raw `session.execute(update/delete)` outside the ORM session
+> pattern target the exempt `creators` table; everything else routes
+> through `session.get(Model, id)` → mutate → commit, where `session.get`
+> returns `None` for RLS-blocked rows and the existing
+> `if not video: raise 404` is the rowcount guard. Documented in DECISIONS.
+>
+> Production runbook in `docs/DEPLOYMENT.md` covers the one-time SQL ops:
+> `ALTER ROLE creatorclip_migrate BYPASSRLS`, set passwords, transfer table
+> ownership to `creatorclip_migrate`, update `/opt/autoclip/.env` with
+> `DATABASE_MIGRATION_URL`, restart app. pgbouncer-future caveat pinned:
+> transaction pooling only, never statement pooling.
+> Test count: **381 passed, 1 skipped, 56 deselected** (+2 RLS integration).
 
 > **Closed Issue 38 Wave 1** (2026-05-28): Sync-in-async fixes for the Celery
 > ingest pipeline. A full-codebase audit found 23 instances of sync external calls

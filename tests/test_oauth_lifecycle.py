@@ -417,7 +417,7 @@ async def test_refresh_analytics_deletes_token_row_on_auth_error():
             return None
 
     with (
-        patch("db.AsyncSessionLocal", FakeSession),
+        patch("db.AdminSessionLocal", FakeSession),
         patch("worker.tasks.remaining", new=AsyncMock(return_value=10000)),
         patch("youtube.oauth.get_valid_access_token", new=AsyncMock(return_value="tok")),
         patch(

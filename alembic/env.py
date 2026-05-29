@@ -9,7 +9,11 @@ from config import settings
 from db import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Issue 60: migrations run as the admin role (BYPASSRLS) so DDL like CREATE
+# POLICY / ENABLE RLS / ALTER ROLE succeeds and so existing data INSERT/UPDATE
+# in data-migrations is not blocked by tenant policies. Falls back to
+# DATABASE_URL when DATABASE_MIGRATION_URL is unset (dev single-role default).
+config.set_main_option("sqlalchemy.url", settings.database_migration_url)
 
 target_metadata = Base.metadata
 

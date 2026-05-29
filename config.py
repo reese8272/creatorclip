@@ -11,6 +11,20 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str
     DATABASE_URL: str
     REDIS_URL: str
+
+    # --- Postgres RLS (Issue 60) ---
+    # Connection string for the migration / admin role. Must point to a role
+    # with BYPASSRLS (used by Alembic migrations and Celery worker tasks that
+    # operate cross-tenant). Falls back to DATABASE_URL when unset, which is
+    # the dev-friendly default — single Postgres role with implicit bypass via
+    # being the table owner. In production these MUST be different roles; see
+    # `docs/DEPLOYMENT.md` for the one-time role-setup runbook.
+    DATABASE_MIGRATION_URL: str | None = None
+
+    @property
+    def database_migration_url(self) -> str:
+        return self.DATABASE_MIGRATION_URL or self.DATABASE_URL
+
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str
     OAUTH_REDIRECT_URI: str

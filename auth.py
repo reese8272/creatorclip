@@ -40,8 +40,16 @@ async def get_current_creator(
         creator_id = uuid.UUID(payload["sub"])
     except (jwt.PyJWTError, ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid or expired session") from None
+    # Bootstrap the Creator lookup before SET LOCAL is meaningful: the `creators`
+    # table is exempt from RLS (Issue 56), so the query runs cleanly even with
+    # no app.creator_id GUC set yet.
     result = await session.execute(select(Creator).where(Creator.id == creator_id))
     creator = result.scalar_one_or_none()
     if creator is None:
         raise HTTPException(status_code=401, detail="Creator not found")
+    # Attribute the rest of this request's queries to the resolved creator.
+    # The after_begin listener on AsyncSessionLocal will emit
+    # `SET LOCAL app.creator_id = :cid` on every subsequent transaction,
+    # gating RLS policies on tenant-owned tables (Issue 60).
+    session.info["creator_id"] = creator.id
     return creator

@@ -1,0 +1,274 @@
+"""
+Integration tests for Issue 60 — Postgres Row-Level Security tenant isolation.
+
+The test strategy assumes the surrounding test infra (docker-compose dev /
+integration.yml CI) connects as a SUPERUSER. Within each test we issue
+``SET LOCAL ROLE creatorclip_app`` so policies are evaluated under the
+non-BYPASSRLS app role, then assert that an unfiltered ``SELECT *`` of every
+tenant-owned table returns zero rows belonging to Creator B while Creator A
+is in scope via ``SET LOCAL app.creator_id``.
+
+This is the structural property RLS is purchased to provide: the application
+can forget the ``WHERE creator_id = :id`` predicate and the database still
+refuses to leak cross-tenant rows.
+
+Setup / teardown runs as the SUPERUSER (no SET ROLE), so the fixtures can
+seed both creators without RLS interfering with the seeding writes.
+"""
+
+import uuid
+from datetime import UTC, datetime
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import delete, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from config import settings
+from models import (
+    AudienceActivity,
+    Clip,
+    ClipFeedback,
+    ClipFormat,
+    Creator,
+    CreatorDna,
+    Demographics,
+    DnaEmbedding,
+    DnaEmbeddingKind,
+    DnaStatus,
+    FeedbackAction,
+    IngestStatus,
+    MinuteDeduction,
+    MinutePack,
+    OnboardingState,
+    PreferenceModel,
+    RenderStatus,
+    Usage,
+    Video,
+    VideoKind,
+    YoutubeToken,
+)
+
+pytestmark = pytest.mark.integration
+
+
+@pytest_asyncio.fixture
+async def admin_engine():
+    """SUPERUSER engine used for fixture setup / teardown."""
+    eng = create_async_engine(settings.database_migration_url, pool_pre_ping=True)
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(admin_engine):
+    factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+
+
+async def _seed_creator(session: AsyncSession, *, label: str) -> Creator:
+    creator = Creator(
+        google_sub=f"test_rls_{label}_{uuid.uuid4().hex[:8]}",
+        channel_id=f"UC_rls_{label}_{uuid.uuid4().hex[:6]}",
+        channel_title=f"RLS Test {label}",
+        onboarding_state=OnboardingState.active,
+        minutes_balance=100,
+    )
+    session.add(creator)
+    await session.commit()
+    return creator
+
+
+async def _seed_all_tenant_rows(session: AsyncSession, creator_id: uuid.UUID) -> None:
+    """Seed one row in every tenant-owned table for the given creator."""
+    now = datetime.now(UTC)
+    # Parent rows first so FKs resolve.
+    video = Video(
+        creator_id=creator_id,
+        youtube_video_id=f"yt_{uuid.uuid4().hex[:8]}",
+        title="RLS fixture",
+        kind=VideoKind.long,
+        duration_s=120.0,
+        ingest_status=IngestStatus.done,
+    )
+    session.add(video)
+    await session.flush()
+    clip = Clip(
+        video_id=video.id,
+        creator_id=creator_id,
+        start_s=10.0,
+        end_s=50.0,
+        peak_s=30.0,
+        format=ClipFormat.short,
+        render_status=RenderStatus.done,
+    )
+    session.add(clip)
+    await session.flush()
+
+    session.add(
+        YoutubeToken(
+            creator_id=creator_id,
+            access_token_encrypted="x",
+            refresh_token_encrypted="x",
+            expires_at=now,
+            scope="",
+        )
+    )
+    session.add(
+        AudienceActivity(
+            creator_id=creator_id, day_of_week=1, hour=12, activity_index=0.5, fetched_at=now
+        )
+    )
+    session.add(Demographics(creator_id=creator_id, payload_jsonb={}, fetched_at=now))
+    session.add(
+        CreatorDna(
+            creator_id=creator_id,
+            version=1,
+            brief_text="x",
+            patterns_jsonb={},
+            status=DnaStatus.draft,
+        )
+    )
+    session.add(
+        DnaEmbedding(
+            creator_id=creator_id,
+            kind=DnaEmbeddingKind.pattern,
+            embedding=[0.0] * 1024,
+            ref_jsonb={},
+        )
+    )
+    session.add(
+        ClipFeedback(
+            clip_id=clip.id,
+            creator_id=creator_id,
+            action=FeedbackAction.upvote,
+        )
+    )
+    session.add(
+        PreferenceModel(
+            creator_id=creator_id,
+            version=1,
+            weights_blob=b"x",
+            updated_at=now,
+        )
+    )
+    session.add(
+        MinutePack(
+            creator_id=creator_id,
+            pack_id="trial",
+            minutes_granted=60,
+            price_cents=0,
+            reason="trial",
+        )
+    )
+    session.add(
+        MinuteDeduction(
+            video_id=video.id,
+            creator_id=creator_id,
+            minutes_deducted=2,
+            duration_s=120.0,
+        )
+    )
+    session.add(Usage(creator_id=creator_id, period=now.strftime("%Y-%m")))
+    await session.commit()
+
+
+async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
+    """Clean up every tenant table for the given creators. Order matters for
+    FK constraints (clips before videos, etc.). MinutePack and Usage don't
+    cascade from creator delete in the model; clear explicitly."""
+    for table_model in (
+        ClipFeedback,
+        Clip,
+        DnaEmbedding,
+        CreatorDna,
+        AudienceActivity,
+        Demographics,
+        PreferenceModel,
+        Usage,
+        MinutePack,
+        MinuteDeduction,
+        Video,
+        YoutubeToken,
+    ):
+        await session.execute(delete(table_model).where(table_model.creator_id.in_(creator_ids)))
+    await session.execute(delete(Creator).where(Creator.id.in_(creator_ids)))
+    await session.commit()
+
+
+# The 12 tenant-owned tables with direct creator_id columns (matches the
+# migration's _TENANT_TABLES tuple).
+_TENANT_TABLES = (
+    "audience_activity",
+    "clip_feedback",
+    "clips",
+    "creator_dna",
+    "demographics",
+    "dna_embeddings",
+    "minute_deductions",
+    "minute_packs",
+    "preference_models",
+    "usage",
+    "videos",
+    "youtube_tokens",
+)
+
+
+@pytest.mark.asyncio
+async def test_rls_blocks_cross_tenant_unfiltered_select(admin_engine, db_session):
+    """For every tenant-owned table, an unfiltered ``SELECT *`` issued under
+    the ``creatorclip_app`` role with Creator A's GUC set returns zero rows
+    belonging to Creator B.
+
+    This is the property RLS is purchased to provide: even when the
+    application forgets ``WHERE creator_id = :id``, the database refuses to
+    return cross-tenant rows.
+    """
+    creator_a = await _seed_creator(db_session, label="A")
+    creator_b = await _seed_creator(db_session, label="B")
+
+    try:
+        await _seed_all_tenant_rows(db_session, creator_a.id)
+        await _seed_all_tenant_rows(db_session, creator_b.id)
+
+        # Now run the RLS visibility test inside a single transaction on a
+        # fresh connection. SET LOCAL ROLE makes the role switch transaction-
+        # scoped so the surrounding fixture teardown still runs as SUPERUSER.
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await s.execute(text("SET LOCAL app.creator_id = :cid"), {"cid": str(creator_a.id)})
+
+            for table in _TENANT_TABLES:
+                rows = (await s.execute(text(f"SELECT creator_id FROM {table}"))).all()
+                row_creator_ids = {r[0] for r in rows}
+                assert creator_b.id not in row_creator_ids, (
+                    f"RLS leak on {table}: row owned by creator B visible to creator A"
+                )
+                # Creator A's row may or may not appear depending on FK chain,
+                # but it must never be that B is visible. The minimum guarantee
+                # tested here is non-leakage, which is what RLS provides.
+    finally:
+        await _cleanup(db_session, [creator_a.id, creator_b.id])
+
+
+@pytest.mark.asyncio
+async def test_rls_creators_table_remains_visible_for_auth_bootstrap(admin_engine, db_session):
+    """The ``creators`` table is exempt from RLS (Issue 56) so the FastAPI auth
+    dependency can resolve ``current_creator`` from the JWT before
+    ``app.creator_id`` has been set. Under the ``creatorclip_app`` role with no
+    GUC set, a lookup by id must still return the row."""
+    creator = await _seed_creator(db_session, label="auth")
+
+    try:
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            # No SET LOCAL app.creator_id — simulating the bootstrap-auth state.
+            result = await s.execute(select(Creator).where(Creator.id == creator.id))
+            row = result.scalar_one_or_none()
+        assert row is not None, "creators table must NOT be gated by RLS"
+        assert row.id == creator.id
+    finally:
+        await _cleanup(db_session, [creator.id])

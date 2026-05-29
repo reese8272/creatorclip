@@ -3,27 +3,31 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-28 (PM session 5 close-out — Issues 46 + 57 + Batch 4 done)
-**Branch:** `main` — 4 commits ahead of `origin/main` (Issues 46, 57, 56, 52 committed
-locally; Issue 38 W1 commit is the next one).
-**Working tree:** Issue 38 W1 staged + tested locally; commit pending.
-**Sync with `origin/main`:** **+4 / 0** (or +5 after Issue 38 W1 commits).
+**Last updated:** 2026-05-28 (PM session 5 — Phase 2 closed + Issue 60 done)
+**Branch:** `main` — 6 commits ahead of `origin/main` after the Issue 60 commit
+(Issues 46, 57, 56, 52, 38 W1, 60 all committed locally; one push will deploy all).
+**Working tree:** clean after Issue 60 commit.
+**Sync with `origin/main`:** **+6 / 0**.
 **Production:** ✅ green on `autoclip.studio` — last successful deploy at `d5b92df`.
-None of this session's commits are on prod yet; awaiting `git push`.
+None of this session's commits are on prod yet; awaiting `git push`. **Note**: Issue
+60's migration `e5f6a7b8c9d0` requires the one-time prod SQL ops in
+`docs/DEPLOYMENT.md` BEFORE the alembic upgrade runs — see "RLS one-time setup"
+section.
 
 ---
 
 ## 1. CURRENT FOCUS
 
-**Phase 2 hardening is fully closed: 26 of 26 issues done.** This session's contributions:
+**Phase 2 hardening is fully closed: 26 of 26 issues done. Issue 60 (the RLS implementation split from Issue 56) also shipped.** This session's contributions:
 
 - **Issue 46** — generate-clips retry safety + outcomes 30-day floor. ✅ Committed `1a8c635`.
 - **Issue 57** — automatic refund on terminal ingest failure. ✅ Committed `1855035`.
 - **Issue 56** — Postgres RLS decide-and-document; adopt-now. ✅ Committed `877eb43`.
-  Implementation tracked as **new Issue 60**.
 - **Issue 52** — worker pipeline integration tests. ✅ Committed `7ec3c1c`.
-- **Issue 38 Wave 1** — Celery hot-path sync-in-async fixes. ✅ Tested, commit pending.
-  Wave 2 tracked as **new Issue 61**.
+- **Issue 38 Wave 1** — Celery hot-path sync-in-async fixes. ✅ Committed `2c53959`.
+  Wave 2 tracked as **Issue 61**.
+- **Issue 60** — Postgres RLS implementation: alembic `0005_rls_policies`, role split,
+  `AdminSessionLocal` for worker tasks, `after_begin` listener, runbook. ✅ Committed.
 
 **Five new issues filed this session** for split-out work:
 - **Issue 58** — transactional email infrastructure (refund email; future password reset, verification, comms)
@@ -33,18 +37,24 @@ None of this session's commits are on prod yet; awaiting `git push`.
 
 ### → NEXT ACTION
 
-1. **Commit Issue 38 W1** (next).
-2. **Push all 5 commits to origin** in one go. CI runs; Docker publish triggers prod deploy
-   for all commits.
-3. **Phase 2 is closed.** Move to Phase 3 = pre-public-launch gates, OR continue with one of
-   the new follow-up issues (60, 61) if you want defense-in-depth hardening before launch:
-   - **Issue 60 (RLS implementation)** is the highest-value pre-launch hardening — closes the
-     structural defense-in-depth on cross-tenant data leaks. Recommended if Google OAuth
-     verification is upcoming (audit-positive).
-   - **Issue 61 (Issue 38 Wave 2)** addresses pool starvation under web-request concurrency —
-     not load-bearing for closed beta but worth closing before public launch.
-   - **Issues 58 + 59** unlock the refund email + banner UX deferred from Issue 57.
-   - **Phase 3 gates** (Issue 30 public go-live) are the canonical sequence after that.
+1. **One-time prod SQL ops** before pushing (Issue 60 migration requires this) — see
+   `docs/DEPLOYMENT.md` "RLS one-time setup": `ALTER ROLE creatorclip_migrate
+   BYPASSRLS`, set role passwords, transfer table ownership, update
+   `/opt/autoclip/.env` with `DATABASE_MIGRATION_URL`. The Dockerized
+   alembic upgrade will then run cleanly.
+2. **Push all 6 commits to origin** in one go after the prod prep. CI runs; Docker
+   publish triggers prod deploy for all commits.
+3. **Three issues remain in the codebase backlog**:
+   - **Issue 61 (Issue 38 Wave 2)** — AsyncAnthropic / AsyncVoyage migration; router
+     session-order refactor; pool starvation load test. Closes the remaining ~9 of 23
+     findings from the Issue 38 audit.
+   - **Issue 58** — transactional email infrastructure. First consumer: refund email
+     (Issue 57 carry-over).
+   - **Issue 59** — in-app notifications surface. First consumer: refund banner
+     (Issue 57 carry-over).
+4. After those land, the only open work is **Phase 3 = pre-public-launch gates**:
+   public-go-live (Issue 30), Google OAuth app verification (external), eval-harness
+   adversarial expansion. See `docs/PROJECT_STATE.md` "Pre-Public-Launch Gates" table.
 
 ---
 
