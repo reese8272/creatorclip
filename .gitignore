@@ -57,3 +57,7 @@ local_storage/
 # baselines ARE committed; these machine outputs are not).
 docs/assessment/_machine.json
 docs/assessment/_coverage.xml
+
+# tests/perf runtime artifacts
+tests/perf/.env.perf
+tests/perf/perf_results*.csv

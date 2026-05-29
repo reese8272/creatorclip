@@ -1,0 +1,111 @@
+# Self-contained load-test stack that reproduces the production topology the
+# BLOCKER fix (Issue 58) depends on: the app talks to Postgres THROUGH PgBouncer
+# in **transaction** pooling mode. That is the exact condition under which
+# psycopg3's server-side prepared statements break ("prepared statement _pg3_…
+# does not exist") unless prepare_threshold=None (db.py). CI hits Postgres
+# directly and so can never catch this — this stack can.
+#
+# Driven by tests/perf/run.sh. Not for production.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: creatorclip
+      POSTGRES_USER: creatorclip
+      POSTGRES_PASSWORD: perf_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creatorclip -d creatorclip"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Transaction pooling — server connections are handed back to the pool at the
+  # end of each transaction and reused by other clients. This is what makes a
+  # prepared statement from a prior transaction vanish.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: creatorclip
+      DB_USER: creatorclip
+      DB_PASSWORD: perf_password
+      AUTH_TYPE: plain
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "20"
+      LISTEN_PORT: "6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U creatorclip -d creatorclip"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: migrate DIRECTLY against Postgres (not via PgBouncer). Migration
+  # 0006 runs CREATE INDEX CONCURRENTLY in an autocommit block, which cannot run
+  # inside the implicit transaction PgBouncer's transaction mode imposes.
+  migrate:
+    build:
+      context: ../..
+    env_file: .env.perf
+    environment:
+      DATABASE_URL: postgresql+psycopg://creatorclip:perf_password@postgres:5432/creatorclip
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: seed a realistic creator (videos/clips/dna/activity/balance) so the
+  # read endpoints return non-empty payloads (empty tables hide N+1 + serialization
+  # cost). Direct to Postgres — multi-statement, no pooling subtlety needed.
+  seed:
+    build:
+      context: ../..
+    env_file: .env.perf
+    environment:
+      DATABASE_URL: postgresql+psycopg://creatorclip:perf_password@postgres:5432/creatorclip
+    command: python -m tests.perf.seed
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # The app under test — DB traffic goes through PgBouncer:6432 (the whole point).
+  app:
+    build:
+      context: ../..
+    env_file: .env.perf
+    environment:
+      DATABASE_URL: postgresql+psycopg://creatorclip:perf_password@pgbouncer:6432/creatorclip
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+    ports:
+      - "58000:8000"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)"
+      interval: 5s
+      timeout: 8s
+      retries: 20
+      start_period: 20s

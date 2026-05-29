@@ -5,6 +5,42 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Tier-1: runnable PgBouncer load harness to verify the BLOCKER (Issue 58)
+
+### What changed
+`tests/perf/` grew from a bare locustfile into a one-command BLOCKER verifier:
+- **`docker-compose.perf.yml`** — reproduces the prod topology the fix depends on:
+  Postgres + **PgBouncer in `POOL_MODE=transaction`** + Redis + the app with its
+  `DATABASE_URL` pointed at **pgbouncer:6432** (not Postgres). That transaction
+  pooling is the exact condition that makes psycopg3 server-side prepared
+  statements vanish across requests — which CI (direct-to-Postgres) can never see.
+- **`seed.py`** — idempotent seed of a fixed creator (UUID `…0000ff`) with
+  videos/metrics/retention/clips/confirmed-DNA/pgvector-embeddings/activity/balance,
+  so the read endpoints return non-empty payloads (empty tables hide N+1 + ser cost).
+- **`run.sh`** — builds the stack, migrates **direct to Postgres** (0006's
+  `CREATE INDEX CONCURRENTLY` can't run under transaction pooling), seeds, runs
+  Locust headless, then **greps the app logs for `prepared statement … does not
+  exist` / `InvalidSqlStatementName`** and exits non-zero if found. That log
+  signature is the pass/fail oracle for the `prepare_threshold=None` fix.
+
+### Why this shape
+The fix (`db.py connect_args={"prepare_threshold": None}`) is code-complete but was
+unprovable without a real pooler. A self-contained compose stack makes the proof a
+single command that anyone can run locally or on staging — no hand-assembled
+infra, deterministic seed (no creator-id handoff), and a machine-checkable verdict
+rather than "eyeball the latency chart". Locust tool choice unchanged (prior entry).
+
+### Notes / constraints
+- Migrations run against Postgres directly; only the app's runtime traffic goes
+  through PgBouncer (mirrors how `CREATE INDEX CONCURRENTLY` must bypass the pooler).
+- PgBouncer `AUTH_TYPE=plain` against a scram Postgres is fine — PgBouncer holds the
+  plaintext and completes the server-side SCRAM handshake itself.
+- Could not execute in the build sandbox (no container-registry egress); validated
+  statically: `docker compose config` valid, `bash -n` clean, `seed.py` imports
+  resolve against the real models, ruff clean. Run it on staging to capture numbers.
+
+---
+
 ## 2026-05-29 — Tier-1 pre-beta launch readiness (legal pages + CORS lockdown + deploy verify)
 
 ### What changed

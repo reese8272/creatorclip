@@ -56,8 +56,10 @@ This session shipped (19 commits, all green on CI before merge):
 
 3. **Pick up the remaining work — Issue 75 tracking list** (`docs/issues.md`), highest-value
    first:
-   - **Staging Locust run behind PgBouncer** to verify the BLOCKER fix (Issue 58) — it's
-     code-complete but unprovable without a real pooler. Scaffold is in `tests/perf/`.
+   - **Run the BLOCKER verification** (Issue 58): harness is now turnkey —
+     `./tests/perf/run.sh` brings up PgBouncer (transaction mode) + app + seed + Locust and
+     fails if `prepared statement … does not exist` appears. **Just needs running on staging/a
+     Docker host** (the build sandbox has no registry egress).
    - ~~14 pip-audit CVEs~~ ✅ **DONE this session** (Issue 75(a)): patched 6 packages, ratcheted
      `pip_audit_vulns`→0; 2 residuals accepted-risk in `run_layer0.py:PIP_AUDIT_IGNORES`
      (pytest dev-cascade; starlette Host-header — needs starlette-1.x). See DECISIONS 2026-05-29.
@@ -179,7 +181,7 @@ This session shipped (19 commits, all green on CI before merge):
 
 | Item | Why it matters |
 |---|---|
-| Staging **Locust run behind PgBouncer** | The only way to *verify* the BLOCKER fix (58) and axes A/B/E under load |
+| **Run** `tests/perf/run.sh` on a Docker host | Harness now turnkey (PgBouncer txn mode + log-scan pass/fail); just needs executing to *prove* the BLOCKER fix (58) + capture p95/p99 |
 | ~~14 pip-audit CVEs~~ ✅ done | Patched; `pip_audit_vulns`→0. Residual: **starlette-1.x migration** to close PYSEC-2026-161 |
 | YouTube **analytics-retention cadence** | ToS exposure (compliance) — needs the cadence figure, then a scheduled purge |
 | Full **`response_model`** coverage | API hygiene across ~16 endpoints |

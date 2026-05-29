@@ -7,8 +7,17 @@ Updated after every issue closes.
 ## Current Status
 
 **Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Tier-1 pre-beta launch readiness — legal-page routes + Google Limited-Use disclosure + CORS prod fail-fast + `verify_deploy.sh`.
-**Blocked**: _(none)_ — remaining Tier-1 items (staging Locust run, prod deploy verify, OAuth verification) need infra/prod access or Google Console, not code.
+**Last completed**: Tier-1 PgBouncer load harness — `tests/perf/run.sh` + `docker-compose.perf.yml` make the Issue-58 BLOCKER verification one command (PgBouncer txn mode + log-scan pass/fail).
+**Blocked**: _(none)_ — remaining Tier-1 items (run the perf harness, prod deploy verify, OAuth verification) need a Docker host / prod access / Google Console, not code.
+
+> **Tier-1 PgBouncer load harness** (2026-05-29): turned tests/perf/ into a one-command BLOCKER
+> verifier — docker-compose.perf.yml (Postgres + PgBouncer POOL_MODE=transaction + Redis + app with
+> DATABASE_URL→pgbouncer:6432), seed.py (idempotent fixed-UUID creator with videos/clips/DNA/pgvector/
+> activity/balance), run.sh (build → migrate direct-to-Postgres → seed → Locust headless → grep app
+> logs for `prepared statement … does not exist`, exit non-zero on regression). Proves the
+> prepare_threshold=None fix (Issue 58) under real transaction pooling — the one failure mode CI
+> can't see. Validated statically (compose config valid, bash -n, seed imports resolve, ruff clean);
+> not run in-sandbox (no registry egress) — run on staging/a Docker host. DECISIONS 2026-05-29.
 
 > **Tier-1 pre-beta launch readiness** (2026-05-29): routed the existing legal pages at clean
 > URLs (main.py /privacy → privacy.html, /terms → tos.html); added the Google-mandated Limited Use

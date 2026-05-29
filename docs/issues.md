@@ -1046,7 +1046,12 @@ exceeds the 25-conn PgBouncer sidecar; no `pool_recycle`. (scale-checklist axis 
 - [x] `connect_args={"prepare_threshold": None}` passed to the engine (`db.py`, asserted by `tests/test_db_engine_config.py`)
 - [x] `pool_size`+`max_overflow` (15+5=20) ≤ PgBouncer sidecar (25); total-connections inequality recorded in `docs/DEPLOYMENT.md`
 - [x] `pool_recycle=1800` set
-- [ ] Verified behind PgBouncer via a Locust run (`tests/perf/`) — **deferred to staging** (no PgBouncer in CI/dev container; the misconfiguration is certain by inspection + library docs, but the green-under-load proof needs the real pooler)
+- [ ] Verified behind PgBouncer via a Locust run — **harness now turnkey** (`tests/perf/run.sh` +
+  `docker-compose.perf.yml` brings up PgBouncer in transaction mode in front of the app and scans
+  the app logs for `prepared statement … does not exist`; exits non-zero if the fix regressed).
+  One command (`./tests/perf/run.sh`); still needs to be **run on staging/your machine** to capture
+  the green-under-load proof + p95/p99 (no container-registry egress in the build sandbox). See
+  DECISIONS 2026-05-29 (PgBouncer load harness).
 
 ## Issue 59: Render from setup_start_s, not the start_s fallback (SEV-1)
 **Depends on**: —
