@@ -1250,7 +1250,7 @@ most endpoints return a bare `dict` with no `response_model`.
 
 **Acceptance criteria**:
 - [x] `youtube_video_id` validated against `^[A-Za-z0-9_-]{11}$` (422 on bad input) on both `/videos/link` and `/videos/upload`, before the value reaches a storage key — DB-free unit test
-- [ ] A Pydantic `*Out` model + `response_model=` on every endpoint — **mechanical hygiene (no security/correctness risk), ~16 endpoints; tracked under Issue 75** rather than rushed into one commit
+- [x] A Pydantic `*Out` model + `response_model=` on every endpoint — DONE (action #3). 18 endpoints across 7 routers now declare a `response_model` (typed OpenAPI + response-side field allow-list). Standing guard `tests/test_response_models.py` fails if a future documented JSON route ships without one.
 
 ## Issue 74: Bound transcription/audio memory (SEV-2)
 **Depends on**: —
@@ -1291,8 +1291,9 @@ vector; WhisperX model + SDK clients reconstructed per call.
   `celery_task_*`) at `/metrics`; correlation id propagated API→Celery via
   before_task_publish/task_prerun/task_postrun signals. +9 tests. See DECISIONS
   2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
-- [ ] **Full `response_model` coverage** across the 18 endpoints (from Issue 73) — SEV1 in the
-  re-run register (`docs/assessment/modules/routers.md`)
+- [x] **Full `response_model` coverage** across the 18 endpoints (from Issue 73) — DONE (action #3).
+  `*Out` models + `response_model=` on every documented JSON endpoint in 7 routers; standing guard
+  `tests/test_response_models.py`. Faithful field-for-field modeling verified by the full endpoint suite.
 - [x] **Deepgram file-stream** upload (from Issue 74) — DONE (action #2). `transcribe.py`
   streams the open file handle (`FileSource.buffer` accepts a `BufferedReader`) instead of
   `f.read()`, so httpx uploads in chunks and the ~115 MB/hr WAV is never held in a Python

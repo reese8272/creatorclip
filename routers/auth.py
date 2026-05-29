@@ -6,6 +6,7 @@ import secrets
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
@@ -26,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 _STATE_COOKIE = "cc_oauth_state"
 _SECURE = settings.ENV == "production"
+
+
+class LogoutOut(BaseModel):
+    status: str
+
+
+class AuthMeOut(BaseModel):
+    id: str
+    channel_id: str | None
+    channel_title: str | None
+    email: str | None
+    onboarding_state: str
 
 
 @router.get("/login")
@@ -110,13 +123,13 @@ async def callback(
     return resp
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=LogoutOut)
 async def logout(response: Response) -> dict:
     response.delete_cookie(SESSION_COOKIE)
     return {"status": "logged out"}
 
 
-@router.get("/me")
+@router.get("/me", response_model=AuthMeOut)
 @limiter.limit("120/minute")
 async def me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Returns the authenticated creator's profile. No virality predictions made here."""

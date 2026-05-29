@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +15,11 @@ router = APIRouter(prefix="/creators", tags=["improvement"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("/me/improvement-brief")
+class ImprovementBriefOut(BaseModel):
+    brief: str
+
+
+@router.get("/me/improvement-brief", response_model=ImprovementBriefOut)
 @limiter.limit("10/hour")
 async def get_improvement_brief(
     request: Request,

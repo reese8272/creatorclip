@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
@@ -10,7 +11,51 @@ from youtube.analytics import check_data_gate
 router = APIRouter(prefix="/creators", tags=["creators"])
 
 
-@router.get("/me")
+class CreatorMeOut(BaseModel):
+    id: str
+    channel_id: str | None
+    channel_title: str | None
+    email: str | None
+    onboarding_state: str
+    created_at: str
+
+
+class DataGateOut(BaseModel):
+    long_form_videos: int
+    shorts: int
+    long_form_ready: bool
+    shorts_ready: bool
+    ready: bool
+
+
+class BuildQueuedOut(BaseModel):
+    task_id: str
+    status: str
+
+
+class DnaProfileOut(BaseModel):
+    id: str
+    version: int
+    status: str
+    brief_text: str | None
+    optimal_clip_len_s: float | None
+    best_source_region: str | None
+    optimal_upload_gap_h: float | None
+    created_at: str
+
+
+class DnaGetOut(BaseModel):
+    profile: DnaProfileOut | None
+    message: str | None = None
+
+
+class DnaConfirmOut(BaseModel):
+    id: str
+    version: int
+    status: str
+
+
+@router.get("/me", response_model=CreatorMeOut)
 @limiter.limit("120/minute")
 async def get_me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     return {
@@ -23,7 +68,7 @@ async def get_me(request: Request, creator: Creator = Depends(get_current_creato
     }
 
 
-@router.get("/me/data-gate")
+@router.get("/me/data-gate", response_model=DataGateOut)
 @limiter.limit("120/minute")
 async def get_data_gate(
     request: Request,
@@ -33,7 +78,7 @@ async def get_data_gate(
     return await check_data_gate(session, creator.id)
 
 
-@router.post("/me/dna/build", status_code=202)
+@router.post("/me/dna/build", status_code=202, response_model=BuildQueuedOut)
 @limiter.limit("120/minute")
 async def build_dna(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Queue a DNA build for the current creator. Returns a Celery task_id."""
@@ -43,7 +88,7 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     return {"task_id": task.id, "status": "queued"}
 
 
-@router.get("/me/dna")
+@router.get("/me/dna", response_model=DnaGetOut)
 @limiter.limit("120/minute")
 async def get_dna(
     request: Request,
@@ -73,7 +118,7 @@ async def get_dna(
     }
 
 
-@router.post("/me/dna/confirm")
+@router.post("/me/dna/confirm", response_model=DnaConfirmOut)
 @limiter.limit("120/minute")
 async def confirm_dna(
     request: Request,

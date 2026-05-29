@@ -19,6 +19,11 @@ router = APIRouter(prefix="/clips", tags=["review"])
 logger = logging.getLogger(__name__)
 
 
+class FeedbackOut(BaseModel):
+    id: str
+    action: str
+
+
 class FeedbackRequest(BaseModel):
     action: FeedbackAction
     trim_start_s: float | None = None
@@ -31,7 +36,7 @@ class FeedbackRequest(BaseModel):
         return FeedbackAction(v)
 
 
-@router.post("/{clip_id}/feedback", status_code=201)
+@router.post("/{clip_id}/feedback", status_code=201, response_model=FeedbackOut)
 @limiter.limit("120/minute")
 async def submit_feedback(
     request: Request,

@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,30 @@ from worker.tasks import start_pipeline
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
+
+class VideoListItemOut(BaseModel):
+    id: str
+    youtube_video_id: str
+    title: str | None
+    kind: str
+    ingest_status: str
+    duration_s: float | None
+    created_at: str
+
+
+class VideoLinkedOut(BaseModel):
+    video_id: str
+    status: str
+
+
+class VideoStatusOut(BaseModel):
+    video_id: str
+    youtube_video_id: str
+    ingest_status: str
+    source_uri: str | None
+    captions_available: bool
+
+
 # YouTube video IDs are exactly 11 chars of [A-Za-z0-9_-]. Validate before the value
 # is interpolated into a storage key, so `../` or `/` can't reshape the object path. (Issue 73)
 _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -29,7 +54,7 @@ def _validate_youtube_id(youtube_video_id: str) -> None:
         raise HTTPException(status_code=422, detail="Invalid youtube_video_id")
 
 
-@router.get("")
+@router.get("", response_model=list[VideoListItemOut])
 @limiter.limit("120/minute")
 async def list_videos(
     request: Request,
@@ -55,7 +80,7 @@ async def list_videos(
     ]
 
 
-@router.post("/link")
+@router.post("/link", response_model=VideoLinkedOut)
 @limiter.limit("120/minute")
 async def link_video(
     request: Request,
@@ -86,7 +111,7 @@ async def link_video(
     return {"video_id": str(video.id), "status": video.ingest_status.value}
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=VideoLinkedOut)
 @limiter.limit("120/minute")
 async def upload_video(
     request: Request,
@@ -164,7 +189,7 @@ async def upload_video(
     return {"video_id": str(video.id), "status": video.ingest_status.value}
 
 
-@router.get("/{video_id}/status")
+@router.get("/{video_id}/status", response_model=VideoStatusOut)
 @limiter.limit("120/minute")
 async def get_video_status(
     request: Request,
