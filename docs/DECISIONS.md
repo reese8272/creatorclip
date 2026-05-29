@@ -5,6 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 71 (Batch 7): Preference hardening
+
+### What changed
+- `preference/model.py`: the `from_bytes` joblib-global swap is now guarded by a
+  module `threading.Lock`. `predict_score` validates feature count against
+  `n_features_in_` and raises on mismatch (no more silent `0.5`).
+- `preference/train.py`: `build_and_save` takes `pg_advisory_xact_lock(hashtext(creator_id))`
+  before the `max(version)+1` read; `load_latest` returns `None` when the stored
+  `feature_schema_jsonb` differs from `FEATURE_NAMES` (schema drift → DNA fallback).
+- `clip_engine/ranking.py`: `rerank_with_preference` scores all clips first; if the
+  scorer raises, it keeps the DNA ranking untouched (honest fallback).
+
+### Why
+The monkeypatch was not thread-safe — a concurrent load could restore the
+unrestricted unpickler mid-load, defeating the RCE allowlist exactly when a
+tampered blob is read. `max()+1` raced into a UNIQUE violation under concurrent
+retrains. `predict_score`'s blanket `0.5` let a broken/drifted model silently move
+rankings.
+
+### Decision: lock over direct unpickler
+The finding suggested instantiating `_RestrictedUnpickler` directly to avoid the
+global swap. Verified empirically that joblib's `NumpyUnpickler.__init__` signature
+is version-dependent (this joblib requires an `ensure_native_byte_order` arg), so
+direct instantiation is brittle across upgrades. A module-level `threading.Lock`
+around the existing swap is version-proof and fully thread-safe — the accepted
+alternative in the finding. Serialization cost is negligible (loads are rare; a
+per-(creator,version) scorer cache is the tracked optimization under Issue 75).
+
+---
+
 ## 2026-05-29 — Issue 70 (Batch 6): Bound poll_clip_outcomes
 
 ### What changed

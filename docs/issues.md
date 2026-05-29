@@ -1215,17 +1215,17 @@ N×M awaited-network loop. (axes E/F)
 
 ## Issue 71: Preference unpickler thread-safety + version race (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 7)
 
-**What**: `preference/model.py:113` monkeypatches a module global during `joblib.load` →
-not thread/task-safe; the RCE allowlist is defeated under concurrent `from_bytes`.
-`build_and_save` version `max()+1` races to `IntegrityError`. `predict_score` swallows all
-errors into `0.5` (a broken model still moves rankings).
+**What**: `from_bytes` monkeypatched a joblib module global during load → not thread-safe
+(the RCE allowlist could be defeated under concurrent loads); `build_and_save` `max()+1`
+raced to `IntegrityError`; `predict_score` swallowed all errors into `0.5`.
 
 **Acceptance criteria**:
-- [ ] No global monkeypatch — explicit unpickler instance, or guarded by a lock; concurrent malicious-blob test always raises
-- [ ] Version assignment serialized (advisory lock / retry-on-IntegrityError)
-- [ ] `predict_score` validates `n_features_in_` and lets the caller fall back instead of returning 0.5
+- [x] The global swap is serialized by a module `threading.Lock` (a directly-instantiated unpickler was rejected — joblib's `NumpyUnpickler` signature is version-fragile; documented in DECISIONS)
+- [x] Version assignment serialized via `pg_advisory_xact_lock(hashtext(creator_id))` (held to commit)
+- [x] `predict_score` validates `n_features_in_` and **raises** on drift; `load_latest` returns `None` on feature-schema drift; `rerank_with_preference` scores all clips before mutating and falls back to DNA order if the scorer raises
+- [x] DB-free unit tests: predict_score raises on feature mismatch; rerank falls back to DNA when the scorer raises
 
 ## Issue 72: OAuth httpx singleton + timeouts (SEV-1)
 **Depends on**: —

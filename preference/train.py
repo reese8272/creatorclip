@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Clip, ClipFeedback, ClipOutcome, FeedbackAction, PreferenceModel
@@ -81,6 +81,13 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
 
     scorer = fit(X, y, w)
 
+    # Serialize concurrent retrains for this creator so the version assignment
+    # (max+1) cannot race into a UNIQUE(creator_id, version) violation. The xact
+    # lock is held until commit. (Issue 71)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": str(creator_id)}
+    )
+
     # Persist to preference_models table
     result = await session.execute(
         select(PreferenceModel)
@@ -115,6 +122,16 @@ async def load_latest(session: AsyncSession, creator_id: uuid.UUID) -> Preferenc
     )
     row = result.scalars().first()
     if not row or not row.weights_blob:
+        return None
+    # Feature-schema drift: if the stored model was trained on a different feature
+    # set than the current code, do NOT score with it — fall back to DNA ranking
+    # (honest) rather than silently producing meaningless probabilities. (Issue 71)
+    stored_features = (row.feature_schema_jsonb or {}).get("features")
+    if stored_features != FEATURE_NAMES:
+        logger.warning(
+            "Preference model feature-schema drift for creator %s — falling back to DNA",
+            creator_id,
+        )
         return None
     try:
         return PreferenceScorer.from_bytes(row.weights_blob)

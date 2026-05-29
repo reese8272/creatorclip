@@ -6,9 +6,19 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–70 + 72 ✅ done. Next: Batch 7 = Issue 71 (preference hardening: unpickler thread-safety + version race + honest fallback).
-**Last completed**: Issue 70 — bounded poll_clip_outcomes via a `final` terminal marker (migration 0007) + created-at cap + per-creator commit.
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–72 ✅ done. Next: Batch 8 = Issues 73 + 74 + 75 (SEV-2 response_models/input validation, transcription memory bounds, tracking items).
+**Last completed**: Issue 71 — preference hardening: lock-guarded unpickler, advisory-lock version race, honest schema-drift/predict_score fallback.
 **Blocked**: _(none)_
+
+> **Closed Issue 71** (2026-05-29, Batch 7): from_bytes monkeypatched a joblib global
+> (not thread-safe -> RCE allowlist defeatable under concurrent loads); build_and_save
+> max()+1 raced to IntegrityError; predict_score swallowed errors into 0.5. Fix: module
+> threading.Lock around the swap (direct unpickler rejected -- joblib signature is
+> version-fragile, see DECISIONS); pg_advisory_xact_lock(hashtext(creator_id)) for the
+> version assignment; predict_score validates n_features_in_ and raises; load_latest
+> returns None on feature-schema drift; rerank scores-then-mutates and falls back to DNA
+> on scorer error. DB-free unit tests + fixed an existing mock-session test for the extra
+> advisory execute. Test count: **397 passed, 1 skipped, 55 deselected** (+2). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.47%.
 
 > **Closed Issue 70** (2026-05-29, Batch 6): poll_clip_outcomes re-polled every published
 > clip every 7 days forever (no terminal guard) -> unbounded YouTube-quota drain. Added

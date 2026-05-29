@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import logging
 import pickle
+import threading
 from typing import Any
 
 import joblib
@@ -28,6 +29,12 @@ import numpy as np
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# from_bytes swaps a process-global joblib class for the duration of the load.
+# That swap is not safe under concurrent loads (one task could restore the
+# unrestricted unpickler while another is mid-load), which would defeat the RCE
+# allowlist exactly when a tampered blob is read. Serialize it. (Issue 71)
+_UNPICKLER_LOCK = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Allowlist — the *complete* set of (module, name) pairs that joblib may
@@ -83,14 +90,20 @@ class PreferenceScorer:
         self.label_count = label_count
 
     def predict_score(self, features: list[float]) -> float:
-        """Return probability of positive label in [0, 1]."""
+        """Return probability of positive label in [0, 1].
+
+        Raises on feature-count drift rather than returning a misleading neutral
+        0.5 — the caller (rerank_with_preference) catches and falls back to the
+        DNA ranking, which is the honest behavior for a broken model. (Issue 71)
+        """
         x = np.array(features, dtype=float).reshape(1, -1)
-        try:
-            proba = self._model.predict_proba(x)
-            return float(proba[0][1])
-        except Exception as exc:
-            logger.warning("predict_score failed: %s", exc)
-            return 0.5
+        expected = getattr(self._model, "n_features_in_", None)
+        if expected is not None and x.shape[1] != expected:
+            raise ValueError(
+                f"feature count {x.shape[1]} does not match model n_features_in_ {expected}"
+            )
+        proba = self._model.predict_proba(x)
+        return float(proba[0][1])
 
     def to_bytes(self) -> bytes:
         """Serialise scorer to bytes using joblib (sklearn's recommended format)."""
@@ -110,12 +123,13 @@ class PreferenceScorer:
         Raises:
             pickle.UnpicklingError: if the blob contains a disallowed class.
         """
-        _original = _jnp.NumpyUnpickler
-        _jnp.NumpyUnpickler = _RestrictedUnpickler  # type: ignore[assignment]
-        try:
-            obj = joblib.load(io.BytesIO(data))
-        finally:
-            _jnp.NumpyUnpickler = _original  # type: ignore[assignment]
+        with _UNPICKLER_LOCK:
+            _original = _jnp.NumpyUnpickler
+            _jnp.NumpyUnpickler = _RestrictedUnpickler  # type: ignore[assignment]
+            try:
+                obj = joblib.load(io.BytesIO(data))
+            finally:
+                _jnp.NumpyUnpickler = _original  # type: ignore[assignment]
 
         if not isinstance(obj, cls):
             raise pickle.UnpicklingError(f"expected PreferenceScorer, got {type(obj).__name__}")

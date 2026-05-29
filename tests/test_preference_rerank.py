@@ -91,3 +91,45 @@ async def test_rerank_noop_when_no_model():
     with patch("preference.train.load_latest", new=AsyncMock(return_value=None)):
         out = await rerank_with_preference(clips, MagicMock(), MagicMock())
     assert [c.score for c in out] == [0.9, 0.1]
+
+
+# ── Issue 71: predict_score validation + DNA fallback ───────────────────────────
+
+
+def test_predict_score_raises_on_feature_mismatch():
+    import numpy as np
+
+    from preference.features import FEATURE_NAMES
+    from preference.model import fit
+
+    n = len(FEATURE_NAMES)
+    scorer = fit(
+        np.array([[0.0] * n, [1.0] * n]),
+        np.array([0, 1]),
+        np.array([1.0, 1.0]),
+    )
+    assert 0.0 <= scorer.predict_score([0.5] * n) <= 1.0  # correct width works
+    with pytest.raises(ValueError, match="feature count"):
+        scorer.predict_score([0.0] * (n - 1))  # drift → raises, not 0.5
+
+
+class _RaisingScorer:
+    label_count = 2 * 9999  # well above threshold → weight > 0
+
+    def predict_score(self, _features):
+        raise ValueError("model is broken")
+
+
+@pytest.mark.asyncio
+async def test_rerank_falls_back_to_dna_when_scorer_raises():
+    from clip_engine.ranking import rerank_with_preference
+
+    # label_count above threshold so weight > 0 and the model WOULD be applied.
+    stub = _RaisingScorer()
+    stub.label_count = 2 * settings.PERSONALIZATION_THRESHOLD_LABELS
+    a, b = _clip(0.9), _clip(0.1)
+    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
+        out = await rerank_with_preference([a, b], MagicMock(), MagicMock())
+
+    # Scorer raised → DNA scores left untouched, original order preserved.
+    assert [c.score for c in out] == [0.9, 0.1]

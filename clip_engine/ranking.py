@@ -47,9 +47,9 @@ async def rerank_with_preference(
     if weight == 0.0:
         return clips
 
-    for clip in clips:
+    def _features(clip: Clip) -> list[float]:
         feats_dict = (clip.signals_jsonb or {}).get("features", {})
-        feats = clip_features(
+        return clip_features(
             signal_density=feats_dict.get("signal_density", 0.0),
             hook_energy=feats_dict.get("hook_energy", 0.0),
             silence_ratio=feats_dict.get("silence_ratio", 0.0),
@@ -59,7 +59,16 @@ async def rerank_with_preference(
             has_retention_spike=feats_dict.get("has_retention_spike", False),
             has_laughter=feats_dict.get("has_laughter", False),
         )
-        pref_score = scorer.predict_score(feats)
+
+    # Score everything BEFORE mutating, so a broken model leaves the DNA ranking
+    # untouched (honest fallback) instead of half-blended. (Issue 71)
+    try:
+        pref_scores = [scorer.predict_score(_features(clip)) for clip in clips]
+    except Exception as exc:
+        logger.warning("Preference rerank failed (%s) — keeping DNA ranking", exc)
+        return clips
+
+    for clip, pref_score in zip(clips, pref_scores, strict=True):
         clip.score = (1.0 - weight) * (clip.score or 0.0) + weight * pref_score
 
     clips.sort(key=lambda c: c.score or 0.0, reverse=True)
