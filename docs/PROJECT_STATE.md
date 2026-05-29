@@ -6,9 +6,19 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–64 ✅ done. Next: Batch 3 = Issue 65 (pgvector HNSW + FK indexes).
-**Last completed**: Batch 2 — Issues 63 + 64 (idempotent unique-keyed writes: build_dna via Celery task_id + confirm_draft single-confirmed; grant_minutes self-idempotent).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–65 ✅ done. Next: Batch 4 = Issues 66+67 (4a: blocking calls off the API loop) then 68+72 (4b: worker loop + timeouts).
+**Last completed**: Batch 3 — Issue 65 (migration 0006: HNSW cosine index on dna_embeddings + ix_clip_feedback_creator_id).
 **Blocked**: _(none)_
+
+> **Closed Batch 3 / Issue 65** (2026-05-29): pgvector HNSW (`vector_cosine_ops`,
+> m=16/ef_construction=200) on `dna_embeddings.embedding` matching the `<=>` query,
+> plus `ix_clip_feedback_creator_id`; both `CREATE INDEX CONCURRENTLY` in an
+> alembic autocommit_block (migration 0006). Reading the schema corrected two
+> assessment items already covered (dna_embeddings.creator_id btree from 0001;
+> preference_models.creator_id via the (creator_id,version) unique index) — no
+> redundant indexes added. Integration test introspects `pg_indexes`. Migration-only,
+> so the unit-coverage floor holds. Test count: **388 passed, 1 skipped, 52 deselected**
+> (+2 integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 69.54%.
 
 > **Closed Batch 2 / Issues 63 + 64** (2026-05-29): Idempotent unique-keyed writes.
 > 63: `build_dna` stamps the Celery `task_id` as `creator_dna.build_job_id` and

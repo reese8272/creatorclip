@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Batch 3 (Issue 65): pgvector HNSW + FK index
+
+### What changed
+- Migration `0006`: `ix_dna_embeddings_hnsw` (HNSW, `vector_cosine_ops`,
+  `m=16, ef_construction=200`) on `dna_embeddings.embedding`, and
+  `ix_clip_feedback_creator_id` on `clip_feedback.creator_id`. Both built
+  `CREATE INDEX CONCURRENTLY` inside `op.get_context().autocommit_block()`.
+
+### Why
+The embedding similarity query (`<=>`, cosine) was an unindexed O(rows) scan;
+`clip_feedback.creator_id` was an unindexed FK on the (now hot, post-Issue-60)
+training + retrain-debounce path.
+
+### Decisions / standard checked
+- **HNSW over IVFFlat**: HNSW is the recommended default for <10M vectors with
+  active writes; IVFFlat's k-means clustering is data-dependent and must NOT live
+  in a migration. `m=16, ef_construction=200` is the documented better-recall
+  starting point (defaults 16/64). Op class `vector_cosine_ops` matches the `<=>`
+  query (voyage-3.5 vectors). Sources: pgvector index-selection guides
+  (medium.com/@philmcc…), AWS pgvector indexing deep-dive.
+- **CONCURRENTLY + autocommit_block**: `CREATE INDEX CONCURRENTLY` can't run in
+  Alembic's default transaction; the autocommit block keeps the build online-safe.
+
+### Scope correction (assessment was imprecise)
+- `dna_embeddings.creator_id` already has a btree index (`ix_dna_embeddings_creator_id`,
+  migration 0001).
+- `preference_models.creator_id` is already covered by the `(creator_id, version)`
+  unique-constraint index (leading column serves `WHERE creator_id ORDER BY version`).
+- So no redundant `creator_id` indexes were added — only the HNSW index and the
+  genuinely missing `clip_feedback.creator_id`.
+
+---
+
 ## 2026-05-29 — Batch 2 (Issues 63 + 64): Idempotent unique-keyed writes
 
 ### What changed

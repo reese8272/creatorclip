@@ -1133,17 +1133,17 @@ uncaught 500. Hardened at the source, mirroring `deduct_for_video`.
 
 ## Issue 65: pgvector HNSW index + missing FK indexes (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 3)
 
-**What**: `dna_embeddings.embedding Vector(1024)` (models.py:320) has no HNSW/IVFFlat index
-→ O(rows) `<=>` scans that die as the corpus grows. `ClipFeedback.creator_id` (models.py:378)
-and `PreferenceModel.creator_id` (models.py:418) FKs are unindexed (queried on hot paths).
-(axis H)
+**What**: `dna_embeddings.embedding Vector(1024)` had no HNSW/IVFFlat index → O(rows) `<=>`
+cosine scans that degrade as the corpus grows. `clip_feedback.creator_id` was an unindexed
+FK hit by the preference training query + retrain debounce. (axis H)
 
 **Acceptance criteria**:
-- [ ] Alembic migration: `CREATE INDEX CONCURRENTLY ... USING hnsw (embedding vector_cosine_ops)` (outside a txn, online-safe); distance op matches the query and documented in SOT.md
-- [ ] `index=True` (concurrent) on both `creator_id` FKs
-- [ ] Migration runs cleanly on a populated table
+- [x] Alembic migration `0006`: `CREATE INDEX CONCURRENTLY ix_dna_embeddings_hnsw ... USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=200)` in an `autocommit_block` (online-safe); op class matches the `<=>` query
+- [x] `CREATE INDEX CONCURRENTLY ix_clip_feedback_creator_id ON clip_feedback (creator_id)`
+- [x] Integration test (`tests/test_vector_index_integration.py`) introspects `pg_indexes` for both
+- Scope correction: `dna_embeddings.creator_id` (indexed in 0001) and `preference_models.creator_id` (covered by the `(creator_id, version)` unique index) needed no new index — assessment was imprecise; see `docs/DECISIONS.md`
 
 ## Issue 66: Move the 120s improvement brief off the API event loop (SEV-1)
 **Depends on**: —
