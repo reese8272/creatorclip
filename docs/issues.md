@@ -1291,12 +1291,79 @@ vector; WhisperX model + SDK clients reconstructed per call.
   `celery_task_*`) at `/metrics`; correlation id propagated API→Celery via
   before_task_publish/task_prerun/task_postrun signals. +9 tests. See DECISIONS
   2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
-- [ ] **Full `response_model` coverage** across the ~16 endpoints (from Issue 73)
-- [ ] **Deepgram file-stream** upload (from Issue 74)
-- [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
-- [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71)
+- [ ] **Full `response_model` coverage** across the 18 endpoints (from Issue 73) — SEV1 in the
+  re-run register (`docs/assessment/modules/routers.md`)
+- [ ] **Deepgram file-stream** upload (from Issue 74) — SEV1: `transcribe.py:61-62` still buffers
+  the whole WAV into RAM (OOM vector under warm concurrency)
+- [ ] **SDK-native transcription timeout** (Deepgram/AssemblyAI) — SEV1: `transcribe.py:54-64,117-131`
+  have no request timeout, so a hung provider leaks the worker thread the job-level `wait_for`
+  cannot cancel (`ingestion/transcribe.py`)
+- [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69. Re-run also flagged the cheap prefix-ordering win: put the static principles block BEFORE `{dna_brief}` in `clip_engine/scoring.py:182-191` so the long static prefix is shared across creators
+- [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71) — confirmed still absent: `preference/train.py:116` deserializes on every rerank (`clip_engine/ranking.py:39`)
 - [ ] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66)
-- [ ] ~37 remaining SEV-2 + ~34 cleanup items in `docs/assessment/modules/*.md` — re-run `/assess` to triage as a diff
+- [ ] ~23 remaining SEV-2 + ~24 cleanup items in `docs/assessment/modules/*.md` — see Issue 76 for the net-new ones from the re-run
+
+---
+
+## Issue 76: Re-assessment re-run findings (2026-05-29, post-hardening /assess)
+**Depends on**: —
+**Status**: Open (tracking) — net-new findings from the post-Issues-58–75 `/assess` re-run.
+Verdict moved NO → **CONDITIONAL** (0 BLOCKER, 4 SEV1, 23 SEV2, 24 cleanup). Full register and
+backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; snapshot in
+`docs/assessment/history/2026-05-29-rerun-post-hardening-REPORT.md`.
+
+**SEV1**
+- [ ] **`build_dna` concurrent-redelivery double-spend** (`worker/tasks.py:423-430` + `dna/profile.py:52-55`).
+  The idempotency re-check runs in its own closed session, not serialized against the draft INSERT;
+  `build_job_id` is non-unique. Serial redelivery is safe (Issue 63), but two *concurrent* same-`job_id`
+  deliveries both run the paid Anthropic brief + Voyage embeddings before the version UNIQUE collides,
+  and the loser raises → Celery retries. **← IN PROGRESS (action #1):** advisory xact lock keyed on
+  creator at the top of the build txn + partial UNIQUE on `build_job_id WHERE NOT NULL` + IntegrityError→no-op.
+
+**SEV2 (net-new)**
+- [ ] clip_engine `ranking.py:129` — `dna_match` seeded to the composite score, never refined →
+  preference model fed a duplicate of its own target as a "DNA-fit" feature (collinear). Persist a
+  DNA-only fit distinct from `clip.score`, or rename to `seed_score`.
+- [ ] clip_engine `candidates.py:94-113` — candidate windows never deduped; adjacent peaks can yield
+  near-identical clips (vs principle #9). Drop candidates overlapping a kept one >50% IoU.
+- [ ] clip_engine `routers/clips.py:67` — `extract_candidates`/`compute_features` CPU runs on the
+  FastAPI loop. Dispatch to Celery (202) or `asyncio.to_thread`.
+- [ ] youtube `oauth.py:303-313` — lock-wait re-read hits the identity map (`expire_on_commit=False`)
+  → stale token → spurious 503 under concurrent refresh. `session.refresh`/`populate_existing=True`.
+- [ ] youtube `quota.py:51` — daily counter keyed by UTC date but Google resets midnight Pacific →
+  early-reset window hands out spent budget → hard 403. Key by `America/Los_Angeles` date.
+- [ ] youtube `ingest.py:44-62` — `extract_audio_wav` `subprocess.run` has no `timeout=`. Add bounded
+  timeout (∝ duration, floor ~600s); map `TimeoutExpired`→RuntimeError.
+- [ ] youtube `analytics.py:51`/`data_api.py:93` — 429 backoff ignores `Retry-After`. Honor it.
+- [ ] worker `tasks.py:547-556` — `poll_clip_outcomes` doesn't `break` on quota exhaustion (vs
+  analytics refresh). Catch `QuotaExhaustedError` and break.
+- [ ] worker `tasks.py:357-394` — `_render_clip_async` not concurrent-safe: two workers both read
+  `pending`, both encode+upload same key. `with_for_update()` + re-check under lock.
+- [ ] worker `tasks.py:222-259` — `_ingest_async` re-extracts/re-uploads the derived WAV on redelivery
+  (no corruption, wasted ffmpeg+R2). Short-circuit when `source_uri` is already the derived key.
+- [ ] dna `builder.py:223-224,137-161` — `_enrich_video` N+1: ~60 serial queries/build. Batch into
+  3 `IN (...)` queries.
+- [ ] dna `builder.py:107-117` — `rank_videos` unbounded fetch into worker memory. Cap with
+  `.limit(DNA_MAX_CANDIDATE_VIDEOS=500)`.
+- [ ] dna `builder.py:201-202` — `kind` compared against bare string literals vs `VideoKind` enum
+  value → a rename silently empties buckets. Compare against `VideoKind.long.value`.
+- [ ] routers list endpoints (`videos.py:40-55`,`clips.py:93-99`,`upload_intel.py:22-25`) — unbounded
+  `list(scalars())`. Add keyset/offset pagination with a hard cap (100).
+- [ ] routers `videos.py:62,93` — `link_video`/`upload_video` raw `Form(...)` with no request model
+  (id regex-validated). Wrap in a body model or record the multipart deviation in DECISIONS.
+- [ ] _root_infra `main.py:102-107` — `/metrics` exposed unauthenticated when `METRICS_ENABLED=true`
+  (new surface from Issue 75f). Bind to an internal listener / gate behind token+network policy.
+- [ ] _root_infra `observability.py:189-211` — correlation-id ContextVars are safe only under the
+  prefork pool. Assert/document the prefork assumption, or key task start off `task.request`.
+- [ ] billing `ledger.py:89-92` — non-keyed grant (trial/manual) swallows a *real* IntegrityError as
+  a no-op (silent dropped credit). `except IntegrityError: if stripe_session_id is None: raise`.
+- [ ] upload_intel `timing.py:54-55` — `optimal_gap_hours` left out of the 75d bounds/coercion guard;
+  the two functions disagree on a valid row. Filter+coerce first (mirror `best_upload_windows`).
+- [ ] ingestion `transcribe.py:71-85,99-110` — hosted-provider normalizers use hard-key indexing →
+  opaque `KeyError` on a missing timestamp. Switch to `.get(..., default)` (WhisperX already does).
+
+**cleanup (24)**: typing gaps the mypy ratchet will catch, DRY extractions, magic-constant naming,
+the clip-scorer cache-prefix ordering. Per-finding detail in `docs/assessment/modules/*.md`.
 
 ---
 

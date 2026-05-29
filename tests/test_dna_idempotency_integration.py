@@ -74,6 +74,61 @@ async def test_build_dna_redelivery_is_noop(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_build_dna_concurrent_redelivery_builds_once(db_session: AsyncSession):
+    """Two concurrent deliveries of the same job_id → one draft, one paid LLM call.
+
+    Regression for Issue 76: the bare check-then-act let two concurrent redeliveries
+    both pass the existence check and both run the paid Anthropic+Voyage build before
+    colliding. The per-creator advisory lock + under-lock re-check must serialize them
+    so the loser short-circuits before any paid call.
+    """
+    import asyncio
+
+    from worker.tasks import _build_dna_async
+
+    creator = await _seed_creator(db_session)
+    job_id = f"task_{uuid.uuid4().hex}"
+
+    patterns = {"dummy": True}
+    brief_calls = 0
+
+    def _slow_brief(*_args, **_kwargs):
+        # Count invocations; the small sleep widens the race window so a missing
+        # lock would let both deliveries enter the paid path.
+        nonlocal brief_calls
+        brief_calls += 1
+        import time
+
+        time.sleep(0.2)
+        return "brief"
+
+    with (
+        patch(
+            "dna.builder.build_patterns",
+            new=AsyncMock(return_value=(patterns, [], [], None, None, None)),
+        ),
+        patch("dna.brief.generate_brief", side_effect=_slow_brief),
+        patch("dna.embeddings.embed_patterns", new=AsyncMock()),
+        patch("dna.embeddings.embed_brief", new=AsyncMock()),
+    ):
+        await asyncio.gather(
+            _build_dna_async(str(creator.id), job_id),
+            _build_dna_async(str(creator.id), job_id),
+        )
+
+    try:
+        n = await db_session.scalar(
+            select(func.count()).select_from(CreatorDna).where(CreatorDna.creator_id == creator.id)
+        )
+        assert n == 1  # exactly one draft despite two concurrent runs
+        assert brief_calls == 1  # the loser short-circuited before the paid LLM call
+    finally:
+        await db_session.execute(delete(CreatorDna).where(CreatorDna.creator_id == creator.id))
+        await db_session.execute(delete(Creator).where(Creator.id == creator.id))
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
 async def test_confirm_draft_keeps_single_confirmed(db_session: AsyncSession):
     creator = await _seed_creator(db_session)
     try:

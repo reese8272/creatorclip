@@ -305,7 +305,19 @@ class CreatorDna(Base):
         default=lambda: datetime.now(UTC),
     )
 
-    __table_args__ = (sa.UniqueConstraint("creator_id", "version", name="uq_dna_creator_version"),)
+    __table_args__ = (
+        sa.UniqueConstraint("creator_id", "version", name="uq_dna_creator_version"),
+        # Partial UNIQUE on the Celery idempotency key: at most one draft per build
+        # job id. Structural backstop for the advisory-lock guard in build_dna so a
+        # concurrent same-task redelivery cannot persist a second draft (Issue 76).
+        # Also serves the idempotency lookup, replacing the plain index from 0005.
+        sa.Index(
+            "uq_creator_dna_build_job_id",
+            "build_job_id",
+            unique=True,
+            postgresql_where=sa.text("build_job_id IS NOT NULL"),
+        ),
+    )
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="dna_profiles")
 

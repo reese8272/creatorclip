@@ -406,12 +406,16 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     persisted. The next retry therefore computes max(version) without an orphan row and
     assigns the same version number again.
 
-    Idempotent across at-least-once redelivery (Issue 63): ``job_id`` is the Celery
-    task id, stamped onto the draft (build_job_id). If a draft for this job_id already
-    exists the build is a no-op — this short-circuits BEFORE the paid Anthropic brief
-    and Voyage embedding calls, so a redelivery costs nothing.
+    Idempotent across at-least-once redelivery (Issue 63 + Issue 76): ``job_id`` is the
+    Celery task id, stamped onto the draft (build_job_id). A per-creator
+    ``pg_advisory_xact_lock`` serializes concurrent builds, and the idempotency key is
+    re-checked UNDER that lock — so a redelivery of the same task id (serial *or*
+    concurrent) short-circuits BEFORE the paid Anthropic brief and Voyage embedding
+    calls, and costs nothing. The partial UNIQUE on ``build_job_id`` (migration 0008)
+    is the structural backstop.
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, text
+    from sqlalchemy.exc import IntegrityError
 
     from dna.brief import generate_brief
     from dna.builder import build_patterns
@@ -420,16 +424,28 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
 
     creator_uuid = uuid.UUID(creator_id)
 
-    if job_id is not None:
-        async with db.AsyncSessionLocal() as session:
+    async with db.AsyncSessionLocal() as session:
+        # Serialize concurrent builds for this creator. The xact-scoped advisory lock
+        # is held until commit/rollback, so a concurrent same-job redelivery blocks
+        # here, then re-reads the committed draft below and short-circuits before any
+        # paid Anthropic/Voyage call — closing the double-spend race the bare
+        # check-then-act left open (Issue 76). Mirrors preference/train.py.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": str(creator_uuid)}
+        )
+
+        # Re-check the idempotency key UNDER the lock: same-task redelivery (serial or
+        # concurrent) is now a no-op that costs nothing.
+        if job_id is not None:
             already = await session.scalar(
                 select(CreatorDna.id).where(CreatorDna.build_job_id == job_id)
             )
-        if already is not None:
-            logger.info("DNA build for job %s already completed — skipping (idempotent)", job_id)
-            return
+            if already is not None:
+                logger.info(
+                    "DNA build for job %s already completed — skipping (idempotent)", job_id
+                )
+                return
 
-    async with db.AsyncSessionLocal() as session:
         creator = await session.get(Creator, creator_uuid)
         if not creator:
             raise ValueError(f"Creator {creator_id} not found")
@@ -473,7 +489,17 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
         await embed_brief(session, creator_uuid, brief_text, commit=False)
 
         # Single atomic commit: draft row + onboarding state + all embeddings.
-        await session.commit()
+        # Under the advisory lock above a build_job_id collision cannot occur, but if
+        # the lock path is ever bypassed the partial UNIQUE (migration 0008) raises
+        # here — treat that lost race as the idempotent no-op, not a spurious retry.
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            logger.info(
+                "DNA build for job %s collided on commit — already built (idempotent)", job_id
+            )
+            return
         await session.refresh(dna)
         logger.info(
             "DNA draft v%d built for creator %s (%s)", dna.version, creator_id, channel_title
