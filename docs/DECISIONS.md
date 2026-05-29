@@ -5,6 +5,47 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Skill freshness convention + standards SSOT
+
+### What changed
+- Created a committed `best-practices` skill (`.claude/skills/best-practices/SKILL.md`)
+  to replace the phantom `/best-practices` that CLAUDE.md mandated but did not exist
+  on disk. It is process-first/evergreen: it operationalizes the One Rule
+  (research current standard live, record in DECISIONS) rather than listing
+  perishable "current best" facts.
+- Added a freshness convention (`docs/SKILL_FRESHNESS.md`): every `SKILL.md`
+  carries `last_verified: YYYY-MM-DD`; a 6th `freshness` gate in `run_layer0.py`
+  flags any skill unverified for >90 days (warn-only by default, hard fail under
+  `--require-fresh` for the scheduled re-verification job). Added freshness
+  (warn-only) to the CI static-gates job.
+- Hoisted the Anthropic model id + web_search tool version to `config.py`
+  (`ANTHROPIC_MODEL`, `ANTHROPIC_WEB_SEARCH_TOOL`), referenced by all 4 call sites
+  (`clip_engine/scoring.py`, `dna/brief.py`, `improvement/brief.py`) instead of
+  three hardcoded duplicates; added both to `.env.example`. Closes the
+  hardcoded-model-id SEV2 from the assessment.
+
+### Why
+A standards skill that bakes perishable facts (model ids, tool/lib versions,
+"best library for X") goes stale silently and then gives confident wrong answers —
+worse than no skill. The mitigation is to encode *process* (how to find the
+current standard) as evergreen, fetch perishable facts live where possible
+(pip-audit pulls current CVEs; web_search researches per decision), store the
+must-store perishable facts in a single source (config/requirements), and make
+staleness a visible CI signal via `last_verified` + the freshness gate. Full
+rationale in `docs/SKILL_FRESHNESS.md`.
+
+### Alternatives ruled out
+- **Baking the current model id / library recommendations into the skill prose:**
+  the exact rot this avoids; the improvement assessment caught `claude-sonnet-4-6`
+  duplicated across three files.
+- **A hard staleness gate that fails all PRs after 90 days:** would block unrelated
+  work; warn-by-default + `--require-fresh` on the scheduled job is the cadence-
+  correct posture.
+- **Cloning the Claude API surface into a repo skill:** that surface moves fastest;
+  delegate to the Anthropic-managed `/claude-api` skill that updates upstream.
+
+---
+
 ## 2026-05-29 — Production-assessment harness + quality gates
 
 ### What changed

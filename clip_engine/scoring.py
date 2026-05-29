@@ -186,7 +186,7 @@ async def score_candidates(
     user_text = _USER_TEMPLATE.format(candidates_json=json.dumps(payload, indent=2))
 
     response = await _ANTHROPIC.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.ANTHROPIC_MODEL,
         max_tokens=1200,
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_text}],

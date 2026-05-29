@@ -6,7 +6,14 @@ description: >-
   sweep, a coverage/test-gap audit, a security/scale review, or runs /assess.
   Splits exhaustiveness (deterministic tools) from judgment (parallel per-module
   subagents that write findings to disk), so context stays flat as the repo grows.
+last_verified: 2026-05-29
 ---
+
+<!-- last_verified is the freshness anchor: see docs/SKILL_FRESHNESS.md. This skill
+     is mostly evergreen process; its only perishable content is the tool pins in
+     requirements-dev.txt. The run_layer0.py freshness gate flags this file when
+     last_verified is >90 days old. -->
+
 
 # Production Assessment
 

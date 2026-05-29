@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # --- Optional with defaults ---
     VOYAGE_API_KEY: str = ""
     JWT_EXPIRY_MINUTES: int = 60
+    # Anthropic model + tool versions live here (single source of truth) rather
+    # than hardcoded at call sites — see docs/SKILL_FRESHNESS.md. These are
+    # perishable: verify against the live Anthropic model/tool catalog
+    # (via the /claude-api skill) before each launch.
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+    ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20250305"
     TRANSCRIPTION_BACKEND: str = "deepgram"
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""

@@ -62,7 +62,7 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
     system_text = _SYSTEM_TEMPLATE.format(corpus=corpus)
 
     response = _ANTHROPIC.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
             {

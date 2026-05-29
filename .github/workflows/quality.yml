@@ -39,7 +39,7 @@ jobs:
         # here to avoid running the test suite twice.
         run: >-
           python3 .claude/skills/production-assessment/scripts/run_layer0.py
-          --gates ruff,mypy,bandit,pip_audit
+          --gates ruff,mypy,bandit,pip_audit,freshness
 
   coverage-gate:
     name: Coverage floor (pytest-cov ratchet)

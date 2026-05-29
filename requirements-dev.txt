@@ -3,7 +3,7 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 # Pytest itself (8.3.3) is pinned in requirements.txt.
 
-ruff==0.8.4              # lint + format (also installed ad-hoc by the lint CI job)
+ruff==0.15.15            # lint + format — MUST track the version ci.yml installs (currently unpinned latest)
 mypy==1.14.1            # static type checking (gate: mypy_errors)
 pytest-cov==6.0.0       # coverage measurement (gate: coverage_line_rate floor)
 bandit==1.8.0           # Python SAST (gate: bandit_high / bandit_medium)

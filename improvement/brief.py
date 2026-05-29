@@ -70,7 +70,7 @@ def generate_improvement_brief(
 
     # web_search tool can take 60-120s; override the default 60s timeout per-call.
     response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
             {
@@ -79,7 +79,7 @@ def generate_improvement_brief(
                 "cache_control": {"type": "ephemeral"},
             }
         ],
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        tools=[{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}],
         messages=[
             {
                 "role": "user",
