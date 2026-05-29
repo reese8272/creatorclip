@@ -6,9 +6,18 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–67 ✅ done. Next: Batch 4b = Issues 68 + 72 (sync LLM/Voyage/transcription off the worker loop + OAuth httpx singleton/timeouts).
-**Last completed**: Batch 4a — Issues 66 + 67 (offloaded the 120s improvement brief, the R2 upload, and the account-deletion purge off the API event loop via asyncio.to_thread).
+**Active issue**: Phase 2.6 — Production-assessment fixes (Issues 58–75, themed batches, CHECK-first). 58 code-complete; 59–68 ✅ done. Next (finishing Batch 4b): Issue 72 (OAuth httpx singleton + timeouts + 5xx backoff).
+**Last completed**: Issue 68 — offloaded sync Anthropic/Voyage/transcription/audio calls off the worker's singleton event loop + a job-level transcription timeout.
 **Blocked**: _(none)_
+
+> **Closed Issue 68** (2026-05-29, Batch 4b): Sync `generate_brief`, Voyage `_embed`
+> (tenacity sleeping on the loop), `transcribe_audio`, and `extract_audio_events` ran
+> on the worker's singleton loop with no transcription upper bound. All offloaded via
+> `asyncio.to_thread`; transcription wrapped in `asyncio.wait_for(..., timeout=
+> TRANSCRIPTION_TIMEOUT_S=300)` for a job-level bound. SDK-native timeouts deferred to
+> Issue 75 (SDKs not installed to verify). DB-free unit test for the Voyage offload;
+> existing pipeline tests confirm behavior-preservation. Test count: **390 passed, 1
+> skipped, 54 deselected** (+2). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.32%.
 
 > **Closed Batch 4a / Issues 66 + 67** (2026-05-29): Three synchronous calls ran on
 > the API event loop (120s improvement brief, large-file upload, account-deletion

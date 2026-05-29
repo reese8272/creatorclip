@@ -5,6 +5,33 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-29 — Issue 68 (Batch 4b): Worker-loop offload + transcription timeout
+
+### What changed
+- `dna/embeddings.py`: both `_embed` (Voyage) calls run via `await asyncio.to_thread`.
+- `worker/tasks.py`: `generate_brief` and `extract_audio_events` offloaded via
+  `asyncio.to_thread`; `transcribe_audio` via
+  `asyncio.wait_for(asyncio.to_thread(...), timeout=settings.TRANSCRIPTION_TIMEOUT_S)`.
+- `config.py`/`.env.example`: `TRANSCRIPTION_TIMEOUT_S` (default 300).
+
+### Why
+These sync calls ran on the worker's Issue-39 singleton event loop (bounded by
+prefork concurrency today, fragile to any pool change), and transcription had no
+upper bound — a hung provider stalled the worker indefinitely (axis E).
+
+### Decision: wait_for as the job-level bound; SDK-native timeouts deferred
+`wait_for(to_thread(...))` guarantees the *job* fails (→ Celery retry) after the
+timeout and keeps the loop free. It cannot kill the worker thread, which lives
+until the SDK call returns; the Deepgram/AssemblyAI SDKs aren't installed in this
+environment to verify their native timeout params, so SDK-level timeouts are a
+tracked follow-up (Issue 75). Voyage already self-bounds (`timeout=30`).
+
+### Standard checked
+FastAPI/asyncio: offload blocking/CPU work with `asyncio.to_thread`; never let a
+sync SDK + retry-sleep run on the event loop. (Batch-0 load-testing research.)
+
+---
+
 ## 2026-05-29 — Batch 4a (Issues 66 + 67): Blocking calls off the API event loop
 
 ### What changed

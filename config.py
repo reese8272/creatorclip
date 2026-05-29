@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
     ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20250305"
     TRANSCRIPTION_BACKEND: str = "deepgram"
+    # Job-level upper bound for a single transcription (Issue 68). A hung provider
+    # fails the task after this many seconds (→ Celery retry) instead of stalling
+    # the worker forever.
+    TRANSCRIPTION_TIMEOUT_S: int = 300
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"

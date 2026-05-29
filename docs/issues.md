@@ -1172,18 +1172,18 @@ inside `async def upload_video` → a multi-hundred-MB write blocked the loop. S
 
 ## Issue 68: Sync LLM/Voyage/transcription off the worker loop + timeouts (SEV-1)
 **Depends on**: —
-**Status**: Open
+**Status**: ✅ Done (2026-05-29, Batch 4b)
 
-**What**: Sync calls run on the worker's singleton event loop and lack timeouts:
-`dna/brief.py:64` (Anthropic), `dna/embeddings.py:70` (Voyage, tenacity sleeps on loop),
-`ingestion/transcribe.py:36/101` (Deepgram/AssemblyAI, no timeout). Bounded today only by
-the prefork pool; SEV-1 the moment the pool changes, and the missing timeouts are a
-backpressure risk now. (axes B/E)
+**What**: Sync calls ran on the worker's singleton event loop and transcription had no
+upper bound: `generate_brief` (Anthropic), `_embed` (Voyage, tenacity sleeping on the
+loop), `transcribe_audio` (Deepgram/AssemblyAI/WhisperX), `extract_audio_events` (librosa).
+(axes B/E)
 
 **Acceptance criteria**:
-- [ ] Blocking calls offloaded via `asyncio.to_thread` (or async clients)
-- [ ] `TRANSCRIPTION_TIMEOUT_S` (config + `.env.example`) applied; provider timeouts set
-- [ ] Tenacity backoff does not sleep on the event loop
+- [x] All four offloaded via `await asyncio.to_thread(...)` (Voyage in `dna/embeddings.py`; brief/transcribe/audio-events at the `worker/tasks.py` call sites)
+- [x] `TRANSCRIPTION_TIMEOUT_S` (config + `.env.example`, default 300) applied as a job-level bound via `asyncio.wait_for(asyncio.to_thread(transcribe_audio, …), timeout=…)`
+- [x] Tenacity backoff no longer sleeps on the event loop (the whole `_embed` runs in a thread)
+- Follow-up (Issue 75): SDK-native request timeouts (Deepgram/AssemblyAI) — `wait_for` bounds the job but can't kill the worker thread; the SDKs aren't installed here to verify their timeout params. Voyage already self-bounds (timeout=30).
 
 ## Issue 69: Fix prompt caching — split static/volatile blocks (SEV-1)
 **Depends on**: —

@@ -2,6 +2,7 @@
 Store DNA pattern embeddings via Voyage AI → pgvector.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -67,7 +68,9 @@ async def embed_patterns(
     if not texts:
         return
 
-    result = _embed(texts, model="voyage-3.5", input_type="document")
+    # Voyage SDK is sync and tenacity sleeps between retries — offload so it never
+    # blocks the worker's singleton event loop. (Issue 68)
+    result = await asyncio.to_thread(_embed, texts, model="voyage-3.5", input_type="document")
 
     for i, embedding in enumerate(result.embeddings):
         session.add(
@@ -103,7 +106,9 @@ async def embed_brief(
     if not settings.VOYAGE_API_KEY:
         return
 
-    result = _embed([brief_text[:_VOYAGE_MAX_TEXT]], model="voyage-3.5", input_type="document")
+    result = await asyncio.to_thread(
+        _embed, [brief_text[:_VOYAGE_MAX_TEXT]], model="voyage-3.5", input_type="document"
+    )
     session.add(
         DnaEmbedding(
             creator_id=creator_id,

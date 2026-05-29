@@ -8,6 +8,7 @@ installed by worker_process_init (Issue 39), so the SQLAlchemy async engine
 pool stays bound to a single loop across task invocations.
 """
 
+import asyncio
 import logging
 import tempfile
 import uuid
@@ -259,6 +260,7 @@ async def _ingest_async(video_id: str) -> None:
 
 
 async def _transcribe_async(video_id: str) -> None:
+    from config import settings
     from ingestion.transcribe import transcribe_audio
     from worker.storage import local_path
 
@@ -269,7 +271,12 @@ async def _transcribe_async(video_id: str) -> None:
         source_uri = video.source_uri
 
     with local_path(source_uri) as audio_path:
-        result = transcribe_audio(str(audio_path))
+        # Blocking SDK call off the worker loop, with a job-level upper bound so a
+        # hung provider fails (→ retry) instead of stalling forever. (Issue 68)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(transcribe_audio, str(audio_path)),
+            timeout=settings.TRANSCRIPTION_TIMEOUT_S,
+        )
 
     async with db.AsyncSessionLocal() as session:
         existing = await session.get(Transcript, uuid.UUID(video_id))
@@ -305,7 +312,7 @@ async def _signals_async(video_id: str) -> None:
         retention_points = list(retention_result.scalars())
 
     with local_path(source_uri) as audio_path:
-        audio_events = extract_audio_events(str(audio_path))
+        audio_events = await asyncio.to_thread(extract_audio_events, str(audio_path))
 
     timeline = build_signal_timeline(audio_events, retention_points)
 
@@ -438,7 +445,7 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
         ) = await build_patterns(session, creator_uuid)
 
         # Generate the brief outside the DB — pure LLM call; no session writes yet.
-        brief_text = generate_brief(patterns, channel_title)
+        brief_text = await asyncio.to_thread(generate_brief, patterns, channel_title)
 
         # Stage the draft row without committing.  commit=False keeps the INSERT
         # pending in this transaction so all writes land atomically below.
