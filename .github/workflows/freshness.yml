@@ -1,0 +1,27 @@
+name: Skill Freshness
+
+# Quarterly (+ manual) check that committed skills haven't gone stale. Runs the
+# production-assessment freshness gate with --require-fresh, so a skill whose
+# `last_verified` is >90 days old fails this job — a visible red check + notification
+# prompting a re-verification (see docs/SKILL_FRESHNESS.md). A scheduled Action, not
+# a /loop: the cadence is months, which a live session can't hold.
+
+on:
+  schedule:
+    - cron: "0 9 1 1,4,7,10 *" # 09:00 UTC on the 1st of Jan / Apr / Jul / Oct
+  workflow_dispatch: {}
+
+jobs:
+  freshness:
+    name: Skills not stale (>90d)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run freshness gate (hard fail if stale)
+        # No dependencies needed — the gate only reads SKILL.md frontmatter.
+        run: >-
+          python3 .claude/skills/production-assessment/scripts/run_layer0.py
+          --gates freshness --require-fresh
