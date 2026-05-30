@@ -102,6 +102,7 @@ def generate_brief(
     patterns: dict,
     channel_title: str,
     stated_identity: str | None = None,
+    task_id: str | None = None,
 ) -> str:
     """
     Call Claude to synthesise a Creator Brief from computed patterns.
@@ -115,11 +116,39 @@ def generate_brief(
             as a system block BEFORE the volatile performance corpus and
             AFTER the static instructions — the LLM should weight it
             alongside the inferred patterns rather than overriding it.
+        task_id: Optional Celery task id (Issue 86). When set, switches to
+            the streaming path — cache hit/miss + text deltas flow to
+            ``task:{task_id}:events`` via ``worker.anthropic_stream.stream_and_emit``.
+            When None (default), uses the legacy non-streaming ``.create()`` path
+            so existing unit-test mocks of this function keep working unchanged.
 
     Returns brief_text with the honesty disclaimer appended.
     Raises RuntimeError if Claude returns no text block.
     """
     system, messages = _build_request(patterns, channel_title, stated_identity)
+
+    if task_id is not None:
+        # Streaming path (Issue 86) — forwards message_start.usage + text_delta
+        # events to the SSE consumer. Same prompt structure as the .create()
+        # path so cache breakpoints are interchangeable between the two.
+        from worker.anthropic_stream import stream_and_emit
+
+        final_text, usage = stream_and_emit(
+            _ANTHROPIC,
+            task_id,
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=2000,
+            system=system,
+            messages=messages,
+        )
+        logger.info(
+            "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
+            usage["input_tokens"],
+            usage["cache_read"],
+            usage["cache_creation"],
+            usage["output_tokens"],
+        )
+        return final_text + _DISCLAIMER
 
     response = _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
@@ -142,44 +171,3 @@ def generate_brief(
 
     # Final text block is the answer (consistent with the web_search path). (Issue 69)
     return text_blocks[-1].text + _DISCLAIMER
-
-
-def generate_brief_streaming(
-    task_id: str,
-    patterns: dict,
-    channel_title: str,
-    stated_identity: str | None = None,
-) -> str:
-    """Streaming variant of ``generate_brief`` that emits live progress events.
-
-    Same prompt structure as ``generate_brief`` (extracted via ``_build_request``),
-    so the cache breakpoint placement is identical and a prior cache write from
-    either path can be served back to the other. Token deltas and the cache
-    hit/miss event are forwarded to ``task:{task_id}:events`` via
-    ``worker.anthropic_stream.stream_and_emit`` for the SSE UI to consume.
-
-    Use this from worker tasks that have a Celery task_id; legacy non-streaming
-    callers should keep using ``generate_brief``.
-    """
-    from worker.anthropic_stream import stream_and_emit
-
-    system, messages = _build_request(patterns, channel_title, stated_identity)
-
-    final_text, usage = stream_and_emit(
-        _ANTHROPIC,
-        task_id,
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=2000,
-        system=system,
-        messages=messages,
-    )
-
-    logger.info(
-        "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
-        usage["input_tokens"],
-        usage["cache_read"],
-        usage["cache_creation"],
-        usage["output_tokens"],
-    )
-
-    return final_text + _DISCLAIMER

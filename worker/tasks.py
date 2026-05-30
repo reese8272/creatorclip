@@ -495,7 +495,7 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     from sqlalchemy import select, text
     from sqlalchemy.exc import IntegrityError
 
-    from dna.brief import generate_brief, generate_brief_streaming
+    from dna.brief import generate_brief
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
     from dna.identity import format_for_prompt, get_current
@@ -574,22 +574,18 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
             stated_identity = format_for_prompt(identity_row)
 
             await _emit("step", label="call_claude")
-            # Streaming variant emits `cache` + `token` (+ future `thinking`)
-            # events as the LLM call progresses. Fall back to the non-streaming
-            # path when there's no subscriber so unit-test callers and any
-            # internal invocation without a job_id keep working unchanged.
-            if progress_enabled:
-                brief_text = await asyncio.to_thread(
-                    generate_brief_streaming,
-                    job_id,  # type: ignore[arg-type]
-                    patterns,
-                    channel_title,
-                    stated_identity,
-                )
-            else:
-                brief_text = await asyncio.to_thread(
-                    generate_brief, patterns, channel_title, stated_identity
-                )
+            # generate_brief switches to the streaming path internally when a
+            # task_id is provided (Issue 86) — emits `cache` + `token` (+ future
+            # `thinking`) events as the LLM call progresses. Passing task_id=None
+            # keeps the legacy .create() path for unit-test callers that mock
+            # this function and any internal invocation without a job_id.
+            brief_text = await asyncio.to_thread(
+                generate_brief,
+                patterns,
+                channel_title,
+                stated_identity,
+                job_id if progress_enabled else None,
+            )
 
             # Stage the draft row without committing.  commit=False keeps the INSERT
             # pending in this transaction so all writes land atomically below.
