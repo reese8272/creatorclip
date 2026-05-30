@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Clip, ClipFeedback, ClipOutcome, FeedbackAction, PreferenceModel
+from preference import _scorer_cache as scorer_cache
 from preference.decay import sample_weight
 from preference.features import FEATURE_NAMES, clip_features
 from preference.model import PreferenceScorer, fit
@@ -114,27 +115,51 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
 
 
 async def load_latest(session: AsyncSession, creator_id: uuid.UUID) -> PreferenceScorer | None:
-    """Load the most recently trained model for a creator, or None."""
+    """Load the most recently trained model for a creator, or None.
+
+    Backed by a per-worker LRU keyed by ``(creator_id, version)`` so the
+    lock-contended joblib deserialize runs once per model version rather than
+    on every rerank. The version + feature schema are read with a cheap query;
+    the blob is fetched only on a cache miss. (Issue 78a)
+    """
     result = await session.execute(
-        select(PreferenceModel)
+        select(PreferenceModel.version, PreferenceModel.feature_schema_jsonb)
         .where(PreferenceModel.creator_id == creator_id)
         .order_by(PreferenceModel.version.desc())
+        .limit(1)
     )
-    row = result.scalars().first()
-    if not row or not row.weights_blob:
+    row = result.first()
+    if row is None:
         return None
+    version, feature_schema = row
     # Feature-schema drift: if the stored model was trained on a different feature
     # set than the current code, do NOT score with it — fall back to DNA ranking
     # (honest) rather than silently producing meaningless probabilities. (Issue 71)
-    stored_features = (row.feature_schema_jsonb or {}).get("features")
+    stored_features = (feature_schema or {}).get("features")
     if stored_features != FEATURE_NAMES:
         logger.warning(
             "Preference model feature-schema drift for creator %s — falling back to DNA",
             creator_id,
         )
         return None
+
+    key = (creator_id, version)
+    cached = scorer_cache.get(key)
+    if cached is not None:
+        return cached
+
+    blob = await session.scalar(
+        select(PreferenceModel.weights_blob).where(
+            PreferenceModel.creator_id == creator_id,
+            PreferenceModel.version == version,
+        )
+    )
+    if not blob:
+        return None
     try:
-        return PreferenceScorer.from_bytes(row.weights_blob)
+        scorer = PreferenceScorer.from_bytes(blob)
     except Exception as exc:
         logger.warning("Failed to deserialize preference model: %s", exc)
         return None
+    scorer_cache.put(key, scorer)
+    return scorer
