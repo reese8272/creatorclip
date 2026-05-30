@@ -17,6 +17,13 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 FROM base AS runtime
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
+# /app holds first-party packages (dna/, worker/, youtube/, …). WORKDIR alone
+# does not put it on sys.path for processes whose entry point is a script in
+# /root/.local/bin (e.g. `celery …`) — sys.path[0] becomes the script's dir,
+# not CWD. Forked Celery pool workers then hit ModuleNotFoundError on lazy
+# first-party imports (Prod incident 2026-05-30: build_dna). Setting
+# PYTHONPATH guarantees /app is discoverable for every process in the image.
+ENV PYTHONPATH=/app
 
 COPY . .
 

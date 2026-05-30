@@ -5,6 +5,59 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Container: PYTHONPATH=/app (prod DNA-stuck hotfix)
+
+### What was decided
+Set `ENV PYTHONPATH=/app` in the runtime stage of `Dockerfile`, in addition to the
+existing `WORKDIR /app`. First-party packages (`dna/`, `worker/`, `youtube/`,
+`ingestion/`, `clip_engine/`, `preference/`, `improvement/`, `billing/`, `routers/`,
+`upload_intel/`) are now reachable from every Python process in the image regardless
+of how that process is invoked.
+
+### Why
+Production incident, 2026-05-30 19:48–19:51 UTC: a user-triggered `build_dna` Celery
+task crashed 4× with `ModuleNotFoundError: No module named 'dna'` and gave up,
+leaving the onboarding UI stuck at "Analysing your top & bottom performers…" past
+its 2-minute poll cap. Root cause: Celery is launched via the console script at
+`/root/.local/bin/celery`, so Python's `sys.path[0]` becomes the script directory
+— not `/app`. Celery's master prepends CWD before importing `worker.celery_app`,
+so the master boots fine, but the forked pool worker that runs the task hits
+`from dna.brief import generate_brief` at `worker/tasks.py:498` and the resolver
+still can't find `/app/dna/`. Other lazy first-party imports (`youtube.*`,
+`ingestion.*`, `clip_engine.*`, …) silently worked only because those packages
+were transitively pulled in at celery boot and lived in `sys.modules`; `dna.*` was
+the first to require a fresh path resolution and exposed the gap.
+
+Setting `PYTHONPATH=/app` closes the gap structurally — every entry point sees
+`/app` regardless of whether sys.path[0] is the script dir, the CWD, or empty.
+WORKDIR alone is not sufficient because `''` only goes into sys.path when Python
+is invoked as `python -c`, `python -m`, or with no script argument; a console
+script overrides it.
+
+### Source / evidence
+- Worker logs: `docker compose -f /opt/autoclip/docker-compose.prod.yml logs --tail 150 worker` showed 4 retries of task `c3b02e43-689d-4f71-b7c0-c25f32102f52` ending in unrecoverable failure.
+- In-container repro: `docker exec autoclip-worker-1 python -c "import sys; sys.path = [p for p in sys.path if p]; from dna.brief import generate_brief"` → `ModuleNotFoundError`. Adding `/app` back → succeeds.
+- Process inspection: master pid 1 cmdline was `python3.12 /root/.local/bin/celery -A worker.celery_app worker …`; sys.argv[0] points at `/root/.local/bin/celery`, so `sys.path[0]` resolves to `/root/.local/bin`.
+- Python docs: [The initialization of the sys.path module search path](https://docs.python.org/3/library/sys_path_init.html) — sys.path[0] is the directory of the running script; CWD is added only for `-c`, `-m`, or interactive mode.
+
+### Alternatives considered
+- **`sys.path.insert(0, "/app")` at the top of `worker/celery_app.py`.** Works
+  but local to one module; doesn't help if another script-style entry point is
+  added later (e.g. an alembic console-script invocation). PYTHONPATH is the
+  global lever.
+- **Switch the command to `python -m celery -A worker.celery_app worker`.**
+  `python -m` adds CWD to sys.path. Less invasive than touching the image, but
+  requires updating every compose service and any future entry; PYTHONPATH is
+  one line that covers them all.
+- **Install the repo as a package (`pip install -e .`).** The right long-term
+  shape but a refactor — needs a real `pyproject.toml` source layout, affects
+  `pytest` and mypy paths, and is out of scope for a hotfix.
+
+### Date
+2026-05-30
+
+---
+
 ## 2026-05-30 — Issue 83: Creator Intake Form (stated identity layer)
 
 ### What was decided
