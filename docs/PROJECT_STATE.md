@@ -6,8 +6,8 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Issue 78 — salvaged-from-PR#6 work. 78a (#9), 78b (#10), 78d (#11), 78g (#12), 78c (mypy→0) ✅ done. Remaining (blocked on inputs): 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off), 78f (PgBouncer load harness — needs real staging).
-**Last completed**: Issue 78c — mypy 30→0 (pydantic plugin + real type fixes in train/oauth/worker + targeted ignores for SDK/stub lag) and enabled the `disallow_untyped_defs` ratchet; baseline mypy_errors 30→0. 431 passed / 66 integration; ruff 0.
+**Active issue**: Issue 78 — salvaged-from-PR#6 work. 78a (#9), 78b (#10), 78d (#11), 78g (#12), 78c (mypy 30→0) ✅ done. Remaining: **enable the `disallow_untyped_defs` ratchet** (deferred from 78c — ~20 pre-existing untyped-def signatures to annotate first), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off), 78f (PgBouncer load harness — needs real staging).
+**Last completed**: Issue 78c — mypy 30→0 (pydantic plugin + real type fixes in train/oauth/worker + targeted SDK/stub-lag ignores); baseline mypy_errors 30→0. The `disallow_untyped_defs` ratchet was reverted same-day (it surfaced ~20 pre-existing untyped-def violations) and re-tracked as a follow-up. 431 passed / 66 integration; ruff 0.
 **Blocked**: _(none)_
 
 > **Closed Issue 78d — improvement-brief 202 + poll** (2026-05-30): the ~120s Claude +
