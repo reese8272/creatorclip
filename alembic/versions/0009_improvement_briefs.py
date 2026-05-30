@@ -42,9 +42,7 @@ def upgrade() -> None:
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index(
-        "ix_improvement_briefs_creator_id", "improvement_briefs", ["creator_id"]
-    )
+    op.create_index("ix_improvement_briefs_creator_id", "improvement_briefs", ["creator_id"])
 
 
 def downgrade() -> None:

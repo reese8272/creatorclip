@@ -106,9 +106,7 @@ async def test_improvement_brief_is_scoped_to_requesting_creator(
 
     token = create_session_token(creator_a.id)
     try:
-        start = client.post(
-            "/creators/me/improvement-brief", cookies={SESSION_COOKIE: token}
-        )
+        start = client.post("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
         assert start.status_code == 202, start.text
 
         from worker.tasks import _generate_improvement_brief_async

@@ -106,9 +106,7 @@ async def test_post_returns_202_and_creates_pending_row(db_session, client, mock
 
     token = create_session_token(creator.id)
     try:
-        resp = client.post(
-            "/creators/me/improvement-brief", cookies={SESSION_COOKIE: token}
-        )
+        resp = client.post("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
         assert resp.status_code == 202, resp.text
         body = resp.json()
         assert body["status"] == "pending"
