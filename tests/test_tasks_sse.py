@@ -26,9 +26,11 @@ def _reset_redis_singletons() -> None:
     """Fresh singletons per test so background Redis state doesn't leak."""
     progress._SYNC = None  # noqa: SLF001
     progress._AIO = None  # noqa: SLF001
+    progress._AIO_LOOP = None  # noqa: SLF001
     yield
     progress._SYNC = None  # noqa: SLF001
     progress._AIO = None  # noqa: SLF001
+    progress._AIO_LOOP = None  # noqa: SLF001
 
 
 @pytest.fixture

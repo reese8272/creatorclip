@@ -28,6 +28,7 @@ losing a progress event is preferable to losing the whole task.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -117,14 +118,30 @@ def sync_emit(task_id: str, event_type: str, **fields: Any) -> None:
 
 
 # ── Async clients (for callers on the worker's event loop) ──────────────────
+#
+# redis.asyncio.Redis binds its connection pool to whichever event loop first
+# touches it. That's fine in prod (one long-lived loop per worker process),
+# but pytest-asyncio with `asyncio_default_fixture_loop_scope = function`
+# spins up a fresh loop per test — a singleton bound to test 1's (now-closed)
+# loop blows up on test 2 with `RuntimeError: no running event loop`. We bind
+# the singleton to the *current running loop* and rebuild on mismatch so the
+# cross-test pattern works without making the production worker pay any cost.
 
 _AIO: aredis.Redis | None = None
+_AIO_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _async_client() -> aredis.Redis:
-    global _AIO
-    if _AIO is None:
+    global _AIO, _AIO_LOOP
+    try:
+        current = asyncio.get_running_loop()
+    except RuntimeError:
+        # Called from a sync context — let the caller's await raise the real
+        # error. We can't bind to a loop that isn't running.
+        current = None
+    if _AIO is None or _AIO_LOOP is not current:
         _AIO = aredis.from_url(settings.REDIS_URL, decode_responses=True)
+        _AIO_LOOP = current
     return _AIO
 
 
@@ -137,6 +154,12 @@ async def aemit(task_id: str, event_type: str, **fields: Any) -> None:
         if event_type in TERMINAL_EVENT_TYPES:
             await client.expire(_stream_key(task_id), _STREAM_TTL_SECONDS)
     except Exception as exc:
+        # Reset the singleton on any failure so a wedged client doesn't
+        # poison every subsequent emit. Progress is observational, so the
+        # next call gets a fresh client and retries.
+        global _AIO, _AIO_LOOP
+        _AIO = None
+        _AIO_LOOP = None
         logger.warning("progress.aemit failed task=%s type=%s err=%s", task_id, event_type, exc)
 
 
@@ -226,9 +249,10 @@ async def aclose() -> None:
     doesn't leak connections (and so tests don't see the noisy
     ``Event loop is closed`` warning at module teardown).
     """
-    global _AIO
+    global _AIO, _AIO_LOOP
     if _AIO is not None:
         try:
             await _AIO.aclose()
         finally:
             _AIO = None
+            _AIO_LOOP = None

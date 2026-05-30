@@ -22,9 +22,11 @@ def _reset_module_clients() -> None:
     """Force fresh client singletons per test — keeps state from bleeding."""
     progress._SYNC = None  # noqa: SLF001
     progress._AIO = None  # noqa: SLF001
+    progress._AIO_LOOP = None  # noqa: SLF001
     yield
     progress._SYNC = None  # noqa: SLF001
     progress._AIO = None  # noqa: SLF001
+    progress._AIO_LOOP = None  # noqa: SLF001
 
 
 @pytest.fixture
