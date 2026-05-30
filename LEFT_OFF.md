@@ -195,7 +195,7 @@ local-main hardening work (Issues 79, 56, 57, 52, 46, 38 W1) just merged in:
 | **Active issue** | _(none in flight)_ — clean up branches/PR, then pick from 78e/f/ratchet/80/81/82/Phase 3 |
 | **Last completed** | Reconcile merge (this session) — Issues 79, 56, 57, 52, 46, 38 W1 + origin all on `main` |
 | **Latest alembic revision** | `0010_rls_policies` (chains after `0009_improvement_briefs`) |
-| **Test count (pre-merge baselines)** | local: 381 passed / 1 skipped / 54 deselected · origin: 431 passed / 1 skipped / 66 integration. **Re-run after the merge.** |
+| **Test count (post-merge, verified)** | **439 passed, 1 skipped, 79 deselected** (`.venv/bin/python -m pytest -q`, this session). Integration tests deselected because Postgres isn't running locally; CI will run them. |
 | **Safety tag for the pre-merge local main** | `safety/pre-reconcile-2026-05-30` (kept for rollback) |
 
 ---
