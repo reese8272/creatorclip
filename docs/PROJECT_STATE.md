@@ -6,7 +6,7 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Issue 78 — re-implementing the net-new pieces salvaged from closed PR #6, one small test-gated PR at a time. 78a (scorer cache, PR #9) + 78b (clip-scorer 1h caching) ✅ done; next: mypy→0 (78c), improvement-brief 202/poll (78d), analytics retention purge (78e), PgBouncer harness (78f), legal/CORS delta (78g).
+**Active issue**: Issue 78 — re-implementing the net-new pieces salvaged from closed PR #6, one small test-gated PR at a time. 78a (scorer cache, PR #9 ✅ merged), 78b (clip-scorer 1h caching, PR #10), 78d (improvement-brief 202+poll, PR #11) ✅ done. Remaining: 78c (mypy→0 — after #10/#11 merge + fix the run_layer0 `knowledge/` gate blind-spot), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off), 78f (PgBouncer harness — needs real staging), 78g (legal/CORS delta — mostly already shipped).
 **Last completed**: Issue 78b — clip-scorer prompt caching (two-block system: static-first + per-creator DNA with a 1h ephemeral breakpoint; candidates uncached). Full suite 430 passed; eval 6 passed; ruff 0 / mypy 30.
 **Blocked**: _(none)_
 

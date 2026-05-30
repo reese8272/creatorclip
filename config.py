@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);
     # it ramps linearly to this cap by 2× the threshold. (Issue 60)
     PREFERENCE_WEIGHT_CAP: float = 0.5
+    # Per-worker LRU cache of deserialized preference scorers, keyed by
+    # (creator_id, version). Bounds memory while letting rerank skip the
+    # lock-contended joblib load when the model is unchanged. (Issue 78a)
+    PREFERENCE_SCORER_CACHE_SIZE: int = 128
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
