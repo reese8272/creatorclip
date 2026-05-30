@@ -219,3 +219,33 @@ async def test_get_videos_metadata_parses_duration_and_kind():
 async def test_get_videos_metadata_empty_ids_returns_empty():
     result = await get_videos_metadata("tok", [])
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_report_honors_retry_after_on_429():
+    """Issue A: a 429 with Retry-After must back off at least that long, not the 1s base."""
+    from unittest.mock import MagicMock
+
+    import youtube.analytics as a
+
+    resp429 = MagicMock(status_code=429, headers={"Retry-After": "7"})
+    resp200 = MagicMock(status_code=200, headers={})
+    resp200.json.return_value = {"rows": []}
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(side_effect=[resp429, resp200])
+
+    slept: list[float] = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+
+    with (
+        patch("youtube.analytics._http.client", return_value=mock_client),
+        patch("youtube.analytics.consume", new=AsyncMock()),
+        patch("youtube.analytics._classify_error", return_value=("rateLimitExceeded", True)),
+        patch("asyncio.sleep", new=fake_sleep),
+    ):
+        result = await a._fetch_report("tok", {})
+
+    assert result == {"rows": []}
+    assert slept and slept[0] >= 7  # honored Retry-After, not the ~1s exponential base

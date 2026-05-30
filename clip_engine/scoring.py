@@ -8,6 +8,7 @@ token cost minimal.  Without DNA, signal features produce a cold-start score.
 Every returned candidate includes a named principle from CLIPPING_PRINCIPLES.md.
 """
 
+import asyncio
 import json
 import logging
 
@@ -39,14 +40,15 @@ _PRINCIPLES = [
     "Audience-fit over generic virality",
 ]
 
-_SYSTEM_PREFIX = """\
+# Static, creator-independent instructions. Kept as a SEPARATE system block placed
+# BEFORE the per-creator DNA so the stable bytes lead the prefix (prompt-caching best
+# practice: stable content first, volatile content after the last breakpoint). The DNA
+# block below carries the cache breakpoint. (Issue 78b)
+_SYSTEM_STATIC = """\
 You are a clip-selection expert for YouTube content creation.
 
-Evaluate the candidate clips below against this creator's DNA profile to find the best
-fits for their audience and proven style.
-
-CREATOR DNA:
-{dna_brief}
+Evaluate the candidate clips against the creator's DNA profile (provided below) to find
+the best fits for their audience and proven style.
 
 NAMED SCORING PRINCIPLES (cite exactly one per clip):
 {principles}
@@ -150,8 +152,13 @@ async def score_candidates(
     if not candidates:
         return []
 
-    for c in candidates:
-        c["features"] = compute_features(c, timeline)
+    # Feature computation is CPU-bound (signal-array build per candidate). Offload it
+    # so scoring never blocks the event loop on this worker. (Issue C)
+    def _compute_features_all() -> None:
+        for c in candidates:
+            c["features"] = compute_features(c, timeline)
+
+    await asyncio.to_thread(_compute_features_all)
 
     if not dna_brief:
         for c in candidates:
@@ -179,16 +186,26 @@ async def score_candidates(
         for i, c in enumerate(candidates)
     ]
 
-    system_text = _SYSTEM_PREFIX.format(
-        dna_brief=dna_brief,
-        principles="\n".join(f"- {p}" for p in _PRINCIPLES),
-    )
+    static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in _PRINCIPLES))
     user_text = _USER_TEMPLATE.format(candidates_json=json.dumps(payload, indent=2))
 
+    # Two-block system: static instructions first (identical across all creators), then the
+    # per-creator DNA brief carrying the cache breakpoint. The brief is constant across a
+    # creator's videos, so caching it lets repeat scorings within the window skip re-billing
+    # the prefix at full price. The 1h TTL widens that window past the default 5 min, so a
+    # creator's batch of videos (ingested/scored over a longer span) still hits the cache.
+    # The volatile per-video candidates stay in the uncached user message. (Issue 78b)
     response = await _ANTHROPIC.messages.create(
-        model="claude-sonnet-4-6",
+        model=settings.ANTHROPIC_MODEL,
         max_tokens=1200,
-        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+        system=[
+            {"type": "text", "text": static_text},
+            {  # type: ignore[typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
+                "type": "text",
+                "text": f"CREATOR DNA:\n{dna_brief}",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
         messages=[{"role": "user", "content": user_text}],
     )
 

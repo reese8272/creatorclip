@@ -286,14 +286,16 @@ async def test_build_and_save_filters_and_weights_feedback():
     db_rows = [row_trim, row_approve, row_downvote]
 
     # Two execute() calls: first fetches feedback rows, second fetches existing PreferenceModel.
+    # Calls: (0) feedback rows, (1) pg_advisory_xact_lock [Issue 71; result ignored],
+    # (2) existing PreferenceModel. Accept the params dict the advisory call passes.
     execute_call_count = [0]
 
-    async def _execute(stmt):
+    async def _execute(stmt, *args):
         result = MagicMock()
         if execute_call_count[0] == 0:
             result.all.return_value = db_rows
         else:
-            # No existing preference model
+            # Advisory lock (ignored) + "no existing preference model".
             scalars_mock = MagicMock()
             scalars_mock.first.return_value = None
             result.scalars.return_value = scalars_mock

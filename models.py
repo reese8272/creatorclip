@@ -291,6 +291,9 @@ class CreatorDna(Base):
     optimal_clip_len_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     best_source_region: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     optimal_upload_gap_h: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    # Celery task id of the build that created this draft — the idempotency key for
+    # at-least-once redelivery (Issue 63). Nullable: legacy rows + non-task callers.
+    build_job_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     status: Mapped[DnaStatus] = mapped_column(
         sa.Enum(DnaStatus, name="dna_status_enum"),
         nullable=False,
@@ -302,7 +305,19 @@ class CreatorDna(Base):
         default=lambda: datetime.now(UTC),
     )
 
-    __table_args__ = (sa.UniqueConstraint("creator_id", "version", name="uq_dna_creator_version"),)
+    __table_args__ = (
+        sa.UniqueConstraint("creator_id", "version", name="uq_dna_creator_version"),
+        # Partial UNIQUE on the Celery idempotency key: at most one draft per build
+        # job id. Structural backstop for the advisory-lock guard in build_dna so a
+        # concurrent same-task redelivery cannot persist a second draft (Issue 76).
+        # Also serves the idempotency lookup, replacing the plain index from 0005.
+        sa.Index(
+            "uq_creator_dna_build_job_id",
+            "build_job_id",
+            unique=True,
+            postgresql_where=sa.text("build_job_id IS NOT NULL"),
+        ),
+    )
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="dna_profiles")
 
@@ -404,6 +419,9 @@ class ClipOutcome(Base):
     retention: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     performed_well: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    # Terminal marker: once the 7d checkpoint is recorded the outcome is never
+    # re-polled (bounds the YouTube-quota drain). (Issue 70)
+    final: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
 
     clip: Mapped["Clip"] = relationship("Clip", back_populates="outcome")
 
@@ -540,3 +558,46 @@ async def append_audit(
             after_jsonb=after,
         )
     )
+
+
+# ── Improvement brief (async 202 + poll) ──────────────────────────────────────
+
+
+class ImprovementBriefStatus(enum.Enum):
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
+class ImprovementBrief(Base):
+    """Async-generated content-improvement brief for a creator (Issue 78d).
+
+    One row per creator. The POST endpoint resets it to ``pending`` and enqueues a
+    Celery task; the task runs the ~120s Claude + web_search call and writes
+    ``brief_text``/``status``; the GET endpoint polls this row. Mirrors the
+    DNA-build 202 + poll precedent so the long call never sits on the request path.
+    """
+
+    __tablename__ = "improvement_briefs"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[ImprovementBriefStatus] = mapped_column(
+        sa.Enum(ImprovementBriefStatus, name="improvement_brief_status"),
+        nullable=False,
+        default=ImprovementBriefStatus.pending,
+    )
+    brief_text: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Safe, user-facing failure message only — never a stack trace or token/PII.
+    error: Mapped[str | None] = mapped_column(sa.String(256), nullable=True)
+    # Celery task id of the in-flight / last build — the idempotency handle.
+    job_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

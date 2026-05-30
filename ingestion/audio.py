@@ -34,7 +34,11 @@ def extract_audio_events(audio_path: str | Path) -> dict:
     import librosa
 
     hop = 512
-    y, sr = librosa.load(str(audio_path), sr=None, mono=True)
+    # Resample to 16 kHz on load (Issue 74): the RMS/ZCR energy/silence/laughter
+    # heuristics need no more fidelity, and sr=None decoded at the native rate
+    # (e.g. 48 kHz) held ~3× the samples in memory — an OOM vector for long videos
+    # across concurrent workers.
+    y, sr = librosa.load(str(audio_path), sr=16000, mono=True)
     duration_s = float(len(y) / sr)
     frame_dur = hop / sr
 

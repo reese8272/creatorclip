@@ -15,10 +15,16 @@ Cost reference (Google official documentation, 2026):
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from config import settings
 from youtube._redis import get_redis_client
+
+# Google resets the shared project quota at midnight Pacific (per the module
+# docstring). Key the daily counter by the PT date so it rolls over with Google's,
+# not ~7-8h early on the UTC date (which would hand out spent budget → 403). (Issue 76)
+_QUOTA_RESET_TZ = ZoneInfo("America/Los_Angeles")
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +54,7 @@ _TTL_SECONDS = 90_000  # 25 hours — auto-expires the day after
 
 
 def _quota_key() -> str:
-    return f"creatorclip:yt_quota:{datetime.now(UTC).strftime('%Y-%m-%d')}"
+    return f"creatorclip:yt_quota:{datetime.now(_QUOTA_RESET_TZ).strftime('%Y-%m-%d')}"
 
 
 class QuotaExhaustedError(Exception):
@@ -61,13 +67,13 @@ async def consume(cost: int) -> None:
     Raises QuotaExhaustedError if the daily budget would be exceeded.
     """
     r = get_redis_client()
-    result = await r.eval(
+    result = await r.eval(  # type: ignore[misc]  # SDK/stub typing lag (Issue 78c)
         _LUA_CONSUME,
         1,
         _quota_key(),
-        cost,
-        settings.YOUTUBE_QUOTA_DAILY_UNITS,
-        _TTL_SECONDS,
+        cost,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
+        settings.YOUTUBE_QUOTA_DAILY_UNITS,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
+        _TTL_SECONDS,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
     )
 
     if result == -1:

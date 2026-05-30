@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from crypto import decrypt, encrypt
 from models import Creator, OnboardingState, YoutubeToken
+from youtube import _http
 from youtube._redis import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -82,31 +83,30 @@ def _is_invalid_grant(response: httpx.Response) -> bool:
 
 
 async def _call_token_endpoint(data: dict) -> dict:
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(_TOKEN_ENDPOINT, data=data)
-        resp.raise_for_status()
-        return resp.json()
+    # Shared timeout-bounded client — token refresh is on the hot path of every
+    # near-expiry request; a per-call client (no timeout) could hang it. (Issue 72)
+    resp = await _http.client().post(_TOKEN_ENDPOINT, data=data)
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def _call_userinfo(access_token: str) -> dict:
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            _USERINFO_ENDPOINT,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+    resp = await _http.client().get(
+        _USERINFO_ENDPOINT,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def _call_youtube_channels(access_token: str) -> dict:
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            _CHANNELS_ENDPOINT,
-            params={"part": "snippet", "mine": "true"},
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+    resp = await _http.client().get(
+        _CHANNELS_ENDPOINT,
+        params={"part": "snippet", "mine": "true"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ── Public OAuth operations ───────────────────────────────────────────────────
@@ -164,7 +164,7 @@ async def upsert_creator(
     result = await session.execute(select(Creator).where(Creator.google_sub == google_sub))
     creator = result.scalar_one_or_none()
     is_new = creator is None
-    if is_new:
+    if creator is None:
         creator = Creator(
             google_sub=google_sub,
             email=email,
@@ -294,14 +294,19 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
             return await _do_token_refresh(creator_id, session, row)
         finally:
             # Only release if the value is still ours — Lua compare-and-delete.
-            await redis_client.eval(_LUA_RELEASE_LOCK, 1, lock_key, lock_token)
+            await redis_client.eval(_LUA_RELEASE_LOCK, 1, lock_key, lock_token)  # type: ignore[misc]  # SDK/stub typing lag (Issue 78c)
     else:
         # Another worker is refreshing. Poll until it finishes.
         for attempt in range(_LOCK_RETRY_COUNT):
             await asyncio.sleep(_LOCK_RETRY_SLEEP_S)
-            # Re-read the row so we see whatever the lock holder committed.
+            # Re-read the row so we see whatever the lock holder committed in its own
+            # session. populate_existing forces the ORM to overwrite our identity-map
+            # copy from the DB — without it `expire_on_commit=False` returns the stale
+            # cached instance and the waiter 503s even though a fresh token exists. (Issue A)
             fresh_result = await session.execute(
-                select(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
+                select(YoutubeToken)
+                .where(YoutubeToken.creator_id == creator_id)
+                .execution_options(populate_existing=True)
             )
             fresh_row = fresh_result.scalar_one_or_none()
             if fresh_row is None:

@@ -33,8 +33,9 @@ def _embed(texts: list[str], model: str, input_type: str):
 
 
 async def _aembed(texts: list[str], model: str, input_type: str):
-    """Async wrapper — Voyage's Python SDK is sync, so offload to a thread so
-    the event loop stays responsive during the HTTP round-trip (Issue 38 W1).
+    """Async wrapper — Voyage's Python SDK is sync and tenacity sleeps between
+    retries, so offload to a thread so neither blocks the worker's singleton
+    event loop. (Issue 38 W1 + Issue 68)
     """
     return await asyncio.to_thread(_embed, texts, model, input_type)
 

@@ -190,6 +190,61 @@ def test_render_clip_file_crop_centers_on_face(tmp_path):
     assert "crop=" in vf_arg
 
 
+def test_render_clip_file_uses_accurate_seek_before_input(tmp_path):
+    """The cut must be frame-accurate: `-accurate_seek` after `-ss`, before `-i` (Issue 59)."""
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = "1920,1080\n"
+        m.stderr = ""
+        return m
+
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+    render_cmd = next((c for c in captured_cmds if "-vf" in c), None)
+    assert render_cmd is not None
+    # -accurate_seek must come after -ss and before -i (it is an input option).
+    assert "-accurate_seek" in render_cmd
+    assert render_cmd.index("-accurate_seek") < render_cmd.index("-i")
+    assert render_cmd.index("-ss") < render_cmd.index("-accurate_seek")
+
+
+# ── _render_start_for: render from setup_start_s, not the start_s clamp (Issue 59) ──
+
+
+def test_render_start_uses_setup_start_when_present():
+    from models import Clip
+    from worker.tasks import _render_start_for
+
+    clip = Clip(setup_start_s=12.0, start_s=40.0, end_s=72.0)
+    # Must render from the computed setup boundary, NOT the peak−window fallback.
+    assert _render_start_for(clip) == 12.0
+
+
+def test_render_start_falls_back_to_start_s_when_setup_missing():
+    from models import Clip
+    from worker.tasks import _render_start_for
+
+    clip = Clip(setup_start_s=None, start_s=40.0, end_s=72.0)
+    assert _render_start_for(clip) == 40.0
+
+
 # ── timeout tests ─────────────────────────────────────────────────────────────
 
 

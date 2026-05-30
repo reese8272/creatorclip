@@ -6,9 +6,186 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 closed (26/26); Issue 79 (RLS implementation) shipped as the first Phase 2-carryover work. Three follow-up issues remain: 58 (email infra), 59 (notifications surface), 61 (Issue 38 W2).
-**Last completed**: Issue 79 — Postgres RLS implementation: roles + policies + FORCE on 12 tables + `after_begin` listener + `AdminSessionLocal` for worker tasks.
+**Active issue**: Issue 78 — salvaged-from-PR#6 work. 78a (#9), 78b (#10), 78d (#11), 78g (#12), 78c (mypy 30→0) ✅ done. Remaining: **enable the `disallow_untyped_defs` ratchet** (deferred from 78c — ~20 pre-existing untyped-def signatures to annotate first), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off), 78f (PgBouncer load harness — needs real staging).
+**Last completed**: Issue 78c — mypy 30→0 (pydantic plugin + real type fixes in train/oauth/worker + targeted SDK/stub-lag ignores); baseline mypy_errors 30→0. The `disallow_untyped_defs` ratchet was reverted same-day (it surfaced ~20 pre-existing untyped-def violations) and re-tracked as a follow-up. 431 passed / 66 integration; ruff 0.
 **Blocked**: _(none)_
+
+> **Closed Issue 78d — improvement-brief 202 + poll** (2026-05-30): the ~120s Claude +
+> web_search brief moved off the request path (it could exceed an LB timeout). New
+> `ImprovementBrief` model + `improvement_brief_status` enum (one row/creator) + migration
+> 0009. `POST /creators/me/improvement-brief` → 202, debounces an in-flight build, enqueues
+> `generate_improvement_brief`; the worker builds the creator-scoped analytics + DNA brief and
+> runs the LLM (idempotent on `job_id`, safe-fail with a generic message — no token/PII/trace);
+> `GET` polls the stored row; `insights.html` POST→poll. Mirrors the DNA-build precedent. +8
+> integration tests; 3 GET-based isolation/offload tests rebased onto the task path;
+> rate-limit test updated (10/hour LLM cap moved GET→POST). Gates: ruff 0, mypy 30, default
+> 425 passed/1 skipped, integration 66 passed. Rationale + sources in DECISIONS (2026-05-30).
+
+> **Closed Issue 75(f) — observability** (2026-05-29): new observability.py — a pure-ASGI
+> RequestIDMiddleware (reads/mints X-Request-ID into a ContextVar, echoes it on the response;
+> added outermost in main.py); JSON structured logs via JsonLogFormatter + RequestIDLogFilter
+> (request_id on every line; configure_logging replaces basicConfig, idempotent, text fallback
+> for dev); Prometheus golden signals (http_request_duration_seconds labelled by route template;
+> celery_task_duration_seconds + celery_tasks_total) at /metrics gated by METRICS_ENABLED. The
+> correlation id propagates API→Celery via before_task_publish/task_prerun/task_postrun signals
+> (weak=False — Celery connects weakly by default). Added prometheus-client==0.25.0 (single CVE-clean
+> dep; the correlation layer is hand-rolled to add zero new surface). Config: LOG_JSON,
+> REQUEST_ID_HEADER, METRICS_ENABLED (+ .env.example). Deferred: OpenTelemetry distributed tracing.
+> +9 DB-free tests; **410 passed, 1 skipped, 55 deselected**; gates ruff 0 / mypy 30 / bandit 0,0 /
+> pip_audit 0. Rationale + sources in DECISIONS (2026-05-29).
+
+> **Closed Issue 75(a) — pip-audit CVE remediation** (2026-05-29): 14 known vulns → 0.
+> Patched 6 packages in requirements.txt: cryptography 43.0.3→46.0.7, python-multipart
+> 0.0.20→0.0.27, PyJWT 2.9.0→2.12.0, lightgbm 4.5.0→4.6.0, python-dotenv 1.0.1→1.2.2,
+> starlette 0.41.3→0.49.1 (forced FastAPI 0.115.4→0.120.4, smallest bump whose pin admits
+> starlette 0.49.1). The disputed PyJWT PYSEC-2025-183 dropped off (2.12.0 out of its
+> affected range). 2 residuals accepted-risk in run_layer0.py's PIP_AUDIT_IGNORES allowlist:
+> pytest GHSA-6w46-j5rx-g56g (dev-only; pytest-asyncio caps pytest<9 — a test-stack cascade)
+> and starlette PYSEC-2026-161 (Host header, fixable only on the starlette-1.x line / FastAPI
+> 0.136.x). baselines.json pip_audit_vulns ratcheted 14→0. Verification: pip check clean;
+> **401 passed, 1 skipped, 55 deselected** on bumped deps; run_layer0 gates ruff 0 / mypy 30 /
+> bandit 0/0 / pip_audit 0. Justification + version evidence in DECISIONS (2026-05-29).
+> Follow-up: starlette-1.x migration to close PYSEC-2026-161 (tracked in issues.md).
+
+> **Closed Batch 8 / Issues 73(partial) + 74 + 75(partial)** (2026-05-29): Memory: librosa
+> loads at sr=16000 (~3x less RAM) + WhisperX/SDK-client singletons. Security: youtube_video_id
+> validated (^[A-Za-z0-9_-]{11}$ -> 422) before reaching a storage key. Robustness: Stripe
+> prod fail-fast config validator; upload_intel skips out-of-range rows instead of 500.
+> Deferred to Issue 75 tracking (with rationale in DECISIONS): full response_model coverage,
+> Deepgram file-stream, 14 CVEs, analytics-retention cadence, observability, mypy->0, clip-scorer
+> caching, scorer cache, brief 202/poll. DB-free unit tests for all four hardening items; updated
+> 3 upload-streaming tests to valid 11-char IDs. Test count: **401 passed, 1 skipped, 55 deselected**
+> (+4). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.45%.
+
+> **Closed Issue 71** (2026-05-29, Batch 7): from_bytes monkeypatched a joblib global
+> (not thread-safe -> RCE allowlist defeatable under concurrent loads); build_and_save
+> max()+1 raced to IntegrityError; predict_score swallowed errors into 0.5. Fix: module
+> threading.Lock around the swap (direct unpickler rejected -- joblib signature is
+> version-fragile, see DECISIONS); pg_advisory_xact_lock(hashtext(creator_id)) for the
+> version assignment; predict_score validates n_features_in_ and raises; load_latest
+> returns None on feature-schema drift; rerank scores-then-mutates and falls back to DNA
+> on scorer error. DB-free unit tests + fixed an existing mock-session test for the extra
+> advisory execute. Test count: **397 passed, 1 skipped, 55 deselected** (+2). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.47%.
+
+> **Closed Issue 70** (2026-05-29, Batch 6): poll_clip_outcomes re-polled every published
+> clip every 7 days forever (no terminal guard) -> unbounded YouTube-quota drain. Added
+> `clip_outcomes.final` (migration 0007) + partial index; the 7d checkpoint sets final and
+> the query excludes final rows + caps candidates to clips created within 10 days; commit
+> per creator. Integration test: 7d poll marks final, finalized outcome skipped. Test count:
+> **395 passed, 1 skipped, 55 deselected** (+1 integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.38%.
+
+> **Closed Issue 69** (2026-05-29, Batch 5): Both briefs interpolated per-creator
+> data into the cached system block (prefix changed every call); improvement returned
+> the web_search preamble instead of the answer. Split system into static-cached +
+> volatile-uncached blocks; return `text_blocks[-1]`. `/claude-api` finding: Sonnet
+> 4.6's min cacheable prefix is 2048 tokens and these static prefixes are ~400 — so
+> caching can't engage for these low-frequency calls regardless; the split is
+> correct-structure, and the real caching win (clip scorer's reused per-creator
+> prefix) is tracked under Issue 75. DB-free unit tests for the split + final-block
+> extraction; updated the existing 1-block test to the 2-block contract. Test count:
+> **395 passed, 1 skipped, 54 deselected** (+4). Gates: ruff 0, mypy 30, bandit 0/0,
+> coverage 70.47%.
+
+> **Closed Issue 72** (2026-05-29, Batch 4b): Per-call `httpx.AsyncClient()` with no
+> timeout on the token-refresh hot path; client built inside the retry loop in
+> data_api/analytics. New `youtube/_http.py` lazy per-process singleton
+> (`Timeout(15, connect=5)`) + `aclose()` reused everywhere and closed on API/worker
+> shutdown; 5xx now backs off + retries. Rebased the oauth-lifecycle tests onto the
+> `_http.client` boundary (they'd mocked the old per-call httpx). Test count: **392
+> passed, 1 skipped, 54 deselected** (+2). Gates: ruff 0, mypy 30, bandit 0/0,
+> coverage 70.49%.
+
+> **Closed Issue 68** (2026-05-29, Batch 4b): Sync `generate_brief`, Voyage `_embed`
+> (tenacity sleeping on the loop), `transcribe_audio`, and `extract_audio_events` ran
+> on the worker's singleton loop with no transcription upper bound. All offloaded via
+> `asyncio.to_thread`; transcription wrapped in `asyncio.wait_for(..., timeout=
+> TRANSCRIPTION_TIMEOUT_S=300)` for a job-level bound. SDK-native timeouts deferred to
+> Issue 75 (SDKs not installed to verify). DB-free unit test for the Voyage offload;
+> existing pipeline tests confirm behavior-preservation. Test count: **390 passed, 1
+> skipped, 54 deselected** (+2). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.32%.
+
+> **Closed Batch 4a / Issues 66 + 67** (2026-05-29): Three synchronous calls ran on
+> the API event loop (120s improvement brief, large-file upload, account-deletion
+> purge), stalling every concurrent request on the worker (axis B). All three moved
+> to `await asyncio.to_thread(...)`. The brief's 120s request duration (vs LB timeout)
+> is tracked for a Celery 202/poll follow-up under Issue 75. Integration tests assert
+> each call is offloaded. Test count: **388 passed, 1 skipped, 54 deselected** (+2
+> integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 69.57%.
+
+> **Closed Batch 3 / Issue 65** (2026-05-29): pgvector HNSW (`vector_cosine_ops`,
+> m=16/ef_construction=200) on `dna_embeddings.embedding` matching the `<=>` query,
+> plus `ix_clip_feedback_creator_id`; both `CREATE INDEX CONCURRENTLY` in an
+> alembic autocommit_block (migration 0006). Reading the schema corrected two
+> assessment items already covered (dna_embeddings.creator_id btree from 0001;
+> preference_models.creator_id via the (creator_id,version) unique index) — no
+> redundant indexes added. Integration test introspects `pg_indexes`. Migration-only,
+> so the unit-coverage floor holds. Test count: **388 passed, 1 skipped, 52 deselected**
+> (+2 integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 69.54%.
+
+> **Closed Batch 2 / Issues 63 + 64** (2026-05-29): Idempotent unique-keyed writes.
+> 63: `build_dna` stamps the Celery `task_id` as `creator_dna.build_job_id` and
+> `_build_dna_async` early-returns before the paid LLM/Voyage calls on redelivery;
+> `confirm_draft` locks `with_for_update()` + partial unique index
+> `uq_one_confirmed_dna_per_creator` (ordered flush, non-deferrable). 64:
+> `grant_minutes` now mirrors `deduct_for_video` (fast-path + SAVEPOINT +
+> IntegrityError) so duplicate Stripe deliveries credit once. Migration `0005`.
+> Integration tests for both. **Coverage floor moved 69.97→69.54%** (justified:
+> DB-only idempotency code is integration-tested, not visible to the unit-coverage
+> gate — see DECISIONS). Test count: **388 passed, 1 skipped, 50 deselected** (+3
+> integration; updated 1 mocked unit test). Gates: ruff 0, mypy 30, bandit 0/0,
+> coverage 69.54%.
+
+> **Closed Batch 1 / Issues 61 + 62** (2026-05-29): Celery is at-least-once. A
+> redelivered `build_signals`→`generate_clips` wiped feedback/outcomes via
+> cascade-delete (data loss; corrupted the Issue-60 training signal), `acks_late`
+> without `reject_on_worker_lost` dropped OOM-killed jobs, and no time limit meant a
+> long task redelivered while still running. Fix: `generate_and_rank_clips`
+> early-returns existing clips (idempotent, never cascade-wipes); added
+> `task_reject_on_worker_lost` + the `soft(3000)<hard(3300)<visibility(3600)`
+> invariant; `_render_clip_async` skips when already done. DB-free config-invariant
+> test + integration tests (feedback survives re-gen; render skips when done).
+> Test count: **388 passed, 1 skipped, 47 deselected** (+3 unit, +2 integration).
+> Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.02%.
+
+> **Closed Issue 60** (2026-05-29): Personalization was dead code — `build_and_save`
+> had no caller and `rerank_with_preference` was never invoked, so ranking was
+> DNA-only (the North-Star "learns your style" loop never ran). Fix: idempotent,
+> self-debouncing `retrain_preference` Celery task enqueued from the feedback
+> endpoint; `rerank_with_preference` now called at the end of `generate_and_rank_clips`;
+> flat 50/50 blend replaced with `preference_weight(label_count)` — 0 below
+> PERSONALIZATION_THRESHOLD_LABELS (honest DNA fallback), ramping to
+> PREFERENCE_WEIGHT_CAP by 2× the threshold (hybrid cold-start standard). Version-race
+> + unpickler thread-safety deferred to Issue 71 (retrain catches IntegrityError
+> meanwhile). DB-free unit tests (weight curve + rerank gating) + integration test
+> (trains v1 then self-debounces). Test count: **385 passed, 1 skipped, 45 deselected**
+> (+6 unit, +1 integration). Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.18%.
+
+> **Closed Issue 59** (2026-05-29): The render cut from `clip.start_s` (fixed
+> peak−75s) while scoring/API/eval all key on `setup_start_s` → delivered Shorts
+> didn't clip the setup. Fix: render via `_render_start_for(clip)` (pure helper,
+> coalesces to `start_s` only when nullable `setup_start_s` is unset); set
+> `-accurate_seek` explicitly. The assessment's "GOP drift" SEV-2 was a false
+> positive — re-encode pipelines accurate-seek by default (DECISIONS). DB-free unit
+> guards + an integration test that the persisted setup_start_s reaches the render.
+> Test count: **379 passed, 1 skipped, 44 deselected** (+3 unit, +1 integration).
+> Gates: ruff 0, mypy 30, bandit 0/0, coverage 70.06%.
+
+> **Production assessment run** (2026-05-29): `/assess` across all 11 modules →
+> verdict **PRODUCTION-READY = NO**. 1 BLOCKER, 25 SEV-1, 39 SEV-2, 34 cleanup;
+> no cross-tenant leak, bandit 0/0. Findings tracked as Issues 58–75; full register
+> in `docs/assessment/`. Also shipped the repeatable harness (`/assess` skill +
+> ratcheted CI gates in `quality.yml` + baselines), the `best-practices` skill +
+> freshness convention (`docs/SKILL_FRESHNESS.md`), and SSOT model-id config.
+
+> **Closed Issue 58** (2026-05-29): psycopg3 prepared statements are incompatible
+> with PgBouncer transaction-pooling mode (the production pooler) → would throw
+> `prepared statement "_pg3_…" does not exist`; CI never caught it (direct
+> Postgres). Fix: `connect_args={"prepare_threshold": None}`; pool ceiling cut
+> 30→20/pod to stay under the 25-conn sidecar; `pool_recycle=1800`. Connection-
+> budget inequality recorded in DEPLOYMENT.md; engine config guarded by
+> `tests/test_db_engine_config.py`. Load-proof behind real PgBouncer deferred to
+> staging Locust. Test count: **376 passed, 1 skipped** (+3). Gates: ruff 0, mypy 30,
+> bandit 0/0, coverage 70.03%.
 
 > **Closed Issue 79** (2026-05-28): Postgres RLS implementation. Closes the
 > structural defense-in-depth gap that allowed Issue 33 (missed `creator_id`

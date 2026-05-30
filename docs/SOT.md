@@ -72,15 +72,22 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── CLAUDE.md
 ├── .env / .env.example
 ├── requirements.txt
+├── requirements-dev.txt        # assessment/dev tooling: mypy, pytest-cov, bandit, pip-audit, mutmut, locust
 ├── pytest.ini
 ├── docker-compose.yml
 ├── Dockerfile
 │
-├── main.py                     # FastAPI entrypoint, /health
+├── .claude/skills/production-assessment/  # /assess harness (Layer 0 gates + per-module rubric + scale checklist)
+├── .github/workflows/quality.yml          # ratcheted CI gates (types/coverage/SAST/CVEs)
+├── docs/assessment/            # production-readiness register: baselines + per-module findings + report history
+├── tests/perf/                 # Locust load-test scaffold (concurrency evidence)
+│
+├── main.py                     # FastAPI entrypoint, /health, /metrics (Issue 75f)
 ├── config.py                   # Pydantic Settings; fail-fast on missing required
 ├── db.py                       # SQLAlchemy async engine + session (Issue 2)
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
 ├── crypto.py                   # Fernet helpers for token columns
+├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
 ├── clients.py                  # Anthropic singleton, Voyage client, YouTube client factory, storage client
 │
 ├── youtube/
@@ -244,6 +251,11 @@ clip_outcomes                        -- strongest positive signal
 
 preference_models
   creator_id (FK), version, weights_blob, feature_schema_jsonb, updated_at
+
+improvement_briefs                    -- async 202 + poll brief (Issue 78d)
+  id, creator_id (FK, indexed, one row/creator),
+  status (pending|ready|failed), brief_text, error (safe msg only),
+  job_id (Celery idempotency), requested_at, completed_at
 
 minute_deductions                     -- cost-side ledger (Issue 34)
   id, video_id (FK, UNIQUE — idempotency key), creator_id (FK),

@@ -5,6 +5,918 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Reconcile merge: local-main hardening + origin Issue 78 salvage
+
+### What changed
+Two parallel timelines that had been diverging since `d5b92df` (2026-05-29) were merged into
+a single `main`. Six remote feature branches (`claude/issue-78a..78g`) had been squash-merged
+into `origin/main` as PRs #9–#14; in parallel, local `main` had shipped six commits hardening
+the Phase-2 carry-over (Issues 38 W1, 46, 52, 56, 57, 60-RLS).
+
+Decisions made during the reconcile (each diverging from at least one side's prior plan):
+
+**1. Renumber local Issues 60/58/59/61 → 79/80/81/82 to avoid collision.** Both timelines
+independently used the same numbers for different work — most importantly, local "Issue 60"
+(Postgres RLS implementation, shipped) collided with origin "Issue 60" (personalization
+loop wiring, also shipped). Local's shipped RLS work was renumbered to Issue 79; the three
+local placeholder issues (58 email, 59 notifications, 61 Wave 2) → 80/81/82. References
+updated across `docs/issues.md`, `docs/PROJECT_STATE.md`, `docs/DECISIONS.md`, `LEFT_OFF.md`,
+`docs/DEPLOYMENT.md`, plus inline comments in `config.py`, `db.py`, `auth.py`, `alembic/env.py`,
+`tests/test_rls_isolation_integration.py`, and the renamed alembic file.
+
+**2. Rename alembic `0005_rls_policies.py` → `0010_rls_policies.py`.** Local's RLS migration
+had `revision = "e5f6a7b8c9d0"` and `down_revision = "d4e5f6a7b8c9"` — the same revision id
+as origin's `0005_dna_idempotency.py`. The file was renamed and re-chained to
+`down_revision = "0009_improvement_briefs"` so the merged migration chain stays linear
+(0001 → 0002 → 0003 → 0004 → 0005_dna_idempotency → 0006 → 0007 → 0008 → 0009 → 0010_rls_policies).
+RLS lands LAST — which is also semantically correct: the policies apply to all tenant tables
+already in the chain, including the new `improvement_briefs` table from 0009.
+
+**3. Drop local's selective-DELETE in `generate_and_rank_clips` in favor of origin's
+idempotency early-return.** Local Issue 46's fix narrowed the DELETE WHERE to exclude
+`done`/`running` rows; origin Issue 61's fix added a top-of-function check that returns the
+existing clips unchanged if any exist. Origin's guarantee is strictly stronger — under it,
+the local DELETE block is unreachable — so the local block was removed. Both files'
+original intent (no late retry orphans rendered clips) is preserved.
+
+**4. Adopt origin's 10-day + `final` poll bound; supersede local's 30-day floor.** Local
+Issue 46 added a 30-day `Clip.created_at` floor to `_poll_clip_outcomes_async`. Origin
+Issue 70 added a tighter 10-day cap (the measurement lifecycle is 48h + 7d) plus a
+`ClipOutcome.final.is_(False)` filter. Origin's bound is strictly tighter and structurally
+correct (the lifecycle is the right measure, not the preference-signal staleness). The
+30-day reasoning becomes moot.
+
+**5. Worker tasks keep `db.AdminSessionLocal()` even with origin's advisory-lock additions
+in `_build_dna_async`.** Origin Issue 76 added a `pg_advisory_xact_lock` + double-checked
+idempotency on `job_id` to close the DNA build double-spend race. Local Issue 79 switched
+worker tasks from `AsyncSessionLocal` → `AdminSessionLocal` (RLS bypass for cross-tenant
+sweeps). Both apply in the merged version: `AdminSessionLocal` for the role, advisory lock
+for the race.
+
+**6. `dna/embeddings.py` keeps local's `_aembed` wrapper.** Both sides offloaded the
+sync Voyage SDK to a thread — origin did it inline at every call site, local introduced
+the `_aembed` helper. The helper is DRY-er and the merged version uses it; origin's
+inline timing comment was folded into the helper's docstring.
+
+**7. `_render_clip_async` uses origin's `setup_start_s`-preferred render start, but on
+locally-snapshotted values.** Origin Issue 59's `_render_start_for(clip)` helper computes
+`setup_start_s if not None else start_s`; local Issue 38 W1 snapshots timing fields into
+locals before closing the session to avoid implicit refresh. Merged version snapshots
+`setup_start_s` AND `start_s` into locals, then inlines the same conditional.
+
+**8. `db.py` admin engine inherits `connect_args=_CONNECT_ARGS`.** Origin Issue 58 added
+`prepare_threshold=None` to the app engine (PgBouncer transaction-pooling incompatibility);
+local Issue 79 added a new admin engine. Merged version passes the same `connect_args`
+to the admin engine so it's safe under future PgBouncer too.
+
+### Why
+Both branches were doing real, shipped work. A "drop one timeline" resolution would have
+permanently deleted either the RLS migration + worker async refactor (if local lost) or the
+Issue 78a–g + AutoClip rebrand + production-assessment work (if origin lost). Preserving
+both via merge + targeted renumbering keeps every commit attributable and every issue
+traceable. The fact-of-the-matter for the four code conflicts (poll bound, generate_clips
+delete, _aembed, render start) is that origin's later iterations were strictly stronger in
+each case — the merge honors that.
+
+### Source / evidence
+- `git merge-base main origin/main` → `d5b92df` (2026-05-29)
+- `git log origin/main..main` → 6 local commits about Issues 38 W1, 46, 52, 56, 57, 60-RLS
+- `git log main..origin/main` → 44 origin commits about Issues 76, 77, 78a-g, beta launch, etc.
+- `gh pr list --state merged` → PRs #9–#14 confirmed squash-merged
+- Audited `docs/issues.md` for issue-number collisions before reconcile (only 58/59/60/61
+  were ambiguous; 38/46/52/56/57 were the same issue tracked on both branches with the
+  local timeline ahead on completion status).
+- Safety tag preserved: `safety/pre-reconcile-2026-05-30` points at local main pre-merge.
+
+### Files
+This entry; the merge commit itself; the renumber prep commit (`7bcc224`).
+
+### Date
+2026-05-30
+
+---
+
+## 2026-05-30 — Issue 78c: mypy 30 → 0 + ratchet enabled
+
+### What changed
+Took the mypy gate from 30 errors to 0 and turned on `disallow_untyped_defs` +
+`disallow_incomplete_defs` (the pyproject comment's promised ratchet). Baseline
+`docs/assessment/baselines.json` `mypy_errors` ratcheted 30 → 0.
+
+### How (three honest buckets)
+- **Plugin (−9):** enabled `pydantic.mypy` in `[tool.mypy].plugins`. The 9 `config.py`
+  `call-arg` errors were spurious — mypy doesn't understand `BaseSettings` env-var
+  population without the plugin (the documented fix).
+- **Real type fixes (−12):** `preference/train.py` — a loop variable `w` (a float from
+  `sample_weight`) shadowed the later `w = np.array(...)`; renamed the loop var to `weight`
+  and gave `X`/`y`/`w` explicit `np.ndarray` annotations. `youtube/oauth.py` — replaced
+  `if is_new:` with `if creator is None:` so mypy narrows `Creator | None → Creator` in the
+  else branch and the return. `worker/tasks.py` — added an explicit `if video.source_uri is
+  None: continue` before `delete_file` (the query already filters non-null; the guard makes
+  it type-sound). `preference/model.py` — removed two now-unused `# type: ignore[assignment]`.
+- **Targeted `# type: ignore[...]` for third-party stub lag (−9):** `anthropic` 0.40's
+  `TextBlockParam`/`ToolParam` stubs predate the `cache_control` field and server-tool
+  (`{type, name}`) shape we send (`clip_engine/scoring.py`, `dna/brief.py`,
+  `improvement/brief.py`); `redis.asyncio`'s `eval` is typed with a `str` union
+  (`youtube/quota.py`, `youtube/oauth.py`); `cv2.data` and slowapi's exception-handler
+  signature are unstubbed (`clip_engine/render.py`, `main.py`). All are runtime-correct,
+  tested code; each ignore carries a code + an "SDK/stub typing lag" comment, and
+  `warn_unused_ignores=true` keeps them honest (a stale one becomes an error).
+
+### Why not bump the anthropic SDK instead
+Upgrading `anthropic` past 0.40 would refresh the stubs but is a dependency change with its
+own behavior + pip-audit/version-pin review — out of scope for a typing-only PR. Targeted
+ignores are the documented mypy way to handle incomplete third-party stubs and carry zero
+runtime risk. (Deferred as a possible future cleanup.)
+
+### Correction
+The earlier `OFF_COURSE_BUGS.md` entry claiming the Layer-0 mypy gate aborts on a
+non-existent `knowledge/` source was a **misdiagnosis** and has been withdrawn: `gate_mypy()`
+calls `_sources()` which filters non-existent paths, so the gate always reported the true
+count. The bogus `mypy=1` came from a raw manual mypy run with the unfiltered candidate list.
+
+### Evidence
+Plain `mypy` over the gate sources → **0** under the committed (gradual) config; ruff 0 +
+format clean; full suite **431 passed, 1 skipped**; integration **66 passed**. All 11 edited
+files `py_compile`-clean. (Note: the `run_layer0.py --gates mypy` harness emits noisy/garbled
+counts locally — the authoritative measure is plain `mypy` + the CI `Types` job, both 0.)
+
+---
+
+## 2026-05-30 — Issue 78d: Improvement-brief → 202 + poll (async Celery)
+
+### What changed
+`GET /creators/me/improvement-brief` built a creator-scoped analytics summary then ran the
+~120s Claude + web_search call inline via `asyncio.to_thread` (offloaded from the loop in
+Issue 66, but still on the request path). Converted to a 202 + poll flow:
+- New `ImprovementBrief` model + `improvement_brief_status` enum (`pending`/`ready`/`failed`),
+  one row per creator, `creator_id` indexed; migration `0009_improvement_briefs`.
+- `POST /me/improvement-brief` → 202, `@limiter.limit("10/hour")`: cheap creator-scoped guards
+  (channel connected; has VideoMetrics — Issue-33-safe), **debounces** an in-flight `pending`
+  build, get-or-creates + resets the row, enqueues `generate_improvement_brief`, stores
+  `job_id`. `GET` now returns the stored row (`status`/`brief`/`requested_at`/`completed_at`/
+  `error`), HTTP 200 always (`none` when absent) — a cheap poll target at 120/min.
+- Worker task `generate_improvement_brief` + `_generate_improvement_brief_async(job_id,
+  creator_id)`: builds the analytics dict (moved out of the router) + DNA brief, calls the
+  unchanged `improvement/brief.py` function via `asyncio.to_thread`, writes `brief_text` +
+  `ready`. Idempotent (no-op on redelivery once `ready` for the same `job_id`) and safe-fail
+  (`failed` + a generic message — never a stack trace / token / PII).
+- `static/insights.html` `loadBrief()` rewritten to POST → poll every 3s until `ready`/`failed`.
+
+### Why
+A ~120s synchronous request can exceed a load-balancer / ingress timeout, returning a 5xx to
+the user even though the work would have finished. Moving it behind a 202 + poll removes the
+request-path time bound; the durable row also survives a worker restart and lets the UI show
+honest progress.
+
+### Why this design (industry standard)
+Mirrors the existing **DNA-build 202 + poll precedent** (`routers/creators.py::build_dna` +
+`worker/tasks.py::_build_dna_async`) — same status-row idempotency, `task.delay`, and Celery
+at-least-once handling — so the codebase has one consistent long-job pattern rather than two.
+202 + a poll endpoint is the standard REST shape for a long-running, non-cacheable job kicked
+off by a client (vs. holding the connection open or a websocket, which the LB-timeout problem
+rules out). The status enum + one-row-per-creator + `job_id` idempotency key matches CreatorDNA.
+
+### Evidence / tests
++8 integration tests (`tests/test_improvement_brief_async.py`): 202 + pending row; debounce;
+GET none→ready; safe-fail with no exception text leaked; per-creator isolation via the task;
+idempotent redelivery. Three pre-existing GET-based isolation/offload tests
+(`test_improvement_isolation.py`, `test_isolation.py`, `test_event_loop_offload_integration.py`)
+rebased onto the task path; `test_rate_limiting.py` updated (the 10/hour LLM cap moved from GET
+to POST). Default suite **425 passed, 1 skipped**; integration **66 passed**; ruff 0; mypy 30
+(= baseline, none in 78d files); migration `0009` up/down/up clean.
+
+---
+
+---
+
+## 2026-05-30 — Issue 78b: Clip-scorer prompt caching (1h TTL) + stable-first ordering
+
+### What changed
+`clip_engine/scoring.py` built a single system block `[intro][CREATOR DNA: {dna_brief}]
+[principles]` with a default-TTL (`{"type": "ephemeral"}`, 5 min) cache breakpoint. Split it
+into two system blocks — a static `[intro][principles]` block first, then a per-creator
+`CREATOR DNA:\n{dna_brief}` block carrying `{"type": "ephemeral", "ttl": "1h"}`. The volatile
+per-video candidates already live in the (uncached) user message and are unchanged.
+
+### Why
+The DNA brief is identical across a creator's videos but the candidates differ per video, so
+the brief is the natural cached prefix. The default 5-minute TTL only helps videos scored
+within 5 minutes of each other; a creator's batch (channel connect → many videos ingested and
+scored over a longer span) falls outside that window. The 1h TTL widens the reuse window so
+those repeat scorings read the cached prefix (~0.1× input price) instead of re-billing it.
+
+### Why this design (industry standard, verified via `/claude-api`)
+- **1h TTL syntax is `{"type": "ephemeral", "ttl": "1h"}` with no beta header** — extended
+  cache TTL is GA (the `/claude-api` prompt-caching reference shows it directly on
+  `messages.create`). Economics: a 1h write costs 2× vs 1.25× for 5-min, so it needs ≥3 reads
+  to pay off (vs 2) — fine for a creator with several videos.
+- **Stable-content-first ordering** is the documented caching best practice (any byte change
+  invalidates the rest of the prefix; volatile content goes after the last breakpoint). Static
+  instructions now lead; the per-creator brief carries the breakpoint; candidates stay last.
+- **Honest scope note:** the minimum cacheable prefix is model-dependent — **2048 tokens on
+  Sonnet 4.6** (`settings.ANTHROPIC_MODEL`). The static block alone (~400 tokens) is below the
+  floor, so it can never cache cross-creator on its own; only the `[static + DNA brief]`
+  per-creator prefix (DNA briefs are large) clears it. The static-first reorder is therefore
+  correct structure + future-proofing (a global breakpoint becomes useful only if the static
+  block ever grows past the floor), and the present, measurable win is the 1h TTL. This
+  refines the Issue 69 note, which framed the reorder as a cross-creator share. The existing
+  `logger.info` already logs `cache_read/cache_creation` tokens, so cache engagement is
+  verifiable in production.
+
+### Evidence / tests
+Updated `test_score_candidates_dna_uses_prompt_caching` to the two-block contract: static
+block leads and is not the breakpoint (no `cache_control`, holds the principles, no DNA); the
+last block carries `{"type":"ephemeral","ttl":"1h"}` and holds the DNA brief. Full suite **430
+passed, 1 skipped**; clip-quality eval **6 passed**; gates ruff 0 / mypy 30 (= baseline; the
+lone `scoring.py` `cache_control` TypedDict error is the pre-existing SDK-stub false positive,
+shared with `dna/brief.py` + `improvement/brief.py`).
+## 2026-05-30 — Issue 78a: Per-(creator, version) preference-scorer cache
+
+### What changed
+`preference.train.load_latest` deserialized the joblib model blob on **every** rerank
+(`clip_engine/ranking.py` calls it per clip-generation pass), each time taking the
+process-global `_UNPICKLER_LOCK` in `PreferenceScorer.from_bytes` — so reranks serialized
+against each other on the worker. Added `preference/_scorer_cache.py`: a per-worker bounded
+LRU (`OrderedDict` + `threading.Lock`) keyed by `(creator_id, version)`. `load_latest` now
+issues a cheap query for the latest `version` + `feature_schema_jsonb` only, returns the
+cached scorer on a hit, and fetches the blob + `from_bytes` once on a miss. Bound via new
+`PREFERENCE_SCORER_CACHE_SIZE` (default 128).
+
+### Why
+The deserialize is the only lock-contended step on the personalization hot path and it
+repeated needlessly. Memoizing on `(creator_id, version)` removes both the redundant blob
+fetch and the lock acquisition when the model is unchanged.
+
+### Why this design (industry standard)
+Per-process bounded cache of deserialized ML artifacts, keyed by an **immutable version**
+and relying on **monotonic versioning** for invalidation, is the standard memoization
+pattern. `train.py` assigns `max(version)+1` on every retrain, so a new model is a new key
+and the stale entry simply ages out by LRU — no manual busting, no stale-read window. A TTL
+cache was rejected (stale-read risk + redundant reloads); `functools.lru_cache` was rejected
+(doesn't fit the async lookup and can't key cheaply on the live version); caching the raw
+blob was rejected (skips the DB fetch but still pays the lock-contended `from_bytes`, which
+is the actual cost). Hand-rolled rather than adding `cachetools`, consistent with the
+zero-new-dependency choice made for the observability layer.
+
+### Evidence / tests
+5 DB-free unit tests (`tests/test_preference_scorer_cache.py`): same-version deserializes
+once, new version reloads (no stale model), feature-drift returns `None` before any
+fetch/deserialize, no-model returns `None`, LRU eviction bound holds. Full suite **430
+passed, 1 skipped**; gates ruff 0 / mypy 30 (= baseline) / coverage ≥ floor.
+
+---
+
+## 2026-05-29 — Issue 75(f): Observability (correlation ids + structured logs + metrics)
+
+### What changed
+New `observability.py` wires three things, integrated in `main.py` (API) and
+`worker/celery_app.py` (worker):
+- **Correlation id** — a `request_id_ctx: ContextVar[str]`; a pure-ASGI
+  `RequestIDMiddleware` (added last → outermost) reads an inbound
+  `REQUEST_ID_HEADER` (default `X-Request-ID`) or mints a UUID4, binds it, and
+  echoes it on the response. A `RequestIDLogFilter` injects `request_id` onto every
+  log record.
+- **Structured logs** — `JsonLogFormatter` emits one JSON object per line (incl.
+  `request_id` + any `extra` fields); `configure_logging(json_logs=settings.LOG_JSON)`
+  replaces `logging.basicConfig`, idempotent, text fallback for local dev.
+- **Golden signals** — `prometheus-client==0.25.0`: `http_request_duration_seconds`
+  (latency + traffic/errors via the `_count` by status, labelled by route template
+  to bound cardinality) recorded in the same middleware; `celery_task_duration_seconds`
+  + `celery_tasks_total` recorded via task signals; exposed at `/metrics`
+  (gated by `METRICS_ENABLED`, `include_in_schema=False`).
+- **Celery propagation** — `before_task_publish` stamps the id onto task headers;
+  `task_prerun` binds it (+ starts the task timer); `task_postrun` records the task
+  metrics and clears the id. Connected with `weak=False`.
+
+### Why
+Assessment axis G was the last ⚠️ blocking *operability*: no request id meant a
+failed render couldn't be traced API→worker, and there were no golden signals for
+p99 / error rate. This is a pre-deploy operational gate, not polish.
+
+### Decisions / deviations
+- **Hand-rolled correlation layer, not `asgi-correlation-id`.** Same documented
+  pattern (ContextVar + ASGI middleware + echo header + logging filter + Celery
+  signals) in ~60 lines we own, adding **zero** new dependency/CVE surface right
+  after ratcheting pip-audit to 0. One new dep (prometheus-client, the canonical
+  metrics client) is justified; a second for ~60 lines is not.
+- **Prometheus metrics now; OpenTelemetry tracing deferred.** Full OTel needs a
+  collector to operate; golden-signals-before-launch is the standard MVP and is
+  k8s-native (our deploy target). Distributed tracing is a tracked follow-up.
+- **`weak=False` on the Celery signal connects** — Celery connects receivers weakly
+  by default, so module-level handlers held by no other ref would be GC'd and never
+  fire (caught by a failing test before it shipped).
+- **Pure-ASGI middleware, not `BaseHTTPMiddleware`** — avoids the known
+  streaming/background-task pitfalls; reads `scope["route"]` in the `finally` (set by
+  the inner router by then) so the latency label is the route template.
+
+### Industry standard checked (live, 2026-05-29)
+The de-facto pattern across `snok/asgi-correlation-id`, `django-structlog`'s Celery
+integration, and current FastAPI observability guides: ContextVar + ASGI middleware
++ echo-header + logging filter, Celery signal propagation, Prometheus for metrics,
+OTel for tracing as a later layer. Sources in the session research.
+
+### Verification
+Full suite **410 passed, 1 skipped, 55 deselected** (+9 DB-free observability tests:
+id validation/mint, log-filter injection, JSON format, idempotent config, mint+echo
++ inbound-respect via TestClient, `/metrics` exposition, Celery publish→run→clear +
+task-counter increment). Gates unchanged: ruff 0 / mypy 30 / bandit 0,0 / pip_audit 0.
+
+---
+
+## 2026-05-29 — Issue 75(a): pip-audit CVE remediation (14 → 0)
+
+### What changed
+Patched every CVE with a fix in our compatible range; pinned in `requirements.txt`:
+- **cryptography** 43.0.3 → **46.0.7** — OpenSSL secadv (GHSA-79v4-65xg-pq4g), EC
+  subgroup check (GHSA-r6ph-v2qm-q3c2), DNS name-constraint (PYSEC-2026-35), and the
+  46.0.6-only PYSEC-2026-36 found after the first bump.
+- **python-multipart** 0.0.20 → **0.0.27** — path-traversal + 2 DoS.
+- **PyJWT** 2.9.0 → **2.12.0** — `crit`-header validation bypass (PYSEC-2026-120). The
+  disputed PYSEC-2025-183 ("weak encryption") dropped off entirely: it was scoped to
+  2.10.1 and 2.12.0 is outside its affected range.
+- **lightgbm** 4.5.0 → **4.6.0** — RCE (PYSEC-2024-231).
+- **python-dotenv** 1.0.1 → **1.2.2** — symlink-follow file overwrite.
+- **starlette** 0.41.3 → **0.49.1** (the newest under FastAPI 0.120.x's `<0.50.0`
+  pin) — multipart-blocks-the-loop (GHSA-2c2j-9gv5-cj73) + Range-header quadratic DoS
+  (GHSA-7f5h-v6xp-fcq8). Required bumping **FastAPI** 0.115.4 → **0.120.4**, the
+  smallest bump whose starlette pin admits 0.49.1.
+
+The gate (`run_layer0.py:gate_pip_audit`) now passes a curated `--ignore-vuln`
+allowlist (`PIP_AUDIT_IGNORES`); baseline `pip_audit_vulns` ratcheted **14 → 0**.
+
+### Accepted-risk (2 residuals, in `PIP_AUDIT_IGNORES`)
+- **pytest GHSA-6w46-j5rx-g56g** — local `/tmp/pytest-of-*` predictable-name
+  priv/DoS. Fixed only in pytest 9, but `pytest-asyncio==0.24.0` caps `pytest<9`, so
+  it's a test-stack cascade, not a runtime exposure (dev/CI only). Lift when the test
+  stack is bumped as a unit.
+- **starlette PYSEC-2026-161** — Host-header path injection, fixed only in starlette
+  **1.0.1**, which needs FastAPI 0.136.x (the documented `on_startup/on_shutdown`
+  1.x landmine). The advisory itself notes routing matches on the *actual* path; we
+  also sit behind Cloudflare + locked `ALLOWED_ORIGINS`. Tracked as a starlette-1.x
+  migration follow-up under Issue 75.
+
+### Why these chosen versions / why not literal-0 without ignores
+Going to starlette 1.x / FastAPI 0.136 to close the last starlette CVE is a
+major-line jump with a documented breakage surface — out of scope for a CVE-patch
+task. The standard posture for a `pip-audit` CI gate is patch-to-nearest-fix plus a
+*justified* ignore-list for no-fix/disputed/major-line-only advisories, kept in
+lockstep with this entry. Verified each fix version and the FastAPI↔starlette pin
+coupling against live PyPI metadata, not memory.
+
+### Verification
+`pip check` clean; full suite **401 passed, 1 skipped, 55 deselected** on the bumped
+deps (auth/crypto/upload/preference/lifespan all green); `run_layer0.py` reports
+`pip_audit 0`, no other gate regression (ruff 0, mypy 30, bandit 0/0). PyJWT 2.12
+emits an `InsecureKeyLengthWarning` only on a short-key test fixture — production
+uses a full-length configured secret.
+
+---
+
+## 2026-05-29 — Batch 8 (Issues 73 + 74 + 75): input/memory/config hardening
+
+### What changed
+- **74:** `ingestion/audio.py` loads at `sr=16000` (≈3× less memory than the native
+  rate); `ingestion/transcribe.py` caches the WhisperX model + align model
+  (`lru_cache`) and makes the Deepgram client + AssemblyAI key module-level singletons.
+- **73:** `routers/videos.py` validates `youtube_video_id` against `^[A-Za-z0-9_-]{11}$`
+  (422) on `/link` and `/upload`, before it reaches a storage key.
+- **75:** `config.py` fails fast in production when Stripe secrets are unset;
+  `upload_intel/timing.py` skips out-of-range `day_of_week`/`hour` rows instead of
+  `IndexError`→500.
+
+### Why
+Memory: the librosa full-rate decode was the dominant OOM vector under concurrency.
+Security: an unvalidated `youtube_video_id` could reshape the R2 object key (`../`).
+Robustness: a missing Stripe secret should fail at boot, not at first webhook; one
+bad activity row shouldn't 500 the upload-intel endpoint.
+
+### Scope decisions (honest deferrals, tracked in Issue 75)
+- **Full `response_model` coverage (73)** is mechanical hygiene across ~16 endpoints
+  with no security/correctness risk; rushing accurate schemas for every dict in one
+  commit risks runtime 500s. Deferred to Issue 75. The *security* part (input
+  validation) shipped here.
+- **Deepgram file-stream (74)** deferred: the deepgram SDK isn't installed in this
+  environment to verify the streaming API, and `sr=16000` already removes the main
+  memory vector.
+- **CVE triage, analytics-retention cadence, observability, mypy→0** are each
+  research/infra efforts, not single commits — enumerated in Issue 75.
+
+---
+
+## 2026-05-29 — Issue 71 (Batch 7): Preference hardening
+
+### What changed
+- `preference/model.py`: the `from_bytes` joblib-global swap is now guarded by a
+  module `threading.Lock`. `predict_score` validates feature count against
+  `n_features_in_` and raises on mismatch (no more silent `0.5`).
+- `preference/train.py`: `build_and_save` takes `pg_advisory_xact_lock(hashtext(creator_id))`
+  before the `max(version)+1` read; `load_latest` returns `None` when the stored
+  `feature_schema_jsonb` differs from `FEATURE_NAMES` (schema drift → DNA fallback).
+- `clip_engine/ranking.py`: `rerank_with_preference` scores all clips first; if the
+  scorer raises, it keeps the DNA ranking untouched (honest fallback).
+
+### Why
+The monkeypatch was not thread-safe — a concurrent load could restore the
+unrestricted unpickler mid-load, defeating the RCE allowlist exactly when a
+tampered blob is read. `max()+1` raced into a UNIQUE violation under concurrent
+retrains. `predict_score`'s blanket `0.5` let a broken/drifted model silently move
+rankings.
+
+### Decision: lock over direct unpickler
+The finding suggested instantiating `_RestrictedUnpickler` directly to avoid the
+global swap. Verified empirically that joblib's `NumpyUnpickler.__init__` signature
+is version-dependent (this joblib requires an `ensure_native_byte_order` arg), so
+direct instantiation is brittle across upgrades. A module-level `threading.Lock`
+around the existing swap is version-proof and fully thread-safe — the accepted
+alternative in the finding. Serialization cost is negligible (loads are rare; a
+per-(creator,version) scorer cache is the tracked optimization under Issue 75).
+
+---
+
+## 2026-05-29 — Issue 70 (Batch 6): Bound poll_clip_outcomes
+
+### What changed
+- Migration `0007`: `clip_outcomes.final BOOLEAN NOT NULL DEFAULT FALSE` + a partial
+  index on `fetched_at WHERE final=false AND published_youtube_id IS NOT NULL`.
+- `_poll_clip_outcomes_async`: query excludes `final IS TRUE` and caps candidates to
+  `Clip.created_at >= now-10d`; the 7d-checkpoint poll sets `final=True`; commits per
+  creator.
+
+### Why
+The `fetched_at < cutoff_7d` branch had no terminal guard, so every published clip
+re-qualified for a quota-costing re-poll every 7 days forever — an unbounded drain
+that would eventually starve the daily analytics refresh (axes E/F). One session was
+also held across the whole N×M network loop.
+
+### Decision
+`final` terminal marker is the primary fix; the 10-day created-at cap is
+defense-in-depth so the scan is bounded even before `final` propagates to legacy
+rows (which self-finalize on their next 7d poll — no backfill needed). Per-creator
+commit bounds the transaction/connection hold to one creator's network calls.
+
+---
+
+## 2026-05-29 — Issue 69 (Batch 5): Prompt-cache split + web_search extraction
+
+### What changed
+- `dna/brief.py` and `improvement/brief.py`: `system` is now two blocks — a static
+  instruction block carrying `cache_control: ephemeral`, then a separate uncached
+  block holding the per-creator corpus/analytics.
+- `improvement/brief.py` returns `text_blocks[-1].text` (final answer after the
+  last web_search `tool_use`), not `text_blocks[0]` (the preamble). `dna/brief.py`
+  uses `[-1]` for consistency.
+- Corrected misleading docstrings (the DNA brief does not share a cache with the
+  clip scorer — separate prompts never share a cache entry).
+
+### Why
+The volatile data was interpolated into the cached block, so the prefix changed
+every call (the assessment's "~0% hit"). The `improvement` extraction bug returned
+the model's "let me search…" preamble instead of the synthesised brief.
+
+### Finding: caching can't engage at this prompt size (the real correction)
+Per the `/claude-api` skill, the **minimum cacheable prefix is 2048 tokens on
+Sonnet 4.6** (4096 on Opus); below it the cache silently no-ops. Both static
+instruction blocks are ~350-450 tokens — far below the floor — and both calls are
+low-frequency (DNA build once per build; improvement 10/hour), so there is no
+repeated-prefix-within-window to cache either. **The split is the correct
+structure but is NOT a cost win for these two endpoints.** The acceptance
+criterion "cache_read_input_tokens non-zero after warmup" was therefore replaced
+with a structural assertion (volatile data is out of the cached block).
+
+### Follow-up (Issue 75)
+The genuine caching beneficiary is `clip_engine/scoring.py`: a large per-creator
+prefix (DNA brief + the 11 principles) reused across all of a creator's videos in
+a window. Splitting static/volatile + `cache_control` there, with a prefix above
+the 2048-token floor, is where caching actually pays off.
+
+### Standard checked
+`/claude-api` prompt-caching: stable-prefix-first, breakpoint on the last stable
+block, volatile after; minimum cacheable prefix 2048 (Sonnet 4.6) / 4096 (Opus);
+web_search interleaves text/tool_use — take the final text block.
+
+---
+
+## 2026-05-29 — Issue 72 (Batch 4b): Shared YouTube HTTP client + 5xx backoff
+
+### What changed
+- New `youtube/_http.py`: lazy per-process singleton `httpx.AsyncClient`
+  (`Timeout(15, connect=5)`) + `aclose()`. All three OAuth helpers, `_get_json`,
+  and `_fetch_report` reuse it. `aclose()` wired into the API lifespan
+  (`main.py`) and worker shutdown (`worker/celery_app.py`).
+- `_get_json`/`_fetch_report` retry transient 5xx with jittered backoff.
+
+### Why
+Per-call `httpx.AsyncClient()` with no timeout on the token-refresh hot path could
+hang a request/worker indefinitely if Google stalls; per-call construction also
+defeats connection pooling under the analytics fan-out (axes B/E).
+
+### Decisions / standard checked
+- **Lazy singleton** (not import-time) so the connection pool binds to the loop
+  that first uses it — the API app loop and the worker's post-fork singleton loop
+  (Issue 39) are different; lazy avoids a cross-loop binding bug.
+- httpx guidance: reuse one `AsyncClient` for pooling; always set timeouts. 5xx on
+  idempotent GETs → backoff+retry (axis E).
+
+### Test-isolation note
+The existing `test_oauth_lifecycle` `_get_json`/`_fetch_report` tests mocked
+`httpx.AsyncClient` directly; rebased them onto the new `youtube._http.client`
+boundary. (The per-test event loop + a module singleton is the same class of
+hazard as Issue 39 — but in tests every patch targets `_http.client`, and the one
+test that builds the real client `aclose()`s it, so nothing leaks across loops.)
+
+---
+
+## 2026-05-29 — Issue 68 (Batch 4b): Worker-loop offload + transcription timeout
+
+### What changed
+- `dna/embeddings.py`: both `_embed` (Voyage) calls run via `await asyncio.to_thread`.
+- `worker/tasks.py`: `generate_brief` and `extract_audio_events` offloaded via
+  `asyncio.to_thread`; `transcribe_audio` via
+  `asyncio.wait_for(asyncio.to_thread(...), timeout=settings.TRANSCRIPTION_TIMEOUT_S)`.
+- `config.py`/`.env.example`: `TRANSCRIPTION_TIMEOUT_S` (default 300).
+
+### Why
+These sync calls ran on the worker's Issue-39 singleton event loop (bounded by
+prefork concurrency today, fragile to any pool change), and transcription had no
+upper bound — a hung provider stalled the worker indefinitely (axis E).
+
+### Decision: wait_for as the job-level bound; SDK-native timeouts deferred
+`wait_for(to_thread(...))` guarantees the *job* fails (→ Celery retry) after the
+timeout and keeps the loop free. It cannot kill the worker thread, which lives
+until the SDK call returns; the Deepgram/AssemblyAI SDKs aren't installed in this
+environment to verify their native timeout params, so SDK-level timeouts are a
+tracked follow-up (Issue 75). Voyage already self-bounds (`timeout=30`).
+
+### Standard checked
+FastAPI/asyncio: offload blocking/CPU work with `asyncio.to_thread`; never let a
+sync SDK + retry-sleep run on the event loop. (Batch-0 load-testing research.)
+
+---
+
+## 2026-05-29 — Batch 4a (Issues 66 + 67): Blocking calls off the API event loop
+
+### What changed
+- `routers/improvement.py`: the 120s Anthropic+web_search brief now runs via
+  `await asyncio.to_thread(generate_improvement_brief, ...)`.
+- `routers/videos.py`: the R2/disk `upload_file` write now runs via
+  `await asyncio.to_thread(...)`.
+- `routers/auth.py`: `delete_account`'s `delete_prefix` purge now runs via
+  `await asyncio.to_thread(...)`.
+
+### Why
+Each was a synchronous call inside an `async def` handler — on FastAPI's
+single-threaded event loop, one in-flight call stalled every other concurrent
+request on that worker (axis B; "p99 issues come from sync calls hidden in async
+paths"). `asyncio.to_thread` moves the blocking work to a threadpool so the loop
+stays responsive.
+
+### Decision: to_thread now, Celery+poll later (Issue 66)
+`to_thread` fully fixes the loop-blocking SEV-1. It does NOT shorten the request
+(the brief can still take 120s, which may exceed a production LB/gateway timeout).
+The robust UX is a Celery 202/poll job (like `build_dna`), but that needs result
+storage + a poll endpoint + frontend work — tracked under Issue 75 rather than
+ballooning this batch. The upload/delete offloads are unambiguously correct as
+`to_thread` (the work must finish before responding; it just must not hold the loop).
+
+### Standard checked
+FastAPI guidance: never run blocking/CPU/sync-I/O directly in an `async def` path;
+offload via `asyncio.to_thread` or a task queue. (Confirmed in the load-testing
+research from Batch 0.)
+
+### Testing
+Integration tests (`tests/test_event_loop_offload_integration.py`) assert the
+offloaded callable is recorded through an `asyncio.to_thread` shim — external
+services mocked, DB real.
+
+---
+
+## 2026-05-29 — Batch 3 (Issue 65): pgvector HNSW + FK index
+
+### What changed
+- Migration `0006`: `ix_dna_embeddings_hnsw` (HNSW, `vector_cosine_ops`,
+  `m=16, ef_construction=200`) on `dna_embeddings.embedding`, and
+  `ix_clip_feedback_creator_id` on `clip_feedback.creator_id`. Both built
+  `CREATE INDEX CONCURRENTLY` inside `op.get_context().autocommit_block()`.
+
+### Why
+The embedding similarity query (`<=>`, cosine) was an unindexed O(rows) scan;
+`clip_feedback.creator_id` was an unindexed FK on the (now hot, post-Issue-60)
+training + retrain-debounce path.
+
+### Decisions / standard checked
+- **HNSW over IVFFlat**: HNSW is the recommended default for <10M vectors with
+  active writes; IVFFlat's k-means clustering is data-dependent and must NOT live
+  in a migration. `m=16, ef_construction=200` is the documented better-recall
+  starting point (defaults 16/64). Op class `vector_cosine_ops` matches the `<=>`
+  query (voyage-3.5 vectors). Sources: pgvector index-selection guides
+  (medium.com/@philmcc…), AWS pgvector indexing deep-dive.
+- **CONCURRENTLY + autocommit_block**: `CREATE INDEX CONCURRENTLY` can't run in
+  Alembic's default transaction; the autocommit block keeps the build online-safe.
+
+### Scope correction (assessment was imprecise)
+- `dna_embeddings.creator_id` already has a btree index (`ix_dna_embeddings_creator_id`,
+  migration 0001).
+- `preference_models.creator_id` is already covered by the `(creator_id, version)`
+  unique-constraint index (leading column serves `WHERE creator_id ORDER BY version`).
+- So no redundant `creator_id` indexes were added — only the HNSW index and the
+  genuinely missing `clip_feedback.creator_id`.
+
+---
+
+## 2026-05-29 — Batch 2 (Issues 63 + 64): Idempotent unique-keyed writes
+
+### What changed
+- `billing/ledger.py`: `grant_minutes` is now self-idempotent — fast-path
+  existence check (keyed grants) + `begin_nested()` SAVEPOINT + `flush()` +
+  `IntegrityError` catch, mirroring `deduct_for_video`.
+- `dna/profile.py`: `create_draft` accepts `build_job_id`; `confirm_draft` locks the
+  creator's DNA rows `with_for_update()`, supersedes-before-promotes with an explicit
+  `flush()`, and catches `IntegrityError`.
+- `worker/tasks.py`: `build_dna` passes `self.request.id`; `_build_dna_async`
+  early-returns before the paid LLM/Voyage calls when a draft for that job_id exists.
+- Migration `0005`: `creator_dna.build_job_id` (nullable) + index, and partial unique
+  index `uq_one_confirmed_dna_per_creator ON creator_dna(creator_id) WHERE status='confirmed'`.
+
+### Why
+At-least-once delivery + concurrent Stripe/worker delivery duplicated money records,
+re-spent paid Anthropic/Voyage calls (duplicate DNA drafts), and could leave two
+`confirmed` DNA rows. The idempotency key for DNA builds is the Celery `task_id`
+(stable across redelivery, new per user re-request); for grants it is
+`stripe_session_id` (UNIQUE).
+
+### Standard / precedent
+In-repo precedent `deduct_for_video` (UNIQUE + SAVEPOINT + IntegrityError); Celery
+idempotency (Batch 1 research). Partial unique index is non-deferrable, hence the
+ordered flush (supersede → flush → promote) so two 'confirmed' rows never coexist
+even transiently.
+
+### Coverage baseline moved: 69.97% → 69.54% (justified)
+These three fixes are DB-mutating logic. The project rule (CLAUDE.md Testing Rules)
+forbids mocking the DB, so they are covered by integration tests
+(`test_dna_idempotency_integration.py`, `test_billing_grant_idempotency_integration.py`)
+which run in the integration CI, not the unit-coverage gate. Their unit-invisible
+lines lowered the unit-only floor. Per the README ratchet + Phase-4 rule, the floor
+moves to current reality (69.54%) with this justification; it climbs back as
+unit-coverable code lands in later batches.
+
+---
+
+## 2026-05-29 — Batch 1 (Issues 61 + 62): Worker at-least-once safety
+
+### What changed
+- `clip_engine/ranking.py`: `generate_and_rank_clips` is now idempotent — it
+  early-returns the existing clips (rank order) when any exist for the video,
+  instead of `delete(Clip)` + reinsert.
+- `worker/celery_app.py`: added `task_reject_on_worker_lost=True`,
+  `task_soft_time_limit=3000`, `task_time_limit=3300`, and
+  `broker_transport_options={"visibility_timeout": 3600}`.
+- `worker/tasks.py`: `_render_clip_async` early-returns when the clip is already
+  `render_status==done` with a `render_uri`.
+
+### Why
+Celery delivers at-least-once. With `acks_late` and cascade-delete on
+`Clip.feedback`/`Clip.outcome`, a redelivered `build_signals`→`generate_clips`
+silently wiped a creator's feedback labels and outcomes (data loss; and post-Issue-60
+the preference training signal). `acks_late` without `reject_on_worker_lost` also
+dropped tasks whose worker was OOM-killed, and with no time limit a task exceeding
+the broker visibility timeout was redelivered while still running (double execution).
+
+### Decisions / standard checked
+- Pair `task_acks_late` with `task_reject_on_worker_lost`; the **invariant
+  soft < hard time_limit < visibility_timeout** ensures a task is killed before
+  Redis redelivers a running copy. Assume tasks run twice → design idempotent.
+  Sources: francoisvoron.com/blog/configure-celery-for-reliable-delivery;
+  dev.to "Celery + Redis at Scale"; celery/celery#5935.
+- **Idempotency strategy = skip-if-exists** (KISS) over "replace only pending
+  zero-feedback clips" — there is no regenerate trigger today, and skip-if-exists
+  can never wipe feedback. The finer-grained replacement is noted as a future
+  enhancement if a re-generate feature is ever added.
+
+### Caveat
+`task_time_limit=3300` (55m) covers normal media jobs; a very long source on CPU
+WhisperX could exceed it → use the hosted transcription backend or add a per-task
+`time_limit` override. Documented here rather than guessed at a larger global ceiling.
+
+---
+
+## 2026-05-29 — Issue 60: Wire the personalization loop + maturity-gated blend
+
+### What changed
+- `clip_engine/ranking.py`: `generate_and_rank_clips` now calls
+  `rerank_with_preference` after persisting (and re-commits the blended score/rank).
+- `preference/model.py`: new `preference_weight(label_count)` — the rerank blend
+  weight. `rerank_with_preference` uses `(1-w)*dna + w*pref` instead of fixed 50/50.
+- `worker/tasks.py`: new idempotent, self-debouncing `retrain_preference(creator_id)`
+  Celery task (no-op when no trainable feedback since the latest model version).
+- `routers/review.py`: enqueues `retrain_preference` after each feedback write.
+- `config.py`/`.env.example`: `PREFERENCE_WEIGHT_CAP` (default 0.5).
+- `preference/train.py`: exposed `TRAINABLE_ACTIONS` (DRY for the debounce filter).
+
+### Why
+Two subagents independently found personalization was dead code — never trained,
+never applied. This is half the North Star ("learns your style, adapts as you
+evolve"). The flat 50/50 blend also gave a 2-label cold-start model equal authority
+over ranking, violating the CLAUDE.md honesty rule ("below the threshold, ranking
+falls back to DNA + signals").
+
+### Decisions
+- **Blend curve:** weight 0 below `PERSONALIZATION_THRESHOLD_LABELS` (honest DNA
+  fallback), linear ramp to `PREFERENCE_WEIGHT_CAP` by 2× the threshold. This is the
+  standard hybrid cold-start strategy — start content-based, grow personalization as
+  the creator's own feedback accumulates. `label_count` already lives on
+  `PreferenceScorer`, so no migration. Sources: hybrid/cold-start recommender
+  practice — expressanalytics.com/blog/cold-start-problem; arxiv 1808.10664.
+- **Retrain trigger:** enqueue-on-feedback (responsive, matches "adapts as you
+  evolve") with an in-task new-labels guard, over a Beat-only cadence (laggy).
+  Repeated clicks collapse to cheap no-ops.
+
+### Scope boundaries (deferred, tracked)
+- `build_and_save` version-race (`max()+1` → IntegrityError) and unpickler
+  thread-safety → **Issue 71**; the retrain task catches `IntegrityError` as a
+  minimal guard meanwhile.
+- `from_bytes` runs sync on the worker loop (bounded by prefork) → **Issues 68/71**.
+
+---
+
+## 2026-05-29 — Issue 59: Render from setup_start_s + ffmpeg accurate-seek finding
+
+### What changed
+- `worker/tasks.py` renders from `setup_start_s` via a new pure helper
+  `_render_start_for(clip)` (coalesces to `start_s` only when the nullable
+  `setup_start_s` is unset), instead of the fixed peak−window `start_s`.
+- `clip_engine/render.py` sets `-accurate_seek` explicitly before `-i`.
+- Tests: DB-free unit guards for `_render_start_for` + the seek flag, plus an
+  end-to-end integration test.
+
+### Why
+The render cut from `start_s` (fixed peak−75s) while scoring, the API response,
+and the eval all key on `setup_start_s` — so the delivered Short did not actually
+"clip the setup" (CLIPPING_PRINCIPLE #2), the product's core differentiator.
+
+### Finding: the assessment's "inaccurate seek" SEV-2 was a false positive
+`clip_engine.md` flagged `-ss` before `-i` as drifting up to one GOP. That is true
+for **stream copy**, but this pipeline **re-encodes with libx264**, and ffmpeg
+applies `accurate_seek` by default when encoding — so the existing cut was already
+frame-accurate. We set `-accurate_seek` explicitly as a self-documenting guard (a
+no-op today) so the cut stays accurate if anyone later switches to `-c copy`. We
+did NOT restructure to output-seek (`-ss` after `-i`), which decodes from 0 and
+could blow the render timeout for clips deep in a long source.
+Source: ffmpeg seek semantics — `-noaccurate_seek` "only applies when encoding"
+(github.com/mifi/lossless-cut/pull/13 discussion); accurate seek is the default
+when transcoding.
+
+### Note
+`setup_start_s` is a nullable column; the coalesce keeps legacy/edge clips
+rendering a valid range rather than passing `None` to ffmpeg.
+
+---
+
+## 2026-05-29 — Issue 58: psycopg3 prepared statements + pool sizing for PgBouncer
+
+### What changed
+- `db.py:_make_engine()` now passes `connect_args={"prepare_threshold": None}` to
+  `create_async_engine`, disabling psycopg3 server-side prepared statements.
+- Pool ceiling lowered from `pool_size=10, max_overflow=20` (30/pod) to
+  `pool_size=15, max_overflow=5` (20/pod) to stay under the 25-conn PgBouncer
+  sidecar; added `pool_recycle=1800`. Values are module constants
+  (`_CONNECT_ARGS`, `_POOL_SIZE`, `_MAX_OVERFLOW`, `_POOL_RECYCLE_S`) for testability.
+- `docs/DEPLOYMENT.md` records the connection-budget inequality.
+- `tests/test_db_engine_config.py` introspects the engine to guard all three.
+
+### Why
+psycopg3 auto-prepares a statement after its 5th execution. PgBouncer in
+transaction-pooling mode (the chosen production pooler, `DEPLOYMENT.md`) reuses
+server connections across clients, so the prepared statement vanishes on the next
+checkout → `prepared statement "_pg3_…" does not exist`. CI never catches this
+because it connects to Postgres directly. The per-pod pool (30) also exceeded the
+25-conn sidecar, causing checkout timeouts at p99 under load.
+
+### Source / evidence
+- psycopg3 docs: *"Unless a pooling middleware explicitly declares otherwise…
+  disable prepared statements by setting `Connection.prepare_threshold` to `None`."*
+  (psycopg.org/psycopg3 — prepared statements).
+- SQLAlchemy issue #6467 / discussion #10246 (pooler + prepared-statement handling).
+
+### Alternatives ruled out
+- **Rely on PgBouncer ≥1.22 + psycopg ≥3.2 named-prepared support:** couples
+  correctness to exact infra versions; a downgrade silently reintroduces the outage.
+- **Session-mode pooling:** defeats pooling benefit at hundreds of clients.
+- **Drop PgBouncer:** contradicts the documented 10k-scale K8s target.
+
+### Verification status
+Code complete + unit-tested. The green-under-load proof (no `prepared statement`
+errors at target concurrency) is deferred to a `tests/perf/` Locust run behind a
+real PgBouncer in staging — not reproducible in the CI/dev container.
+
+---
+
+## 2026-05-29 — Skill freshness convention + standards SSOT
+
+### What changed
+- Created a committed `best-practices` skill (`.claude/skills/best-practices/SKILL.md`)
+  to replace the phantom `/best-practices` that CLAUDE.md mandated but did not exist
+  on disk. It is process-first/evergreen: it operationalizes the One Rule
+  (research current standard live, record in DECISIONS) rather than listing
+  perishable "current best" facts.
+- Added a freshness convention (`docs/SKILL_FRESHNESS.md`): every `SKILL.md`
+  carries `last_verified: YYYY-MM-DD`; a 6th `freshness` gate in `run_layer0.py`
+  flags any skill unverified for >90 days (warn-only by default, hard fail under
+  `--require-fresh` for the scheduled re-verification job). Added freshness
+  (warn-only) to the CI static-gates job.
+- Hoisted the Anthropic model id + web_search tool version to `config.py`
+  (`ANTHROPIC_MODEL`, `ANTHROPIC_WEB_SEARCH_TOOL`), referenced by all 4 call sites
+  (`clip_engine/scoring.py`, `dna/brief.py`, `improvement/brief.py`) instead of
+  three hardcoded duplicates; added both to `.env.example`. Closes the
+  hardcoded-model-id SEV2 from the assessment.
+
+### Why
+A standards skill that bakes perishable facts (model ids, tool/lib versions,
+"best library for X") goes stale silently and then gives confident wrong answers —
+worse than no skill. The mitigation is to encode *process* (how to find the
+current standard) as evergreen, fetch perishable facts live where possible
+(pip-audit pulls current CVEs; web_search researches per decision), store the
+must-store perishable facts in a single source (config/requirements), and make
+staleness a visible CI signal via `last_verified` + the freshness gate. Full
+rationale in `docs/SKILL_FRESHNESS.md`.
+
+### Alternatives ruled out
+- **Baking the current model id / library recommendations into the skill prose:**
+  the exact rot this avoids; the improvement assessment caught `claude-sonnet-4-6`
+  duplicated across three files.
+- **A hard staleness gate that fails all PRs after 90 days:** would block unrelated
+  work; warn-by-default + `--require-fresh` on the scheduled job is the cadence-
+  correct posture.
+- **Cloning the Claude API surface into a repo skill:** that surface moves fastest;
+  delegate to the Anthropic-managed `/claude-api` skill that updates upstream.
+
+---
+
+## 2026-05-29 — Production-assessment harness + quality gates
+
+### What changed
+- Added a committed project skill `.claude/skills/production-assessment/`
+  (`SKILL.md` + `rubric.md` + `scale-checklist.md` + `subagent-contract.md` +
+  `report-template.md` + `scripts/run_layer0.py`) and a `/assess` slash command.
+- Added four ratcheted CI gates in `.github/workflows/quality.yml`, all driven by
+  the single `run_layer0.py` harness: **mypy** (types), **pytest-cov** (coverage
+  floor), **bandit** (SAST), **pip-audit** (dependency CVEs).
+- Added `requirements-dev.txt` (pinned), `[tool.mypy|coverage|bandit]` config in
+  `pyproject.toml`, `docs/assessment/` register (baselines + per-module findings +
+  report history), and a Locust load-test scaffold in `tests/perf/`.
+- Un-ignored `.claude/skills/` and `.claude/commands/` in `.gitignore` (session
+  state stays ignored; intentional skills/commands are now committed).
+- Added one line to the CLAUDE.md Phase-4 checklist requiring the Layer-0 gates
+  to be green before an issue closes.
+
+### Why
+Assessing a codebase aimed at hundreds of concurrent users needs to be (a)
+exhaustive, (b) repeatable, and (c) bounded in context as the repo grows. A
+single full-codebase Claude sweep satisfies none of these — it is
+non-deterministic, unrepeatable, and its recall drops as the repo grows. The
+governing split is **tools provide exhaustiveness; Claude provides judgment**:
+deterministic gates run in CI with perfect recall at zero context cost, and the
+model is reserved for per-module judgment via parallel subagents that write
+findings to disk, so the orchestrator reads short summaries rather than source.
+This keeps assessment context flat from 16k LOC upward.
+
+### Tool choices (industry standard checked, 2026)
+- **Type checker: mypy** over pyright/ty. `ty` only reached FastAPI in 3/2026 —
+  too new for a load-bearing gate; pyright needs Node in CI. mypy is pip-native
+  and mypyc-compiled builds are fast. Sources: pydevtools.com type-checker
+  comparison; "Migrating from mypy to ty" (FastAPI).
+- **SAST: bandit** — AST-based, Python-specific, ~88% issue recall, <5s scans.
+  Semgrep (92%, semantic) noted as a future add; heavier and needs rule curation.
+  Source: dev.to "Semgrep vs Bandit (2026)".
+- **Dependency CVEs: pip-audit** over safety (safety now gates behind an account).
+  Critical/high CVEs to be fixed within 7 days. Source: aikido.dev Python tools.
+- **Coverage: pytest-cov as a self-baselining ratchet** (regression gate, not an
+  absolute bar) so it doesn't red-wall 16k existing LOC. Mutation testing via
+  **mutmut** (most-active tool; target score 75%→85%) is cadence-only because it
+  is slow. Source: johal.in mutmut 2026; ieeexplore mutation-tool comparison.
+- **Load testing: Locust** over k6 — Python-first, reuses the project's JWT/auth
+  scheme and is maintained in-language. k6 documented as the alternative for
+  >10k RPS/Grafana streaming. Source: dev.to "Best Load Testing Tools 2025".
+
+### Ratchet posture
+Gates are seeded permissively in `docs/assessment/baselines.json` and only fail
+on regression; `run_layer0.py --update-baseline` captures current reality, then
+the targets are tightened over time (bandit_high→0, pip_audit_vulns→0,
+mypy_errors→0 then enable `disallow_untyped_defs`). Rationale and steps in
+`docs/assessment/README.md`.
+
+### Alternatives ruled out
+- **One big Claude sweep**: non-deterministic, unrepeatable, recall degrades with
+  size, context blows up — the exact failure mode this design avoids.
+- **Strict gates from day one** (mypy --strict, 90% coverage): would block every
+  PR against existing code; the ratchet reaches the same end state without a
+  flag-day rewrite.
+- **Folding the full assessment into every issue's Phase 4**: too heavy for
+  day-to-day; instead only the cheap Layer-0 floor-check is per-issue, and the
+  deep sweep is the milestone-cadence `/assess`.
+
+---
+
 ## 2026-05-28 — Issue 79: Postgres RLS implementation per Issue 56 decision
 
 ### What was built

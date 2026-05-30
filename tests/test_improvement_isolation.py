@@ -11,6 +11,7 @@ pytest run by pytest.ini `-m "not integration"`; runs in `integration.yml` CI wo
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -83,7 +84,11 @@ async def _seed_creator(
 async def test_improvement_brief_is_scoped_to_requesting_creator(
     db_session: AsyncSession, client, mocker
 ):
-    """SEV-0 isolation: creator A's brief receives only A's metrics, never B's."""
+    """SEV-0 isolation: creator A's brief receives only A's metrics, never B's.
+
+    The analytics build moved from the GET handler into the worker task (Issue 78d),
+    so this drives the task path; the assertion is unchanged from the Issue-33 fix.
+    """
     creator_a = await _seed_creator(db_session, suffix="A", avg_views=1_000)
     creator_b = await _seed_creator(db_session, suffix="B", avg_views=999_999)
 
@@ -94,18 +99,19 @@ async def test_improvement_brief_is_scoped_to_requesting_creator(
         captured["analytics"] = analytics
         return "stubbed brief text"
 
-    mocker.patch(
-        "improvement.brief.generate_improvement_brief",
-        side_effect=_capture,
-    )
+    mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_capture)
+    fake_task = MagicMock()
+    fake_task.id = "job-iso-legacy"
+    mocker.patch("worker.tasks.generate_improvement_brief.delay", return_value=fake_task)
 
     token = create_session_token(creator_a.id)
     try:
-        resp = client.get(
-            "/creators/me/improvement-brief",
-            cookies={SESSION_COOKIE: token},
-        )
-        assert resp.status_code == 200, resp.text
+        start = client.post("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
+        assert start.status_code == 202, start.text
+
+        from worker.tasks import _generate_improvement_brief_async
+
+        await _generate_improvement_brief_async("job-iso-legacy", str(creator_a.id))
 
         # The analytics summary fed to Claude must reflect ONLY creator A's data.
         assert captured["channel_title"] == "Channel A"
@@ -133,7 +139,7 @@ async def test_improvement_brief_zero_data_returns_400(db_session: AsyncSession,
 
     token = create_session_token(creator.id)
     try:
-        resp = client.get(
+        resp = client.post(
             "/creators/me/improvement-brief",
             cookies={SESSION_COOKIE: token},
         )

@@ -19,6 +19,11 @@ router = APIRouter(prefix="/clips", tags=["review"])
 logger = logging.getLogger(__name__)
 
 
+class FeedbackOut(BaseModel):
+    id: str
+    action: str
+
+
 class FeedbackRequest(BaseModel):
     action: FeedbackAction
     trim_start_s: float | None = None
@@ -31,7 +36,7 @@ class FeedbackRequest(BaseModel):
         return FeedbackAction(v)
 
 
-@router.post("/{clip_id}/feedback", status_code=201)
+@router.post("/{clip_id}/feedback", status_code=201, response_model=FeedbackOut)
 @limiter.limit("120/minute")
 async def submit_feedback(
     request: Request,
@@ -58,4 +63,12 @@ async def submit_feedback(
     await session.refresh(feedback)
 
     logger.info("feedback: creator=%s clip=%s action=%s", creator.id, clip_id, body.action.value)
+
+    # Retrain the creator's preference model so ranking adapts to this feedback.
+    # The task self-debounces (no-op without new trainable labels), so enqueuing
+    # on every feedback write is cheap. (Issue 60)
+    from worker.tasks import retrain_preference
+
+    retrain_preference.delay(str(creator.id))
+
     return {"id": str(feedback.id), "action": feedback.action.value}

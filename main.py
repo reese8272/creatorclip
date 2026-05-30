@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import psycopg
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +16,11 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from config import settings
 from limiter import limiter
+from observability import (
+    RequestIDMiddleware,
+    configure_logging,
+    metrics_response,
+)
 from routers import auth as auth_router
 from routers import billing as billing_router
 from routers import clips as clips_module
@@ -24,10 +30,7 @@ from routers import review as review_router
 from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
+configure_logging(json_logs=settings.LOG_JSON)
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +38,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("CreatorClip starting (env=%s)", settings.ENV)
     yield
+    # Close the shared YouTube/Google HTTP client (Issue 72).
+    from youtube import _http
+
+    await _http.aclose()
     logger.info("CreatorClip shutdown")
 
 
@@ -54,7 +61,7 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
 app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(auth_router.router)
@@ -83,6 +90,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Added last → outermost layer, so the correlation id is bound before any other
+# middleware runs and the latency metric spans the whole request (Issue 75f).
+app.add_middleware(
+    RequestIDMiddleware,
+    header=settings.REQUEST_ID_HEADER,
+    metrics_enabled=settings.METRICS_ENABLED,
+)
+
+
+if settings.METRICS_ENABLED:
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics(request: Request) -> Response:
+        # Gate the scrape surface behind a bearer token when configured (required in
+        # production via config fail-fast). Empty token = unauthenticated, for dev or
+        # an internal-only network. (Issue 76)
+        token = settings.METRICS_TOKEN
+        if token:
+            auth = request.headers.get("authorization", "")
+            if not secrets.compare_digest(auth, f"Bearer {token}"):
+                raise HTTPException(status_code=401, detail="Unauthorized")
+        payload, content_type = metrics_response()
+        return Response(content=payload, media_type=content_type)
 
 
 def _pg_dsn() -> str:

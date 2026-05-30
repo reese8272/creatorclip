@@ -12,10 +12,12 @@ import re
 import httpx
 
 from models import VideoKind
+from youtube import _http
 from youtube.errors import (
     PERMANENT_403_REASONS,
     TRANSIENT_403_REASONS,
     YouTubeAuthError,
+    retry_after_seconds,
 )
 from youtube.quota import (
     COST_DATA_CAPTIONS,
@@ -83,8 +85,8 @@ async def _get_json(
     delay = 1.0
 
     for attempt in range(_MAX_RETRIES):
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, headers=headers, params=params)
+        # Shared timeout-bounded client, reused across calls/retries (Issue 72).
+        resp = await _http.client().get(url, headers=headers, params=params)
 
         if resp.status_code < 400:
             return resp.json()
@@ -95,7 +97,11 @@ async def _get_json(
                 raise YouTubeAuthError(reason, resp.status_code)
             if attempt < _MAX_RETRIES - 1:
                 jitter = random.uniform(0, delay * 0.3)
-                await asyncio.sleep(delay + jitter)
+                base = delay + jitter
+                # Honor a server-stated Retry-After (Google sends it on 429). (Issue A)
+                retry_after = retry_after_seconds(resp)
+                sleep_s = max(retry_after, base) if retry_after is not None else base
+                await asyncio.sleep(sleep_s)
                 delay *= 2
                 continue
             logger.warning(
@@ -105,6 +111,12 @@ async def _get_json(
                 reason,
                 _MAX_RETRIES,
             )
+        elif resp.status_code >= 500 and attempt < _MAX_RETRIES - 1:
+            # 5xx is transient for these idempotent GETs — back off and retry (axis E).
+            jitter = random.uniform(0, delay * 0.3)
+            await asyncio.sleep(delay + jitter)
+            delay *= 2
+            continue
 
         resp.raise_for_status()
         return resp.json()

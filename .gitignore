@@ -48,4 +48,16 @@ local_storage/
 "Screenshot 2026-05-27 124552.png"
 
 # Claude Code per-project state (worktrees, agent caches, session metadata)
-.claude/
+# — ignore everything EXCEPT committed project skills, slash commands, the shared
+# settings + hooks (the SessionStart provisioning hook must travel with the repo).
+# User-local overrides (settings.local.json) stay ignored.
+.claude/*
+!.claude/skills/
+!.claude/commands/
+!.claude/settings.json
+!.claude/hooks/
+
+# Assessment artifacts that are regenerated each run (the register/report and
+# baselines ARE committed; these machine outputs are not).
+docs/assessment/_machine.json
+docs/assessment/_coverage.xml

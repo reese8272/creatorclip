@@ -1,0 +1,74 @@
+name: Quality Gates
+
+# The deterministic floor of the production assessment (Layer 0). The existing
+# ci.yml `test` job gives fast correctness feedback; this workflow adds the
+# regression gates that ci.yml does not: types (mypy), coverage floor, SAST
+# (bandit), and dependency CVEs (pip-audit). All gating logic lives in one place
+# — scripts/run_layer0.py — so CI and a local `/assess` run measure identically.
+#
+# Gates are RATCHETED: each is seeded permissively in docs/assessment/baselines.json
+# and only fails on regression. Tighten the baselines over time
+# (see docs/assessment/README.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-gates:
+    name: Types + SAST + deps (mypy, bandit, pip-audit)
+    runs-on: ubuntu-latest
+    # No DB/Redis needed — these three gates are static. Fast feedback (~1 min).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run static gates
+        # run_layer0.py writes _machine.json and exits non-zero on regression.
+        # Coverage runs in the coverage-gate job (it needs Redis), so exclude it
+        # here to avoid running the test suite twice.
+        run: >-
+          python3 .claude/skills/production-assessment/scripts/run_layer0.py
+          --gates ruff,mypy,bandit,pip_audit,freshness
+
+  coverage-gate:
+    name: Coverage floor (pytest-cov ratchet)
+    runs-on: ubuntu-latest
+    # Mirrors ci.yml's test job: the slowapi limiter needs a real Redis.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system deps (ffmpeg + libpq)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+      - name: Install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run coverage gate
+        # --require-coverage turns a skipped coverage run into a hard failure so
+        # the floor is genuinely enforced in CI (unlike local runs).
+        run: >-
+          python3 .claude/skills/production-assessment/scripts/run_layer0.py
+          --gates coverage --require-coverage

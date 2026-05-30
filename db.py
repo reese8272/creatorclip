@@ -16,8 +16,8 @@ from config import settings
 # Two engines (Issue 79):
 #   - `engine` / `AsyncSessionLocal`: connects as the app role. In production
 #     this role has NO BYPASSRLS, so every transaction is subject to the
-#     row-level-security policies defined in alembic 0005. Sessions created
-#     from this factory carry an `after_begin` listener that emits
+#     row-level-security policies defined in alembic 0010_rls_policies. Sessions
+#     created from this factory carry an `after_begin` listener that emits
 #     `SET LOCAL app.creator_id = <uuid>` from `session.info["creator_id"]`.
 #   - `admin_engine` / `AdminSessionLocal`: connects as the migration role
 #     (BYPASSRLS). Used by Celery worker tasks for cross-tenant sweeps and by
@@ -25,13 +25,30 @@ from config import settings
 #     deployments `DATABASE_MIGRATION_URL` defaults to `DATABASE_URL`, so the
 #     two factories are functionally equivalent until the prod role split lands.
 
+# psycopg3 auto-prepares a statement server-side after its 5th execution. PgBouncer
+# in transaction-pooling mode (docs/DEPLOYMENT.md) reuses server connections across
+# clients, so a prepared statement created on one connection is gone on the next →
+# `prepared statement "_pg3_…" does not exist`. prepare_threshold=None disables
+# server-side preparation entirely. CI never catches this (it hits Postgres directly).
+_CONNECT_ARGS = {"prepare_threshold": None}
+
+# Per-pod connection ceiling = pool_size + max_overflow = 20, which stays under the
+# 25-conn PgBouncer sidecar (docs/DEPLOYMENT.md). See the total-connections
+# inequality in DEPLOYMENT.md before changing replica counts. pool_recycle cycles
+# connections so a Postgres/PgBouncer restart can't strand a stale handle.
+_POOL_SIZE = 15
+_MAX_OVERFLOW = 5
+_POOL_RECYCLE_S = 1800
+
 
 def _make_engine() -> AsyncEngine:
     return create_async_engine(
         settings.DATABASE_URL,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=_POOL_SIZE,
+        max_overflow=_MAX_OVERFLOW,
+        pool_recycle=_POOL_RECYCLE_S,
+        connect_args=_CONNECT_ARGS,
     )
 
 
@@ -41,6 +58,7 @@ def _make_admin_engine() -> AsyncEngine:
         pool_pre_ping=True,
         pool_size=5,
         max_overflow=10,
+        connect_args=_CONNECT_ARGS,
     )
 
 

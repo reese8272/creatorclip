@@ -84,11 +84,13 @@ async def test_remaining_never_negative():
 
 
 def test_quota_key_contains_today():
-    from datetime import UTC, datetime
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     key = _quota_key()
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
-    assert today in key
+    # Keyed by the Pacific date (Google's quota reset zone), not UTC. (Issue 76)
+    today_pt = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
+    assert today_pt in key
     assert key.startswith("creatorclip:yt_quota:")
 
 
@@ -138,3 +140,27 @@ async def test_consume_raises_when_redis_unreachable():
 
     # Confirm the Redis client actually raised — not that we got a QuotaExhaustedError silently.
     mock_redis.eval.assert_awaited_once()
+
+
+def test_quota_key_uses_pacific_not_utc(monkeypatch):
+    """Issue 76: the daily key must roll over on Google's Pacific reset, not UTC.
+
+    Pins an instant that is still 'yesterday' in PT but already 'tomorrow' in UTC;
+    a UTC-keyed implementation would produce the Jan-2 key 7-8h early and hand out
+    spent budget.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    import youtube.quota as q
+
+    pt = ZoneInfo("America/Los_Angeles")
+    fixed = datetime(2026, 1, 1, 19, 0, tzinfo=pt)  # == 2026-01-02 03:00 UTC
+
+    class _DT:
+        @staticmethod
+        def now(tz=None):
+            return fixed.astimezone(tz) if tz else fixed
+
+    monkeypatch.setattr(q, "datetime", _DT)
+    assert q._quota_key().endswith("2026-01-01")  # PT date, not UTC's 2026-01-02

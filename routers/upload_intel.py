@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +12,21 @@ from upload_intel.timing import best_upload_windows, optimal_gap_hours
 router = APIRouter(prefix="/creators", tags=["upload-intel"])
 
 
-@router.get("/me/upload-intel")
+class UploadWindowOut(BaseModel):
+    day_of_week: int
+    day_name: str
+    hour: int
+    label: str
+    activity_index: float
+
+
+class UploadIntelOut(BaseModel):
+    best_windows: list[UploadWindowOut]
+    optimal_gap_hours: float | None
+    data_available: bool
+
+
+@router.get("/me/upload-intel", response_model=UploadIntelOut)
 @limiter.limit("120/minute")
 async def get_upload_intel(
     request: Request,

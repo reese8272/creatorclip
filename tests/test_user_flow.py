@@ -64,25 +64,25 @@ def test_insights_includes_auth_js(client):
 
 def test_index_has_nav(client):
     content = client.get("/").text
-    assert "Dashboard" in content or "CreatorClip" in content
+    assert "Dashboard" in content or "AutoClip" in content
     assert "/static/review.html" in content
 
 
 def test_review_has_nav(client):
     content = client.get("/static/review.html").text
-    assert "CreatorClip" in content
+    assert "AutoClip" in content
     assert "Dashboard" in content
 
 
 def test_profile_has_nav(client):
     content = client.get("/static/profile.html").text
-    assert "CreatorClip" in content
+    assert "AutoClip" in content
     assert "Dashboard" in content
 
 
 def test_insights_has_nav(client):
     content = client.get("/static/insights.html").text
-    assert "CreatorClip" in content
+    assert "AutoClip" in content
     assert "Dashboard" in content
 
 

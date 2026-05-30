@@ -27,6 +27,35 @@ from fastapi.testclient import TestClient
 from main import app
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Fail fast, with one clear message, if a required backing service is down.
+
+    The suite needs a live Redis — the slowapi rate limiter has no in-memory
+    fallback by design (a fail-open limiter would be a prod cost/abuse risk). When
+    Redis is missing this otherwise surfaces as dozens of opaque 500s from every
+    limited/health route, which is what masked a mid-session Redis death once (see
+    docs/OFF_COURSE_BUGS.md, 2026-05-29). This guard runs wherever pytest runs —
+    GitHub Actions, Claude-on-web, and local — so the failure is always legible.
+    Provision the service with `scripts/dev_session_setup.sh` (or `docker compose
+    up -d redis`).
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    url = urlparse(os.environ["REDIS_URL"])
+    host, port = url.hostname or "localhost", url.port or 6379
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return
+    except OSError as exc:
+        raise pytest.UsageError(
+            f"Redis is not reachable at {host}:{port} ({exc}). The test suite "
+            "requires a live Redis (the rate limiter has no in-memory fallback). "
+            "Start it with `scripts/dev_session_setup.sh`, `docker compose up -d "
+            "redis`, or `redis-server --daemonize yes --save '' --appendonly no`."
+        ) from exc
+
+
 @pytest.fixture(scope="session")
 def client() -> TestClient:
     with TestClient(app) as c:

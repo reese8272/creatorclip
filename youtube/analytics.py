@@ -11,7 +11,6 @@ import logging
 import random
 from datetime import UTC, datetime
 
-import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +25,9 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
+from youtube import _http
 from youtube.data_api import _classify_error, get_videos_metadata, list_channel_videos
-from youtube.errors import YouTubeAuthError
+from youtube.errors import YouTubeAuthError, retry_after_seconds
 from youtube.quota import COST_ANALYTICS_REPORT, consume
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,8 @@ async def _fetch_report(access_token: str, params: dict) -> dict:
     delay = 1.0
 
     for attempt in range(_MAX_RETRIES):
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(_ANALYTICS_V2, headers=headers, params=params)
+        # Shared timeout-bounded client, reused across calls/retries (Issue 72).
+        resp = await _http.client().get(_ANALYTICS_V2, headers=headers, params=params)
 
         if resp.status_code < 400:
             return resp.json()
@@ -54,7 +54,11 @@ async def _fetch_report(access_token: str, params: dict) -> dict:
                 raise YouTubeAuthError(reason, resp.status_code)
             if attempt < _MAX_RETRIES - 1:
                 jitter = random.uniform(0, delay * 0.3)
-                await asyncio.sleep(delay + jitter)
+                base = delay + jitter
+                # Honor a server-stated Retry-After (Google sends it on 429). (Issue A)
+                retry_after = retry_after_seconds(resp)
+                sleep_s = max(retry_after, base) if retry_after is not None else base
+                await asyncio.sleep(sleep_s)
                 delay *= 2
                 continue
             logger.warning(
@@ -63,6 +67,12 @@ async def _fetch_report(access_token: str, params: dict) -> dict:
                 reason,
                 _MAX_RETRIES,
             )
+        elif resp.status_code >= 500 and attempt < _MAX_RETRIES - 1:
+            # 5xx is transient for this idempotent GET — back off and retry (axis E).
+            jitter = random.uniform(0, delay * 0.3)
+            await asyncio.sleep(delay + jitter)
+            delay *= 2
+            continue
 
         resp.raise_for_status()
         return resp.json()
