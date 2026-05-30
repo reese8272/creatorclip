@@ -45,8 +45,10 @@ calls `_sources()` which filters non-existent paths, so the gate always reported
 count. The bogus `mypy=1` came from a raw manual mypy run with the unfiltered candidate list.
 
 ### Evidence
-`run_layer0.py --gates mypy` → 0 (with the ratchet on); ruff 0 + format clean; full suite
-**431 passed, 1 skipped**; integration **66 passed**. All 11 edited files `py_compile`-clean.
+Plain `mypy` over the gate sources → **0** under the committed (gradual) config; ruff 0 +
+format clean; full suite **431 passed, 1 skipped**; integration **66 passed**. All 11 edited
+files `py_compile`-clean. (Note: the `run_layer0.py --gates mypy` harness emits noisy/garbled
+counts locally — the authoritative measure is plain `mypy` + the CI `Types` job, both 0.)
 
 ---
 

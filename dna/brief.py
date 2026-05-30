@@ -65,11 +65,12 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
-            # Stable prefix — carries the cache breakpoint.  # type: ignore[typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
+            # Stable prefix — carries the cache breakpoint.
             {
                 "type": "text",
                 "text": _SYSTEM_INSTRUCTIONS,
-                "cache_control": {"type": "ephemeral"},
+                # anthropic 0.40's TextBlockParam stub predates cache_control (Issue 78c).
+                "cache_control": {"type": "ephemeral"},  # type: ignore[typeddict-unknown-key]
             },
             # Volatile per-creator data — AFTER the breakpoint, never cached.
             {"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"},
