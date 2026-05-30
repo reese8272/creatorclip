@@ -1,3 +1,4 @@
+import logging
 import sys
 
 from pydantic import ValidationError, model_validator
@@ -93,8 +94,8 @@ class Settings(BaseSettings):
     METRICS_ENABLED: bool = True
     # Bearer token required to scrape /metrics. When set, callers must send
     # `Authorization: Bearer <token>`. Empty = unauthenticated (dev / internal-only
-    # network); production fails fast below if metrics are enabled without it so the
-    # operational scrape surface is never exposed unauthenticated. (Issue 76)
+    # network); in production, an empty token auto-disables /metrics (see the validator
+    # below) so the scrape surface is never exposed unauthenticated. (Issue 76)
     METRICS_TOKEN: str = ""
 
     # ── Stripe billing ────────────────────────────────────────────────────────
@@ -117,13 +118,15 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"In production these must be set: {', '.join(missing)}")
-            # The /metrics scrape surface must not be unauthenticated in production:
-            # set METRICS_TOKEN, or disable the endpoint with METRICS_ENABLED=false.
+            # The /metrics scrape surface must never be unauthenticated in production —
+            # but don't crash-loop the whole app over a missing scrape token. Fail SAFE:
+            # disable the endpoint and warn. Set METRICS_TOKEN to turn it back on. (Issue 76)
             if self.METRICS_ENABLED and not self.METRICS_TOKEN:
-                raise ValueError(
-                    "In production, set METRICS_TOKEN (or METRICS_ENABLED=false) — "
-                    "the /metrics endpoint must not be exposed unauthenticated."
+                logging.getLogger(__name__).warning(
+                    "METRICS_TOKEN is unset in production — disabling /metrics. "
+                    "Set METRICS_TOKEN to enable authenticated scraping."
                 )
+                self.METRICS_ENABLED = False
         return self
 
 

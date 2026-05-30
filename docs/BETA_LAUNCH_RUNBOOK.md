@@ -17,29 +17,29 @@ what to do*, and *how to confirm it worked*.
 
 ---
 
-## Step 0 — Set two required prod settings BEFORE you deploy
+## Step 0 — Set the one prod setting the pipeline needs (transcription)
 
-**What:** Two environment values the new code needs.
+**What:** A transcription backend + key. (A metrics token is *optional* — see the note.)
 
-**Why:** (a) The app now **refuses to start in production** if metrics are on without a
-token — this is a safety feature, but it means a missing value = a failed deploy. (b)
-The clip pipeline can't transcribe audio without a transcription backend + key.
+**Why:** The clip pipeline can't turn a video into clips without transcribing the audio
+first. No transcription key = videos ingest but never produce clips.
 
 **Do this** — on the server, edit `/opt/autoclip/.env` (or your secrets manager) and set:
 
 ```bash
-# 1) Protect the metrics endpoint (pick any long random string)
-METRICS_TOKEN=$(openssl rand -hex 32)
-#    …or, if you don't scrape metrics yet, just turn it off instead:
-# METRICS_ENABLED=false
-
-# 2) Transcription — the simplest beta path is a hosted backend:
+# Transcription — the simplest beta path is a hosted backend:
 TRANSCRIPTION_BACKEND=deepgram
 DEEPGRAM_API_KEY=<your Deepgram API key>
 #    (or TRANSCRIPTION_BACKEND=assemblyai + ASSEMBLYAI_API_KEY=...)
 ```
 
-**Confirm:** `grep -E 'METRICS_TOKEN|TRANSCRIPTION_BACKEND|DEEPGRAM_API_KEY' /opt/autoclip/.env`
+**Optional — metrics:** `/metrics` is an internal monitoring page. If you don't run
+Prometheus yet, **do nothing** — in production it auto-disables itself safely when no
+token is set, so it's never exposed and the deploy can't break over it. If you *do* want
+to scrape it, set `METRICS_TOKEN=$(openssl rand -hex 32)` and give that token to your
+scraper.
+
+**Confirm:** `grep -E 'TRANSCRIPTION_BACKEND|DEEPGRAM_API_KEY' /opt/autoclip/.env`
 shows your values.
 
 ---
@@ -205,7 +205,7 @@ public:
 
 | Symptom | First thing to check |
 |---|---|
-| Deploy won't start | `docker compose logs --tail 100 app` — most likely a missing required secret (Step 0/1), e.g. `METRICS_TOKEN` in prod. |
+| Deploy won't start | `docker compose logs --tail 100 app` — most likely a missing *required* secret (Step 1), e.g. `TOKEN_ENCRYPTION_KEY` or `ANTHROPIC_API_KEY`. (A missing metrics token will NOT crash it — it just disables /metrics.) |
 | `/health` says `degraded` | Which dependency: the JSON shows `postgres`/`redis` status. |
 | Tester can't log in | Are they added as a Test User (Step 3)? Right Google account? |
 | "Build DNA" never finishes | `docker compose logs --tail 200 worker` — check the transcription key (Step 0) and that the Celery worker is running. |
