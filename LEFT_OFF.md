@@ -3,13 +3,16 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-30 (reconciliation merge — local-main RLS/refund/W1 work + origin Issue 78 salvage)
-**Branch:** `main` only (all 6 feature branches squash-merged on origin; about to be deleted).
-**Working tree:** clean after the reconcile merge commit.
-**Sync with `origin/main`:** awaiting push — local `main` = origin/main + 6 local commits + 1 prep (renumber) + 1 merge.
-**Production:** ⚠️ **UNVERIFIED.** This push will deploy the merged code path including new alembic migration
-`0010_rls_policies` (renamed from local's 0005 to chain after origin's 0009). RLS roles require one-time SQL ops
-in `docs/DEPLOYMENT.md` "RLS one-time setup (Issue 79)" BEFORE the upgrade runs.
+**Last updated:** 2026-05-30 (reconciliation merge pushed; deploy green; RLS activation pending)
+**Branch:** `main` only (6 feature branches deleted from origin; PR #15 closed).
+**Working tree:** clean.
+**Sync with `origin/main`:** **0 / 0** — pushed.
+**Production:** ✅ **DEPLOYED.** GH Actions deploy job `26691893870` succeeded at 18:43 UTC; alembic upgrade ran
+through head `0010_rls_policies`; health endpoint returned `{"status":"ok","postgres":"ok","redis":"ok"}`.
+**RLS posture:** ⚠️ **migration applied but NOT enforced yet.** The app is still connecting as SUPERUSER
+`creatorclip` which bypasses RLS by default. The roles `creatorclip_app` and `creatorclip_migrate` exist
+(created by 0010 with LOGIN-only) but have no passwords and no BYPASSRLS attribute. Activation is a separate
+one-time step — see **NEXT ACTION #1**.
 
 ---
 
@@ -66,25 +69,25 @@ local-main hardening work (Issues 79, 56, 57, 52, 46, 38 W1) just merged in:
 
 ### → NEXT ACTION (in priority order)
 
-1. **One-time prod SQL ops** before pushing (Issue 79 migration `0010_rls_policies` requires this) —
-   see `docs/DEPLOYMENT.md` "RLS one-time setup (Issue 79)": `ALTER ROLE creatorclip_migrate
-   BYPASSRLS`, set role passwords, transfer table ownership, update `/opt/autoclip/.env` with
-   `DATABASE_MIGRATION_URL`. The Dockerized alembic upgrade will then run cleanly through
-   0005 → 0006 → 0007 → 0008 → 0009 → 0010.
+1. **Activate RLS enforcement** via the new `.github/workflows/activate-rls.yml` workflow
+   (`workflow_dispatch` only). Sequence:
+   1. Add two repo Secrets at **Settings → Secrets and variables → Actions**:
+      - `POSTGRES_APP_PASSWORD` — generate with `openssl rand -hex 24`
+      - `POSTGRES_MIGRATE_PASSWORD` — generate with `openssl rand -hex 24`
+   2. Run the **Activate RLS (Issue 79)** workflow with `dry_run=true` — prints the SQL
+      and .env edits it would apply, without touching anything. Verify the plan.
+   3. Re-run with `dry_run=false` to apply: sets role passwords, grants BYPASSRLS to
+      `creatorclip_migrate`, transfers public-schema table ownership, rewrites
+      `/opt/autoclip/.env` (DATABASE_URL → `creatorclip_app`; new DATABASE_MIGRATION_URL →
+      `creatorclip_migrate`), restarts the compose services, and verifies that
+      `creatorclip_app` sees 0 rows from `videos` without an `app.creator_id` GUC.
+   4. Rollback if anything goes wrong: SSH to the VM, restore the timestamped
+      `/opt/autoclip/.env.backup-YYYYMMDD-HHMMSS` and `docker compose up -d`.
 
-2. **Verify the prod deploy + migrations 0005–0010 applied.** Confirm:
-   ```bash
-   curl -fsS https://autoclip.studio/health     # {"status":"ok","postgres":"ok","redis":"ok"}
-   ssh creatorclip-vm "cd /opt/autoclip && docker compose exec app .venv/bin/alembic current"
-   # expect head = 0010_rls_policies
-   ```
-   If alembic shows an earlier head, the deploy didn't run `alembic upgrade` — check
-   `docker compose logs --tail 100 app worker`.
+2. ~~Delete 6 stale remote branches + close duplicate PR #15.~~ ✅ Done this session.
 
-3. **Delete 6 stale remote branches + close duplicate PR #15.** All merged & safe to remove:
-   `claude/issue-78a-scorer-cache`, `-78b-clip-scorer-caching`, `-78c-mypy-zero`,
-   `-78c-ratchet-revert`, `-78d-improvement-brief-async`, `-78g-limited-use-disclosure`.
-   PR #15 is a duplicate re-open of merged PR #9 — close without merging.
+3. ~~Verify deploy + migration 0010.~~ ✅ Deploy job `26691893870` green; alembic at
+   `0010_rls_policies`; `/health` returning ok.
 
 4. **Remaining Issue 78 items — all BLOCKED on a human input; do not start blind:**
    - **78e — YouTube analytics-retention purge** (`docs/issues.md`). Needs (a) the **confirmed
