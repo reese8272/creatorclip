@@ -59,6 +59,19 @@ def test_static_privacy_served(client):
     assert b"Privacy Policy" in resp.content
 
 
+def test_privacy_page_has_limited_use_disclosure(client):
+    """COMPLIANCE.md requires the Google Limited Use disclosure in the public Privacy
+    Policy before launch (Issue 78g). Pin the canonical language so it can't regress."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "Limited Use" in text
+    assert "Google API Services User Data Policy" in text
+    assert "information received from Google APIs" in text
+    # The affirmative no-advertising commitment must be present.
+    assert "advertis" in text.lower()
+
+
 # ── GET /videos list endpoint ─────────────────────────────────────────────────
 
 

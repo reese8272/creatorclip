@@ -122,3 +122,27 @@ for tenant-owned tables** in the Phase 2 backlog. Postgres RLS would have preven
 class of bug structurally (the database refuses to return cross-tenant rows even when the
 application forgets the WHERE), and is the industry-standard safety net underneath
 always-filter for compliance-sensitive multi-tenant SaaS.
+
+### 2026-05-30 — Missing Google Limited Use disclosure in the public Privacy Policy (Issue 78g)
+
+**What**: `static/privacy.html` described what YouTube data AutoClip collects and how it is
+used, but did not carry the explicit **Limited Use** attestation that Google's API Services
+User Data Policy requires of apps accessing Google user data. Google flags a missing Limited
+Use disclosure during OAuth app verification, so this was a launch blocker.
+
+**Discovered**: 2026-05-30, reconciling the salvaged "legal / Limited Use / CORS" item
+(Issue 78g) from closed PR #6 against what already shipped. CORS lockdown, `/docs` prod
+gating, and the ToS/Privacy pages themselves were already present — the disclosure was the
+only gap.
+
+**Fix**: added a **Limited Use disclosure** section to `static/privacy.html` with the
+canonical attestation ("AutoClip's use and transfer to any other app of information received
+from Google APIs will adhere to the Google API Services User Data Policy, including the
+Limited Use requirements", linking the policy) plus the four affirmative commitments: use
+limited to the user-facing features; no third-party transfer except as needed / for security
+/ to comply with law; no use for advertising; no human reads without consent, security need,
+legal need, or aggregation/anonymization.
+
+**Verification**: `tests/test_static.py::test_privacy_page_has_limited_use_disclosure` pins
+the required language ("Limited Use", "Google API Services User Data Policy", "information
+received from Google APIs", and the no-advertising commitment) so it cannot silently regress.
