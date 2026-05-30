@@ -6,7 +6,7 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Issue 78 — re-implementing the net-new pieces salvaged from closed PR #6, one small test-gated PR at a time. 78a (scorer cache, PR #9 ✅ merged), 78b (clip-scorer 1h caching, PR #10), 78d (improvement-brief 202+poll, PR #11) ✅ done. Remaining: 78c (mypy→0 — overlaps #9/#10, do after they merge + fix the run_layer0 `knowledge/` gate blind-spot), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off; collides with 78d on worker/tasks.py), 78f (PgBouncer harness — needs real staging), 78g (legal/CORS delta — mostly already shipped).
+**Active issue**: Issue 78 — re-implementing the net-new pieces salvaged from closed PR #6, one small test-gated PR at a time. 78a (scorer cache, PR #9), 78b (clip-scorer 1h caching, PR #10), 78d (improvement-brief 202+poll, PR #11) ✅ done. Remaining: 78c (mypy→0 — after #10/#11 merge + fix the run_layer0 `knowledge/` gate blind-spot), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off; collides with 78d on worker/tasks.py), 78f (PgBouncer harness — needs real staging), 78g (legal/CORS delta — mostly already shipped).
 **Last completed**: Issue 78d — improvement-brief async (202 + poll): new ImprovementBrief model + migration 0009; POST enqueues a Celery task (debounced) and GET polls the stored row; ~120s LLM call off the request path. Default 425 passed / integration 66 passed; ruff 0 / mypy 30; migration up/down/up clean.
 **Blocked**: _(none)_
 

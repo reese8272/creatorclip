@@ -1411,6 +1411,19 @@ regressing `main`. These items it contained are **genuinely not yet on `main`** 
 each fresh, test-gated, against current `main` (the old commits remain in git history on
 the retired branch for reference):
 
+<<<<<<< HEAD
+- [ ] **Per-(creator, version) preference-scorer cache** — so `from_bytes` runs once, not
+  per rerank (also tracked under Issue 76).
+- [x] **Clip-scorer prompt caching (1h TTL)** (Issue 78b, 2026-05-30) — the real caching
+  beneficiary (large per-creator prefix reused across videos); also Issue 76. Split the
+  system into a static instructions+principles block (stable, first) and a per-creator
+  `CREATOR DNA:` block carrying a `{"type":"ephemeral","ttl":"1h"}` breakpoint; candidates
+  stay in the uncached user message. Extended TTL (now GA, no beta header) widens the reuse
+  window from 5 min → 1h so a creator's batch of videos still hits. Prefix-ordering fix
+  (static-first) done; verified via `/claude-api`: at Sonnet-4.6's 2048-token floor only the
+  `[static+DNA]` per-creator prefix caches (static alone ~400 tok is sub-floor — the
+  cross-creator share is future-proofing, not a present win).
+=======
 - [x] **Per-(creator, version) preference-scorer cache** (Issue 78a, 2026-05-30) — so
   `from_bytes` runs once, not per rerank (also tracked under Issue 76). Per-worker bounded
   LRU keyed by `(creator_id, version)` in `preference/_scorer_cache.py`; `load_latest` now
@@ -1419,6 +1432,7 @@ the retired branch for reference):
 - [ ] **Clip-scorer prompt caching (1h TTL)** — the real caching beneficiary (large
   per-creator prefix reused across videos); also Issue 76. Pair with the prefix-ordering
   fix (`clip_engine/scoring.py`).
+>>>>>>> main
 - [ ] **mypy 30 → 0** then enable `disallow_untyped_defs` (Issue 75e ratchet).
 - [x] **Improvement-brief → 202 + poll** (Issue 78d, 2026-05-30) — async Celery job (the
   120s request can exceed an LB timeout; also Issue 76). New `ImprovementBrief` model +

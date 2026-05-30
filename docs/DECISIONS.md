@@ -50,6 +50,52 @@ to POST). Default suite **425 passed, 1 skipped**; integration **66 passed**; ru
 
 ---
 
+---
+
+## 2026-05-30 — Issue 78b: Clip-scorer prompt caching (1h TTL) + stable-first ordering
+
+### What changed
+`clip_engine/scoring.py` built a single system block `[intro][CREATOR DNA: {dna_brief}]
+[principles]` with a default-TTL (`{"type": "ephemeral"}`, 5 min) cache breakpoint. Split it
+into two system blocks — a static `[intro][principles]` block first, then a per-creator
+`CREATOR DNA:\n{dna_brief}` block carrying `{"type": "ephemeral", "ttl": "1h"}`. The volatile
+per-video candidates already live in the (uncached) user message and are unchanged.
+
+### Why
+The DNA brief is identical across a creator's videos but the candidates differ per video, so
+the brief is the natural cached prefix. The default 5-minute TTL only helps videos scored
+within 5 minutes of each other; a creator's batch (channel connect → many videos ingested and
+scored over a longer span) falls outside that window. The 1h TTL widens the reuse window so
+those repeat scorings read the cached prefix (~0.1× input price) instead of re-billing it.
+
+### Why this design (industry standard, verified via `/claude-api`)
+- **1h TTL syntax is `{"type": "ephemeral", "ttl": "1h"}` with no beta header** — extended
+  cache TTL is GA (the `/claude-api` prompt-caching reference shows it directly on
+  `messages.create`). Economics: a 1h write costs 2× vs 1.25× for 5-min, so it needs ≥3 reads
+  to pay off (vs 2) — fine for a creator with several videos.
+- **Stable-content-first ordering** is the documented caching best practice (any byte change
+  invalidates the rest of the prefix; volatile content goes after the last breakpoint). Static
+  instructions now lead; the per-creator brief carries the breakpoint; candidates stay last.
+- **Honest scope note:** the minimum cacheable prefix is model-dependent — **2048 tokens on
+  Sonnet 4.6** (`settings.ANTHROPIC_MODEL`). The static block alone (~400 tokens) is below the
+  floor, so it can never cache cross-creator on its own; only the `[static + DNA brief]`
+  per-creator prefix (DNA briefs are large) clears it. The static-first reorder is therefore
+  correct structure + future-proofing (a global breakpoint becomes useful only if the static
+  block ever grows past the floor), and the present, measurable win is the 1h TTL. This
+  refines the Issue 69 note, which framed the reorder as a cross-creator share. The existing
+  `logger.info` already logs `cache_read/cache_creation` tokens, so cache engagement is
+  verifiable in production.
+
+### Evidence / tests
+Updated `test_score_candidates_dna_uses_prompt_caching` to the two-block contract: static
+block leads and is not the breakpoint (no `cache_control`, holds the principles, no DNA); the
+last block carries `{"type":"ephemeral","ttl":"1h"}` and holds the DNA brief. Full suite **430
+passed, 1 skipped**; clip-quality eval **6 passed**; gates ruff 0 / mypy 30 (= baseline; the
+lone `scoring.py` `cache_control` TypedDict error is the pre-existing SDK-stub false positive,
+shared with `dna/brief.py` + `improvement/brief.py`).
+=======
+## 2026-05-30 — Issue 78a: Per-(creator, version) preference-scorer cache
+
 ## 2026-05-30 — Issue 78a: Per-(creator, version) preference-scorer cache
 
 ### What changed
