@@ -23,7 +23,7 @@ def test_root_returns_html(client):
 
 def test_root_contains_creatorclip(client):
     resp = client.get("/")
-    assert b"CreatorClip" in resp.content
+    assert b"AutoClip" in resp.content
 
 
 def test_static_onboarding_served(client):

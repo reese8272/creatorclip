@@ -24,7 +24,7 @@ Every feature decision is tested against this. Does it deepen the channel-knowle
 
 ## Honesty Constraint (must appear in every interface and the system prompt)
 
-CreatorClip predicts fit with your style and audience — it does not promise virality.
+AutoClip predicts fit with your style and audience — it does not promise virality.
 Every recommendation is an estimate grounded in your own data, not a guarantee. We
 comply with the YouTube API Services Terms of Service at all times.
 

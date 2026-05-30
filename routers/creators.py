@@ -102,7 +102,7 @@ async def get_dna(
     if not profile:
         return {
             "profile": None,
-            "message": "No DNA profile yet. POST /creators/me/dna/build to start.",
+            "message": "No Creator DNA yet — build it from the setup screen to unlock personalised scoring.",
         }
     return {
         "profile": {
