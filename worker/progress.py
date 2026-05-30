@@ -142,6 +142,7 @@ def _async_client() -> aredis.Redis:
     if _AIO is None or _AIO_LOOP is not current:
         _AIO = aredis.from_url(settings.REDIS_URL, decode_responses=True)
         _AIO_LOOP = current
+    assert _AIO is not None  # narrow for mypy after the conditional rebuild
     return _AIO
 
 
