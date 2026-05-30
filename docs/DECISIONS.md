@@ -5,11 +5,11 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
-## 2026-05-28 — Issue 60: Postgres RLS implementation per Issue 56 decision
+## 2026-05-28 — Issue 79: Postgres RLS implementation per Issue 56 decision
 
 ### What was built
 Implements the Issue 56 adopt-now decision. New alembic revision
-`e5f6a7b8c9d0` (`0005_rls_policies`) creates roles, grants, and policies:
+`0010_rls_policies` creates roles, grants, and policies:
 
 - **Roles**: `creatorclip_app` (LOGIN, no BYPASSRLS — the application
   connects as this) and `creatorclip_migrate` (LOGIN, BYPASSRLS granted out
@@ -28,7 +28,7 @@ Implements the Issue 56 adopt-now decision. New alembic revision
   true)::uuid) WITH CHECK (...)`. Both `ENABLE` and `FORCE ROW LEVEL
   SECURITY` are applied so the table owner cannot bypass.
 
-Application wiring (Issue 60 code changes):
+Application wiring (Issue 79 code changes):
 
 - `config.py`: new optional `DATABASE_MIGRATION_URL` env var (falls back to
   `DATABASE_URL` for single-role dev/CI).
@@ -111,7 +111,7 @@ introduces a router-side bulk UPDATE/DELETE on tenant tables, the
 rowcount-zero check must be added at the call site; this is documented
 in the runbook.
 
-### Alternatives ruled out (Issue 60-specific)
+### Alternatives ruled out (Issue 79-specific)
 - **Drop FORCE RLS to make dev/CI Just Work**: would let the table owner
   bypass policies — defeats the purpose. The chosen role-assumption test
   strategy keeps FORCE on without needing to change CI.
@@ -153,7 +153,7 @@ Azure multi-tenant guidance). Re-validated against the actual codebase:
   the exempt `creators` table.
 
 ### Files
-- `alembic/versions/0005_rls_policies.py` — new migration.
+- `alembic/versions/0010_rls_policies.py` — new migration.
 - `config.py` — new `DATABASE_MIGRATION_URL` + `database_migration_url`
   property with fallback.
 - `db.py` — admin engine/sessionmaker; `after_begin` listener.
@@ -180,7 +180,7 @@ Azure multi-tenant guidance). Re-validated against the actual codebase:
 ### What was decided
 **Adopt Postgres RLS as the defense-in-depth layer underneath the existing
 application-level always-filter for every tenant-owned table.** The
-implementation lands in a separate issue (filed as **Issue 60**); this entry
+implementation lands in a separate issue (filed as **Issue 79**); this entry
 closes the Issue 56 "research-and-decide" deliverable.
 
 ### Why
@@ -198,7 +198,7 @@ multi-tenant isolation posture is load-bearing for approval; the right
 time to pay the implementation cost is before public launch, not during a
 post-launch incident.
 
-### Implementation sketch (for Issue 60)
+### Implementation sketch (for Issue 79)
 
 **Tables needing CREATE POLICY** — every table with a direct `creator_id`
 column, 12 in total: `videos`, `audience_activity`, `demographics`,
@@ -275,7 +275,7 @@ is the industry-standard pairing for RLS-enabled stacks.
 - **Silent UPDATE/DELETE failures**: with RLS, a mutation touching a row
   the current tenant doesn't own returns 0 rows affected with no error.
   Mutation paths must check rowcount and raise 404 rather than silently
-  succeeding. Issue 60 implementation must audit every mutation path.
+  succeeding. Issue 79 implementation must audit every mutation path.
 - **pgvector ANN index queries on `dna_embeddings`**: RLS policies are
   evaluated post-index-scan, so cross-tenant embeddings could briefly
   appear in ANN candidates before filtering. For current scale (closed
@@ -283,7 +283,7 @@ is the industry-standard pairing for RLS-enabled stacks.
   neutral; revisit at scale.
 - **Migration role lockdown**: requires SSH access to the prod Postgres
   to grant `BYPASSRLS` to the migration role one time. Captured in
-  `docs/DEPLOYMENT.md` for Issue 60.
+  `docs/DEPLOYMENT.md` for Issue 79.
 
 ### Source / evidence (RLS pattern + pgbouncer compatibility)
 - Crunchy Data — Row Level Security for Tenants in Postgres:
@@ -310,7 +310,7 @@ is the industry-standard pairing for RLS-enabled stacks.
 
 ### Files (this issue, decision-only)
 - `docs/DECISIONS.md` — this entry.
-- `docs/issues.md` — Issue 56 closed; new Issue 60 filed for the
+- `docs/issues.md` — Issue 56 closed; new Issue 79 filed for the
   implementation.
 
 ### Date

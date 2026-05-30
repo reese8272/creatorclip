@@ -50,6 +50,6 @@ async def get_current_creator(
     # Attribute the rest of this request's queries to the resolved creator.
     # The after_begin listener on AsyncSessionLocal will emit
     # `SET LOCAL app.creator_id = :cid` on every subsequent transaction,
-    # gating RLS policies on tenant-owned tables (Issue 60).
+    # gating RLS policies on tenant-owned tables (Issue 79).
     session.info["creator_id"] = creator.id
     return creator

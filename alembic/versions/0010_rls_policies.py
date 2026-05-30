@@ -1,7 +1,7 @@
-"""Postgres Row-Level Security policies for tenant-owned tables (Issue 60)
+"""Postgres Row-Level Security policies for tenant-owned tables (Issue 79)
 
-Revision ID: e5f6a7b8c9d0
-Revises: d4e5f6a7b8c9
+Revision ID: 0010_rls_policies
+Revises: 0009_improvement_briefs
 Create Date: 2026-05-28
 
 Implements the RLS adopt-now decision from Issue 56. Twelve tables with a
@@ -45,8 +45,8 @@ issue if a query path ever bypasses the parent join.
 
 from alembic import op
 
-revision = "e5f6a7b8c9d0"
-down_revision = "d4e5f6a7b8c9"
+revision = "0010_rls_policies"
+down_revision = "0009_improvement_briefs"
 branch_labels = None
 depends_on = None
 

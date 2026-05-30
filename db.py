@@ -13,7 +13,7 @@ from config import settings
 
 # ── Engines ───────────────────────────────────────────────────────────────────
 #
-# Two engines (Issue 60):
+# Two engines (Issue 79):
 #   - `engine` / `AsyncSessionLocal`: connects as the app role. In production
 #     this role has NO BYPASSRLS, so every transaction is subject to the
 #     row-level-security policies defined in alembic 0005. Sessions created
@@ -95,7 +95,7 @@ class Base(DeclarativeBase):
     pass
 
 
-# ── RLS context injection (Issue 60) ──────────────────────────────────────────
+# ── RLS context injection (Issue 79) ──────────────────────────────────────────
 
 
 @event.listens_for(Session, "after_begin")

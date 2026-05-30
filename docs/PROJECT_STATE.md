@@ -6,14 +6,14 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2 closed (26/26); Issue 60 (RLS implementation) shipped as the first Phase 2-carryover work. Three follow-up issues remain: 58 (email infra), 59 (notifications surface), 61 (Issue 38 W2).
-**Last completed**: Issue 60 — Postgres RLS implementation: roles + policies + FORCE on 12 tables + `after_begin` listener + `AdminSessionLocal` for worker tasks.
+**Active issue**: Phase 2 closed (26/26); Issue 79 (RLS implementation) shipped as the first Phase 2-carryover work. Three follow-up issues remain: 58 (email infra), 59 (notifications surface), 61 (Issue 38 W2).
+**Last completed**: Issue 79 — Postgres RLS implementation: roles + policies + FORCE on 12 tables + `after_begin` listener + `AdminSessionLocal` for worker tasks.
 **Blocked**: _(none)_
 
-> **Closed Issue 60** (2026-05-28): Postgres RLS implementation. Closes the
+> **Closed Issue 79** (2026-05-28): Postgres RLS implementation. Closes the
 > structural defense-in-depth gap that allowed Issue 33 (missed `creator_id`
 > filter → cross-creator analytics in a Claude prompt). New alembic revision
-> `e5f6a7b8c9d0` creates roles `creatorclip_app` (LOGIN, no BYPASSRLS) +
+> `0010_rls_policies` creates roles `creatorclip_app` (LOGIN, no BYPASSRLS) +
 > `creatorclip_migrate` (LOGIN, BYPASSRLS granted out of band), grants the
 > app role full DML on `public` (plus `ALTER DEFAULT PRIVILEGES` for future
 > tables), and enables + forces RLS on the 12 tenant-owned tables
@@ -68,7 +68,7 @@ Updated after every issue closes.
 > ingest pipeline. A full-codebase audit found 23 instances of sync external calls
 > inside `async def` (class 1) or `await` while a DB session was open (class 2);
 > Wave 1 closed all the class (1) findings in the Celery hot path (~14 of 23).
-> Wave 2 is filed as Issue 61 — covers the AsyncAnthropic/AsyncVoyage SDK swap
+> Wave 2 is filed as Issue 82 — covers the AsyncAnthropic/AsyncVoyage SDK swap
 > across `dna/brief.py` / `improvement/brief.py` / `clip_engine/scoring.py`, the
 > router session-order refactor (`routers/auth.py` / `videos.py` / `clips.py` /
 > `billing.py`), the `clip_engine/ranking.py` compute/persist split, and the
@@ -128,10 +128,10 @@ Updated after every issue closes.
 > pooling, unsafe with statement pooling (we don't run pgbouncer today). Sources:
 > Crunchy Data, pganalyze, Bytebase footguns writeup, SQLAlchemy 2.0 async docs
 > + discussion #10469, Microsoft Azure multi-tenant guidance. **Implementation
-> split to new Issue 60** — the Issue 56 spec was explicitly "research-and-decide",
+> split to new Issue 79** — the Issue 56 spec was explicitly "research-and-decide",
 > and the implementation is substantial enough (alembic migration + role split +
 > middleware + mutation audit) to warrant its own focused PR. The decision
-> ships now and Issue 60 inherits the carry-over ACs.
+> ships now and Issue 79 inherits the carry-over ACs.
 
 > **Closed Issue 57** (2026-05-28): Automatic refund on terminal ingest failure.
 > Issue 34 made minute deduction per-video-idempotent, but a terminally-failing ingest

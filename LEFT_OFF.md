@@ -3,14 +3,14 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-28 (PM session 5 — Phase 2 closed + Issue 60 done)
-**Branch:** `main` — 6 commits ahead of `origin/main` after the Issue 60 commit
+**Last updated:** 2026-05-28 (PM session 5 — Phase 2 closed + Issue 79 done)
+**Branch:** `main` — 6 commits ahead of `origin/main` after the Issue 79 commit
 (Issues 46, 57, 56, 52, 38 W1, 60 all committed locally; one push will deploy all).
-**Working tree:** clean after Issue 60 commit.
+**Working tree:** clean after Issue 79 commit.
 **Sync with `origin/main`:** **+6 / 0**.
 **Production:** ✅ green on `autoclip.studio` — last successful deploy at `d5b92df`.
 None of this session's commits are on prod yet; awaiting `git push`. **Note**: Issue
-60's migration `e5f6a7b8c9d0` requires the one-time prod SQL ops in
+79's migration `0010_rls_policies` requires the one-time prod SQL ops in
 `docs/DEPLOYMENT.md` BEFORE the alembic upgrade runs — see "RLS one-time setup"
 section.
 
@@ -18,26 +18,26 @@ section.
 
 ## 1. CURRENT FOCUS
 
-**Phase 2 hardening is fully closed: 26 of 26 issues done. Issue 60 (the RLS implementation split from Issue 56) also shipped.** This session's contributions:
+**Phase 2 hardening is fully closed: 26 of 26 issues done. Issue 79 (the RLS implementation split from Issue 56) also shipped.** This session's contributions:
 
 - **Issue 46** — generate-clips retry safety + outcomes 30-day floor. ✅ Committed `1a8c635`.
 - **Issue 57** — automatic refund on terminal ingest failure. ✅ Committed `1855035`.
 - **Issue 56** — Postgres RLS decide-and-document; adopt-now. ✅ Committed `877eb43`.
 - **Issue 52** — worker pipeline integration tests. ✅ Committed `7ec3c1c`.
 - **Issue 38 Wave 1** — Celery hot-path sync-in-async fixes. ✅ Committed `2c53959`.
-  Wave 2 tracked as **Issue 61**.
-- **Issue 60** — Postgres RLS implementation: alembic `0005_rls_policies`, role split,
+  Wave 2 tracked as **Issue 82**.
+- **Issue 79** — Postgres RLS implementation: alembic `0010_rls_policies`, role split,
   `AdminSessionLocal` for worker tasks, `after_begin` listener, runbook. ✅ Committed.
 
 **Five new issues filed this session** for split-out work:
-- **Issue 58** — transactional email infrastructure (refund email; future password reset, verification, comms)
-- **Issue 59** — in-app notifications surface (refund banner; future deploy notices, quota warnings)
-- **Issue 60** — Postgres RLS implementation per Issue 56 decision
-- **Issue 61** — Issue 38 Wave 2: AsyncAnthropic/AsyncVoyage migration + router session-order + load test
+- **Issue 80** — transactional email infrastructure (refund email; future password reset, verification, comms)
+- **Issue 81** — in-app notifications surface (refund banner; future deploy notices, quota warnings)
+- **Issue 79** — Postgres RLS implementation per Issue 56 decision
+- **Issue 82** — Issue 38 Wave 2: AsyncAnthropic/AsyncVoyage migration + router session-order + load test
 
 ### → NEXT ACTION
 
-1. **One-time prod SQL ops** before pushing (Issue 60 migration requires this) — see
+1. **One-time prod SQL ops** before pushing (Issue 79 migration requires this) — see
    `docs/DEPLOYMENT.md` "RLS one-time setup": `ALTER ROLE creatorclip_migrate
    BYPASSRLS`, set role passwords, transfer table ownership, update
    `/opt/autoclip/.env` with `DATABASE_MIGRATION_URL`. The Dockerized
@@ -45,12 +45,12 @@ section.
 2. **Push all 6 commits to origin** in one go after the prod prep. CI runs; Docker
    publish triggers prod deploy for all commits.
 3. **Three issues remain in the codebase backlog**:
-   - **Issue 61 (Issue 38 Wave 2)** — AsyncAnthropic / AsyncVoyage migration; router
+   - **Issue 82 (Issue 38 Wave 2)** — AsyncAnthropic / AsyncVoyage migration; router
      session-order refactor; pool starvation load test. Closes the remaining ~9 of 23
      findings from the Issue 38 audit.
-   - **Issue 58** — transactional email infrastructure. First consumer: refund email
+   - **Issue 80** — transactional email infrastructure. First consumer: refund email
      (Issue 57 carry-over).
-   - **Issue 59** — in-app notifications surface. First consumer: refund banner
+   - **Issue 81** — in-app notifications surface. First consumer: refund banner
      (Issue 57 carry-over).
 4. After those land, the only open work is **Phase 3 = pre-public-launch gates**:
    public-go-live (Issue 30), Google OAuth app verification (external), eval-harness
@@ -61,7 +61,7 @@ section.
 ## 2. WHAT WORKS NOW (do not re-investigate)
 
 - ✅ **All 26 Phase 2 hardening issues closed**: 32–57 (with 38 closed as "Wave 1 done";
-  Wave 2 separated to Issue 61).
+  Wave 2 separated to Issue 82).
 - ✅ **Test suite green locally**: `381 passed, 1 skipped, 54 deselected` (was 373 at session
   start → +6 unit, +8 integration this session: +2 outcomes predicate, +3 generate-clips
   integration, +3 refund integration, +5 worker pipeline integration).
@@ -76,7 +76,7 @@ section.
 - ✅ **Poll-clip-outcomes bounded** (Issue 46): 30-day floor on `Clip.created_at`.
 - ✅ **Auto-refund on terminal ingest failure** (Issue 57): `RefundOnFailureTask` base class.
 - ✅ **Worker pipeline integration tests** (Issue 52): all 7 async functions + 5 ACs pinned.
-- ✅ **Postgres RLS decision** (Issue 56): adopt-now decision shipped; implementation = Issue 60.
+- ✅ **Postgres RLS decision** (Issue 56): adopt-now decision shipped; implementation = Issue 79.
 - ✅ **Celery hot-path async correctness** (Issue 38 W1): `worker/storage.py` async wrappers
   in use; all sync calls in `_ingest_async`/`_transcribe_async`/`_signals_async`/
   `_render_clip_async`/`_build_dna_async`/`_purge_stale_source_media_async` are now
@@ -115,7 +115,7 @@ section.
 | **App secrets on VM** | `/opt/autoclip/.env` (chmod 600 — see `docs/SECRETS.md`) |
 | **Test runner** | **`.venv/bin/python -m pytest -q`** |
 | **Lint runner** | **BOTH `.venv/bin/python -m ruff check .` AND `.venv/bin/python -m ruff format --check .`** |
-| **Active issue** | _(none in flight)_ — Phase 2 closed; pick Issue 60 / 61 / 58 / 59 / Phase 3 |
+| **Active issue** | _(none in flight)_ — Phase 2 closed; pick Issue 79 / 61 / 58 / 59 / Phase 3 |
 | **Last completed** | Issue 38 W1 (2026-05-28 PM session 5) |
 | **Latest alembic revision** | `d4e5f6a7b8c9` — `0004_video_done_creator_refreshed` |
 | **Phase 2 progress** | **26 of 26 closed** |
@@ -151,7 +151,7 @@ section.
 - **Issue 38 W1 `_purge_stale_source_media_async` is now two-session**: select
   tuples → close → boto3 loop → reopen → single UPDATE. Tests in
   `test_retention_tasks.py` patch the new shape.
-- **Issue 56 RLS is decided but not implemented** — Issue 60 implementation must
+- **Issue 56 RLS is decided but not implemented** — Issue 79 implementation must
   split DB roles before any policies are deployed (the app role must not own the
   tables or it bypasses RLS).
 - **Issue 52 tests cannot be validated locally** (no Postgres in WSL); designed

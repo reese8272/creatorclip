@@ -1,5 +1,5 @@
 """
-Integration tests for Issue 60 — Postgres Row-Level Security tenant isolation.
+Integration tests for Issue 79 — Postgres Row-Level Security tenant isolation.
 
 The test strategy assumes the surrounding test infra (docker-compose dev /
 integration.yml CI) connects as a SUPERUSER. Within each test we issue

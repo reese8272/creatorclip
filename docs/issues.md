@@ -593,7 +593,7 @@ with no `timeout=` and no retry policy. Each SDK call can hang the worker indefi
 ### Issue 38: Sync external calls inside `async def` + held DB sessions
 **Severity**: SEV-1 — DB connection pool starvation under LLM load
 **Depends on**: 32, 37
-**Status**: ✅ Wave 1 Done (2026-05-28) — Wave 2 tracked as Issue 61
+**Status**: ✅ Wave 1 Done (2026-05-28) — Wave 2 tracked as Issue 82
 
 **What**: Sync calls (sync Anthropic, sync Voyage, sync Deepgram, boto3, subprocess) run
 inside `async def` while an AsyncSession is open. The connection is pinned for the entire
@@ -604,7 +604,7 @@ class (1) sync-in-async and class (2) await-while-session-open patterns. Split i
 two waves to keep PRs reviewable:
 
 - **Wave 1 (this issue)** — Celery hot-path class (1) fixes. ✅ Done.
-- **Wave 2 (Issue 61)** — AsyncAnthropic / AsyncVoyage migration in `dna/brief.py`,
+- **Wave 2 (Issue 82)** — AsyncAnthropic / AsyncVoyage migration in `dna/brief.py`,
   `improvement/brief.py`, `clip_engine/ranking.py`; router session-order refactor in
   `routers/auth.py`, `routers/videos.py`, `routers/clips.py`; the load test.
 
@@ -618,8 +618,8 @@ integration test patches updated for `alocal_path`).
 
 **Acceptance criteria**:
 - [x] Sync calls in the Celery ingest pipeline wrapped in `asyncio.to_thread` (Wave 1: probe_duration_s, extract_audio_wav, transcribe_audio, extract_audio_events, render_clip_file, upload_file, delete_file, Voyage `_embed`, sync Anthropic `generate_brief`)
-- [→] Where Anthropic supports it, switch to `AsyncAnthropic` → **tracked as Issue 61**
-- [→] Load test: 10 concurrent improvement-brief calls do not exhaust the connection pool → **tracked as Issue 61** (depends on routers/improvement.py refactor which is also in Wave 2)
+- [→] Where Anthropic supports it, switch to `AsyncAnthropic` → **tracked as Issue 82**
+- [→] Load test: 10 concurrent improvement-brief calls do not exhaust the connection pool → **tracked as Issue 82** (depends on routers/improvement.py refactor which is also in Wave 2)
 
 ---
 
@@ -941,7 +941,7 @@ existing test files rather than a new file per item.
 ### Issue 56: Evaluate Postgres Row-Level Security for tenant-owned tables
 **Severity**: SEV-2 — defense-in-depth against future missed creator_id filters
 **Depends on**: 32, 48
-**Status**: ✅ Done (2026-05-28) — decision: **adopt now**; implementation tracked as new Issue 60
+**Status**: ✅ Done (2026-05-28) — decision: **adopt now**; implementation tracked as new Issue 79
 
 **What**: The current isolation model is application-layer always-filter — every protected
 query carries `where(creator_id == ...)`. This is the 2026 industry-standard foundation,
@@ -967,8 +967,8 @@ RLS-aware test updates, `docs/SOT.md` + `docs/DECISIONS.md` + `docs/COMPLIANCE.m
 **Acceptance criteria**:
 - [x] Phase 1: research current production patterns for RLS + SQLAlchemy 2.0 + async (pgbouncer compatibility pinned in DECISIONS: safe with transaction pooling, unsafe with statement pooling; we don't run pgbouncer today)
 - [x] Decision documented in `docs/DECISIONS.md`: **adopt now**
-- [→] If adopted: RLS policies cover every table with a `creator_id` column; migration role retains BYPASSRLS for alembic upgrades → **tracked as Issue 60**
-- [→] If adopted: Issue 48 isolation tests extended to assert "unfiltered query returns zero rows for non-current creator" → **tracked as Issue 60**
+- [→] If adopted: RLS policies cover every table with a `creator_id` column; migration role retains BYPASSRLS for alembic upgrades → **tracked as Issue 79**
+- [→] If adopted: Issue 48 isolation tests extended to assert "unfiltered query returns zero rows for non-current creator" → **tracked as Issue 79**
 
 ---
 
@@ -1005,7 +1005,7 @@ failed ingest. The product needs a policy for this.
 
 ---
 
-### Issue 58: Transactional email infrastructure
+### Issue 80: Transactional email infrastructure
 **Severity**: FEATURE — enables refund email + future password-reset / verification / launch comms
 **Depends on**: 57
 **Status**: 🔲 Not started
@@ -1037,7 +1037,7 @@ quota-warning, and launch comms.
 
 ---
 
-### Issue 59: In-app notifications surface
+### Issue 81: In-app notifications surface
 **Severity**: FEATURE — enables refund banner + future deploy notices / quota warnings
 **Depends on**: 57
 **Status**: 🔲 Not started
@@ -1069,7 +1069,7 @@ warnings, "your trial expires in N days", and YouTube re-auth prompts.
 
 ---
 
-### Issue 61: Issue 38 Wave 2 — AsyncAnthropic + AsyncVoyage migration + router session-order refactor
+### Issue 82: Issue 38 Wave 2 — AsyncAnthropic + AsyncVoyage migration + router session-order refactor
 **Severity**: SEV-2 — closes remaining ~9 of 23 findings from the Issue 38 audit; pool starvation under web-request load
 **Depends on**: 38 ✅ (Wave 1)
 **Status**: 🔲 Not started
@@ -1108,7 +1108,7 @@ Findings carry-over from Issue 38 audit:
 
 ---
 
-### Issue 60: Implement Postgres Row-Level Security per Issue 56 decision
+### Issue 79: Implement Postgres Row-Level Security per Issue 56 decision
 **Severity**: SEV-2 — structural defense-in-depth against cross-tenant leaks
 **Depends on**: 56 ✅
 **Status**: ✅ Done (2026-05-28)
@@ -1129,7 +1129,7 @@ checks), `tests/test_isolation.py` (extend per AC4),
 **Acceptance criteria**:
 - [x] Alembic migration creates SELECT policies on all 12 tables listed in
       Issue 56's DECISIONS entry; `FORCE ROW LEVEL SECURITY` on each
-      (alembic revision `e5f6a7b8c9d0`)
+      (alembic revision `0010_rls_policies`)
 - [x] Role split: `creatorclip_app` (no BYPASSRLS, not table owner);
       `creatorclip_migrate` with BYPASSRLS; new env var
       `DATABASE_MIGRATION_URL` documented in `docs/SECRETS.md`

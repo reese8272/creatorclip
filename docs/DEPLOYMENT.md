@@ -83,9 +83,9 @@ See `docs/PROJECT_STATE.md` Pre-Public-Launch Gates section.
 
 ---
 
-## RLS one-time setup (Issue 60)
+## RLS one-time setup (Issue 79)
 
-Alembic migration `0005_rls_policies` introduces Postgres Row-Level Security
+Alembic migration `0010_rls_policies` introduces Postgres Row-Level Security
 on 12 tenant-owned tables. The application connects as `creatorclip_app`
 (no `BYPASSRLS`); migrations and Celery worker tasks connect as
 `creatorclip_migrate` (`BYPASSRLS`). The migration itself only creates the
@@ -94,7 +94,7 @@ table ownership transfer must be performed once by an operator with
 `SUPERUSER`.
 
 **One-time prod ops (run BEFORE the first alembic upgrade that includes
-revision `e5f6a7b8c9d0`):**
+revision `0010_rls_policies`):**
 
 ```sql
 -- 1. Grant BYPASSRLS to the migration role (created by the migration with

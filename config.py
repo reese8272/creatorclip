@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str
 
-    # --- Postgres RLS (Issue 60) ---
+    # --- Postgres RLS (Issue 79) ---
     # Connection string for the migration / admin role. Must point to a role
     # with BYPASSRLS (used by Alembic migrations and Celery worker tasks that
     # operate cross-tenant). Falls back to DATABASE_URL when unset, which is
