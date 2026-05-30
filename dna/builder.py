@@ -20,6 +20,7 @@ from models import (
     Signals,
     Transcript,
     Video,
+    VideoKind,
     VideoMetrics,
 )
 
@@ -112,6 +113,10 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
             Video.ingest_status == IngestStatus.done,
             VideoMetrics.engagement_rate.is_not(None),
         )
+        # Bound the fetch to the most-recent N so a huge catalog can't exhaust worker
+        # memory; recency-weighted ranking already favors recent content. (Issue B)
+        .order_by(Video.published_at.desc().nullslast())
+        .limit(settings.DNA_MAX_CANDIDATE_VIDEOS)
     )
     scored: list[dict] = []
     for video, metrics in result.all():
@@ -134,30 +139,54 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
     return sorted(scored, key=lambda v: v["weighted_score"], reverse=True)
 
 
-async def _enrich_video(session: AsyncSession, v: dict) -> None:
-    """Attach hook text, signal counts, and retention data to a video dict in-place."""
-    vid_id = v["video_id"]
+async def _enrich_videos(session: AsyncSession, videos: list[dict]) -> None:
+    """Attach hook text, signal counts, and retention data to each video dict in-place.
 
-    transcript = await session.get(Transcript, vid_id)
-    v["hook_text"] = _hook_text(transcript.segments_jsonb) if transcript else ""
+    Batched into 3 IN-queries total, regardless of video count — previously 3 round
+    trips per video, an N+1 of up to ~60 queries per build. (Issue B)
+    """
+    if not videos:
+        return
+    ids = [v["video_id"] for v in videos]
 
-    signals = await session.get(Signals, vid_id)
-    if signals:
-        timeline = signals.timeline_jsonb
-        v["energy_spike_count"] = len(timeline.get("energy_spikes", []))
-        v["laughter_count"] = len(timeline.get("laughter", []))
-    else:
-        v["energy_spike_count"] = 0
-        v["laughter_count"] = 0
+    transcripts = {
+        t.video_id: t
+        for t in (
+            await session.execute(select(Transcript).where(Transcript.video_id.in_(ids)))
+        ).scalars()
+    }
+    signals_map = {
+        s.video_id: s
+        for s in (await session.execute(select(Signals).where(Signals.video_id.in_(ids)))).scalars()
+    }
+    retention: dict[uuid.UUID, list] = {}
+    ret_rows = (
+        await session.execute(
+            select(RetentionCurve)
+            .where(RetentionCurve.video_id.in_(ids))
+            .order_by(RetentionCurve.video_id, RetentionCurve.timestamp_s)
+        )
+    ).scalars()
+    for r in ret_rows:
+        retention.setdefault(r.video_id, []).append(r)
 
-    ret_result = await session.execute(
-        select(RetentionCurve)
-        .where(RetentionCurve.video_id == vid_id)
-        .order_by(RetentionCurve.timestamp_s)
-    )
-    retention_rows = list(ret_result.scalars())
-    v["retention_spike_times"] = [r.timestamp_s for r in retention_rows if r.is_rewatch_spike]
-    v["best_source_region"] = _best_source_region(retention_rows, v.get("duration_s"))
+    for v in videos:
+        vid_id = v["video_id"]
+        transcript = transcripts.get(vid_id)
+        v["hook_text"] = _hook_text(transcript.segments_jsonb) if transcript else ""
+
+        signals = signals_map.get(vid_id)
+        if signals:
+            timeline = signals.timeline_jsonb
+            v["energy_spike_count"] = len(timeline.get("energy_spikes", []))
+            v["laughter_count"] = len(timeline.get("laughter", []))
+        else:
+            v["energy_spike_count"] = 0
+            v["laughter_count"] = 0
+
+        rows = retention.get(vid_id, [])
+        v["retention_spike_times"] = [r.timestamp_s for r in rows if r.is_rewatch_spike]
+        v["best_source_region"] = _best_source_region(rows, v.get("duration_s"))
 
 
 def _video_summary(v: dict) -> dict:
@@ -198,8 +227,10 @@ async def build_patterns(
     """
     ranked = await rank_videos(session, creator_id)
 
-    longs = [v for v in ranked if v["kind"] == "long"]
-    shorts = [v for v in ranked if v["kind"] == "short"]
+    # Compare against the enum value, not a bare literal, so a VideoKind rename is a
+    # loud import error rather than two silently-empty buckets. (Issue B)
+    longs = [v for v in ranked if v["kind"] == VideoKind.long.value]
+    shorts = [v for v in ranked if v["kind"] == VideoKind.short.value]
 
     if len(longs) < settings.MIN_VIDEOS_FOR_DNA and len(shorts) < settings.MIN_SHORTS_FOR_DNA:
         raise ValueError(
@@ -220,8 +251,7 @@ async def build_patterns(
     top_all = top_long + top_short
     bottom_all = bottom_long + bottom_short
 
-    for v in top_all + bottom_all:
-        await _enrich_video(session, v)
+    await _enrich_videos(session, top_all + bottom_all)
 
     def _avg(vals: list) -> float | None:
         valid = [x for x in vals if x is not None]

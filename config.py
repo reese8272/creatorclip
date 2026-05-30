@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
+    # Cap the DNA candidate set so a power user with thousands of videos doesn't pull
+    # the whole catalog into worker memory. We take the most-recent N (recency-weighted
+    # scoring already favors recent content). (Issue B)
+    DNA_MAX_CANDIDATE_VIDEOS: int = 500
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
     # Max weight the preference model gets in the rerank blend once mature. Below
     # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);
