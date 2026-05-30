@@ -324,8 +324,10 @@
       });
       if (resp.ok) {
         const data = await resp.json();
-        status.textContent = `✓ Saved as v${data.version}. We'll use this on the next clip pass.`;
-        status.style.color = '#2ecc71';
+        // The clip scorer caches the DNA brief (which is what carries identity
+        // into the LLM prompt), so identity edits take effect on the NEXT
+        // DNA rebuild — point the creator at the Rebuild button explicitly.
+        status.innerHTML = `<span style="color:#2ecc71">✓ Saved as v${data.version}.</span> Click <strong>↺ Rebuild DNA</strong> above to apply this to your next clip pass.`;
         await loadIdentity();
       } else {
         const data = await resp.json().catch(() => ({}));
