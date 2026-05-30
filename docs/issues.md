@@ -1446,8 +1446,13 @@ the retired branch for reference):
   figure, then a scheduled purge of stale VideoMetrics/RetentionCurve/etc.
 - [ ] **PgBouncer load-test harness** — to actually verify the axis-A pool BLOCKER fix
   (Issue 58) under load.
-- [ ] **Legal routes / Limited Use / CORS lockdown** — reconcile with what already shipped
-  (ToS/Privacy pages exist; `ALLOWED_ORIGINS` already locked) and port only the delta.
+- [x] **Legal routes / Limited Use / CORS lockdown** (Issue 78g, 2026-05-30) — reconciled
+  with what already shipped. Verified already-done: CORS locked to `ALLOWED_ORIGINS` (never
+  `*`, `main.py`); `/docs`+`/redoc` gated on `ENV=="development"`; `static/tos.html` +
+  `static/privacy.html` served + tested. The genuine delta was the **Google Limited Use
+  disclosure** — required by `docs/COMPLIANCE.md` in the public Privacy Policy before launch
+  but absent; added the canonical attestation + the four Limited-Use commitments to
+  `static/privacy.html`, with a test pinning the required language.
 
 ---
 
