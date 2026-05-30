@@ -1,7 +1,7 @@
-import asyncio
 import logging
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,75 +9,114 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from db import get_session
 from limiter import limiter
-from models import Creator, Video, VideoMetrics
+from models import Creator, ImprovementBrief, ImprovementBriefStatus, Video, VideoMetrics
 
 router = APIRouter(prefix="/creators", tags=["improvement"])
 logger = logging.getLogger(__name__)
 
 
+class BriefQueuedOut(BaseModel):
+    status: str
+    task_id: str | None
+
+
 class ImprovementBriefOut(BaseModel):
-    brief: str
+    status: str  # pending | ready | failed | none
+    brief: str | None
+    requested_at: str | None
+    completed_at: str | None
+    error: str | None
+
+
+@router.post(
+    "/me/improvement-brief",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=BriefQueuedOut,
+)
+@limiter.limit("10/hour")
+async def start_improvement_brief(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Queue an improvement-brief build for the current creator. Returns 202.
+
+    The brief is a ~120s Claude + web_search call — too long for the request path
+    (it can exceed a load-balancer timeout), so it runs in a Celery task and the
+    GET handler polls the stored row. Mirrors the DNA-build 202 + poll precedent.
+    """
+    # Cheap, good-UX guards kept on the POST so a brand-new creator gets an
+    # immediate, honest 400 instead of a pending job that can only fail later.
+    if not creator.channel_id:
+        raise HTTPException(status_code=400, detail="Channel not connected")
+
+    # "Has any VideoMetrics for THIS creator" — scoped to the creator (the prior
+    # unscoped query was a SEV-0 cross-creator leak, Issue 33). The full analytics
+    # build happens in the worker; this is just a cheap existence check.
+    has_metrics = await session.scalar(
+        select(VideoMetrics.video_id)
+        .join(Video, VideoMetrics.video_id == Video.id)
+        .where(Video.creator_id == creator.id)
+        .limit(1)
+    )
+    if has_metrics is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough data yet — link some videos first.",
+        )
+
+    # One row per creator. Debounce: an in-flight build returns 202 without
+    # re-enqueuing, so repeated clicks collapse onto the same job.
+    row = await session.scalar(
+        select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
+    )
+    if row is not None and row.status == ImprovementBriefStatus.pending:
+        return {"status": "pending", "task_id": row.job_id}
+
+    if row is None:
+        row = ImprovementBrief(creator_id=creator.id)
+        session.add(row)
+    row.status = ImprovementBriefStatus.pending
+    row.requested_at = datetime.now(UTC)
+    row.brief_text = None
+    row.error = None
+    row.completed_at = None
+    row.job_id = None
+    await session.commit()
+
+    from worker.tasks import generate_improvement_brief as generate_improvement_brief_task
+
+    task = generate_improvement_brief_task.delay(str(creator.id))
+    row.job_id = task.id
+    await session.commit()
+    logger.info("Improvement brief queued for creator %s (task %s)", creator.id, task.id)
+
+    return {"status": "pending", "task_id": task.id}
 
 
 @router.get("/me/improvement-brief", response_model=ImprovementBriefOut)
-@limiter.limit("10/hour")
+@limiter.limit("120/minute")
 async def get_improvement_brief(
     request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Generate a data + research grounded improvement brief via Claude + web_search."""
-    if not creator.channel_id:
-        raise HTTPException(status_code=400, detail="Channel not connected")
-
-    # Build analytics summary for the prompt. Scoped to THIS creator only —
-    # the prior unscoped query was a SEV-0 cross-creator leak (Issue 33).
-    metrics_result = await session.execute(
-        select(VideoMetrics)
-        .join(Video, VideoMetrics.video_id == Video.id)
-        .where(Video.creator_id == creator.id)
-        .order_by(VideoMetrics.fetched_at.desc())
-        .limit(50)
+    """Return the stored improvement brief for the current creator (poll target)."""
+    row = await session.scalar(
+        select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
     )
-    all_metrics = list(metrics_result.scalars())
-    if not all_metrics:
-        raise HTTPException(
-            status_code=400,
-            detail="Not enough data yet — link some videos first.",
-        )
-    views_list = [m.views for m in all_metrics if m.views]
-    eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
-    dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
-
-    def _avg(lst):
-        return sum(lst) / len(lst) if lst else None
-
-    analytics = {
-        "channel_title": creator.channel_title,
-        "videos_in_db": len(all_metrics),
-        "avg_views": _avg(views_list),
-        "avg_engagement_rate": _avg(eng_list),
-        "avg_view_duration_s": _avg(dur_list),
+    if row is None:
+        return {
+            "status": "none",
+            "brief": None,
+            "requested_at": None,
+            "completed_at": None,
+            "error": None,
+        }
+    return {
+        "status": row.status.value,
+        "brief": row.brief_text,
+        "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "error": row.error,
     }
-
-    from dna.profile import get_active
-
-    dna_profile = await get_active(session, creator.id)
-    dna_brief = dna_profile.brief_text if dna_profile else None
-
-    from improvement.brief import generate_improvement_brief
-
-    try:
-        # 120s Anthropic+web_search call — offload so it never pins the API event
-        # loop and stall other concurrent requests on this worker. (Issue 66)
-        brief_text = await asyncio.to_thread(
-            generate_improvement_brief,
-            channel_title=creator.channel_title or "Unknown Channel",
-            analytics=analytics,
-            dna_brief=dna_brief,
-        )
-    except Exception as exc:
-        logger.error("Improvement brief generation failed: %s", exc)
-        raise HTTPException(status_code=502, detail="Brief generation failed — try again.") from exc
-
-    return {"brief": brief_text}

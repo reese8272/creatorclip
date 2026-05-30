@@ -558,3 +558,46 @@ async def append_audit(
             after_jsonb=after,
         )
     )
+
+
+# ── Improvement brief (async 202 + poll) ──────────────────────────────────────
+
+
+class ImprovementBriefStatus(enum.Enum):
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
+class ImprovementBrief(Base):
+    """Async-generated content-improvement brief for a creator (Issue 78d).
+
+    One row per creator. The POST endpoint resets it to ``pending`` and enqueues a
+    Celery task; the task runs the ~120s Claude + web_search call and writes
+    ``brief_text``/``status``; the GET endpoint polls this row. Mirrors the
+    DNA-build 202 + poll precedent so the long call never sits on the request path.
+    """
+
+    __tablename__ = "improvement_briefs"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[ImprovementBriefStatus] = mapped_column(
+        sa.Enum(ImprovementBriefStatus, name="improvement_brief_status"),
+        nullable=False,
+        default=ImprovementBriefStatus.pending,
+    )
+    brief_text: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Safe, user-facing failure message only — never a stack trace or token/PII.
+    error: Mapped[str | None] = mapped_column(sa.String(256), nullable=True)
+    # Celery task id of the in-flight / last build — the idempotency handle.
+    job_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)

@@ -414,8 +414,13 @@ async def test_upload_intel_scoped_to_creator(db_session: AsyncSession, client):
 
 @pytest.mark.integration
 async def test_improvement_brief_scoped_to_creator(db_session: AsyncSession, client, mocker):
-    """GET /creators/me/improvement-brief feeds only the requesting creator's metrics."""
+    """The improvement-brief worker task feeds only the requesting creator's metrics.
+
+    The analytics build moved from the GET handler into the Celery task (Issue 78d);
+    this drives the task path. The isolation guarantee (Issue 33) is unchanged.
+    """
     from datetime import datetime as _dt
+    from unittest.mock import MagicMock as _MagicMock
 
     from models import VideoMetrics
 
@@ -455,10 +460,17 @@ async def test_improvement_brief_scoped_to_creator(db_session: AsyncSession, cli
         return "stubbed brief"
 
     mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_stub)
+    fake_task = _MagicMock()
+    fake_task.id = "job-iso2"
+    mocker.patch("worker.tasks.generate_improvement_brief.delay", return_value=fake_task)
 
     try:
-        resp = client.get("/creators/me/improvement-brief", cookies=_cookie(creator_a))
-        assert resp.status_code == 200
+        start = client.post("/creators/me/improvement-brief", cookies=_cookie(creator_a))
+        assert start.status_code == 202
+
+        from worker.tasks import _generate_improvement_brief_async
+
+        await _generate_improvement_brief_async("job-iso2", str(creator_a.id))
         assert captured["analytics"]["avg_views"] == pytest.approx(1_000.0)
         assert captured["analytics"]["videos_in_db"] == 1
     finally:
