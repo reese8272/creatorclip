@@ -135,8 +135,15 @@ def _set_app_creator_id(session, transaction, connection):
     creator_id = session.info.get("creator_id")
     if creator_id is None:
         return
+    # `SET LOCAL` is utility SQL and does NOT accept bind parameters in any
+    # Postgres protocol path — psycopg routes it as a regular `Execute` and
+    # the server rejects the `$1` placeholder with a syntax error. The
+    # `set_config(setting_name, new_value, is_local)` function is the
+    # parameterized equivalent — `is_local=true` makes it transaction-scoped
+    # so it's wiped by COMMIT/ROLLBACK, matching `SET LOCAL` semantics.
+    # See: https://www.postgresql.org/docs/current/functions-admin.html
     connection.execute(
-        text("SET LOCAL app.creator_id = :cid"),
+        text("SELECT set_config('app.creator_id', :cid, true)"),
         {"cid": str(creator_id)},
     )
 

@@ -61,7 +61,7 @@ class RefundOnFailureTask(Task):
     `pack_id=refund:<video_id>` so a duplicate on_failure invocation is safe.
     """
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):  # type: ignore[override]
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
         from billing.refund import refund_for_video
 
         video_id_raw = args[0] if args else kwargs.get("video_id")
@@ -524,7 +524,6 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
                 )
                 return
 
-
         creator = await session.get(Creator, creator_uuid)
         if not creator:
             raise ValueError(f"Creator {creator_id} not found")
@@ -767,13 +766,20 @@ async def _purge_stale_source_media_async() -> None:
                 )
             )
         )
-        targets: list[tuple[uuid.UUID, str]] = list(result.all())
+        # `.all()` returns Sequence[Row[...]] which is Row-iterable and
+        # unpacks to (uuid, str|None) per row. Untyped because Row's
+        # bracketed type doesn't equal `tuple[...]` in the eyes of mypy.
+        # The WHERE clause filters `source_uri.isnot(None)`; the loop below
+        # still skips defensive None so type-narrowing stays trivial.
+        targets = result.all()
 
     if not targets:
         return
 
     purged_ids: list[uuid.UUID] = []
     for video_id, source_uri in targets:
+        if source_uri is None:
+            continue
         try:
             await adelete_file(source_uri)
             purged_ids.append(video_id)
