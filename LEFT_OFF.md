@@ -1,186 +1,94 @@
 # LEFT_OFF — Session Handoff Contract
 
-> **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
-> truth — those live in `docs/`. Updated at the end of every session.
+> **Read this first.** Living "where we are right now" file. Not a changelog, not a source
+> of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-30 (reconciliation merge pushed; deploy green; RLS activation pending)
-**Branch:** `main` only (6 feature branches deleted from origin; PR #15 closed).
-**Working tree:** clean.
-**Sync with `origin/main`:** **0 / 0** — pushed.
-**Production:** ✅ **DEPLOYED.** GH Actions deploy job `26691893870` succeeded at 18:43 UTC; alembic upgrade ran
-through head `0010_rls_policies`; health endpoint returned `{"status":"ok","postgres":"ok","redis":"ok"}`.
-**RLS posture:** ⚠️ **migration applied but NOT enforced yet.** The app is still connecting as SUPERUSER
-`creatorclip` which bypasses RLS by default. The roles `creatorclip_app` and `creatorclip_migrate` exist
-(created by 0010 with LOGIN-only) but have no passwords and no BYPASSRLS attribute. Activation is a separate
-one-time step — see **NEXT ACTION #1**.
-
----
-
-## 0. RECONCILE NOTE (this session's first action — read before anything else)
-
-Two timelines existed concurrently between 2026-05-28 and 2026-05-30:
-
-- **Local `main`** shipped Issues 38 W1, 46, 52, 56, 57, 60 (RLS) into 6 unpushed commits.
-- **Origin `main`** shipped Issues 58–78c, the beta launch, and the AutoClip rebrand (PRs #5, #8–#14).
-
-Both used the issue number "60" for entirely different work (local = RLS implementation,
-origin = personalization loop). Local-side numbers were re-issued to a free range before the merge:
-
-| Local was | Now | Status |
-|---|---|---|
-| Issue 60 (RLS, **shipped**) | **Issue 79** | ✅ Done — see DECISIONS 2026-05-28 |
-| Issue 58 (transactional email placeholder) | **Issue 80** | 🔲 Not started |
-| Issue 59 (in-app notifications placeholder) | **Issue 81** | 🔲 Not started |
-| Issue 61 (Issue 38 Wave 2 placeholder) | **Issue 82** | 🔲 Not started |
-
-Alembic migration `0005_rls_policies` was renamed to `0010_rls_policies` and re-chained to
-`down_revision = "0009_improvement_briefs"` so origin's 0005–0009 migrations stay linear.
-
-Six remote feature branches (already squash-merged into origin/main as PRs #9–#14) and the duplicate
-open PR #15 will be cleaned up after the push — see **NEXT ACTION #2 + #3**.
+**Last updated:** 2026-05-30 (Issue 86 closed end-to-end · Dockerfile PYTHONPATH hotfix · full `/assess` re-run)
+**Branch:** `main` — HEAD `bbfa3c8`. Only `main` exists locally and on origin.
+**Working tree:** dirty — `LEFT_OFF.md` (this file, in-flight), `docs/assessment/REPORT.md` + all 11 `docs/assessment/modules/*.md` + new `docs/assessment/history/2026-05-30-post-issue-86-REPORT.md` (fresh `/assess` output). Plus untracked `Screenshot 2026-05-30 155339.png` (the user's stuck-DNA screenshot that kicked off the session — can be deleted).
+**Sync with `origin/main`:** **0 / 0** — in sync.
+**Production:** ✅ Deployed. Last deploy `26696877304` succeeded on commit `bbfa3c8`; `/health` returning `{"status":"ok","postgres":"ok","redis":"ok"}`. All 5 CI lanes green on HEAD (CI, Quality Gates, Integration tests, Docker publish, Deploy).
+**RLS posture:** ⚠️ unchanged from prior session — migration `0010_rls_policies` applied, roles exist, BUT not yet *enforced*. App still connects as SUPERUSER `creatorclip`. Activation is a manual one-time step via `.github/workflows/activate-rls.yml` once the user adds the two `POSTGRES_*_PASSWORD` repo Secrets.
 
 ---
 
 ## 1. CURRENT FOCUS
 
-**Issue 78 — re-implementing the net-new pieces salvaged from the closed PR #6**, plus the
-local-main hardening work (Issues 79, 56, 57, 52, 46, 38 W1) just merged in:
+**Nothing in flight.** Issue 86 closed this session — live SSE progress streaming for long-running LLM + worker tasks (DNA build is the first wired call site). A full `/assess` was run after: **PRODUCTION-READY = CONDITIONAL**, 0 BLOCKERs, 2 SEV1s, 27 SEV2s, 28 cleanups. Pre-existing CONDITIONAL posture maintained; SEV1 count went 4 → 2 (net improvement); scale axis D moved ⚠️ → ✅ via RLS structural enforcement; scale axis B moved ⚠️ → ✅ via clip_engine CPU off the loop.
 
-| Item | PR / Commit | What |
-|------|----|------|
-| 78a | #9  | per-(creator, version) preference-scorer cache (`preference/_scorer_cache.py`) |
-| 78b | #10 | clip-scorer prompt caching — 1h TTL + stable-first ordering (`clip_engine/scoring.py`) |
-| 78d | #11 | improvement-brief → 202 + poll async Celery (new `ImprovementBrief` model, migration **0009**) |
-| 78g | #12 | Google **Limited Use** disclosure in `static/privacy.html` (was an OAuth-verification blocker) |
-| 78c | #13 + #14 | **mypy 30 → 0** (pydantic.mypy plugin + real fixes + targeted SDK-stub ignores) |
-| 79  | 7e120d3 | Postgres RLS on 12 tenant-owned tables, role split, `AdminSessionLocal`, runbook (migration **0010**) |
-| 56  | 877eb43 | RLS decide-and-document (decision-only; implementation = Issue 79) |
-| 57  | 1855035 | Automatic refund on terminal ingest failure (3 ingest tasks) |
-| 52  | 7ec3c1c | Worker pipeline integration tests (all 7 async fns, 5 ACs) |
-| 46  | 1a8c635 | Generate-clips retry safety + outcomes time-window bound |
-| 38 W1 | 2c53959 | Celery hot-path sync-in-async fixes (async storage wrappers, thread-offload) |
+Four independent threads are queued. The user picks which to start next — each has a clean Phase-1 CHECK in front of it; do NOT start any without one.
 
-> **78c needed a hotfix (#14) — read this.** #13 over-reached by also enabling
-> `disallow_untyped_defs`, which surfaces ~18 PRE-EXISTING untyped-def signatures that were never
-> in the 30-error backlog; it was also merged before its Types CI job finished (that job *failed*,
-> briefly red-gating `main`). #14 reverted the ratchet flags (back to commented-out in
-> `[tool.mypy]`) and fixed 2 misplaced `# type: ignore`. **mypy is now a true 0 under the
-> committed gradual config.** The 30→0 deliverable stands; the ratchet is deferred (see NEXT #4).
+### → NEXT ACTION (pick one, in any order)
 
-### → NEXT ACTION (in priority order)
+1. **Commit the `/assess` artifacts + this LEFT_OFF.md** — currently dirty in the working tree, not yet on `main`. Single commit, no code change, safe to land:
+   ```bash
+   git add LEFT_OFF.md docs/assessment/REPORT.md docs/assessment/modules/*.md docs/assessment/history/2026-05-30-post-issue-86-REPORT.md
+   git commit -m "chore(assessment): /assess re-run post Issue 86 — VERDICT: CONDITIONAL"
+   git push origin main
+   ```
+   The untracked screenshot can be deleted (`rm "Screenshot 2026-05-30 155339.png"`) — it was the user's stuck-DNA screenshot that triggered the PYTHONPATH hotfix; no longer needed.
 
-1. **Activate RLS enforcement** via the new `.github/workflows/activate-rls.yml` workflow
-   (`workflow_dispatch` only). Sequence:
-   1. Add two repo Secrets at **Settings → Secrets and variables → Actions**:
-      - `POSTGRES_APP_PASSWORD` — generate with `openssl rand -hex 24`
-      - `POSTGRES_MIGRATE_PASSWORD` — generate with `openssl rand -hex 24`
-   2. Run the **Activate RLS (Issue 79)** workflow with `dry_run=true` — prints the SQL
-      and .env edits it would apply, without touching anything. Verify the plan.
-   3. Re-run with `dry_run=false` to apply: sets role passwords, grants BYPASSRLS to
-      `creatorclip_migrate`, transfers public-schema table ownership, rewrites
-      `/opt/autoclip/.env` (DATABASE_URL → `creatorclip_app`; new DATABASE_MIGRATION_URL →
-      `creatorclip_migrate`), restarts the compose services, and verifies that
-      `creatorclip_app` sees 0 rows from `videos` without an `app.creator_id` GUC.
-   4. Rollback if anything goes wrong: SSH to the VM, restore the timestamped
-      `/opt/autoclip/.env.backup-YYYYMMDD-HHMMSS` and `docker compose up -d`.
+2. **Fix the top SEV1 from this morning's `/assess`** (`worker/progress.py:214-232`, ~5 lines). `aacquire_slot` only sets EXPIRE on the INCR→1 transition — a creator holding ≥1 SSE streams continuously past 1h has the counter TTL elapse → cap silently bypassed. One-line fix: `EXPIRE` on every INCR, not just count==1. **Only SEV1 a misbehaving client can exploit today; lowest-LOC highest-leverage fix on the register.** Full backing in `docs/assessment/REPORT.md` row 1.
 
-2. ~~Delete 6 stale remote branches + close duplicate PR #15.~~ ✅ Done this session.
+3. **Fix the latent SEV1 in `billing/refund.py:41`** (~1 line + 1 test). `refund_for_video` opens `db.AsyncSessionLocal()` (RLS-gated app role) without setting `session.info["creator_id"]` → silently no-ops once the prod RLS role split flips. Mechanical fix: switch to `db.AdminSessionLocal()` to match the rest of the worker surface. Must land **before** the RLS activation step (#5 below) — flagged in CLAUDE.md as pending.
 
-3. ~~Verify deploy + migration 0010.~~ ✅ Deploy job `26691893870` green; alembic at
-   `0010_rls_policies`; `/health` returning ok.
+4. **Activate RLS on prod** (manual, ~5 min, no new code) — same procedure as last session, still pending. **Land action #3 above first** so refund doesn't silently break the moment RLS is enforced:
+   1. Generate two passwords: `echo "APP: $(openssl rand -hex 24)"; echo "MIGRATE: $(openssl rand -hex 24)"`
+   2. Add as repo Secrets at **Settings → Secrets and variables → Actions**: `POSTGRES_APP_PASSWORD` and `POSTGRES_MIGRATE_PASSWORD`.
+   3. Trigger **Actions → "Activate RLS (Issue 79)" → Run workflow** with `dry_run=true`. Verify printed SQL + .env plan.
+   4. Re-run with `dry_run=false` to apply. Workflow rolls back automatically on a failed verification; timestamped `/opt/autoclip/.env.backup-…` is created first.
 
-4. **Remaining Issue 78 items — all BLOCKED on a human input; do not start blind:**
-   - **78e — YouTube analytics-retention purge** (`docs/issues.md`). Needs (a) the **confirmed
-     YouTube ToS data-staleness figure** (`docs/COMPLIANCE.md` §2 still says "TBD") and (b) your
-     **sign-off to actually delete creator analytics**. Will add a Beat purge task to
-     `worker/tasks.py` + touch models. Bring a Phase-1 CHECK before writing deletion code.
-   - **78f — PgBouncer load-test harness** to prove the Issue-58 pool fix under load. Authorable,
-     but the load-proof needs a **real staging cluster** (scaffold in `tests/perf/` / `deploy/`).
-   - **Enable the `disallow_untyped_defs` ratchet** (deferred from 78c). First annotate the ~20
-     pre-existing untyped-def signatures (8 in `worker/tasks.py`, 4 in `ingestion/transcribe.py`,
-     + `youtube/analytics.py`, `worker/storage.py`, `models.py:542`, `dna/embeddings.py`,
-     `limiter.py:15`, `main.py:38`), THEN uncomment the two flags in `[tool.mypy]`.
+5. **Issue 84 — AI/LLM efficiency assessment** (user-requested follow-up, prerequisite for the Issue 86 streaming wrapper to ever surface real `thinking_delta` events). The Issue-86 build also produced **free cache-hit observability** at every Anthropic call site via the new `cache` SSE event — that data is now Issue 84's raw material. **Start with a Phase-1 CHECK** — Anthropic SDK + caching state moves fast. Scope brief at `docs/issues.md::Issue 84`.
 
-5. **Three local-only placeholder issues remain (renumbered):**
-   - **Issue 82 (was 61, Issue 38 Wave 2)** — AsyncAnthropic / AsyncVoyage migration; router
-     session-order refactor; pool starvation load test. Closes the remaining ~9 of 23 findings
-     from the Issue 38 audit. (Note: substantial overlap with origin's Issue 68 — review first.)
-   - **Issue 80 (was 58)** — transactional email infrastructure. First consumer: refund email
-     (Issue 57 carry-over).
-   - **Issue 81 (was 59)** — in-app notifications surface. First consumer: refund banner
-     (Issue 57 carry-over).
+6. **Issue 85 — UI redesign** (user-requested follow-up). Same scope as last session — sleek modern editing-tool aesthetic (CapCut / Descript / Riverside / Final Cut for web). Includes reworking the Issue 83 intake form **and** dressing up the brand-new Issue 86 terminal-style progress block. Soft-depends on Issue 84. Scope brief at `docs/issues.md::Issue 85`.
 
-6. **Re-run `/assess`** for a fresh diff of the remaining SEV-2/cleanup tail from **Issue 76**
-   (it diffs against `docs/assessment/`, so each run is incremental).
+7. **Backboard Media data investigation** (incidental finding from today's hotfix session). User's own creator account (`eb9af967-5d2f-4063-a05e-9f4f070ce840`, channel "Backboard Media", state `connected`) has **0 videos in the DB** — `build_dna` correctly raises `ValueError: Insufficient data for DNA build: 0 long videos (min 10), 0 shorts (min 5)`. The YouTube analytics fetch from Issue 4 either never completed for this account or hasn't run since. Worth investigating before the user retries the DNA flow.
 
-### PROCESS LESSONS (carry forward)
+### Other open work (not user-prioritized this session)
 
-- **Never merge a PR before its CI reports a terminal `success` on the head commit.**
-- **Do NOT fan out parallel sub-agents on the same task/branch.** One worker per branch; sequential.
-- **CI runs BOTH `ruff check .` AND `ruff format --check .`** — run both locally before pushing.
-- **After every `Edit`, confirm the anchor matched.** Several doc edits silently no-op'd this session.
-- **Parallel branches → same issue numbers → collisions.** If you fork work for more than ~12
-  hours, sanity-check the next-free issue number on `origin/main` before assigning one locally.
-- **The test DB accumulates leftover `creators` rows** from crashed runs; the analytics-fairness
-  integration test (scans ALL creators) then false-fails. Run
-  `psql -h localhost -U creatorclip -d creatorclip -c "DELETE FROM creators;"` before an
-  integration run if it complains about a surprising creator count.
+- **Top SEV2s from `/assess` row 3-10** (worker progress.py XREAD pool sizing, routers/tasks.py 404/403 enumeration oracle, unvalidated Last-Event-ID, Anthropic stream mid-interrupt no terminal emit, Dockerfile root user + `--reload` default, refund pack_id needs UNIQUE). All small and well-backed. See `docs/assessment/REPORT.md` for the full ranked register.
+- **Issue 78e** — YouTube analytics-retention purge. Still needs ToS staleness figure in `docs/COMPLIANCE.md` §2 and sign-off to delete creator analytics.
+- **Issue 78f** — PgBouncer load-test harness. Needs a real staging cluster. This is the single highest-leverage action for moving the overall verdict from CONDITIONAL to YES — converts scale axes A/C/E/F from ⚠️ to ✅.
+- **`disallow_untyped_defs` ratchet** (deferred from 78c). Still ~20 pre-existing untyped-def signatures.
+- **Local-track placeholders** (Issues 80–82): transactional email, in-app notifications, Wave 2 of Issue 38.
 
 ---
 
 ## 2. WHAT WORKS NOW (do not re-investigate)
 
-- ✅ **Assessment Issues 58–72 + 73(p)/74/75(p) + 78a/b/c/d/g closed** (origin) AND **Issues 38 W1,
-  46, 52, 56, 79 closed** (local-main). Per-issue rationale in `docs/DECISIONS.md`; close log in
-  `docs/PROJECT_STATE.md`.
-- ✅ **Postgres RLS on 12 tenant-owned tables** (Issue 79): `creatorclip_app` (no BYPASSRLS) +
-  `creatorclip_migrate` (BYPASSRLS) role split; `after_begin` listener emits `SET LOCAL
-  app.creator_id` from `session.info["creator_id"]`; worker tasks use `AdminSessionLocal`;
-  one-time runbook in `docs/DEPLOYMENT.md`.
-- ✅ **Auto-refund on terminal ingest failure** (Issue 57): `RefundOnFailureTask` base class on
-  the 3 ingest-chain tasks; refund idempotent on `pack_id="refund:<video_id>"`.
-- ✅ **Worker pipeline integration tests** (Issue 52): all 7 async functions + 5 ACs pinned.
-- ✅ **Celery hot-path async correctness** (Issue 38 W1): `worker/storage.py` async wrappers
-  (`aupload_file`, `adelete_file`, `adelete_prefix`, `alocal_path`); all sync calls in
-  `_ingest_async` / `_transcribe_async` / `_signals_async` / `_render_clip_async` /
-  `_build_dna_async` / `_purge_stale_source_media_async` are now thread-offloaded; `dna/embeddings.py`
-  has `_aembed`.
-- ✅ **Core product promise** (Issues 59 + 60 from origin): clips render from `setup_start_s`;
-  personalization loop wired with maturity-gated blend.
-- ✅ **Celery at-least-once safety** (Issues 61/62 from origin): `generate_and_rank_clips`
-  idempotent (skips if clips exist — never cascade-wipes feedback); `task_reject_on_worker_lost` +
-  visibility-timeout invariant; `render_clip` skips when done.
-- ✅ **Idempotent money/data writes** (Issues 63/64/71 from origin): `build_dna` keyed on
-  Celery task_id with advisory lock; `grant_minutes` SAVEPOINT + IntegrityError; advisory-lock
-  for preference version race.
-- ✅ **Event loops are clean** (Issues 66/67/68): no sync LLM/upload/transcription/Voyage calls
-  on the API or worker loops; transcription has a `wait_for` job timeout.
-- ✅ **YouTube HTTP** (Issue 72): one lazy per-process `youtube/_http.py` client w/ timeouts +
-  5xx backoff. **pgvector HNSW index** (65). **poll_clip_outcomes bounded** (70 + `final` marker).
-- ✅ **Generate-clips retry safety + outcomes time-window bound** (Issue 46, local) — note the
-  poll-outcomes change was reconciled to origin's tighter 10-day + `final` bound (supersedes
-  local's 30-day floor).
-- ✅ **The `/assess` harness works end-to-end** (locally and on GitHub runners). Layer 0 =
-  `run_layer0.py`; Layer 1 = parallel per-module subagents; Layer 2 = `REPORT.md` verdict.
-- ✅ **All prior Phase-1/Phase-2 work** still intact (see `docs/PROJECT_STATE.md`).
+### Just-shipped this session (Issue 86 + the PYTHONPATH hotfix that preceded it)
+
+**Dockerfile PYTHONPATH hotfix (commit `c2a76d4`)** — prod incident root cause was Celery's console-script entry at `/root/.local/bin/celery` setting `sys.path[0]` to the script dir instead of `/app`. Forked pool workers couldn't import first-party packages → `ModuleNotFoundError("No module named 'dna'")` → 4-retry crash-loop with UI frozen for 3+ min. Fix: `ENV PYTHONPATH=/app` in Dockerfile. Subprocess integration test at `tests/test_worker_imports_integration.py` guards it forever — spawns a real Celery worker subprocess and asserts `from dna.brief import generate_brief` succeeds. Decision logged in `docs/DECISIONS.md`.
+
+**Issue 86 — live SSE progress surface (commits `8cf33a4` → `bbfa3c8`)** — DNA build no longer feels like a frozen spinner. Six commits including four post-push CI fixes (cross-loop Redis binding, generate_brief streaming unification, aclose defensive teardown, mypy 1.14.1 type narrowing). All 5 CI lanes green; production deploy succeeded.
+
+- **`worker/progress.py`** (NEW) — `sync_emit` (for inside `asyncio.to_thread`) / `aemit` (async) + `aset_owner` / `aget_owner` / `aacquire_slot` / `arelease_slot` / `aread_since` / `aclose`. Per-task Redis Stream `task:{task_id}:events` with `MAXLEN ~200` + `EXPIRE 3600` on terminal events. Per-creator concurrent SSE counter (cap 3). Ownership key for SSE auth. Loop-aware singleton survives pytest's per-test loop scope.
+- **`worker/anthropic_stream.py`** (NEW) — wraps `Anthropic.messages.stream()` to forward `message_start.usage` as `cache` event (HIT/miss visible BEFORE first token), `text_delta` as `token`, `thinking_delta` as `thinking` (forward-compat — fires once SDK is bumped in Issue 84). Returns `(final_text, usage_dict)`.
+- **`dna/brief.py`** — extracted `_build_request` helper; `generate_brief()` got a `task_id: str | None = None` kwarg that internally routes to the streaming path when set. **Same prompt structure either way** — cache breakpoint identical, so prior cache writes are interchangeable between paths. Existing unit-test mocks of `generate_brief` keep working untouched.
+- **`worker/tasks.py::_build_dna_async`** — `aemit("step", label=...)` at every stage boundary (`acquire_lock`, `analyze_patterns`, `analyzed_patterns` with counts, `call_claude`, `embed`); terminal `done`/`error` with safe messages; whole flow wrapped in try/except for clean error propagation.
+- **`routers/tasks.py`** (NEW) — `GET /tasks/{task_id}/events` SSE endpoint with session-cookie auth, ownership check via Redis key, EventSource `Last-Event-ID` resume, 12s `: keepalive` comment, 600s hard lifetime cap, per-creator concurrent cap = 3. Cloudflare-Tunnel-safe headers (`Cache-Control: no-cache` + `X-Accel-Buffering: no`).
+- **`routers/creators.py::build_dna`** — sets ownership in Redis after `.delay()`, returns `stream_url` in the 202 response.
+- **`static/progressStream.js`** (NEW) + **`static/onboarding.html`** — vanilla-JS EventSource reducer renders progress into a terminal-style `<pre>` block. Pollers stay as belt-and-suspenders fallback.
+- **`main.py`** — mounts the new router; lifespan shutdown drains `worker.progress.aclose()`.
+- **Tests**: +24 unit + 1 subprocess integration test. **492 passed / 1 skipped / 85 deselected** on default lane; integration lane green on CI. Seven sub-decisions captured in `docs/DECISIONS.md`.
+
+**Today's `/assess` re-run** — `docs/assessment/REPORT.md` plus snapshot at `docs/assessment/history/2026-05-30-post-issue-86-REPORT.md`. **VERDICT: CONDITIONAL** (was CONDITIONAL — held with improvements). 11 module files refreshed. Net SEV1 trend: −2 (closed 4 prior, surfaced 2 new). Scale axes B and D moved ⚠️ → ✅. The single gating action between CONDITIONAL and YES is the Locust-behind-PgBouncer load test (Issue 78f) — no code reading can substitute.
+
+### Stable foundations from prior sessions (unchanged this session)
+
+- **Beta production** live at `https://autoclip.studio` (Cloudflare Tunnel → VM `app:8000`).
+- **Reconcile merge + RLS + Issue 83 identity** all deployed. Migration head `0012_creator_identity`.
+- **`activate-rls.yml`** workflow ready (`workflow_dispatch`, `dry_run=true` default, idempotent SQL, timestamped `.env` backup before edit). Sanity check accepts any head ≥ `0010_rls_policies`.
+- **mypy baseline 0** (CI pinned to `1.14.1`; local `.venv` runs `2.1.0` — re-pin if you re-baseline).
 
 ---
 
 ## 3. THE ARC THAT LED HERE
 
-1. **Phases 1–2** closed in earlier sessions; beta live on `autoclip.studio`.
-2. **2026-05-29** — production-readiness assessment session: built the `/assess` harness +
-   standards/freshness layer + CI gates; ran the full assessment → tracked findings as **Issues
-   58–75**; closed the BLOCKER + all SEV-1s + security SEV-2s. Merged as PR #3.
-3. **2026-05-30 (origin track)** — salvaged the net-new pieces from closed PR #6 as **Issue 78**;
-   shipped 78a–d + g as PRs #9–#14 (with the #14 hotfix for the 78c over-reach). Merged.
-4. **2026-05-28 → 2026-05-30 (local-main track, parallel)** — six commits hardening the
-   Phase-2 carry-over: Issues 38 W1 (Celery async), 46 (retry safety), 52 (worker integration
-   tests), 56 (RLS decide), 57 (auto-refund), Issue 79 (RLS implementation, was 60 locally).
-5. **2026-05-30 (this session)** — **reconciled the two timelines into one `main`**: renumbered
-   local Issues 60/58/59/61 → 79/80/81/82; renamed alembic 0005_rls_policies → 0010_rls_policies;
-   merged origin/main into local main; resolved 7 file conflicts (docs/DECISIONS, PROJECT_STATE,
-   issues, LEFT_OFF; clip_engine/ranking, db, dna/embeddings, worker/tasks).
+1. **2026-05-30 (this session, pt 1)** — user reported stuck DNA build screenshot. Traced to prod worker `ModuleNotFoundError: 'dna'` 4× crash-loop. Filed as off-course bug, hotfixed with `ENV PYTHONPATH=/app` in Dockerfile + subprocess integration test as a permanent guard. Pushed and deployed before continuing.
+2. **2026-05-30 (pt 2)** — user asked "what's a good way to test this internally? Maybe for the DNA testing or really ANY LLM analysis, I think having it show it's thinking is HUGE." Phase-1 CHECK with deep industry-standards research → SSE + Redis Streams + Anthropic streaming wrapper, plain JSON wire format. User approved with "good to go, make sure we test while we build, and then do a deep assessment after."
+3. **2026-05-30 (pt 3)** — built Issue 86 end-to-end: test-first (TDD red → green for `worker/progress.py` and `worker/anthropic_stream.py`), then wiring into DNA build, the SSE endpoint, the frontend reducer. Invoked `/claude-api` before writing the streaming wrapper per CLAUDE.md project rule. Single feature commit (`8cf33a4`) followed by four CI-driven fix-forwards as integration tests + Quality Gates surfaced cross-loop Redis binding, test-mock unification, aclose defensiveness, and mypy 1.14.1 type-narrowing. All five CI lanes green on `bbfa3c8`.
+4. **2026-05-30 (pt 4 — current)** — ran `/assess` (full 3-layer: deterministic gates + 11 parallel module subagents + Layer-2 verdict). Result: CONDITIONAL, SEV1 4→2, scale axes B+D promoted to ✅. Report + 11 module findings + history snapshot written; not yet committed.
 
 ---
 
@@ -191,85 +99,64 @@ local-main hardening work (Issues 79, 56, 57, 52, 46, 38 W1) just merged in:
 | **Public URL / health** | `https://autoclip.studio` · `/health` |
 | **VM / SSH / deploy dir** | `147.182.136.107` (Ubuntu 24.04) · `ssh creatorclip-vm` · `/opt/autoclip/` |
 | **R2 bucket / image** | `creatorclip-beta` · `ghcr.io/reese8272/creatorclip:latest` |
-| **GitHub repo** | `github.com/reese8272/creatorclip` (private) — `main` will be the only branch after cleanup |
-| **Test runner** | `.venv/bin/python -m pytest -q` — **venv MUST be Python 3.12**. Needs a running **Redis**. |
-| **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. `requirements-dev.txt` pins `ruff==0.15.15`. |
+| **GitHub repo** | `github.com/reese8272/creatorclip` (private) — single branch `main` |
+| **Test runner** | `.venv/bin/python -m pytest -q` — venv MUST be Python 3.12. Needs a running Redis. |
+| **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. `ruff==0.15.15`. |
+| **mypy** | `.venv/bin/python -m mypy .` — **CI pins `mypy==1.14.1`**; local `.venv` may have newer. Re-pin (`pip install "mypy==1.14.1"`) if a baseline diverges. Baseline: 0. |
 | **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` |
-| **Active issue** | _(none in flight)_ — clean up branches/PR, then pick from 78e/f/ratchet/80/81/82/Phase 3 |
-| **Last completed** | Reconcile merge (this session) — Issues 79, 56, 57, 52, 46, 38 W1 + origin all on `main` |
-| **Latest alembic revision** | `0010_rls_policies` (chains after `0009_improvement_briefs`) |
-| **Test count (post-merge, verified)** | **439 passed, 1 skipped, 79 deselected** (`.venv/bin/python -m pytest -q`, this session). Integration tests deselected because Postgres isn't running locally; CI will run them. |
-| **Safety tag for the pre-merge local main** | `safety/pre-reconcile-2026-05-30` (kept for rollback) |
+| **Latest assessment** | `docs/assessment/REPORT.md` (today, post Issue 86) · snapshot `history/2026-05-30-post-issue-86-REPORT.md` |
+| **Active issue** | _(none in flight)_ — pick from NEXT ACTION above |
+| **Last completed** | Issue 86 — live SSE progress streaming (this session) |
+| **Latest alembic head** | `0012_creator_identity` (deployed) |
+| **Test count** | 492 passed, 1 skipped, 85 deselected (default); integration lane green |
+| **Safety tag (pre-merge rollback)** | `safety/pre-reconcile-2026-05-30` |
+| **Secrets registry** | `docs/SECRETS.md` — names only, values in `.env` / GitHub Secrets |
+| **Secrets needed for RLS activation** | `POSTGRES_APP_PASSWORD`, `POSTGRES_MIGRATE_PASSWORD` (both write-only — generate fresh with `openssl rand -hex 24`) |
+| **Memory dir** | `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` |
+| **Backboard Media creator id** | `eb9af967-5d2f-4063-a05e-9f4f070ce840` — currently 0 videos in DB (see Next Action #7) |
 
 ---
 
 ## 5. CONSTRAINTS & GOTCHAS
 
-- **RLS roles `creatorclip_app` / `creatorclip_migrate`** must be created with the right
-  attributes before migration 0010 runs — see `docs/DEPLOYMENT.md`. The migration creates
-  the roles idempotently but does NOT `ALTER ROLE ... BYPASSRLS` (that requires SUPERUSER).
-- **Alembic migration chain after the merge:** `0001 → 0002 → 0003 → 0004 → 0005_dna_idempotency
-  → 0006_vector_and_fk_indexes → 0007_clip_outcome_final → 0008_dna_build_job_unique →
-  0009_improvement_briefs → 0010_rls_policies`. RLS lands LAST.
-- **Issue 60 ↔ 71 coupling:** the preference reranker (origin Issue 60) relies on the hardening
-  in 71 (lock-guarded unpickler, advisory-lock version race, schema-drift → DNA fallback).
-- **Issue 70's `final` marker** + 10-day created-at cap on `_poll_clip_outcomes_async` — both
-  must stay (the merge already supersedes local Issue 46's looser 30-day floor with these).
-- **clip_engine/ranking.py is idempotent** (origin Issue 61): if any clip exists for the video,
-  the function returns existing clips unchanged. Local Issue 46's selective DELETE block was
-  dropped in the merge — origin's stricter guarantee makes it unreachable.
-- **worker/tasks.py uses `db.AdminSessionLocal()` everywhere** (Issue 79) — keep this when
-  writing new tasks, otherwise RLS will gate cross-tenant sweeps.
-- **The `_build_dna_async` advisory lock + idempotency check** (origin Issue 76) was kept on
-  top of the `AdminSessionLocal` switch — don't remove either.
-- **Coverage is a regression floor, not an absolute bar.** Don't tighten without justification.
-- **Deploy is gated on Docker publish, NOT on lint/CI.**
-- **Two issue-numbering tracks USED to exist.** They're reconciled now; future work must use
-  numbers that are free on `origin/main`. Check `docs/issues.md` before assigning.
-- **TestClient cookie jar is session-scoped** (clear in teardown after OAuth callbacks).
-- **SQLAlchemy 2.0 async sessions cannot cross event loops** (Issue 39's `db.recreate_engine`
-  re-binds module globals on Celery `worker_process_init`).
+- **Pushing to `main` triggers the production deploy pipeline.** No staging gate today. CI must be green before push; alembic `upgrade head` runs as part of deploy. The dirty assessment artifacts in the working tree right now (`docs/assessment/*.md` + this file) are doc-only and safe to push.
+- **RLS is on the tables but NOT yet enforced** — the app still uses SUPERUSER. The `creator_identity.uq_one_current_identity_per_creator` invariant + every other tenant-scoped invariant is defended only by the application layer + indices until the activation workflow runs. **Land action #3 (refund AdminSessionLocal fix) BEFORE running the activation workflow** — otherwise terminal-ingest refunds will silently no-op the moment RLS is enforced.
+- **`SET LOCAL` does NOT accept bind parameters in Postgres** — always use `SELECT set_config('name', :value, true)` instead. Caught the hard way; see `db.py:138` for canonical pattern.
+- **`pack_id` is now VARCHAR(64)** (was 32) — long enough for `refund:<uuid>` (43 chars). If you invent any longer pack_id shape, re-check the column width.
+- **`dna_brief` is the cached prefix for clip scoring** — identity reaches the scorer transitively via the brief, NOT through a separate scorer-prompt block. Identity edits don't take effect on scoring until the next DNA rebuild.
+- **Anthropic prompt-cache TTL is 5 minutes** (2026 change). Identity caching rarely engages for a creator's single isolated DNA build. **Issue 86 added free cache-hit observability** via the new `cache` SSE event — Issue 84 inherits this as evidence.
+- **Worker tasks use `db.AdminSessionLocal()`** — when RLS is activated, this is the BYPASSRLS role. New worker tasks must use `AdminSessionLocal`, NOT `AsyncSessionLocal`, or cross-tenant sweeps (purge, poll, refresh, refund) will silently see zero rows. **`billing/refund.py:41` is the one place this is wrong today — fix it before RLS flip.**
+- **`_build_dna_async` holds a `pg_advisory_xact_lock`** + double-checks `job_id` idempotency. Both must stay — they close a double-spend race on paid LLM/Voyage calls.
+- **Anthropic SDK 0.40 TextBlockParam stub predates `cache_control`** — hence the targeted `# type: ignore[arg-type]` on the `system=` kwarg. Asymmetric: `.create()` has the ignore, `stream_and_emit` doesn't — fine today (stream_and_emit's signature is `Any`), but watch when Issue 84 bumps the SDK.
+- **`worker.progress` async Redis singleton is loop-aware** (rebinds on `asyncio.get_running_loop()` mismatch) so it survives pytest's per-test loop scope. Production cost: zero (one loop per worker process). Resets singleton on emit failure to recover from a wedged client — observability NEVER load-bearing.
+- **`worker.progress.aset_owner` / `aget_owner` MUST raise on Redis failure** (unlike `aemit` which swallows). They are the SSE authorization invariant — a swallow would let a leaked task_id read another creator's stream after a Redis blip. Asymmetry is intentional; documented inline.
+- **Integration tests are deselected from default `pytest -q`** (`pytest.ini`); only the integration-tests CI lane runs them (needs real Postgres + Redis).
+- **mypy version mismatch trap**: CI pins `1.14.1`, local `.venv` may have `2.x`. `2.x` narrows union types more aggressively, so a local-green change can fail Quality Gates. If you ever see "passes locally, fails CI" on mypy, pin locally first.
 - **Google OAuth app still in Testing mode.** Verification required before public launch.
+- **Cannot delete remote branches from a fresh agent env** sometimes — git proxy has returned 403 on delete-refspec pushes. Branch cleanup may need the GitHub UI.
 
 ---
 
-## 6. WHAT'S LEFT
-
-**Assessment tail (origin track, Issue 75/76 follow-ups):**
-
-| Item | Why it matters |
-|---|---|
-| Staging **Locust run behind PgBouncer** (78f) | Verifies the BLOCKER fix under load |
-| YouTube **analytics-retention cadence** (78e) | ToS compliance — needs cadence + delete sign-off |
-| **`disallow_untyped_defs` ratchet** (deferred from 78c) | Annotate ~20 untyped defs first |
-| ~37 SEV-2 + ~34 cleanup | In `docs/assessment/modules/*.md`; re-run `/assess` to triage |
-
-**Local-track placeholders (renumbered, all "not started"):**
-
-| Issue | Was | Title |
-|---|---|---|
-| 80 | 58 | Transactional email infrastructure (unblocks Issue 57's refund email) |
-| 81 | 59 | In-app notifications surface (unblocks Issue 57's refund banner) |
-| 82 | 61 | Issue 38 Wave 2 — AsyncAnthropic + router session-order + load test (overlaps origin 68; review before starting) |
-
-**Then Phase 3** = pre-public-launch gates (OAuth verification, ToS/Privacy pages, billing
-tiers, eval adversarial expansion) — see `docs/PROJECT_STATE.md` and `CLAUDE.md`.
-
----
-
-## 7. POINTERS
+## 6. POINTERS
 
 | Doc / path | Purpose |
 |---|---|
-| `docs/PROJECT_STATE.md` | Per-issue close log (chronological; 2026-05-30 entries top, then 2026-05-29, then 2026-05-28) |
-| `docs/issues.md` | Issue backlog — Issues 1–82 (60 = origin personalization; 79 = local RLS; 78e/f open) |
-| `docs/DECISIONS.md` | Architecture decisions — 2026-05-30 → 2026-05-29 → 2026-05-28 (chronological) |
-| `docs/DEPLOYMENT.md` | RLS one-time setup runbook (Issue 79) |
-| `docs/assessment/REPORT.md` + `modules/*.md` | Assessment verdict + per-module findings register |
-| `.claude/skills/production-assessment/` | The `/assess` harness |
-| `.claude/skills/best-practices/` | Process-first standards gate (Phase-1 CHECK) |
+| `docs/assessment/REPORT.md` | **TODAY'S** production-readiness verdict (CONDITIONAL); top-10 register; scale checklist with axis-by-axis evidence |
+| `docs/assessment/history/2026-05-30-post-issue-86-REPORT.md` | Immutable snapshot of today's run |
+| `docs/assessment/modules/*.md` | Per-module findings (11 files, all refreshed today) |
+| `docs/PROJECT_STATE.md` | Per-issue close log (reverse chronological; Issue 86 at top) |
+| `docs/issues.md` | Backlog incl. Issue 86 closed + Issues 84 + 85 open |
+| `docs/DECISIONS.md` | Architecture decisions — Issue 86 (7 sub-decisions) + Dockerfile PYTHONPATH hotfix both captured today |
+| `docs/SOT.md` | Tech stack + data model + file tree (Issue 86 additions reflected: `routers/tasks.py`, `worker/progress.py`, `worker/anthropic_stream.py`, `static/progressStream.js`) |
+| `docs/COMPLIANCE.md` | YouTube ToS posture + retention + honesty constraint |
+| `docs/CLIPPING_PRINCIPLES.md` | Named principles registry the clip engine cites |
+| `docs/DEPLOYMENT.md` | Dev setup + RLS one-time setup runbook (Issue 79) |
+| `docs/SECRETS.md` | Every secret by NAME (incl. the two `POSTGRES_*_PASSWORD` slots for RLS activation) |
+| `docs/ACCESS.md` | SSH + Cloudflare Tunnel runbook |
+| `docs/OFF_COURSE_BUGS.md` | Off-course bug log — PYTHONPATH ModuleNotFoundError entry added this session |
+| `.github/workflows/activate-rls.yml` | Manual one-time RLS activation (workflow_dispatch only) |
 | `.github/workflows/quality.yml` | Ratcheted CI gates (types/coverage/SAST/CVEs) |
-| `tests/perf/` | Locust load-test scaffold |
-| `alembic/versions/0005–0010` | Migration chain (0005 dna idempotency → ... → 0010 RLS policies) |
+| `.github/workflows/deploy.yml` | CD pipeline (gated on Docker publish, runs alembic upgrade) |
+| `alembic/versions/0001..0012` | Migration chain (head: `0012_creator_identity`) |
 | `CLAUDE.md` | Project rules + Check→Approve→Build→Review workflow |
-| `docs/SOT.md`, `docs/COMPLIANCE.md`, `docs/SECRETS.md`, `docs/ACCESS.md` | Architecture / compliance / secrets / access |
+| `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` | Auto-memory index |
