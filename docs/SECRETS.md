@@ -140,8 +140,15 @@ pipeline can reach the VM and pull the image — they are **not** app config.
 | `VPS_PORT` | secret | SSH port (defaults to 22 if unset) | your sshd config |
 | `GHCR_TOKEN` | secret | PAT (read:packages) so the VM can `docker login ghcr.io` and pull the private image | github.com → Settings → Developer settings → PAT |
 | `PRODUCTION_URL` | **variable** | Base URL the scheduled health check probes (`https://agenticlip.studio`) | you set it |
+| `POSTGRES_APP_PASSWORD` | secret | Password for the `creatorclip_app` Postgres role (RLS-enforced, no `BYPASSRLS`). Set BEFORE running `activate-rls.yml`. Once set on the role, this becomes the password segment of `DATABASE_URL` on the VM. | generate: `openssl rand -hex 24` |
+| `POSTGRES_MIGRATE_PASSWORD` | secret | Password for the `creatorclip_migrate` Postgres role (`BYPASSRLS`, used by Alembic and Celery worker tasks). Set BEFORE running `activate-rls.yml`. Once set on the role, this becomes the password segment of `DATABASE_MIGRATION_URL` on the VM. | generate: `openssl rand -hex 24` |
 
 > `GITHUB_TOKEN` (used in `docker-publish.yml`) is injected automatically by GitHub — you never create it.
+>
+> **`activate-rls.yml` (Issue 79 RLS activation, one-time):** workflow_dispatch only. Reads
+> `POSTGRES_APP_PASSWORD` + `POSTGRES_MIGRATE_PASSWORD` from Secrets above, plus the existing
+> `VPS_*` secrets for SSH. Run with `dry_run=true` first to inspect; flip to false to apply.
+> The workflow is idempotent (safe to re-run if interrupted).
 
 ---
 

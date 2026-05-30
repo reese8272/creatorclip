@@ -1,0 +1,245 @@
+name: Activate RLS (Issue 79)
+
+# One-time (idempotent) activation of Postgres Row-Level Security on the prod VM.
+#
+# After alembic migration 0010_rls_policies runs, RLS is ENABLED + FORCED on 12 tenant
+# tables and the two roles (creatorclip_app, creatorclip_migrate) exist with LOGIN only.
+# RLS is silently bypassed in this state because the app still connects as the SUPERUSER
+# `creatorclip`. This workflow flips that:
+#
+#   1. Set passwords on creatorclip_app + creatorclip_migrate (from repo Secrets).
+#   2. Grant BYPASSRLS to creatorclip_migrate (alembic + Celery cross-tenant sweeps).
+#   3. Transfer table ownership in `public` to creatorclip_migrate so future DDL
+#      can run without SUPERUSER.
+#   4. Update /opt/autoclip/.env so DATABASE_URL points to creatorclip_app (RLS
+#      enforced) and DATABASE_MIGRATION_URL points to creatorclip_migrate (bypass).
+#   5. Restart the app/worker/beat services so they pick up the new env.
+#   6. Verify: as creatorclip_app with no `app.creator_id` GUC, `SELECT count(*) FROM
+#      videos` must return 0. Existing rows are still there for SUPERUSER queries.
+#
+# Required repo Secrets:
+#   - VPS_HOST, VPS_USER, VPS_SSH_KEY        (already used by deploy.yml)
+#   - VPS_PORT                                (optional, defaults to 22)
+#   - POSTGRES_APP_PASSWORD                   NEW — password for creatorclip_app role
+#   - POSTGRES_MIGRATE_PASSWORD               NEW — password for creatorclip_migrate role
+#
+# Safety:
+#   - All SQL statements are idempotent (ALTER ROLE / GRANT / OWNER TO are
+#     no-ops on re-run with the same values).
+#   - The .env edit creates a timestamped backup before any change.
+#   - `dry_run: true` runs every step in inspect-only mode (prints what WOULD
+#     happen without applying). Run with dry_run first; flip to false once the
+#     plan looks right.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — print planned actions, do not apply'
+        type: boolean
+        default: true
+      skip_ownership_transfer:
+        description: 'Skip the table-ownership transfer step (defer until later)'
+        type: boolean
+        default: false
+
+jobs:
+  activate:
+    name: SSH → activate RLS on autoclip.studio
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Validate secrets are present
+        env:
+          POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
+          POSTGRES_MIGRATE_PASSWORD: ${{ secrets.POSTGRES_MIGRATE_PASSWORD }}
+        run: |
+          missing=()
+          [ -z "$POSTGRES_APP_PASSWORD" ] && missing+=("POSTGRES_APP_PASSWORD")
+          [ -z "$POSTGRES_MIGRATE_PASSWORD" ] && missing+=("POSTGRES_MIGRATE_PASSWORD")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required repo Secrets: ${missing[*]}"
+            echo "Add them under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "Secret presence verified (values redacted)."
+
+      - name: SSH → activate RLS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          SKIP_OWNERSHIP: ${{ inputs.skip_ownership_transfer }}
+          APP_PW: ${{ secrets.POSTGRES_APP_PASSWORD }}
+          MIGRATE_PW: ${{ secrets.POSTGRES_MIGRATE_PASSWORD }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: DRY_RUN,SKIP_OWNERSHIP,APP_PW,MIGRATE_PW
+          script: |
+            set -euo pipefail
+            cd /opt/autoclip
+
+            log()  { echo "▶ $*"; }
+            run()  {
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "  [dry-run] $*"
+              else
+                eval "$@"
+              fi
+            }
+
+            # ─── 0. Sanity ────────────────────────────────────────────────────
+            log "Verifying alembic head is at 0010_rls_policies"
+            HEAD=$(docker compose -f docker-compose.prod.yml exec -T app \
+              .venv/bin/alembic current 2>/dev/null | tail -1 || true)
+            echo "  alembic current: $HEAD"
+            if ! echo "$HEAD" | grep -q "0010_rls_policies"; then
+              echo "::error::alembic head is not 0010_rls_policies — aborting."
+              echo "  Run deploy first so migration 0010 lands, then re-run this workflow."
+              exit 1
+            fi
+
+            # ─── 1. SQL: passwords + BYPASSRLS + (optional) ownership ────────
+            log "Building SQL script"
+            SQL=$(mktemp)
+            cat > "$SQL" <<EOF
+            -- Idempotent: ALTER ROLE on existing role is a no-op modulo the new value.
+            -- creatorclip_app and creatorclip_migrate were created by migration 0010 with
+            -- LOGIN-only (no password, no BYPASSRLS).
+            ALTER ROLE creatorclip_app PASSWORD '${APP_PW}';
+            ALTER ROLE creatorclip_migrate PASSWORD '${MIGRATE_PW}';
+
+            -- BYPASSRLS for the migration role: alembic upgrades + Celery cross-tenant
+            -- sweeps run as this role and need to see all rows regardless of policy.
+            ALTER ROLE creatorclip_migrate BYPASSRLS;
+
+            -- App role explicitly does NOT have BYPASSRLS (defense-in-depth structural
+            -- guarantee from Issue 79 — every app query is policy-gated).
+            ALTER ROLE creatorclip_app NOBYPASSRLS;
+            EOF
+
+            if [ "$SKIP_OWNERSHIP" != "true" ]; then
+              cat >> "$SQL" <<'EOF'
+
+            -- Transfer all public-schema tables to creatorclip_migrate so future DDL
+            -- (CREATE POLICY / ALTER TABLE / etc.) can run without SUPERUSER. This is
+            -- safe to re-run (OWNER TO on already-owned table is a no-op).
+            DO $$
+            DECLARE
+                t text;
+            BEGIN
+                FOR t IN
+                    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+                LOOP
+                    EXECUTE format('ALTER TABLE %I OWNER TO creatorclip_migrate', t);
+                END LOOP;
+            END
+            $$;
+            EOF
+            else
+              echo "  (ownership transfer SKIPPED per input)"
+            fi
+
+            log "SQL plan:"
+            # Redact passwords in the printed plan
+            sed -E "s/PASSWORD '[^']*'/PASSWORD '***REDACTED***'/g" "$SQL" | sed 's/^/    /'
+
+            # ─── 2. Apply (or dry-run) the SQL ───────────────────────────────
+            log "Applying SQL as superuser via docker compose exec"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [dry-run] would: docker compose exec -T postgres psql -U creatorclip -d creatorclip < $SQL"
+            else
+              docker compose -f docker-compose.prod.yml exec -T postgres \
+                psql -v ON_ERROR_STOP=1 -U creatorclip -d creatorclip < "$SQL"
+            fi
+            rm -f "$SQL"
+
+            # ─── 3. Update /opt/autoclip/.env ────────────────────────────────
+            log "Patching .env (backup first)"
+            BACKUP=".env.backup-$(date +%Y%m%d-%H%M%S)"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [dry-run] cp .env $BACKUP"
+            else
+              cp .env "$BACKUP"
+              echo "  backup: $BACKUP"
+            fi
+
+            # The existing .env has DATABASE_URL pointing at creatorclip (superuser).
+            # Swap it to creatorclip_app and add DATABASE_MIGRATION_URL for creatorclip_migrate.
+            # postgres host is `postgres` (compose service); db is `creatorclip`.
+            NEW_DB_URL="postgresql+psycopg://creatorclip_app:${APP_PW}@postgres:5432/creatorclip"
+            NEW_MIG_URL="postgresql+psycopg://creatorclip_migrate:${MIGRATE_PW}@postgres:5432/creatorclip"
+
+            log "Will rewrite DATABASE_URL → creatorclip_app, add DATABASE_MIGRATION_URL → creatorclip_migrate"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [dry-run] sed -i s|^DATABASE_URL=.*|DATABASE_URL=<creatorclip_app URL>| .env"
+              echo "  [dry-run] add DATABASE_MIGRATION_URL=<creatorclip_migrate URL>"
+            else
+              # Replace existing DATABASE_URL line (anchored to start).
+              if grep -q '^DATABASE_URL=' .env; then
+                sed -i "s|^DATABASE_URL=.*|DATABASE_URL=${NEW_DB_URL}|" .env
+              else
+                echo "DATABASE_URL=${NEW_DB_URL}" >> .env
+              fi
+              # Upsert DATABASE_MIGRATION_URL.
+              if grep -q '^DATABASE_MIGRATION_URL=' .env; then
+                sed -i "s|^DATABASE_MIGRATION_URL=.*|DATABASE_MIGRATION_URL=${NEW_MIG_URL}|" .env
+              else
+                echo "DATABASE_MIGRATION_URL=${NEW_MIG_URL}" >> .env
+              fi
+            fi
+
+            # ─── 4. Restart app/worker/beat ──────────────────────────────────
+            log "Restarting app/worker/beat to pick up the new env"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [dry-run] docker compose -f docker-compose.prod.yml up -d app worker beat"
+            else
+              docker compose -f docker-compose.prod.yml up -d app worker beat
+            fi
+
+            # ─── 5. Verify RLS is enforced ───────────────────────────────────
+            log "Verifying RLS enforcement"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [dry-run] would: connect as creatorclip_app, expect SELECT count(*) FROM videos = 0 (no GUC set)"
+            else
+              # Connect AS the app role (-U creatorclip_app via PGPASSWORD). Without
+              # any `app.creator_id` GUC set, the RLS policy USING clause evaluates
+              # to NULL → no row passes → expect 0 rows.
+              VIDEOS=$(docker compose -f docker-compose.prod.yml exec -T -e PGPASSWORD="${APP_PW}" postgres \
+                psql -tA -h localhost -U creatorclip_app -d creatorclip \
+                -c "SELECT count(*) FROM videos;" 2>&1 || echo "ERROR")
+              echo "  videos visible to creatorclip_app (no GUC): $VIDEOS"
+              if [ "$VIDEOS" != "0" ]; then
+                echo "::error::Expected 0 visible videos for creatorclip_app without GUC; got $VIDEOS."
+                echo "  RLS may not be enforced. Investigate before declaring success."
+                exit 1
+              fi
+              echo "  ✅ RLS enforced: app role sees 0 rows without a creator-id GUC."
+            fi
+
+            # ─── 6. Health check ─────────────────────────────────────────────
+            log "Health-checking the app"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [dry-run] would curl /health after restart"
+            else
+              for i in 1 2 3 4 5 6; do
+                BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
+                  python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health',timeout=10).read().decode())" \
+                  2>/dev/null || true)
+                echo "  attempt $i: $BODY"
+                STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
+                if [ "$STATUS" = "ok" ]; then
+                  echo "  ✅ App healthy after RLS activation"
+                  exit 0
+                fi
+                [ $i -lt 6 ] && sleep 10
+              done
+              echo "::error::Health check failed after 60s — app may not be picking up new creds."
+              echo "  Roll back: restore .env from the timestamped backup and \`docker compose up -d\`."
+              exit 1
+            fi
+
+            echo "✅ Done."
