@@ -200,7 +200,7 @@ async def score_candidates(
         max_tokens=1200,
         system=[
             {"type": "text", "text": static_text},
-            {
+            {  # type: ignore[typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
                 "type": "text",
                 "text": f"CREATOR DNA:\n{dna_brief}",
                 "cache_control": {"type": "ephemeral", "ttl": "1h"},

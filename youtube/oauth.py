@@ -164,7 +164,7 @@ async def upsert_creator(
     result = await session.execute(select(Creator).where(Creator.google_sub == google_sub))
     creator = result.scalar_one_or_none()
     is_new = creator is None
-    if is_new:
+    if creator is None:
         creator = Creator(
             google_sub=google_sub,
             email=email,
@@ -294,7 +294,7 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
             return await _do_token_refresh(creator_id, session, row)
         finally:
             # Only release if the value is still ours — Lua compare-and-delete.
-            await redis_client.eval(_LUA_RELEASE_LOCK, 1, lock_key, lock_token)
+            await redis_client.eval(_LUA_RELEASE_LOCK, 1, lock_key, lock_token)  # type: ignore[misc]  # SDK/stub typing lag (Issue 78c)
     else:
         # Another worker is refreshing. Poll until it finishes.
         for attempt in range(_LOCK_RETRY_COUNT):

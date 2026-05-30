@@ -65,7 +65,7 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
-            # Stable prefix — carries the cache breakpoint.
+            # Stable prefix — carries the cache breakpoint.  # type: ignore[typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
             {
                 "type": "text",
                 "text": _SYSTEM_INSTRUCTIONS,

@@ -72,7 +72,7 @@ def generate_improvement_brief(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=[
-            # Stable prefix — carries the cache breakpoint.
+            # Stable prefix — carries the cache breakpoint.  # type: ignore[typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
             {
                 "type": "text",
                 "text": _SYSTEM_INSTRUCTIONS,
@@ -81,7 +81,7 @@ def generate_improvement_brief(
             # Volatile per-creator analytics — AFTER the breakpoint, never cached.
             {"type": "text", "text": f"CREATOR ANALYTICS DATA:\n{analytics_json}"},
         ],
-        tools=[{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}],
+        tools=[{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}],  # type: ignore[typeddict-item, typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
         messages=[
             {
                 "role": "user",

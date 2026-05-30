@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 78c: mypy 30 → 0 + ratchet enabled
+
+### What changed
+Took the mypy gate from 30 errors to 0 and turned on `disallow_untyped_defs` +
+`disallow_incomplete_defs` (the pyproject comment's promised ratchet). Baseline
+`docs/assessment/baselines.json` `mypy_errors` ratcheted 30 → 0.
+
+### How (three honest buckets)
+- **Plugin (−9):** enabled `pydantic.mypy` in `[tool.mypy].plugins`. The 9 `config.py`
+  `call-arg` errors were spurious — mypy doesn't understand `BaseSettings` env-var
+  population without the plugin (the documented fix).
+- **Real type fixes (−12):** `preference/train.py` — a loop variable `w` (a float from
+  `sample_weight`) shadowed the later `w = np.array(...)`; renamed the loop var to `weight`
+  and gave `X`/`y`/`w` explicit `np.ndarray` annotations. `youtube/oauth.py` — replaced
+  `if is_new:` with `if creator is None:` so mypy narrows `Creator | None → Creator` in the
+  else branch and the return. `worker/tasks.py` — added an explicit `if video.source_uri is
+  None: continue` before `delete_file` (the query already filters non-null; the guard makes
+  it type-sound). `preference/model.py` — removed two now-unused `# type: ignore[assignment]`.
+- **Targeted `# type: ignore[...]` for third-party stub lag (−9):** `anthropic` 0.40's
+  `TextBlockParam`/`ToolParam` stubs predate the `cache_control` field and server-tool
+  (`{type, name}`) shape we send (`clip_engine/scoring.py`, `dna/brief.py`,
+  `improvement/brief.py`); `redis.asyncio`'s `eval` is typed with a `str` union
+  (`youtube/quota.py`, `youtube/oauth.py`); `cv2.data` and slowapi's exception-handler
+  signature are unstubbed (`clip_engine/render.py`, `main.py`). All are runtime-correct,
+  tested code; each ignore carries a code + an "SDK/stub typing lag" comment, and
+  `warn_unused_ignores=true` keeps them honest (a stale one becomes an error).
+
+### Why not bump the anthropic SDK instead
+Upgrading `anthropic` past 0.40 would refresh the stubs but is a dependency change with its
+own behavior + pip-audit/version-pin review — out of scope for a typing-only PR. Targeted
+ignores are the documented mypy way to handle incomplete third-party stubs and carry zero
+runtime risk. (Deferred as a possible future cleanup.)
+
+### Correction
+The earlier `OFF_COURSE_BUGS.md` entry claiming the Layer-0 mypy gate aborts on a
+non-existent `knowledge/` source was a **misdiagnosis** and has been withdrawn: `gate_mypy()`
+calls `_sources()` which filters non-existent paths, so the gate always reported the true
+count. The bogus `mypy=1` came from a raw manual mypy run with the unfiltered candidate list.
+
+### Evidence
+`run_layer0.py --gates mypy` → 0 (with the ratchet on); ruff 0 + format clean; full suite
+**431 passed, 1 skipped**; integration **66 passed**. All 11 edited files `py_compile`-clean.
+
+---
+
 ## 2026-05-30 — Issue 78d: Improvement-brief → 202 + poll (async Celery)
 
 ### What changed

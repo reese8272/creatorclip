@@ -1433,7 +1433,14 @@ the retired branch for reference):
   per-creator prefix reused across videos); also Issue 76. Pair with the prefix-ordering
   fix (`clip_engine/scoring.py`).
 >>>>>>> main
-- [ ] **mypy 30 → 0** then enable `disallow_untyped_defs` (Issue 75e ratchet).
+- [x] **mypy 30 → 0** then enable `disallow_untyped_defs` (Issue 75e ratchet) — done (Issue
+  78c, 2026-05-30). Enabled the `pydantic.mypy` plugin (−9 config false positives); real fixes
+  in `preference/train.py` (loop-var shadow + explicit ndarray types), `youtube/oauth.py`
+  (`if creator is None` narrowing), `worker/tasks.py` (None-guard before `delete_file`),
+  `preference/model.py` (dropped 2 stale ignores); targeted `# type: ignore[...]` for
+  third-party stub lag (anthropic 0.40 `cache_control`/server-tool params, redis async `eval`,
+  cv2 `.data`, slowapi handler). Flipped on `disallow_untyped_defs` +
+  `disallow_incomplete_defs`; baseline ratcheted 30→0. 431 passed; ruff 0.
 - [x] **Improvement-brief → 202 + poll** (Issue 78d, 2026-05-30) — async Celery job (the
   120s request can exceed an LB timeout; also Issue 76). New `ImprovementBrief` model +
   `improvement_brief_status` enum (one row per creator) + migration 0009. `POST
