@@ -1400,6 +1400,34 @@ the clip-scorer cache-prefix ordering. Per-finding detail in `docs/assessment/mo
 
 ---
 
+## Issue 78: Salvage net-new work from closed PR #6 (`claude/busy-mendel-1r2oZ`)
+**Depends on**: —
+**Status**: Open — re-implement cleanly on top of current `main` (do NOT merge the old branch).
+
+PR #6 was a parallel earlier-session workstream that branched off pre-PR#5 `main` and
+re-did much of Issue 75 (CVEs, observability, response_model — all now already on `main`
+via #4/#5). It conflicted across 18 files and was **closed without merging** to avoid
+regressing `main`. These items it contained are **genuinely not yet on `main`** — rebuild
+each fresh, test-gated, against current `main` (the old commits remain in git history on
+the retired branch for reference):
+
+- [ ] **Per-(creator, version) preference-scorer cache** — so `from_bytes` runs once, not
+  per rerank (also tracked under Issue 76).
+- [ ] **Clip-scorer prompt caching (1h TTL)** — the real caching beneficiary (large
+  per-creator prefix reused across videos); also Issue 76. Pair with the prefix-ordering
+  fix (`clip_engine/scoring.py`).
+- [ ] **mypy 30 → 0** then enable `disallow_untyped_defs` (Issue 75e ratchet).
+- [ ] **Improvement-brief → 202 + poll** async Celery job (the 120s request can exceed an
+  LB timeout; also Issue 76).
+- [ ] **YouTube analytics retention purge** (Issue 75b) — needs the confirmed ToS staleness
+  figure, then a scheduled purge of stale VideoMetrics/RetentionCurve/etc.
+- [ ] **PgBouncer load-test harness** — to actually verify the axis-A pool BLOCKER fix
+  (Issue 58) under load.
+- [ ] **Legal routes / Limited Use / CORS lockdown** — reconcile with what already shipped
+  (ToS/Privacy pages exist; `ALLOWED_ORIGINS` already locked) and port only the delta.
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
