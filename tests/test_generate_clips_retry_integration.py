@@ -7,8 +7,10 @@ Three regressions to guard against:
    (orphans R2 objects and breaks the ClipOutcome FK chain).
 2. A late retry on a video whose clips are already `done` must short-circuit —
    no new pending duplicates may be inserted alongside the done rows.
-3. `_poll_clip_outcomes_async` must not re-poll clips older than 30 days, even
-   if their `fetched_at` is past the 7d cutoff.
+3. `_poll_clip_outcomes_async` must not re-poll clips older than the
+   measurement-lifecycle cap (10 days — origin Issue 70 supersedes the
+   30-day floor local Issue 46 originally shipped), even if their
+   `fetched_at` is past the 7d cutoff.
 
 Marked `integration` so it only runs against a live Postgres (see pytest.ini).
 """
@@ -220,13 +222,20 @@ async def test_generate_clips_async_short_circuits_when_done_exists(db_session):
         await _cleanup_creator(db_session, creator.id)
 
 
-# ── Bug B: 30-day floor on _poll_clip_outcomes_async ──────────────────────────
+# ── Bug B: created_at cap on _poll_clip_outcomes_async ───────────────────────
+#
+# Local Issue 46 originally bounded the poll set with a 30-day `created_at`
+# floor. Origin Issue 70 superseded that with a tighter 10-day cap (clips'
+# 48h + 7d measurement lifecycle ends well before 10 days) plus a
+# `ClipOutcome.final` flag. The merge adopted origin's bound; this test
+# now exercises the 10-day boundary.
 
 
 @pytest.mark.asyncio
-async def test_poll_clip_outcomes_excludes_clips_older_than_30d(db_session):
-    """A clip whose created_at is >30 days ago must not be re-polled, even when
-    its fetched_at is past the 7d cutoff."""
+async def test_poll_clip_outcomes_excludes_clips_older_than_cap(db_session):
+    """A clip created beyond the cap (10 days) must not be re-polled even if
+    its fetched_at is past the 7d cutoff. A clip comfortably inside the cap
+    must still re-poll."""
     from worker.tasks import _poll_clip_outcomes_async
 
     creator = await _seed_creator(db_session)
@@ -238,7 +247,8 @@ async def test_poll_clip_outcomes_excludes_clips_older_than_30d(db_session):
         video_id=video.id,
         creator_id=creator.id,
         render_status=RenderStatus.done,
-        created_at=now - timedelta(days=35),
+        # Comfortably beyond the 10-day cap.
+        created_at=now - timedelta(days=15),
     )
     fresh_clip = await _seed_clip(
         db_session,
@@ -247,11 +257,14 @@ async def test_poll_clip_outcomes_excludes_clips_older_than_30d(db_session):
         render_status=RenderStatus.done,
         start_s=200.0,
         end_s=250.0,
-        created_at=now - timedelta(days=10),
+        # Comfortably inside the 10-day cap (avoid the boundary timing race
+        # that would race against the cutoff computed inside the function).
+        created_at=now - timedelta(days=3),
     )
 
-    # Both have stale fetched_at (>7d) so absent the new floor they would both
-    # qualify for re-poll.
+    # Both have stale fetched_at (>7d) so absent the cap they would both
+    # qualify for re-poll. ClipOutcome.final defaults to False, so the
+    # `final.is_(False)` filter in the query lets both through on that axis.
     db_session.add_all(
         [
             ClipOutcome(
@@ -286,8 +299,8 @@ async def test_poll_clip_outcomes_excludes_clips_older_than_30d(db_session):
         ):
             await _poll_clip_outcomes_async()
 
-        assert "yt_old_clip" not in polled_ids, "clip >30d old must be excluded"
-        assert "yt_fresh_clip" in polled_ids, "clip within 30d must still re-poll"
+        assert "yt_old_clip" not in polled_ids, "clip past the 10-day cap must be excluded"
+        assert "yt_fresh_clip" in polled_ids, "clip inside the 10-day cap must still re-poll"
     finally:
         # Outcomes cascade-delete with their clips.
         await _cleanup_creator(db_session, creator.id)

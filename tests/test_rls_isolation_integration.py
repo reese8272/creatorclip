@@ -6,7 +6,8 @@ integration.yml CI) connects as a SUPERUSER. Within each test we issue
 ``SET LOCAL ROLE creatorclip_app`` so policies are evaluated under the
 non-BYPASSRLS app role, then assert that an unfiltered ``SELECT *`` of every
 tenant-owned table returns zero rows belonging to Creator B while Creator A
-is in scope via ``SET LOCAL app.creator_id``.
+is in scope via ``set_config('app.creator_id', :cid, true)`` (the parameterized
+equivalent of ``SET LOCAL`` — utility ``SET`` doesn't accept bind params).
 
 This is the structural property RLS is purchased to provide: the application
 can forget the ``WHERE creator_id = :id`` predicate and the database still
@@ -238,7 +239,12 @@ async def test_rls_blocks_cross_tenant_unfiltered_select(admin_engine, db_sessio
         factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
         async with factory() as s:
             await s.execute(text("SET LOCAL ROLE creatorclip_app"))
-            await s.execute(text("SET LOCAL app.creator_id = :cid"), {"cid": str(creator_a.id)})
+            # SET LOCAL doesn't accept bind parameters — use the set_config()
+            # function form, matching db.py's after_begin listener.
+            await s.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(creator_a.id)},
+            )
 
             for table in _TENANT_TABLES:
                 rows = (await s.execute(text(f"SELECT creator_id FROM {table}"))).all()
@@ -265,7 +271,7 @@ async def test_rls_creators_table_remains_visible_for_auth_bootstrap(admin_engin
         factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
         async with factory() as s:
             await s.execute(text("SET LOCAL ROLE creatorclip_app"))
-            # No SET LOCAL app.creator_id — simulating the bootstrap-auth state.
+            # No set_config('app.creator_id', ...) — simulating bootstrap-auth.
             result = await s.execute(select(Creator).where(Creator.id == creator.id))
             row = result.scalar_one_or_none()
         assert row is not None, "creators table must NOT be gated by RLS"

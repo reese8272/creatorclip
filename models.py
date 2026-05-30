@@ -458,7 +458,7 @@ class MinutePack(Base):
     creator_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
     )
-    pack_id: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    pack_id: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     minutes_granted: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     price_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     stripe_session_id: Mapped[str | None] = mapped_column(
