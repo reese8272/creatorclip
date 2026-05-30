@@ -5,6 +5,42 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 78a: Per-(creator, version) preference-scorer cache
+
+### What changed
+`preference.train.load_latest` deserialized the joblib model blob on **every** rerank
+(`clip_engine/ranking.py` calls it per clip-generation pass), each time taking the
+process-global `_UNPICKLER_LOCK` in `PreferenceScorer.from_bytes` — so reranks serialized
+against each other on the worker. Added `preference/_scorer_cache.py`: a per-worker bounded
+LRU (`OrderedDict` + `threading.Lock`) keyed by `(creator_id, version)`. `load_latest` now
+issues a cheap query for the latest `version` + `feature_schema_jsonb` only, returns the
+cached scorer on a hit, and fetches the blob + `from_bytes` once on a miss. Bound via new
+`PREFERENCE_SCORER_CACHE_SIZE` (default 128).
+
+### Why
+The deserialize is the only lock-contended step on the personalization hot path and it
+repeated needlessly. Memoizing on `(creator_id, version)` removes both the redundant blob
+fetch and the lock acquisition when the model is unchanged.
+
+### Why this design (industry standard)
+Per-process bounded cache of deserialized ML artifacts, keyed by an **immutable version**
+and relying on **monotonic versioning** for invalidation, is the standard memoization
+pattern. `train.py` assigns `max(version)+1` on every retrain, so a new model is a new key
+and the stale entry simply ages out by LRU — no manual busting, no stale-read window. A TTL
+cache was rejected (stale-read risk + redundant reloads); `functools.lru_cache` was rejected
+(doesn't fit the async lookup and can't key cheaply on the live version); caching the raw
+blob was rejected (skips the DB fetch but still pays the lock-contended `from_bytes`, which
+is the actual cost). Hand-rolled rather than adding `cachetools`, consistent with the
+zero-new-dependency choice made for the observability layer.
+
+### Evidence / tests
+5 DB-free unit tests (`tests/test_preference_scorer_cache.py`): same-version deserializes
+once, new version reloads (no stale model), feature-drift returns `None` before any
+fetch/deserialize, no-model returns `None`, LRU eviction bound holds. Full suite **430
+passed, 1 skipped**; gates ruff 0 / mypy 30 (= baseline) / coverage ≥ floor.
+
+---
+
 ## 2026-05-29 — Issue 75(f): Observability (correlation ids + structured logs + metrics)
 
 ### What changed
