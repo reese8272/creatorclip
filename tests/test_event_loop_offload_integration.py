@@ -11,6 +11,7 @@ Marked `integration` (excluded from the default run — see pytest.ini).
 
 import io
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -47,6 +48,11 @@ def _offload_recorder():
 
 @pytest.mark.asyncio
 async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, mocker):
+    """The ~120s brief call is offloaded via to_thread inside the worker task.
+
+    The call moved off the request path into a Celery task (Issue 78d); it still
+    runs through asyncio.to_thread so it can't pin the worker's event loop.
+    """
     creator = Creator(
         google_sub=f"test_off_{uuid.uuid4().hex[:8]}",
         channel_id=f"UC_off_{uuid.uuid4().hex[:6]}",
@@ -63,7 +69,23 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
     )
     db_session.add(video)
     await db_session.flush()
-    db_session.add(VideoMetrics(video_id=video.id, views=1000, engagement_rate=0.05))
+    db_session.add(
+        VideoMetrics(
+            video_id=video.id,
+            views=1000,
+            engagement_rate=0.05,
+            fetched_at=datetime.now(UTC),
+        )
+    )
+    await db_session.commit()
+
+    from models import ImprovementBrief, ImprovementBriefStatus
+
+    db_session.add(
+        ImprovementBrief(
+            creator_id=creator.id, status=ImprovementBriefStatus.pending, job_id="job-off"
+        )
+    )
     await db_session.commit()
 
     brief_mock = mocker.patch(
@@ -72,11 +94,10 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
     calls, fake_to_thread = _offload_recorder()
     mocker.patch("asyncio.to_thread", new=fake_to_thread)
 
-    token = create_session_token(creator.id)
     try:
-        resp = client.get("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["brief"] == "stub brief"
+        from worker.tasks import _generate_improvement_brief_async
+
+        await _generate_improvement_brief_async("job-off", str(creator.id))
         # The 120s LLM call was offloaded, not run on the loop.
         assert brief_mock in calls
     finally:

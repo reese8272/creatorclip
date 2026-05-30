@@ -130,18 +130,47 @@
       const out = document.getElementById('brief-output');
       btn.disabled = true;
       btn.textContent = 'Generating…';
-      out.textContent = '';
+      out.textContent = 'Generating your brief — this can take up to a minute…';
 
-      const resp = await fetch('/creators/me/improvement-brief', { credentials: 'include' });
-      if (!resp.ok) {
-        out.innerHTML = '<span class="error">Failed to generate brief — try again.</span>';
+      // Kick off the background build (202). The brief is a ~minute-long
+      // research call, so the GET below polls for the stored result.
+      const start = await fetch('/creators/me/improvement-brief', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!start.ok) {
+        let msg = 'Failed to start — try again.';
+        try {
+          const err = await start.json();
+          if (err.detail) msg = err.detail;
+        } catch (e) { /* keep default */ }
+        out.innerHTML = '<span class="error">' + msg + '</span>';
         btn.disabled = false; btn.textContent = 'Retry';
         return;
       }
-      const data = await resp.json();
-      out.textContent = data.brief;
-      btn.textContent = 'Regenerate';
-      btn.disabled = false;
+
+      const poll = async () => {
+        const resp = await fetch('/creators/me/improvement-brief', { credentials: 'include' });
+        if (!resp.ok) {
+          out.innerHTML = '<span class="error">Failed to load brief — try again.</span>';
+          btn.disabled = false; btn.textContent = 'Retry';
+          return;
+        }
+        const data = await resp.json();
+        if (data.status === 'ready') {
+          out.textContent = data.brief || 'No brief available.';
+          btn.textContent = 'Regenerate';
+          btn.disabled = false;
+        } else if (data.status === 'failed') {
+          out.innerHTML =
+            '<span class="error">' + (data.error || 'Brief generation failed — try again.') +
+            '</span>';
+          btn.disabled = false; btn.textContent = 'Retry';
+        } else {
+          setTimeout(poll, 3000);
+        }
+      };
+      setTimeout(poll, 3000);
     }
 
     document.addEventListener('auth:ready', init);

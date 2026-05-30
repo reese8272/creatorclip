@@ -1304,7 +1304,7 @@ vector; WhisperX model + SDK clients reconstructed per call.
   provider socket now returns the blocking thread before the job timeout (which can't cancel it).
 - [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69. Re-run also flagged the cheap prefix-ordering win: put the static principles block BEFORE `{dna_brief}` in `clip_engine/scoring.py:182-191` so the long static prefix is shared across creators
 - [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71) — confirmed still absent: `preference/train.py:116` deserializes on every rerank (`clip_engine/ranking.py:39`)
-- [ ] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66)
+- [x] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66) — done in Issue 78d (2026-05-30)
 - [ ] ~23 remaining SEV-2 + ~24 cleanup items in `docs/assessment/modules/*.md` — see Issue 76 for the net-new ones from the re-run
 
 ---
@@ -1417,8 +1417,14 @@ the retired branch for reference):
   per-creator prefix reused across videos); also Issue 76. Pair with the prefix-ordering
   fix (`clip_engine/scoring.py`).
 - [ ] **mypy 30 → 0** then enable `disallow_untyped_defs` (Issue 75e ratchet).
-- [ ] **Improvement-brief → 202 + poll** async Celery job (the 120s request can exceed an
-  LB timeout; also Issue 76).
+- [x] **Improvement-brief → 202 + poll** (Issue 78d, 2026-05-30) — async Celery job (the
+  120s request can exceed an LB timeout; also Issue 76). New `ImprovementBrief` model +
+  `improvement_brief_status` enum (one row per creator) + migration 0009. `POST
+  /creators/me/improvement-brief` now returns 202, debounces an in-flight build, and enqueues
+  `generate_improvement_brief`; the worker builds the creator-scoped analytics + DNA brief and
+  runs the LLM call (idempotent + safe-fail); `GET` polls the stored row; `insights.html`
+  POST→poll. Mirrors the DNA-build precedent. +8 integration tests (3 GET-based isolation
+  tests rebased onto the task path).
 - [ ] **YouTube analytics retention purge** (Issue 75b) — needs the confirmed ToS staleness
   figure, then a scheduled purge of stale VideoMetrics/RetentionCurve/etc.
 - [ ] **PgBouncer load-test harness** — to actually verify the axis-A pool BLOCKER fix

@@ -252,6 +252,11 @@ clip_outcomes                        -- strongest positive signal
 preference_models
   creator_id (FK), version, weights_blob, feature_schema_jsonb, updated_at
 
+improvement_briefs                    -- async 202 + poll brief (Issue 78d)
+  id, creator_id (FK, indexed, one row/creator),
+  status (pending|ready|failed), brief_text, error (safe msg only),
+  job_id (Celery idempotency), requested_at, completed_at
+
 minute_deductions                     -- cost-side ledger (Issue 34)
   id, video_id (FK, UNIQUE — idempotency key), creator_id (FK),
   minutes_deducted, duration_s, deducted_at

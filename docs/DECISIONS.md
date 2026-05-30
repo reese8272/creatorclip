@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 78d: Improvement-brief → 202 + poll (async Celery)
+
+### What changed
+`GET /creators/me/improvement-brief` built a creator-scoped analytics summary then ran the
+~120s Claude + web_search call inline via `asyncio.to_thread` (offloaded from the loop in
+Issue 66, but still on the request path). Converted to a 202 + poll flow:
+- New `ImprovementBrief` model + `improvement_brief_status` enum (`pending`/`ready`/`failed`),
+  one row per creator, `creator_id` indexed; migration `0009_improvement_briefs`.
+- `POST /me/improvement-brief` → 202, `@limiter.limit("10/hour")`: cheap creator-scoped guards
+  (channel connected; has VideoMetrics — Issue-33-safe), **debounces** an in-flight `pending`
+  build, get-or-creates + resets the row, enqueues `generate_improvement_brief`, stores
+  `job_id`. `GET` now returns the stored row (`status`/`brief`/`requested_at`/`completed_at`/
+  `error`), HTTP 200 always (`none` when absent) — a cheap poll target at 120/min.
+- Worker task `generate_improvement_brief` + `_generate_improvement_brief_async(job_id,
+  creator_id)`: builds the analytics dict (moved out of the router) + DNA brief, calls the
+  unchanged `improvement/brief.py` function via `asyncio.to_thread`, writes `brief_text` +
+  `ready`. Idempotent (no-op on redelivery once `ready` for the same `job_id`) and safe-fail
+  (`failed` + a generic message — never a stack trace / token / PII).
+- `static/insights.html` `loadBrief()` rewritten to POST → poll every 3s until `ready`/`failed`.
+
+### Why
+A ~120s synchronous request can exceed a load-balancer / ingress timeout, returning a 5xx to
+the user even though the work would have finished. Moving it behind a 202 + poll removes the
+request-path time bound; the durable row also survives a worker restart and lets the UI show
+honest progress.
+
+### Why this design (industry standard)
+Mirrors the existing **DNA-build 202 + poll precedent** (`routers/creators.py::build_dna` +
+`worker/tasks.py::_build_dna_async`) — same status-row idempotency, `task.delay`, and Celery
+at-least-once handling — so the codebase has one consistent long-job pattern rather than two.
+202 + a poll endpoint is the standard REST shape for a long-running, non-cacheable job kicked
+off by a client (vs. holding the connection open or a websocket, which the LB-timeout problem
+rules out). The status enum + one-row-per-creator + `job_id` idempotency key matches CreatorDNA.
+
+### Evidence / tests
++8 integration tests (`tests/test_improvement_brief_async.py`): 202 + pending row; debounce;
+GET none→ready; safe-fail with no exception text leaked; per-creator isolation via the task;
+idempotent redelivery. Three pre-existing GET-based isolation/offload tests
+(`test_improvement_isolation.py`, `test_isolation.py`, `test_event_loop_offload_integration.py`)
+rebased onto the task path; `test_rate_limiting.py` updated (the 10/hour LLM cap moved from GET
+to POST). Default suite **425 passed, 1 skipped**; integration **66 passed**; ruff 0; mypy 30
+(= baseline, none in 78d files); migration `0009` up/down/up clean.
+
+---
+
 ## 2026-05-29 — Issue 75(f): Observability (correlation ids + structured logs + metrics)
 
 ### What changed

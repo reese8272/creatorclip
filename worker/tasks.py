@@ -12,6 +12,7 @@ import asyncio
 import logging
 import tempfile
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -749,3 +750,106 @@ async def _refresh_youtube_analytics_async() -> None:
             except Exception as exc:
                 logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
                 await session.rollback()
+
+
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.generate_improvement_brief"
+)
+def generate_improvement_brief(self, creator_id: str) -> str:
+    """Generate a creator's content-improvement brief off the request path (Issue 78d).
+
+    The ~120s Claude + web_search call previously ran inline on the API event loop;
+    here it runs in the worker and the result is polled via GET /me/improvement-brief.
+    """
+    try:
+        run_async(_generate_improvement_brief_async(self.request.id, creator_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> None:
+    """Build the creator-scoped analytics summary + Claude brief and store it.
+
+    Idempotent + retry-safe (Celery is at-least-once): a redelivery whose row is
+    already ``ready`` for this job short-circuits before the paid LLM call. On
+    failure the row is marked ``failed`` with a SAFE message (no stack trace /
+    token / PII) and the task retries. Per-creator isolation on every query (Issue 33).
+    """
+    from sqlalchemy import select
+
+    from dna.profile import get_active
+    from improvement.brief import generate_improvement_brief as build_brief
+    from models import ImprovementBrief, ImprovementBriefStatus
+
+    cid = uuid.UUID(creator_id)
+    async with db.AsyncSessionLocal() as session:
+        row = (
+            await session.execute(
+                select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            logger.warning("generate_improvement_brief: no row for %s; nothing to do", creator_id)
+            return
+
+        # Idempotency: this exact task already produced the brief (redelivery).
+        if row.job_id == job_id and row.status == ImprovementBriefStatus.ready:
+            logger.info("generate_improvement_brief: redelivery for %s — already built", creator_id)
+            return
+
+        creator = await session.get(Creator, cid)
+        if creator is None:
+            row.status = ImprovementBriefStatus.failed
+            row.error = "Creator not found."
+            row.completed_at = datetime.now(UTC)
+            await session.commit()
+            return
+
+        try:
+            metrics_result = await session.execute(
+                select(VideoMetrics)
+                .join(Video, VideoMetrics.video_id == Video.id)
+                .where(Video.creator_id == creator.id)
+                .order_by(VideoMetrics.fetched_at.desc())
+                .limit(50)
+            )
+            all_metrics = list(metrics_result.scalars())
+            views_list = [m.views for m in all_metrics if m.views]
+            eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
+            dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
+
+            def _avg(lst: Sequence[float]) -> float | None:
+                return sum(lst) / len(lst) if lst else None
+
+            analytics = {
+                "channel_title": creator.channel_title,
+                "videos_in_db": len(all_metrics),
+                "avg_views": _avg(views_list),
+                "avg_engagement_rate": _avg(eng_list),
+                "avg_view_duration_s": _avg(dur_list),
+            }
+
+            dna_profile = await get_active(session, creator.id)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+
+            brief_text = await asyncio.to_thread(
+                build_brief,
+                channel_title=creator.channel_title or "Unknown Channel",
+                analytics=analytics,
+                dna_brief=dna_brief,
+            )
+        except Exception as exc:
+            row.status = ImprovementBriefStatus.failed
+            row.error = "Brief generation failed — try again."
+            row.completed_at = datetime.now(UTC)
+            await session.commit()
+            logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
+            raise
+
+        row.status = ImprovementBriefStatus.ready
+        row.brief_text = brief_text
+        row.error = None
+        row.completed_at = datetime.now(UTC)
+        await session.commit()
+        logger.info("Improvement brief ready for creator %s", creator_id)
