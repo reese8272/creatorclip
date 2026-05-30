@@ -1331,27 +1331,27 @@ backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; sn
   DNA-only fit distinct from `clip.score`, or rename to `seed_score`.
 - [ ] clip_engine `candidates.py:94-113` — candidate windows never deduped; adjacent peaks can yield
   near-identical clips (vs principle #9). Drop candidates overlapping a kept one >50% IoU.
-- [ ] clip_engine `routers/clips.py:67` — `extract_candidates`/`compute_features` CPU runs on the
+- [x] DONE (Issue C) — clip_engine `routers/clips.py:67` — `extract_candidates`/`compute_features` CPU runs on the
   FastAPI loop. Dispatch to Celery (202) or `asyncio.to_thread`.
-- [ ] youtube `oauth.py:303-313` — lock-wait re-read hits the identity map (`expire_on_commit=False`)
+- [x] DONE (Issue A) — youtube `oauth.py:303-313` — lock-wait re-read hits the identity map (`expire_on_commit=False`)
   → stale token → spurious 503 under concurrent refresh. `session.refresh`/`populate_existing=True`.
 - [x] youtube `quota.py:51` — DONE (beta-blocker). Daily counter now keyed by the
   `America/Los_Angeles` date (Google's reset zone) via `_QUOTA_RESET_TZ`, so it rolls over with
   Google's quota instead of ~8h early on the UTC date. Regression test pins a UTC-vs-PT split day.
-- [ ] youtube `ingest.py:44-62` — `extract_audio_wav` `subprocess.run` has no `timeout=`. Add bounded
+- [x] DONE (Issue A) — youtube `ingest.py:44-62` — `extract_audio_wav` `subprocess.run` has no `timeout=`. Add bounded
   timeout (∝ duration, floor ~600s); map `TimeoutExpired`→RuntimeError.
-- [ ] youtube `analytics.py:51`/`data_api.py:93` — 429 backoff ignores `Retry-After`. Honor it.
+- [x] DONE (Issue A) — youtube `analytics.py:51`/`data_api.py:93` — 429 backoff ignores `Retry-After`. Honor it.
 - [ ] worker `tasks.py:547-556` — `poll_clip_outcomes` doesn't `break` on quota exhaustion (vs
   analytics refresh). Catch `QuotaExhaustedError` and break.
 - [ ] worker `tasks.py:357-394` — `_render_clip_async` not concurrent-safe: two workers both read
   `pending`, both encode+upload same key. `with_for_update()` + re-check under lock.
 - [ ] worker `tasks.py:222-259` — `_ingest_async` re-extracts/re-uploads the derived WAV on redelivery
   (no corruption, wasted ffmpeg+R2). Short-circuit when `source_uri` is already the derived key.
-- [ ] dna `builder.py:223-224,137-161` — `_enrich_video` N+1: ~60 serial queries/build. Batch into
+- [x] DONE (Issue B) — dna `builder.py:223-224,137-161` — `_enrich_video` N+1: ~60 serial queries/build. Batch into
   3 `IN (...)` queries.
-- [ ] dna `builder.py:107-117` — `rank_videos` unbounded fetch into worker memory. Cap with
+- [x] DONE (Issue B) — dna `builder.py:107-117` — `rank_videos` unbounded fetch into worker memory. Cap with
   `.limit(DNA_MAX_CANDIDATE_VIDEOS=500)`.
-- [ ] dna `builder.py:201-202` — `kind` compared against bare string literals vs `VideoKind` enum
+- [x] DONE (Issue B) — dna `builder.py:201-202` — `kind` compared against bare string literals vs `VideoKind` enum
   value → a rename silently empties buckets. Compare against `VideoKind.long.value`.
 - [ ] routers list endpoints (`videos.py:40-55`,`clips.py:93-99`,`upload_intel.py:22-25`) — unbounded
   `list(scalars())`. Add keyset/offset pagination with a hard cap (100).
