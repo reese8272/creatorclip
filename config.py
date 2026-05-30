@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"
+    # Hard cap for the ffmpeg audio-extract subprocess. Real extraction is far faster
+    # than realtime; this only kills a wedged/hung ffmpeg so it can't tie up a worker
+    # slot indefinitely (probe already uses timeout=30). (Issue A / Issue 76)
+    FFMPEG_EXTRACT_TIMEOUT_S: int = 1800
     STORAGE_BACKEND: str = "local"
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""

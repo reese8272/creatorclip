@@ -267,3 +267,17 @@ def test_ytdlp_raises_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr("config.settings.YTDLP_ENABLED", False)
     with pytest.raises(ValueError, match="YTDLP_ENABLED"):
         download_via_ytdlp("dQw4w9WgXcQ", tmp_path)
+
+
+def test_extract_audio_wav_timeout_raises_runtimeerror():
+    """A wedged ffmpeg must surface as RuntimeError (clean Celery retry), not hang. (Issue A)"""
+    import subprocess
+
+    with (
+        patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1),
+        ),
+        pytest.raises(RuntimeError, match="timed out"),
+    ):
+        extract_audio_wav("/tmp/in.mp4", "/tmp/out.wav")

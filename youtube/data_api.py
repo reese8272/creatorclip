@@ -17,6 +17,7 @@ from youtube.errors import (
     PERMANENT_403_REASONS,
     TRANSIENT_403_REASONS,
     YouTubeAuthError,
+    retry_after_seconds,
 )
 from youtube.quota import (
     COST_DATA_CAPTIONS,
@@ -96,7 +97,11 @@ async def _get_json(
                 raise YouTubeAuthError(reason, resp.status_code)
             if attempt < _MAX_RETRIES - 1:
                 jitter = random.uniform(0, delay * 0.3)
-                await asyncio.sleep(delay + jitter)
+                base = delay + jitter
+                # Honor a server-stated Retry-After (Google sends it on 429). (Issue A)
+                retry_after = retry_after_seconds(resp)
+                sleep_s = max(retry_after, base) if retry_after is not None else base
+                await asyncio.sleep(sleep_s)
                 delay *= 2
                 continue
             logger.warning(
