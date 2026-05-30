@@ -2,6 +2,7 @@
 Rank scored clip candidates and persist them to the clips table.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -108,7 +109,10 @@ async def generate_and_rank_clips(
         )
         return list(existing)
 
-    candidates = extract_candidates(timeline, max_candidates=max_candidates)
+    # Candidate extraction is CPU-bound (numpy array build + scipy find_peaks over
+    # duration/0.5 samples). Offload it so it can't stall the API event loop and the
+    # other concurrent requests on this worker. (Issue C)
+    candidates = await asyncio.to_thread(extract_candidates, timeline, max_candidates)
     if not candidates:
         logger.info("No candidates found for video %s", video_id)
         return []

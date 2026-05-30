@@ -2,6 +2,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,30 @@ from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcrip
 router = APIRouter(prefix="/videos", tags=["clips"])
 clips_router = APIRouter(prefix="/clips", tags=["clips"])
 logger = logging.getLogger(__name__)
+
+
+class ClipOut(BaseModel):
+    id: str
+    video_id: str
+    setup_start_s: float | None
+    start_s: float
+    end_s: float
+    peak_s: float | None
+    score: float | None
+    rank: int | None
+    principle: str
+    reasoning: str
+    render_status: str
+    render_uri: str | None
+
+
+class ClipListOut(BaseModel):
+    clips: list[ClipOut]
+
+
+class RenderQueuedOut(BaseModel):
+    task_id: str
+    status: str
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -35,7 +60,7 @@ def _clip_response(clip: Clip) -> dict:
     }
 
 
-@router.post("/{video_id}/clips/generate")
+@router.post("/{video_id}/clips/generate", response_model=ClipListOut)
 @limiter.limit("10/hour")
 async def generate_clips(
     request: Request,
@@ -77,7 +102,7 @@ async def generate_clips(
     return {"clips": [_clip_response(c) for c in clips]}
 
 
-@router.get("/{video_id}/clips")
+@router.get("/{video_id}/clips", response_model=ClipListOut)
 @limiter.limit("120/minute")
 async def list_clips(
     request: Request,
@@ -102,7 +127,7 @@ async def list_clips(
 # ── Clip-level actions ────────────────────────────────────────────────────────
 
 
-@clips_router.post("/{clip_id}/render", status_code=202)
+@clips_router.post("/{clip_id}/render", status_code=202, response_model=RenderQueuedOut)
 @limiter.limit("20/hour")
 async def render_clip(
     request: Request,
@@ -125,7 +150,7 @@ async def render_clip(
     return {"task_id": task.id, "status": "queued"}
 
 
-@clips_router.get("/{clip_id}")
+@clips_router.get("/{clip_id}", response_model=ClipOut)
 @limiter.limit("120/minute")
 async def get_clip(
     request: Request,

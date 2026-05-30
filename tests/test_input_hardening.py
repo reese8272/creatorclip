@@ -56,3 +56,34 @@ def test_development_ok_without_stripe_secrets():
 
     settings = Settings(ENV="development")
     assert settings.ENV == "development"
+
+
+# ── Issue 76: /metrics is never exposed unauthenticated in production ──────────
+
+
+def test_production_without_metrics_token_auto_disables_metrics():
+    """Fail safe, not crash: a missing scrape token disables /metrics, never raises."""
+    from config import Settings
+
+    s = Settings(
+        ENV="production",
+        STRIPE_SECRET_KEY="sk_live_x",
+        STRIPE_WEBHOOK_SECRET="whsec_x",
+        METRICS_ENABLED=True,
+        METRICS_TOKEN="",
+    )
+    assert s.METRICS_ENABLED is False  # auto-disabled, so the endpoint isn't registered
+
+
+def test_production_keeps_metrics_enabled_with_token():
+    from config import Settings
+
+    s = Settings(
+        ENV="production",
+        STRIPE_SECRET_KEY="sk_live_x",
+        STRIPE_WEBHOOK_SECRET="whsec_x",
+        METRICS_ENABLED=True,
+        METRICS_TOKEN="scrape-secret",
+    )
+    assert s.METRICS_ENABLED is True
+    assert s.METRICS_TOKEN == "scrape-secret"

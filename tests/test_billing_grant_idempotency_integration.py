@@ -85,3 +85,26 @@ async def test_concurrent_grants_credit_once(db_session: AsyncSession):
         await db_session.execute(delete(MinutePack).where(MinutePack.creator_id == creator.id))
         await db_session.execute(delete(Creator).where(Creator.id == creator.id))
         await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_non_keyed_grant_surfaces_real_integrity_error(db_session: AsyncSession):
+    """A non-keyed (trial/manual) grant against a missing creator must RAISE, not no-op.
+
+    Regression for Issue 76: the broad `except IntegrityError` previously swallowed a
+    real fault on the non-keyed path, so a new beta user could silently get 0 trial
+    minutes. With no stripe_session_id there is no UNIQUE to race on, so the FK
+    violation is genuine and must propagate.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    bogus_creator = uuid.uuid4()  # no Creator row → FK violation on the MinutePack insert
+    with pytest.raises(IntegrityError):
+        await grant_minutes(
+            creator_id=bogus_creator,
+            minutes=settings.FREE_TRIAL_MINUTES,
+            reason="trial",
+            session=db_session,
+            pack_id="trial",
+        )
+    await db_session.rollback()  # leave the session clean after the surfaced error

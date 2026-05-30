@@ -119,3 +119,16 @@ def test_celery_signals_propagate_request_id():
     after = CELERY_TASKS_TOTAL.labels(task="worker.tasks.demo", state="SUCCESS")._value.get()
     assert after == before + 1
     assert request_id_ctx.get() == "-"
+
+
+def test_metrics_open_when_no_token(client: TestClient):
+    # Default test config leaves METRICS_TOKEN unset → scrape allowed (dev/internal).
+    assert client.get("/metrics").status_code == 200
+
+
+def test_metrics_requires_bearer_token_when_set(client: TestClient, monkeypatch):
+    monkeypatch.setattr("config.settings.METRICS_TOKEN", "scrape-secret")
+    assert client.get("/metrics").status_code == 401
+    assert client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    ok = client.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
+    assert ok.status_code == 200

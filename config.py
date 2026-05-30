@@ -1,3 +1,4 @@
+import logging
 import sys
 
 from pydantic import ValidationError, model_validator
@@ -39,9 +40,22 @@ class Settings(BaseSettings):
     # fails the task after this many seconds (→ Celery retry) instead of stalling
     # the worker forever.
     TRANSCRIPTION_TIMEOUT_S: int = 300
+    # Per-request socket timeout for the hosted backends (Deepgram / AssemblyAI).
+    # Keep < TRANSCRIPTION_TIMEOUT_S: a hung provider socket must make the blocking
+    # SDK call return — unwinding the leaked worker thread — BEFORE the job-level
+    # wait_for gives up (wait_for cannot cancel the OS thread it spawned). (Issue 76)
+    TRANSCRIPTION_HTTP_TIMEOUT_S: int = 120
+    # Reject an audio file larger than this before sending it to a hosted backend —
+    # fail fast with a clear error rather than buffer a pathological file. A normal
+    # 16 kHz mono WAV is ~115 MB/hour, so the default allows ~9h. (Issue 76)
+    TRANSCRIPTION_MAX_MB: int = 1024
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
     WHISPER_MODEL: str = "large-v3"
+    # Hard cap for the ffmpeg audio-extract subprocess. Real extraction is far faster
+    # than realtime; this only kills a wedged/hung ffmpeg so it can't tie up a worker
+    # slot indefinitely (probe already uses timeout=30). (Issue A / Issue 76)
+    FFMPEG_EXTRACT_TIMEOUT_S: int = 1800
     STORAGE_BACKEND: str = "local"
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""
@@ -51,6 +65,10 @@ class Settings(BaseSettings):
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
+    # Cap the DNA candidate set so a power user with thousands of videos doesn't pull
+    # the whole catalog into worker memory. We take the most-recent N (recency-weighted
+    # scoring already favors recent content). (Issue B)
+    DNA_MAX_CANDIDATE_VIDEOS: int = 500
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
     # Max weight the preference model gets in the rerank blend once mature. Below
     # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);
@@ -74,6 +92,11 @@ class Settings(BaseSettings):
     # Expose Prometheus golden-signal metrics at /metrics. Disable to drop the
     # endpoint entirely (the scrape surface) without touching the rest.
     METRICS_ENABLED: bool = True
+    # Bearer token required to scrape /metrics. When set, callers must send
+    # `Authorization: Bearer <token>`. Empty = unauthenticated (dev / internal-only
+    # network); in production, an empty token auto-disables /metrics (see the validator
+    # below) so the scrape surface is never exposed unauthenticated. (Issue 76)
+    METRICS_TOKEN: str = ""
 
     # ── Stripe billing ────────────────────────────────────────────────────────
     STRIPE_SECRET_KEY: str = ""
@@ -95,6 +118,15 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"In production these must be set: {', '.join(missing)}")
+            # The /metrics scrape surface must never be unauthenticated in production —
+            # but don't crash-loop the whole app over a missing scrape token. Fail SAFE:
+            # disable the endpoint and warn. Set METRICS_TOKEN to turn it back on. (Issue 76)
+            if self.METRICS_ENABLED and not self.METRICS_TOKEN:
+                logging.getLogger(__name__).warning(
+                    "METRICS_TOKEN is unset in production — disabling /metrics. "
+                    "Set METRICS_TOKEN to enable authenticated scraping."
+                )
+                self.METRICS_ENABLED = False
         return self
 
 

@@ -2,131 +2,142 @@
 
 Slice: routers/auth.py, billing.py, clips.py, creators.py, improvement.py,
 review.py, upload_intel.py, videos.py. Load-bearing focus: per-tenant isolation,
-JWT-derived creator_id, Pydantic surfaces, blocking calls on the request loop,
-error-message leakage, per-creator rate limiting.
+JWT-derived creator_id, Pydantic response surfaces, blocking calls on the request
+loop, per-creator rate limiting.
 
 ## Findings
 
-### Concurrency & scale (rubric 2 / scale axis B — sync calls on the async loop)
+### Security & compliance (category 3)
+- Per-creator isolation verified clean across the whole module. Every creator-scoped
+  read/write derives `creator.id` from the JWT via `get_current_creator`
+  (auth.py:31-47) and filters on it, never trusting a request-body id:
+  - clips.py:48, 90, 95, 117, 138 (Video/Clip ownership checks + `WHERE creator_id`)
+  - videos.py:41, 69-72, 134-137, 176 (list/link/upload/status all scoped)
+  - improvement.py:33-36 (prior SEV-0 Issue-33 leak is fixed: joins `Video` and
+    filters `Video.creator_id == creator.id`)
+  - review.py:45 (clip ownership re-checked before feedback insert)
+  - upload_intel.py:23-24, creators.py:33/60/87 (all derive from JWT creator)
+  - billing.py:144-167 webhook keys off Stripe `metadata.creator_id` from the
+    signature-verified payload — trusted, not client-supplied; acceptable.
+- OAuth token handling clean: `decrypt()` used only at auth.py:157 (delete_account
+  revocation); the decrypted token is never logged — log lines use `creator_id` only
+  (auth.py:169-181). No token, email, or secret in any `logger.*` call in the module.
+  auth.py:121 /me and creators.py:15 /me return `email` to the authenticated owner
+  only — not a cross-tenant leak.
+- Parameterized SQL throughout (SQLAlchemy ORM/Core); no f-string/`%` queries.
+- ToS / source-acquisition: link_video (videos.py:58) explicitly does not download;
+  storage-key path-traversal guarded by `_validate_youtube_id` (videos.py:24-29)
+  before interpolation into `source/{creator.id}/...` (Issue 73). Clean.
+- No virality promise in any string or docstring (auth.py:122 explicitly disclaims).
 
-- [SEV1] routers/improvement.py:65 — `generate_improvement_brief(...)` is a
-  **synchronous** function that calls the blocking Anthropic client
-  (`_ANTHROPIC.with_options(timeout=120.0).messages.create`, confirmed at
-  improvement/brief.py:72) and is invoked directly inside the
-  `async def get_improvement_brief` request handler. A single in-flight brief
-  pins the event loop for up to 120s, stalling every other concurrent request on
-  that API worker. Worst scale defect in the module.
-  | fix: do not run a 120s LLM+web_search call in the request path. Move it to a
-  Celery task (return 202 + task_id and poll, mirroring `build_dna` in
-  creators.py:36), OR if it must stay in-process,
-  `await asyncio.to_thread(generate_improvement_brief, ...)`. Celery is preferred
-  — matches the `build_dna` / `render_clip` pattern and keeps the loop free.
+### Concurrency & scale (category 2)
+- Blocking-call audit clean. Known heavy sync paths are offloaded via
+  `asyncio.to_thread`: R2 upload videos.py:147 (Issue 67); ~120s Anthropic+web_search
+  improvement brief improvement.py:68 (Issue 66); paginated boto3 list+delete on
+  account deletion auth.py:189 (Issue 67). OAuth revocation uses `httpx.AsyncClient`
+  (auth.py:158) — non-blocking.
+- start_pipeline (videos.py:162 → worker/tasks.py:45) only enqueues a Celery chain;
+  no blocking work on the request path. All other worker handoffs are `.delay()`
+  (clips.py:124, creators.py:42, review.py:67) — request returns immediately.
+- [SEV2] videos.py:40-55, clips.py:93-99, upload_intel.py:22-25 — unbounded
+  `list(result.scalars())` with no LIMIT/pagination. A creator with thousands of
+  videos/clips/activity rows loads the whole set into memory and serializes it in a
+  single response. | fix: add keyset or offset pagination (`?limit=&before=`) with a
+  hard cap (e.g. 100) on list_videos and list_clips; bound the AudienceActivity read.
 
-- [SEV1] routers/videos.py:132 — `upload_file(tmp_path, key)` is synchronous
-  (worker/storage.py:45 → boto3 `upload_file` for R2, or `shutil.copy2` for local)
-  and called inside `async def upload_video`. For a multi-hundred-MB source file
-  this blocks the event loop for the entire R2 PUT / disk copy, starving all other
-  requests on the worker.
-  | fix: `await asyncio.to_thread(upload_file, tmp_path, key)`. (The chunked
-  `await file.read(...)` loop at videos.py:104-115 is correctly async; only the
-  storage write is blocking.)
+### Error handling & API surface (category 7)
+- [SEV1] response_model coverage gap (known-open Issue 75). Only billing.py declares
+  `response_model` (BalanceOut/PackOut/CheckoutOut at lines 56/67/82). Every other
+  endpoint returns a bare `dict`/`list[dict]`, so the OpenAPI schema is untyped and
+  responses are neither validated nor field-filtered. Endpoints still lacking a `*Out`
+  response_model:
+  - auth.py:114 `POST /auth/logout`
+  - auth.py:121 `GET /auth/me`
+  - clips.py:40 `POST /videos/{video_id}/clips/generate`
+  - clips.py:82 `GET /videos/{video_id}/clips`
+  - clips.py:107 `POST /clips/{clip_id}/render`
+  - clips.py:130 `GET /clips/{clip_id}`
+  - creators.py:15 `GET /creators/me`
+  - creators.py:28 `GET /creators/me/data-gate`
+  - creators.py:38 `POST /creators/me/dna/build`
+  - creators.py:48 `GET /creators/me/dna`
+  - creators.py:78 `POST /creators/me/dna/confirm`
+  - improvement.py:19 `GET /creators/me/improvement-brief`
+  - review.py:36 `POST /clips/{clip_id}/feedback`
+  - upload_intel.py:16 `GET /creators/me/upload-intel`
+  - videos.py:34 `GET /videos`
+  - videos.py:60 `POST /videos/link`
+  - videos.py:91 `POST /videos/upload`
+  - videos.py:169 `GET /videos/{video_id}/status`
+  (n/a — no JSON body: auth.py:32 /login and auth.py:46 /callback are RedirectResponse;
+  auth.py:134 DELETE /me is 204; billing.py:107 webhook intentionally returns a plain
+  ack dict.)
+  | fix: define `*Out` Pydantic models (ClipOut, VideoOut, DnaOut, BriefOut,
+  FeedbackOut, UploadIntelOut, MeOut, etc.) and set `response_model=` on each route;
+  replace the hand-built `_clip_response` dict (clips.py:20) with `ClipOut`. This also
+  closes response-side leakage risk (explicit field allow-list vs. whatever the dict
+  carries).
+- [SEV2] request models: videos.py:62 link_video and videos.py:93 upload_video take
+  raw `Form(...)` fields with no Pydantic request model. youtube_video_id is regex-
+  validated (videos.py:27) so it is not a security hole, but it sits outside the
+  "Pydantic model on every request" rule. | fix: acceptable for multipart upload; if
+  kept, record the deviation in DECISIONS.md, else wrap link_video's field in a body
+  model.
+- HTTP status codes correct: 404 ownership (clips.py:49/91/118/139, videos.py:177),
+  409 conflict (videos.py:75/141, clips.py:120, creators.py:89), 413 oversize
+  (videos.py:124), 400 bad input (improvement.py:39, auth.py:56/60/63), 422 invalid id
+  (videos.py:29), 503/502 dependency failures (billing.py:90/103, improvement.py:76),
+  202 queued async (clips.py:105, creators.py:36), 201 create (review.py:34), 204
+  delete (auth.py:132).
+- Error messages safe — no stack trace or DB error reaches the client. Internal
+  failures log the exception and return a generic detail (improvement.py:75-76,
+  billing.py:101-103). Clean.
 
-- [SEV2] routers/auth.py:187 — `delete_prefix(prefix)` is synchronous boto3
-  (paginated `list_objects_v2` + `delete_objects`, worker/storage.py:66) called
-  inside `async def delete_account`. Account deletion is rare (5/hour limit) so
-  blast radius is small, but a creator with thousands of objects blocks the loop
-  for the full multi-page delete.
-  | fix: `await asyncio.to_thread(delete_prefix, prefix)` per prefix, or move the
-  purge into an idempotent Celery erasure task (re-running a prefix delete is
-  naturally idempotent).
+### Resource lifecycle (category 1)
+- DB sessions come from `Depends(get_session)` on every route — closed by FastAPI
+  dependency teardown on all paths. Clean.
+- Upload temp file removed in `finally` (videos.py:148-149) and on the size-limit
+  early-abort path (videos.py:130). No leak.
+- Module-level singletons: `limiter` (limiter.py:31), stripe client module. The only
+  per-call client is the deliberately short-lived one-shot `httpx.AsyncClient` in the
+  revocation path (auth.py:158) — acceptable.
+- billing webhook idempotent: checks `stripe_session_id` already fulfilled before
+  granting (billing.py:144-148). Clean.
 
-### Error handling & API surface (rubric 7)
+### Code cleanliness & typing (category 6)
+- [cleanup] clips.py:20 `_clip_response(clip: Clip) -> dict` — the hand-maintained
+  field mapping is superseded once a ClipOut response_model exists (DRY).
+- [cleanup] improvement.py:47 `_avg(lst)` — param and return untyped; annotate
+  `_avg(lst: list[float]) -> float | None`.
+- Inline `from ... import` inside handlers (clips.py:60/65, creators.py:40/54/84,
+  auth.py:78/148/184, improvement.py:58/63) avoids import cycles / heavy worker imports
+  at module load — deliberate, not flagged.
 
-- [SEV2] Bare `dict` return with **no `response_model`** on nearly every endpoint:
-  auth.py:113/120, clips.py:38/80/105/128, creators.py:15/28/38/48/76,
-  improvement.py:18, review.py:36, upload_intel.py:16, videos.py:23/49/79/152.
-  CLAUDE.md and rubric 7 require a Pydantic model on every request AND response;
-  only billing.py declares `response_model=` (BalanceOut/PackOut/CheckoutOut).
-  Untyped dicts mean no response validation, no schema in `/docs`, and silent
-  drift between handler and contract.
-  | fix: declare a Pydantic `*Out` model per endpoint (`CreatorOut`, `ClipOut`,
-  `VideoOut`, `FeedbackOut`, `UploadIntelOut`, `DnaOut`, `ImprovementBriefOut`) and
-  set `response_model=`. `_clip_response` (clips.py:20) should return a `ClipOut`.
+### Config & paths (category 8)
+- Paths absolute / tempfile-based (videos.py:111-112). Clean.
+- Per-creator rate limiting confirmed: `_creator_key` keys on JWT `sub`, falling back
+  to remote IP for unauthenticated requests (limiter.py:14-28). It decodes with
+  `verify_exp: False` (limiter.py:23), acceptable since the value is only a rate-limit
+  bucket key, not authz.
 
-- [SEV2] routers/videos.py:51,81 — `youtube_video_id` arrives as a raw
-  `Form(...)` string with no validation, then is interpolated into a storage key
-  `source/{creator.id}/{youtube_video_id}{suffix}` (videos.py:131). A value
-  containing `../` or `/` can shape the object key — within the creator's own
-  prefix (creator_id still scopes it, so NOT cross-tenant), but it can escape the
-  intended `source/<id>/` layout and collide/overwrite.
-  | fix: validate `youtube_video_id` against the YouTube ID charset
-  (`^[A-Za-z0-9_-]{11}$`) via a Pydantic model / `field_validator`; reject with 422.
-
-### Code cleanliness & typing (rubric 6)
-
-- [cleanup] routers/improvement.py:46 — nested `_avg(lst)` has no parameter or
-  return type hint (CLAUDE.md mandates types on every signature).
-  | fix: `def _avg(lst: list[float]) -> float | None:`.
-
-- [cleanup] routers/clips.py:20 — `_clip_response(clip: Clip) -> dict` returns an
-  untyped dict; once `ClipOut` exists, annotate the return as `-> ClipOut`.
-
-### Items verified clean (no finding)
-
-- Per-tenant isolation (rubric 3 / scale axis D): traced EVERY creator-scoped
-  query — all filter by the authenticated `creator.id`: videos
-  list/link/upload/status (videos.py:30,57,121,161), clips
-  generate/list/get/render (clips.py:48,90,95,117,138), feedback (review.py:45,52),
-  upload-intel (upload_intel.py:23), improvement metrics (improvement.py:32 —
-  re-scoped after the Issue 33 leak), billing balance (ledger.py:33).
-  `get_current_creator` (auth.py:31) derives creator_id from the JWT `sub`, never
-  from the request body. The Stripe webhook reads `creator_id` from session
-  metadata that `create_checkout_session` set server-side from the authenticated
-  creator (billing/stripe_client.py:57), not from client input — no body-trust leak.
-  Caveat (scale axis D, not a finding): isolation is hand-enforced by per-path
-  `WHERE` / `if ... != creator.id: 404`, i.e. vigilant not structural — one
-  forgotten clause is a leak. Postgres RLS with per-request `SET app.current_creator`
-  is the recommended defense-in-depth backstop (Layer-2/scale level; not blocking
-  since current coverage is complete).
-
-- Rate limiting (scale axis F): `limiter._creator_key` (limiter.py:15) keys on the
-  JWT `sub` for authenticated routes and only falls back to remote IP with no
-  session cookie — correctly per-creator, backed by real Redis, no in-memory
-  fail-open. `verify_exp=False` in the limiter decode is acceptable (used only to
-  bucket the rate key; the auth dependency still rejects expired tokens). Spend
-  gate (`check_positive_balance`) guards render/upload in clips.py:114 / videos.py:91.
-
-- Token handling (rubric 3): only token read is delete_account (auth.py:156) via
-  `decrypt(token_row.refresh_token_encrypted)`; POSTed to Google revoke, never
-  logged. No `logger.*` line in the module emits a token, refresh token, or PII as
-  secret. OAuth state uses `secrets.token_urlsafe(32)`, httponly cookie, equality
-  check (auth.py:58) — CSRF covered.
-
-- Error messages (rubric 7): no stack trace or DB error reaches the client.
-  Billing and improvement-brief catch broad `Exception`, return generic 502/400,
-  and log detail server-side (billing.py:101-103,118-122; improvement.py:70-72).
-  Correct status codes throughout (401/402/404/409/413/422/502/503).
-
-- Resource lifecycle (rubric 1): DB sessions via `Depends(get_session)`
-  (context-managed in db.py). Upload temp file cleaned in `finally`/except on every
-  path (videos.py:116-134). The one per-call client is `httpx.AsyncClient` in
-  delete_account (auth.py:157) — acceptable given the 5/hour rarity and proper
-  `async with` scoping.
+### Anthropic SDK (category 5)
+- n/a — the improvement-brief LLM call lives in improvement/brief.py; this router only
+  offloads it via to_thread (improvement.py:68). SDK correctness is that module's slice.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
 | 1 Resource lifecycle | ok |
-| 2 Concurrency & scale | 3 findings (2 SEV1, 1 SEV2) |
-| 3 Security & compliance | ok (isolation, tokens, CSRF verified clean) |
-| 4 Clip-quality | n/a (routers do not score clips) |
-| 5 Anthropic SDK | n/a here (brief.py owns the call; flagged only its sync invocation) |
+| 2 Concurrency & scale | 1 SEV2 (unbounded list endpoints) |
+| 3 Security & compliance | ok (isolation, tokens, ToS verified clean) |
+| 4 Clip-quality | n/a (not a clip-scoring module) |
+| 5 Anthropic SDK | n/a (LLM call lives in improvement/brief.py) |
 | 6 Cleanliness & typing | 2 cleanup |
-| 7 Error handling / API | 3 findings (2 SEV2: response_model + input validation) — status codes & error masking ok |
-| 8 Config & paths | ok (no new config introduced; paths absolute via storage layer) |
+| 7 Error handling / API | 1 SEV1 (response_model gap, 18 endpoints) + 1 SEV2 (Form request models) |
+| 8 Config & paths | ok |
 
 ## Module verdict
-NEEDS-WORK — no cross-tenant leak and no BLOCKER, but two SEV1 blocking calls on
-the async loop (the 120s improvement-brief LLM call and the synchronous large-file
-upload) will collapse p99 latency under concurrency, and nearly every response
-lacks a Pydantic `response_model`.
+NEEDS-WORK — no BLOCKERs: per-creator isolation, token handling, and event-loop
+offloading are all verified clean post-hardening; remaining work is the known-open
+Issue-75 response_model coverage (18 endpoints) and pagination on unbounded list
+endpoints.

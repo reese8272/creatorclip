@@ -57,7 +57,16 @@ def extract_audio_wav(source_path: str | Path, dest_path: str | Path) -> None:
         "1",
         str(dest_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Bound the subprocess so a wedged ffmpeg can't pin a worker slot forever; the
+    # caller runs this in a Celery task that retries on RuntimeError. (Issue A)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=settings.FFMPEG_EXTRACT_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"ffmpeg audio extraction timed out after {settings.FFMPEG_EXTRACT_TIMEOUT_S}s"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg audio extraction failed: {result.stderr[:500]}")
 

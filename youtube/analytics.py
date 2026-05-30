@@ -27,7 +27,7 @@ from models import (
 )
 from youtube import _http
 from youtube.data_api import _classify_error, get_videos_metadata, list_channel_videos
-from youtube.errors import YouTubeAuthError
+from youtube.errors import YouTubeAuthError, retry_after_seconds
 from youtube.quota import COST_ANALYTICS_REPORT, consume
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,11 @@ async def _fetch_report(access_token: str, params: dict) -> dict:
                 raise YouTubeAuthError(reason, resp.status_code)
             if attempt < _MAX_RETRIES - 1:
                 jitter = random.uniform(0, delay * 0.3)
-                await asyncio.sleep(delay + jitter)
+                base = delay + jitter
+                # Honor a server-stated Retry-After (Google sends it on 429). (Issue A)
+                retry_after = retry_after_seconds(resp)
+                sleep_s = max(retry_after, base) if retry_after is not None else base
+                await asyncio.sleep(sleep_s)
                 delay *= 2
                 continue
             logger.warning(

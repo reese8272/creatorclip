@@ -299,9 +299,14 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
         # Another worker is refreshing. Poll until it finishes.
         for attempt in range(_LOCK_RETRY_COUNT):
             await asyncio.sleep(_LOCK_RETRY_SLEEP_S)
-            # Re-read the row so we see whatever the lock holder committed.
+            # Re-read the row so we see whatever the lock holder committed in its own
+            # session. populate_existing forces the ORM to overwrite our identity-map
+            # copy from the DB — without it `expire_on_commit=False` returns the stale
+            # cached instance and the waiter 503s even though a fresh token exists. (Issue A)
             fresh_result = await session.execute(
-                select(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
+                select(YoutubeToken)
+                .where(YoutubeToken.creator_id == creator_id)
+                .execution_options(populate_existing=True)
             )
             fresh_row = fresh_result.scalar_one_or_none()
             if fresh_row is None:

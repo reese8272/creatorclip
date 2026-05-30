@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CreatorClip — Dashboard</title>
+  <title>AutoClip — Dashboard</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <style>
@@ -70,7 +70,7 @@
 </head>
 <body>
   <nav>
-    <a class="brand" href="/">CreatorClip</a>
+    <a class="brand" href="/">AutoClip</a>
     <a href="/static/review.html">Review</a>
     <a href="/static/insights.html">Insights</a>
     <a href="/static/profile.html">Profile</a>
@@ -81,7 +81,7 @@
   </nav>
 
   <div class="disclaimer">
-    CreatorClip predicts fit with your style and audience — it does not promise virality.
+    AutoClip predicts fit with your style and audience — it does not promise virality.
     Recommendations are estimates grounded in your own data, not guarantees.
   </div>
 
@@ -166,12 +166,14 @@
       }
 
       const dnaResp = await fetch('/creators/me/dna', { credentials: 'include' });
-      if (dnaResp.ok) {
-        const dna = await dnaResp.json();
-        document.getElementById('dna-status').innerHTML = `<span class="badge badge-dna">${dna.status}</span>`;
-        document.getElementById('dna-version').textContent = `v${dna.version}`;
+      const dna = dnaResp.ok ? await dnaResp.json() : null;
+      const profile = dna && dna.profile;
+      if (profile) {
+        document.getElementById('dna-status').innerHTML = `<span class="badge badge-dna">${profile.status}</span>`;
+        document.getElementById('dna-version').textContent = `v${profile.version}`;
       } else {
         document.getElementById('dna-status').textContent = 'Not built';
+        document.getElementById('dna-version').textContent = '';
       }
 
       await loadVideos();

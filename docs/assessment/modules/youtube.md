@@ -1,98 +1,117 @@
 # youtube — assessed 2026-05-29
 
-Slice: `youtube/_redis.py`, `youtube/analytics.py`, `youtube/data_api.py`,
-`youtube/errors.py`, `youtube/ingest.py`, `youtube/oauth.py`, `youtube/quota.py`.
+Re-assessment after hardening Issues 58–75. Scope: every file under `youtube/`
+(`_http.py`, `_redis.py`, `errors.py`, `quota.py`, `oauth.py`, `analytics.py`,
+`data_api.py`, `ingest.py`). Callers in `worker/` are another agent's slice and
+are referenced only to establish how this module's functions are invoked.
 
 ## Findings
 
-- [SEV1] youtube/oauth.py:84-109 — every OAuth/Google call (`_call_token_endpoint`,
-  `_call_userinfo`, `_call_youtube_channels`) constructs a fresh `httpx.AsyncClient()`
-  per call and **none sets a timeout** | this is two rubric/scale violations at once:
-  (a) rubric 1 + scale axis B — clients should be a module-level singleton, not built
-  per request (TLS handshake + pool teardown on every token refresh, and at hundreds of
-  creators the refresh storm has no connection reuse); (b) scale axis E — a call with no
-  timeout will hang the request/Celery worker indefinitely if Google's token endpoint
-  stalls, cascading to outage. fix: introduce one module-level
-  `_HTTP = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))` (mirroring the
-  data_api/analytics pattern which already passes a timeout), reuse it in all three
-  helpers, and close it on app shutdown. Token refresh is on the hot path for every
-  authenticated request whose token is within 5 min of expiry, so this is load-bearing.
+- [SEV2] youtube/oauth.py:303-313 — in the lock-contended wait branch, the re-read
+  `session.execute(select(YoutubeToken)...)` runs against a session that already
+  loaded this PK at line 272-275. With `expire_on_commit=False` (db.py:44) and no
+  `.execution_options(populate_existing=True)` / `session.expire(row)`, SQLAlchemy's
+  identity map returns the **cached stale instance** — the new `expires_at` the
+  lock-holder committed (in its own session) is never seen. The waiter then exhausts
+  all 3 retries and raises 503 even though a fresh token exists in the DB. Under
+  concurrent refresh (two workers, or worker + API request for the same creator) this
+  turns a benign race into spurious 503s and a wasted second refresh on the next call.
+  | fix: force a DB round trip in the loop —
+  `await session.refresh(fresh_row)` after fetch, or
+  `select(YoutubeToken).where(...).execution_options(populate_existing=True)`; add a
+  test that seeds an expired row, simulates the lock-holder committing a fresh row in a
+  *separate* session, and asserts the waiter returns the new token (not 503).
 
-- [SEV1] youtube/data_api.py:86 & youtube/analytics.py:45 — `async with
-  httpx.AsyncClient(timeout=...) as client:` is **inside the retry loop**, so a new
-  client (and connection pool) is created and torn down on every attempt and every call |
-  rubric 1 (external clients must be singletons) + scale axis B. Timeouts are correctly
-  set here (good), but per-call construction defeats connection pooling under the
-  analytics fan-out (one `_fetch_report`/`_get_json` per video × hundreds of creators in
-  the Beat refresh). fix: hoist a single module-level `httpx.AsyncClient` with the
-  configured timeout and reuse it across calls and retries; do not enter the context
-  manager per attempt.
+- [SEV2] youtube/quota.py:51 — `_quota_key()` buckets the daily counter by
+  `datetime.now(UTC)` date, but the YouTube/Google project quota resets at **midnight
+  Pacific Time** (per quota.py's own docstring line 4 and COMPLIANCE.md §4). UTC date
+  rolls over 7–8h before the real Google reset, so for that window our counter starts
+  fresh while Google's has not — we can hand out budget the project no longer has and
+  hit hard 403 `quotaExceeded`, defeating the degrade-gracefully design. | fix: key by
+  America/Los_Angeles date:
+  `datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")`; keep the 25h
+  TTL. Add a test pinning a UTC instant that is still "yesterday" in PT and asserting
+  the key matches the PT date.
 
-- [SEV1] youtube/analytics.py:79-163 (all `_fetch_report` callers) and
-  youtube/data_api.py — no enforcement of the YouTube Analytics **data-retention /
-  refresh-or-delete cadence** that docs/COMPLIANCE.md §2 marks TBD and lists as a
-  pre-launch gate. Analytics rows (`VideoMetrics.fetched_at`, `RetentionCurve`,
-  `AudienceActivity`, `Demographics`) are written with `fetched_at` but nothing in this
-  module refreshes or purges them on Google's required cadence; cached analytics can
-  persist indefinitely, which is a direct ToS exposure | fix: (1) confirm Google's
-  required refresh interval and record it in COMPLIANCE.md §2; (2) add a scheduled
-  refresh/purge keyed on `fetched_at` older than the cadence (Celery Beat task that
-  re-fetches or deletes stale rows). Mark `(needs-runtime-confirmation)` on the exact
-  cadence value until the ToS figure is confirmed.
+- [SEV2] youtube/ingest.py:44-62 — `extract_audio_wav` runs `subprocess.run(...)` with
+  **no `timeout=`**, unlike `probe_duration_s` (line 36, `timeout=30`). A wedged ffmpeg
+  on a malformed/huge upload blocks the calling thread indefinitely; this function is
+  invoked from `_ingest_async` (worker/tasks.py:244), so a hang ties up that worker
+  slot with no recovery. | fix: add a bounded `timeout=` (e.g. proportional to source
+  duration, floor ~600s) and convert `TimeoutExpired` into the existing `RuntimeError`
+  path so the Celery task fails and retries cleanly.
 
-- [SEV2] youtube/data_api.py:129-163 — `list_channel_videos` accumulates **every** video
-  in the uploads playlist into one in-memory `list[dict]` with no upper bound, and
-  `sync_video_catalog` (analytics.py:171) then builds two full dicts (`video_id_map`,
-  `duration_map`) over that list | scale rubric 2 "no unbounded in-memory accumulation
-  of per-creator data". A creator with tens of thousands of uploads spikes memory and
-  quota in a single task. fix: stream pages — yield/insert per page rather than
-  accumulating, or cap with a configurable `MAX_CATALOG_VIDEOS` and document it; combine
-  with `worker_prefetch_multiplier=1` so one large channel cannot starve workers.
+- [SEV2] youtube/analytics.py:51 / youtube/data_api.py:93 — on a 429 the backoff uses a
+  fixed exponential schedule (1s, 2s, 4s…) and ignores the `Retry-After` header Google
+  returns on rate-limit/quota responses. COMPLIANCE.md §4 mandates backoff on 429/403;
+  honoring `Retry-After` is the documented-correct behavior and avoids retrying before
+  the server-stated window. | fix: when `resp.status_code == 429` and a `Retry-After`
+  header is present, sleep `max(parsed_retry_after, computed_delay)` before the next
+  attempt.
 
-- [SEV2] youtube/oauth.py:244 — `logger.warning("Token refresh failed for creator %s:
-  %s", creator_id, exc)` logs the raw `httpx.HTTPStatusError`. httpx's `str(exc)`
-  includes the request URL and status (not the POST body), so the client_secret/
-  refresh_token in the request `data` are **not** emitted today — but this is one
-  httpx-version/`repr` change away from leaking, and the rubric requires no secret in any
-  log line | fix: log only `exc.response.status_code` and a static message, never the
-  exception object, on any line in the token-refresh path. (Confirmed by reading: the
-  POST body at oauth.py:127-135 carries refresh_token + client_secret.)
+- [SEV2] docs/COMPLIANCE.md:21,47-50,85 — analytics data-retention **refresh cadence is
+  still TBD/open** (Issue 75b). The mechanism exists and is sound: `refresh_youtube_analytics`
+  beat task re-fetches daily (worker/schedule.py:27, worker/tasks.py:654) and overwrites
+  `fetched_at`. But ToS §2 requires a *documented max-staleness / deletion* policy, and
+  the table still reads "Refresh cadence TBD — confirm from ToS." There is no upper bound
+  that deletes or force-refreshes analytics rows whose `fetched_at` is older than the
+  policy window (e.g. if a creator's grant dies, their last metrics persist indefinitely).
+  | fix: confirm Google's required staleness window, record it in COMPLIANCE.md, and add a
+  purge/staleness sweep (delete VideoMetrics/RetentionCurve/AudienceActivity/Demographics
+  rows whose `fetched_at` exceeds the window) so retention is enforced, not just attempted.
+  Tracks as Issue 75b — flag as not-closed.
 
-- [SEV2] youtube/data_api.py:78-113 / youtube/analytics.py:39-71 — for a non-2xx status
-  **outside** {401,403,429} (e.g. 500/503 from Google), the loop falls straight to
-  `resp.raise_for_status()` with no retry, even though 5xx is the textbook transient case
-  | scale axis E (retry-with-jitter on idempotent external calls). These GETs are
-  idempotent, so a Google 503 currently fails the whole ingest instead of backing off.
-  fix: treat 5xx like the transient branch (backoff + retry) before `raise_for_status`.
+- [cleanup] youtube/analytics.py:155 — `fetch_audience_activity` hardcodes `"hour": 12`
+  with the comment "Hour-level data not in public API," yet the AudienceActivity model and
+  COMPLIANCE.md describe "day/hour activity windows." The magic 12 is a silent
+  placeholder; a reader of downstream upload-timing logic could mistake it for a real
+  hour. | fix: name the constant (e.g. `_HOUR_UNAVAILABLE_SENTINEL = 12`) or document on
+  the model that `hour` is a fixed sentinel until hour-level data is available.
 
-- [cleanup] youtube/data_api.py:198-209 — `get_video_stats` does
-  `int(stats.get("viewCount", 0))`; `viewCount` from the API arrives as a string and a
-  missing/malformed value would raise `ValueError` rather than returning `{}` | fix:
-  wrap the cast in `contextlib.suppress`/`try` and default to 0, consistent with the
-  defensive parsing used elsewhere in the file.
+## Verified clean (load-bearing traces)
 
-- [cleanup] youtube/analytics.py:278 — `check_data_gate(session, creator_id)` has an
-  untyped `creator_id` parameter (every other signature in the slice is typed) | fix:
-  annotate `creator_id: uuid.UUID` and the return as `-> dict[str, int | bool]`.
-
-- [cleanup] youtube/data_api.py:36-46 — `parse_duration_seconds` regex requires a literal
-  `T`; an ISO 8601 duration with only a day component (`P1D`, no `T`) returns 0.0 | fix:
-  make the `T` and time groups optional, or note in a comment that YouTube always returns
-  a time component (low real-world risk for video durations, hence cleanup not SEV).
+- OAuth tokens read via `decrypt()` only (oauth.py:229, 281, 313); `encrypt()` on every
+  write (oauth.py:203-216). No token, refresh token, email, or secret appears in any
+  `logger.*` line — the only token-context logs (oauth.py:244,283) log `creator_id` +
+  the httpx exception, and token auth is sent via header (not URL), so the exception repr
+  carries no secret.
+- Shared per-process httpx singleton present and lazy (Issue 72, _http.py:19-24); reused
+  across every Google/YouTube/Analytics call and across retries (oauth.py:88,94,103;
+  analytics.py:46; data_api.py:88). Bound to first-use loop (correct for the post-fork
+  worker loop). `aclose()` wired into both FastAPI lifespan (main.py:43) and Celery
+  `worker_process_shutdown` (celery_app.py:96).
+- Every httpx call carries the singleton's timeout (connect=5s, read/write/pool=15s,
+  _http.py:15) — no unbounded Google call.
+- 5xx backoff with jitter on the idempotent GETs (analytics.py:66-71, data_api.py:109-114);
+  permanent vs transient 401/403 correctly split (errors.py + data_api.py:_classify_error)
+  so revoked grants raise `YouTubeAuthError` instead of looping.
+- QuotaExhausted degrade-to-tomorrow honored: `consume()` is atomic Lua check-then-incr
+  (quota.py:33-45); the daily refresh catches `QuotaExhaustedError`, rolls back, and
+  `break`s, deferring remaining creators to the next run (worker/tasks.py:698-704), with
+  starvation-fair ordering by `last_analytics_refreshed_at NULLS FIRST` (tasks.py:666).
+- Per-creator isolation: every creator-scoped query filters `creator_id`/`video_id`
+  (analytics.py:191, 246, 258, 276, 285-297; oauth.py:164, 194, 241, 273). No
+  unscoped reads. SQL is ORM-parameterized throughout; no f-string/`%` query building.
+- Revocation: invalid_grant deletes the token row (oauth.py:236-242); auth-error in the
+  refresh loop drops the row so the creator is skipped thereafter (tasks.py:705-722).
+- `yt-dlp` off by default, guarded by `YTDLP_ENABLED` (ingest.py:73), documented
+  own-content-only (ingest.py:1-9); present in `.env.example` with the correct warning.
+- No virality promise in any string in the module.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 2 findings — per-call httpx clients in oauth + data_api/analytics (SEV1) |
-| 2 Concurrency & scale | 2 findings — missing timeouts on OAuth calls (SEV1), unbounded catalog accumulation (SEV2), no 5xx backoff (SEV2) |
-| 3 Security & compliance | 2 findings — analytics retention/refresh not enforced (SEV1, compliance gate), exc logged in refresh path (SEV2). Tokens correctly go through `decrypt()`/`encrypt()`; per-creator scoping present on every query (`creator_id`/`video_id` filters confirmed); yt-dlp gated off by default; no virality strings. |
+| 1 Resource lifecycle | ok — singleton clients, aclose wired both processes; ingest.py:44 missing subprocess timeout (SEV2) |
+| 2 Concurrency & scale | 1 SEV2 (oauth.py:303 stale identity-map re-read under lock contention) |
+| 3 Security & compliance | tokens/isolation/revocation clean; analytics retention cadence still open (SEV2, Issue 75b); 429 Retry-After unhonored (SEV2) |
 | 4 Clip-quality | n/a (not a clip module) |
 | 5 Anthropic SDK | n/a (no LLM calls in this module) |
-| 6 Cleanliness & typing | 3 cleanup findings — untyped `creator_id`, fragile `int()` cast, regex `T` edge |
-| 7 Error handling / API | n/a (no FastAPI routes here; HTTP error classification reviewed under cat 2/3) |
-| 8 Config & paths | ok — all referenced config (`YOUTUBE_QUOTA_DAILY_UNITS`, `OAUTH_REDIRECT_URI`, `GOOGLE_OAUTH_*`, `YTDLP_ENABLED`, `REDIS_URL`, `SOURCE_MEDIA_RETENTION_HOURS`, `TOKEN_ENCRYPTION_KEY*`) present in `.env.example` with descriptions; no relative paths |
+| 6 Cleanliness & typing | ok — signatures typed; 1 cleanup (magic `hour=12` sentinel) |
+| 7 Error handling / API | n/a (no routers here; HTTPException raised from oauth is consumed by routers) |
+| 8 Config & paths | ok — all new config in `.env.example` with descriptions; quota key uses wrong TZ (folded into SEV2 above) |
 
 ## Module verdict
-NEEDS-WORK — no cross-tenant leak and token handling is sound, but per-call httpx
-clients without timeouts on the OAuth hot path and the unenforced analytics
-retention/refresh cadence are SEV1s that will bite under load and against the YouTube ToS.
+NEEDS-WORK — no cross-tenant leak and the Issue-72 HTTP/timeout/backoff/quota hardening
+holds, but four SEV2s remain: the lock-wait stale-read (spurious 503s), the UTC-vs-PT
+quota reset window, the missing ffmpeg timeout, and the still-open analytics retention
+cadence (Issue 75b).

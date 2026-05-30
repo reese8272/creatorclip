@@ -87,6 +87,12 @@ async def grant_minutes(
                 .values(minutes_balance=Creator.minutes_balance + minutes)
             )
     except IntegrityError:
+        if stripe_session_id is None:
+            # Non-keyed grant (free trial / manual): there is no UNIQUE to race on, so
+            # an IntegrityError here is a *real* fault (e.g. the creator row is gone),
+            # not a duplicate delivery. Don't swallow it — that would silently drop a
+            # legitimate grant (a new beta user getting 0 trial minutes). (Issue 76)
+            raise
         # Concurrent duplicate delivery won the UNIQUE(stripe_session_id) race — no-op.
         logger.info("billing grant race skip session=%s", stripe_session_id)
         return

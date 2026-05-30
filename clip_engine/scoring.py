@@ -8,6 +8,7 @@ token cost minimal.  Without DNA, signal features produce a cold-start score.
 Every returned candidate includes a named principle from CLIPPING_PRINCIPLES.md.
 """
 
+import asyncio
 import json
 import logging
 
@@ -150,8 +151,13 @@ async def score_candidates(
     if not candidates:
         return []
 
-    for c in candidates:
-        c["features"] = compute_features(c, timeline)
+    # Feature computation is CPU-bound (signal-array build per candidate). Offload it
+    # so scoring never blocks the event loop on this worker. (Issue C)
+    def _compute_features_all() -> None:
+        for c in candidates:
+            c["features"] = compute_features(c, timeline)
+
+    await asyncio.to_thread(_compute_features_all)
 
     if not dna_brief:
         for c in candidates:

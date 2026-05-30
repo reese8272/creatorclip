@@ -27,7 +27,7 @@ _ANTHROPIC = Anthropic(
 _DISCLAIMER = (
     "\n\n---\n"
     "*These insights are estimates grounded in your own channel data. "
-    "CreatorClip predicts fit with your style and audience — it does not promise virality.*"
+    "AutoClip predicts fit with your style and audience — it does not promise virality.*"
 )
 
 # Static instruction block — no per-creator data, so it is identical across all

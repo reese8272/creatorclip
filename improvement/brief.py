@@ -30,7 +30,7 @@ _ANTHROPIC = Anthropic(
 _DISCLAIMER = (
     "\n\n---\n"
     "*These recommendations are estimates grounded in your channel data and publicly "
-    "available information. CreatorClip does not promise virality or specific growth outcomes.*"
+    "available information. AutoClip does not promise virality or specific growth outcomes.*"
 )
 
 # Static instruction block — no per-creator data, carries the cache breakpoint. (Issue 69)

@@ -1250,7 +1250,7 @@ most endpoints return a bare `dict` with no `response_model`.
 
 **Acceptance criteria**:
 - [x] `youtube_video_id` validated against `^[A-Za-z0-9_-]{11}$` (422 on bad input) on both `/videos/link` and `/videos/upload`, before the value reaches a storage key — DB-free unit test
-- [ ] A Pydantic `*Out` model + `response_model=` on every endpoint — **mechanical hygiene (no security/correctness risk), ~16 endpoints; tracked under Issue 75** rather than rushed into one commit
+- [x] A Pydantic `*Out` model + `response_model=` on every endpoint — DONE (action #3). 18 endpoints across 7 routers now declare a `response_model` (typed OpenAPI + response-side field allow-list). Standing guard `tests/test_response_models.py` fails if a future documented JSON route ships without one.
 
 ## Issue 74: Bound transcription/audio memory (SEV-2)
 **Depends on**: —
@@ -1291,12 +1291,112 @@ vector; WhisperX model + SDK clients reconstructed per call.
   `celery_task_*`) at `/metrics`; correlation id propagated API→Celery via
   before_task_publish/task_prerun/task_postrun signals. +9 tests. See DECISIONS
   2026-05-29. Follow-up: OpenTelemetry distributed tracing (deferred).
-- [ ] **Full `response_model` coverage** across the ~16 endpoints (from Issue 73)
-- [ ] **Deepgram file-stream** upload (from Issue 74)
-- [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69
-- [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71)
+- [x] **Full `response_model` coverage** across the 18 endpoints (from Issue 73) — DONE (action #3).
+  `*Out` models + `response_model=` on every documented JSON endpoint in 7 routers; standing guard
+  `tests/test_response_models.py`. Faithful field-for-field modeling verified by the full endpoint suite.
+- [x] **Deepgram file-stream** upload (from Issue 74) — DONE (action #2). `transcribe.py`
+  streams the open file handle (`FileSource.buffer` accepts a `BufferedReader`) instead of
+  `f.read()`, so httpx uploads in chunks and the ~115 MB/hr WAV is never held in a Python
+  bytes object. Plus a `TRANSCRIPTION_MAX_MB` fail-fast size guard before any read/upload.
+- [x] **SDK-native transcription timeout** (Deepgram/AssemblyAI) — DONE (action #2). New
+  `TRANSCRIPTION_HTTP_TIMEOUT_S` (default 120, kept < the 300s job `wait_for`): Deepgram gets
+  an `httpx.Timeout` per `transcribe_file`; AssemblyAI sets `aai.settings.http_timeout`. A hung
+  provider socket now returns the blocking thread before the job timeout (which can't cancel it).
+- [ ] **Clip-scorer prompt caching** — the real caching beneficiary (large per-creator prefix reused across videos), from Issue 69. Re-run also flagged the cheap prefix-ordering win: put the static principles block BEFORE `{dna_brief}` in `clip_engine/scoring.py:182-191` so the long static prefix is shared across creators
+- [ ] **Per-(creator, version) scorer cache** so `from_bytes` runs once, not per rerank (from Issue 71) — confirmed still absent: `preference/train.py:116` deserializes on every rerank (`clip_engine/ranking.py:39`)
 - [ ] **Improvement-brief 202/poll** Celery UX (the 120s request can exceed an LB timeout; from Issue 66)
-- [ ] ~37 remaining SEV-2 + ~34 cleanup items in `docs/assessment/modules/*.md` — re-run `/assess` to triage as a diff
+- [ ] ~23 remaining SEV-2 + ~24 cleanup items in `docs/assessment/modules/*.md` — see Issue 76 for the net-new ones from the re-run
+
+---
+
+## Issue 76: Re-assessment re-run findings (2026-05-29, post-hardening /assess)
+**Depends on**: —
+**Status**: Open (tracking) — net-new findings from the post-Issues-58–75 `/assess` re-run.
+Verdict moved NO → **CONDITIONAL** (0 BLOCKER, 4 SEV1, 23 SEV2, 24 cleanup). Full register and
+backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; snapshot in
+`docs/assessment/history/2026-05-29-rerun-post-hardening-REPORT.md`.
+
+**SEV1**
+- [x] **`build_dna` concurrent-redelivery double-spend** (`worker/tasks.py:423-430` + `dna/profile.py:52-55`).
+  The idempotency re-check ran in its own closed session, not serialized against the draft INSERT;
+  `build_job_id` was non-unique. Serial redelivery was safe (Issue 63), but two *concurrent* same-`job_id`
+  deliveries both ran the paid Anthropic brief + Voyage embeddings before the version UNIQUE collided,
+  and the loser raised → Celery retries. **DONE (action #1):** per-creator `pg_advisory_xact_lock` at
+  the top of the build txn with the re-check under it + partial UNIQUE on `build_job_id WHERE NOT NULL`
+  (migration 0008) + IntegrityError→no-op. Concurrent-redelivery regression test verified on real PG.
+
+**SEV2 (net-new)**
+- [ ] clip_engine `ranking.py:129` — `dna_match` seeded to the composite score, never refined →
+  preference model fed a duplicate of its own target as a "DNA-fit" feature (collinear). Persist a
+  DNA-only fit distinct from `clip.score`, or rename to `seed_score`.
+- [ ] clip_engine `candidates.py:94-113` — candidate windows never deduped; adjacent peaks can yield
+  near-identical clips (vs principle #9). Drop candidates overlapping a kept one >50% IoU.
+- [x] DONE (Issue C) — clip_engine `routers/clips.py:67` — `extract_candidates`/`compute_features` CPU runs on the
+  FastAPI loop. Dispatch to Celery (202) or `asyncio.to_thread`.
+- [x] DONE (Issue A) — youtube `oauth.py:303-313` — lock-wait re-read hits the identity map (`expire_on_commit=False`)
+  → stale token → spurious 503 under concurrent refresh. `session.refresh`/`populate_existing=True`.
+- [x] youtube `quota.py:51` — DONE (beta-blocker). Daily counter now keyed by the
+  `America/Los_Angeles` date (Google's reset zone) via `_QUOTA_RESET_TZ`, so it rolls over with
+  Google's quota instead of ~8h early on the UTC date. Regression test pins a UTC-vs-PT split day.
+- [x] DONE (Issue A) — youtube `ingest.py:44-62` — `extract_audio_wav` `subprocess.run` has no `timeout=`. Add bounded
+  timeout (∝ duration, floor ~600s); map `TimeoutExpired`→RuntimeError.
+- [x] DONE (Issue A) — youtube `analytics.py:51`/`data_api.py:93` — 429 backoff ignores `Retry-After`. Honor it.
+- [ ] worker `tasks.py:547-556` — `poll_clip_outcomes` doesn't `break` on quota exhaustion (vs
+  analytics refresh). Catch `QuotaExhaustedError` and break.
+- [ ] worker `tasks.py:357-394` — `_render_clip_async` not concurrent-safe: two workers both read
+  `pending`, both encode+upload same key. `with_for_update()` + re-check under lock.
+- [ ] worker `tasks.py:222-259` — `_ingest_async` re-extracts/re-uploads the derived WAV on redelivery
+  (no corruption, wasted ffmpeg+R2). Short-circuit when `source_uri` is already the derived key.
+- [x] DONE (Issue B) — dna `builder.py:223-224,137-161` — `_enrich_video` N+1: ~60 serial queries/build. Batch into
+  3 `IN (...)` queries.
+- [x] DONE (Issue B) — dna `builder.py:107-117` — `rank_videos` unbounded fetch into worker memory. Cap with
+  `.limit(DNA_MAX_CANDIDATE_VIDEOS=500)`.
+- [x] DONE (Issue B) — dna `builder.py:201-202` — `kind` compared against bare string literals vs `VideoKind` enum
+  value → a rename silently empties buckets. Compare against `VideoKind.long.value`.
+- [ ] routers list endpoints (`videos.py:40-55`,`clips.py:93-99`,`upload_intel.py:22-25`) — unbounded
+  `list(scalars())`. Add keyset/offset pagination with a hard cap (100).
+- [ ] routers `videos.py:62,93` — `link_video`/`upload_video` raw `Form(...)` with no request model
+  (id regex-validated). Wrap in a body model or record the multipart deviation in DECISIONS.
+- [x] _root_infra `main.py:102-107` — DONE (beta-blocker). `/metrics` now gated behind a
+  `METRICS_TOKEN` bearer token (constant-time compare); config fails fast in production if metrics
+  are enabled without a token, so the scrape surface can't be exposed unauthenticated. Empty token
+  = open for dev/internal-network. Tests cover the gate + the prod fail-fast.
+- [ ] _root_infra `observability.py:189-211` — correlation-id ContextVars are safe only under the
+  prefork pool. Assert/document the prefork assumption, or key task start off `task.request`.
+- [x] billing `ledger.py:89-92` — DONE (beta-blocker). The non-keyed (trial/manual) path now
+  re-raises IntegrityError instead of swallowing it, so a new beta user can't silently get 0 trial
+  minutes; the keyed (Stripe) path still no-ops on the UNIQUE race. Integration test covers it.
+- [ ] upload_intel `timing.py:54-55` — `optimal_gap_hours` left out of the 75d bounds/coercion guard;
+  the two functions disagree on a valid row. Filter+coerce first (mirror `best_upload_windows`).
+- [ ] ingestion `transcribe.py:71-85,99-110` — hosted-provider normalizers use hard-key indexing →
+  opaque `KeyError` on a missing timestamp. Switch to `.get(..., default)` (WhisperX already does).
+
+**cleanup (24)**: typing gaps the mypy ratchet will catch, DRY extractions, magic-constant naming,
+the clip-scorer cache-prefix ordering. Per-finding detail in `docs/assessment/modules/*.md`.
+
+---
+
+## Issue 77: Beta UX polish + brand rename to AutoClip
+**Depends on**: —
+**Status**: Done (2026-05-30) — caught during a real device walkthrough of the beta UI.
+
+- [x] **Brand → AutoClip.** Renamed the user-facing brand from "CreatorClip" to "AutoClip"
+  across `static/*` + `auth.js`, the user-facing brief disclaimers (`dna/brief.py`,
+  `improvement/brief.py`), the CLAUDE.md honesty constraint sentence, and the two
+  brand-asserting tests. ("Creator DNA" the *feature* is unchanged.) **Internal identifiers
+  intentionally left as `creatorclip`** (package, docker image, DB role, Redis key prefix,
+  docs) — a deeper rename is a separate, larger task if wanted.
+- [x] **Dashboard "undefined / vundefined".** `index.html` read `dna.status`/`dna.version`
+  but `/creators/me/dna` nests them under `.profile`. Now reads `dna.profile?.status/version`
+  and shows "Not built" when null.
+- [x] **Channel-data raw JSON.** `onboarding.html` step 2 used htmx to swap the data-gate
+  JSON straight into the page. Replaced with a JS render (✓/• per type + friendly summary),
+  loaded on page open and on refresh.
+- [x] **"Queued (task <uuid>)" + "what does queued mean".** Build-DNA no longer leaks the
+  Celery task id; copy explains what's happening and then **polls `/creators/me/dna`** and
+  flips to "Your Creator Brief is ready — review & confirm" when the draft lands.
+- [x] **API path leaked as UI copy.** Backend `get_dna` "No DNA profile yet. POST
+  /creators/me/dna/build…" → friendly "No Creator DNA yet — build it from the setup screen…".
 
 ---
 

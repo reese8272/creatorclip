@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import psycopg
 import redis.asyncio as aioredis
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -102,7 +103,15 @@ app.add_middleware(
 if settings.METRICS_ENABLED:
 
     @app.get("/metrics", include_in_schema=False)
-    async def metrics() -> Response:
+    async def metrics(request: Request) -> Response:
+        # Gate the scrape surface behind a bearer token when configured (required in
+        # production via config fail-fast). Empty token = unauthenticated, for dev or
+        # an internal-only network. (Issue 76)
+        token = settings.METRICS_TOKEN
+        if token:
+            auth = request.headers.get("authorization", "")
+            if not secrets.compare_digest(auth, f"Bearer {token}"):
+                raise HTTPException(status_code=401, detail="Unauthorized")
         payload, content_type = metrics_response()
         return Response(content=payload, media_type=content_type)
 

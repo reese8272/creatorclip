@@ -1,4 +1,4 @@
-// Shared auth guard — included in every CreatorClip page.
+// Shared auth guard — included in every AutoClip page.
 // Fetches /auth/me; redirects to /auth/login on 401.
 // Sets window.__USER__ and dispatches 'auth:ready' on document.
 (async function () {
