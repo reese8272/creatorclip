@@ -6,8 +6,8 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Phase 2.6 — Production-assessment fixes. 58 code-complete (staging Locust verify pending); 59–72 ✅ done; 73 partial (input validation done), 74 ✅ done, 75 tracking (item (a) CVEs now done; (c)/(d) done). **Assessment-driven SEV-0/SEV-1 work is complete.** Remaining: Issue 75 tracked follow-ups (analytics-retention compliance, full response_models, observability, mypy→0, starlette-1.x migration) + the staging Locust run for 58.
-**Last completed**: Issue 75(f) — observability (correlation ids + JSON structured logs + Prometheus golden signals + Celery propagation).
+**Active issue**: Issue 78 — re-implementing the net-new pieces salvaged from closed PR #6, one small test-gated PR at a time. 78a (scorer cache, PR #9) + 78b (clip-scorer 1h caching) ✅ done; next: mypy→0 (78c), improvement-brief 202/poll (78d), analytics retention purge (78e), PgBouncer harness (78f), legal/CORS delta (78g).
+**Last completed**: Issue 78b — clip-scorer prompt caching (two-block system: static-first + per-creator DNA with a 1h ephemeral breakpoint; candidates uncached). Full suite 430 passed; eval 6 passed; ruff 0 / mypy 30.
 **Blocked**: _(none)_
 
 > **Closed Issue 75(f) — observability** (2026-05-29): new observability.py — a pure-ASGI

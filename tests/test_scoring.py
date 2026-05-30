@@ -189,7 +189,11 @@ async def test_score_candidates_with_dna_calls_claude():
 
 @pytest.mark.asyncio
 async def test_score_candidates_dna_uses_prompt_caching():
-    """System block must carry cache_control for the DNA prefix."""
+    """The per-creator DNA block carries a 1h cache breakpoint; static block leads, uncached.
+
+    Stable-content-first ordering + extended TTL so a creator's videos scored within an hour
+    reuse the cached DNA prefix instead of re-billing it at full price. (Issue 78b)
+    """
     candidates = [_candidate()]
     mock_resp = _mock_claude_response(
         [{"index": 0, "score": 0.7, "principle": "Loop-ability", "reasoning": "Clean loop."}]
@@ -198,9 +202,15 @@ async def test_score_candidates_dna_uses_prompt_caching():
         mock_client.messages.create = AsyncMock(return_value=mock_resp)
         await score_candidates(candidates, _timeline(), dna_brief="some dna")
 
-    call_kwargs = mock_client.messages.create.call_args.kwargs
-    system = call_kwargs.get("system", [])
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    system = mock_client.messages.create.call_args.kwargs.get("system", [])
+    assert len(system) == 2
+    # Static instructions lead and are NOT the cache breakpoint (stable bytes first).
+    assert "cache_control" not in system[0]
+    assert "NAMED SCORING PRINCIPLES" in system[0]["text"]
+    assert "some dna" not in system[0]["text"]
+    # The per-creator DNA is the last block and carries the 1h breakpoint.
+    assert system[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "some dna" in system[-1]["text"]
 
 
 @pytest.mark.asyncio
