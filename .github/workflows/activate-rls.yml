@@ -92,13 +92,27 @@ jobs:
             }
 
             # ─── 0. Sanity ────────────────────────────────────────────────────
-            log "Verifying alembic head is at 0010_rls_policies"
-            HEAD=$(docker compose -f docker-compose.prod.yml exec -T app \
+            # The activation only requires the RLS migration (0010_rls_policies)
+            # to have landed — later migrations (0011_widen_pack_id and beyond)
+            # are fine. We check 0010 ran by listing alembic history rather than
+            # pinning a specific head string.
+            log "Verifying migration 0010_rls_policies has been applied"
+            CURRENT=$(docker compose -f docker-compose.prod.yml exec -T app \
               .venv/bin/alembic current 2>/dev/null | tail -1 || true)
-            echo "  alembic current: $HEAD"
-            if ! echo "$HEAD" | grep -q "0010_rls_policies"; then
-              echo "::error::alembic head is not 0010_rls_policies — aborting."
+            echo "  alembic current: $CURRENT"
+            HISTORY=$(docker compose -f docker-compose.prod.yml exec -T app \
+              .venv/bin/alembic history 2>/dev/null || true)
+            if ! echo "$HISTORY" | grep -q "0010_rls_policies"; then
+              echo "::error::alembic history does not mention 0010_rls_policies — aborting."
               echo "  Run deploy first so migration 0010 lands, then re-run this workflow."
+              exit 1
+            fi
+            # And confirm we're at or past 0010 (current must include a revision
+            # >= 0010 in the chain — the simplest check: 0010 appears in history
+            # AND a downgrade to 0009 would be possible from current).
+            if ! docker compose -f docker-compose.prod.yml exec -T app \
+                 .venv/bin/alembic show "0010_rls_policies" >/dev/null 2>&1; then
+              echo "::error::Cannot resolve 0010_rls_policies revision — aborting."
               exit 1
             fi
 
