@@ -56,3 +56,32 @@ def test_development_ok_without_stripe_secrets():
 
     settings = Settings(ENV="development")
     assert settings.ENV == "development"
+
+
+# ── Issue 76: production fails fast if /metrics is exposed unauthenticated ──────
+
+
+def test_production_requires_metrics_token_when_metrics_enabled():
+    from config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(
+            ENV="production",
+            STRIPE_SECRET_KEY="sk_live_x",
+            STRIPE_WEBHOOK_SECRET="whsec_x",
+            METRICS_ENABLED=True,
+            METRICS_TOKEN="",
+        )
+
+
+def test_production_ok_with_metrics_token():
+    from config import Settings
+
+    s = Settings(
+        ENV="production",
+        STRIPE_SECRET_KEY="sk_live_x",
+        STRIPE_WEBHOOK_SECRET="whsec_x",
+        METRICS_ENABLED=True,
+        METRICS_TOKEN="scrape-secret",
+    )
+    assert s.METRICS_TOKEN == "scrape-secret"

@@ -15,10 +15,16 @@ Cost reference (Google official documentation, 2026):
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from config import settings
 from youtube._redis import get_redis_client
+
+# Google resets the shared project quota at midnight Pacific (per the module
+# docstring). Key the daily counter by the PT date so it rolls over with Google's,
+# not ~7-8h early on the UTC date (which would hand out spent budget → 403). (Issue 76)
+_QUOTA_RESET_TZ = ZoneInfo("America/Los_Angeles")
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +54,7 @@ _TTL_SECONDS = 90_000  # 25 hours — auto-expires the day after
 
 
 def _quota_key() -> str:
-    return f"creatorclip:yt_quota:{datetime.now(UTC).strftime('%Y-%m-%d')}"
+    return f"creatorclip:yt_quota:{datetime.now(_QUOTA_RESET_TZ).strftime('%Y-%m-%d')}"
 
 
 class QuotaExhaustedError(Exception):

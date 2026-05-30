@@ -1335,8 +1335,9 @@ backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; sn
   FastAPI loop. Dispatch to Celery (202) or `asyncio.to_thread`.
 - [ ] youtube `oauth.py:303-313` — lock-wait re-read hits the identity map (`expire_on_commit=False`)
   → stale token → spurious 503 under concurrent refresh. `session.refresh`/`populate_existing=True`.
-- [ ] youtube `quota.py:51` — daily counter keyed by UTC date but Google resets midnight Pacific →
-  early-reset window hands out spent budget → hard 403. Key by `America/Los_Angeles` date.
+- [x] youtube `quota.py:51` — DONE (beta-blocker). Daily counter now keyed by the
+  `America/Los_Angeles` date (Google's reset zone) via `_QUOTA_RESET_TZ`, so it rolls over with
+  Google's quota instead of ~8h early on the UTC date. Regression test pins a UTC-vs-PT split day.
 - [ ] youtube `ingest.py:44-62` — `extract_audio_wav` `subprocess.run` has no `timeout=`. Add bounded
   timeout (∝ duration, floor ~600s); map `TimeoutExpired`→RuntimeError.
 - [ ] youtube `analytics.py:51`/`data_api.py:93` — 429 backoff ignores `Retry-After`. Honor it.
@@ -1356,12 +1357,15 @@ backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; sn
   `list(scalars())`. Add keyset/offset pagination with a hard cap (100).
 - [ ] routers `videos.py:62,93` — `link_video`/`upload_video` raw `Form(...)` with no request model
   (id regex-validated). Wrap in a body model or record the multipart deviation in DECISIONS.
-- [ ] _root_infra `main.py:102-107` — `/metrics` exposed unauthenticated when `METRICS_ENABLED=true`
-  (new surface from Issue 75f). Bind to an internal listener / gate behind token+network policy.
+- [x] _root_infra `main.py:102-107` — DONE (beta-blocker). `/metrics` now gated behind a
+  `METRICS_TOKEN` bearer token (constant-time compare); config fails fast in production if metrics
+  are enabled without a token, so the scrape surface can't be exposed unauthenticated. Empty token
+  = open for dev/internal-network. Tests cover the gate + the prod fail-fast.
 - [ ] _root_infra `observability.py:189-211` — correlation-id ContextVars are safe only under the
   prefork pool. Assert/document the prefork assumption, or key task start off `task.request`.
-- [ ] billing `ledger.py:89-92` — non-keyed grant (trial/manual) swallows a *real* IntegrityError as
-  a no-op (silent dropped credit). `except IntegrityError: if stripe_session_id is None: raise`.
+- [x] billing `ledger.py:89-92` — DONE (beta-blocker). The non-keyed (trial/manual) path now
+  re-raises IntegrityError instead of swallowing it, so a new beta user can't silently get 0 trial
+  minutes; the keyed (Stripe) path still no-ops on the UNIQUE race. Integration test covers it.
 - [ ] upload_intel `timing.py:54-55` — `optimal_gap_hours` left out of the 75d bounds/coercion guard;
   the two functions disagree on a valid row. Filter+coerce first (mirror `best_upload_windows`).
 - [ ] ingestion `transcribe.py:71-85,99-110` — hosted-provider normalizers use hard-key indexing →
@@ -1369,6 +1373,30 @@ backed fixes in `docs/assessment/REPORT.md` + `docs/assessment/modules/*.md`; sn
 
 **cleanup (24)**: typing gaps the mypy ratchet will catch, DRY extractions, magic-constant naming,
 the clip-scorer cache-prefix ordering. Per-finding detail in `docs/assessment/modules/*.md`.
+
+---
+
+## Issue 77: Beta UX polish + brand rename to AutoClip
+**Depends on**: —
+**Status**: Done (2026-05-30) — caught during a real device walkthrough of the beta UI.
+
+- [x] **Brand → AutoClip.** Renamed the user-facing brand from "CreatorClip" to "AutoClip"
+  across `static/*` + `auth.js`, the user-facing brief disclaimers (`dna/brief.py`,
+  `improvement/brief.py`), the CLAUDE.md honesty constraint sentence, and the two
+  brand-asserting tests. ("Creator DNA" the *feature* is unchanged.) **Internal identifiers
+  intentionally left as `creatorclip`** (package, docker image, DB role, Redis key prefix,
+  docs) — a deeper rename is a separate, larger task if wanted.
+- [x] **Dashboard "undefined / vundefined".** `index.html` read `dna.status`/`dna.version`
+  but `/creators/me/dna` nests them under `.profile`. Now reads `dna.profile?.status/version`
+  and shows "Not built" when null.
+- [x] **Channel-data raw JSON.** `onboarding.html` step 2 used htmx to swap the data-gate
+  JSON straight into the page. Replaced with a JS render (✓/• per type + friendly summary),
+  loaded on page open and on refresh.
+- [x] **"Queued (task <uuid>)" + "what does queued mean".** Build-DNA no longer leaks the
+  Celery task id; copy explains what's happening and then **polls `/creators/me/dna`** and
+  flips to "Your Creator Brief is ready — review & confirm" when the draft lands.
+- [x] **API path leaked as UI copy.** Backend `get_dna` "No DNA profile yet. POST
+  /creators/me/dna/build…" → friendly "No Creator DNA yet — build it from the setup screen…".
 
 ---
 
