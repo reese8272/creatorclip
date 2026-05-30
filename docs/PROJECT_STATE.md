@@ -6,10 +6,38 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 83 just closed. Queued follow-ups: AI/LLM efficiency assessment (filed as Issue 84) and UI redesign to sleek editing-tool aesthetic (Issue 85), both user-requested while approving Issue 83.
-**Last completed**: Issue 83 — Creator Intake Form (stated identity layer fused with inferred DNA). Append-only `creator_identity` table + 4 endpoints + identity injection into `dna/brief.py` with `cache_control` on the new block + niche-mismatch conflict nudge on the profile page. 461 passed / 1 skipped / 84 deselected.
+**Active issue**: _(none in flight)_ — Issue 86 just closed. Queued follow-ups: AI/LLM efficiency assessment (Issue 84) and UI redesign to sleek editing-tool aesthetic (Issue 85), both user-requested earlier; both now benefit from Issue 86's free cache-hit observability + token streaming.
+**Last completed**: Issue 86 — Live progress surface for long-running LLM + worker tasks. New `worker/progress.py` (Redis Streams XADD/XREAD + per-creator SSE slot cap + ownership keys) + `worker/anthropic_stream.py` (forwards Anthropic stream events to progress emitter) + `dna/brief.py::generate_brief_streaming` (cache breakpoint identical to .create() path so the two share the prefix) + `worker/tasks.py::_build_dna_async` emits step events at every stage with terminal `done`/`error` + new `routers/tasks.py` SSE endpoint (auth + ownership + Last-Event-ID resume + 12s keepalive + 600s lifetime cap + 3-stream concurrent cap) + `static/progressStream.js` vanilla-JS reducer + `static/onboarding.html` renders progress live in a terminal-style block. Sub-decisions captured in `docs/DECISIONS.md` (2026-05-30). 492 passed / 1 skipped / 85 deselected; +24 unit tests + 1 subprocess integration test that guards the PYTHONPATH hotfix forever.
 **Blocked**: _(none)_
 
+> **Closed Issue 86 — Live progress surface for long-running tasks** (2026-05-30): A
+> reusable per-task observability primitive built on Redis Streams + SSE, designed
+> to eliminate the frozen-spinner experience that triggered today's prod incident
+> (3+ min of nothing during a `build_dna` crash-loop). DNA build is the first wired
+> call site — `_build_dna_async` now emits `step` events at `acquire_lock`,
+> `analyze_patterns`, `analyzed_patterns` (with counts), `call_claude`, `embed`, plus
+> terminal `done`/`error`. The LLM segment streams via the new `generate_brief_streaming`
+> path which wraps Anthropic's `messages.stream(...)` context manager — surfaces
+> `message_start.usage` as a `cache` event (cache HIT/miss confirmable BEFORE the
+> first token), forwards `text_delta` as `token` events, and is forward-compatible
+> with `thinking_delta` once the SDK is bumped in Issue 84. Three layers, all
+> additive: (1) `worker/progress.py` with `sync_emit`/`aemit`/`aset_owner`/
+> `aacquire_slot`/`aread_since` against `task:{task_id}:events` Redis Streams
+> (MAXLEN ~ 200, EXPIRE 3600 on terminal); (2) `routers/tasks.py` SSE endpoint
+> `GET /tasks/{task_id}/events` with session-cookie auth, Redis-key ownership
+> check (`task:{task_id}:owner` set by `routers/creators.py::build_dna`),
+> `Last-Event-ID` resume, 12s `: keepalive` comment, per-creator concurrent cap
+> of 3, 600s hard lifetime; (3) `static/progressStream.js` — ~50-line vanilla-JS
+> EventSource reducer + a terminal-style `<pre>` block in `static/onboarding.html`.
+> Cloudflare-Tunnel-safe headers (`Cache-Control: no-cache` + `X-Accel-Buffering: no`)
+> ensure no proxy buffers the stream. New subprocess integration test
+> `tests/test_worker_imports_integration.py` spawns a real Celery worker subprocess
+> and asserts `from dna.brief import generate_brief` succeeds — guards the
+> Dockerfile PYTHONPATH hotfix from today's incident forever. 7 sub-decisions
+> (transport, bridge, thinking API, cache stat location, wire format, late-joiner,
+> SSE security) captured in `docs/DECISIONS.md`. +24 unit tests + 1 integration.
+> All gates green: ruff 0, mypy 0, **492 passed / 1 skipped / 85 deselected**.
+>
 > **Closed Issue 83 — Creator Intake Form** (2026-05-30): Adds a stated-identity layer
 > (niche, audience, mission, tone, hard-nos, optional style sample) that is captured via
 > a 5-field intake (3 required, 2+ optional via progressive disclosure) and fused with

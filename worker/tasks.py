@@ -495,107 +495,164 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     from sqlalchemy import select, text
     from sqlalchemy.exc import IntegrityError
 
-    from dna.brief import generate_brief
+    from dna.brief import generate_brief, generate_brief_streaming
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
     from dna.identity import format_for_prompt, get_current
     from dna.profile import create_draft
+    from worker.progress import aemit
 
     creator_uuid = uuid.UUID(creator_id)
 
-    async with db.AdminSessionLocal() as session:
-        # Serialize concurrent builds for this creator. The xact-scoped advisory lock
-        # is held until commit/rollback, so a concurrent same-job redelivery blocks
-        # here, then re-reads the committed draft below and short-circuits before any
-        # paid Anthropic/Voyage call — closing the double-spend race the bare
-        # check-then-act left open (Issue 76). Mirrors preference/train.py.
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": str(creator_uuid)}
-        )
+    # Emit progress events ONLY when we have a job_id to scope them to. The
+    # job_id is the Celery task id — the SSE endpoint at /tasks/{id}/events
+    # tails the stream at task:{job_id}:events. With no job_id (direct unit-
+    # test invocations of _build_dna_async) there's no subscriber and emitting
+    # would just litter Redis with orphan streams.
+    progress_enabled = job_id is not None
 
-        # Re-check the idempotency key UNDER the lock: same-task redelivery (serial or
-        # concurrent) is now a no-op that costs nothing.
-        if job_id is not None:
-            already = await session.scalar(
-                select(CreatorDna.id).where(CreatorDna.build_job_id == job_id)
+    async def _emit(event_type: str, **fields: object) -> None:
+        if progress_enabled:
+            await aemit(job_id, event_type, **fields)  # type: ignore[arg-type]
+
+    try:
+        async with db.AdminSessionLocal() as session:
+            await _emit("step", label="acquire_lock")
+            # Serialize concurrent builds for this creator. The xact-scoped advisory lock
+            # is held until commit/rollback, so a concurrent same-job redelivery blocks
+            # here, then re-reads the committed draft below and short-circuits before any
+            # paid Anthropic/Voyage call — closing the double-spend race the bare
+            # check-then-act left open (Issue 76). Mirrors preference/train.py.
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": str(creator_uuid)},
             )
-            if already is not None:
-                logger.info(
-                    "DNA build for job %s already completed — skipping (idempotent)", job_id
+
+            # Re-check the idempotency key UNDER the lock: same-task redelivery (serial
+            # or concurrent) is now a no-op that costs nothing.
+            if job_id is not None:
+                already = await session.scalar(
+                    select(CreatorDna.id).where(CreatorDna.build_job_id == job_id)
                 )
-                return
+                if already is not None:
+                    logger.info(
+                        "DNA build for job %s already completed — skipping (idempotent)",
+                        job_id,
+                    )
+                    await _emit("done", reason="idempotent_skip")
+                    return
 
-        creator = await session.get(Creator, creator_uuid)
-        if not creator:
-            raise ValueError(f"Creator {creator_id} not found")
-        channel_title = creator.channel_title or "Unknown Channel"
+            creator = await session.get(Creator, creator_uuid)
+            if not creator:
+                raise ValueError(f"Creator {creator_id} not found")
+            channel_title = creator.channel_title or "Unknown Channel"
 
-        (
-            patterns,
-            top_ids,
-            bottom_ids,
-            clip_len_s,
-            source_region,
-            upload_gap_h,
-        ) = await build_patterns(session, creator_uuid)
-
-        # Fetch the creator's stated identity (Issue 83) and render it as a
-        # stable system block to inject ahead of the volatile performance corpus.
-        # Returns None if the creator hasn't filled the intake yet — brief.py
-        # then skips the block entirely (cleaner prompt + better cache hit-rate
-        # than passing "(no identity)").
-        identity_row = await get_current(session, creator_uuid)
-        stated_identity = format_for_prompt(identity_row)
-
-        # Generate the brief outside the DB — pure LLM call; no session writes yet.
-        # `generate_brief` uses the sync Anthropic client; offload to a worker
-        # thread so the event loop is not blocked for the duration of the LLM
-        # round-trip (Issue 38 Wave 1).
-        brief_text = await asyncio.to_thread(
-            generate_brief, patterns, channel_title, stated_identity
-        )
-
-        # Stage the draft row without committing.  commit=False keeps the INSERT
-        # pending in this transaction so all writes land atomically below.
-        dna = await create_draft(
-            session,
-            creator_id=creator_uuid,
-            patterns=patterns,
-            top_video_ids=top_ids,
-            bottom_video_ids=bottom_ids,
-            brief_text=brief_text,
-            optimal_clip_len_s=clip_len_s,
-            best_source_region=source_region,
-            optimal_upload_gap_h=upload_gap_h,
-            build_job_id=job_id,
-            commit=False,
-        )
-
-        # Stage onboarding state update in the same transaction.
-        if creator.onboarding_state == OnboardingState.awaiting_data:
-            creator.onboarding_state = OnboardingState.dna_pending
-
-        # Stage embedding rows without committing — all writes flush in the single
-        # commit below.  Both helpers accept commit=False for exactly this purpose.
-        await embed_patterns(session, creator_uuid, patterns, commit=False)
-        await embed_brief(session, creator_uuid, brief_text, commit=False)
-
-        # Single atomic commit: draft row + onboarding state + all embeddings.
-        # Under the advisory lock above a build_job_id collision cannot occur, but if
-        # the lock path is ever bypassed the partial UNIQUE (migration 0008) raises
-        # here — treat that lost race as the idempotent no-op, not a spurious retry.
-        try:
-            await session.commit()
-        except IntegrityError:
-            await session.rollback()
-            logger.info(
-                "DNA build for job %s collided on commit — already built (idempotent)", job_id
+            await _emit("step", label="analyze_patterns")
+            (
+                patterns,
+                top_ids,
+                bottom_ids,
+                clip_len_s,
+                source_region,
+                upload_gap_h,
+            ) = await build_patterns(session, creator_uuid)
+            await _emit(
+                "step",
+                label="analyzed_patterns",
+                long_videos=patterns.get("long_videos_analyzed", 0),
+                shorts=patterns.get("shorts_analyzed", 0),
+                top_count=len(top_ids),
+                bottom_count=len(bottom_ids),
             )
-            return
-        await session.refresh(dna)
-        logger.info(
-            "DNA draft v%d built for creator %s (%s)", dna.version, creator_id, channel_title
-        )
+
+            # Fetch the creator's stated identity (Issue 83) and render it as a
+            # stable system block to inject ahead of the volatile performance corpus.
+            # Returns None if the creator hasn't filled the intake yet — brief.py
+            # then skips the block entirely (cleaner prompt + better cache hit-rate
+            # than passing "(no identity)").
+            identity_row = await get_current(session, creator_uuid)
+            stated_identity = format_for_prompt(identity_row)
+
+            await _emit("step", label="call_claude")
+            # Streaming variant emits `cache` + `token` (+ future `thinking`)
+            # events as the LLM call progresses. Fall back to the non-streaming
+            # path when there's no subscriber so unit-test callers and any
+            # internal invocation without a job_id keep working unchanged.
+            if progress_enabled:
+                brief_text = await asyncio.to_thread(
+                    generate_brief_streaming,
+                    job_id,  # type: ignore[arg-type]
+                    patterns,
+                    channel_title,
+                    stated_identity,
+                )
+            else:
+                brief_text = await asyncio.to_thread(
+                    generate_brief, patterns, channel_title, stated_identity
+                )
+
+            # Stage the draft row without committing.  commit=False keeps the INSERT
+            # pending in this transaction so all writes land atomically below.
+            dna = await create_draft(
+                session,
+                creator_id=creator_uuid,
+                patterns=patterns,
+                top_video_ids=top_ids,
+                bottom_video_ids=bottom_ids,
+                brief_text=brief_text,
+                optimal_clip_len_s=clip_len_s,
+                best_source_region=source_region,
+                optimal_upload_gap_h=upload_gap_h,
+                build_job_id=job_id,
+                commit=False,
+            )
+
+            # Stage onboarding state update in the same transaction.
+            if creator.onboarding_state == OnboardingState.awaiting_data:
+                creator.onboarding_state = OnboardingState.dna_pending
+
+            await _emit("step", label="embed")
+            # Stage embedding rows without committing — all writes flush in the single
+            # commit below.  Both helpers accept commit=False for exactly this purpose.
+            await embed_patterns(session, creator_uuid, patterns, commit=False)
+            await embed_brief(session, creator_uuid, brief_text, commit=False)
+
+            # Single atomic commit: draft row + onboarding state + all embeddings.
+            # Under the advisory lock above a build_job_id collision cannot occur, but
+            # if the lock path is ever bypassed the partial UNIQUE (migration 0008)
+            # raises here — treat that lost race as the idempotent no-op, not a
+            # spurious retry.
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                logger.info(
+                    "DNA build for job %s collided on commit — already built (idempotent)",
+                    job_id,
+                )
+                await _emit("done", reason="idempotency_collision")
+                return
+            await session.refresh(dna)
+            logger.info(
+                "DNA draft v%d built for creator %s (%s)",
+                dna.version,
+                creator_id,
+                channel_title,
+            )
+            await _emit("done", version=dna.version, brief_chars=len(brief_text or ""))
+    except ValueError as exc:
+        # Data-gate failures (e.g. "0 long videos") are permanent — emit a
+        # human-safe error and re-raise so the caller's data-gate handling
+        # remains intact (ValueError bypasses retry by design).
+        await _emit("error", message=str(exc))
+        raise
+    except Exception as exc:
+        # Anything else: emit a generic error so the UI stops spinning, then
+        # re-raise so Celery's retry logic kicks in. Never leak exc args into
+        # the UI — they may carry stack traces or token-shaped data.
+        await _emit("error", message="DNA build failed; retrying")
+        logger.error("DNA build for job %s failed: %s", job_id, exc)
+        raise
 
 
 async def _poll_clip_outcomes_async() -> None:

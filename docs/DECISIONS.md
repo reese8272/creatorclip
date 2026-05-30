@@ -5,6 +5,68 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 86: Live progress surface (SSE + Redis Streams)
+
+### What was decided
+A reusable per-task live-progress facility. Worker tasks call
+`worker.progress.sync_emit / aemit(task_id, event_type, **fields)`, which writes
+to a per-task Redis Stream `task:{task_id}:events`. A new authenticated FastAPI
+endpoint `GET /tasks/{task_id}/events` returns `text/event-stream`, tails the
+stream with `XREAD BLOCK 5000`, and forwards each entry as an SSE event the
+browser consumes via `EventSource`. Wrapping `Anthropic().messages.stream(...)`
+in `worker.anthropic_stream.stream_and_emit` forwards `message_start.usage`
+(cache hit/miss + input tokens) → `thinking_delta` → `text_delta` →
+final usage, returning `(final_text, usage_dict)` to the caller.
+
+The seven sub-decisions:
+
+| Sub-decision | Choice | Why |
+|---|---|---|
+| Transport | SSE | One-way append-only flow; every LLM provider already uses SSE; passes Cloudflare Tunnel + corporate proxies without protocol upgrade. WebSocket overkill (no client→server channel needed), long-poll laggy, HTTP/2 server push deprecated in Chrome 106. |
+| Worker→web bridge | Redis Streams `XADD`/`XREAD` | Persists + replays — the page-refresh case (today's pain) just works via `Last-Event-ID`. Pub/Sub is fire-and-forget. Postgres `LISTEN/NOTIFY` has an 8 KB payload limit + no replay. Already-existing Redis singleton, zero new infrastructure. |
+| Anthropic thinking | Surfaced via `content_block_delta` generic forwarding | Wrapper forwards every delta type generically, so `thinking_delta` is supported now even though the project's `anthropic==0.40.0` may not expose first-class thinking-block params yet. The `effort:`/`adaptive` migration belongs to Issue 84. |
+| Cache stat reporting | Read from `message_start.usage`, not `message_delta` | Anthropic puts `cache_read_input_tokens` / `cache_creation_input_tokens` in `message_start` — confirmable BEFORE the first token, exactly what observability needs. |
+| Wire format | Plain JSON-per-event + named SSE `event:` types | `EventSource.addEventListener('thinking', …)` filters natively. Vercel AI SDK Data Stream Protocol locks the frontend into the Vercel React SDK; the project's frontend is vanilla JS. |
+| Late-joiner support | `XREAD` from cursor; `MAXLEN ~ 200`; `EXPIRE 3600` on terminal | EventSource's `Last-Event-ID` header auto-sent on reconnect — free replay. 200 events covers step + token traffic with buffer. 1h post-terminal TTL handles "user comes back after the build finished". |
+| Security | Session-cookie auth + ownership key + per-creator concurrent cap (3) + ~12s keepalive comment + 600s hard lifetime cap | Cookies carry on `EventSource`. Ownership prevents cross-creator subscription by guessing task ids. The concurrent cap + lifetime cap close the hold-open exhaustion vector. Keepalive cadence (12s) shorter than typical TCP/proxy idle (25s) to stay alive on mobile networks. |
+
+### Why
+Today's prod incident — `build_dna` Celery task crash-looped on a
+`ModuleNotFoundError` for 4 retries while the UI sat on a generic spinner
+for 3+ minutes. Even on the happy path, the LLM call takes ~30 seconds with
+zero user-facing signal of progress. The pattern is generic: every Celery
+task in the system today has this same failure mode. Live progress is the
+single biggest "feels like a real editing tool, not a generic AI website"
+upgrade we can ship and is a load-bearing prerequisite for Issue 85 (UI
+redesign) and a free observability win for Issue 84 (LLM efficiency audit).
+
+### Source / evidence
+- **SSE vs WebSocket**: [MDN EventSource](https://developer.mozilla.org/en-US/docs/Web/API/EventSource), [Cloudflare Agents SSE docs](https://developers.cloudflare.com/agents/api-reference/http-sse/), [cloudflared issue #199 (buffering fix)](https://github.com/cloudflare/cloudflared/issues/199).
+- **Redis Streams**: [Redis XADD docs](https://redis.io/docs/latest/commands/xadd/), [Redis XREAD docs](https://redis.io/docs/latest/commands/xread/).
+- **Anthropic streaming + cache stats in `message_start`**: [Anthropic streaming docs](https://platform.claude.com/docs/en/api/messages-streaming), [prompt caching docs](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) ("within `usage` in the response, or `message_start` event if streaming").
+- **Wire format**: Vercel AI SDK Data Stream Protocol [docs](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol) confirm the React-SDK-only consumer assumption.
+- **SSE security**: per-creator concurrent cap + idle timeout is the documented production pattern; no specific CVE class, but architectural exhaustion is real for long-lived connections.
+
+### Alternatives ruled out
+- **WebSocket** — protocol upgrade that corporate/CDN configs silently fail, and we have no client→server channel need.
+- **HTTP long-poll** — latency + extra requests; UI would still feel choppy.
+- **Redis Pub/Sub** — fire-and-forget; page-refresh = lost progress, exactly today's pain.
+- **Postgres LISTEN/NOTIFY** — 8 KB payload cap, no persistence, no replay, requires a long-lived connection per subscriber.
+- **Celery built-in events (Flower-style)** — `task_prerun`/`task_postrun` are already wired in `observability.py` for the request-id correlation, but they are coarse lifecycle only; mid-task step emission is out of scope.
+- **Vercel AI SDK Data Stream Protocol** — locks frontend into Vercel React SDK; we're vanilla JS by SOT decision.
+- **`sse-starlette` / `asgi-correlation-id` packages** — project convention (per `observability.py`) is hand-rolled when the pattern is ~60 lines we control, no new CVE surface.
+
+### Scope guard
+DNA build is the only LLM call site wired in this issue. `improvement/brief.py`
+and `clip_engine/scoring.py` get the same `emit()` calls in follow-up PRs once
+we've validated the pattern on real traffic. Broader CapCut/Descript redesign
+of the surrounding pages belongs to Issue 85.
+
+### Date
+2026-05-30
+
+---
+
 ## 2026-05-30 — Container: PYTHONPATH=/app (prod DNA-stuck hotfix)
 
 ### What was decided

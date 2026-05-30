@@ -142,19 +142,23 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── clips.py                # List candidate clips, get clip, render status
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
-│   └── improvement.py          # GET improvement brief
+│   ├── improvement.py          # GET improvement brief
+│   └── tasks.py                # SSE live-progress endpoint (Issue 86)
 │
 ├── worker/
 │   ├── celery_app.py           # Celery + Redis broker
 │   ├── tasks.py                # Pipeline tasks (ingest → render)
-│   └── schedule.py             # Beat: profile refresh, token refresh, media purge
+│   ├── schedule.py             # Beat: profile refresh, token refresh, media purge
+│   ├── progress.py             # Issue 86 — per-task Redis Stream emit/read + SSE slot cap + ownership
+│   └── anthropic_stream.py     # Issue 86 — wraps Anthropic .stream() so tokens flow into progress events
 │
 ├── static/
 │   ├── index.html              # Dashboard
 │   ├── onboarding.html         # Connect YouTube, min-data gate, DNA confirm
 │   ├── review.html             # Fast clip review (player-first, single-player + Next)
 │   ├── profile.html            # Creator DNA view/edit
-│   └── insights.html           # Upload timing + improvement brief
+│   ├── insights.html           # Upload timing + improvement brief
+│   └── progressStream.js       # Issue 86 — EventSource consumer that renders live task progress
 │
 ├── tests/
 │   ├── conftest.py

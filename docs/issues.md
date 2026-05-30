@@ -1766,6 +1766,82 @@ contributor to that vibe and should be reworked in this issue.
 
 ---
 
+### Issue 86: Live progress surface for long-running LLM + worker tasks
+**Severity**: FEATURE — pre-public-launch polish; directly addresses today's prod incident (3+ min frozen spinner on DNA build) and provides a reusable observability primitive for every long task
+**Depends on**: nothing — pure additive surface; lands cleanly before Issue 84/85
+**Status**: ✅ Done (2026-05-30)
+
+**What**: A reusable per-task progress facility on three layers — (1) **Redis Streams**
+(`XADD`/`XREAD` on key `task:{task_id}:events`) as the worker→web bridge with bounded
+retention (MAXLEN ~ 200) and TTL expiry, (2) a new authenticated FastAPI endpoint
+`GET /tasks/{task_id}/events` returning `text/event-stream` (SSE) that tails the stream
+with `BLOCK 5000` reads, sets the three Cloudflare-safe headers (`Cache-Control: no-cache`,
+`Content-Type: text/event-stream`, `Connection: keep-alive`, plus nginx's
+`X-Accel-Buffering: no`), emits a `: keepalive` comment every ~12s, honors `Last-Event-ID`
+for reconnect, and enforces a per-creator concurrent-connection cap via Redis `INCR`/`DECR`,
+(3) a tiny `worker/progress.py` helper — `sync_emit` / `aemit` `(task_id, event_type,
+**fields)` — that every Celery task calls at meaningful stage boundaries, plus a context
+manager `stream_and_emit(client, task_id, ...)` in `worker/anthropic_stream.py` that
+wraps `Anthropic().messages.stream()` to forward `message_start.usage` (cache hit/miss +
+input tokens) → `thinking_delta` chunks → `text_delta` chunks → final usage, returning
+`(final_text, usage_dict)`.
+
+DNA build is the first wired call site; the same `emit()` calls drop into
+`_ingest_async`, `_transcribe_async`, `_signals_async`, `_render_clip_async`, and
+`_generate_improvement_brief_async` in follow-up PRs without touching the SSE / Redis
+layer.
+
+**Why**: Today's prod incident — the user clicked "Build Creator DNA," the worker
+crash-looped on a `ModuleNotFoundError`, and the UI showed nothing for 3+ minutes
+before timing out. The frozen-spinner experience is the same even on the happy path:
+the LLM call takes ~30s with zero user-facing feedback. Live progress is the single
+biggest "feels like a real tool, not a generic AI website" signal we can ship and
+directly motivates Issue 85; the cache-hit observability the streaming wrapper
+yields also feeds Issue 84.
+
+**Approach** (per the 2026 industry-standard research summarized in DECISIONS):
+
+| Sub-decision | Choice | Why won |
+|---|---|---|
+| Transport | SSE (text/event-stream) | One-way append-only; every LLM provider uses SSE; passes Cloudflare Tunnel + corp proxies without protocol upgrade. WebSocket overkill, long-poll laggy, HTTP/2 push deprecated. |
+| Worker→web bridge | Redis Streams (XADD/XREAD) | Pub/Sub loses events on page refresh — Streams persist + replay from `0-0` or `Last-Event-ID`. Postgres LISTEN/NOTIFY has an 8 KB payload limit + no late-joiner replay. Already-existing Redis singleton, zero new infrastructure. |
+| Wire format | Plain JSON-per-event + named `event:` types | EventSource `addEventListener` filters by event type natively. Vercel Data Stream Protocol locks frontend into Vercel React SDK. |
+| Cache stat reporting | Read from `message_start.usage` | Anthropic puts `cache_read_input_tokens` / `cache_creation_input_tokens` here, available BEFORE the first token — confirmable in the stream. |
+| Late-joiner support | XREAD from `Last-Event-ID` cursor (or `0-0`) | EventSource auto-reconnects with this header — the replay is free. |
+| Per-creator SSE cap | Redis `INCR sse:count:{creator_id}` + EXPIRE | Per-creator hold-open exhaustion guard; idle timeout caps stale subscribers from a forgotten tab. Set to 3 (two tabs + slow reconnect). |
+| Ownership | `task:{task_id}:owner = creator_id` set by API on enqueue | SSE endpoint refuses without ownership match — task ids leak nothing on their own. |
+
+**Files (planned)**:
+- `worker/progress.py` — NEW; `sync_emit`, `aemit`, ownership helpers, slot helpers, `aread_since`
+- `worker/anthropic_stream.py` — NEW; `stream_and_emit(client, task_id, ...)` returning `(text, usage)`
+- `dna/brief.py` — extract `_build_request` helper; add `generate_brief_streaming` alongside `generate_brief` (legacy callers untouched)
+- `worker/tasks.py::_build_dna_async` — `aemit` step events at each stage; switch to `generate_brief_streaming`; terminal `done`/`error` emit
+- `routers/tasks.py` — NEW; `GET /tasks/{task_id}/events` SSE endpoint with auth, ownership, keepalive, resume, concurrent cap, lifetime cap
+- `routers/creators.py::build_dna` — set ownership in Redis post-`.delay()`, return `stream_url` in response
+- `main.py` — mount `routers/tasks.py`
+- `static/progressStream.js` — NEW; ~40-line EventSource reducer
+- `static/onboarding.html` — replace `pollForBrief` with `subscribeToTaskStream`; add terminal-style `<pre>` block
+- `tests/test_progress.py` — NEW; sync_emit/aemit/ownership/slot/replay unit tests against real Redis
+- `tests/test_anthropic_stream.py` — NEW; stream wrapper with mocked Anthropic client
+- `tests/test_tasks_sse.py` — NEW; SSE endpoint integration (auth, ownership, replay, cap, terminal close)
+- `tests/test_worker_imports_integration.py` — NEW; subprocess celery worker that imports first-party packages — catches today's PYTHONPATH bug class forever
+- `docs/DECISIONS.md` — new entry capturing all 7 sub-decisions
+- `docs/SOT.md` — file structure additions
+
+**Acceptance criteria**:
+- [x] `worker/progress.py` writes XADD with MAXLEN ~ 200, EXPIRE 3600 on terminal events; both sync and async variants
+- [x] `worker/anthropic_stream.py::stream_and_emit` forwards `message_start.usage`/`text_delta`/`thinking_delta` and returns `(final_text, usage_dict)`
+- [x] `_build_dna_async` emits `step` events at: `acquire_lock`, `analyze_patterns`, `call_claude`, `embed`, and terminal `done`/`error`
+- [x] `GET /tasks/{task_id}/events`: auth required (session cookie), ownership-checked, three Cloudflare-safe headers + `X-Accel-Buffering: no`, ~12s keepalive comment, `Last-Event-ID` resume, per-creator concurrent cap = 3, hard lifetime cap = 600s
+- [x] Frontend renders progress live in a terminal-style block during the DNA build
+- [x] No virality language emitted; no PII/token in any progress payload (compliance tests green)
+- [x] `tests/test_worker_imports_integration.py` boots a real celery worker subprocess and confirms `from dna.brief import generate_brief` succeeds — guards the PYTHONPATH fix
+- [x] All gates green: ruff format/check, mypy 0, pytest default (492 passed / 1 skipped / 85 deselected)
+- [x] DECISIONS entry capturing the 7 sub-decisions
+- [x] SOT updated; PROJECT_STATE updated; this issue closed
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

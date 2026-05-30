@@ -20,6 +20,7 @@ _EXEMPT_PATHS = {
     "/health",  # liveness probe — intentionally a plain status dict
     "/auth/login",  # 302 RedirectResponse to Google
     "/auth/callback",  # 302 RedirectResponse after OAuth
+    "/tasks/{task_id}/events",  # SSE (text/event-stream); wire format is named SSE events, not a JSON body (Issue 86)
 }
 
 

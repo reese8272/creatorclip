@@ -33,6 +33,7 @@ class DataGateOut(BaseModel):
 class BuildQueuedOut(BaseModel):
     task_id: str
     status: str
+    stream_url: str  # Issue 86: SSE endpoint for live progress events
 
 
 class DnaProfileOut(BaseModel):
@@ -143,11 +144,23 @@ async def get_data_gate(
 @router.post("/me/dna/build", status_code=202, response_model=BuildQueuedOut)
 @limiter.limit("120/minute")
 async def build_dna(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
-    """Queue a DNA build for the current creator. Returns a Celery task_id."""
+    """Queue a DNA build for the current creator. Returns a Celery task_id.
+
+    Also stamps task ownership in Redis so the SSE stream endpoint at
+    ``/tasks/{task_id}/events`` (Issue 86) can verify the requesting creator
+    owns the task before opening the event stream — prevents cross-creator
+    stream attachment via guessed/leaked task ids.
+    """
+    from worker import progress
     from worker.tasks import build_dna as build_dna_task
 
     task = build_dna_task.delay(str(creator.id))
-    return {"task_id": task.id, "status": "queued"}
+    await progress.aset_owner(task.id, str(creator.id))
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "stream_url": f"/tasks/{task.id}/events",
+    }
 
 
 @router.get("/me/dna", response_model=DnaGetOut)

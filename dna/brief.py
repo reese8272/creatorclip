@@ -57,26 +57,15 @@ your focus as education — here's how to bridge that or split into two styles")
 rather than silently overriding the stated direction with engagement signals."""
 
 
-def generate_brief(
-    patterns: dict,
-    channel_title: str,
-    stated_identity: str | None = None,
-) -> str:
-    """
-    Call Claude to synthesise a Creator Brief from computed patterns.
+def _build_request(
+    patterns: dict, channel_title: str, stated_identity: str | None
+) -> tuple[list[dict], list[dict]]:
+    """Assemble the (system, messages) pair for both .create and .stream paths.
 
-    Args:
-        patterns: Inferred performance patterns from the DNA builder.
-        channel_title: The creator's channel title (used in the brief headline).
-        stated_identity: Optional Markdown block from
-            ``dna.identity.format_for_prompt`` capturing the creator's own
-            self-described identity (Issue 83). When present, it's injected
-            as a system block BEFORE the volatile performance corpus and
-            AFTER the static instructions — the LLM should weight it
-            alongside the inferred patterns rather than overriding it.
-
-    Returns brief_text with the honesty disclaimer appended.
-    Raises RuntimeError if Claude returns no text block.
+    Extracted in Issue 86 so the streaming wrapper reuses the exact same prompt
+    structure — keeps the cache breakpoint identical across both call paths,
+    so a streaming call benefits from a prior non-streaming call's cache write
+    (and vice versa).
     """
     corpus = json.dumps(
         {"channel": channel_title, "performance_data": patterns},
@@ -100,16 +89,43 @@ def generate_brief(
     # Volatile per-creator data — AFTER the breakpoint, never cached.
     system.append({"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"})
 
+    messages: list[dict] = [
+        {
+            "role": "user",
+            "content": f"Generate the Creator Brief for '{channel_title}'.",
+        }
+    ]
+    return system, messages
+
+
+def generate_brief(
+    patterns: dict,
+    channel_title: str,
+    stated_identity: str | None = None,
+) -> str:
+    """
+    Call Claude to synthesise a Creator Brief from computed patterns.
+
+    Args:
+        patterns: Inferred performance patterns from the DNA builder.
+        channel_title: The creator's channel title (used in the brief headline).
+        stated_identity: Optional Markdown block from
+            ``dna.identity.format_for_prompt`` capturing the creator's own
+            self-described identity (Issue 83). When present, it's injected
+            as a system block BEFORE the volatile performance corpus and
+            AFTER the static instructions — the LLM should weight it
+            alongside the inferred patterns rather than overriding it.
+
+    Returns brief_text with the honesty disclaimer appended.
+    Raises RuntimeError if Claude returns no text block.
+    """
+    system, messages = _build_request(patterns, channel_title, stated_identity)
+
     response = _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
         system=system,  # type: ignore[arg-type]
-        messages=[
-            {
-                "role": "user",
-                "content": (f"Generate the Creator Brief for '{channel_title}'."),
-            }
-        ],
+        messages=messages,  # type: ignore[arg-type]  # list[dict] → MessageParam at runtime
     )
 
     logger.info(
@@ -126,3 +142,44 @@ def generate_brief(
 
     # Final text block is the answer (consistent with the web_search path). (Issue 69)
     return text_blocks[-1].text + _DISCLAIMER
+
+
+def generate_brief_streaming(
+    task_id: str,
+    patterns: dict,
+    channel_title: str,
+    stated_identity: str | None = None,
+) -> str:
+    """Streaming variant of ``generate_brief`` that emits live progress events.
+
+    Same prompt structure as ``generate_brief`` (extracted via ``_build_request``),
+    so the cache breakpoint placement is identical and a prior cache write from
+    either path can be served back to the other. Token deltas and the cache
+    hit/miss event are forwarded to ``task:{task_id}:events`` via
+    ``worker.anthropic_stream.stream_and_emit`` for the SSE UI to consume.
+
+    Use this from worker tasks that have a Celery task_id; legacy non-streaming
+    callers should keep using ``generate_brief``.
+    """
+    from worker.anthropic_stream import stream_and_emit
+
+    system, messages = _build_request(patterns, channel_title, stated_identity)
+
+    final_text, usage = stream_and_emit(
+        _ANTHROPIC,
+        task_id,
+        model=settings.ANTHROPIC_MODEL,
+        max_tokens=2000,
+        system=system,
+        messages=messages,
+    )
+
+    logger.info(
+        "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
+        usage["input_tokens"],
+        usage["cache_read"],
+        usage["cache_creation"],
+        usage["output_tokens"],
+    )
+
+    return final_text + _DISCLAIMER

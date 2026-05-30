@@ -6,6 +6,7 @@
   <title>AutoClip — Setup</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
+  <script src="/static/progressStream.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0;
@@ -27,6 +28,12 @@
     .btn-secondary { background: #333; color: #e0e0e0; margin-top: 8px; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     #dna-status { font-size: 0.8rem; color: #aaa; margin-top: 8px; min-height: 20px; text-align: center; }
+    #dna-stream {
+      display: none; background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px;
+      padding: 10px 12px; margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem; color: #c8c8c8; max-height: 180px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+    }
   </style>
 </head>
 <body>
@@ -96,6 +103,7 @@
       Build Creator DNA
     </button>
     <div id="dna-status"></div>
+    <pre id="dna-stream"></pre>
   </div>
 
   <!-- Step 5: Confirm DNA -->
@@ -155,23 +163,52 @@
       }, 5000);
     }
 
+    let _dnaSub = null;
     async function buildDna() {
       const btn = document.getElementById('build-dna-btn');
       const status = document.getElementById('dna-status');
+      const stream = document.getElementById('dna-stream');
       btn.disabled = true;
-      status.textContent =
-        'Analysing your top & bottom performers and writing your Creator Brief — this usually takes about 30 seconds…';
+      status.textContent = 'Starting your DNA build…';
+      stream.style.display = 'none';
+      stream.textContent = '';
       try {
         const resp = await fetch('/creators/me/dna/build', {
           method: 'POST', credentials: 'include'
         });
         const data = await resp.json();
-        if (resp.ok) {
-          pollForBrief();
-        } else {
+        if (!resp.ok) {
           status.textContent = data.detail || 'Could not start — make sure your channel data is ready (step 2).';
           btn.disabled = false;
+          return;
         }
+
+        // Subscribe to live progress (Issue 86). Falls back to the DB poll if
+        // EventSource isn't available (very old browsers) or the SSE endpoint
+        // fails — pollForBrief still hits /creators/me/dna periodically.
+        status.textContent = 'Live progress —';
+        stream.style.display = 'block';
+
+        if (typeof window.subscribeToTaskStream === 'function' && data.stream_url) {
+          if (_dnaSub) _dnaSub.close();
+          _dnaSub = window.subscribeToTaskStream(data.stream_url, {
+            onRender: function (text) {
+              stream.textContent = text;
+              stream.scrollTop = stream.scrollHeight;
+            },
+            onDone: function () {
+              status.innerHTML = '<span class="ok">✓ Your Creator Brief is ready — review &amp; confirm it in step 5 below.</span>';
+              btn.disabled = false;
+            },
+            onError: function (msg) {
+              status.innerHTML = '<span class="wait">' + msg + '</span>';
+              btn.disabled = false;
+            },
+          });
+        }
+        // Belt-and-suspenders: also poll the DB so the UI converges even if
+        // the SSE stream silently drops (mobile network blip, proxy quirk).
+        pollForBrief();
       } catch (e) {
         status.textContent = 'Network error — try again.';
         btn.disabled = false;

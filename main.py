@@ -27,6 +27,7 @@ from routers import clips as clips_module
 from routers import creators as creators_router
 from routers import improvement as improvement_router
 from routers import review as review_router
+from routers import tasks as tasks_router
 from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
@@ -42,6 +43,11 @@ async def lifespan(app: FastAPI):
     from youtube import _http
 
     await _http.aclose()
+    # Close the Issue-86 progress Redis client cleanly (no Event-loop-is-closed
+    # warnings at shutdown; releases the connection pool).
+    from worker import progress
+
+    await progress.aclose()
     logger.info("CreatorClip shutdown")
 
 
@@ -73,6 +79,7 @@ app.include_router(clips_module.clips_router)
 app.include_router(review_router.router)
 app.include_router(upload_intel_router.router)
 app.include_router(improvement_router.router)
+app.include_router(tasks_router.router)
 
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")

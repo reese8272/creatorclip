@@ -1,0 +1,122 @@
+"""Stream Anthropic responses while emitting live progress events (Issue 86).
+
+Wraps the sync Anthropic ``messages.stream(...)`` context manager so that:
+
+* Cache hit/miss + input tokens are surfaced as an ``event: cache`` BEFORE
+  the first generated token (via the ``message_start`` event's usage).
+* Each ``text_delta`` is forwarded as ``event: token``.
+* Each ``thinking_delta`` (extended thinking, post-SDK-bump) is forwarded as
+  ``event: thinking`` — generic delta forwarding so any unknown delta types
+  added by future SDK releases are silently dropped instead of crashing.
+* The final text and a structured usage dict are returned to the caller.
+
+Designed to be called from inside ``asyncio.to_thread`` in a Celery worker —
+the Anthropic sync client blocks, so the progress emitter is sync too.
+
+Per CLAUDE.md /claude-api guidance:
+  - For 0.40, do not pass thinking={...} — the param shape isn't recognized.
+    Enable thinking when the SDK is bumped in Issue 84.
+  - `getattr` on every usage field is defensive: older SDK responses don't
+    always populate cache_read_input_tokens / cache_creation_input_tokens
+    (e.g. when caching wasn't engaged or for non-cacheable models).
+  - Wrap each sync_emit call in try/except inside the loop so a Redis hiccup
+    can't abort iteration before `get_final_message()` is reachable.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from worker.progress import sync_emit
+
+logger = logging.getLogger(__name__)
+
+
+def stream_and_emit(
+    client: Any,
+    task_id: str,
+    *,
+    model: str,
+    max_tokens: int,
+    system: Any,
+    messages: list,
+) -> tuple[str, dict[str, int]]:
+    """Run a streamed Anthropic call, forwarding deltas as progress events.
+
+    Returns
+    -------
+    (final_text, usage_dict)
+        ``final_text`` is the last text block's text (matches the pattern used
+        in the existing non-streaming ``dna/brief.py``). ``usage_dict`` has
+        ``input_tokens``, ``output_tokens``, ``cache_read``, ``cache_creation``.
+
+    The caller is responsible for emitting the terminal ``done`` / ``error``
+    event after this returns — this function only forwards intra-stream events.
+    """
+    with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=messages,
+    ) as stream:
+        for event in stream:
+            try:
+                _forward_event(task_id, event)
+            except Exception as exc:
+                # Per /claude-api guidance: a hiccup forwarding one event must
+                # NOT abort iteration — losing the final_text would be worse.
+                logger.warning("stream_and_emit: forward failed task=%s err=%s", task_id, exc)
+        final = stream.get_final_message()
+
+    text_blocks = [b for b in final.content if getattr(b, "type", None) == "text"]
+    if not text_blocks:
+        raise RuntimeError("Claude returned no text block in streaming response")
+    final_text = text_blocks[-1].text
+
+    usage = final.usage
+    usage_dict = {
+        "input_tokens": getattr(usage, "input_tokens", 0),
+        "output_tokens": getattr(usage, "output_tokens", 0),
+        "cache_read": getattr(usage, "cache_read_input_tokens", 0),
+        "cache_creation": getattr(usage, "cache_creation_input_tokens", 0),
+    }
+    return final_text, usage_dict
+
+
+def _forward_event(task_id: str, event: Any) -> None:
+    """Forward a single SDK event to the progress stream.
+
+    Split out so the try/except in the main loop wraps exactly the right scope.
+    """
+    etype = getattr(event, "type", None)
+
+    if etype == "message_start":
+        # Cache stats live on message_start.message.usage — readable BEFORE
+        # the first token, so the UI can show "cache HIT" instantly.
+        msg = getattr(event, "message", None)
+        usage = getattr(msg, "usage", None) if msg is not None else None
+        if usage is not None:
+            sync_emit(
+                task_id,
+                "cache",
+                input_tokens=getattr(usage, "input_tokens", 0),
+                cache_read=getattr(usage, "cache_read_input_tokens", 0),
+                cache_creation=getattr(usage, "cache_creation_input_tokens", 0),
+            )
+        return
+
+    if etype == "content_block_delta":
+        delta = getattr(event, "delta", None)
+        if delta is None:
+            return
+        dtype = getattr(delta, "type", "")
+        if dtype == "text_delta":
+            sync_emit(task_id, "token", chunk=getattr(delta, "text", ""))
+        elif dtype == "thinking_delta":
+            # Forwarded but won't fire on anthropic==0.40 (SDK predates
+            # extended thinking) — wakes up automatically once Issue 84
+            # bumps the SDK + enables thinking on the call.
+            sync_emit(task_id, "thinking", chunk=getattr(delta, "thinking", ""))
+        # Unknown delta types (signature_delta, input_json_delta, future
+        # types) are silently dropped — they carry no human-readable text.
