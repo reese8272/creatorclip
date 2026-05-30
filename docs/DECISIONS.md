@@ -5,6 +5,124 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 83: Creator Intake Form (stated identity layer)
+
+### What was decided
+Adopt a **form-driven, append-only, strictly-separated** stated-identity layer that
+fuses with the inferred `creator_dna` at LLM-call time. Specifically:
+
+1. **Form-driven over sample-text-driven.** A multi-select niche enum (1–3 of 15
+   YouTube Data API categories) + required audience-summary free text + four optional
+   fields (mission, content pillars, tone tags, hard-nos) + optional ~600-char style
+   sample. Not a paste-3-articles voice extractor.
+2. **Strictly separate from `creator_dna`.** Two tables, fused at query time, never
+   merged. The clip engine + brief generator inject the identity as a stable per-creator
+   system block; conflicts surface as a non-blocking profile-page nudge instead of being
+   silently resolved with engagement signals.
+3. **Append-only versioned storage.** Each POST creates a new row at `version = max+1`
+   and stamps `superseded_at` on the prior current row. Partial unique index
+   `uq_one_current_identity_per_creator` on `(creator_id) WHERE superseded_at IS NULL`
+   is the DB-level guarantee. Mirrors `creator_dna`'s versioning shape.
+4. **Cache placement.** Identity goes as the LAST stable system block (after the
+   global instructions, before the volatile performance corpus); `cache_control` moves
+   to that block. When no identity exists, the block is OMITTED entirely (not "(no
+   identity)") so the cache prefix stays canonical across no-identity creators.
+5. **Onboarding UX.** Inline optional card during onboarding (3 required fields + 45-s
+   target) with a skip-from-step-1 affordance. Full edit + version-summary view lives
+   on `static/profile.html`. Never blocks clip generation.
+6. **Conflict surfacing.** A simple keyword-based detector flags "stated niche keywords
+   appear in NONE of the inferred top/bottom video titles + hooks" as a profile-page
+   nudge. Non-blocking; the clip engine continues to weight stated identity at full
+   strength.
+
+### Why
+Two motivating problems. (1) The user observed the inferred DNA pipeline takes ~30s
+end-to-end (LLM call + analytics fetch + embeddings) and ships nothing usable until
+everything finishes — bad cold-start. (2) Inference can only see what has *accidentally*
+performed well; it cannot see what the creator is *trying* to build. The intake gives
+us both an instant cold-start signal AND a signal the inference pipeline structurally
+lacks.
+
+The strict-separation decision is load-bearing for the North Star ("the only AI editor
+that truly knows your channel"). Silently overriding stated intent with engagement
+signals is the YouTube-algorithm problem recreated inside our own tool. Recommender-
+system research (PReF 2025, production writeups from Userpilot/LaunchNotes/Tianpan
+2026) shows user satisfaction is higher when systems surface stated-vs-revealed
+conflicts than when they silently re-rank by behavior.
+
+### Industry standard checked
+Read the 2026 patterns across Jasper Brand Voice, Copy.ai Brand Voice, HubSpot Breeze,
+Claude Projects, ChatGPT Custom Instructions, Beehiiv/Substack/ConvertKit onboarding,
+VidIQ/TubeBuddy creator personas. The convergent field set (niche + audience + content
+pillars + tone tags + hard-nos + mission + sample) is exactly what every leading tool
+captures. Multi-step wizards complete at **52.9% higher rate** than single-page forms
+(HubSpot A/B). Forced pre-value intake is the 70%-first-session-drop-off norm —
+progressive disclosure is the 2026 winner. Hybrid columns + JSONB beat single freeform
+blobs for filterability and audit. Append-only versioning is rarer (Jasper/HubSpot
+overwrite) but the right call for an honesty-constrained product.
+
+### Alternatives ruled out
+- **Sample-text-driven voice extraction (Jasper-style):** Duplicates the inferred-DNA
+  path's job. No signal gain; adds a second LLM pass.
+- **Single freeform "about you" blob (ChatGPT Custom Instructions-style):** Loses
+  filterability, breaks the "Why this clip" attribution UX, blocks auditable updates.
+- **Overwrite-on-update versioning:** Loses the audit trail. Storage cost of
+  append-only is negligible for small identity rows.
+- **Required full questionnaire at signup:** 70% drop-off norm; worse than no intake.
+- **Conversational chat intake (Notion AI-style):** Higher friction for a 45-second
+  task; harder to backfill for existing creators.
+- **Single fused `creator_dna` table with stated + inferred merged:** Re-creates the
+  engagement-bias problem we are explicitly trying to avoid.
+- **Block clip generation until intake is complete:** Inferred-only mode still works;
+  non-blocking intake is the high-completion-rate pattern.
+- **Confidence-score/uncertainty-interval display for the conflict nudge:** Production
+  evidence (HubSpot, Claude Projects) shows users find numeric uncertainty less
+  actionable than qualitative framing. We use qualitative phrasing ("your stated focus
+  is X but your top clips don't reflect it yet").
+
+### Tradeoffs accepted
+- **5-minute Anthropic prompt-cache TTL (2026 change).** Identity blocks rarely engage
+  the cache for a creator's single isolated DNA build. The structural placement is
+  still correct, and we'll capture savings any time we pipeline multiple LLM calls in
+  one session (a future-Issue-84 candidate).
+- **Niche-conflict detector is keyword-based, not embedding-based.** Higher precision,
+  lower recall — fine for a nudge, would be wrong for a gate. Embedding-based
+  detection is a Phase-3 enhancement if false-negatives become a real complaint.
+- **No write to the existing `dna_pending → active` onboarding state on POST identity.**
+  Identity is independent of DNA confirmation; the state machine still hangs off
+  `confirm_draft`.
+
+### Source / evidence
+- 2026 industry-standard research synthesis (Jasper Brand Voice docs, Copy.ai feature
+  page, HubSpot Brand Voice setup, Claude Projects guide, Anthropic Prompt Caching
+  docs incl. April-2026 TTL writeup, ChatGPT Custom Instructions help center,
+  Userpilot/LaunchNotes 2025 onboarding stats, MIT PReF 2025 paper, Ivy Forms
+  multi-step-vs-single-step study, Tianpan 2026 cold-start writeup).
+- Read `dna/builder.py`, `dna/brief.py`, `dna/profile.py`, `models.py::CreatorDna`,
+  `routers/creators.py`, `static/onboarding.html`, `static/profile.html` to ground the
+  design in actually-existing patterns (versioning, partial-unique idiom, system-block
+  structure, dark theme).
+
+### Files
+- `alembic/versions/0012_creator_identity.py` — new table + partial unique + history index
+- `models.py::CreatorIdentity`
+- `youtube/categories.py` — static 15-option NICHE_OPTIONS list
+- `dna/identity.py` — CRUD + `format_for_prompt` + `validate_*` helpers
+- `dna/conflict.py` — niche-keyword mismatch detector
+- `dna/brief.py` — `generate_brief()` accepts `stated_identity`; cache breakpoint moved
+- `worker/tasks.py::_build_dna_async` — passes identity through to brief
+- `routers/creators.py` — 4 new endpoints + Pydantic schemas
+- `static/onboarding.html` — optional intake step 3
+- `static/profile.html` — full edit + history + conflict nudge
+- `tests/test_identity_unit.py` — 22 unit tests
+- `tests/test_identity_integration.py` — 5 integration tests
+- `docs/SOT.md`, `docs/issues.md`, `docs/PROJECT_STATE.md` — updated
+
+### Date
+2026-05-30
+
+---
+
 ## 2026-05-30 — Reconcile merge: local-main hardening + origin Issue 78 salvage
 
 ### What changed

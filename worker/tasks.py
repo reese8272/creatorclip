@@ -498,6 +498,7 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     from dna.brief import generate_brief
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
+    from dna.identity import format_for_prompt, get_current
     from dna.profile import create_draft
 
     creator_uuid = uuid.UUID(creator_id)
@@ -538,11 +539,21 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
             upload_gap_h,
         ) = await build_patterns(session, creator_uuid)
 
+        # Fetch the creator's stated identity (Issue 83) and render it as a
+        # stable system block to inject ahead of the volatile performance corpus.
+        # Returns None if the creator hasn't filled the intake yet — brief.py
+        # then skips the block entirely (cleaner prompt + better cache hit-rate
+        # than passing "(no identity)").
+        identity_row = await get_current(session, creator_uuid)
+        stated_identity = format_for_prompt(identity_row)
+
         # Generate the brief outside the DB — pure LLM call; no session writes yet.
         # `generate_brief` uses the sync Anthropic client; offload to a worker
         # thread so the event loop is not blocked for the duration of the LLM
         # round-trip (Issue 38 Wave 1).
-        brief_text = await asyncio.to_thread(generate_brief, patterns, channel_title)
+        brief_text = await asyncio.to_thread(
+            generate_brief, patterns, channel_title, stated_identity
+        )
 
         # Stage the draft row without committing.  commit=False keeps the INSERT
         # pending in this transaction so all writes land atomically below.

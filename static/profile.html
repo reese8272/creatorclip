@@ -36,7 +36,49 @@
              cursor: pointer; font-weight: 600; }
     .btn-confirm { background: #2ecc71; color: #000; }
     .btn-rebuild { background: #333; color: #e0e0e0; }
+    .btn-save { background: #6c63ff; color: #fff; }
     #confirm-status { font-size: 0.8rem; margin-top: 10px; color: #aaa; min-height: 20px; }
+
+    /* Identity section (Issue 83) */
+    .section { margin-top: 40px; }
+    .section h2 { font-size: 1.15rem; margin-bottom: 4px; }
+    .section .sub { color: #888; font-size: 0.85rem; margin-bottom: 16px; }
+    .nudge {
+      background: #2a1d10; border-left: 3px solid #f39c12;
+      padding: 10px 14px; font-size: 0.82rem; color: #e0c890;
+      border-radius: 4px; margin-bottom: 16px;
+    }
+    .form-field { margin-bottom: 14px; }
+    .form-field label {
+      display: block; font-size: 0.78rem; color: #aaa;
+      margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .form-field label .req { color: #f39c12; margin-left: 4px; }
+    .form-field input[type="text"],
+    .form-field textarea {
+      width: 100%; background: #141414; border: 1px solid #2a2a2a;
+      border-radius: 6px; padding: 10px 12px; color: #e0e0e0;
+      font-family: inherit; font-size: 0.88rem; resize: vertical;
+    }
+    .form-field input:focus,
+    .form-field textarea:focus { border-color: #6c63ff; outline: none; }
+    .form-field .hint { font-size: 0.72rem; color: #666; margin-top: 4px; }
+    .niche-grid {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .niche-chip {
+      background: #1e1e1e; border: 1px solid #2a2a2a;
+      padding: 6px 12px; border-radius: 999px; font-size: 0.78rem;
+      cursor: pointer; user-select: none; color: #aaa;
+    }
+    .niche-chip.selected {
+      background: #6c63ff; border-color: #6c63ff; color: #fff;
+    }
+    .niche-chip:hover:not(.selected) { border-color: #6c63ff; color: #e0e0e0; }
+    #identity-status { font-size: 0.8rem; margin-top: 8px; min-height: 20px; }
+    .identity-current { background: #1e1e1e; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .identity-current .field { margin-bottom: 8px; font-size: 0.85rem; }
+    .identity-current .field-label { color: #888; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
   </style>
 </head>
 <body>
@@ -69,6 +111,58 @@
     <button class="btn-rebuild" onclick="rebuildDna()">↺ Rebuild DNA</button>
   </div>
   <div id="confirm-status"></div>
+
+  <!-- Stated identity (Issue 83) -->
+  <section class="section">
+    <h2>Your identity</h2>
+    <p class="sub">
+      Tell us who you are — we'll fuse this with the patterns we infer from your videos.
+      Used to honour your boundaries and surface clips that fit your actual direction,
+      not just what's accidentally performed well.
+    </p>
+
+    <div id="identity-nudge" style="display:none"></div>
+    <div id="identity-current"></div>
+
+    <form id="identity-form" onsubmit="event.preventDefault(); saveIdentity();">
+      <div class="form-field">
+        <label>Niche<span class="req">*</span> <span style="text-transform:none;font-size:0.7rem;color:#666">(pick 1–3)</span></label>
+        <div class="niche-grid" id="niche-grid">Loading…</div>
+      </div>
+
+      <div class="form-field">
+        <label for="audience">Who's your audience?<span class="req">*</span></label>
+        <textarea id="audience" rows="2" placeholder="e.g. 'College students trying to learn investing without the YouTube finance bro vibe.'" required></textarea>
+        <div class="hint">1–3 sentences. The clearer you are, the better the fit.</div>
+      </div>
+
+      <div class="form-field">
+        <label for="mission">What are you trying to build? <span style="text-transform:none;font-size:0.7rem;color:#666">(optional)</span></label>
+        <textarea id="mission" rows="2" placeholder="e.g. 'The most trusted intro-to-investing channel for under-25s.'"></textarea>
+      </div>
+
+      <div class="form-field">
+        <label for="pillars">Content pillars <span style="text-transform:none;font-size:0.7rem;color:#666">(optional, comma-separated)</span></label>
+        <input type="text" id="pillars" placeholder="e.g. portfolio breakdowns, market explainers, Q&amp;A">
+      </div>
+
+      <div class="form-field">
+        <label for="tone">Voice / tone <span style="text-transform:none;font-size:0.7rem;color:#666">(optional, comma-separated)</span></label>
+        <input type="text" id="tone" placeholder="e.g. calm, plainspoken, dry humour">
+      </div>
+
+      <div class="form-field">
+        <label for="hardnos">What you will NOT do <span style="text-transform:none;font-size:0.7rem;color:#666">(optional, comma-separated)</span></label>
+        <input type="text" id="hardnos" placeholder="e.g. clickbait, fearmongering, crypto promos">
+        <div class="hint">We'll respect these in every clip we suggest.</div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn-save">Save identity</button>
+      </div>
+      <div id="identity-status"></div>
+    </form>
+  </section>
 
   <script>
     async function loadDna() {
@@ -119,7 +213,132 @@
       }
     }
 
-    document.addEventListener('auth:ready', loadDna);
+    // ── Identity (Issue 83) ────────────────────────────────────────────────
+    const selectedNiches = new Set();
+    let nicheOptions = [];
+
+    async function loadNiches() {
+      try {
+        const resp = await fetch('/creators/niches', { credentials: 'include' });
+        if (!resp.ok) throw new Error('niches');
+        const data = await resp.json();
+        nicheOptions = data.options;
+        renderNicheGrid();
+      } catch (e) {
+        document.getElementById('niche-grid').textContent = 'Could not load niches — refresh to retry.';
+      }
+    }
+
+    function renderNicheGrid() {
+      const grid = document.getElementById('niche-grid');
+      grid.innerHTML = '';
+      nicheOptions.forEach(opt => {
+        const chip = document.createElement('span');
+        chip.className = 'niche-chip' + (selectedNiches.has(opt.id) ? ' selected' : '');
+        chip.textContent = opt.label;
+        chip.dataset.id = opt.id;
+        chip.addEventListener('click', () => {
+          if (selectedNiches.has(opt.id)) {
+            selectedNiches.delete(opt.id);
+          } else {
+            if (selectedNiches.size >= 3) return;  // max 3
+            selectedNiches.add(opt.id);
+          }
+          renderNicheGrid();
+        });
+        grid.appendChild(chip);
+      });
+    }
+
+    async function loadIdentity() {
+      const resp = await fetch('/creators/me/identity', { credentials: 'include' });
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      if (data.conflict) {
+        const nudge = document.getElementById('identity-nudge');
+        nudge.className = 'nudge';
+        nudge.style.display = 'block';
+        nudge.textContent = data.conflict;
+      }
+
+      if (!data.identity) return;
+      const id = data.identity;
+
+      // Show current as a read-only summary above the form.
+      const labelFor = (nid) => (nicheOptions.find(o => o.id === nid) || {}).label || nid;
+      const cur = document.getElementById('identity-current');
+      const pillars = (id.content_pillars || []).join(', ');
+      const tone = (id.tone_tags || []).join(', ');
+      const nos = (id.hard_nos || []).join(', ');
+      cur.className = 'identity-current';
+      cur.innerHTML =
+        `<div class="field"><div class="field-label">Current — v${id.version}</div></div>` +
+        `<div class="field"><strong>Niche:</strong> ${id.niches.map(labelFor).join(', ')}</div>` +
+        `<div class="field"><strong>Audience:</strong> ${id.audience_summary}</div>` +
+        (id.mission ? `<div class="field"><strong>Mission:</strong> ${id.mission}</div>` : '') +
+        (pillars ? `<div class="field"><strong>Pillars:</strong> ${pillars}</div>` : '') +
+        (tone ? `<div class="field"><strong>Tone:</strong> ${tone}</div>` : '') +
+        (nos ? `<div class="field"><strong>Won't do:</strong> ${nos}</div>` : '');
+
+      // Pre-fill the form so "save" feels like "edit" not "start over".
+      id.niches.forEach(n => selectedNiches.add(n));
+      renderNicheGrid();
+      document.getElementById('audience').value = id.audience_summary || '';
+      document.getElementById('mission').value = id.mission || '';
+      document.getElementById('pillars').value = pillars;
+      document.getElementById('tone').value = tone;
+      document.getElementById('hardnos').value = nos;
+    }
+
+    function parseCsv(s) {
+      return (s || '').split(',').map(x => x.trim()).filter(Boolean);
+    }
+
+    async function saveIdentity() {
+      const status = document.getElementById('identity-status');
+      status.textContent = '';
+      status.style.color = '#aaa';
+
+      const payload = {
+        niches: Array.from(selectedNiches),
+        audience_summary: document.getElementById('audience').value.trim(),
+        mission: document.getElementById('mission').value.trim() || null,
+        content_pillars: parseCsv(document.getElementById('pillars').value),
+        tone_tags: parseCsv(document.getElementById('tone').value),
+        hard_nos: parseCsv(document.getElementById('hardnos').value),
+      };
+
+      if (payload.niches.length === 0) {
+        status.textContent = 'Pick at least one niche.'; status.style.color = '#e74c3c'; return;
+      }
+      if (!payload.audience_summary) {
+        status.textContent = 'Tell us who your audience is.'; status.style.color = '#e74c3c'; return;
+      }
+
+      const resp = await fetch('/creators/me/identity', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        status.textContent = `✓ Saved as v${data.version}. We'll use this on the next clip pass.`;
+        status.style.color = '#2ecc71';
+        await loadIdentity();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        status.textContent = data.detail || 'Could not save — try again.';
+        status.style.color = '#e74c3c';
+      }
+    }
+
+    document.addEventListener('auth:ready', async () => {
+      await loadDna();
+      await loadNiches();
+      await loadIdentity();
+    });
   </script>
 </div>
 </body>

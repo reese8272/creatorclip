@@ -94,6 +94,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── oauth.py                # OAuth flow, token storage/refresh (encrypted)
 │   ├── analytics.py            # Retention curves, demographics, activity windows
 │   ├── data_api.py             # Video metadata, captions
+│   ├── categories.py           # Static YouTube category enum (Issue 83 intake niches)
 │   └── ingest.py               # Source acquisition (upload / yt-dlp guard), normalize
 │
 ├── ingestion/
@@ -104,8 +105,10 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 ├── dna/
 │   ├── builder.py              # Research Mode: top/bottom analysis, pattern extraction
-│   ├── profile.py              # CreatorDNA model + living profile CRUD (versioned)
-│   ├── brief.py                # Plain-language creator brief generation (Claude)
+│   ├── profile.py              # CreatorDNA inferred profile CRUD (versioned)
+│   ├── identity.py             # Creator STATED identity CRUD (Issue 83; append-only)
+│   ├── conflict.py             # stated-vs-inferred mismatch detector (Issue 83)
+│   ├── brief.py                # Plain-language creator brief generation (Claude) — fuses identity
 │   └── embeddings.py           # Profile + clip embeddings → pgvector
 │
 ├── clip_engine/
@@ -226,11 +229,18 @@ transcripts
 signals
   video_id (FK), timeline_jsonb (audio energy, silence, laughter, retention spikes)
 
-creator_dna                          -- the living profile (versioned)
+creator_dna                          -- the inferred profile (versioned)
   id, creator_id (FK), version, brief_text, patterns_jsonb,
   top_video_ids_jsonb, bottom_video_ids_jsonb,
   optimal_clip_len_s, best_source_region, optimal_upload_gap_h,
   status (draft/confirmed/superseded), created_at
+
+creator_identity                     -- the STATED profile (Issue 83, append-only)
+  id, creator_id (FK, CASCADE), version,
+  niches (JSONB array of YouTube category IDs), audience_summary,
+  content_pillars (JSONB), tone_tags (JSONB), hard_nos (JSONB),
+  mission, style_sample,
+  created_at, superseded_at (NULL = current; partial UNIQUE enforces ≤1 current)
 
 dna_embeddings
   id, creator_id (FK), kind (pattern/clip/hook), embedding (vector), ref_jsonb

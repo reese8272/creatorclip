@@ -462,7 +462,7 @@ industry standard** for each fix before changing code. Dependency-ordered. Sever
 **Status**: ✅ Done (2026-05-28)
 
 **What**: `python3.12 -m pytest -q` fails at import with
-`TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'`.
+`TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'`.2
 Cause: installed `starlette==1.1.0` (published under the new `Kludex/starlette` maintainership;
 starlette graduated from ZeroVer to 1.0 on 2026-03-22 — a legitimate breaking release, not a
 typosquat) is incompatible with FastAPI 0.115.x which forwards `on_startup`/`on_shutdown` to
@@ -1618,6 +1618,151 @@ the retired branch for reference):
   disclosure** — required by `docs/COMPLIANCE.md` in the public Privacy Policy before launch
   but absent; added the canonical attestation + the four Limited-Use commitments to
   `static/privacy.html`, with a test pinning the required language.
+
+---
+
+### Issue 83: Creator Intake Form — stated identity layer fused with inferred DNA
+**Severity**: FEATURE — addresses "DNA takes a long time" cold-start + adds a structural honesty signal
+**Depends on**: 79 ✅ (RLS — so per-creator queries on `creator_identity` are policy-gated once RLS is activated)
+**Status**: ✅ Done (2026-05-30)
+
+**What**: A self-described identity layer fused with the inferred `creator_dna`. Captures
+who the creator says they are (niche, audience, mission), how they describe their voice
+(tone tags), what they refuse to do (hard-nos), and an optional writing/style sample.
+Used as a stable per-creator system block in every Claude call so the LLM treats the
+creator's own words as authoritative for "what they're trying to build," and only uses
+inferred patterns to fill in "what's actually working."
+
+**Why**: Two problems in one. (1) The inferred DNA pipeline takes 30+s end-to-end (LLM call
++ analytics fetch + embeddings) and can't ship a useful first-pass result until everything
+finishes. (2) The inferred pipeline can only see what has accidentally performed well —
+it cannot see what the creator is trying to build. The stated identity ships an instant
+cold-start signal and adds the dimension inference structurally lacks.
+
+**Approach** (per the 2026 industry-standard research summarized in DECISIONS):
+- Form-driven, NOT sample-text-driven (samples are already covered by the inferred path).
+- 5-field intake: 1 required niche multi-select (1–3 of the YouTube Data API categories) +
+  1 required audience description + 3 optional fields (mission, content pillars, tone tags,
+  hard-nos, style sample).
+- **Strictly separate from `creator_dna`** — two tables, fused at query time, never merged.
+  Silently overriding stated intent with engagement is the YouTube-algorithm problem
+  recreated inside our own tool; we surface conflicts to the creator instead.
+- Append-only versioned (`creator_identity.superseded_at IS NULL` ⇔ current; partial
+  unique index is the DB-level backstop).
+- Multi-step UX with skip-from-step-1 affordance (research: 52.9% higher completion vs
+  single-page; forced pre-value intake is the 70%-drop-off norm).
+
+**Files (delivered)**:
+- `alembic/versions/0012_creator_identity.py` — append-only table + partial unique + history index
+- `models.py::CreatorIdentity`
+- `youtube/categories.py` — static 15-option NICHE_OPTIONS list (YouTube Data API IDs)
+- `dna/identity.py` — `get_current` / `get_history` / `upsert_identity` with FOR UPDATE +
+  IntegrityError race recovery, plus `format_for_prompt` (cache-friendly: returns None
+  rather than emitting "(no identity)") and `validate_*` helpers shared with the router
+- `dna/conflict.py` — niche-keyword-vs-inferred-patterns mismatch detector, returns a
+  one-line nudge for the UI
+- `dna/brief.py` — `generate_brief()` accepts `stated_identity`; injects it as the 2nd
+  system block; moves the `cache_control` breakpoint to the last stable block
+- `worker/tasks.py::_build_dna_async` — fetches identity via `AdminSessionLocal` and
+  passes it into `generate_brief`
+- `routers/creators.py` — `GET /creators/niches` (public; intake form depends on it),
+  `GET /creators/me/identity` (current + conflict nudge), `POST /creators/me/identity`
+  (creates new version), `GET /creators/me/identity/history` (max 20 versions)
+- `static/onboarding.html` — optional inline intake card (step 3 of 5)
+- `static/profile.html` — full identity edit form, current-version summary, conflict nudge
+- `tests/test_identity_unit.py` — 21 unit tests
+- `tests/test_identity_integration.py` — 4 integration tests against real Postgres
+
+**Acceptance criteria**:
+- [x] `creator_identity` table created via alembic 0012; cascade-deletes with creator
+- [x] Partial unique index `uq_one_current_identity_per_creator` enforces ≤1 current row
+- [x] `POST /creators/me/identity` creates a new version, stamps `superseded_at` on prior
+- [x] `GET /creators/me/identity` returns current row (or null) + conflict nudge (or null)
+- [x] `GET /creators/me/identity/history` returns newest-first, max 20
+- [x] `GET /creators/niches` returns the stable category list (works pre-session)
+- [x] Validation: 1–3 niches (must be from the known list), audience required, dedup'd lists
+- [x] Identity injected into `dna/brief.py` as the 2nd system block with cache_control on it
+- [x] Identity is omitted entirely (not "(no identity)") when missing — cache-friendly
+- [x] Conflict detector returns a niche-mismatch nudge when stated niche keywords miss patterns
+- [x] Per-creator isolation: A's GET never returns B's row (integration test)
+- [x] Onboarding step 3 + profile.html edit form both wired; skip path preserved
+- [x] No virality language anywhere new; preserves the AutoClip honesty constraint
+- [x] All gates green: ruff format/check, mypy 0, pytest passes
+
+---
+
+### Issue 84: AI/LLM efficiency assessment — context engineering, caching, latency vs quality
+**Severity**: ASSESSMENT — informs every downstream LLM change
+**Depends on**: 83 ✅ (so identity injection is in scope of the audit)
+**Status**: 🔲 Not started
+
+**What**: User asked for a focused assessment of how we use Anthropic right now:
+context engineering at every call site, the actual realized prompt-cache hit rate (the
+2026 5-minute TTL change in particular), and the speed-vs-quality tradeoffs at each
+step. Goal: the service should feel **fast** without being **shallow**.
+
+**Scope (do a real Phase 1 CHECK before scoping further — Anthropic SDK + caching
+state move fast):**
+- Audit every Anthropic call site: `dna/brief.py`, `improvement/brief.py`,
+  `clip_engine/scoring.py`. Confirm block ordering, cache breakpoints, system-vs-user
+  placement, max_tokens, model choice (Sonnet vs Opus for which call).
+- Measure the realized cache hit rate from `cache_read_input_tokens` /
+  `cache_creation_input_tokens` logs over a representative session.
+- Identify pipeline opportunities to co-locate calls under one cache prefix (clip
+  scoring + ranking + explanation in one pass?) to actually reap caching savings
+  given the 5-minute TTL.
+- Identify any call that could be batched (Anthropic batch API), streamed, or
+  replaced with a smaller model.
+- Evaluate latency: time-to-first-byte and total wall-clock for the DNA build (the
+  motivating "DNA takes a LONG time" complaint).
+- Recommend a **target SLO** per call site (e.g. "DNA brief P50 < 8s, P95 < 20s").
+
+**Acceptance criteria**:
+- [ ] Phase 1: research the current Anthropic SDK + caching best practices for 2026
+- [ ] Per-call-site report in `docs/assessment/llm/<call-site>.md` with placement,
+      cache hit rate, model, max_tokens, observed latency, recommended changes
+- [ ] One pipeline candidate identified for co-located calls under a shared cache prefix
+- [ ] At least one concrete latency win shipped (or a rationale for why no change is safe)
+- [ ] DECISIONS entry capturing any model / placement / pipeline changes
+
+---
+
+### Issue 85: UI redesign — sleek editing-tool aesthetic (away from "AI-generated website" vibe)
+**Severity**: FEATURE — pre-public-launch polish
+**Depends on**: 84 ✅ (so any UI surfacing of LLM output is informed by the assessment) — soft dep
+**Status**: 🔲 Not started
+
+**What**: User flagged that current static pages (`static/index.html`,
+`static/onboarding.html`, `static/profile.html`, `static/review.html`,
+`static/insights.html`, `static/pricing.html`) feel like "an AI-generated website,"
+not "an actual editing tool." Beta-quality is fine for current users; brand pass is
+wanted before public launch. The Issue 83 identity edit form is the most recent
+contributor to that vibe and should be reworked in this issue.
+
+**Scope (Phase 1 CHECK should look at):**
+- 2026 editing-tool UI references (CapCut, Descript, Riverside, Final Cut for web,
+  Frame.io, Lumen5). Common shapes: timeline-first, player-first, dark base with
+  saturated accent, dense info-rich panels, keyboard-driven.
+- Design system foundations: typography (system stack → swap to Inter/Geist?), 8-pt
+  spacing scale, color palette beyond `#6c63ff`, motion language.
+- The review surface (`static/review.html`) — should it feel like a TikTok-style
+  vertical scroller or a timeline-first editor? Player-first is the established design
+  intent (see `docs/PRD.md` "feels like scrolling" bar).
+- Whether to introduce a CSS framework (Tailwind / Open Props) or keep hand-rolled.
+  The current "vanilla HTML/CSS/JS, no build step" stance is a flagged DECISIONS
+  candidate per `docs/SOT.md` ("review-UI framework").
+- Component-library candidates if a framework is adopted.
+
+**Acceptance criteria**:
+- [ ] Phase 1: industry references collected; framework-vs-vanilla DECISIONS entry
+- [ ] Design system documented (typography, spacing, color, motion) in `docs/UI.md`
+- [ ] Review surface redesigned to the chosen player-first / timeline-first shape
+- [ ] Profile + onboarding + insights surfaces reworked to the design system
+- [ ] Identity intake form (Issue 83) reworked in the new aesthetic
+- [ ] No regression in the structural honesty test (the AutoClip predicts-fit
+      disclaimer must remain visible per `CLAUDE.md`)
+- [ ] Mobile-responsive baseline (90% of YouTubers check phone first)
+- [ ] All a11y basics: keyboard navigation, focus rings, contrast AA on body text
 
 ---
 

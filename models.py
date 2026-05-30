@@ -276,6 +276,52 @@ class Signals(Base):
 # ── Creator DNA ───────────────────────────────────────────────────────────────
 
 
+class CreatorIdentity(Base):
+    """Append-only versioned record of a creator's self-described identity (Issue 83).
+
+    Captures who the creator says they are, who they're for, and what they
+    won't do. Fused with the inferred ``CreatorDna`` at clip-engine and
+    brief-generation time, kept structurally separate so the two signals
+    can be reconciled honestly (see ``dna/conflict.py``).
+
+    Lifecycle: each ``POST /creators/me/identity`` creates a new row and
+    stamps ``superseded_at`` on the prior current row inside one
+    transaction. The partial unique index
+    ``uq_one_current_identity_per_creator`` is the DB-level guarantee that
+    only ONE row per creator has ``superseded_at IS NULL`` at any moment.
+    """
+
+    __tablename__ = "creator_identity"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # JSONB array of YouTube Data API category IDs (strings, e.g. ["27", "26"]).
+    # See youtube/categories.py for the stable enum mapping.
+    niches: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    audience_summary: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    content_pillars: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    tone_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    hard_nos: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    mission: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    style_sample: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    # NULL means current. Stamped non-null when superseded by a newer version.
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("creator_id", "version", name="uq_identity_creator_version"),
+    )
+
+
 class CreatorDna(Base):
     __tablename__ = "creator_dna"
 

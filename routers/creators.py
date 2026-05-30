@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
+from dna import identity as identity_module
 from limiter import limiter
 from models import Creator
 from youtube.analytics import check_data_gate
+from youtube.categories import NICHE_OPTIONS
 
 router = APIRouter(prefix="/creators", tags=["creators"])
 
@@ -53,6 +55,66 @@ class DnaConfirmOut(BaseModel):
     id: str
     version: int
     status: str
+
+
+# ── Identity (Issue 83) ───────────────────────────────────────────────────────
+
+
+class NicheOption(BaseModel):
+    id: str
+    label: str
+
+
+class NichesOut(BaseModel):
+    options: list[NicheOption]
+
+
+class IdentityIn(BaseModel):
+    # Pydantic validates shape; dna.identity.validate_* enforces semantic rules
+    # (length, dedup, known niche ids) so the same rules apply to both the
+    # router payload and any future internal callers.
+    niches: list[str] = Field(..., min_length=1, max_length=3)
+    audience_summary: str = Field(..., min_length=1)
+    content_pillars: list[str] | None = None
+    tone_tags: list[str] | None = None
+    hard_nos: list[str] | None = None
+    mission: str | None = None
+    style_sample: str | None = None
+
+
+class IdentityOut(BaseModel):
+    version: int
+    niches: list[str]
+    audience_summary: str
+    content_pillars: list[str] | None
+    tone_tags: list[str] | None
+    hard_nos: list[str] | None
+    mission: str | None
+    style_sample: str | None
+    created_at: str
+
+
+class IdentityGetOut(BaseModel):
+    identity: IdentityOut | None
+    conflict: str | None = None  # nudge text from dna/conflict.py; None = no conflict
+
+
+class IdentityHistoryOut(BaseModel):
+    versions: list[IdentityOut]
+
+
+def _identity_to_dict(row) -> dict:
+    return {
+        "version": row.version,
+        "niches": row.niches or [],
+        "audience_summary": row.audience_summary,
+        "content_pillars": row.content_pillars,
+        "tone_tags": row.tone_tags,
+        "hard_nos": row.hard_nos,
+        "mission": row.mission,
+        "style_sample": row.style_sample,
+        "created_at": row.created_at.isoformat(),
+    }
 
 
 @router.get("/me", response_model=CreatorMeOut)
@@ -133,3 +195,106 @@ async def confirm_dna(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"id": str(profile.id), "version": profile.version, "status": profile.status.value}
+
+
+# ── Identity (Issue 83) ───────────────────────────────────────────────────────
+
+
+@router.get("/niches", response_model=NichesOut)
+@limiter.limit("120/minute")
+async def list_niches(request: Request) -> dict:
+    """Return the YouTube category multi-select options for the intake form.
+
+    Unauthenticated — the list is stable public data and the onboarding form
+    needs it before the session JWT is fully wired in the browser.
+    """
+    return {"options": list(NICHE_OPTIONS)}
+
+
+@router.get("/me/identity", response_model=IdentityGetOut)
+@limiter.limit("120/minute")
+async def get_identity(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return the current stated identity (if any) plus any conflict nudge.
+
+    The conflict nudge is a one-liner the dashboard shows in-place when the
+    stated niche and the inferred DNA disagree (per the 2026 honesty pattern —
+    surface conflicts, do not silently override).
+    """
+    from dna.conflict import detect
+    from dna.profile import get_active
+
+    current = await identity_module.get_current(session, creator.id)
+    body: dict = {"identity": None, "conflict": None}
+    if current is not None:
+        body["identity"] = _identity_to_dict(current)
+        dna = await get_active(session, creator.id)
+        nudge = detect(current, dna)
+        if nudge is not None:
+            body["conflict"] = nudge.message
+    return body
+
+
+@router.post("/me/identity", status_code=201, response_model=IdentityOut)
+@limiter.limit("30/hour")  # intake is rarely updated; keep abusive churn bounded
+async def upsert_identity(
+    request: Request,
+    payload: IdentityIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Save a new identity version. Supersedes the prior current row.
+
+    All validation (length, dedup, known niche ids) is delegated to
+    ``dna.identity.validate_*`` so the same rules apply to internal callers.
+    """
+    try:
+        niches = identity_module.validate_niches(payload.niches)
+        audience = identity_module.validate_text(
+            payload.audience_summary,
+            max_chars=identity_module.MAX_AUDIENCE_CHARS,
+            label="audience_summary",
+        )
+        mission = identity_module.validate_optional_text(
+            payload.mission,
+            max_chars=identity_module.MAX_MISSION_CHARS,
+            label="mission",
+        )
+        style_sample = identity_module.validate_optional_text(
+            payload.style_sample,
+            max_chars=identity_module.MAX_STYLE_SAMPLE_CHARS,
+            label="style_sample",
+        )
+        pillars = identity_module.validate_list(payload.content_pillars, label="content_pillars")
+        tone = identity_module.validate_list(payload.tone_tags, label="tone_tags")
+        nos = identity_module.validate_list(payload.hard_nos, label="hard_nos")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    row = await identity_module.upsert_identity(
+        session,
+        creator.id,
+        niches=niches,
+        audience_summary=audience,
+        content_pillars=pillars,
+        tone_tags=tone,
+        hard_nos=nos,
+        mission=mission,
+        style_sample=style_sample,
+    )
+    return _identity_to_dict(row)
+
+
+@router.get("/me/identity/history", response_model=IdentityHistoryOut)
+@limiter.limit("120/minute")
+async def get_identity_history(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return identity versions for the current creator, newest first (max 20)."""
+    rows = await identity_module.get_history(session, creator.id)
+    return {"versions": [_identity_to_dict(r) for r in rows]}

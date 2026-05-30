@@ -45,12 +45,35 @@ Structure it with exactly these five sections:
 5. **Shorts Strategy** — if Shorts data is available, what's working vs not
 
 Be specific: reference actual video titles where relevant. Keep total length under 500 words.
-Phrase all predictions as likelihood estimates grounded in their data — never promise virality."""
+Phrase all predictions as likelihood estimates grounded in their data — never promise virality.
+
+If a CREATOR-STATED IDENTITY block appears below, treat it as authoritative for
+"what the creator is trying to build" — it is the creator's own words about
+their niche, audience, voice, mission, and explicit boundaries. Honour their
+hard-nos. Where stated identity AND inferred performance agree, lean into it
+with confidence. Where they disagree, surface the disagreement explicitly in
+the brief (e.g. "Your top-performing clips lean comedy even though you describe
+your focus as education — here's how to bridge that or split into two styles")
+rather than silently overriding the stated direction with engagement signals."""
 
 
-def generate_brief(patterns: dict, channel_title: str) -> str:
+def generate_brief(
+    patterns: dict,
+    channel_title: str,
+    stated_identity: str | None = None,
+) -> str:
     """
     Call Claude to synthesise a Creator Brief from computed patterns.
+
+    Args:
+        patterns: Inferred performance patterns from the DNA builder.
+        channel_title: The creator's channel title (used in the brief headline).
+        stated_identity: Optional Markdown block from
+            ``dna.identity.format_for_prompt`` capturing the creator's own
+            self-described identity (Issue 83). When present, it's injected
+            as a system block BEFORE the volatile performance corpus and
+            AFTER the static instructions — the LLM should weight it
+            alongside the inferred patterns rather than overriding it.
 
     Returns brief_text with the honesty disclaimer appended.
     Raises RuntimeError if Claude returns no text block.
@@ -61,20 +84,26 @@ def generate_brief(patterns: dict, channel_title: str) -> str:
         default=str,
     )
 
+    # Per the 2026 prompt-caching standard: stable content first, variable last,
+    # cache breakpoint at the end of the stable prefix. Two stability tiers:
+    # (1) global instructions are identical across all creators; (2) the stated
+    # identity is stable per creator. Both go BEFORE the breakpoint so a
+    # creator's repeated calls in one session share the longer prefix; the
+    # volatile performance corpus stays after.
+    system: list[dict] = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
+    if stated_identity:
+        system.append({"type": "text", "text": stated_identity})
+    # Mark the LAST stable block as the cache breakpoint. anthropic 0.40's
+    # TextBlockParam stub predates cache_control (Issue 78c) — the cast is
+    # what suppresses the typed-dict complaint at the call site below.
+    system[-1]["cache_control"] = {"type": "ephemeral"}
+    # Volatile per-creator data — AFTER the breakpoint, never cached.
+    system.append({"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"})
+
     response = _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
-        system=[
-            # Stable prefix — carries the cache breakpoint.
-            {
-                "type": "text",
-                "text": _SYSTEM_INSTRUCTIONS,
-                # anthropic 0.40's TextBlockParam stub predates cache_control (Issue 78c).
-                "cache_control": {"type": "ephemeral"},  # type: ignore[typeddict-unknown-key]
-            },
-            # Volatile per-creator data — AFTER the breakpoint, never cached.
-            {"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"},
-        ],
+        system=system,  # type: ignore[arg-type]
         messages=[
             {
                 "role": "user",

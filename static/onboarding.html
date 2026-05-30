@@ -64,9 +64,31 @@
     </button>
   </div>
 
-  <!-- Step 3: Build DNA -->
+  <!-- Step 3 (optional): Tell us about yourself (Issue 83) -->
   <div class="card">
-    <h2>3. Build your Creator DNA</h2>
+    <h2>3. Tell us about yourself <span style="color:#666;font-weight:400;font-size:0.8rem">(optional — 45 seconds)</span></h2>
+    <p class="status">
+      Speeds up your DNA and keeps recommendations honest. Skip and we'll use your video data only.
+    </p>
+
+    <div style="margin-top:12px">
+      <div style="font-size:0.78rem;color:#aaa;margin-bottom:6px">NICHE (pick 1–3)</div>
+      <div id="onb-niche-grid" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">Loading…</div>
+
+      <div style="font-size:0.78rem;color:#aaa;margin-bottom:6px">WHO'S YOUR AUDIENCE?</div>
+      <textarea id="onb-audience" rows="2"
+        style="width:100%;background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:10px 12px;color:#e0e0e0;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:12px"
+        placeholder="e.g. 'College students learning to invest.'"></textarea>
+
+      <button class="btn-primary" onclick="saveOnboardingIdentity()">Save &amp; continue</button>
+      <button class="btn-secondary" onclick="skipIdentity()">Skip for now</button>
+      <div id="onb-identity-status" style="font-size:0.8rem;color:#aaa;min-height:20px;margin-top:8px;text-align:center"></div>
+    </div>
+  </div>
+
+  <!-- Step 4: Build DNA -->
+  <div class="card">
+    <h2>4. Build your Creator DNA</h2>
     <p class="status">
       Analyses your top &amp; bottom performers to generate a personalised brief.
     </p>
@@ -76,9 +98,9 @@
     <div id="dna-status"></div>
   </div>
 
-  <!-- Step 4: Confirm DNA -->
+  <!-- Step 5: Confirm DNA -->
   <div class="card">
-    <h2>4. Review &amp; confirm your brief</h2>
+    <h2>5. Review &amp; confirm your brief</h2>
     <p class="status">
       Check your Creator Brief, then confirm to activate personalised clip scoring.
     </p>
@@ -156,6 +178,73 @@
       }
     }
 
+    // ── Optional identity intake (Issue 83) ────────────────────────────────
+    const _onbSelectedNiches = new Set();
+
+    async function _onbLoadNiches() {
+      try {
+        const resp = await fetch('/creators/niches', { credentials: 'include' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const grid = document.getElementById('onb-niche-grid');
+        grid.innerHTML = '';
+        data.options.forEach(opt => {
+          const chip = document.createElement('span');
+          chip.textContent = opt.label;
+          chip.style.cssText =
+            'background:#1e1e1e;border:1px solid #2a2a2a;padding:6px 12px;border-radius:999px;' +
+            'font-size:0.78rem;cursor:pointer;color:#aaa;user-select:none';
+          chip.addEventListener('click', () => {
+            if (_onbSelectedNiches.has(opt.id)) {
+              _onbSelectedNiches.delete(opt.id);
+              chip.style.background = '#1e1e1e';
+              chip.style.color = '#aaa';
+              chip.style.borderColor = '#2a2a2a';
+            } else {
+              if (_onbSelectedNiches.size >= 3) return;
+              _onbSelectedNiches.add(opt.id);
+              chip.style.background = '#6c63ff';
+              chip.style.color = '#fff';
+              chip.style.borderColor = '#6c63ff';
+            }
+          });
+          grid.appendChild(chip);
+        });
+      } catch (e) { /* non-fatal — user can still skip */ }
+    }
+
+    async function saveOnboardingIdentity() {
+      const status = document.getElementById('onb-identity-status');
+      const audience = document.getElementById('onb-audience').value.trim();
+      if (_onbSelectedNiches.size === 0) {
+        status.textContent = 'Pick at least one niche, or click Skip.'; return;
+      }
+      if (!audience) {
+        status.textContent = 'Add a one-sentence audience description, or click Skip.'; return;
+      }
+      status.textContent = 'Saving…';
+      const resp = await fetch('/creators/me/identity', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          niches: Array.from(_onbSelectedNiches),
+          audience_summary: audience,
+        }),
+      });
+      if (resp.ok) {
+        status.innerHTML = '<span class="ok">✓ Saved. Continue to step 4.</span>';
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        status.textContent = data.detail || 'Could not save — try again or skip.';
+      }
+    }
+
+    function skipIdentity() {
+      document.getElementById('onb-identity-status').innerHTML =
+        '<span style="color:#888">Skipped — you can fill this in later on the Profile page.</span>';
+    }
+
     document.addEventListener('auth:ready', (e) => {
       const user = e.detail;
       const el = document.getElementById('auth-status');
@@ -163,6 +252,7 @@
         el.innerHTML = `<span class="ok">Connected as ${user.channel_title || user.email || 'your channel'}</span>`;
       }
       refreshDataGate();
+      _onbLoadNiches();
     });
   </script>
 </body>

@@ -6,9 +6,37 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: Issue 78 — salvaged-from-PR#6 work. 78a (#9), 78b (#10), 78d (#11), 78g (#12), 78c (mypy 30→0) ✅ done. Remaining: **enable the `disallow_untyped_defs` ratchet** (deferred from 78c — ~20 pre-existing untyped-def signatures to annotate first), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off), 78f (PgBouncer load harness — needs real staging).
-**Last completed**: Issue 78c — mypy 30→0 (pydantic plugin + real type fixes in train/oauth/worker + targeted SDK/stub-lag ignores); baseline mypy_errors 30→0. The `disallow_untyped_defs` ratchet was reverted same-day (it surfaced ~20 pre-existing untyped-def violations) and re-tracked as a follow-up. 431 passed / 66 integration; ruff 0.
+**Active issue**: _(none in flight)_ — Issue 83 just closed. Queued follow-ups: AI/LLM efficiency assessment (filed as Issue 84) and UI redesign to sleek editing-tool aesthetic (Issue 85), both user-requested while approving Issue 83.
+**Last completed**: Issue 83 — Creator Intake Form (stated identity layer fused with inferred DNA). Append-only `creator_identity` table + 4 endpoints + identity injection into `dna/brief.py` with `cache_control` on the new block + niche-mismatch conflict nudge on the profile page. 461 passed / 1 skipped / 84 deselected.
 **Blocked**: _(none)_
+
+> **Closed Issue 83 — Creator Intake Form** (2026-05-30): Adds a stated-identity layer
+> (niche, audience, mission, tone, hard-nos, optional style sample) that is captured via
+> a 5-field intake (3 required, 2+ optional via progressive disclosure) and fused with
+> the inferred `creator_dna` at LLM-call time. Two structural decisions per the 2026
+> industry-standard research (see DECISIONS 2026-05-30 entry): (1) stated and inferred
+> are STRICTLY SEPARATE tables fused at query time — silently overriding stated intent
+> with engagement signals is the YouTube-algorithm problem recreated inside our own
+> tool, contradicting the North Star; (2) append-only versioning (partial unique
+> `uq_one_current_identity_per_creator` is the DB backstop) keeps the audit trail
+> intact. New `dna/identity.py` provides `get_current` / `get_history` / `upsert_identity`
+> with FOR UPDATE serialization + IntegrityError race recovery, plus
+> `format_for_prompt` that returns `None` (not "(no identity)") when missing for
+> prompt-cache friendliness. New `dna/conflict.py` flags stated-niche-vs-inferred-pattern
+> mismatches as a non-blocking profile-page nudge per the research's honesty pattern.
+> `dna/brief.py` accepts a `stated_identity` block and moves the `cache_control`
+> breakpoint to the new last stable block. `worker/tasks.py::_build_dna_async` fetches
+> identity via `AdminSessionLocal` and passes through. New `youtube/categories.py`
+> exposes the stable 15-option YouTube Data API niche list. New endpoints in
+> `routers/creators.py`: public `GET /creators/niches` (intake form depends on it
+> pre-session); authed `GET/POST /creators/me/identity` and
+> `GET /creators/me/identity/history`. `static/onboarding.html` gets an optional
+> 45-second intake card; `static/profile.html` gets full edit + version summary +
+> conflict nudge. Alembic `0012_creator_identity`. +22 unit tests + 5 integration
+> tests (append-only invariant, per-creator isolation, conflict detection, cache
+> breakpoint placement). All gates green.
+
+> **Prior Active**: Issue 78 — salvaged-from-PR#6 work. 78a (#9), 78b (#10), 78d (#11), 78g (#12), 78c (mypy 30→0) ✅ done. Remaining: **enable the `disallow_untyped_defs` ratchet** (deferred from 78c — ~20 pre-existing untyped-def signatures to annotate first), 78e (analytics retention purge — needs confirmed ToS staleness figure + data-deletion sign-off), 78f (PgBouncer load harness — needs real staging).
 
 > **Closed Issue 78d — improvement-brief 202 + poll** (2026-05-30): the ~120s Claude +
 > web_search brief moved off the request path (it could exceed an LB timeout). New
