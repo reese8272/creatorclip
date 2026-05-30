@@ -248,11 +248,30 @@ async def aclose() -> None:
     Wire into the FastAPI lifespan shutdown so the worker / web process
     doesn't leak connections (and so tests don't see the noisy
     ``Event loop is closed`` warning at module teardown).
+
+    Defensive: if the singleton was bound to a different (now-closed) loop
+    — which happens in pytest's per-test loop scope when a TestClient
+    teardown runs after the loop that opened the connection has rolled —
+    just null out the globals and return. Letting redis-py call
+    ``call_soon`` on a dead loop raises ``RuntimeError`` and crashes the
+    teardown. The connection will be GC'd naturally.
     """
     global _AIO, _AIO_LOOP
-    if _AIO is not None:
-        try:
-            await _AIO.aclose()
-        finally:
-            _AIO = None
-            _AIO_LOOP = None
+    if _AIO is None:
+        return
+    try:
+        current = asyncio.get_running_loop()
+    except RuntimeError:
+        current = None
+    if _AIO_LOOP is not None and _AIO_LOOP is not current:
+        # Wrong loop — drop the reference and let GC handle teardown.
+        _AIO = None
+        _AIO_LOOP = None
+        return
+    try:
+        await _AIO.aclose()
+    except Exception as exc:  # pragma: no cover - defensive only
+        logger.warning("progress.aclose redis aclose failed: %s", exc)
+    finally:
+        _AIO = None
+        _AIO_LOOP = None
