@@ -28,14 +28,15 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.12"
+plugins = ["pydantic.mypy"]   # type BaseSettings/BaseModel correctly (no spurious call-arg)
 ignore_missing_imports = true   # gradual: don't fail on untyped third-party stubs
 warn_unused_ignores = true
 warn_redundant_casts = true
 exclude = ['^alembic/', '^tests/']
-# Ratchet ON once mypy_errors reaches 0 — this makes CLAUDE.md's "type hints on
-# every signature" rule mechanically enforced:
-# disallow_untyped_defs = true
-# disallow_incomplete_defs = true
+# Ratchet ON now that mypy_errors reached 0 (Issue 78c) — mechanically enforces
+# CLAUDE.md's "type hints on every signature" rule.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
 
 [tool.coverage.run]
 branch = true
