@@ -1,13 +1,17 @@
-# ingestion — assessed 2026-05-31 (re-assessment, Wave 1 no-touch)
+# ingestion — assessed 2026-05-31 (Wave 2 re-assessment, no-touch)
 
 Slice: `ingestion/__init__.py` (empty), `ingestion/audio.py`, `ingestion/signals.py`,
 `ingestion/transcribe.py`. (No `ingestion/source.py` exists in the tree — the brief
 listed it as conditional; the slice is the three Python files above plus the empty
-`__init__.py`.) Worker call sites in `worker/tasks.py:344-410` (`_transcribe_async`,
+`__init__.py`.) Worker call sites in `worker/tasks.py:378-415` (`_transcribe_async`,
 `_signals_async`) traced only to confirm async/blocking, timeout, and temp-cleanup
 boundaries — the fixes there live in another slice but are intrinsic to how this slice
-runs. Wave 1 did NOT touch ingestion; this re-assessment carries forward the
-2026-05-30 findings, re-verified against current code at HEAD (`74431e7`).
+runs. Issue 92's progress-event wiring (step events around the transcribe call) lives
+in the **caller** (`worker/tasks.py:386,401-407`) and does not touch this slice; the
+slice's behavior, signatures, and call surface are byte-identical to the 2026-05-30
+state. **Wave 2 did NOT touch ingestion** — `git log f5d44df..HEAD -- ingestion/`
+returns zero commits — so the two carry-forward SEV2s remain open. Re-verified
+against current code at HEAD (`74431e7`).
 
 ## Findings
 
@@ -18,9 +22,9 @@ runs. Wave 1 did NOT touch ingestion; this re-assessment carries forward the
   a Celery retry instead of skipping the partial item. The WhisperX normalizer
   (lines 236-243) already uses `.get(..., default)`; the AssemblyAI normalizer
   (lines 180-184) uses attribute access on SDK objects — only Deepgram is at risk.
-  Carry-forward from 2026-05-30 assessment; UNADDRESSED in Wave 1. | fix: switch
-  both list comprehensions in `_normalize_deepgram` to `.get("start")` / `.get("end")`
-  and skip any utterance/word where either is `None`; default text via
+  Carry-forward from 2026-05-30 assessment; UNADDRESSED in Wave 1 and Wave 2. | fix:
+  switch both list comprehensions in `_normalize_deepgram` to `.get("start")` /
+  `.get("end")` and skip any utterance/word where either is `None`; default text via
   `u.get("transcript", "")` and `w.get("punctuated_word", w.get("word", ""))`
   (already done for `word`, finish the job for the timestamps).
 
@@ -31,7 +35,7 @@ runs. Wave 1 did NOT touch ingestion; this re-assessment carries forward the
   succeeds and returns an empty transcript — burning the per-job budget on a
   guaranteed-empty pipeline run and (under Issue 57) triggering an automatic refund
   for a cause we could have detected up front. Carry-forward from 2026-05-30;
-  UNADDRESSED in Wave 1. | fix: in the `except OSError` branch, raise
+  UNADDRESSED in Wave 1 and Wave 2. | fix: in the `except OSError` branch, raise
   `FileNotFoundError(f"audio not found: {audio_path}")` so the caller's retry/refund
   pathway sees a clear terminal error rather than a silent empty success.
 
@@ -118,8 +122,9 @@ runs. Wave 1 did NOT touch ingestion; this re-assessment carries forward the
 | 8 Config & paths | ok — keys + descriptions in `.env.example`; fail-fast guards |
 
 ## Module verdict
-NEEDS-WORK — Wave 1 did not touch ingestion, so the two carry-forward SEV2s
-(Deepgram normalizer hard-key indexing and `_guard_audio_size` swallowing OSError)
-remain open. No BLOCKER, no SEV1, no security or cross-tenant defect; the prior
-SEV1s closed by Issue 76 (Deepgram streaming + SDK-native timeouts) are still
-green at HEAD.
+NEEDS-WORK — Neither Wave 1 nor Wave 2 touched ingestion (zero commits in
+`git log f5d44df..HEAD -- ingestion/`), so the two carry-forward SEV2s (Deepgram
+normalizer hard-key indexing and `_guard_audio_size` swallowing OSError) remain
+open. No BLOCKER, no SEV1, no security or cross-tenant defect; the prior SEV1s
+closed by Issue 76 (Deepgram streaming + SDK-native timeouts) are still green at
+HEAD. Issue 92's caller-side step events do not change the slice's contract.

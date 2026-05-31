@@ -1,12 +1,14 @@
-# preference — assessed 2026-05-31
+# preference — assessed 2026-05-31 (Wave 2 re-verification)
 
-Wave 1 did not touch this module (last commits to `preference/` were `eb0953f` Issue 78c
-and `a4fcb56` Issue 78a). Slice walked: `preference/__init__.py`, `preference/_scorer_cache.py`,
-`preference/decay.py`, `preference/features.py`, `preference/model.py`, `preference/train.py`.
-Callers in `clip_engine/ranking.py` and `worker/tasks.py` traced for wiring confirmation only
-(those files belong to other agents and are not scored here). Both SEV2s from the 2026-05-30
+Wave 2 did not touch this module — `git log f5d44df..HEAD -- preference/` is empty; the last
+commits to `preference/` remain `eb0953f` Issue 78c and `a4fcb56` Issue 78a (both pre-baseline).
+Slice walked: `preference/__init__.py`, `preference/_scorer_cache.py`, `preference/decay.py`,
+`preference/features.py`, `preference/model.py`, `preference/train.py`. Callers in
+`clip_engine/ranking.py` and `worker/tasks.py` traced for wiring confirmation only (those
+files belong to other agents and are not scored here). Both SEV2s from the 2026-05-30 (Wave 1)
 report are carried forward verbatim — verified by re-reading the same line numbers in the
-unchanged files.
+unchanged files, and `tests/test_preference.py` still contains no `lightgbm` / `LGBMClassifier`
+round-trip (confirmed by grep), so the silent-degrade risk remains live.
 
 ## Findings
 
@@ -140,7 +142,7 @@ unchanged files.
 | 8 Config & paths | ok (cache size in .env.example with description) |
 
 ## Module verdict
-NEEDS-WORK — no regressions; two SEV2s carried forward unchanged from 2026-05-30: the
-allowlist still needs a LightGBM round-trip in CI to avoid silent personalization loss on
-a library upgrade, and the cache's memory bound is by entry count not bytes, which will
-inflate footprint if worker concurrency is raised later.
+NEEDS-WORK — no regressions, no Wave 2 changes to this module; the two SEV2s carry forward
+unchanged from 2026-05-30: the allowlist still needs a LightGBM round-trip in CI to avoid
+silent personalization loss on a library upgrade, and the cache's memory bound is by entry
+count not bytes, which will inflate footprint if worker concurrency is raised later.

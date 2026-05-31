@@ -1,20 +1,22 @@
 # upload_intel — assessed 2026-05-31
 
-Re-assessment after Wave 1 (Issues 89/90/91/98 + hotfixes A/B). Confirmed by
-`git log -- upload_intel/`: last (and only) edit to this module remains commit
-`c2d6335` (Batch 8, Issues 73/74/75) — no Wave 1 commit touched the slice.
-Findings carry forward unchanged from the 2026-05-30 assessment.
+Re-assessment after Wave 2 (baseline `f5d44df`). Confirmed by
+`git log f5d44df..HEAD -- upload_intel/` returning empty — no Wave 2 commit
+touched the slice; the last (and only) edit to this module remains commit
+`c2d6335` (Batch 8, Issues 73/74/75). Findings carry forward unchanged from
+the 2026-05-30 Wave 1 assessment.
 
-Slice: `upload_intel/__init__.py` (empty, 1 line — confirmed via Read), and
-`upload_intel/timing.py` (60 lines, 2 pure functions: `best_upload_windows`,
-`optimal_gap_hours`). No LLM, no DB session, no external client, no I/O, no
-async, no Celery task, no file/subprocess handling. Per-creator isolation is
-enforced one layer up in `routers/upload_intel.py:23`
-(`WHERE AudienceActivity.creator_id == creator.id`); this module only sees
-pre-scoped rows. Isolation regression: `tests/test_isolation.py:377`. Both
-functions are consumed together inside the same router response at
-`routers/upload_intel.py:42-47`, which is what makes the consistency gap
-between them load-bearing.
+Slice: `upload_intel/__init__.py` (empty, 0 lines — confirmed via `wc -l`),
+and `upload_intel/timing.py` (60 lines, 2 pure functions:
+`best_upload_windows`, `optimal_gap_hours`). No LLM, no DB session, no
+external client, no I/O, no async, no Celery task, no file/subprocess
+handling. Per-creator isolation is enforced one layer up in
+`routers/upload_intel.py:31` (`get_upload_intel` scopes
+`AudienceActivity` rows by `creator.id`); this module only sees pre-scoped
+rows. Isolation regression: `tests/test_isolation.py:377`
+(`test_upload_intel_scoped_to_creator`). Both functions are consumed
+together inside the same router response at `routers/upload_intel.py:42-47`,
+which is what makes the consistency gap between them load-bearing.
 
 ## Findings
 - [VERIFIED-FIX] upload_intel/timing.py:26-31 — the prior IndexError→500 fix
@@ -76,8 +78,8 @@ between them load-bearing.
 | 8 Config & paths | n/a (no config, no filesystem paths) |
 
 ## Module verdict
-NEEDS-WORK — Wave 1 did not touch this module, so the prior SEV2 on
-`optimal_gap_hours` (timing.py:54-55) carries forward: it was left out of the
-Issue 75d bounds/coercion guard that hardened `best_upload_windows`, so the
-two functions consuming the same payload still disagree on what a valid row
-is. Three typing/DRY cleanups also carry forward. No BLOCKER.
+NEEDS-WORK — Wave 2 did not touch this module, so the prior SEV2 on
+`optimal_gap_hours` (timing.py:54-55) carries forward: it was left out of
+the Issue 75d bounds/coercion guard that hardened `best_upload_windows`, so
+the two functions consuming the same payload still disagree on what a valid
+row is. Three typing/DRY cleanups also carry forward. No BLOCKER.

@@ -1,109 +1,164 @@
 # improvement — assessed 2026-05-31
 
-Wave-2 re-assessment. Wave 1 did not touch `improvement/`. The slice is
-unchanged on disk since 2026-05-30 12:32 (`improvement/brief.py` mtime), and
-the surrounding call path (`routers/improvement.py`, `worker/tasks.py:1050-1149`)
-is also unchanged in the parts the prior assessment relied on. Recent commits
-(b464a34, e9a2c3f, ac4cf65, 3c8d83d, 74431e7) touch catalog-sync / dna / onboarding
-/ ci only, not this module.
+Wave-2 re-assessment. Wave-1 verdict was clean. Wave 2 (Issue 92) refactored
+`improvement/brief.py` to extract `_build_request(channel_title, analytics,
+dna_brief) -> (system, tools, messages)` and added a `task_id: str | None`
+kwarg that routes to `worker.anthropic_stream.stream_and_emit` — the same
+pattern Issue 86 introduced in `dna/brief.py`. Obsolete
+`# type: ignore[...]` comments were removed; mypy 1.14.1 confirms the local
+`list[dict]` typing no longer needs them. Slice covered:
+`improvement/__init__.py` (empty package marker, 0 lines),
+`improvement/brief.py`.
 
-Slice covered: `improvement/__init__.py` (empty package marker, 0 lines),
-`improvement/brief.py`. The invoking router and Celery task are owned by other
-agents; read only to confirm the call path moved off the event loop and the
-prompt-cache split, web_search tool wiring, and token logging are still correct.
+The re-verification surfaced ONE new SEV1 introduced by the streaming-path
+extraction, plus the same low-severity cleanups as Wave 1.
 
 ## Findings
 
-- [cleanup] improvement/brief.py:57,64 — typing gaps the mypy gate has not caught:
-  the public parameter `analytics: dict` is un-parameterised, and the local
-  `payload` at :64 is implicitly typed. Function return type `-> str` is correct;
-  `dna_brief: str | None = None` is correct.
-  | fix: annotate `analytics: dict[str, object]` (or a TypedDict matching the
-  worker's `analytics = {...}` shape at worker/tasks.py:1119-1125 — the call site
-  already passes that exact shape) and `payload: dict[str, object] = {...}` at
-  :64.
+- [SEV1] improvement/brief.py:124-131 — Wave-2 streaming branch silently
+  drops the `tools=[web_search]` argument that the non-streaming branch
+  forwards at :149. `_build_request` returns `(system, tools, messages)`
+  and `tools` is unpacked at :113, but the streaming call site never
+  forwards it to `stream_and_emit`, and `stream_and_emit` itself does not
+  accept a `tools` kwarg (worker/anthropic_stream.py:36-44 signature is
+  `client, task_id, *, model, max_tokens, system, messages`). Net effect:
+  any caller passing `task_id=...` gets a brief generated WITHOUT
+  web_search grounding — silently neutering the module's stated purpose
+  ("synthesise data + live-research grounded recommendations", brief.py
+  docstring + `_SYSTEM_INSTRUCTIONS`:43-45). This also breaks the docstring
+  claim at :117-118 ("Same prompt structure as the .create() path so cache
+  breakpoints are interchangeable") — the structures diverge by exactly
+  the tool that defines the cache prefix's downstream behaviour. Rubric §5
+  (Anthropic SDK — web-search tool used where live research is intended)
+  and §6 (DRY / consistency between the two paths). Note: `dna/brief.py`
+  does not have this bug because it never used `tools` — the streaming
+  helper was designed for that simpler call shape. `improvement/brief.py`
+  is the first caller that needs a tool through the streaming wrapper.
+  | fix: (a) extend `worker/anthropic_stream.stream_and_emit` to accept
+  `tools: list | None = None` and forward to `client.messages.stream(...)`
+  when not None; (b) at improvement/brief.py:124-131 pass `tools=tools`.
+  Add a regression test that mocks `stream_and_emit` and asserts it
+  receives `tools=[{"type": "web_search_20260209", "name": "web_search"}]`
+  whenever `task_id` is supplied. Refresh the comment at brief.py:139-141
+  to reflect that web_search IS now wired through the stream while the
+  LAST text block remains the synthesised answer (Issue 69 pattern).
 
-- [cleanup] improvement/brief.py — Issue 86's progress-streaming primitive
-  (`worker/progress.py` + `worker/anthropic_stream.py`, already used by
-  `dna/brief.py`'s `generate_brief_streaming`) is NOT wired here. The user
-  currently sees a static "pending" status for ~120s with no incremental
-  feedback, while DNA builds stream per-token deltas to the onboarding UI. Not a
-  defect — the 202/poll contract is correct on its own — but a clear consistency
-  / UX follow-up now that the primitive exists.
-  | fix (follow-up issue, not a Phase-4 blocker): extract a
-  `generate_improvement_brief_streaming(...)` mirroring `dna/brief.py`'s pattern;
-  have `_generate_improvement_brief_async` call it under a `task_id` channel; add
-  a `stream_url` to the 202 response in `routers/improvement.py` so the UI can
-  subscribe. Track as a new issue, not inline.
+- [SEV2] improvement/brief.py:132-138 — streaming log line still bundles
+  cache reads into a single `cached_read=` counter. The task brief
+  acknowledges TTL-tier breakdown (5m vs 1h) is deferred to the
+  Issue-84-follow-up SDK bump, so this is informational, not a Phase-4
+  blocker — but flagging here so it's not lost: once the SDK exposes
+  `cache_creation.ephemeral_5m_input_tokens` /
+  `cache_creation.ephemeral_1h_input_tokens`, this log line will lose
+  the breakdown silently. Rubric §5. | fix: when Issue 84's SDK bump
+  lands, branch on `getattr(usage, "cache_creation", None)` (structured
+  breakdown object) and emit `cache_creation_5m=` / `cache_creation_1h=`
+  alongside totals. No code change in this issue.
 
-## Trace results (items the orchestrator asked to re-verify)
+- [cleanup] improvement/brief.py:55 — `_build_request(...) -> tuple` is a
+  bare `tuple` annotation. The Issue-86 peer at `dna/brief.py:62` uses
+  the precise `tuple[list[dict], list[dict]]`. The new helper here
+  returns three lists, so the matching shape would be
+  `tuple[list[dict], list[dict], list[dict]]`. Rubric §6. | fix: replace
+  the bare `tuple` with the parameterised shape so mypy can catch shape
+  drift if a future edit re-orders the return.
 
-- **Prior SEV2 — 120s blocking request on the API path (Issue 75/78d):** still
-  CLOSED. `routers/improvement.py:33` is `status_code=status.HTTP_202_ACCEPTED`
-  and returns `{"status": "pending", "task_id": ...}` (line 94). The
-  `_ANTHROPIC.with_options(timeout=120.0).messages.create(...)` at brief.py:71
-  runs in the Celery worker via `asyncio.to_thread(build_brief, ...)` at
-  worker/tasks.py:1130-1135, NOT on the API event loop. Idempotent on
-  `(job_id, status==ready)` at worker/tasks.py:1091; debounced on in-flight
-  pending at routers/improvement.py:73-74.
-- **Per-creator isolation:** the worker's metrics query has
-  `where(Video.creator_id == creator.id)` at worker/tasks.py:1107. The brief
-  itself receives only pre-scoped aggregates + the creator's own DNA summary;
-  no cross-tenant surface in this module.
-- **Prompt caching (Issue 69):** still correct. `_SYSTEM_INSTRUCTIONS` is a
-  static block carrying `cache_control: {"type": "ephemeral"}` (brief.py:74-81),
-  followed by a SEPARATE per-creator analytics block (brief.py:82-83). The
-  documented 2048-token-floor no-op behavior (brief.py:5-7, DECISIONS.md) is
-  intentional, not a defect.
-- **Token logging (rubric §5):** brief.py:98-104 logs `input_tokens`,
-  `cache_read_input_tokens`, `cache_creation_input_tokens`, `output_tokens`. No
-  PII / no prompt text in the log line.
-- **web_search tool (rubric §5):** still wired via
-  `settings.ANTHROPIC_WEB_SEARCH_TOOL` (brief.py:85), tool id resolved from
-  `.env.example` (`web_search_20250305`). Final-text-block extraction
-  (brief.py:106-112) handles the interleaved text/tool_use stream and raises
-  `RuntimeError` on an empty response.
-- **`max_tokens` / model id (rubric §5):** `max_tokens=2000` (brief.py:73);
-  model from `settings.ANTHROPIC_MODEL` (`claude-sonnet-4-6`). Both present in
-  `.env.example` with descriptions.
-- **Client lifecycle (rubric §1):** module-level singleton
-  `_ANTHROPIC = Anthropic(...)` (brief.py:24-28) with
-  `timeout=httpx.Timeout(60.0, connect=10.0)` and `max_retries=2`; per-call
-  `with_options(timeout=120.0)` for the long web_search path.
-- **Honesty constraint (rubric §3):** prompt instructs "never promise virality"
-  and "likelihood estimates, not guarantees" (brief.py:50,52); the
-  Python-appended `_DISCLAIMER` (brief.py:30-34, always appended at :112) makes
-  the honesty string structural, not LLM-dependent. No virality string anywhere.
+- [cleanup] improvement/brief.py:55, 97 — `analytics: dict` (public
+  signature) is un-parameterised while the local `payload: dict[str,
+  object]` at :62 is. Same finding as Wave 1 — Wave 2 did not address
+  it. Rubric §6. | fix: annotate `analytics: dict[str, object]` (or a
+  TypedDict matching `worker/tasks.py`'s metrics shape) at both the
+  public `generate_improvement_brief` signature and the `_build_request`
+  signature so both call sites are consistent.
+
+- [cleanup] improvement/brief.py:64 — `dna_brief[:1000]` is a magic
+  number with a hand-waved justification in the trailing comment ("cap
+  so system block stays cacheable"). Rubric §6. | fix: hoist to a
+  module-level `_DNA_BRIEF_MAX_CHARS = 1000` so the rationale lives
+  beside the constant.
+
+## Trace results (Wave-2-specific re-verifications)
+
+- **Streaming path uses the same `_build_request` shape:** confirmed —
+  both branches unpack `system, tools, messages = _build_request(...)`
+  at :113 once, so the cache breakpoint embedded in `system[0]` (the
+  static `_SYSTEM_INSTRUCTIONS` block carrying `cache_control:
+  {"type": "ephemeral"}` at brief.py:69-77) is byte-identical across
+  both call paths. A streaming call CAN benefit from a prior
+  non-streaming call's cache write (and vice versa) at the system-block
+  level — that part of the docstring claim holds. The `tools` shape
+  divergence flagged above does NOT affect the cache-key on the system
+  prefix, only the downstream tool-use behaviour.
+- **`task_id` kwarg behaviour matches `dna/brief.py::generate_brief`'s
+  Issue-86 pattern:** confirmed structurally — both modules: (i) build
+  the request shape once via the extracted helper, (ii) branch on
+  `task_id is not None`, (iii) import `stream_and_emit` lazily inside
+  the branch (avoids a top-level worker dep when only the .create path
+  is used), (iv) log a 4-field token summary keyed
+  `in/cached_read/cached_write/out`, (v) append `_DISCLAIMER`. The only
+  intentional shape difference is `improvement/brief.py:123` passing
+  `client = _ANTHROPIC.with_options(timeout=120.0)` because the
+  improvement brief's underlying call (when not streaming) needs the
+  longer timeout for web_search — fine, but as noted in the SEV1, the
+  streaming branch ALSO loses the tool that was the reason for that
+  longer timeout in the first place.
+- **Honesty disclaimer still Python-appended on BOTH paths:** confirmed
+  — `_DISCLAIMER` appended at brief.py:142 (streaming) and brief.py:167
+  (non-streaming). Never delegated to the model.
+- **Token logging captures input / cache_read / cache_creation /
+  output:** confirmed on both paths. Streaming path reads from the
+  `usage` dict returned by `stream_and_emit` (worker/anthropic_stream.py
+  :78-83); non-streaming reads directly from `response.usage` with
+  `getattr` defensiveness for the cache fields. TTL-tier breakdown
+  missing is a known Issue-84 follow-up.
+- **No PII / no token in log lines:** grep of brief.py confirms only
+  two `logger.info` sites; both emit ONLY integer token counts. No
+  channel title, no creator id, no prompt body, no analytics body.
+- **Removed `type: ignore` comments verified safe:** the system block
+  list is now typed `list[dict]` (brief.py:68), not the SDK's
+  `TextBlockParam`, so the `cache_control` key the SDK accepts at
+  runtime no longer trips a typed-dict stub complaint. Mypy 1.14.1
+  agrees the ignores were dead — confirmed by reading the surrounding
+  comment at brief.py:74-77 explaining the rationale.
+- **Industry standard check (Anthropic SDK):** `web_search_20260209`
+  configured at config.py:56 — current GA tool version per Wave-2
+  bump in Issue 84, with dynamic filtering. Cache breakpoint at end
+  of stable prefix per the 2026 prompt-caching standard. Single
+  4-byte field token logging is correct for the current SDK; the
+  TTL-tier follow-up is captured.
 
 ## Security & compliance notes
 
-- No OAuth tokens, no PII, no channel-identity secrets handled in this module.
-  Only an aggregate analytics dict + a capped (`[:1000]`, brief.py:66) DNA
-  summary reach the prompt. No `decrypt()` surface here.
-- The single `logger.info` (brief.py:98) emits token counts only — no leak.
-- The worker's `except` path stores a SAFE error string ("Brief generation
-  failed — try again.") in the DB row (worker/tasks.py:1138) and logs the
-  exception text via `logger.error` server-side only; the GET handler returns
-  that safe string to the client. No stack trace / token / DB error surfaced.
+- No OAuth tokens, no PII, no channel-identity secrets handled. Only an
+  aggregate analytics dict + a capped DNA summary (`[:1000]`) reach the
+  prompt. No `decrypt()` surface here.
+- The `logger.info` sites at brief.py:132-138 and :153-159 emit only
+  integer token counts.
+- The worker upstream stores a safe error string in the DB row and logs
+  the exception server-side; the GET handler returns the safe string to
+  the client. No stack trace / token / DB error surfaced. (Owned by
+  worker/router agents; included only because the task brief asked for
+  end-to-end honesty/logging verification.)
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — module-level singleton Anthropic client with timeout+retries; no DB/file handles in this module |
-| 2 Concurrency & scale | ok — 120s LLM call runs in Celery via `asyncio.to_thread`, not on the API loop; idempotent on `(job_id, status==ready)`; debounced on in-flight |
-| 3 Security & compliance | ok — no tokens/PII in logs or prompt; capped DNA payload; isolation enforced upstream; no virality promise; safe client-facing error |
+| 1 Resource lifecycle | ok — module-level singleton Anthropic client with timeout+retries; `.with_options(timeout=120.0)` returns a derived client; no DB/file/subprocess handles in this module |
+| 2 Concurrency & scale | ok — both call paths run in Celery via `asyncio.to_thread` upstream (worker/anthropic_stream.py:13-15 documents the contract); no hidden blocking inside an `async def` here |
+| 3 Security & compliance | ok — no tokens/PII in logs or prompt; capped DNA payload; isolation enforced upstream; no virality promise; honesty disclaimer always Python-appended |
 | 4 Clip-quality | n/a (not a clip module) |
-| 5 Anthropic SDK | ok — cache split correct (no-op below 2048 floor, documented); tokens logged with cache_read/cache_creation; web_search wired via config; final-block extraction correct; `max_tokens=2000`; model/tool from config |
-| 6 Cleanliness & typing | 2 cleanup — `analytics: dict` under-parameterised at brief.py:57; Issue 86 streaming primitive not yet reused |
-| 7 Error handling / API | n/a (router owns API surface; module raises `RuntimeError` for empty response, mapped to a SAFE message by the worker) |
-| 8 Config & paths | ok — model/tool/key via `config.settings`; all three in `.env.example` with descriptions; no paths in module |
+| 5 Anthropic SDK | 1 SEV1 (streaming path drops `tools=[web_search]`) + 1 SEV2 (TTL-tier breakdown deferred to Issue 84). Cache breakpoint at end of stable prefix per 2026 standard; `web_search_20260209` is current GA tool version; max_tokens=2000; model/tool from config |
+| 6 Cleanliness & typing | 3 cleanup — bare `tuple` return at :55, under-parameterised `analytics: dict` at :55/:97, magic `1000` at :64. The Wave-2 removal of obsolete `# type: ignore[...]` comments verified safe under mypy 1.14.1 |
+| 7 Error handling / API | n/a (not a router) — `RuntimeError` on empty response is appropriate for a Celery-task call path, mapped to a safe message upstream |
+| 8 Config & paths | ok — `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_WEB_SEARCH_TOOL` via `config.settings` (pydantic-settings, fail-fast); no paths in module |
 
 ## Module verdict
-clean — re-verified 2026-05-31. The improvement module is byte-identical to the
-prior wave (mtime 2026-05-30 12:32) and the surrounding call path the rubric
-depends on (router 202+poll, worker `asyncio.to_thread`, per-creator metrics
-WHERE) is also unchanged. Prompt-cache split, web_search tool wiring, token
-logging, model/tool config, isolation, idempotency, and the honesty constraint
-all still hold. Two non-blocking cleanups remain: under-parameterised typing on
-`analytics`/`payload`, and a UX follow-up to reuse Issue 86's progress-streaming
-primitive so the brief's pending state isn't a 120s black box.
+NEEDS-WORK — Wave-2's extraction of `_build_request` is structurally
+clean and matches the Issue-86 pattern in `dna/brief.py`, but the new
+streaming branch forgets to forward the `tools=[web_search]` argument
+(and the shared `stream_and_emit` helper has no `tools` kwarg to
+forward it through), so any caller using `task_id=...` gets an
+un-grounded improvement brief — a silent regression of the module's
+core promise. Fix by plumbing `tools` through `stream_and_emit` and
+passing it from this call site; ship a regression test asserting the
+streaming path receives the web_search tool config.
