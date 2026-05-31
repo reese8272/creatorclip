@@ -10,10 +10,19 @@
 #   (select Linux / x64 — copy only the token, not the full configure command)
 #
 # Why self-hosted?
-#   The deploy job runs a docker pull + restart — 30 seconds of work that
-#   consumes a full GitHub-hosted runner minute. A self-hosted runner on the
-#   same VM that already runs the app costs nothing and removes the billing
-#   dependency permanently.
+#   The deploy pipeline runs (1) docker-publish (build + push to GHCR) and
+#   (2) deploy (pull + migrate + restart). Both consume GitHub-hosted runner
+#   minutes. Hitting the spending limit silently fast-fails every push, which
+#   is what live-blocked Wave 6's deploy on 2026-05-31. A self-hosted runner
+#   on the same VM that already runs the app costs nothing and removes the
+#   billing dependency for both workflows permanently. (Issue 101)
+#
+#   After running this script:
+#     - docker-publish.yml (build + push to GHCR) runs on this VM
+#     - deploy.yml (pull + migrate + roll out) runs on this VM
+#     - CI / Quality / Integration workflows stay on GitHub-hosted (they're
+#       informational only and don't gate deploys — deploy.yml depends on
+#       Docker publish, not on CI)
 
 set -euo pipefail
 

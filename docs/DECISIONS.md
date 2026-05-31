@@ -5,6 +5,135 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Issue 101: move docker-publish.yml to self-hosted runner
+
+### What was decided
+
+Changed `.github/workflows/docker-publish.yml` from `runs-on: ubuntu-latest`
+to `runs-on: self-hosted`. The Docker build + GHCR push now run on the same
+self-hosted GitHub Actions runner on the production VM (`147.182.136.107`)
+that already serves `deploy.yml`. The deploy pipeline (docker-publish →
+workflow_run → deploy) is now end-to-end zero-GitHub-hosted-minutes.
+
+`deploy.yml` was already `self-hosted` (Wave-5 close-out, 2026-05-31
+self-hosted-runner DECISIONS entry below). The Wave-1 push and the Wave-6
+push both fast-failed in 3-5 seconds with "recent account payments have
+failed or your spending limit needs to be increased" — the docker-publish
+hosted-runner job was the remaining billing dependency in the deploy
+critical path.
+
+CI / Quality Gates / Integration tests (`ci.yml`, `quality.yml`,
+`integration.yml`) remain on `ubuntu-latest`. They are informational
+only and don't gate the deploy: `deploy.yml`'s `workflow_run` trigger
+depends ONLY on the "Docker publish" workflow completing successfully.
+Their billing-block-induced failures are visible noise but never block
+a deploy.
+
+### Why
+
+- The deploy pipeline failed end-to-end twice in one day from a billing
+  issue that has nothing to do with code correctness. Moving the
+  pipeline's critical path off GitHub-hosted infra eliminates the
+  failure mode permanently — card expiration, spending limit hits,
+  account suspension can no longer block a production deploy.
+- The user has done 90% of this work already: `scripts/setup-runner.sh`
+  exists, `deploy.yml` is already `self-hosted`. A one-line change to
+  `docker-publish.yml` closes the loop.
+- Image artifact path stays in GHCR — preserves SHA-pinned rollback
+  capability and keeps the runtime image source identical to the
+  pre-change pipeline (no behavioral change for the deployed app).
+
+### Industry standard checked
+
+- **GitHub Docs ("About self-hosted runners" + "Security hardening for
+  self-hosted runners")**: explicitly recommends self-hosted runners for
+  "deployments to environments you control." The documented risk is
+  fork-PR-driven runner hijacking on PUBLIC repos. This repo is
+  PRIVATE (`gh repo view --json visibility` → PRIVATE) and neither
+  workflow has `pull_request` triggers — only `push: branches: [main]`
+  and `release: published` for docker-publish, `workflow_run` and
+  `workflow_dispatch` for deploy. Every precondition for self-hosted
+  safety is met.
+- **Single-node Compose deploy pattern**: build-on-deploy-target is
+  canonical for solo-dev / single-VM setups (DigitalOcean, Linode,
+  Hetzner deploy tutorials; FastAPI deployment cookbook). The
+  "centralized CI runner builds; deploy targets only pull" pattern is
+  for multi-node fleets, which is out of scope for a single 1-VM
+  droplet running one app.
+- **Docker buildx cache (`cache-from: type=gha`)**: continues to work
+  on self-hosted runners — routes through the GitHub Actions cache API.
+  `type=local` is an optimization for later if VM disk has spare GB and
+  cache invalidation becomes a pain point.
+
+### Alternatives ruled out
+
+- **Move all 11 workflow jobs to self-hosted** — VM CPU/RAM contention
+  during a CI run (Python tests, integration tests, Layer-0 gates,
+  doctor preflight) would degrade production app latency. CI/quality/
+  integration aren't deploy-critical (deploy depends only on
+  docker-publish); leaving them on hosted-ubuntu lets them fail
+  visibly as a signal to fix billing rather than silently burning VM
+  cycles.
+- **Skip GHCR entirely, build + run locally** (`docker compose build
+  && docker compose up`): saves one push + one pull, but loses the
+  SHA-pinned rollback artifact and complicates a future multi-node
+  move. Not worth the architectural change for the one-RTT saving.
+- **Add billing alerts / payment retry / spending limit auto-raise**:
+  addresses the symptom (this card lapsed), not the root cause (any
+  card can lapse). Doesn't make deploys robust.
+- **External CI vendor (CircleCI / GitLab CI / Buildkite)**: over-
+  engineering for a solo-dev setup; introduces a new SaaS dependency,
+  another token to rotate, and another vendor billing relationship
+  that can lapse.
+- **Path-filter docker-publish to only Python/Dockerfile changes**:
+  reduces unnecessary triggers but doesn't fix billing block on the
+  pushes that DO trigger. Orthogonal optimization, not the right
+  layer for the permanent fix.
+
+### Tradeoffs accepted
+
+- **Single point of failure**: if the prod VM is down, deploys can't run
+  (CI runners are co-located with the deploy target). Mitigation:
+  `scripts/deploy.sh` is the manual fallback for any "VM down" or
+  "runner mis-configured" scenario; it ships the same docker-compose
+  steps from any laptop with SSH + GHCR_TOKEN. The user's runbook
+  explicitly documents both paths.
+- **VM resource pressure during builds**: a docker buildx build pulls
+  CPU + I/O. The DigitalOcean droplet is amd64 and historically
+  comfortable; if build time starts impacting prod app latency
+  noticeably, the next move is dedicated build cache volume or a
+  smaller build context. Not pre-optimizing.
+- **Setup is operational, not automated**: the runner still has to be
+  installed on the VM once via `scripts/setup-runner.sh`. Captured in
+  LEFT_OFF.md + setup-runner.sh banner.
+
+### Operational requirement
+
+The runner is NOT installed on the VM as of this commit. Until
+`setup-runner.sh` runs, BOTH `docker-publish.yml` and `deploy.yml`
+will queue. The manual `scripts/deploy.sh` remains the unblocked path
+for ad-hoc deploys.
+
+### Files & tests
+
+- `.github/workflows/docker-publish.yml` (runs-on swap + comment).
+- `scripts/setup-runner.sh` (banner updated to reflect coverage of
+  BOTH pipeline workflows now).
+- `tests/test_ci_config.py` (new) — pins `runs-on: self-hosted` for
+  both deploy-pipeline workflows so a future "fix CI" PR can't
+  silently regress to hosted. Also pins the `name: Docker publish`
+  ↔ `workflows: ["Docker publish"]` workflow_run linkage so a rename
+  on one side doesn't silently break deploys on the other.
+
+**Layer 0 gates**: ruff 0 / mypy 0 / freshness ok. **Tests**: 560
+passed (+3 from Wave 6's 557) / 1 skipped / 100 deselected.
+
+### Date
+
+2026-05-31
+
+---
+
 ## 2026-05-31 — Wave 6: "done-vs-visible" audit fixes (4-batch)
 
 ### What was decided

@@ -3,61 +3,71 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-31 (Blockers A + B both resolved in code; Wave 5 deploy is one push away)
-**Branch:** `main` — HEAD `280d089`. Only `main` exists locally and on origin.
-**Sync with `origin/main`:** **1 ahead / 0 behind** — one commit not yet pushed.
-**Working tree:** clean.
-**Production:** ⚠️ **Wave 5 is NOT live yet.** Production still serving `67fddc9`. Wave 5 (activity panel + cross-tab persistence) is committed and ready to ship.
-**Tests (local):** 553 passed / 1 skipped / 94 deselected.
+**Last updated:** 2026-05-31 (Wave 6 + Issue 101 committed; production three waves behind; runner install is the unblocker)
+**Branch:** `main` — HEAD = post-Issue-101 commit. Only `main` exists locally and on origin.
+**Working tree:** clean (except two untracked PNG audit screenshots).
+**Production:** ⚠️ **Waves 4 + 5 + 6 + Issue 101 are NOT live.** Production still serving `67fddc9` (Wave-3 era). Three full waves backed up; deploy pipeline is correct in code but billing-blocked on every recent push.
+**Tests (local):** 560 passed / 1 skipped / 100 deselected.
 
 ---
 
 ## CURRENT FOCUS
 
-### → PUSH THIS COMMIT
+### → DEPLOY THE BACKLOG
 
-The commit `280d089` fixes both blockers. Push it to `origin/main`:
+Every push since `67fddc9` has fast-failed with:
+> *"The job was not started because recent account payments have failed or your spending limit needs to be increased."*
 
-```
-git push
-```
+Issue 101 (this session) made `.github/workflows/docker-publish.yml` `runs-on: self-hosted` so future pushes don't depend on GitHub-hosted billing. But the **runner isn't installed yet**, so until that's done, pushes will queue indefinitely.
 
-What happens on push:
-1. **Docker publish** runs immediately (push-triggered, not billing-gated) — builds and pushes `:latest` to GHCR.
-2. **Deploy** — see "Deploy Path" below.
+Pick a path:
 
----
+### Path A — Install the self-hosted runner (permanent fix, ~10 min one-time)
 
-## DEPLOY PATH (pick whichever is ready first)
-
-### Path A — Self-hosted runner (permanent fix, ~10 min one-time setup)
-
-SSH to the production VM and install the runner:
+This is the only path that unblocks future pushes without a billing fix.
 
 ```bash
-# On your local machine:
 scp scripts/setup-runner.sh root@147.182.136.107:/tmp/
 ssh root@147.182.136.107 bash /tmp/setup-runner.sh
 ```
 
-The script will prompt for a runner registration token. Get it from:
-`https://github.com/reese8272/Youtube-Video-AI-Editor/settings/actions/runners/new`
+The script prompts for a runner registration token. Get it from:
+`https://github.com/reese8272/creatorclip/settings/actions/runners/new`
+(Select Linux / x64 — copy only the token, not the full configure command.)
 
-Once the runner is registered, the `Deploy to production` workflow runs automatically whenever `Docker publish` completes. Zero GitHub-hosted minutes consumed from that point on — the billing problem is permanently eliminated.
+After install, BOTH `docker-publish.yml` AND `deploy.yml` run on the VM. The previously-queued runs will dispatch automatically. Zero GitHub-hosted minutes for the deploy pipeline from this point forward, forever.
 
-### Path B — Manual deploy script (immediate, no runner needed)
+### Path B — Fix the billing block in GitHub
 
-If you want Wave 5 live **right now** without setting up the runner:
+Settings → Billing & plans → update payment method / raise spending limit. Then:
+```
+gh run rerun <run-id>      # re-trigger the failed docker-publish
+```
+or push an empty commit. Hosted runners will work again; the Issue 101 change is then *unused* until a future billing lapse re-triggers the protection. (Both paths are belt-and-suspenders.)
+
+### Path C — Manual deploy right now (no runner needed)
+
+To ship Waves 4 + 5 + 6 + 101 today without any GitHub Actions involvement:
 
 ```bash
 GHCR_TOKEN=ghp_xxx VPS_USER=root VPS_SSH_KEY=~/.ssh/id_ed25519 ./scripts/deploy.sh
 ```
 
-This mirrors every step in the GH Actions workflow (pull → preflight → migrate → up → smoke test).
+Mirrors every deploy.yml step (pull → preflight → migrate → up → smoke test).
 
-### Verify after either path
+Requires the `:latest` image to already be in GHCR. If GHCR doesn't have a recent image (Docker publish hasn't run successfully since `67fddc9`), build + push locally first:
+```bash
+docker build --platform linux/amd64 -t ghcr.io/reese8272/creatorclip:latest .
+echo $GHCR_TOKEN | docker login ghcr.io -u reese8272 --password-stdin
+docker push ghcr.io/reese8272/creatorclip:latest
+./scripts/deploy.sh
+```
 
-Check `view-source:https://autoclip.studio/` contains `/static/activityPanel.js`. If it does, Wave 5 is live.
+### Verify after any path
+
+- Dashboard banner gone for Backboard Media (Wave-6 Fix A migration `0014` ran on `alembic upgrade head`)
+- `view-source:https://autoclip.studio/` contains the new footer `<footer ...>Terms ... Privacy ...` (Wave-6 Fix B)
+- Pricing link visible in nav
 
 ---
 

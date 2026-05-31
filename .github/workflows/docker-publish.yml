@@ -9,7 +9,12 @@ on:
 jobs:
   push:
     name: Build & push to GHCR
-    runs-on: ubuntu-latest
+    # Self-hosted runner on 147.182.136.107 — no GitHub-hosted minutes consumed.
+    # Pairs with `deploy.yml` (also self-hosted). The runner is installed via
+    # scripts/setup-runner.sh; if it's not yet installed, this job queues until
+    # it is — use `scripts/deploy.sh` as the manual fallback. Decision: Issue
+    # 101 (2026-05-31) — eliminate GH-hosted billing as a deploy blocker.
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
