@@ -11,6 +11,7 @@ import re
 
 import httpx
 
+from config import settings
 from models import VideoKind
 from youtube import _http
 from youtube.errors import (
@@ -49,7 +50,7 @@ def parse_duration_seconds(iso_duration: str) -> float:
 
 
 def classify_video_kind(duration_s: float) -> VideoKind:
-    return VideoKind.short if duration_s <= 60 else VideoKind.long
+    return VideoKind.short if duration_s <= settings.SHORTS_MAX_DURATION_S else VideoKind.long
 
 
 def _classify_error(resp: httpx.Response) -> tuple[str, bool]:

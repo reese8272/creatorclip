@@ -1842,6 +1842,49 @@ yields also feeds Issue 84.
 
 ---
 
+## Issue 87: Wire up channel catalog sync + fix kind classification (SEV-0 onboarding bug)
+**Status**: ✅ Done (2026-05-30)
+
+**The bug**: A freshly-connected creator (verified live on `reesepludwick@gmail.com`,
+channel "backboard media": 20 Shorts + 3 long-form videos) saw the onboarding data-gate
+report `0 long-form videos / 0 Shorts` and never moved past it. `sync_video_catalog` in
+`youtube/analytics.py` was defined but had **zero callers** in the entire repo — neither
+the OAuth callback nor the Beat refresh task ever populated the `videos` table from the
+uploads playlist. Two related defects compounded it: `/videos/link` and `/videos/upload`
+both hardcoded `kind=VideoKind.long` (so a manually-pasted Short couldn't be classified
+correctly either), and `classify_video_kind` still used the pre-2024 `<=60s` Shorts
+threshold (YouTube raised the official max to 180s in October 2024).
+
+**Files**:
+- `config.py` + `.env.example` — new `SHORTS_MAX_DURATION_S=180`
+- `youtube/data_api.py::classify_video_kind` — reads from settings (180s default)
+- `worker/tasks.py` — new `sync_channel_catalog` Celery task + `_sync_channel_catalog_async`
+- `worker/tasks.py::_refresh_youtube_analytics_async` — prepends `sync_video_catalog` per creator
+- `routers/auth.py::callback` — enqueues `sync_channel_catalog.delay(...)` for new creators
+- `routers/creators.py` — new `POST /creators/me/catalog/sync` (5/min, 202+task_id)
+- `routers/videos.py::link_video` — resolves `kind`/`duration_s` via `get_videos_metadata`
+- `routers/videos.py::upload_video` — resolves `kind` from `probe_duration_s` before R2 PUT
+- `static/onboarding.html::refreshDataGate` — POSTs to `/catalog/sync` then polls data-gate
+- `tests/test_catalog_sync.py` — 8 unit tests
+- `tests/test_analytics.py` — classify boundary tests updated to 180s
+- `tests/test_retention_tasks.py` / `tests/test_oauth_lifecycle.py` — mock `sync_video_catalog`
+- `docs/DECISIONS.md`, `docs/SOT.md`, `docs/OFF_COURSE_BUGS.md`, `docs/PROJECT_STATE.md`
+
+**Acceptance criteria**:
+- [x] `classify_video_kind(180)` → Short, `(181)` → long (load-bearing boundary tested)
+- [x] `sync_channel_catalog` Celery task exists, idempotent (skips known video IDs), commits
+- [x] `_refresh_youtube_analytics_async` calls `sync_video_catalog` before per-video analytics
+- [x] OAuth callback enqueues catalog sync for new creators (async — never blocks redirect)
+- [x] `POST /creators/me/catalog/sync` returns 202 + `task_id`; rate-limited 5/min
+- [x] `/videos/link` resolves kind from YouTube metadata; falls back to long on API failure
+- [x] `/videos/upload` resolves kind from local `probe_duration_s`
+- [x] Onboarding "Refresh data status" button triggers sync + polls until count stabilises
+- [x] Per-creator isolation preserved (sync_video_catalog filters by `Video.creator_id`)
+- [x] Source / evidence captured in `docs/DECISIONS.md` (YouTube 180s spec; OAuth post-sync pattern)
+- [x] All gates green: ruff 0, mypy 0, **501 passed / 1 skipped / 85 deselected** (+9 new)
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

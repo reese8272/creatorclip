@@ -57,6 +57,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `CLIPS_PER_VIDEO_DEFAULT` | No | Default `8` |
 | `MIN_VIDEOS_FOR_DNA` | No | Default `10` |
 | `MIN_SHORTS_FOR_DNA` | No | Default `5` |
+| `SHORTS_MAX_DURATION_S` | No | Default `180`. YouTube's official Shorts maximum (raised from 60s in Oct 2024). Issue 87. |
 | `PERSONALIZATION_THRESHOLD_LABELS` | No | Default `20` |
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |

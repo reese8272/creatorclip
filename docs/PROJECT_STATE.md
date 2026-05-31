@@ -6,9 +6,38 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 86 just closed. Queued follow-ups: AI/LLM efficiency assessment (Issue 84) and UI redesign to sleek editing-tool aesthetic (Issue 85), both user-requested earlier; both now benefit from Issue 86's free cache-hit observability + token streaming.
-**Last completed**: Issue 86 — Live progress surface for long-running LLM + worker tasks. New `worker/progress.py` (Redis Streams XADD/XREAD + per-creator SSE slot cap + ownership keys) + `worker/anthropic_stream.py` (forwards Anthropic stream events to progress emitter) + `dna/brief.py::generate_brief_streaming` (cache breakpoint identical to .create() path so the two share the prefix) + `worker/tasks.py::_build_dna_async` emits step events at every stage with terminal `done`/`error` + new `routers/tasks.py` SSE endpoint (auth + ownership + Last-Event-ID resume + 12s keepalive + 600s lifetime cap + 3-stream concurrent cap) + `static/progressStream.js` vanilla-JS reducer + `static/onboarding.html` renders progress live in a terminal-style block. Sub-decisions captured in `docs/DECISIONS.md` (2026-05-30). 492 passed / 1 skipped / 85 deselected; +24 unit tests + 1 subprocess integration test that guards the PYTHONPATH hotfix forever.
+**Active issue**: _(none in flight)_ — Issue 87 just closed. Queued follow-ups: AI/LLM efficiency assessment (Issue 84) and UI redesign to sleek editing-tool aesthetic (Issue 85), both user-requested earlier; both now benefit from Issue 86's free cache-hit observability + token streaming.
+**Last completed**: Issue 87 — Catalog sync wiring + 180s Shorts threshold. Closed the SEV-0 onboarding bug surfaced live on `reesepludwick@gmail.com` / "backboard media" (20 Shorts + 3 long-form, data-gate reporting 0/0). `youtube/analytics.py::sync_video_catalog` was dead code — `grep -rn` returned exactly one hit (the definition itself). New `sync_channel_catalog` Celery task wraps it, enqueued (a) from the OAuth callback for new creators and (b) prepended to each creator's iteration of `_refresh_youtube_analytics_async`; new `POST /creators/me/catalog/sync` endpoint (5/min, 202+task_id) wires the onboarding "Refresh data status" button into a true sync trigger. Compounding fixes: `classify_video_kind` now reads `SHORTS_MAX_DURATION_S=180` (was hardcoded `<=60s` — YouTube raised the Shorts max to 180s in Oct 2024); `/videos/link` resolves kind via `get_videos_metadata`; `/videos/upload` probes duration locally via `probe_duration_s` before R2 PUT. 9 new unit tests + 1 OFF_COURSE_BUGS row closed. 501 passed / 1 skipped / 85 deselected; ruff 0 / mypy 0.
 **Blocked**: _(none)_
+
+> **Closed Issue 87 — Catalog sync wiring + 180s Shorts threshold** (2026-05-30):
+> Documented in detail in `docs/DECISIONS.md` (2026-05-30 entry). Investigation
+> triggered by the user reporting that connecting `reesepludwick@gmail.com` (channel
+> "backboard media") and clicking "Refresh data status" returned 0 long-form videos
+> and 0 Shorts despite the channel having 23 actual uploads. Root cause was structural,
+> not data-related: the only function in the codebase that pulls a creator's uploads
+> playlist (`youtube/analytics.py::sync_video_catalog`) had zero callers. The OAuth
+> callback never called it; the hourly Beat refresh task only re-fetched analytics for
+> already-known Video rows. The two write surfaces for new Video rows
+> (`/videos/link`, `/videos/upload`) both hardcoded `kind=VideoKind.long` and the
+> Shorts classifier was at the pre-2024 `<=60s` threshold, so even manual linking
+> would have mis-bucketed every Short.
+>
+> Fix: new `sync_channel_catalog` Celery task wraps the existing
+> `sync_video_catalog` (idempotent on `UNIQUE(creator_id, youtube_video_id)`, with
+> token resolution + commit + safe-fail). OAuth callback enqueues it via `.delay()`
+> for new creators so the redirect budget isn't blocked. The hourly Beat job prepends
+> it to each per-creator iteration so newly published videos are discovered every
+> refresh tick. New `POST /creators/me/catalog/sync` endpoint (5/min, 202+task_id)
+> wires the onboarding "Refresh data status" button into a real sync trigger; the
+> button now polls the data-gate every 4s until the row count stabilises. New
+> `SHORTS_MAX_DURATION_S=180` config (matches YouTube's 2024 spec — verified at
+> [Create a Short](https://support.google.com/youtube/answer/10059070)).
+> `/videos/link` resolves kind via `get_videos_metadata` (safe-fails to long-form
+> with a warning log); `/videos/upload` probes duration locally before R2 PUT. 8 new
+> tests in `tests/test_catalog_sync.py` + 4 boundary tests updated in `test_analytics.py`;
+> 3 retention-task mocks + 1 oauth-lifecycle mock updated to patch `sync_video_catalog`.
+> All gates green: ruff 0, mypy 0, **501 passed / 1 skipped / 85 deselected**.
 
 > **Closed Issue 86 — Live progress surface for long-running tasks** (2026-05-30): A
 > reusable per-task observability primitive built on Redis Streams + SSE, designed
@@ -653,6 +682,7 @@ Updated after every issue closes.
 | 35 | Idempotent DNA build (SEV-0) | HARDENING | ✅ Done | Single-transaction commit in `_build_dna_async`; `commit=False` param on `create_draft`, `embed_patterns`, `embed_brief`; 3 integration tests; 313 non-integration tests pass |
 | 40 | Streaming upload + DoS guard | HARDENING | ✅ Done | 1 MB streaming chunk loop in upload_video; 413 + tempfile unlink on oversize; RSS delta test; 3 new tests in test_videos_upload_streaming.py; 314 tests pass |
 | 44 | Auth boundary hardening — malformed sub 401, DELETE /me rate limit, MultiFernet rotation | SEC | ✅ Done | auth.py ValueError/KeyError catch; routers/auth.py 5/hour on DELETE /me; crypto.py MultiFernet + TokenDecryptError; +8 tests |
+| 87 | Catalog sync wiring + 180s Shorts threshold (SEV-0 onboarding bug) | HARDENING | ✅ Done | New `sync_channel_catalog` Celery task wired into OAuth callback + Beat refresh + new `POST /me/catalog/sync` endpoint; `/videos/link` + `/videos/upload` resolve kind from real duration; `SHORTS_MAX_DURATION_S=180` configurable; 9 new tests; surfaced live on `reesepludwick@gmail.com`/"backboard media"; DECISIONS.md entry |
 
 ---
 

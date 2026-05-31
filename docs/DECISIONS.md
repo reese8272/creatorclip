@@ -5,6 +5,108 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 87: Catalog sync wiring + 180s Shorts threshold
+
+### What was decided
+
+Four coupled fixes for a SEV-0 onboarding bug surfaced on `reesepludwick@gmail.com`
+("backboard media": 20 Shorts + 3 long-form, data-gate reporting 0/0):
+
+1. **New `sync_channel_catalog` Celery task** that wraps the previously-uncalled
+   `youtube.analytics.sync_video_catalog` (token resolution + commit + safe-fail).
+2. **OAuth callback enqueues the task asynchronously** for new creators — async
+   via `.delay()` so the OAuth redirect budget is never blocked by a 10–30s
+   playlistItems + per-video duration fan-out.
+3. **The hourly `refresh_youtube_analytics` Beat job prepends `sync_video_catalog`**
+   to each creator's iteration, so new uploads land in the DB before per-video
+   analytics is attempted (otherwise newly published videos stay invisible until
+   the next deploy).
+4. **New `POST /creators/me/catalog/sync` endpoint** (5/min, 202+task_id) wired
+   into the onboarding "Refresh data status" button — the data-gate becomes a
+   true sync trigger, not just a counter.
+
+Plus two compounding fixes in the same code path:
+- **`classify_video_kind` reads `settings.SHORTS_MAX_DURATION_S` (default 180)**
+  to match YouTube's 2024 spec.
+- **`/videos/link` and `/videos/upload` resolve `kind` + `duration_s`** from
+  `get_videos_metadata` (link) / `probe_duration_s` (upload) instead of
+  hardcoding `VideoKind.long`.
+
+### Why
+
+The user-observed symptom was a silent failure: the onboarding step 2 data-gate
+counted Video rows that never existed because the only function that pulled the
+uploads playlist was dead code. The fix had to (a) populate the table on
+connect, (b) keep it fresh, and (c) ensure manual link/upload paths also
+classify correctly so a manually-pasted Short isn't mis-bucketed as long-form.
+
+### Industry standard checked
+
+- **YouTube Shorts duration**: Officially raised from 60s to **180s** in
+  October 2024 — confirmed from YouTube Help Center
+  ([Create a Short](https://support.google.com/youtube/answer/10059070)).
+  The codebase comment + `<=60s` constant predate that change.
+- **Async OAuth-post-sync pattern**: Trigger initial catalog pull async right
+  after token storage; refresh on schedule. Mirrors the pattern used by every
+  major YouTube-data tool (TubeBuddy, VidIQ, Streams Charts). A synchronous
+  catalog fetch in the OAuth callback can exceed LB / ingress timeouts on
+  large channels; standard is enqueue → redirect → background sync → poll.
+- **`sync_video_catalog` itself is unchanged** — it already does the right
+  thing (`UNIQUE(creator_id, youtube_video_id)` keeps it idempotent across
+  redeliveries; classifier handles duration → kind). The bug was that
+  nothing called it.
+
+### Alternatives ruled out
+
+- **Sync catalog in the OAuth callback path**: would block the redirect for
+  10–30s on large channels and fail under LB timeouts. Standard is enqueue +
+  redirect.
+- **Lazy-sync on first `/creators/me/data-gate` GET**: hides the kickoff in
+  a "read" endpoint, makes rate-limit accounting weird, and races against the
+  5s onboarding poll. Explicit `POST /catalog/sync` is cleaner.
+- **Keep `kind=VideoKind.long` hardcoded in link/upload and "fix later"**: the
+  link/upload path is the only DB-write surface other than the catalog sync;
+  shipping a known data-quality bug for no reason.
+- **Block on `get_videos_metadata` failure in `/videos/link` and return 502**:
+  worse user experience than registering the row as long-form and letting the
+  next catalog sync repair it. The fallback is observable in logs.
+
+### Tradeoffs accepted
+
+- **`/videos/link` fallback may briefly mis-classify a Short as long-form**
+  if YT API is unreachable at link time. The next `refresh_youtube_analytics`
+  tick won't fix this (the per-video sync doesn't re-classify; only the
+  catalog sync does, and the catalog sync skips existing IDs). If this turns
+  out to be a real problem, the catalog sync can be extended to refresh kind
+  for rows where `duration_s IS NULL` — tracked under Issue 75 follow-ups.
+- **Onboarding `refreshDataGate` button now costs YouTube quota** (one
+  `playlistItems` + one `videos` call per click) — rate-limited at 5/min per
+  creator to bound abuse.
+
+### Source / evidence
+
+- YouTube Help Center: [Create a Short](https://support.google.com/youtube/answer/10059070) — confirms 180s upper bound for new Shorts uploads since Oct 2024.
+- `grep -rn "sync_video_catalog" .` across the entire repo: ONE hit (the definition itself, `youtube/analytics.py:179`) before this issue; zero callers confirmed by `Bash` inspection.
+- Live user evidence: `reesepludwick@gmail.com` / "backboard media" — 20 Shorts + 3 videos >10 min, sync reported 0/0.
+
+### Files
+
+- `config.py` (`SHORTS_MAX_DURATION_S`)
+- `.env.example`
+- `youtube/data_api.py::classify_video_kind`
+- `worker/tasks.py` (new `sync_channel_catalog` task + `_sync_channel_catalog_async`; prepended call in `_refresh_youtube_analytics_async`)
+- `routers/auth.py::callback` (enqueue on new creator)
+- `routers/creators.py` (`POST /me/catalog/sync`)
+- `routers/videos.py` (link + upload kind resolution)
+- `static/onboarding.html::refreshDataGate`
+- `tests/test_catalog_sync.py` (new), `tests/test_analytics.py` (180s boundary), `tests/test_retention_tasks.py` + `tests/test_oauth_lifecycle.py` (mock `sync_video_catalog`)
+
+### Date
+
+2026-05-30
+
+---
+
 ## 2026-05-30 — Issue 86: Live progress surface (SSE + Redis Streams)
 
 ### What was decided

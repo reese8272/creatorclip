@@ -109,6 +109,15 @@ async def callback(
     )
     await session.commit()
 
+    # Kick off the initial catalog pull so the user's videos land in the DB
+    # by the time they reach the onboarding data-gate. Async because the
+    # playlistItems + per-video duration fan-out can take >10s on large
+    # channels — far longer than the OAuth redirect budget. (Issue 87)
+    if is_new:
+        from worker.tasks import sync_channel_catalog
+
+        sync_channel_catalog.delay(str(creator.id))
+
     session_token = create_session_token(creator.id)
     resp = RedirectResponse(url="/", status_code=302)
     resp.delete_cookie(_STATE_COOKIE)

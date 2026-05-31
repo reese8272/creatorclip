@@ -61,19 +61,27 @@ def test_parse_duration_invalid_returns_zero():
 
 
 # ── classify_video_kind ───────────────────────────────────────────────────────
+# Issue 87: threshold raised to 180s to match YouTube's 2024 Shorts max.
+# The four boundary tests below are the load-bearing classification contract.
 
 
-def test_classify_short_at_boundary():
-    # exactly 60s is a Short
+def test_classify_short_at_new_180s_boundary():
+    # Exactly 180s is still a Short — YouTube treats the limit as inclusive.
+    assert classify_video_kind(180.0) == VideoKind.short
+
+
+def test_classify_long_just_above_180s():
+    assert classify_video_kind(180.5) == VideoKind.long
+
+
+def test_classify_short_well_under_threshold():
+    # 60s (the old threshold) must STILL be a Short under the new rules.
     assert classify_video_kind(60.0) == VideoKind.short
 
 
-def test_classify_long_above_boundary():
-    assert classify_video_kind(61.0) == VideoKind.long
-
-
-def test_classify_short_below_boundary():
-    assert classify_video_kind(59.0) == VideoKind.short
+def test_classify_long_for_typical_long_form():
+    # 10-minute video — the canonical "above 10 minutes" case from Issue 87.
+    assert classify_video_kind(600.0) == VideoKind.long
 
 
 # ── _parse_report ─────────────────────────────────────────────────────────────

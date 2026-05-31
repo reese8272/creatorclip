@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
+    # YouTube raised the Shorts maximum to 180s in October 2024
+    # (https://support.google.com/youtube/answer/10059070). Any uploaded
+    # vertical video at or below this duration is treated as a Short.
+    # Configurable so a future spec change is a one-line update. (Issue 87)
+    SHORTS_MAX_DURATION_S: int = 180
     # Cap the DNA candidate set so a power user with thousands of videos doesn't pull
     # the whole catalog into worker memory. We take the most-recent N (recency-weighted
     # scoring already favors recent content). (Issue B)

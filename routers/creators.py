@@ -36,6 +36,11 @@ class BuildQueuedOut(BaseModel):
     stream_url: str  # Issue 86: SSE endpoint for live progress events
 
 
+class CatalogSyncQueuedOut(BaseModel):
+    task_id: str
+    status: str
+
+
 class DnaProfileOut(BaseModel):
     id: str
     version: int
@@ -139,6 +144,24 @@ async def get_data_gate(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return await check_data_gate(session, creator.id)
+
+
+@router.post("/me/catalog/sync", status_code=202, response_model=CatalogSyncQueuedOut)
+@limiter.limit("5/minute")
+async def sync_catalog(
+    request: Request, creator: Creator = Depends(get_current_creator)
+) -> dict:
+    """Pull the creator's YouTube uploads playlist into the videos table.
+
+    Async via Celery — the playlistItems + per-video duration fan-out can
+    exceed the LB timeout on large channels. The data-gate poll picks up
+    the resulting Video rows. Rate-limited tightly (5/min) because every
+    invocation costs YouTube quota. (Issue 87)
+    """
+    from worker.tasks import sync_channel_catalog
+
+    task = sync_channel_catalog.delay(str(creator.id))
+    return {"task_id": task.id, "status": "queued"}
 
 
 @router.post("/me/dna/build", status_code=202, response_model=BuildQueuedOut)

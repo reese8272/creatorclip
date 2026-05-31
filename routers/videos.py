@@ -17,6 +17,9 @@ from limiter import limiter
 from models import Creator, IngestStatus, Video, VideoKind
 from worker.storage import upload_file
 from worker.tasks import start_pipeline
+from youtube.data_api import classify_video_kind, get_videos_metadata
+from youtube.ingest import probe_duration_s
+from youtube.oauth import get_valid_access_token
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -99,10 +102,30 @@ async def link_video(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Video already registered")
 
+    # Resolve kind+duration from YouTube so a manually-linked Short is not
+    # mis-bucketed as long-form (Issue 87). Falls back to long+unknown on
+    # ANY error — better to register the video than to block the user; the
+    # next catalog/analytics sync repairs the row when YT is reachable again.
+    kind = VideoKind.long
+    duration_s: float | None = None
+    try:
+        access_token = await get_valid_access_token(creator.id, session)
+        metadata = await get_videos_metadata(access_token, [youtube_video_id])
+        if metadata:
+            kind = metadata[0]["kind"]
+            duration_s = metadata[0]["duration_s"]
+    except Exception as exc:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "link_video: could not resolve kind for %s: %s", youtube_video_id, exc
+        )
+
     video = Video(
         creator_id=creator.id,
         youtube_video_id=youtube_video_id,
-        kind=VideoKind.long,
+        kind=kind,
+        duration_s=duration_s,
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
@@ -165,6 +188,12 @@ async def upload_video(
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="Video already registered")
 
+    # Probe duration from the uploaded file BEFORE the R2 PUT so we never
+    # store an unknown-kind row even if upload fails partway through.
+    # ffprobe is a header read (caps at 30s in youtube/ingest.py). (Issue 87)
+    duration_s = await asyncio.to_thread(probe_duration_s, tmp_path)
+    kind = classify_video_kind(duration_s) if duration_s is not None else VideoKind.long
+
     try:
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"
         # Offload the (possibly multi-hundred-MB) R2 PUT / disk copy so it never
@@ -176,7 +205,8 @@ async def upload_video(
     video = Video(
         creator_id=creator.id,
         youtube_video_id=youtube_video_id,
-        kind=VideoKind.long,
+        kind=kind,
+        duration_s=duration_s,
         source_uri=source_uri,
         ingest_status=IngestStatus.pending,
     )

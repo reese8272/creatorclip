@@ -366,6 +366,7 @@ def test_analytics_refresh_iterates_creators():
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),
+            patch("youtube.analytics.sync_video_catalog", new_callable=AsyncMock),
             patch(
                 "youtube.analytics.sync_video_analytics", new_callable=AsyncMock
             ) as mock_sync_vid,
@@ -485,6 +486,7 @@ def test_analytics_refresh_stamps_last_refreshed_on_success():
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),
+            patch("youtube.analytics.sync_video_catalog", new_callable=AsyncMock),
             patch("youtube.analytics.sync_video_analytics", new_callable=AsyncMock),
             patch("youtube.analytics.sync_audience_data", new_callable=AsyncMock),
             patch("worker.tasks.remaining", new_callable=AsyncMock, return_value=5000),
@@ -524,6 +526,7 @@ def test_analytics_refresh_does_not_stamp_on_quota_exhaustion():
             patch(
                 "youtube.oauth.get_valid_access_token", new_callable=AsyncMock, return_value="tok"
             ),
+            patch("youtube.analytics.sync_video_catalog", new_callable=AsyncMock),
             patch(
                 "youtube.analytics.sync_video_analytics",
                 new_callable=AsyncMock,

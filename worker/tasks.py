@@ -176,6 +176,26 @@ def refresh_youtube_analytics() -> None:
     run_async(_refresh_youtube_analytics_async())
 
 
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.sync_channel_catalog")
+def sync_channel_catalog(self, creator_id: str) -> str:
+    """Pull the creator's uploads playlist into the videos table (Issue 87).
+
+    Idempotent: the underlying sync_video_catalog skips existing
+    (creator_id, youtube_video_id) rows. YouTubeAuthError is terminal
+    (token revoked — surfaces the row deletion via the existing refresh
+    path); transient errors retry.
+    """
+    try:
+        run_async(_sync_channel_catalog_async(creator_id))
+    except YouTubeAuthError:
+        # Permanent — the token is dead. Don't retry; the next refresh tick
+        # will delete the YoutubeToken row via the existing handler.
+        raise
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
 @celery.task(name="worker.tasks.poll_clip_outcomes")
 def poll_clip_outcomes() -> None:
     """
@@ -859,10 +879,39 @@ async def _purge_stale_source_media_async() -> None:
         logger.info("Purged source media for %d video(s)", len(purged_ids))
 
 
+async def _sync_channel_catalog_async(creator_id: str) -> None:
+    """Fetch the creator's uploads playlist and upsert Video rows.
+
+    The catalog sync is the only path that resolves a video's Shorts/long
+    classification from its actual duration — every other code path either
+    counts existing rows or refreshes per-video analytics. Without this
+    task firing, a freshly-connected creator has an empty videos table and
+    the data-gate reports 0/0 forever. (Issue 87)
+    """
+    from youtube.analytics import sync_video_catalog
+    from youtube.oauth import get_valid_access_token
+
+    cid = uuid.UUID(creator_id)
+    async with db.AdminSessionLocal() as session:
+        creator = await session.get(Creator, cid)
+        if creator is None:
+            logger.warning("sync_channel_catalog: creator %s not found, skip", cid)
+            return
+        try:
+            access_token = await get_valid_access_token(creator.id, session)
+        except Exception as exc:
+            logger.warning("sync_channel_catalog: no valid token for %s: %s", cid, exc)
+            return
+
+        await sync_video_catalog(session, creator, access_token)
+        await session.commit()
+        logger.info("sync_channel_catalog: catalog synced for creator %s", cid)
+
+
 async def _refresh_youtube_analytics_async() -> None:
     from sqlalchemy import delete, select
 
-    from youtube.analytics import sync_audience_data, sync_video_analytics
+    from youtube.analytics import sync_audience_data, sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
 
     async with db.AdminSessionLocal() as session:
@@ -893,6 +942,11 @@ async def _refresh_youtube_analytics_async() -> None:
                 continue
 
             try:
+                # Pull any new uploads into the videos table BEFORE iterating
+                # per-video analytics — otherwise newly published videos stay
+                # invisible to the pipeline until the next deploy. (Issue 87)
+                await sync_video_catalog(session, creator, access_token)
+
                 videos_result = await session.execute(
                     select(Video).where(Video.creator_id == creator.id)
                 )

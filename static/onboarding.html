@@ -130,16 +130,48 @@
           : 'Link more of your published videos to unlock DNA.');
     }
 
+    // Issue 87: clicking "Refresh data status" kicks off an async catalog
+    // sync (POST /creators/me/catalog/sync) and then polls the data-gate
+    // until the row count stops growing — otherwise the gate just counts
+    // an empty videos table forever for a freshly connected creator.
+    let _gatePoll = null;
     async function refreshDataGate() {
       const el = document.getElementById('data-gate-status');
-      el.textContent = 'Checking…';
+      if (_gatePoll) { clearInterval(_gatePoll); _gatePoll = null; }
+
+      el.textContent = 'Syncing your channel…';
       try {
-        const resp = await fetch('/creators/me/data-gate', { credentials: 'include' });
-        if (resp.ok) renderDataGate(await resp.json());
-        else el.textContent = 'Could not load channel data — try again.';
-      } catch (e) {
-        el.textContent = 'Network error — try again.';
-      }
+        // Fire the sync; ignore 429 (a recent sync is still running).
+        await fetch('/creators/me/catalog/sync', { method: 'POST', credentials: 'include' });
+      } catch (e) { /* fall through — we'll still poll the gate */ }
+
+      // Poll the gate every 4s for up to ~90s, stopping early once
+      // we see the count stabilize OR ready=true.
+      let tries = 0;
+      let lastTotal = -1;
+      let stableTicks = 0;
+      const tick = async () => {
+        tries++;
+        try {
+          const resp = await fetch('/creators/me/data-gate', { credentials: 'include' });
+          if (resp.ok) {
+            const data = await resp.json();
+            renderDataGate(data);
+            const total = data.long_form_videos + data.shorts;
+            if (total > 0 && total === lastTotal) stableTicks++;
+            else stableTicks = 0;
+            lastTotal = total;
+            if (data.ready || stableTicks >= 2 || tries >= 22) {
+              clearInterval(_gatePoll); _gatePoll = null;
+            }
+          } else {
+            el.textContent = 'Could not load channel data — try again.';
+            clearInterval(_gatePoll); _gatePoll = null;
+          }
+        } catch (e) { /* keep polling */ }
+      };
+      await tick();
+      _gatePoll = setInterval(tick, 4000);
     }
 
     // After a build is kicked off, watch for the brief to land instead of asking
