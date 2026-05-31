@@ -118,6 +118,15 @@ async def callback(
 
         sync_channel_catalog.delay(str(creator.id))
 
+    from observability import log_event
+
+    log_event(
+        "auth_callback_completed",
+        creator_id=str(creator.id),
+        is_new=is_new,
+        channel_id=identity.get("channel_id"),
+    )
+
     session_token = create_session_token(creator.id)
     resp = RedirectResponse(url="/", status_code=302)
     resp.delete_cookie(_STATE_COOKIE)

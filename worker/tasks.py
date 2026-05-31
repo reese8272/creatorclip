@@ -882,15 +882,28 @@ async def _purge_stale_source_media_async() -> None:
 
 
 async def _sync_channel_catalog_async(creator_id: str) -> None:
-    """Fetch the creator's uploads playlist and upsert Video rows.
+    """Fetch the creator's uploads playlist and upsert Video rows + their metrics.
 
-    The catalog sync is the only path that resolves a video's Shorts/long
-    classification from its actual duration — every other code path either
-    counts existing rows or refreshes per-video analytics. Without this
-    task firing, a freshly-connected creator has an empty videos table and
-    the data-gate reports 0/0 forever. (Issue 87)
+    Two-phase: (1) `sync_video_catalog` upserts Video rows from the uploads
+    playlist (classifies Shorts vs long-form by duration); (2) for each video
+    that does NOT yet have a VideoMetrics row with engagement_rate, call
+    `sync_video_analytics` to populate it. Phase 2 closes the Issue 88 gap:
+    the user clicks "Refresh data status" and the data-gate / DNA build
+    immediately see ready rows instead of waiting up to an hour for the
+    Beat `refresh_youtube_analytics` to catch up.
+
+    Idempotent end-to-end:
+      - `sync_video_catalog` skips known (creator_id, youtube_video_id) pairs.
+      - Phase 2 filters to videos missing engagement_rate, so a re-run is a
+        no-op once metrics are in place.
+
+    YouTubeAuthError mid-loop is surfaced (terminal — the refresh tick will
+    delete the YoutubeToken row); other per-video errors are logged and
+    skipped so one bad video can't strand the whole catalog. (Issues 87, 88)
     """
-    from youtube.analytics import sync_video_catalog
+    from sqlalchemy import select
+
+    from youtube.analytics import sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
 
     cid = uuid.UUID(creator_id)
@@ -905,9 +918,49 @@ async def _sync_channel_catalog_async(creator_id: str) -> None:
             logger.warning("sync_channel_catalog: no valid token for %s: %s", cid, exc)
             return
 
+        # Phase 1 — catalog upsert.
         await sync_video_catalog(session, creator, access_token)
         await session.commit()
-        logger.info("sync_channel_catalog: catalog synced for creator %s", cid)
+
+        # Phase 2 — fetch metrics for any video that doesn't have them yet.
+        # Filtered query, not a global iterate-and-skip, so quota cost is bounded
+        # to truly-missing rows (re-runs are cheap).
+        unmeasured = (
+            (
+                await session.execute(
+                    select(Video)
+                    .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
+                    .where(
+                        Video.creator_id == creator.id,
+                        (VideoMetrics.video_id.is_(None))
+                        | (VideoMetrics.engagement_rate.is_(None)),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        fetched = 0
+        for video in unmeasured:
+            try:
+                await sync_video_analytics(session, video, creator, access_token)
+                fetched += 1
+            except YouTubeAuthError:
+                # Surface immediately — token is dead.
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "sync_channel_catalog: metrics fetch failed for video %s: %s",
+                    video.id,
+                    exc,
+                )
+        await session.commit()
+        logger.info(
+            "sync_channel_catalog: creator %s synced (metrics fetched for %d new video(s))",
+            cid,
+            fetched,
+        )
 
 
 async def _refresh_youtube_analytics_async() -> None:

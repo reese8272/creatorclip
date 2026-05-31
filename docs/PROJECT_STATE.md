@@ -6,8 +6,27 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 87 just closed. Queued follow-ups: AI/LLM efficiency assessment (Issue 84) and UI redesign to sleek editing-tool aesthetic (Issue 85), both user-requested earlier; both now benefit from Issue 86's free cache-hit observability + token streaming.
-**Last completed**: Issue 87 — Catalog sync wiring + 180s Shorts threshold. Closed the SEV-0 onboarding bug surfaced live on `reesepludwick@gmail.com` / "backboard media" (20 Shorts + 3 long-form, data-gate reporting 0/0). `youtube/analytics.py::sync_video_catalog` was dead code — `grep -rn` returned exactly one hit (the definition itself). New `sync_channel_catalog` Celery task wraps it, enqueued (a) from the OAuth callback for new creators and (b) prepended to each creator's iteration of `_refresh_youtube_analytics_async`; new `POST /creators/me/catalog/sync` endpoint (5/min, 202+task_id) wires the onboarding "Refresh data status" button into a true sync trigger. Compounding fixes: `classify_video_kind` now reads `SHORTS_MAX_DURATION_S=180` (was hardcoded `<=60s` — YouTube raised the Shorts max to 180s in Oct 2024); `/videos/link` resolves kind via `get_videos_metadata`; `/videos/upload` probes duration locally via `probe_duration_s` before R2 PUT. 9 new unit tests + 1 OFF_COURSE_BUGS row closed. 501 passed / 1 skipped / 85 deselected; ruff 0 / mypy 0.
+**Active issue**: _(none in flight)_ — Issue 88 just closed. Queued: Issues 89 (silent upload failure on low balance), 90 (catalog-synced videos polluting /videos list), 91 ("Clips ready" counter wrong) — all SEV-1/2 spawned by Issue 88's targeted audit. Also AI/LLM efficiency assessment (Issue 84) and UI redesign (Issue 85) still queued.
+**Last completed**: Issue 88 — DNA filter parity + business-event observability. Closed the SEV-0 logical bug surfaced live on `reesepludwick@gmail.com` ("data-gate said 3 long + 20 shorts, build said insufficient 0/0"). Root cause: `check_data_gate` counted every Video row by kind; `rank_videos` required `ingest_status==done` AND metrics — two queries on the same table with diverging predicates. Fixes: `rank_videos` no longer requires `ingest_status==done` (DNA needs metrics only, not local-pipeline state); `check_data_gate` joins VideoMetrics + uses OR semantics (matches `build_patterns` raise condition); `sync_channel_catalog` chains a phase-2 `sync_video_analytics` call so metrics are present immediately (was waiting up to an hour for Beat refresh). New `observability.log_event(event, **fields)` helper emits structured JSON; wired into 7 user surfaces (auth callback, link, upload, sync_catalog, build_dna, confirm_dna, feedback) + diagnostic `dna_build_insufficient_data` event with total/metered/per-kind counts. Targeted display-vs-filter audit returned 4 findings (2 SEV-1, 2 SEV-2) — one fixed inline (data-gate `ready` used AND, blocking long-only/shorts-only creators), three filed as Issues 89-91. 8 new tests. **509 passed / 1 skipped / 85 deselected**; ruff 0 / mypy 0.
+**Blocked**: _(none)_
+
+> **Closed Issue 88 — DNA filter parity + business-event observability** (2026-05-30):
+> Detailed in `docs/DECISIONS.md` (2026-05-30 entry). Triggered by a live user
+> report: connecting `reesepludwick@gmail.com` showed 3 long + 20 shorts in
+> step 2 but the DNA build said "Insufficient data: 0 long, 0 shorts." Two
+> queries silently disagreed — the data-gate counted every Video row, the
+> DNA build required `ingest_status==done` (set only by the local-clip pipeline,
+> never by catalog sync) AND metrics. The fix: aligned both paths on a single
+> predicate (metrics-only); chained metrics fetch into `sync_channel_catalog`
+> so the user doesn't wait an hour for the Beat refresh. Then added a class
+> of debug observability: `log_event(event, **fields)` helper + diagnostic
+> log on the insufficient-data raise + 7 wired user surfaces. A targeted
+> subagent audit on the same failure shape found a SEV-1 in `check_data_gate.ready`
+> (used AND while the build accepts OR — blocked long-only creators); fixed
+> inline. Three other findings spawned Issues 89, 90, 91. All gates green:
+> ruff 0, mypy 0, **509 passed / 1 skipped / 85 deselected** (+8 new).
+
+> **Closed Issue 87 — Catalog sync wiring + 180s Shorts threshold** (2026-05-30): Closed the SEV-0 onboarding bug surfaced live on `reesepludwick@gmail.com` / "backboard media" (20 Shorts + 3 long-form, data-gate reporting 0/0). `youtube/analytics.py::sync_video_catalog` was dead code — `grep -rn` returned exactly one hit (the definition itself). New `sync_channel_catalog` Celery task wraps it, enqueued (a) from the OAuth callback for new creators and (b) prepended to each creator's iteration of `_refresh_youtube_analytics_async`; new `POST /creators/me/catalog/sync` endpoint (5/min, 202+task_id) wires the onboarding "Refresh data status" button into a true sync trigger. Compounding fixes: `classify_video_kind` now reads `SHORTS_MAX_DURATION_S=180` (was hardcoded `<=60s` — YouTube raised the Shorts max to 180s in Oct 2024); `/videos/link` resolves kind via `get_videos_metadata`; `/videos/upload` probes duration locally via `probe_duration_s` before R2 PUT. 9 new unit tests + 1 OFF_COURSE_BUGS row closed. 501 passed / 1 skipped / 85 deselected; ruff 0 / mypy 0.
 **Blocked**: _(none)_
 
 > **Closed Issue 87 — Catalog sync wiring + 180s Shorts threshold** (2026-05-30):
@@ -683,6 +702,10 @@ Updated after every issue closes.
 | 40 | Streaming upload + DoS guard | HARDENING | ✅ Done | 1 MB streaming chunk loop in upload_video; 413 + tempfile unlink on oversize; RSS delta test; 3 new tests in test_videos_upload_streaming.py; 314 tests pass |
 | 44 | Auth boundary hardening — malformed sub 401, DELETE /me rate limit, MultiFernet rotation | SEC | ✅ Done | auth.py ValueError/KeyError catch; routers/auth.py 5/hour on DELETE /me; crypto.py MultiFernet + TokenDecryptError; +8 tests |
 | 87 | Catalog sync wiring + 180s Shorts threshold (SEV-0 onboarding bug) | HARDENING | ✅ Done | New `sync_channel_catalog` Celery task wired into OAuth callback + Beat refresh + new `POST /me/catalog/sync` endpoint; `/videos/link` + `/videos/upload` resolve kind from real duration; `SHORTS_MAX_DURATION_S=180` configurable; 9 new tests; surfaced live on `reesepludwick@gmail.com`/"backboard media"; DECISIONS.md entry |
+| 88 | DNA filter parity + business-event observability (SEV-0 logical bug) | HARDENING | ✅ Done | `rank_videos` no longer requires `ingest_status==done`; `check_data_gate` joins VideoMetrics + uses OR; `sync_channel_catalog` chains metrics fetch (no Beat wait); new `observability.log_event()` helper + diagnostic on insufficient-data raise + 7 wired surfaces; targeted audit spawned Issues 89-91; 8 new tests |
+| 89 | Balance pre-check vs deduction mismatch — silent upload failures (SEV-1, spawned by Issue 88 audit) | HARDENING | 🔲 Not started | `check_positive_balance` raises only on `<= 0`; deduction needs `>= video_minutes`. Low-balance creator → upload succeeds → silent failed status with no message |
+| 90 | Catalog-synced videos pollute /videos library list (SEV-2, spawned by Issue 88 audit) | HARDENING | 🔲 Not started | `list_videos` returns every Video row; catalog-only rows have no `source_uri` and will never transition out of pending. Dashboard polling loop hammers `/status` forever |
+| 91 | "Clips ready" dashboard counter ignores render_status (SEV-2, spawned by Issue 88 audit) | HARDENING | 🔲 Not started | Counter shows total clips regardless of render; reviewer can only play rendered clips. User clicks into "12 ready", scrolls past 12 placeholders |
 
 ---
 

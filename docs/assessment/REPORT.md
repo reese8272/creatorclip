@@ -130,3 +130,18 @@ Net SEV1 trend: **−2** (4 prior closed; 2 new — one is the Issue-86 surface 
 3. **Collapse the SSE 404/403 enumeration oracle** (`routers/tasks.py:131-138`, SEV2) **and** validate `Last-Event-ID` against `^\d+-\d+$` before XREAD (`routers/tasks.py:140` + `worker/progress.py:204`, SEV2). Two-line and ~five-line fixes; both directly hardening the newly-shipped SSE surface.
 4. **Dockerfile production hardening** (`Dockerfile:1-34, :34`, two SEV2s). Add the non-root `app` user + flip the default CMD to `gunicorn -k uvicorn.workers.UvicornWorker -w 4`. Defense-in-depth that any pre-public-launch checklist would require; cheap to do now while Issue 86's deploy is still warm.
 5. **Run the Locust-behind-PgBouncer load test** (`tests/perf/`). This is the **only** way to convert scale axes A/B/C/E/F from ⚠️ to ✅ — no amount of code reading can confirm the pool math holds, the SSE Redis pool doesn't exhaust at target concurrency, or backpressure degrades gracefully under contention. This is the gating action between **CONDITIONAL** and **YES**.
+
+---
+
+## Targeted audit (2026-05-30): display-vs-filter mismatches (post Issue 88)
+
+Issue 88 closed a SEV-0 in which `youtube/analytics.py::check_data_gate` counted every Video row while `dna/builder.py::rank_videos` required metrics — gate said "ready", build said "0/0". A focused subagent audit looked for the same shape on three other surfaces (clip generation, review feedback, billing balance) plus the just-fixed data-gate path. Four findings, all the same shape; all promoted to `docs/issues.md` (89, 90, 91) or fixed inline with this commit.
+
+| # | Title | Severity | Where | User-visible symptom | Status |
+|---|-------|----------|-------|----------------------|--------|
+| 1 | Data-gate `ready` uses AND, builder accepts OR | SEV-1 | `youtube/analytics.py:324`, `dna/builder.py:241` | Long-only or shorts-only creator sees "not ready" but build would succeed | ✅ Fixed inline with Issue 88 |
+| 2 | Balance pre-check is `>0`, deduction needs `>= video_minutes` | SEV-1 | `billing/ledger.py:173,144`, `routers/videos.py:163`, `routers/clips.py:139` | Low-balance creator uploads a 60-min video, sees "Uploaded — processing…", then silent `failed` in DB | Spawned **Issue 89** |
+| 3 | Catalog-synced videos pollute `/videos` list | SEV-2 | `routers/videos.py:60`, `routers/clips.py:75` | Dashboard shows "247 videos, all pending" after Issue 87 catalog sync; polling loop hammers `/status` for rows that will never transition | Spawned **Issue 90** |
+| 4 | "Clips ready" counter ignores `render_status` | SEV-2 | `static/index.html:196`, `static/review.html:154` | Dashboard says "12 clips ready", reviewer scrolls past 12 placeholders showing "(not yet rendered)" | Spawned **Issue 91** |
+
+Summary: 2 SEV-1s (one fixed, one filed), 2 SEV-2s (both filed), 0 SEV-0s. All four share the failure mode "count/boolean shown to user is computed from a broader predicate than the consumer enforces" — exactly the shape the Issue 88 fix codified as a class. The pattern likely recurs as the codebase grows; the `log_event` + diagnostic logging shipped with Issue 88 means the next instance is one log line away from the answer instead of a code-bisect.

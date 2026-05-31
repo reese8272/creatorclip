@@ -102,6 +102,36 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+_event_logger = logging.getLogger("event")
+
+
+def log_event(event: str, **fields: Any) -> None:
+    """Emit one structured business-event log line.
+
+    Use at every load-bearing user-action surface so production debugging is
+    `grep event=dna_build_started creator_id=X`, not a Cloudflare-tunnel +
+    code-bisect treasure hunt. Fields land as top-level JSON keys in
+    JsonLogFormatter mode (i.e. searchable as `creator_id:"..."` in
+    aggregators) and as a `key=value` tail in dev text mode.
+
+    Example:
+        log_event("dna_build_started", creator_id=str(creator.id), task_id=tid)
+
+    Conventions:
+        - `event` is a short snake_case noun_verb (created, fetched, started).
+        - Fields should be small primitives — never raw request bodies, tokens,
+          or PII. The same JsonLogFormatter that emits these honors the
+          existing PII / token-leak compliance rules.
+
+    Issue 88.
+    """
+    extra = {"event": event, **fields}
+    if _event_logger.isEnabledFor(logging.INFO):
+        # `event=<name>` also leads the message so dev text mode is greppable.
+        msg_parts = [f"event={event}"] + [f"{k}={v}" for k, v in fields.items()]
+        _event_logger.info(" ".join(msg_parts), extra=extra)
+
+
 def configure_logging(*, json_logs: bool, level: int = logging.INFO) -> None:
     """Install the request-id filter + (optionally) JSON formatting on the root logger.
 

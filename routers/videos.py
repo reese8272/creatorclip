@@ -131,6 +131,17 @@ async def link_video(
     session.add(video)
     await session.commit()
     await session.refresh(video)
+
+    from observability import log_event
+
+    log_event(
+        "video_linked",
+        creator_id=str(creator.id),
+        video_id=str(video.id),
+        youtube_video_id=youtube_video_id,
+        kind=kind.value,
+        duration_s=duration_s,
+    )
     return {"video_id": str(video.id), "status": video.ingest_status.value}
 
 
@@ -215,6 +226,18 @@ async def upload_video(
     await session.refresh(video)
 
     start_pipeline(str(video.id))
+
+    from observability import log_event
+
+    log_event(
+        "video_uploaded",
+        creator_id=str(creator.id),
+        video_id=str(video.id),
+        youtube_video_id=youtube_video_id,
+        kind=kind.value,
+        duration_s=duration_s,
+        bytes_received=bytes_received,
+    )
 
     return {"video_id": str(video.id), "status": video.ingest_status.value}
 

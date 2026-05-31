@@ -9,13 +9,12 @@ import uuid
 from collections import Counter
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models import (
     AudienceActivity,
-    IngestStatus,
     RetentionCurve,
     Signals,
     Transcript,
@@ -102,15 +101,22 @@ def _optimal_upload_gap_h(activity_rows: list) -> float | None:
 
 async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict]:
     """
-    Return all ingested+metered videos sorted descending by weighted_score
+    Return all metered videos sorted descending by weighted_score
     (engagement_rate × recency_weight).
+
+    Readiness for DNA = a YouTube-side metrics row (views / engagement) exists.
+    `ingest_status` (the local clip-engine pipeline state — download, transcribe,
+    signals) is intentionally NOT a filter here: a catalog-synced video has
+    `ingest_status=pending` forever unless the creator actually clips it, but
+    its metrics are perfectly usable for DNA analysis. Requiring `ingest_status=done`
+    here was the cause of the Issue 88 bug — the data-gate showed videos and
+    the build said insufficient. (Issue 88)
     """
     result = await session.execute(
         select(Video, VideoMetrics)
         .join(VideoMetrics, VideoMetrics.video_id == Video.id)
         .where(
             Video.creator_id == creator_id,
-            Video.ingest_status == IngestStatus.done,
             VideoMetrics.engagement_rate.is_not(None),
         )
         # Bound the fetch to the most-recent N so a huge catalog can't exhaust worker
@@ -233,6 +239,36 @@ async def build_patterns(
     shorts = [v for v in ranked if v["kind"] == VideoKind.short.value]
 
     if len(longs) < settings.MIN_VIDEOS_FOR_DNA and len(shorts) < settings.MIN_SHORTS_FOR_DNA:
+        # Issue 88 diagnostic: when the build fails the readiness check, log the
+        # bucket breakdown so the next "data-gate said 23 but build says 0/0"
+        # report is one log line away from the answer (not a code-bisect).
+        from observability import log_event
+
+        total_videos = (
+            await session.execute(
+                select(func.count(Video.id)).where(Video.creator_id == creator_id)
+            )
+        ).scalar_one()
+        metered_videos = (
+            await session.execute(
+                select(func.count(Video.id))
+                .join(VideoMetrics, VideoMetrics.video_id == Video.id)
+                .where(
+                    Video.creator_id == creator_id,
+                    VideoMetrics.engagement_rate.is_not(None),
+                )
+            )
+        ).scalar_one()
+        log_event(
+            "dna_build_insufficient_data",
+            creator_id=str(creator_id),
+            total_videos_in_db=total_videos,
+            metered_videos=metered_videos,
+            ranked_longs=len(longs),
+            ranked_shorts=len(shorts),
+            min_longs=settings.MIN_VIDEOS_FOR_DNA,
+            min_shorts=settings.MIN_SHORTS_FOR_DNA,
+        )
         raise ValueError(
             f"Insufficient data for DNA build: {len(longs)} long videos "
             f"(min {settings.MIN_VIDEOS_FOR_DNA}), {len(shorts)} shorts "

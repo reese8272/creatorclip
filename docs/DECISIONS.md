@@ -5,6 +5,136 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-30 — Issue 88: DNA filter parity + business-event observability + display-vs-filter audit
+
+### What was decided
+
+Three coupled fixes triggered by a SEV-0 logical bug user-reported live:
+`reesepludwick@gmail.com` saw step-2 data-gate show "23 videos" but step-4 DNA
+build said "0 long, 0 shorts insufficient." Root cause was structural — the
+display query and the consumer's predicate had silently diverged.
+
+1. **Aligned the DNA-readiness predicate.** `rank_videos` no longer requires
+   `Video.ingest_status==done` — that's local-clip-pipeline state, not a DNA
+   prerequisite. DNA only needs YouTube-side metrics (`engagement_rate`).
+   `check_data_gate` now joins `VideoMetrics` and applies the same predicate,
+   so the gate cannot disagree with the build.
+
+2. **Closed the metrics-lag window.** `sync_channel_catalog` now runs in two
+   phases: (1) catalog upsert (unchanged from Issue 87); (2) for each video
+   without `engagement_rate`, call `sync_video_analytics` so metrics are
+   present immediately. Previously a freshly-connected creator waited up to
+   an hour for the Beat refresh to populate metrics.
+
+3. **Business-event structured logging.** New
+   `observability.log_event(event: str, **fields)` helper emits one JSON
+   line with `event=<snake_case_name>` and arbitrary fields, promoted to
+   top-level JSON keys by `JsonLogFormatter`. Wired into the seven
+   load-bearing user surfaces: `auth.callback`, `videos.link`, `videos.upload`,
+   `creators.sync_catalog`, `creators.build_dna`, `creators.confirm_dna`,
+   `review.feedback`. Plus a diagnostic event `dna_build_insufficient_data`
+   that fires on the readiness raise with `(total_videos, metered_videos,
+   ranked_longs, ranked_shorts, min_longs, min_shorts)` — so the next
+   "data-gate said N but build said 0" report is one log line away from the
+   answer.
+
+4. **Targeted display-vs-filter assessment.** Subagent audit of the four
+   surfaces most likely to exhibit the same shape (catalog/data-gate, clip
+   generation, review feedback, billing balance) returned four findings —
+   two SEV-1, two SEV-2 — all the same class. One was fixed inline with this
+   commit (`check_data_gate.ready` used AND while the builder accepts OR —
+   blocked long-only or shorts-only creators from onboarding); the other
+   three spawned Issues 89, 90, 91. Section appended to
+   `docs/assessment/REPORT.md`.
+
+### Why
+
+The user-observed sequence — sync shows 23 videos, DNA says 0 — is a
+credibility-corroding bug that proves we don't trust our own data. Two
+queries on the same table, filtering differently, produced UI that lied.
+The fix codifies "display and business logic share the predicate" as a
+class so future instances (the three spinoff issues) are obvious. The
+business-event logging closes the observability gap that made this bug
+require a screenshot + code bisect to debug; the next instance is
+`grep event=dna_build_insufficient_data` against the live logs.
+
+### Industry standard checked
+
+- **Structured business events**: Datadog / Honeycomb / OpenTelemetry-Logs
+  convention is `{event, actor_id, **domain_fields}` keys in JSON, not free
+  text. Existing `JsonLogFormatter` (Issue 75f) already promotes arbitrary
+  `extra=` fields, so `log_event` is a thin wrapper, not new infrastructure.
+- **Diagnostic breakdown on "no results"**: standard SRE practice — when a
+  query that should return rows returns zero, log the row counts at each
+  filter step so the error is self-explanatory in production logs.
+- **Single source of truth for predicates**: Martin Fowler / Refactoring
+  guidance on duplicated business rules. The fix isn't "extract a function"
+  yet (the two queries diverge for legitimate reasons — one is `COUNT`, one
+  is full SELECT+ORDER+LIMIT) but they now share the same WHERE clause
+  semantically. Future iteration could extract a `dna_readiness_filter()`
+  helper if a third caller appears.
+
+### Alternatives ruled out
+
+- **Fix only the filter mismatch and defer observability**: the next async-
+  pipeline gap surfaces the same way. Business-event logs pay for themselves
+  the second time.
+- **Add Sentry or external error tracker for this**: not a crash — the
+  `ValueError` raise is correct. Need is logical observability (state at
+  decision points), not exception capture.
+- **Add OpenTelemetry distributed tracing now**: tracked follow-up from
+  Issue 75f, but needs a collector + bigger lift. Business-event logs cover
+  this case at a fraction of the effort.
+- **Tighten `rank_videos` to require `ingest_status==done`**: this would have
+  broken DNA for every catalog-synced creator (the entire point of Issue 87).
+  The right fix is the predicate to NOT depend on local-pipeline state.
+- **Defer the data-gate AND→OR fix to a separate issue**: same shape, same
+  file, would-have-been-cheap-now → expensive-later. Fixing inline.
+
+### Tradeoffs accepted
+
+- **The metrics chain in `sync_channel_catalog` makes the sync more expensive**:
+  one YouTube Analytics call per unmeasured video. Bounded by the
+  `engagement_rate IS NULL` filter so re-runs are cheap; cost is proportional
+  to "new videos since last sync," not catalog size.
+- **`log_event` is text-based for now**: in dev text-log mode, the message is
+  `event=foo key=value` (greppable). In JSON mode it's promoted to top-level
+  keys (queryable). Not a full schema — that's an OpenTelemetry-shaped lift.
+- **Three spinoff issues are filed but not fixed**: Issues 89 (silent
+  upload-failure for low-balance creators), 90 (catalog-synced videos
+  polluting the dashboard list), 91 ("Clips ready" counter ignoring
+  render_status). Each is independently scoped; bundling would have made
+  this commit too large to review.
+
+### Source / evidence
+
+- Live user evidence: `reesepludwick@gmail.com` / "backboard media" reported
+  the bug post-Issue-87 deploy. Screenshot attached to session showed
+  step-4 build button + spinner.
+- Code citations: `dna/builder.py:113` (the dead filter), `youtube/analytics.py:288`
+  (the diverging count), `worker/tasks.py:884` (the missing phase-2 chain).
+- Audit findings: see `docs/assessment/REPORT.md` (2026-05-30 targeted audit
+  section) and Issues 89-91.
+
+### Files
+
+- `dna/builder.py::rank_videos` — drop ingest_status filter; diagnostic log on raise
+- `youtube/analytics.py::check_data_gate` — JOIN VideoMetrics; OR semantics on `ready`
+- `worker/tasks.py::_sync_channel_catalog_async` — phase-2 metrics chain
+- `observability.py` — new `log_event(event, **fields)` helper
+- `routers/auth.py`, `routers/videos.py`, `routers/creators.py`, `routers/review.py`
+  — emit business events at the seven user-action surfaces
+- `tests/test_issue_88_filter_parity.py` — 8 new tests
+- `tests/test_catalog_sync.py` — Issue 87 test updated for phase-2 commit
+- `docs/assessment/REPORT.md` — new "targeted audit" section
+- `docs/issues.md` — Issue 88 entry + Issues 89-91 (spinoffs)
+
+### Date
+
+2026-05-30
+
+---
+
 ## 2026-05-30 — Issue 87: Catalog sync wiring + 180s Shorts threshold
 
 ### What was decided

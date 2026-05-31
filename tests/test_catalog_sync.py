@@ -62,6 +62,10 @@ async def test_sync_channel_catalog_calls_sync_video_catalog_and_commits():
     fake_session = MagicMock()
     fake_session.get = AsyncMock(return_value=fake_creator)
     fake_session.commit = AsyncMock()
+    # Issue 88: phase 2 queries for unmetered videos. Empty result = no metrics fetched.
+    empty_phase2 = MagicMock()
+    empty_phase2.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    fake_session.execute = AsyncMock(return_value=empty_phase2)
 
     # AdminSessionLocal() returns an async context manager
     fake_ctx = MagicMock()
@@ -80,7 +84,8 @@ async def test_sync_channel_catalog_calls_sync_video_catalog_and_commits():
         await _sync_channel_catalog_async(str(creator_id))
 
     sync_catalog_mock.assert_awaited_once()
-    fake_session.commit.assert_awaited_once()
+    # Two commits: one after phase 1 (catalog upsert), one after phase 2 (metrics chain).
+    assert fake_session.commit.await_count == 2
 
 
 @pytest.mark.asyncio

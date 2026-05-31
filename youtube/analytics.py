@@ -286,26 +286,48 @@ async def sync_audience_data(session: AsyncSession, creator: Creator, access_tok
 
 
 async def check_data_gate(session: AsyncSession, creator_id) -> dict:
+    """Return per-kind counts of videos READY for DNA analysis.
+
+    "Ready" = the video has a VideoMetrics row with a non-null engagement_rate.
+    This is the same predicate `dna.builder.rank_videos` uses — display and
+    business logic share the source of truth so the gate cannot disagree with
+    the build. (Issue 88: pre-fix, this counted every Video row regardless of
+    metrics presence, so the gate said "ready" while the build said "0/0".)
+    """
     long_result = await session.execute(
-        select(func.count(Video.id)).where(
-            Video.creator_id == creator_id, Video.kind == VideoKind.long
+        select(func.count(Video.id))
+        .join(VideoMetrics, VideoMetrics.video_id == Video.id)
+        .where(
+            Video.creator_id == creator_id,
+            Video.kind == VideoKind.long,
+            VideoMetrics.engagement_rate.is_not(None),
         )
     )
     long_count: int = long_result.scalar_one()
 
     short_result = await session.execute(
-        select(func.count(Video.id)).where(
-            Video.creator_id == creator_id, Video.kind == VideoKind.short
+        select(func.count(Video.id))
+        .join(VideoMetrics, VideoMetrics.video_id == Video.id)
+        .where(
+            Video.creator_id == creator_id,
+            Video.kind == VideoKind.short,
+            VideoMetrics.engagement_rate.is_not(None),
         )
     )
     short_count: int = short_result.scalar_one()
 
+    # `ready` matches `dna.builder.build_patterns`: the build raises only when
+    # BOTH buckets fall below their min — i.e. EITHER bucket above its min is
+    # enough to build. Pre-Issue-88, this used AND, so a creator with 10 longs
+    # + 0 shorts (or vice-versa) saw "not ready" in onboarding while the build
+    # would have succeeded. Same shape as the original Issue 88 bug —
+    # surfaced by the targeted display-vs-filter assessment. (Issue 88)
     return {
         "long_form_videos": long_count,
         "shorts": short_count,
         "long_form_ready": long_count >= settings.MIN_VIDEOS_FOR_DNA,
         "shorts_ready": short_count >= settings.MIN_SHORTS_FOR_DNA,
         "ready": (
-            long_count >= settings.MIN_VIDEOS_FOR_DNA and short_count >= settings.MIN_SHORTS_FOR_DNA
+            long_count >= settings.MIN_VIDEOS_FOR_DNA or short_count >= settings.MIN_SHORTS_FOR_DNA
         ),
     }

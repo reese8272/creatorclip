@@ -156,9 +156,15 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     the resulting Video rows. Rate-limited tightly (5/min) because every
     invocation costs YouTube quota. (Issue 87)
     """
+    from observability import log_event
     from worker.tasks import sync_channel_catalog
 
     task = sync_channel_catalog.delay(str(creator.id))
+    log_event(
+        "catalog_sync_requested",
+        creator_id=str(creator.id),
+        task_id=task.id,
+    )
     return {"task_id": task.id, "status": "queued"}
 
 
@@ -172,11 +178,17 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     owns the task before opening the event stream — prevents cross-creator
     stream attachment via guessed/leaked task ids.
     """
+    from observability import log_event
     from worker import progress
     from worker.tasks import build_dna as build_dna_task
 
     task = build_dna_task.delay(str(creator.id))
     await progress.aset_owner(task.id, str(creator.id))
+    log_event(
+        "dna_build_requested",
+        creator_id=str(creator.id),
+        task_id=task.id,
+    )
     return {
         "task_id": task.id,
         "status": "queued",
@@ -228,6 +240,15 @@ async def confirm_dna(
         profile = await confirm_draft(session, creator.id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    from observability import log_event
+
+    log_event(
+        "dna_confirmed",
+        creator_id=str(creator.id),
+        dna_id=str(profile.id),
+        version=profile.version,
+    )
     return {"id": str(profile.id), "version": profile.version, "status": profile.status.value}
 
 

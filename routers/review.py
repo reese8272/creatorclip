@@ -62,7 +62,14 @@ async def submit_feedback(
     await session.commit()
     await session.refresh(feedback)
 
-    logger.info("feedback: creator=%s clip=%s action=%s", creator.id, clip_id, body.action.value)
+    from observability import log_event
+
+    log_event(
+        "clip_feedback_submitted",
+        creator_id=str(creator.id),
+        clip_id=str(clip_id),
+        action=body.action.value,
+    )
 
     # Retrain the creator's preference model so ranking adapts to this feedback.
     # The task self-debounces (no-op without new trainable labels), so enqueuing

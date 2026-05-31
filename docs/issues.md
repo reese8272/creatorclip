@@ -1885,6 +1885,92 @@ threshold (YouTube raised the official max to 180s in October 2024).
 
 ---
 
+## Issue 88: DNA filter parity + business-event observability (SEV-0 logical bug)
+**Status**: ✅ Done (2026-05-30)
+
+**The bug**: User reported live — `reesepludwick@gmail.com` connected, the
+onboarding step-2 data-gate showed "3 long-form videos, 20 Shorts ready", but
+clicking "Build Creator DNA" raised "Insufficient data: 0 long videos, 0
+shorts." Two queries on the `videos` table filtered differently for "what
+exists" vs "what's usable":
+- `youtube/analytics.py:288 check_data_gate` counted every Video row by kind.
+- `dna/builder.py:113 rank_videos` required `ingest_status==done` AND
+  `engagement_rate IS NOT NULL`.
+
+The catalog sync from Issue 87 creates rows with `ingest_status=pending` (the
+local-clip-pipeline state, not a DNA prerequisite) and doesn't fetch metrics
+until the hourly Beat refresh. So the gate cheerfully said "ready" while the
+build couldn't see a single eligible video.
+
+**Files**:
+- `dna/builder.py::rank_videos` — drop `ingest_status==done` filter
+- `dna/builder.py::build_patterns` — diagnostic `dna_build_insufficient_data` event on raise
+- `youtube/analytics.py::check_data_gate` — JOIN VideoMetrics; OR semantics on `ready`
+- `worker/tasks.py::_sync_channel_catalog_async` — phase 2: fetch metrics for unmeasured videos
+- `observability.py` — new `log_event(event, **fields)` helper
+- `routers/auth.py`, `routers/videos.py`, `routers/creators.py`, `routers/review.py` — emit events at 7 user surfaces
+- `tests/test_issue_88_filter_parity.py` — 8 new tests
+- `tests/test_catalog_sync.py` — updated for phase-2 commit
+- `docs/assessment/REPORT.md` — new targeted-audit section
+- `docs/DECISIONS.md`, `docs/PROJECT_STATE.md`, `docs/issues.md` (Issues 89-91 spinoffs)
+
+**Acceptance criteria**:
+- [x] `rank_videos` does NOT require `ingest_status==done` (test asserts WHERE excludes it)
+- [x] `check_data_gate` joins VideoMetrics; same predicate as `rank_videos`
+- [x] `check_data_gate.ready` uses OR (matches `build_patterns` AND-only-raise semantics)
+- [x] `sync_channel_catalog` chains `sync_video_analytics` for unmeasured videos (no metrics wait)
+- [x] `log_event(event, **fields)` emits structured JSON; promoted to top-level keys in production
+- [x] Wired into 7 surfaces: auth callback, link, upload, sync_catalog, build_dna, confirm_dna, feedback
+- [x] Diagnostic `dna_build_insufficient_data` event includes total/metered/per-kind counts
+- [x] Targeted display-vs-filter audit complete; SEV-1+ findings filed as Issues 89-91
+- [x] All gates green: ruff 0, mypy 0, **509 passed / 1 skipped / 85 deselected** (+8 new)
+- [x] DECISIONS, SOT, PROJECT_STATE, assessment REPORT updated
+
+---
+
+## Issue 89: Balance pre-check vs deduction mismatch — silent failed uploads (SEV-1)
+**Status**: 🔲 Not started (surfaced by Issue 88's targeted assessment)
+
+**What**: `billing/ledger.py:173 check_positive_balance` raises 402 only when `balance <= 0`. The actual `deduct_for_video` (`billing/ledger.py:144`) requires `balance >= video_minutes(duration_s)` (e.g. 60 minutes for a 60-min video). Called from `routers/videos.py:163` (`upload_video`) and `routers/clips.py:139` (`render_clip`). A creator with 1-minute balance uploading a 60-minute video passes the pre-check, the upload completes, then `_ingest_async`'s deduction silently 402s inside the Celery task; `RefundOnFailureTask` runs but has nothing to refund. The user sees "failed" with no actionable message.
+
+**Files**: `billing/ledger.py`, `routers/videos.py`, `routers/clips.py`, `tests/test_billing*.py`.
+
+**Acceptance criteria**:
+- [ ] New `check_balance_for_minutes(creator_id, minutes_needed, session)` helper that raises 402 with `"This video needs N minutes; you have M"`.
+- [ ] `/videos/upload` calls it AFTER probe_duration_s (line 205) with `video_minutes(duration_s)`.
+- [ ] `/clips/{id}/render` calls it with `video_minutes(clip duration)` before enqueuing.
+- [ ] Integration test: 1-minute creator, 60-min video → 402 BEFORE upload completes; no ledger row written.
+- [ ] User-facing copy on the 402 surfaces the gap (currently a generic "Insufficient balance").
+
+---
+
+## Issue 90: Catalog-synced videos pollute /videos library list (SEV-2)
+**Status**: 🔲 Not started (surfaced by Issue 88's targeted assessment)
+
+**What**: After Issue 87 catalog sync ships, a creator with 200+ uploads will see "200 videos, all pending" on the dashboard. `routers/videos.py:60 list_videos` returns every Video row regardless of `source_uri` / `ingest_status`. The dashboard's polling loop (`static/index.html:267-279`) keeps hitting `/status` for catalog-only rows that will NEVER transition (no `start_pipeline` was called — they're DNA-only references). Looks broken.
+
+**Files**: `routers/videos.py`, `static/index.html`, `tests/test_videos*.py`.
+
+**Acceptance criteria**:
+- [ ] Either (a) exclude `source_uri IS NULL` rows from `/videos` by default (treat as DNA-only); OR (b) tag them with a distinct "catalog" badge + suppress the polling loop + hide the "Generate clips" button.
+- [ ] Dashboard "Videos in library" count reflects the user's mental model (clippable videos), not the full catalog.
+- [ ] Documented in `docs/SOT.md` data-model section so the meaning of `source_uri IS NULL` is canonical.
+
+---
+
+## Issue 91: "Clips ready" dashboard counter ignores render_status (SEV-2)
+**Status**: 🔲 Not started (surfaced by Issue 88's targeted assessment)
+
+**What**: Dashboard counter `clipsReadyCount += clips.length` (`static/index.html:196`) counts every clip regardless of render state. Reviewer (`static/review.html:154`) only plays clips with `render_uri`; un-rendered clips show "(not yet rendered)" with an empty player. Render must be triggered manually per-clip via `/clips/{id}/render` (`routers/clips.py:130`) — NOT auto-chained after `generate_clips` in `worker/tasks.py:136`. So most clips will be `RenderStatus.pending` immediately after generation.
+
+**Files**: `static/index.html`, `routers/clips.py`, `tests/test_clips*.py`.
+
+**Acceptance criteria**:
+- [ ] Either (a) add a `?render_status=done` query param to `GET /videos/{id}/clips` and have the dashboard use it for the counter; OR (b) have the dashboard JS filter `clips.filter(c => c.render_status === 'done').length`.
+- [ ] Counter label changed to "Clips rendered" (or similar) to match what it actually counts.
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
