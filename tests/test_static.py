@@ -281,37 +281,94 @@ def test_link_video_input_accepts_full_urls():
     assert extractor_call, "linkVideo() must call extractYouTubeId() on the raw input"
 
 
-def test_pricing_page_renders_without_missing_stylesheet():
-    """Wave 7: pricing.html previously linked /static/style.css which did
-    not exist in the repo, so every var(--…) below resolved to the empty
-    string and the page rendered in browser defaults (Times New Roman,
-    blue underlined links — captured live by the user on autoclip.studio
-    2026-05-31).
+def test_design_tokens_file_exists_with_canonical_linear_palette():
+    """Issue 99 Phase A: static/_design-tokens.css is the canonical
+    design system. Pin (a) the file exists, (b) it imports Inter +
+    JetBrains Mono, (c) the Linear-locked palette values are defined
+    so a future "let's brighten this" PR can't silently regress the
+    direction the user explicitly picked from the 8-option survey.
 
-    Pin both halves of the fix: the broken link is gone, AND the CSS
-    variables the page uses are defined in a :root block.
+    See docs/DECISIONS.md "2026-05-31 — Issue 99 design direction"
+    for the full rationale and what was rejected.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "_design-tokens.css").read_text()
+
+    # Google Fonts import for Inter + JetBrains Mono with font-display: swap
+    # so the system fallback renders instantly while the variable fonts load.
+    assert "fonts.googleapis.com" in src, (
+        "_design-tokens.css must @import Inter + JetBrains Mono from "
+        "Google Fonts (the picked typography pairing for Issue 99)."
+    )
+    assert "family=Inter" in src and "family=JetBrains+Mono" in src, (
+        "_design-tokens.css must load BOTH Inter (sans) and JetBrains Mono "
+        "(data register) — the two halves of the Linear/mono composition."
+    )
+    assert "display=swap" in src, (
+        "Google Fonts URL must include display=swap so the system "
+        "fallback renders instantly; otherwise we get FOIT (flash of "
+        "invisible text) and the page looks broken for ~200ms."
+    )
+
+    # The Linear-locked palette. These exact values were picked from the
+    # researched menu and are locked in docs/DECISIONS.md.
+    palette = {
+        "--color-bg":        "#0a0a0a",
+        "--color-surface":   "#111111",
+        "--color-border":    "#1f1f1f",
+        "--color-text":      "#ededed",
+        "--color-accent":    "#5e6ad2",  # Linear indigo
+    }
+    for var_name, expected_value in palette.items():
+        assert f"{var_name}:" in src, (
+            f"_design-tokens.css must define {var_name} — locked in the "
+            f"Issue 99 design system."
+        )
+        assert expected_value in src, (
+            f"_design-tokens.css must use {expected_value} for {var_name} — "
+            f"the value the user picked from the Linear option. Changing "
+            f"this is a design-direction shift that belongs in DECISIONS, "
+            f"not a quiet edit."
+        )
+
+    # The mono data register is a load-bearing concept — pin the .mono
+    # utility class so Phase C consumers can rely on it.
+    assert ".mono {" in src, (
+        "_design-tokens.css must expose a .mono utility class for the "
+        "data register (clip metadata, transcript timestamps, IDs, "
+        "durations, scores). Phase C of Issue 99 retrofits these "
+        "surfaces onto this class."
+    )
+
+
+def test_pricing_page_uses_design_tokens():
+    """Issue 99 Phase A: pricing.html is the proof retrofit. It must
+    consume the shared _design-tokens.css (not redefine its own palette
+    inline as the Wave 7 stopgap did). Each subsequent template that
+    retrofits onto the design system inherits this same assertion.
     """
     import pathlib
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "pricing.html").read_text()
 
     assert 'href="/static/style.css"' not in src, (
-        "pricing.html must not link /static/style.css — the file "
-        "doesn't exist and the page falls back to browser defaults. "
-        "Issue 99 will replace the inline tokens with the canonical "
-        "_design-tokens.css when the design system lands."
+        "pricing.html must not link the never-existed /static/style.css. "
+        "(Wave 7 dropped this link; Issue 99 Phase A replaces it with "
+        "the canonical /static/_design-tokens.css.)"
     )
-    assert ":root {" in src, (
-        "pricing.html must define a :root block with CSS variables — "
-        "every var(--…) used in the inline <style> needs a value."
+    assert 'href="/static/_design-tokens.css"' in src, (
+        "pricing.html must link /static/_design-tokens.css — the shared "
+        "design system. (Issue 99 Phase A proof retrofit.)"
     )
-    # Pin the variables the inline <style> consumes, so a future cleanup
-    # that drops one accidentally breaks the test, not the live site.
-    for var_name in ("--bg", "--surface", "--border", "--text", "--muted", "--accent"):
-        assert f"{var_name}:" in src, (
-            f"pricing.html :root block must define {var_name} — the inline "
-            f"<style> block references var({var_name})."
-        )
+    # The page-specific styles must consume the new semantic token names,
+    # not redefine inline palette vars under the old --bg / --surface /
+    # --accent names (those were the Wave 7 stopgap).
+    assert "var(--color-bg)" in src or "var(--color-surface)" in src, (
+        "pricing.html must consume the new --color-* tokens from "
+        "_design-tokens.css instead of the Wave-7 inline --bg / "
+        "--surface palette."
+    )
 
 
 def test_dashboard_registers_in_flight_ingests_with_active_tasks():

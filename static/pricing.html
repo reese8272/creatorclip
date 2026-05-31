@@ -4,141 +4,176 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pricing — AutoClip</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css" />
   <style>
-    /* Wave 7 — pricing.html previously linked /static/style.css which did
-       not exist, so every var(--…) below resolved to the empty string and
-       the browser fell back to default styles. These :root values match the
-       inline palette used by index.html / insights.html / profile.html /
-       review.html (the current dark + purple aesthetic). Issue 99 will
-       supersede this with the canonical _design-tokens.css. */
-    :root {
-      --bg: #0f0f0f;
-      --surface: #1e1e1e;
-      --border: #2a2a2a;
-      --text: #e0e0e0;
-      --muted: #888888;
-      --accent: #6c63ff;
-    }
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-    }
-    a { color: var(--text); text-decoration: none; }
-    .nav {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 14px 24px;
-      background: #161616;
-      border-bottom: 1px solid var(--border);
-    }
-    .nav-brand { font-weight: 700; color: var(--accent); font-size: 1.05rem; }
-    .nav-links { display: flex; gap: 18px; align-items: center; font-size: 0.88rem; }
-    .nav-links a { color: #aaa; }
-    .nav-links a:hover, .nav-links a.active { color: var(--text); }
+    /* Issue 99 Phase A — pricing.html is the proof retrofit for the new
+       Linear-style design system. Page-specific styles only; everything
+       else (palette, typography, nav, buttons, kbd, footer) comes from
+       /static/_design-tokens.css. */
+
     .pricing-hero {
       text-align: center;
-      padding: 3rem 1rem 1rem;
+      padding: var(--space-12) var(--space-4) var(--space-6);
     }
-    .pricing-hero h1 { font-size: 2.2rem; margin-bottom: 0.5rem; }
-    .pricing-hero p  { color: var(--muted); max-width: 540px; margin: 0 auto 2rem; }
+    .pricing-hero h1 {
+      font-size: var(--text-2xl);
+      margin-bottom: var(--space-2);
+    }
+    .pricing-hero p {
+      color: var(--color-text-muted);
+      max-width: 540px;
+      margin: 0 auto var(--space-8);
+      font-size: var(--text-sm);
+    }
 
     .pack-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1.25rem;
-      max-width: 960px;
-      margin: 0 auto 2rem;
-      padding: 0 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: var(--space-4);
+      max-width: 1100px;
+      margin: 0 auto var(--space-8);
+      padding: 0 var(--space-4);
     }
 
     .pack-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.5rem 1.25rem;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: var(--space-2);
       position: relative;
-      transition: border-color 0.15s;
+      transition: border-color var(--duration) var(--ease),
+                  background var(--duration) var(--ease);
     }
-    .pack-card:hover { border-color: var(--accent); }
+    .pack-card:hover {
+      background: var(--color-elevated);
+      border-color: var(--color-border-strong);
+    }
     .pack-card.featured {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px var(--accent);
-    }
-    .pack-card .badge {
-      position: absolute;
-      top: -12px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--accent);
-      color: #fff;
-      font-size: 0.7rem;
-      font-weight: 700;
-      padding: 2px 10px;
-      border-radius: 99px;
-      white-space: nowrap;
+      border-color: var(--color-accent);
     }
 
-    .pack-label   { font-weight: 700; font-size: 1rem; }
-    .pack-minutes { font-size: 1.6rem; font-weight: 800; color: var(--accent); }
-    .pack-minutes span { font-size: 0.85rem; font-weight: 400; color: var(--muted); }
-    .pack-price   { font-size: 1.1rem; font-weight: 600; }
-    .pack-permin  { font-size: 0.8rem; color: var(--muted); }
-    .pack-note    { font-size: 0.78rem; color: var(--muted); margin-top: auto; }
+    /* "Most popular" pill — kbd-chip aesthetic, not a marketing splat. */
+    .pack-card .pop-tag {
+      position: absolute;
+      top: -1px;
+      right: var(--space-4);
+      transform: translateY(-50%);
+      padding: 2px var(--space-2);
+      font-size: var(--text-xs);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--color-accent);
+      background: var(--color-bg);
+      border: 1px solid var(--color-accent);
+      border-radius: var(--radius-sm);
+    }
+
+    .pack-label {
+      font-size: var(--text-sm);
+      font-weight: 600;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Mono data register — minutes, price, $/min are all data values. */
+    .pack-minutes {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xl);
+      font-weight: 600;
+      color: var(--color-text);
+      line-height: var(--leading-tight);
+    }
+    .pack-minutes-suffix {
+      font-family: var(--font-sans);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      font-weight: 400;
+      margin-left: var(--space-1);
+    }
+    .pack-price {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-md);
+      color: var(--color-text);
+      font-weight: 500;
+    }
+    .pack-permin {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+    .pack-note {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: auto;
+      padding-top: var(--space-3);
+      line-height: var(--leading-relaxed);
+    }
 
     .pack-btn {
-      margin-top: 1rem;
+      margin-top: var(--space-4);
       width: 100%;
-      padding: 0.6rem 0;
-      border-radius: 8px;
-      border: none;
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-      font-size: 0.95rem;
+      padding: var(--space-3) 0;
+      border-radius: var(--radius);
+      background: var(--color-accent);
+      color: #ffffff;
+      font-weight: 500;
+      font-size: var(--text-sm);
+      transition: background var(--duration-fast) var(--ease);
     }
+    .pack-btn:hover:not(:disabled) { background: var(--color-accent-hover); }
     .pack-btn:disabled { opacity: 0.5; cursor: default; }
     .pack-btn.secondary {
       background: transparent;
-      border: 1px solid var(--accent);
-      color: var(--accent);
+      border: 1px solid var(--color-border-strong);
+      color: var(--color-text);
+    }
+    .pack-btn.secondary:hover {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+      background: transparent;
     }
 
     .balance-bar {
       text-align: center;
-      font-size: 0.9rem;
-      color: var(--muted);
-      margin-bottom: 1.5rem;
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-6);
     }
-    .balance-bar strong { color: var(--text); }
+    .balance-bar strong {
+      color: var(--color-text);
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-weight: 600;
+    }
 
-    .disclaimer {
+    .pricing-fine {
       max-width: 640px;
-      margin: 0 auto 3rem;
-      padding: 0 1rem;
-      font-size: 0.8rem;
-      color: var(--muted);
+      margin: 0 auto var(--space-10);
+      padding: 0 var(--space-4);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
       text-align: center;
-      line-height: 1.6;
+      line-height: var(--leading-relaxed);
     }
 
     #toast {
       position: fixed;
-      bottom: 1.5rem;
+      bottom: var(--space-6);
       left: 50%;
       transform: translateX(-50%);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      padding: 0.7rem 1.4rem;
-      border-radius: 8px;
-      font-size: 0.9rem;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      padding: var(--space-3) var(--space-5);
+      border-radius: var(--radius);
+      font-size: var(--text-sm);
       display: none;
       z-index: 999;
     }
@@ -149,30 +184,36 @@
     <a class="nav-brand" href="/">AutoClip</a>
     <div class="nav-links">
       <a href="/static/index.html">Dashboard</a>
-      <a href="/static/pricing.html" class="active">Pricing</a>
+      <a href="/static/insights.html">Insights</a>
+      <a href="/static/review.html">Review</a>
       <a href="/static/profile.html">Profile</a>
-      <span id="nav-auth"></span>
+      <a href="/static/pricing.html" class="active">Pricing</a>
     </div>
+    <span class="nav-spacer"></span>
+    <span id="nav-auth" class="nav-links"></span>
   </nav>
 
-  <div class="pricing-hero">
+  <div class="disclaimer">
+    AutoClip predicts fit with your style and audience — it does not promise virality.
+    Recommendations are estimates grounded in your own data, not guarantees.
+  </div>
+
+  <main class="pricing-hero">
     <h1>Buy the minutes you need.</h1>
     <p>No subscription. No expiry. Pay once, use whenever — stash extras for next season.</p>
     <div class="balance-bar" id="balance-bar" style="display:none">
       Your balance: <strong id="balance-display">—</strong> minutes remaining
     </div>
-  </div>
+  </main>
 
-  <div class="pack-grid" id="pack-grid">
+  <section class="pack-grid" id="pack-grid">
     <!-- injected by JS -->
-  </div>
+  </section>
 
-  <div class="disclaimer">
-    AutoClip predicts fit with your style and audience — it does not promise virality.
-    Every recommendation is an estimate grounded in your own data.
+  <p class="pricing-fine">
     Minutes cover source video processing time (transcription + AI analysis + render).
     One minute of source video = one minute deducted.
-  </div>
+  </p>
 
   <div id="toast"></div>
 
@@ -196,16 +237,16 @@
       const grid = document.getElementById("pack-grid");
       grid.innerHTML = PACKS.map(p => `
         <div class="pack-card${p.featured ? " featured" : ""}">
-          ${p.featured ? '<span class="badge">Most Popular</span>' : ""}
+          ${p.featured ? '<span class="pop-tag">Most picked</span>' : ""}
           <div class="pack-label">${p.label}</div>
-          <div class="pack-minutes">${p.minutes.toLocaleString()} <span>minutes</span></div>
+          <div class="pack-minutes">${p.minutes.toLocaleString()}<span class="pack-minutes-suffix">min</span></div>
           <div class="pack-price">${formatPrice(p.price_cents)}</div>
           <div class="pack-permin">$${p.per_min.toFixed(3)}/min</div>
-          <div class="pack-note">Minutes never expire. One source minute = one minute used.</div>
+          <div class="pack-note">Never expires. One source minute = one minute used.</div>
           <button
             class="pack-btn${authed ? "" : " secondary"}"
             onclick="buyPack('${p.id}')"
-          >${authed ? "Buy Now" : "Sign in to Buy"}</button>
+          >${authed ? "Buy now" : "Sign in to buy"}</button>
         </div>
       `).join("");
     }
@@ -255,6 +296,12 @@
       if (authed) loadBalance();
     });
 
+    // Render the cards immediately too — so unauthenticated visitors see
+    // the price grid before /auth/me resolves (auth.js will redirect to
+    // /auth/login on its 401, which is the expected behavior for
+    // authenticated routes; pricing is a public-facing surface).
+    renderPacks(false);
+
     // Handle post-checkout redirects
     const params = new URLSearchParams(window.location.search);
     if (params.get("success") === "1") {
@@ -265,10 +312,10 @@
     }
   </script>
 
-  <footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px">
-    <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
-    <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
-    <span style="margin:0 8px">© AutoClip 2026</span>
+  <footer class="footer">
+    <a href="/static/tos.html">Terms</a>
+    <a href="/static/privacy.html">Privacy</a>
+    <span>© AutoClip 2026</span>
   </footer>
 </body>
 </html>

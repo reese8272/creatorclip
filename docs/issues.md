@@ -2300,16 +2300,16 @@ renders instantly.
 
 **ACs**:
 - [x] Phase 1 design direction picked (Linear-style + mono data layer)
-- [ ] `static/_design-tokens.css` lands with full :root, typography,
-      component layer
-- [ ] pricing.html retrofit as Phase-A proof
+- [x] `static/_design-tokens.css` lands with full :root, typography,
+      component layer (Phase A, 2026-05-31)
+- [x] pricing.html retrofit as Phase-A proof (2026-05-31)
 - [ ] 8 remaining templates retrofit (Phase B, one commit each)
 - [ ] `.mono` data register applied to clip metadata, transcript,
       timestamps (Phase C)
-- [ ] No regression in load perf (existing static-page tests stay green)
-- [ ] No new build step; vanilla CSS only
-- [ ] Static-page test pins `_design-tokens.css` is included on every
-      template
+- [x] No regression in load perf (existing static-page tests stay green)
+- [x] No new build step; vanilla CSS only
+- [~] Static-page test pins `_design-tokens.css` is included on every
+      template — currently pins pricing.html only; Phase B expands
 
 ---
 
