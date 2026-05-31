@@ -29,7 +29,10 @@ set -euo pipefail
 RUNNER_VERSION="2.317.0"
 RUNNER_USER="github-runner"
 RUNNER_DIR="/opt/github-runner"
-REPO_URL="https://github.com/reese8272/Youtube-Video-AI-Editor"
+# Repo was renamed Youtube-Video-AI-Editor → creatorclip; the registration
+# token from `gh api repos/<owner>/<repo>/actions/runners/registration-token`
+# is scoped to a specific repo URL and returns 404 on any mismatch.
+REPO_URL="https://github.com/reese8272/creatorclip"
 
 if [[ $EUID -ne 0 ]]; then
   echo "ERROR: run as root on the production VM." >&2
@@ -66,6 +69,16 @@ sudo -u "$RUNNER_USER" ./config.sh \
   --work "_work" \
   --unattended \
   --replace
+
+echo "==> Granting the runner write access to the deploy directory..."
+# deploy.yml runs `cp` into /opt/autoclip and `sed -i` on /opt/autoclip/.env;
+# the runner user needs to own that directory. Pre-install it was root:root
+# which failed the first deploy run after switching docker-publish to
+# self-hosted (Issue 101). .env stays 600 — only the runner can read secrets.
+if [[ -d /opt/autoclip ]]; then
+  chown -R "$RUNNER_USER:$RUNNER_USER" /opt/autoclip
+  [[ -f /opt/autoclip/.env ]] && chmod 600 /opt/autoclip/.env
+fi
 
 echo "==> Installing as systemd service..."
 ./svc.sh install "$RUNNER_USER"
