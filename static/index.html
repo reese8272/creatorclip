@@ -76,6 +76,7 @@
     <a href="/static/review.html">Review</a>
     <a href="/static/insights.html">Insights</a>
     <a href="/static/profile.html">Profile</a>
+    <a href="/static/pricing.html">Pricing</a>
     <div class="right">
       <span class="user" id="nav-user"></span>
       <a href="#" class="btn btn-secondary" style="font-size:0.8rem;padding:6px 12px" onclick="logout()">Logout</a>
@@ -233,7 +234,41 @@
       }));
       tbody.innerHTML = rows.join('');
       document.getElementById('clips-ready').textContent = clipsReadyCount;
+      _registerInFlightIngests(videos);
       startPolling();
+    }
+
+    // Wave 6 Fix D — surface in-flight upload-pipeline ingests in the
+    // Wave-5 floating activity panel.
+    //
+    // `/videos/upload` stamps aset_owner on `task:{video_id}` (routers/
+    // videos.py:273, Issue 92 / Wave-4 Fix 1) and the worker chain
+    // (_ingest_async → _transcribe_async → _signals_async → _generate_clips_async)
+    // emits step/done events to that same stream key (Wave-3 Fix E). The
+    // dashboard didn't subscribe — so a creator who uploaded a video, then
+    // navigated to the dashboard mid-ingest, saw the activity panel hidden
+    // (no tasks tracked) even though work was actively happening.
+    //
+    // Registering here makes the panel surface ingest progress on the
+    // dashboard regardless of where the upload was started. Linked-only
+    // rows never appear here (list_videos filters `source_uri IS NOT NULL`
+    // per Issue 90), so we don't register tasks for videos that have no
+    // running pipeline.
+    function _registerInFlightIngests(videos) {
+      if (!window.activeTasks) return;
+      const tracked = new Set(
+        (window.activeTasks.getActiveTasks() || []).map(t => t.task_id)
+      );
+      for (const v of videos) {
+        if (v.ingest_status !== 'pending' && v.ingest_status !== 'running') continue;
+        if (tracked.has(v.id)) continue;
+        window.activeTasks.registerTask({
+          task_id: v.id,
+          kind: 'upload_pipeline',
+          label: `Ingesting ${v.title || v.youtube_video_id}`,
+          stream_url: `/tasks/${v.id}/events`,
+        });
+      }
     }
 
     function extractYouTubeId(input) {
@@ -306,5 +341,11 @@
       }, 5000);
     }
   </script>
+
+  <footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px">
+    <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
+    <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
+    <span style="margin:0 8px">© AutoClip 2026</span>
+  </footer>
 </body>
 </html>

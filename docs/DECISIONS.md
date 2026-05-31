@@ -5,6 +5,134 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Wave 6: "done-vs-visible" audit fixes (4-batch)
+
+### What was decided
+
+User report on Wave-5 deploy: "I'm seeing a lot of things 'done' but not necessarily on
+the website." Audit traced this to four mechanically-distinct causes, all bundled into
+one branch on the established Wave-1 hotfix-batch pattern.
+
+1. **Fix A — Alembic migration `0014_backfill_onboarding_state`**. Issue 98's
+   `create_draft` state-machine fix (Wave 1) was forward-only — it advances
+   `connected → dna_pending` on every new draft, but creators who confirmed their DNA
+   under the pre-fix code path had `onboarding_state = connected` permanently and the
+   dashboard "Build your Creator DNA" banner stayed visible forever (live-observed on
+   Backboard Media's confirmed v2 DNA). One-shot SQL `UPDATE creators SET
+   onboarding_state = 'active' WHERE id IN (SELECT creator_id FROM creator_dna WHERE
+   status = 'confirmed') AND onboarding_state IN ('connected', 'awaiting_data')`.
+   `dna_pending` is intentionally excluded — that state legitimately represents a
+   rebuild-in-progress.
+
+2. **Fix B — Pricing nav link + universal legal footer**. Pricing.html was fully wired
+   to `/billing/balance` + `/billing/checkout` but had zero inbound links — minutes
+   couldn't be bought from anywhere in the app. TOS + Privacy pages existed but had no
+   inbound links anywhere — a Google OAuth verification blocker. Added `<a
+   href="/static/pricing.html">Pricing</a>` to top nav of 4 authenticated templates
+   (index, insights, profile, review; onboarding skipped per its focused-single-task
+   design) + minimal `<footer>` linking Terms + Privacy + © AutoClip 2026 to all 9
+   static templates (authenticated + public).
+
+3. **Fix C — `PROJECT_STATE.md` queue cleanup**. The "Queued for next session" list
+   still showed Issues 84 and 92 despite both having ✅ Closed entries above (bookkeeping
+   rot that drove the user's perception of "stale planning"). Removed the duplicates +
+   one repeated Issue-84 close entry.
+
+4. **Fix D — Surface in-flight ingests in the activity panel on the dashboard**.
+   `/videos/upload` stamps aset_owner on `task:{video_id}` and the Celery chain emits to
+   that stream, but `index.html` never registered the task with `window.activeTasks`.
+   So the Wave-5 floating activity panel was hidden 100% of the time on the dashboard,
+   even when an upload was actively ingesting. New `_registerInFlightIngests(videos)`
+   iterates the rendered video list and calls `window.activeTasks.registerTask({...})`
+   for any row in `pending` or `running` ingest status — restoring SSE visibility
+   across page navigation for the upload flow.
+
+### Why
+
+- The user's specific concern is exactly the pattern this codebase keeps fighting:
+  backend work shipped, frontend never wired. Closing it methodically (one targeted
+  fix per cause) keeps the trail clean for the next "I see this is done but it's not
+  on the website" report.
+- Fix A had to be a migration, not a runtime read-time heal, because the existing Issue
+  98 DECISIONS entry (2026-05-31, Wave 1) explicitly rejected loosening `confirm_draft`
+  to accept `connected` ("masks the missing transition for every other consumer"). The
+  same anti-defensive principle applies to a runtime heal in the `me` endpoint.
+- Fix B closes the documented Google OAuth verification gate around TOS/Privacy
+  reachability. CLAUDE.md "Pre-Public-Launch Requirements" line for TOS + Privacy can
+  now flip to ✅.
+- Fix C is doc hygiene but matters: the queue list is the first thing read on every
+  session and drives prioritization.
+
+### Industry standard checked
+
+- **SQL backfill migrations for state-machine repair**: Alembic/Rails/Django canonical
+  pattern — declared, idempotent, runs at deploy boundary. Beats runtime defensive
+  heals (which dilute the state machine, hide future bugs of the same shape, and tax
+  every request). The codebase already follows this in migration `0004_video_ingest_done_at`.
+- **Footer-for-legal, header-for-product**: standard SaaS pattern (Stripe, Linear,
+  Vercel, Notion). Vanilla-HTML duplication is correct under KISS for ~9 templates;
+  a `nav.js`-rendered shared component would be premature and is owned by the queued
+  Issue 99 UI redesign.
+- **Last-Event-ID SSE resume**: the activeTasks.js library (Wave-5 Fix 2) already
+  implements this; Fix D just hooks the dashboard up to the same pattern that
+  onboarding/insights already use.
+
+### Alternatives ruled out
+
+- **Read-time heal in `routers/creators.py::me`** (Fix A option): explicitly rejected
+  by the Wave 1 DECISIONS principle — defensive runtime healing masks future
+  state-machine bugs by silently absorbing them. Migration is the right layer.
+- **Backfilling `dna_pending` creators too** (Fix A option): would incorrectly flip
+  any creator currently in a legitimate rebuild-in-progress to `active`, hiding the
+  "Confirm your new brief" banner that's actually telling them what to do next.
+- **Shared `nav.js` component for cross-template nav** (Fix B option): premature DRY
+  for vanilla-HTML pages; the real architecture pass belongs in Issue 99 (UI redesign).
+- **Adding stream_url support to `/videos/{id}/clips/generate`** (Fix D option):
+  considered, then ruled out. That endpoint runs `generate_and_rank_clips` synchronously
+  in-process (not via Celery delegation) and returns the clip list directly in the
+  response — there's no async task to subscribe to. Going async would change the
+  endpoint's contract for no clear win; the synchronous path is correct.
+- **Wiring `linkVideo()` to subscribe to a stream** (Fix D option): `/videos/link`
+  creates the Video row but doesn't kick off the ingest pipeline (`start_pipeline` is
+  only called by `/videos/upload`). There's no stream to subscribe to.
+
+### Tradeoffs accepted
+
+- **Footer duplication across 9 templates** (Fix B): 6 lines × 9 files = ~54 LOC of
+  duplication. Acceptable under KISS for vanilla HTML; folded into the Issue 99 UI
+  redesign when the system component pass happens.
+- **Linked-only videos still invisible on dashboard**: surfaced during Fix D scoping
+  — `list_videos` filters `source_uri IS NOT NULL` (Issue 90) which excludes BOTH
+  catalog-sync rows (intended) AND user-linked rows (unintended). Logged in
+  `docs/OFF_COURSE_BUGS.md` for proper triage; not in Wave 6 scope.
+
+### Files & tests
+
+- `alembic/versions/0014_backfill_onboarding_state.py` (new) +
+  `tests/test_onboarding_state_backfill_integration.py` (+6 integration tests pinning
+  heal semantics on stuck / pending / draft-only / mixed-population creators).
+- `static/index.html`, `static/onboarding.html`, `static/insights.html`,
+  `static/profile.html`, `static/review.html`, `static/pricing.html`,
+  `static/tos.html`, `static/privacy.html`, `static/early-access.html` (Fix B
+  nav + footer additions).
+- `static/index.html` (Fix D: `_registerInFlightIngests`).
+- `tests/test_static.py` (+3 unit tests: Pricing nav link, universal legal footer,
+  in-flight ingest registration). Pre-existing E401 `import pathlib, re` two-imports
+  flake fixed in passing.
+- `docs/PROJECT_STATE.md` (Fix C: queue cleanup + Wave 6 close entry).
+- `docs/OFF_COURSE_BUGS.md` (linked-videos-invisible row added).
+- `CLAUDE.md` (Pre-Public-Launch Requirements: TOS + Privacy line flipped to ✅).
+
+**Layer 0 gates**: ruff 0 / mypy 0 / freshness ok. **Tests**: 557 passed / 1 skipped /
+100 deselected (default lane; +4 vs Wave 5's 553/94, integration lane gained +6 from
+Fix A).
+
+### Date
+
+2026-05-31
+
+---
+
 ## 2026-05-31 — CI/CD: switch deploy job to self-hosted runner + add manual deploy script
 
 ### What was decided

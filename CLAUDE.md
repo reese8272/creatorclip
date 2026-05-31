@@ -266,7 +266,7 @@ docker compose logs --tail 100 app worker
 - Per-creator rate limiting + usage quotas before each LLM/render job
 - ✅ YouTube data-retention/refresh fully compliant — Wave-4 Fix 3 (Issue 75b): 30-day partial-staleness purge per ToS §III.E.4.b (`docs/COMPLIANCE.md`)
 - `TOKEN_ENCRYPTION_KEY` rotation runbook written
-- Terms of Service + Privacy Policy pages live
+- ✅ Terms of Service + Privacy Policy pages live AND linked — pages existed at `/static/tos.html` + `/static/privacy.html`; Wave-6 Fix B added a footer linking both from every static template (Google OAuth verification gate, Issue 29)
 - Google OAuth app verification completed
 - Account-deletion endpoint (right-to-erasure: token revocation + media purge)
 - Billing + plan-tier wired (usage-based tiers — pricing research pending)

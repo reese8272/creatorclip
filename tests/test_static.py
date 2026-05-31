@@ -260,7 +260,8 @@ def test_link_video_input_accepts_full_urls():
     """The Link-a-video input must accept full YouTube URLs, not just bare IDs.
     Users naturally paste share URLs; the extractYouTubeId() helper must strip
     them to the 11-char ID before the form submits to /videos/link."""
-    import pathlib, re
+    import pathlib
+    import re
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
 
@@ -278,6 +279,108 @@ def test_link_video_input_accepts_full_urls():
     # linkVideo() must call the extractor, not use the raw input directly
     extractor_call = re.search(r'extractYouTubeId\s*\(', src)
     assert extractor_call, "linkVideo() must call extractYouTubeId() on the raw input"
+
+
+def test_dashboard_registers_in_flight_ingests_with_active_tasks():
+    """Wave 6 Fix D: the dashboard's loadVideos() must call into
+    window.activeTasks.registerTask for any video in pending/running
+    ingest state, so the floating activity panel (Wave-5 Fix 3) surfaces
+    upload-pipeline progress on the dashboard. Without this wiring the
+    panel was hidden 100% of the time on /static/index.html — a creator
+    who uploaded mid-session and navigated to the dashboard saw no
+    indication that work was in flight, despite the worker chain
+    actively emitting to task:{video_id}:events.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+
+    # The registrar function must exist + be called from loadVideos.
+    assert "_registerInFlightIngests" in src, (
+        "index.html must define _registerInFlightIngests so loadVideos can "
+        "surface upload-pipeline streams in the Wave-5 activity panel."
+    )
+    # The task_id key matches the upload chain's stream key
+    # (worker emits to task:{video_id}:events keyed by video.id).
+    assert "task_id: v.id" in src, (
+        "_registerInFlightIngests must use v.id as task_id — that's the "
+        "stream key the upload chain emits to (Issue 92 / Wave-3 Fix E)."
+    )
+    # stream_url must point at the SSE endpoint for this task.
+    assert "stream_url: `/tasks/${v.id}/events`" in src, (
+        "_registerInFlightIngests must build stream_url as "
+        "/tasks/{video_id}/events to subscribe to the upload pipeline."
+    )
+    # The 'upload_pipeline' kind is the canonical entry from the
+    # activeTasks.js entry-shape contract (see static/activeTasks.js).
+    assert "kind: 'upload_pipeline'" in src, (
+        "Use the canonical 'upload_pipeline' kind from the activeTasks.js "
+        "entry-shape contract — same vocabulary as catalog_sync / dna_build / "
+        "improvement_brief on the other surfaces."
+    )
+
+
+def test_authenticated_templates_link_to_pricing_in_nav():
+    """Wave 6 Fix B: index/insights/profile/review must expose Pricing in the
+    main nav so creators can reach the billing surface. Pricing.html is fully
+    wired to /billing/balance and /billing/checkout, but pre-Wave-6 it had
+    zero entry points — minutes couldn't be bought without typing the URL.
+
+    Onboarding.html is intentionally excluded — its minimal nav (brand +
+    logout only) is the canonical focused-single-task pattern; cluttering
+    it with Pricing would degrade the setup flow.
+    """
+    import pathlib
+
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    for name in ("index.html", "insights.html", "profile.html", "review.html"):
+        src = (static_dir / name).read_text()
+        # The nav anchor must be present — using `> Pricing<` ensures we
+        # match the anchor text, not a stray Pricing mention in JS.
+        assert '"/static/pricing.html">Pricing<' in src, (
+            f"Wave-6 Fix B: {name} nav must include a Pricing link to "
+            f"/static/pricing.html — otherwise billing is unreachable from "
+            f"the main app surface."
+        )
+
+
+def test_every_template_has_legal_footer():
+    """Wave 6 Fix B: every static template — authenticated, marketing, AND
+    legal — must link to both /static/tos.html and /static/privacy.html in a
+    footer. TOS + Privacy must be reachable from every page, which is a
+    documented Google OAuth app-verification gate (Issue 29) and the
+    canonical SaaS pattern (Stripe, Linear, Vercel, Notion). Pre-Wave-6 the
+    Privacy and TOS pages had zero inbound links from anywhere.
+    """
+    import pathlib
+
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    templates = [
+        "index.html",
+        "onboarding.html",
+        "insights.html",
+        "profile.html",
+        "review.html",
+        "pricing.html",
+        "tos.html",
+        "privacy.html",
+        "early-access.html",
+    ]
+    for name in templates:
+        src = (static_dir / name).read_text()
+        assert "<footer" in src, (
+            f"Wave-6 Fix B: {name} must include a <footer> element "
+            f"(industry-standard SaaS pattern for legal links)."
+        )
+        assert "/static/tos.html" in src, (
+            f"Wave-6 Fix B: {name} footer must link to /static/tos.html — "
+            f"required pre-launch surface (CLAUDE.md line 174)."
+        )
+        assert "/static/privacy.html" in src, (
+            f"Wave-6 Fix B: {name} footer must link to /static/privacy.html — "
+            f"required pre-launch surface + Google OAuth verification gate "
+            f"(Issue 29)."
+        )
 
 
 def test_active_tasks_library_exists_and_exports_api():
