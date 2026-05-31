@@ -118,7 +118,7 @@
       <h2>Link a video</h2>
     </div>
     <div id="link-form">
-      <input id="yt-id-input" type="text" placeholder="YouTube video ID (e.g. dQw4w9WgXcQ)" />
+      <input id="yt-id-input" type="text" placeholder="YouTube video ID or URL" />
       <button class="btn btn-primary" onclick="linkVideo()">Link video</button>
     </div>
     <p id="link-status" style="font-size:0.8rem;color:#888;margin-top:8px;min-height:18px"></p>
@@ -236,10 +236,25 @@
       startPolling();
     }
 
+    function extractYouTubeId(input) {
+      try {
+        const url = new URL(input);
+        if (url.hostname === 'youtu.be') return url.pathname.slice(1).split('/')[0];
+        if (url.hostname.includes('youtube.com')) {
+          const v = url.searchParams.get('v');
+          if (v) return v;
+          const shorts = url.pathname.match(/\/shorts\/([^/?]+)/);
+          if (shorts) return shorts[1];
+        }
+      } catch (_) {}
+      return input.split('?')[0];
+    }
+
     async function linkVideo() {
-      const ytId = document.getElementById('yt-id-input').value.trim();
+      const raw = document.getElementById('yt-id-input').value.trim();
+      const ytId = extractYouTubeId(raw);
       const status = document.getElementById('link-status');
-      if (!ytId) { status.textContent = 'Enter a YouTube video ID.'; return; }
+      if (!ytId) { status.textContent = 'Enter a YouTube video ID or URL.'; return; }
 
       status.textContent = 'Linking…';
       const resp = await fetch('/videos/link', {

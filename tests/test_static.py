@@ -256,6 +256,30 @@ def test_all_authenticated_templates_include_active_tasks_and_panel():
 # ── Wave 5: activeTasks.js library exists + exposes documented API ──────────
 
 
+def test_link_video_input_accepts_full_urls():
+    """The Link-a-video input must accept full YouTube URLs, not just bare IDs.
+    Users naturally paste share URLs; the extractYouTubeId() helper must strip
+    them to the 11-char ID before the form submits to /videos/link."""
+    import pathlib, re
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+
+    assert "extractYouTubeId" in src, (
+        "index.html must define extractYouTubeId() to normalise pasted URLs"
+    )
+    # youtu.be short-link path is the most common share format
+    assert "youtu.be" in src, "extractYouTubeId must handle youtu.be short links"
+    # watch?v= is the standard desktop URL
+    assert "searchParams.get('v')" in src or 'searchParams.get("v")' in src, (
+        "extractYouTubeId must handle youtube.com/watch?v=ID URLs"
+    )
+    # /shorts/ links are common for Shorts (regex in source uses \/shorts\/)
+    assert "shorts" in src, "extractYouTubeId must handle youtube.com/shorts/ID URLs"
+    # linkVideo() must call the extractor, not use the raw input directly
+    extractor_call = re.search(r'extractYouTubeId\s*\(', src)
+    assert extractor_call, "linkVideo() must call extractYouTubeId() on the raw input"
+
+
 def test_active_tasks_library_exists_and_exports_api():
     """Wave-5 Fix 2: static/activeTasks.js manages localStorage + SSE
     EventSource resume so background work (DNA build, catalog sync,
