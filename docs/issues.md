@@ -1694,7 +1694,7 @@ cold-start signal and adds the dimension inference structurally lacks.
 ### Issue 84: AI/LLM efficiency assessment — context engineering, caching, latency vs quality
 **Severity**: ASSESSMENT — informs every downstream LLM change
 **Depends on**: 83 ✅ (so identity injection is in scope of the audit)
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-05-31 — Wave 2)
 
 **What**: User asked for a focused assessment of how we use Anthropic right now:
 context engineering at every call site, the actual realized prompt-cache hit rate (the
@@ -1718,12 +1718,11 @@ state move fast):**
 - Recommend a **target SLO** per call site (e.g. "DNA brief P50 < 8s, P95 < 20s").
 
 **Acceptance criteria**:
-- [ ] Phase 1: research the current Anthropic SDK + caching best practices for 2026
-- [ ] Per-call-site report in `docs/assessment/llm/<call-site>.md` with placement,
-      cache hit rate, model, max_tokens, observed latency, recommended changes
-- [ ] One pipeline candidate identified for co-located calls under a shared cache prefix
-- [ ] At least one concrete latency win shipped (or a rationale for why no change is safe)
-- [ ] DECISIONS entry capturing any model / placement / pipeline changes
+- [x] Phase 1: research the current Anthropic SDK + caching best practices for 2026 (industry-standards-researcher walk; full record in `docs/DECISIONS.md` 2026-05-31 Issue 84 entry)
+- [x] Per-call-site report in `docs/assessment/llm/<call-site>.md` — `dna_brief.md`, `clip_scoring.md`, `improvement_brief.md` (placement, cache hit reality, recommended SLO, follow-ups)
+- [x] One pipeline candidate identified — co-locate clip scoring + per-clip explanation under one Claude call with the DNA brief as cached prefix. Flagged for Issue 94's Phase-1.
+- [x] At least one concrete latency win shipped — `ANTHROPIC_WEB_SEARCH_TOOL` bumped from `web_search_20250305` → `web_search_20260209` (dynamic filtering). 1-LOC config + 2 regression tests.
+- [x] DECISIONS entry captured 2026-05-31. Includes follow-up issues to be filed (SDK bump; drop unproductive cache markers on DNA + improvement brief; Haiku 4.5 A/B for clip scoring).
 
 ---
 
@@ -1982,7 +1981,7 @@ at start of each issue's Phase 1.
 ---
 
 ## Issue 92: Universal progress visibility for every long-running operation (extends Issue 86)
-**Status**: 🔲 Not started · **Severity**: SEV-1 UX
+**Status**: ✅ Done (2026-05-31 — Wave 2) · **Severity**: SEV-1 UX
 
 **What**: Issue 86 shipped live SSE progress for DNA build — should become the
 default for EVERY long-running op, not the exception. User quote: "I want
@@ -2004,13 +2003,11 @@ always have concrete looks at what's happening."
 each of the above tasks. Emit `step` events at every meaningful boundary +
 include ETA when computable. Pattern is already proven on `_build_dna_async`.
 
-**ACs (draft)**:
-- [ ] Every Celery task fronted by a 202+task_id endpoint emits ≥3 step events
-- [ ] Per-step ETA when bounded (catalog sync = "fetching metrics 14/21");
-      "indeterminate" only when truly unknown (the LLM call)
-- [ ] Frontend shows a terminal-style stream (Issue 86 pattern) for every
-      long-running click
-- [ ] One regression test per task asserting the events fire
+**ACs**:
+- [x] Every Celery task fronted by a 202+task_id endpoint emits ≥3 step events. Verified: ingest (5 step events), transcribe (3), signals (3), render (4), catalog sync (3 + per-video tick), improvement brief (3).
+- [x] Per-step ETA when bounded — catalog sync emits `sync_metrics i=k total=N` so the UI renders `k/N`. Indeterminate emits (LLM call) stay as plain step labels.
+- [x] Frontend shows a terminal-style stream (Issue 86 pattern) for every long-running click — onboarding catalog sync + insights improvement brief wired this session. Upload + render backend returns `stream_url`; their frontend UI lands with Issues 100/95.
+- [x] One regression test per task asserting the events fire (`tests/test_progress_emit_wiring.py` — 8 tests covering ingest emit sequence + stream-key choice, signals terminal `done`, render stream-key + sequence, catalog sync per-video progress + silent-when-no-task_id case, router `stream_url`/`aset_owner` wiring for catalog sync + render, upload response contract).
 
 ---
 

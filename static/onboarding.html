@@ -28,7 +28,7 @@
     .btn-secondary { background: #333; color: #e0e0e0; margin-top: 8px; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     #dna-status { font-size: 0.8rem; color: #aaa; margin-top: 8px; min-height: 20px; text-align: center; }
-    #dna-stream {
+    #dna-stream, #catalog-stream {
       display: none; background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px;
       padding: 10px 12px; margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.72rem; color: #c8c8c8; max-height: 180px; overflow-y: auto;
@@ -69,6 +69,7 @@
     <button class="btn-secondary" id="refresh-data-btn" onclick="refreshDataGate()">
       Refresh data status
     </button>
+    <pre id="catalog-stream"></pre>
   </div>
 
   <!-- Step 3 (optional): Tell us about yourself (Issue 83) -->
@@ -135,14 +136,34 @@
     // until the row count stops growing — otherwise the gate just counts
     // an empty videos table forever for a freshly connected creator.
     let _gatePoll = null;
+    let _catalogSub = null;
     async function refreshDataGate() {
       const el = document.getElementById('data-gate-status');
+      const stream = document.getElementById('catalog-stream');
       if (_gatePoll) { clearInterval(_gatePoll); _gatePoll = null; }
+      if (_catalogSub) { _catalogSub.close(); _catalogSub = null; }
+      stream.style.display = 'none';
+      stream.textContent = '';
 
       el.textContent = 'Syncing your channel…';
       try {
         // Fire the sync; ignore 429 (a recent sync is still running).
-        await fetch('/creators/me/catalog/sync', { method: 'POST', credentials: 'include' });
+        const resp = await fetch('/creators/me/catalog/sync', {
+          method: 'POST', credentials: 'include'
+        });
+        // Issue 92: subscribe to per-video metric progress events.
+        if (resp.ok) {
+          const data = await resp.json();
+          if (typeof window.subscribeToTaskStream === 'function' && data.stream_url) {
+            stream.style.display = 'block';
+            _catalogSub = window.subscribeToTaskStream(data.stream_url, {
+              onRender: function (text) {
+                stream.textContent = text;
+                stream.scrollTop = stream.scrollHeight;
+              },
+            });
+          }
+        }
       } catch (e) { /* fall through — we'll still poll the gate */ }
 
       // Poll the gate every 4s for up to ~90s, stopping early once

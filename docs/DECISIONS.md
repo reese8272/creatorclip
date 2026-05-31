@@ -5,6 +5,129 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Issue 92: universal progress visibility (extends Issue 86 SSE primitive)
+
+### What was decided
+
+Extended the Issue-86 SSE progress primitive (`worker/progress.py` + `routers/tasks.py` + `static/progressStream.js`) to four more long-running surfaces:
+
+1. **Upload chain** (`_ingest_async → _transcribe_async → _signals_async`) — emits using `video_id` as the SSE stream key. Stage events: `ingest_start`, `probe_duration`, `extract_audio`, `upload_audio`, `deduct_minutes`, `transcribe_start`, `transcribe_audio`, `store_transcript`, `signals_start`, `extract_audio_events`, `build_timeline`, terminal `done` (emitted in `_signals_async`, the last stage).
+2. **Render** (`_render_clip_async`) — emits using `clip_id`. Stage events: `render_start`, `download_source`, `ffmpeg_encode`, `upload_r2`, terminal `done`. Per-frame ffmpeg progress intentionally NOT parsed — step-level boundaries are sufficient for UX and the encode runs in a single `asyncio.to_thread` shell-out.
+3. **Catalog sync** (`_sync_channel_catalog_async`) — emits using the Celery `self.request.id` (passed in by the wrapper). Stage events: `fetch_uploads`, `sync_metrics_start total=N`, per-video `sync_metrics i=k total=N`, terminal `done message="Synced N new video(s)."`. Emits are gated behind `task_id is not None` so Beat-task callers + tests stay silent.
+4. **Improvement brief** (`_generate_improvement_brief_async`) — emits using the Celery `job_id` (which IS the SSE stream key for this surface). Stage events: `improvement_brief_start`, `load_analytics`, `call_claude`, terminal `done`. Critically: the brief itself **now streams** — `improvement/brief.py::generate_improvement_brief` got a `task_id` kwarg that mirrors `dna/brief.py::generate_brief`'s Issue-86 pattern, routing through `worker.anthropic_stream.stream_and_emit` so `cache` + `token` deltas flow on the same Redis stream as the step events.
+
+**Stream-key choice — deterministic IDs over Celery task IDs.** For surfaces where the frontend already knows a stable identifier (video_id for upload, clip_id for render), we use that as the SSE stream key instead of the Celery task ID. The router stamps ownership via `progress.aset_owner(deterministic_id, creator_id)` and returns `stream_url: /tasks/{deterministic_id}/events`. This means:
+- No Celery chain-id propagation gymnastics through the 3 upload-chain stages.
+- The frontend (which gets back `stream_url` in the upload/render response) doesn't need to track a separate progress identifier alongside the video/clip identifier it already has.
+- The stream is durable across Celery retries — a redelivered task emits to the same key.
+
+For `catalog_sync` and `improvement_brief` (single tasks, no chain), the Celery task ID is the natural choice.
+
+**Router wiring** (3 endpoints):
+- `POST /me/catalog/sync` — `aset_owner(task.id, creator.id)` + return `stream_url`.
+- `POST /me/improvement-brief` — `aset_owner(task.id, creator.id)` + return `stream_url`. Debounce-collapse case reuses the in-flight task's ownership (already stamped).
+- `POST /clips/{clip_id}/render` — `aset_owner(str(clip_id), creator.id)` + return `stream_url: /tasks/{clip_id}/events`.
+- `POST /videos/upload` — `aset_owner(str(video.id), creator.id)` before `start_pipeline` + return `stream_url`.
+
+**Frontend wiring** (2 templates):
+- `static/onboarding.html` — `refreshDataGate()` subscribes to the catalog-sync `stream_url`. Existing 4s data-gate poll remains as belt-and-suspenders fallback.
+- `static/insights.html` — `loadBrief()` subscribes to the improvement-brief `stream_url`. Existing 5s `/me/improvement-brief` GET poll remains as fallback.
+- The existing `static/index.html` render/upload surfaces don't have terminal UI today; the backend `stream_url` is in place for when Issues 100/95 add the matching frontend.
+
+### Why
+
+User quote on Issue 92's intent (close-out 2026-05-31): *"I want thinking on literally [anything] that takes time to load. You want the user to always see what's going on."* The Issue-86 primitive proved sound on DNA build; extending to the four most-spinning surfaces is the smallest correct way to honor that. No new primitive design — every change is plumbing.
+
+### Industry standard checked
+
+- **SSE for one-way progress in 2026:** Still canonical for server→client streaming text. EventSource API universally supported in modern browsers. Anthropic's own streaming endpoints use SSE under the hood. (Mozilla MDN EventSource docs, current.)
+- **Celery chain task_id propagation:** Celery 5.x supports the chain root ID via `AsyncResult.id` or per-stage `self.request.group`. Using a domain-meaningful ID (video_id) instead is the simpler pattern when one exists — same recipe Stripe uses (per-resource event streams keyed by the resource ID, not the request ID).
+- **Per-creator concurrency cap:** Already enforced at 3 streams via `aacquire_slot` (Hotfix A verified). No change.
+- **ffmpeg progress parsing:** `ffmpeg -progress pipe:1` is the canonical 2026 pattern; we intentionally skip it here because the render runs as a single shell-out — step-level boundaries match the UX intent without adding subprocess piping complexity.
+
+### Alternatives ruled out
+
+- **Add a `progress_task_id` column on `Video` + `Clip`:** Avoided. Migration overhead for no functional gain over using the existing primary key as the stream identifier.
+- **Pipe the Celery chain group ID through each stage** (via `Signature(immutable=False)` kwargs): Avoided. Three stages would each take a new positional/kwarg, breaking call sites. Using `video_id` as the stream key is structurally simpler and frontend-friendly.
+- **Per-frame ffmpeg progress parsing:** Deferred — would require `ffmpeg -progress pipe:1` plumbing, a subprocess monitor task, and a parser. Step-level boundaries cover the UX intent today; revisit if a creator-feedback signal asks for frame-by-frame.
+- **WebSockets instead of SSE:** WebSockets are bidirectional; we only need server → client. SSE is simpler, plays better with Cloudflare Tunnel (validated by Issue 86), and the proven primitive already exists.
+- **One unified emit-orchestration abstraction:** Premature. Each task's stage list is different and lives best inside the task. The `aemit` shape is small enough that copying it across 4 tasks is clearer than abstracting it.
+
+### Tradeoffs accepted
+
+- **No frontend wiring for upload/render today.** The backend returns `stream_url` for `POST /videos/upload` + `POST /clips/{id}/render`, but the current static templates don't have terminal UI surfaces for those flows (the upload UI is API-only today, render is triggered API-only from the review surface). Issues 100 (onboarding wizard) and 95 (OBS integration) will consume those `stream_url`s when their UIs land.
+- **Improvement-brief streaming uses the same prompt structure as the non-streaming path** (per `_build_request` extraction). Cache breakpoints are interchangeable — same Issue-69 design Issue 86 honored for DNA brief. Cache hit rate observability inherits the same `cache` SSE event Issue 86 added.
+- **`_sync_channel_catalog_async`'s `aemit` calls are gated behind `task_id is not None`** so Beat-task callers (which already pass through `_refresh_youtube_analytics_async` without a task_id today) stay silent. Tests explicitly assert the no-emit case to pin this.
+
+### Files & tests
+
+- `worker/tasks.py` — `aemit` calls added to `_ingest_async`, `_transcribe_async`, `_signals_async`, `_render_clip_async`, `_sync_channel_catalog_async`, `_generate_improvement_brief_async`. `sync_channel_catalog` wrapper now passes `self.request.id` as `task_id` kwarg.
+- `improvement/brief.py` — extracted `_build_request` helper; added `task_id` kwarg + streaming path via `worker.anthropic_stream.stream_and_emit` (mirrors `dna/brief.py` Issue-86 pattern).
+- `routers/creators.py` — `sync_catalog` endpoint: `aset_owner` + `stream_url`.
+- `routers/improvement.py` — `start_improvement_brief` endpoint: `aset_owner` + `stream_url` (debounce-collapse case included).
+- `routers/clips.py` — `render_clip` endpoint: `aset_owner(clip_id, ...)` + `stream_url: /tasks/{clip_id}/events`.
+- `routers/videos.py` — `upload_video` endpoint: `aset_owner(video.id, ...)` + `stream_url`.
+- `static/onboarding.html` — `refreshDataGate()` subscribes to catalog-sync stream + terminal `<pre>` element.
+- `static/insights.html` — `loadBrief()` subscribes to brief stream + terminal `<pre>` element.
+- `tests/test_progress_emit_wiring.py` (NEW) — 8 tests pinning the emit sequences (video_id key for upload, clip_id key for render, Celery task_id key for catalog sync) + the terminal `done` event + router wiring (`stream_url` + `aset_owner` calls).
+
+**Tests:** 533 passed / 1 skipped / 89 deselected (default lane). Layer 0: ruff 0 / mypy 0 / format clean.
+
+---
+
+## 2026-05-31 — Issue 84: AI/LLM efficiency assessment + web_search tool bump
+
+### What was decided
+
+1. **Audited all three Anthropic call sites** (`dna/brief.py`, `clip_engine/scoring.py`, `improvement/brief.py`) against current (May 2026) Anthropic SDK + caching state, verified via industry-standards-researcher subagent. Wrote per-call-site reports + consolidated REPORT in `docs/assessment/llm/`.
+2. **Shipped one latency-and-cost win**: bumped `ANTHROPIC_WEB_SEARCH_TOOL` default from `web_search_20250305` → `web_search_20260209` (current GA). Adds dynamic filtering: Claude writes code to pre-filter web-search results before they reach the main context window, reducing tokens read and improving accuracy on the improvement brief. Tool API shape unchanged; 1-LOC config bump + 2 regression tests in `tests/test_brief_caching.py` (default-config assertion + actual-request-body assertion).
+3. **Captured remaining findings as follow-up issues to be filed** (not implemented in Issue 84):
+   - SDK 0.40 → 0.105.2 bump (65 minor versions stale, no breaking changes to our call sites, unlocks `cache_creation.ephemeral_5m_input_tokens`/`ephemeral_1h_input_tokens` TTL-tier logging).
+   - Drop unproductive `cache_control` markers from DNA brief + improvement brief (both prefixes < 1024-token Sonnet 4.6 floor → 1.25× write premium for zero reads). Needs SDK bump first to measure before/after via the new TTL-tier fields.
+   - Per-call-site model settings (`ANTHROPIC_MODEL_DNA`, `_CLIP_SCORING`, `_IMPROVEMENT_BRIEF`) + Haiku 4.5 A/B eval for clip scoring (~67% cost reduction on the highest-frequency call, needs `tests/eval/scenarios/*.yaml` validation).
+
+### Why
+
+User asked for a focused LLM efficiency assessment to inform downstream UX work (Issues 93/94 both surface LLM output). Issue 86 already added free cache-hit observability via the `cache` SSE event at every Anthropic call site, so the audit's raw material was in hand.
+
+The web_search bump is the smallest correct shipped win: 1 LOC + 1 test, lowest risk, immediate measurable benefit. The remaining findings each deserve their own scoped issue — bundling all of them into Issue 84 would have over-stuffed the deliverable and skipped the per-issue assess cycle that catches regressions cleanly.
+
+### Industry standard checked (2026-05-31 via industry-standards-researcher)
+
+- **Anthropic Python SDK:** latest GA `0.105.2`; no breaking changes between 0.40 and current on our call shapes; `client.count_tokens()` removed in v0.39 (we don't use it).
+- **Sonnet 4.6 cacheable-prefix minimum: 1024 tokens** (not 2048 as previously documented). Opus 4.6/4.7 minimum: 4096. Haiku 4.5 minimum: 4096.
+- **Cache TTLs:** two options — 5min ephemeral (1.25× write, 0.1× read), 1h ephemeral (2× write, 0.1× read). No 24h.
+- **Web search:** `web_search_20260209` is GA with dynamic filtering; `web_search_20250305` still supported (no filtering). Pricing: $10 per 1k searches + standard token costs.
+- **Model pricing (per MTok):** Opus 4.7 $5/$25, Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5.
+- **Extended thinking:** adaptive mode required on Opus 4.7; `budget_tokens` deprecated on Sonnet 4.6 / Opus 4.6 but still functional. **None of our call sites use thinking** — clean migration surface.
+- **No Opus 4.7-breaking parameters** anywhere on our surface (`temperature`, `top_p`, `top_k`, `budget_tokens`, assistant-turn prefills, `count_tokens()` all absent).
+
+Source: industry-standards-researcher subagent walked Anthropic docs, PyPI, GitHub changelog. Full record in this session's transcript.
+
+### Alternatives ruled out
+
+- **Bump SDK + remove type-ignores + add TTL-tier logging in Issue 84:** Too much surface for one issue. SDK bump deserves its own assess cycle (regression risk across 3 call sites + their tests).
+- **Flip clip_engine/scoring to Haiku 4.5 as the shipped win:** Cost is right (~67% reduction), but quality risk is unacceptable without an eval-harness A/B against `tests/eval/scenarios/*.yaml`. File as its own issue.
+- **Drop cache markers in Issue 84:** Want to measure cache_creation_input_tokens before/after via the new SDK's TTL-tier fields. Sequence after SDK bump.
+- **Implement co-located scoring + explanation (the Issue 94 pipeline candidate):** Out of Issue 84's audit scope — flagged for Issue 94's Phase-1.
+- **Move improvement brief to Batch API:** Premature — Issue 93's "what changed since last week" is the trigger that justifies the Batch shape. Flagged for Issue 93's Phase-1.
+
+### Tradeoffs accepted
+
+- **Wave 2 deliberately under-ships on Issue 84.** The audit found ~$0.027 per clip scored in cost-saving headroom (Haiku 4.5 swap) and ~10-15% input-token waste on two unused cache markers — none of it shipped this issue. Reason: each follow-up needs its own measurement + regression surface, and bundling would have made the verdict noisy.
+- **Recommended SLOs are provisional** (derived from Anthropic streaming defaults + qualitative worker observation). Re-baselining after 1 week of prod data via Issue-86's `cache` event is in the REPORT close-out.
+
+### Files & tests
+
+- New `docs/assessment/llm/dna_brief.md`, `clip_scoring.md`, `improvement_brief.md`, `REPORT.md`.
+- `config.py:51` — `ANTHROPIC_WEB_SEARCH_TOOL` default bumped + inline comment.
+- `.env.example:12` — same bump + updated description.
+- `tests/test_brief_caching.py` — 2 new tests (`test_default_web_search_tool_is_current_ga_version`, `test_improvement_brief_request_uses_configured_web_search_tool`).
+
+**Tests:** `tests/test_brief_caching.py` 5 passed.
+
+---
+
 ## 2026-05-31 — Wave 1 hotfix batch (2 SEV-1s from `/assess` + Issues 89/90/91/98)
 
 ### What was decided

@@ -39,6 +39,7 @@ class BuildQueuedOut(BaseModel):
 class CatalogSyncQueuedOut(BaseModel):
     task_id: str
     status: str
+    stream_url: str  # Issue 92: SSE endpoint for per-video metric progress
 
 
 class DnaProfileOut(BaseModel):
@@ -157,15 +158,23 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     invocation costs YouTube quota. (Issue 87)
     """
     from observability import log_event
+    from worker import progress
     from worker.tasks import sync_channel_catalog
 
     task = sync_channel_catalog.delay(str(creator.id))
+    # Issue 92: stamp ownership so the SSE endpoint can authorize the stream
+    # against the requesting creator (same pattern as /me/dna/build).
+    await progress.aset_owner(task.id, str(creator.id))
     log_event(
         "catalog_sync_requested",
         creator_id=str(creator.id),
         task_id=task.id,
     )
-    return {"task_id": task.id, "status": "queued"}
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "stream_url": f"/tasks/{task.id}/events",
+    }
 
 
 @router.post("/me/dna/build", status_code=202, response_model=BuildQueuedOut)

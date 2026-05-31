@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 class BriefQueuedOut(BaseModel):
     status: str
     task_id: str | None
+    stream_url: str | None = (
+        None  # Issue 92: SSE endpoint for live progress (None on debounce-collapse)
+    )
 
 
 class ImprovementBriefOut(BaseModel):
@@ -71,7 +74,10 @@ async def start_improvement_brief(
         select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
     )
     if row is not None and row.status == ImprovementBriefStatus.pending:
-        return {"status": "pending", "task_id": row.job_id}
+        # Debounced: the in-flight task's owner key was stamped on its original
+        # enqueue, so the client can re-subscribe to the same stream_url.
+        stream_url = f"/tasks/{row.job_id}/events" if row.job_id else None
+        return {"status": "pending", "task_id": row.job_id, "stream_url": stream_url}
 
     if row is None:
         row = ImprovementBrief(creator_id=creator.id)
@@ -84,14 +90,21 @@ async def start_improvement_brief(
     row.job_id = None
     await session.commit()
 
+    from worker import progress
     from worker.tasks import generate_improvement_brief as generate_improvement_brief_task
 
     task = generate_improvement_brief_task.delay(str(creator.id))
+    # Issue 92: stamp ownership so /tasks/{task.id}/events authorizes the stream.
+    await progress.aset_owner(task.id, str(creator.id))
     row.job_id = task.id
     await session.commit()
     logger.info("Improvement brief queued for creator %s (task %s)", creator.id, task.id)
 
-    return {"status": "pending", "task_id": task.id}
+    return {
+        "status": "pending",
+        "task_id": task.id,
+        "stream_url": f"/tasks/{task.id}/events",
+    }
 
 
 @router.get("/me/improvement-brief", response_model=ImprovementBriefOut)

@@ -37,6 +37,9 @@ class VideoListItemOut(BaseModel):
 class VideoLinkedOut(BaseModel):
     video_id: str
     status: str
+    stream_url: str | None = (
+        None  # Issue 92: SSE for the upload ingest pipeline; None on /videos/link (no pipeline)
+    )
 
 
 class VideoStatusOut(BaseModel):
@@ -252,6 +255,14 @@ async def upload_video(
     await session.commit()
     await session.refresh(video)
 
+    # Issue 92: stamp ownership for the upload chain's SSE stream BEFORE we
+    # enqueue the chain. The worker tasks (_ingest_async, _transcribe_async,
+    # _signals_async) all emit to task:{video.id}:events — using video_id as
+    # the stream key keeps the client lookup deterministic across the chain
+    # without piping the Celery chain id through every stage.
+    from worker import progress
+
+    await progress.aset_owner(str(video.id), str(creator.id))
     start_pipeline(str(video.id))
 
     from observability import log_event
@@ -266,7 +277,11 @@ async def upload_video(
         bytes_received=bytes_received,
     )
 
-    return {"video_id": str(video.id), "status": video.ingest_status.value}
+    return {
+        "video_id": str(video.id),
+        "status": video.ingest_status.value,
+        "stream_url": f"/tasks/{video.id}/events",
+    }
 
 
 @router.get("/{video_id}/status", response_model=VideoStatusOut)

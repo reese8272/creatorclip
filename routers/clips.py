@@ -40,6 +40,7 @@ class ClipListOut(BaseModel):
 class RenderQueuedOut(BaseModel):
     task_id: str
     status: str
+    stream_url: str  # Issue 92: SSE endpoint for render progress
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -144,10 +145,20 @@ async def render_clip(
     if clip.render_status == RenderStatus.running:
         raise HTTPException(status_code=409, detail="Render already in progress")
 
+    from worker import progress
     from worker.tasks import render_clip as render_task
 
     task = render_task.delay(str(clip_id))
-    return {"task_id": task.id, "status": "queued"}
+    # Issue 92: use clip_id (not task.id) as the SSE stream key — the worker
+    # task emits to task:{clip_id}:events for the same deterministic-lookup
+    # reason as the upload chain (the frontend already has clip_id in URL).
+    # Ownership is stamped against clip_id, not task.id.
+    await progress.aset_owner(str(clip_id), str(creator.id))
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "stream_url": f"/tasks/{clip_id}/events",
+    }
 
 
 @clips_router.get("/{clip_id}", response_model=ClipOut)

@@ -186,9 +186,12 @@ def sync_channel_catalog(self, creator_id: str) -> str:
     (creator_id, youtube_video_id) rows. YouTubeAuthError is terminal
     (token revoked — surfaces the row deletion via the existing refresh
     path); transient errors retry.
+
+    Issue 92: passes ``self.request.id`` as the SSE stream key so the
+    catalog-sync UI can subscribe to per-video metric progress.
     """
     try:
-        run_async(_sync_channel_catalog_async(creator_id))
+        run_async(_sync_channel_catalog_async(creator_id, task_id=self.request.id))
     except YouTubeAuthError:
         # Permanent — the token is dead. Don't retry; the next refresh tick
         # will delete the YoutubeToken row via the existing handler.
@@ -298,121 +301,202 @@ async def _set_status(video_id: str, status: IngestStatus) -> None:
 
 
 async def _ingest_async(video_id: str) -> None:
+    """Ingest stage of the upload chain.
+
+    Progress (Issue 92): emits step events to ``task:{video_id}:events``.
+    The frontend subscribes via ``/tasks/{video_id}/events`` — using the
+    video_id as the SSE stream key keeps the client lookup deterministic
+    across the chain (no need to pipe a Celery chain id through every
+    stage; the client already knows the video_id from the upload response).
+    """
+    from worker.progress import aemit
     from worker.storage import alocal_path, aupload_file
     from youtube.ingest import extract_audio_wav
 
-    async with db.AdminSessionLocal() as session:
-        video = await session.get(Video, uuid.UUID(video_id))
-        if not video:
-            raise ValueError(f"Video {video_id} not found")
-        if not video.source_uri:
-            raise ValueError(f"Video {video_id} has no source_uri — upload the file first")
-        source_uri = video.source_uri
-        video.ingest_status = IngestStatus.running
-        await session.commit()
+    try:
+        await aemit(video_id, "step", label="ingest_start", stage="ingest")
 
-    duration_s: float | None = None
-    async with alocal_path(source_uri) as src:
-        from youtube.ingest import probe_duration_s
-
-        # Offload sync subprocess + ffmpeg + boto3 work to a worker thread so the
-        # event loop is not blocked for the duration of the call (Issue 38 Wave 1).
-        duration_s = await asyncio.to_thread(probe_duration_s, src)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            wav_path = Path(tmp.name)
-        try:
-            await asyncio.to_thread(extract_audio_wav, src, wav_path)
-            audio_uri = await aupload_file(wav_path, f"audio/{video_id}.wav")
-        finally:
-            wav_path.unlink(missing_ok=True)
-
-    async with db.AdminSessionLocal() as session:
-        video = await session.get(Video, uuid.UUID(video_id))
-        if video:
-            video.source_uri = audio_uri
-            if duration_s and not video.duration_s:
-                video.duration_s = duration_s
-            if duration_s:
-                from billing.ledger import deduct_for_video
-
-                await deduct_for_video(video.id, video.creator_id, duration_s, session)
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, uuid.UUID(video_id))
+            if not video:
+                raise ValueError(f"Video {video_id} not found")
+            if not video.source_uri:
+                raise ValueError(f"Video {video_id} has no source_uri — upload the file first")
+            source_uri = video.source_uri
+            video.ingest_status = IngestStatus.running
             await session.commit()
+
+        duration_s: float | None = None
+        async with alocal_path(source_uri) as src:
+            from youtube.ingest import probe_duration_s
+
+            # Offload sync subprocess + ffmpeg + boto3 work to a worker thread so the
+            # event loop is not blocked for the duration of the call (Issue 38 Wave 1).
+            await aemit(video_id, "step", label="probe_duration", stage="ingest")
+            duration_s = await asyncio.to_thread(probe_duration_s, src)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                wav_path = Path(tmp.name)
+            try:
+                await aemit(
+                    video_id,
+                    "step",
+                    label="extract_audio",
+                    stage="ingest",
+                    duration_s=duration_s,
+                )
+                await asyncio.to_thread(extract_audio_wav, src, wav_path)
+                await aemit(video_id, "step", label="upload_audio", stage="ingest")
+                audio_uri = await aupload_file(wav_path, f"audio/{video_id}.wav")
+            finally:
+                wav_path.unlink(missing_ok=True)
+
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, uuid.UUID(video_id))
+            if video:
+                video.source_uri = audio_uri
+                if duration_s and not video.duration_s:
+                    video.duration_s = duration_s
+                if duration_s:
+                    from billing.ledger import deduct_for_video
+
+                    await aemit(video_id, "step", label="deduct_minutes", stage="ingest")
+                    await deduct_for_video(video.id, video.creator_id, duration_s, session)
+                await session.commit()
+    except Exception as exc:
+        # Safe message — exception args may carry internal detail. The
+        # generic shape matches the data-gate emit policy in _build_dna_async.
+        await aemit(
+            video_id,
+            "error",
+            stage="ingest",
+            message="Ingest failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
+        raise
 
 
 async def _transcribe_async(video_id: str) -> None:
+    """Transcribe stage of the upload chain. (Issue 92 progress wired.)"""
     from config import settings
     from ingestion.transcribe import transcribe_audio
+    from worker.progress import aemit
     from worker.storage import alocal_path
 
-    async with db.AdminSessionLocal() as session:
-        video = await session.get(Video, uuid.UUID(video_id))
-        if not video or not video.source_uri:
-            raise ValueError(f"Video {video_id} not ready for transcription")
-        source_uri = video.source_uri
+    try:
+        await aemit(video_id, "step", label="transcribe_start", stage="transcribe")
 
-    async with alocal_path(source_uri) as audio_path:
-        # transcribe_audio dispatches to sync Deepgram / AssemblyAI / WhisperX
-        # SDKs — offload to a thread so the event loop is free during the
-        # multi-second transcription round-trip (Issue 38 Wave 1). Bounded by
-        # TRANSCRIPTION_TIMEOUT_S so a hung provider fails (→ retry) instead
-        # of stalling forever (Issue 68).
-        result = await asyncio.wait_for(
-            asyncio.to_thread(transcribe_audio, str(audio_path)),
-            timeout=settings.TRANSCRIPTION_TIMEOUT_S,
-        )
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, uuid.UUID(video_id))
+            if not video or not video.source_uri:
+                raise ValueError(f"Video {video_id} not ready for transcription")
+            source_uri = video.source_uri
 
-    async with db.AdminSessionLocal() as session:
-        existing = await session.get(Transcript, uuid.UUID(video_id))
-        if existing:
-            existing.source = result["source"]
-            existing.segments_jsonb = result
-        else:
-            session.add(
-                Transcript(
-                    video_id=uuid.UUID(video_id),
-                    source=result["source"],
-                    segments_jsonb=result,
-                )
+        async with alocal_path(source_uri) as audio_path:
+            # transcribe_audio dispatches to sync Deepgram / AssemblyAI / WhisperX
+            # SDKs — offload to a thread so the event loop is free during the
+            # multi-second transcription round-trip (Issue 38 Wave 1). Bounded by
+            # TRANSCRIPTION_TIMEOUT_S so a hung provider fails (→ retry) instead
+            # of stalling forever (Issue 68).
+            await aemit(
+                video_id,
+                "step",
+                label="transcribe_audio",
+                stage="transcribe",
+                backend=settings.TRANSCRIPTION_BACKEND,
             )
-        await session.commit()
+            result = await asyncio.wait_for(
+                asyncio.to_thread(transcribe_audio, str(audio_path)),
+                timeout=settings.TRANSCRIPTION_TIMEOUT_S,
+            )
+
+        await aemit(
+            video_id,
+            "step",
+            label="store_transcript",
+            stage="transcribe",
+            segment_count=len(result.get("segments", [])) if isinstance(result, dict) else 0,
+        )
+        async with db.AdminSessionLocal() as session:
+            existing = await session.get(Transcript, uuid.UUID(video_id))
+            if existing:
+                existing.source = result["source"]
+                existing.segments_jsonb = result
+            else:
+                session.add(
+                    Transcript(
+                        video_id=uuid.UUID(video_id),
+                        source=result["source"],
+                        segments_jsonb=result,
+                    )
+                )
+            await session.commit()
+    except Exception as exc:
+        await aemit(
+            video_id,
+            "error",
+            stage="transcribe",
+            message="Transcription failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
+        raise
 
 
 async def _signals_async(video_id: str) -> None:
+    """Final stage of the upload chain. Emits the terminal ``done`` event."""
     from sqlalchemy import select
 
     from ingestion.audio import extract_audio_events
     from ingestion.signals import build_signal_timeline
+    from worker.progress import aemit
     from worker.storage import alocal_path
 
-    async with db.AdminSessionLocal() as session:
-        video = await session.get(Video, uuid.UUID(video_id))
-        if not video or not video.source_uri:
-            raise ValueError(f"Video {video_id} not ready for signal extraction")
-        source_uri = video.source_uri
-        retention_result = await session.execute(
-            select(RetentionCurve).where(RetentionCurve.video_id == video.id)
+    try:
+        await aemit(video_id, "step", label="signals_start", stage="signals")
+
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, uuid.UUID(video_id))
+            if not video or not video.source_uri:
+                raise ValueError(f"Video {video_id} not ready for signal extraction")
+            source_uri = video.source_uri
+            retention_result = await session.execute(
+                select(RetentionCurve).where(RetentionCurve.video_id == video.id)
+            )
+            retention_points = list(retention_result.scalars())
+
+        async with alocal_path(source_uri) as audio_path:
+            # extract_audio_events is librosa-backed (sync, CPU + IO heavy).
+            # Offload so the event loop stays responsive (Issue 38 Wave 1).
+            await aemit(video_id, "step", label="extract_audio_events", stage="signals")
+            audio_events = await asyncio.to_thread(extract_audio_events, str(audio_path))
+
+        await aemit(video_id, "step", label="build_timeline", stage="signals")
+        timeline = build_signal_timeline(audio_events, retention_points)
+
+        async with db.AdminSessionLocal() as session:
+            existing = await session.get(Signals, uuid.UUID(video_id))
+            if existing:
+                existing.timeline_jsonb = timeline
+            else:
+                session.add(Signals(video_id=uuid.UUID(video_id), timeline_jsonb=timeline))
+            video = await session.get(Video, uuid.UUID(video_id))
+            if video:
+                video.ingest_status = IngestStatus.done
+                if video.ingest_done_at is None:
+                    video.ingest_done_at = datetime.now(UTC)
+            await session.commit()
+
+        # Terminal event — the upload chain is done. Sets TTL on the stream
+        # so a creator who comes back ~1h later can still see the result.
+        await aemit(video_id, "done", stage="signals", message="Ingest complete.")
+    except Exception as exc:
+        await aemit(
+            video_id,
+            "error",
+            stage="signals",
+            message="Signal extraction failed; retrying.",
+            exc_type=type(exc).__name__,
         )
-        retention_points = list(retention_result.scalars())
-
-    async with alocal_path(source_uri) as audio_path:
-        # extract_audio_events is librosa-backed (sync, CPU + IO heavy).
-        # Offload so the event loop stays responsive (Issue 38 Wave 1).
-        audio_events = await asyncio.to_thread(extract_audio_events, str(audio_path))
-
-    timeline = build_signal_timeline(audio_events, retention_points)
-
-    async with db.AdminSessionLocal() as session:
-        existing = await session.get(Signals, uuid.UUID(video_id))
-        if existing:
-            existing.timeline_jsonb = timeline
-        else:
-            session.add(Signals(video_id=uuid.UUID(video_id), timeline_jsonb=timeline))
-        video = await session.get(Video, uuid.UUID(video_id))
-        if video:
-            video.ingest_status = IngestStatus.done
-            if video.ingest_done_at is None:
-                video.ingest_done_at = datetime.now(UTC)
-        await session.commit()
+        raise
 
 
 async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
@@ -436,64 +520,100 @@ def _render_start_for(clip: Clip) -> float:
 
 
 async def _render_clip_async(clip_id: str) -> None:
+    """Render a clip. Issue 92 progress wired — uses ``clip_id`` as the
+    SSE stream key for the same deterministic-lookup reason as the upload
+    chain. Per-frame ffmpeg progress is intentionally NOT parsed here (the
+    encode runs as a single ``asyncio.to_thread`` shell-out); we emit
+    step-level boundaries instead — start/encode/upload/done.
+    """
     from clip_engine.render import render_clip_file
+    from worker.progress import aemit
     from worker.storage import alocal_path, aupload_file
 
-    async with db.AdminSessionLocal() as session:
-        clip = await session.get(Clip, uuid.UUID(clip_id))
-        if not clip:
-            raise ValueError(f"Clip {clip_id} not found")
-        # Idempotent under at-least-once delivery (Issue 62): a redelivered render
-        # must not re-encode and last-writer-win the URI. Skip if already done.
-        if clip.render_status == RenderStatus.done and clip.render_uri:
-            logger.info("Clip %s already rendered — skipping", clip_id)
-            return
-        video = await session.get(Video, clip.video_id)
-        if not video or not video.source_uri:
-            raise ValueError(f"Source video not available for clip {clip_id}")
-        source_uri = video.source_uri
-        # Snapshot the timing fields into locals — session closes at the end of
-        # this with-block, after which `clip.start_s` would emit an implicit
-        # SELECT to refresh the expired attribute (Issue 38 Wave 1).
-        setup_start_s = clip.setup_start_s
-        start_s = clip.start_s
-        end_s = clip.end_s
-        clip.render_status = RenderStatus.running
-        await session.commit()
+    try:
+        await aemit(clip_id, "step", label="render_start", stage="render")
 
-    async with alocal_path(source_uri) as src:
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            out_path = Path(tmp.name)
-        try:
-            # render_clip_file shells out to ffmpeg via subprocess.run; upload_file
-            # is sync boto3. Both go to a worker thread so the event loop stays
-            # free during the multi-second render + upload (Issue 38 Wave 1).
-            # Render from the computed setup boundary (CLIPPING_PRINCIPLE #2 —
-            # "clip the setup, not the aftermath"), NOT the fixed peak−window
-            # `start_s` fallback. setup_start_s is nullable; fall back to start_s
-            # only if it was never computed so a legacy clip still renders a
-            # valid range. (Issue 59)
-            await asyncio.to_thread(
-                render_clip_file,
-                source_path=src,
-                start_s=setup_start_s if setup_start_s is not None else start_s,
-                end_s=end_s,
-                out_path=out_path,
-            )
-            render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
-        finally:
-            out_path.unlink(missing_ok=True)
-
-    async with db.AdminSessionLocal() as session:
-        clip = await session.get(Clip, uuid.UUID(clip_id))
-        if clip:
-            clip.render_uri = render_uri
-            clip.render_status = RenderStatus.done
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            if not clip:
+                raise ValueError(f"Clip {clip_id} not found")
+            # Idempotent under at-least-once delivery (Issue 62): a redelivered render
+            # must not re-encode and last-writer-win the URI. Skip if already done.
+            if clip.render_status == RenderStatus.done and clip.render_uri:
+                logger.info("Clip %s already rendered — skipping", clip_id)
+                await aemit(
+                    clip_id,
+                    "done",
+                    stage="render",
+                    message="Clip already rendered.",
+                )
+                return
+            video = await session.get(Video, clip.video_id)
+            if not video or not video.source_uri:
+                raise ValueError(f"Source video not available for clip {clip_id}")
+            source_uri = video.source_uri
+            # Snapshot the timing fields into locals — session closes at the end of
+            # this with-block, after which `clip.start_s` would emit an implicit
+            # SELECT to refresh the expired attribute (Issue 38 Wave 1).
+            setup_start_s = clip.setup_start_s
+            start_s = clip.start_s
+            end_s = clip.end_s
+            clip_duration_s = end_s - (setup_start_s if setup_start_s is not None else start_s)
+            clip.render_status = RenderStatus.running
             await session.commit()
 
-    logger.info("Clip %s rendered → %s", clip_id, render_uri)
+        await aemit(clip_id, "step", label="download_source", stage="render")
+        async with alocal_path(source_uri) as src:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                out_path = Path(tmp.name)
+            try:
+                # render_clip_file shells out to ffmpeg via subprocess.run; upload_file
+                # is sync boto3. Both go to a worker thread so the event loop stays
+                # free during the multi-second render + upload (Issue 38 Wave 1).
+                # Render from the computed setup boundary (CLIPPING_PRINCIPLE #2 —
+                # "clip the setup, not the aftermath"), NOT the fixed peak−window
+                # `start_s` fallback. setup_start_s is nullable; fall back to start_s
+                # only if it was never computed so a legacy clip still renders a
+                # valid range. (Issue 59)
+                await aemit(
+                    clip_id,
+                    "step",
+                    label="ffmpeg_encode",
+                    stage="render",
+                    clip_duration_s=clip_duration_s,
+                )
+                await asyncio.to_thread(
+                    render_clip_file,
+                    source_path=src,
+                    start_s=setup_start_s if setup_start_s is not None else start_s,
+                    end_s=end_s,
+                    out_path=out_path,
+                )
+                await aemit(clip_id, "step", label="upload_r2", stage="render")
+                render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
+            finally:
+                out_path.unlink(missing_ok=True)
+
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            if clip:
+                clip.render_uri = render_uri
+                clip.render_status = RenderStatus.done
+                await session.commit()
+
+        logger.info("Clip %s rendered → %s", clip_id, render_uri)
+        await aemit(clip_id, "done", stage="render", message="Clip ready.")
+    except Exception as exc:
+        await aemit(
+            clip_id,
+            "error",
+            stage="render",
+            message="Render failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
+        raise
 
 
 async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
@@ -881,7 +1001,7 @@ async def _purge_stale_source_media_async() -> None:
         logger.info("Purged source media for %d video(s)", len(purged_ids))
 
 
-async def _sync_channel_catalog_async(creator_id: str) -> None:
+async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = None) -> None:
     """Fetch the creator's uploads playlist and upsert Video rows + their metrics.
 
     Two-phase: (1) `sync_video_catalog` upserts Video rows from the uploads
@@ -900,71 +1020,117 @@ async def _sync_channel_catalog_async(creator_id: str) -> None:
     YouTubeAuthError mid-loop is surfaced (terminal — the refresh tick will
     delete the YoutubeToken row); other per-video errors are logged and
     skipped so one bad video can't strand the whole catalog. (Issues 87, 88)
+
+    Issue 92: when ``task_id`` is provided, emits step events to
+    ``task:{task_id}:events`` so the catalog-sync UI can show per-video
+    metric progress. When None (Beat-task callers + tests), emits short-
+    circuit silently — no observer.
     """
     from sqlalchemy import select
 
+    from worker.progress import aemit
     from youtube.analytics import sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
 
+    async def _emit(event_type: str, **fields: object) -> None:
+        if task_id is not None:
+            await aemit(task_id, event_type, **fields)
+
     cid = uuid.UUID(creator_id)
-    async with db.AdminSessionLocal() as session:
-        creator = await session.get(Creator, cid)
-        if creator is None:
-            logger.warning("sync_channel_catalog: creator %s not found, skip", cid)
-            return
-        try:
-            access_token = await get_valid_access_token(creator.id, session)
-        except Exception as exc:
-            logger.warning("sync_channel_catalog: no valid token for %s: %s", cid, exc)
-            return
+    try:
+        async with db.AdminSessionLocal() as session:
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                logger.warning("sync_channel_catalog: creator %s not found, skip", cid)
+                await _emit("error", stage="catalog_sync", message="Creator not found.")
+                return
+            try:
+                access_token = await get_valid_access_token(creator.id, session)
+            except Exception as exc:
+                logger.warning("sync_channel_catalog: no valid token for %s: %s", cid, exc)
+                await _emit(
+                    "error",
+                    stage="catalog_sync",
+                    message="YouTube auth unavailable; reconnect.",
+                    exc_type=type(exc).__name__,
+                )
+                return
 
-        # Phase 1 — catalog upsert.
-        await sync_video_catalog(session, creator, access_token)
-        await session.commit()
+            # Phase 1 — catalog upsert.
+            await _emit("step", label="fetch_uploads", stage="catalog_sync")
+            await sync_video_catalog(session, creator, access_token)
+            await session.commit()
 
-        # Phase 2 — fetch metrics for any video that doesn't have them yet.
-        # Filtered query, not a global iterate-and-skip, so quota cost is bounded
-        # to truly-missing rows (re-runs are cheap).
-        unmeasured = (
-            (
-                await session.execute(
-                    select(Video)
-                    .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
-                    .where(
-                        Video.creator_id == creator.id,
-                        (VideoMetrics.video_id.is_(None))
-                        | (VideoMetrics.engagement_rate.is_(None)),
+            # Phase 2 — fetch metrics for any video that doesn't have them yet.
+            # Filtered query, not a global iterate-and-skip, so quota cost is bounded
+            # to truly-missing rows (re-runs are cheap).
+            unmeasured = (
+                (
+                    await session.execute(
+                        select(Video)
+                        .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
+                        .where(
+                            Video.creator_id == creator.id,
+                            (VideoMetrics.video_id.is_(None))
+                            | (VideoMetrics.engagement_rate.is_(None)),
+                        )
                     )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
 
-        fetched = 0
-        for video in unmeasured:
-            try:
-                await sync_video_analytics(session, video, creator, access_token)
-                fetched += 1
-            except YouTubeAuthError:
-                # Surface immediately — token is dead.
-                raise
-            except Exception as exc:
-                # repr() because some exceptions (httpx.ReadTimeout) have an
-                # empty str(); exc_info=True so the traceback is in the log
-                # rather than requiring an ssh + Python repro. (Issue 88 lesson)
-                logger.warning(
-                    "sync_channel_catalog: metrics fetch failed for video %s: %r",
-                    video.id,
-                    exc,
-                    exc_info=True,
-                )
-        await session.commit()
-        logger.info(
-            "sync_channel_catalog: creator %s synced (metrics fetched for %d new video(s))",
-            cid,
-            fetched,
+            total = len(unmeasured)
+            await _emit("step", label="sync_metrics_start", stage="catalog_sync", total=total)
+
+            fetched = 0
+            for i, video in enumerate(unmeasured, 1):
+                try:
+                    await sync_video_analytics(session, video, creator, access_token)
+                    fetched += 1
+                    await _emit(
+                        "step",
+                        label="sync_metrics",
+                        stage="catalog_sync",
+                        i=i,
+                        total=total,
+                    )
+                except YouTubeAuthError:
+                    # Surface immediately — token is dead.
+                    raise
+                except Exception as exc:
+                    # repr() because some exceptions (httpx.ReadTimeout) have an
+                    # empty str(); exc_info=True so the traceback is in the log
+                    # rather than requiring an ssh + Python repro. (Issue 88 lesson)
+                    logger.warning(
+                        "sync_channel_catalog: metrics fetch failed for video %s: %r",
+                        video.id,
+                        exc,
+                        exc_info=True,
+                    )
+            await session.commit()
+            logger.info(
+                "sync_channel_catalog: creator %s synced (metrics fetched for %d new video(s))",
+                cid,
+                fetched,
+            )
+            await _emit(
+                "done",
+                stage="catalog_sync",
+                message=f"Synced {fetched} new video(s).",
+                fetched=fetched,
+            )
+    except YouTubeAuthError:
+        await _emit("error", stage="catalog_sync", message="YouTube token revoked; reconnect.")
+        raise
+    except Exception as exc:
+        await _emit(
+            "error",
+            stage="catalog_sync",
+            message="Catalog sync failed; retrying.",
+            exc_type=type(exc).__name__,
         )
+        raise
 
 
 async def _refresh_youtube_analytics_async() -> None:
@@ -1069,81 +1235,148 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     already ``ready`` for this job short-circuits before the paid LLM call. On
     failure the row is marked ``failed`` with a SAFE message (no stack trace /
     token / PII) and the task retries. Per-creator isolation on every query (Issue 33).
+
+    Issue 92: ``job_id`` is the Celery task id, which doubles as the SSE
+    stream key — the router stamps ownership for the same id at enqueue
+    time. Step + token + cache events flow to ``task:{job_id}:events``.
+    The brief itself streams via the ``task_id`` kwarg on
+    ``generate_improvement_brief`` (Issue 92 added this mirroring the DNA
+    brief's Issue-86 pattern).
     """
     from sqlalchemy import select
 
     from dna.profile import get_active
     from improvement.brief import generate_improvement_brief as build_brief
     from models import ImprovementBrief, ImprovementBriefStatus
+    from worker.progress import aemit
 
-    cid = uuid.UUID(creator_id)
-    async with db.AsyncSessionLocal() as session:
-        row = (
-            await session.execute(
-                select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            logger.warning("generate_improvement_brief: no row for %s; nothing to do", creator_id)
-            return
+    try:
+        await aemit(job_id, "step", label="improvement_brief_start", stage="improvement_brief")
 
-        # Idempotency: this exact task already produced the brief (redelivery).
-        if row.job_id == job_id and row.status == ImprovementBriefStatus.ready:
-            logger.info("generate_improvement_brief: redelivery for %s — already built", creator_id)
-            return
+        cid = uuid.UUID(creator_id)
+        async with db.AsyncSessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                logger.warning(
+                    "generate_improvement_brief: no row for %s; nothing to do", creator_id
+                )
+                await aemit(
+                    job_id,
+                    "error",
+                    stage="improvement_brief",
+                    message="No brief request found.",
+                )
+                return
 
-        creator = await session.get(Creator, cid)
-        if creator is None:
-            row.status = ImprovementBriefStatus.failed
-            row.error = "Creator not found."
+            # Idempotency: this exact task already produced the brief (redelivery).
+            if row.job_id == job_id and row.status == ImprovementBriefStatus.ready:
+                logger.info(
+                    "generate_improvement_brief: redelivery for %s — already built",
+                    creator_id,
+                )
+                await aemit(
+                    job_id,
+                    "done",
+                    stage="improvement_brief",
+                    message="Brief already ready.",
+                )
+                return
+
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                row.status = ImprovementBriefStatus.failed
+                row.error = "Creator not found."
+                row.completed_at = datetime.now(UTC)
+                await session.commit()
+                await aemit(
+                    job_id,
+                    "error",
+                    stage="improvement_brief",
+                    message="Creator not found.",
+                )
+                return
+
+            try:
+                await aemit(
+                    job_id,
+                    "step",
+                    label="load_analytics",
+                    stage="improvement_brief",
+                )
+                metrics_result = await session.execute(
+                    select(VideoMetrics)
+                    .join(Video, VideoMetrics.video_id == Video.id)
+                    .where(Video.creator_id == creator.id)
+                    .order_by(VideoMetrics.fetched_at.desc())
+                    .limit(50)
+                )
+                all_metrics = list(metrics_result.scalars())
+                views_list = [m.views for m in all_metrics if m.views]
+                eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
+                dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
+
+                def _avg(lst: Sequence[float]) -> float | None:
+                    return sum(lst) / len(lst) if lst else None
+
+                analytics = {
+                    "channel_title": creator.channel_title,
+                    "videos_in_db": len(all_metrics),
+                    "avg_views": _avg(views_list),
+                    "avg_engagement_rate": _avg(eng_list),
+                    "avg_view_duration_s": _avg(dur_list),
+                }
+
+                dna_profile = await get_active(session, creator.id)
+                dna_brief = dna_profile.brief_text if dna_profile else None
+
+                await aemit(
+                    job_id,
+                    "step",
+                    label="call_claude",
+                    stage="improvement_brief",
+                )
+                # task_id propagates into improvement.brief.stream_and_emit,
+                # which forwards cache/token deltas on the same Redis stream.
+                brief_text = await asyncio.to_thread(
+                    build_brief,
+                    channel_title=creator.channel_title or "Unknown Channel",
+                    analytics=analytics,
+                    dna_brief=dna_brief,
+                    task_id=job_id,
+                )
+            except Exception as exc:
+                row.status = ImprovementBriefStatus.failed
+                row.error = "Brief generation failed — try again."
+                row.completed_at = datetime.now(UTC)
+                await session.commit()
+                logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
+                await aemit(
+                    job_id,
+                    "error",
+                    stage="improvement_brief",
+                    message="Brief generation failed; retrying.",
+                    exc_type=type(exc).__name__,
+                )
+                raise
+
+            row.status = ImprovementBriefStatus.ready
+            row.brief_text = brief_text
+            row.error = None
             row.completed_at = datetime.now(UTC)
             await session.commit()
-            return
-
-        try:
-            metrics_result = await session.execute(
-                select(VideoMetrics)
-                .join(Video, VideoMetrics.video_id == Video.id)
-                .where(Video.creator_id == creator.id)
-                .order_by(VideoMetrics.fetched_at.desc())
-                .limit(50)
+            logger.info("Improvement brief ready for creator %s", creator_id)
+            await aemit(
+                job_id,
+                "done",
+                stage="improvement_brief",
+                message="Brief ready.",
             )
-            all_metrics = list(metrics_result.scalars())
-            views_list = [m.views for m in all_metrics if m.views]
-            eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
-            dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
-
-            def _avg(lst: Sequence[float]) -> float | None:
-                return sum(lst) / len(lst) if lst else None
-
-            analytics = {
-                "channel_title": creator.channel_title,
-                "videos_in_db": len(all_metrics),
-                "avg_views": _avg(views_list),
-                "avg_engagement_rate": _avg(eng_list),
-                "avg_view_duration_s": _avg(dur_list),
-            }
-
-            dna_profile = await get_active(session, creator.id)
-            dna_brief = dna_profile.brief_text if dna_profile else None
-
-            brief_text = await asyncio.to_thread(
-                build_brief,
-                channel_title=creator.channel_title or "Unknown Channel",
-                analytics=analytics,
-                dna_brief=dna_brief,
-            )
-        except Exception as exc:
-            row.status = ImprovementBriefStatus.failed
-            row.error = "Brief generation failed — try again."
-            row.completed_at = datetime.now(UTC)
-            await session.commit()
-            logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
-            raise
-
-        row.status = ImprovementBriefStatus.ready
-        row.brief_text = brief_text
-        row.error = None
-        row.completed_at = datetime.now(UTC)
-        await session.commit()
-        logger.info("Improvement brief ready for creator %s", creator_id)
+    except Exception:
+        # The inner try/except above already emitted the error + persisted the
+        # row.failed state. This outer guard exists so a Redis emit failure
+        # at line entry does not silently swallow the original exception.
+        raise

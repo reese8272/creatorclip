@@ -52,47 +52,102 @@ Synthesise both into 3–5 specific, actionable improvements. For each:
 Keep total length under 600 words. Phrase predictions as likelihood estimates, not guarantees."""
 
 
-def generate_improvement_brief(
-    channel_title: str,
-    analytics: dict,
-    dna_brief: str | None = None,
-) -> str:
+def _build_request(channel_title: str, analytics: dict, dna_brief: str | None) -> tuple:
+    """Assemble (system, tools, messages) for both .create and .stream paths.
+
+    Extracted (Issue 92) so the streaming wrapper reuses the exact same shape —
+    keeps cache breakpoints identical across both call paths, mirroring the
+    Issue-86 split in ``dna/brief.py``.
     """
-    Call Claude with web_search to generate a data + research grounded improvement brief.
-    Returns brief_text with disclaimer appended.
-    """
-    payload = {"channel": channel_title, "analytics": analytics}
+    payload: dict[str, object] = {"channel": channel_title, "analytics": analytics}
     if dna_brief:
         payload["dna_summary"] = dna_brief[:1000]  # cap so system block stays cacheable
 
     analytics_json = json.dumps(payload, indent=2, default=str)
 
+    system: list[dict] = [
+        # Stable prefix — carries the cache breakpoint.
+        {
+            "type": "text",
+            "text": _SYSTEM_INSTRUCTIONS,
+            # `system` is typed as `list[dict]` here (not the SDK's TextBlockParam),
+            # so cache_control on a generic dict needs no type: ignore — the SDK
+            # accepts the field at runtime regardless of stub-typed-dict membership.
+            "cache_control": {"type": "ephemeral"},
+        },
+        # Volatile per-creator analytics — AFTER the breakpoint, never cached.
+        {"type": "text", "text": f"CREATOR ANALYTICS DATA:\n{analytics_json}"},
+    ]
+    tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Generate the improvement brief for '{channel_title}'. "
+                "Search for the most current YouTube algorithm guidance relevant "
+                "to this channel's niche before writing your recommendations."
+            ),
+        }
+    ]
+    return system, tools, messages
+
+
+def generate_improvement_brief(
+    channel_title: str,
+    analytics: dict,
+    dna_brief: str | None = None,
+    task_id: str | None = None,
+) -> str:
+    """
+    Call Claude with web_search to generate a data + research grounded improvement brief.
+    Returns brief_text with disclaimer appended.
+
+    Args:
+        task_id: Optional Celery task id (Issue 92). When set, switches to the
+            streaming path — cache hit/miss + text deltas flow to
+            ``task:{task_id}:events`` via ``worker.anthropic_stream.stream_and_emit``.
+            Mirrors ``dna/brief.py::generate_brief``'s Issue-86 pattern. When None
+            (default), uses the legacy ``.create()`` path so existing tests and
+            non-progress-aware callers keep working unchanged.
+    """
+    system, tools, messages = _build_request(channel_title, analytics, dna_brief)
+
+    if task_id is not None:
+        # Streaming path (Issue 92) — forwards message_start.usage + text_delta
+        # events to the SSE consumer. Same prompt structure as the .create()
+        # path so cache breakpoints are interchangeable between the two.
+        from worker.anthropic_stream import stream_and_emit
+
+        # The 120s timeout matters more here than on the streaming path
+        # (streaming returns first byte fast), but pass it through for parity.
+        client = _ANTHROPIC.with_options(timeout=120.0)
+        final_text, usage = stream_and_emit(
+            client,
+            task_id,
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=2000,
+            system=system,
+            messages=messages,
+        )
+        logger.info(
+            "improvement_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
+            usage["input_tokens"],
+            usage["cache_read"],
+            usage["cache_creation"],
+            usage["output_tokens"],
+        )
+        # stream_and_emit doesn't carry tool-result blocks today (web_search
+        # interleaves text/tool_use; stream_and_emit returns the LAST text
+        # block, which is the synthesised brief per Issue 69 pattern).
+        return final_text + _DISCLAIMER
+
     # web_search tool can take 60-120s; override the default 60s timeout per-call.
     response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=2000,
-        system=[
-            # Stable prefix — carries the cache breakpoint.
-            {
-                "type": "text",
-                "text": _SYSTEM_INSTRUCTIONS,
-                # anthropic 0.40's TextBlockParam stub predates cache_control (Issue 78c).
-                "cache_control": {"type": "ephemeral"},  # type: ignore[typeddict-unknown-key]
-            },
-            # Volatile per-creator analytics — AFTER the breakpoint, never cached.
-            {"type": "text", "text": f"CREATOR ANALYTICS DATA:\n{analytics_json}"},
-        ],
-        tools=[{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}],  # type: ignore[typeddict-item, typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"Generate the improvement brief for '{channel_title}'. "
-                    "Search for the most current YouTube algorithm guidance relevant to this channel's niche "
-                    "before writing your recommendations."
-                ),
-            }
-        ],
+        system=system,
+        tools=tools,
+        messages=messages,
     )
 
     logger.info(

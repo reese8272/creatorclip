@@ -6,6 +6,7 @@
   <title>AutoClip — Insights</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
+  <script src="/static/progressStream.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
@@ -48,6 +49,12 @@
       white-space: pre-wrap; font-size: 0.85rem; line-height: 1.65;
       color: #d0d0d0; margin-top: 16px; min-height: 40px;
     }
+    #brief-stream {
+      display: none; background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px;
+      padding: 10px 12px; margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem; color: #c8c8c8; max-height: 180px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+    }
     .loading { color: #888; font-size: 0.85rem; font-style: italic; }
     .error { color: #e74c3c; font-size: 0.85rem; }
   </style>
@@ -89,6 +96,7 @@
       <button class="btn btn-primary" id="brief-btn" onclick="loadBrief()">
         Generate brief
       </button>
+      <pre id="brief-stream"></pre>
       <div id="brief-output"></div>
     </div>
   </main>
@@ -125,12 +133,17 @@
       }
     }
 
+    let _briefSub = null;
     async function loadBrief() {
       const btn = document.getElementById('brief-btn');
       const out = document.getElementById('brief-output');
+      const stream = document.getElementById('brief-stream');
+      if (_briefSub) { _briefSub.close(); _briefSub = null; }
       btn.disabled = true;
       btn.textContent = 'Generating…';
       out.textContent = 'Generating your brief — this can take up to a minute…';
+      stream.style.display = 'none';
+      stream.textContent = '';
 
       // Kick off the background build (202). The brief is a ~minute-long
       // research call, so the GET below polls for the stored result.
@@ -148,6 +161,22 @@
         btn.disabled = false; btn.textContent = 'Retry';
         return;
       }
+
+      // Issue 92: subscribe to live brief progress (cache + step + token deltas)
+      // while the GET poll below picks up the stored final text. Belt-and-
+      // suspenders — if the stream drops, the poll still resolves.
+      try {
+        const startData = await start.clone().json();
+        if (typeof window.subscribeToTaskStream === 'function' && startData.stream_url) {
+          stream.style.display = 'block';
+          _briefSub = window.subscribeToTaskStream(startData.stream_url, {
+            onRender: function (text) {
+              stream.textContent = text;
+              stream.scrollTop = stream.scrollHeight;
+            },
+          });
+        }
+      } catch (e) { /* stream is optional; poll resolves anyway */ }
 
       const poll = async () => {
         const resp = await fetch('/creators/me/improvement-brief', { credentials: 'include' });
