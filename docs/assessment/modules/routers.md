@@ -1,220 +1,216 @@
-# routers — assessed 2026-05-30
+# routers — assessed 2026-05-31
 
 Slice: routers/auth.py, billing.py, clips.py, creators.py, improvement.py,
-review.py, tasks.py (NEW — Issue 86 SSE), upload_intel.py, videos.py.
-Focus this round: the new `/tasks/{task_id}/events` SSE endpoint (auth/ownership
-behavior, per-creator concurrent-cap correctness, Cloudflare header set, slot
-release on disconnect / terminal event / lifetime cap, `Last-Event-ID` resume
-hardening), and confirmation of the prior carryover SEV1 (response_model gap).
+review.py, tasks.py, upload_intel.py, videos.py. (No `health.py` /
+`improvement_brief.py` in tree — the prompt's filename guess was off; actual
+files are improvement.py and there is no separate health router.)
+Focus this round: Wave-1 deltas — videos.py Issues 89/90 (duration-aware
+balance pre-check + catalog-row filter) and re-verification of the prior
+SEV2 carryovers in tasks.py (404/403 enumeration oracle, unvalidated
+`Last-Event-ID`), plus confirmation that the Wave-1 hotfix in
+`worker/progress.py` (EXPIRE-on-every-INCR) actually closes the
+slot-recovery SEV2 the previous pass flagged.
 
 ## Findings
 
+### Wave-1 deltas confirmed clean
+
+- videos.py:228-233 — Issue 89 balance pre-check is correctly wired:
+  `check_balance_for_minutes(creator.id, video_minutes(duration_s), session)`
+  runs AFTER `probe_duration_s` returns a value and BEFORE the R2 PUT, gated
+  on `duration_s is not None` so unknown-duration uploads fall through to
+  the legacy path. The `except HTTPException: tmp_path.unlink(...); raise`
+  cleanup is correct — the 402 propagates with the temp file removed.
+  Predicate matches `deduct_for_video`'s internal `balance >= minutes`
+  (billing/ledger.py:203). No new isolation gap.
+
+- videos.py:77-82 — Issue 90 `Video.source_uri.isnot(None)` filter is
+  correctly added to the per-creator `WHERE` and excludes catalog-only
+  rows from the dashboard list. `creator_id` clause still present. No
+  change to the other catalog touchpoints in this module — those don't
+  surface lists.
+
+- worker/progress.py:225-232 — the Wave-1 EXPIRE-on-every-INCR hotfix is
+  in place and correctly closes the previous slot-recovery SEV2: a
+  long-held N>=1 stream now keeps its `sse:count:{creator_id}` key fresh
+  rather than letting it silently expire under it.
+
 ### Security & compliance (category 3)
 
-- [SEV2] routers/tasks.py:131-138 — ownership check is an enumeration oracle:
-  the 404/403 split lets an unauthenticated probe distinguish "task_id never
-  existed" (404) from "exists but belongs to another creator" (403). The
-  in-code comment at line 133-135 explicitly says "Either way: don't leak
-  whether the task ever existed" — but the implementation contradicts the
-  comment. With 32-char Celery UUIDs the search space is huge, so this is
-  bounded, but it's still a discoverable side channel and easy to fix. | fix:
-  return `404 "Unknown task"` for both the `owner is None` AND the
-  `owner != str(creator.id)` branches; log the distinction server-side for
-  debugging if needed. Add a regression test asserting creator B sees 404
-  (not 403) when probing creator A's task_id.
+- [SEV2 — STILL OPEN, prompt-flagged] routers/tasks.py:131-138 — ownership
+  check is an enumeration oracle: `owner is None → 404 "Unknown task"`
+  versus `owner != creator.id → 403 "Not your task"` lets an authenticated
+  creator distinguish "task_id never existed" from "exists but belongs to
+  another creator". The in-code comment at lines 133-135 explicitly
+  acknowledges "don't leak whether the task ever existed", but the
+  implementation contradicts itself. Wave-1 did not touch this. | fix:
+  return `404 "Unknown task"` for BOTH branches; if you need the 403
+  signal for debugging, log it server-side via `logger.info(...)`. Add a
+  regression test asserting creator B sees 404 (not 403) when probing
+  creator A's task_id.
 
-- [SEV2] routers/tasks.py:140 + worker/progress.py:204 — the client-supplied
-  `Last-Event-ID` header is forwarded raw into `XREAD` with no validation.
-  Redis expects the form `<ms>-<seq>` (or `$` / `0-0`); any other string —
-  e.g. `Last-Event-ID: bogus` or a multi-KB payload — triggers
-  `redis.exceptions.ResponseError: Invalid stream ID specified as stream
-  command argument`, which `aread_since` does not catch. The exception
-  propagates out of `_event_stream`; the `finally:` does release the SSE slot
-  (good — verified by Python semantics), but the client gets a mid-stream
-  500 / connection drop instead of a clean SSE `error` event, and a noisy
-  500 lands in the server logs on every malformed reconnect. | fix: at the
-  top of `_event_stream`, after acquiring the slot, validate
-  `last_event_id` matches `^\d+-\d+$` (or is the empty string); on
-  mismatch reset `cursor = "0-0"` and continue. Optionally also bound
-  the header length (e.g. reject >64 chars) before that check so a huge
-  header isn't even parsed. Add a unit test sending
+- [SEV2 — STILL OPEN, prompt-flagged] routers/tasks.py:140 — the
+  client-supplied `Last-Event-ID` header is forwarded raw into XREAD
+  (`worker/progress.py:204`) with no validation. Redis expects
+  `<ms>-<seq>` (or `$` / `0-0`); any other string raises
+  `redis.exceptions.ResponseError: Invalid stream ID...`, which
+  `aread_since` does not catch. The exception escapes `_event_stream`;
+  the `finally:` does release the slot (verified — Python semantics
+  guarantee `finally:` runs on exception), but the client sees a 500 /
+  connection drop and the server log fills with errors on each malformed
+  reconnect. Wave-1 did not touch this. | fix: at the top of
+  `_event_stream`, after acquiring the slot, validate
+  `last_event_id` against `^\d+-\d+$` (or empty); on mismatch reset
+  `cursor = "0-0"`. Cap header length at e.g. 64 chars before that check
+  so a huge header isn't even parsed. Add a unit test sending
   `Last-Event-ID: <evil>` and asserting a clean SSE error frame + slot
   released.
 
-- Auth path on `/tasks/{task_id}/events` clean: `get_current_creator` is a
-  Depends so an unauthenticated client gets 401 before any Redis lookup. No
-  `task_id` lookup leaks information to unauthenticated probes.
+- Per-creator isolation verified clean across all 19 endpoints:
+  - auth.py: token decrypt only at :188; cascade-delete via session.delete(creator) at :237.
+  - billing.py: webhook is signature-verified and idempotent (:144-148);
+    creator_id derived from Stripe metadata (creator-scoped on every write).
+  - clips.py: all reads/writes filter `creator_id == creator.id`
+    (:73, :115, :120, :142, :163). `_clip_response` reads from the
+    already-isolated row.
+  - creators.py: every `creator.id` derives from `get_current_creator`.
+    `aset_owner(task.id, str(creator.id))` at :186 stamps SSE ownership
+    from the authenticated principal, not from client input.
+  - improvement.py: VideoMetrics join scoped to `Video.creator_id` (:56-61),
+    closing the prior Issue-33 SEV-0. `ImprovementBrief` filtered by
+    `creator_id` on both POST and GET (:71, :106).
+  - review.py:50 — `clip.creator_id != creator.id` check before the
+    ClipFeedback write.
+  - tasks.py: ownership check at :131-137 (modulo the enumeration-oracle
+    SEV2 above; the isolation itself is enforced).
+  - upload_intel.py:38 — AudienceActivity filtered by `creator_id`.
+  - videos.py: every Video read/write is creator-scoped.
 
-- Per-creator isolation still verified clean across every other route in the
-  module (every creator-scoped read/write derives `creator.id` from the JWT;
-  the creators.py:158 `aset_owner(task.id, str(creator.id))` correctly stamps
-  the SSE ownership from the authenticated principal, not from any
-  client-supplied value).
+- OAuth token handling unchanged: `decrypt()` used at auth.py:188 for
+  revocation only; no token / refresh_token appears in any `logger.*`
+  line in the slice. PII safe in logs (channel_id / video_id / task_id
+  only).
 
-- OAuth token handling unchanged from prior pass: `decrypt()` only used in
-  `auth.py:170` for revocation; no token / email / secret appears in any
-  `logger.*` call in the module.
-
-- No virality promise anywhere in the new strings (`tasks.py` docstrings, SSE
-  event messages, BuildQueuedOut field).
+- No virality promise in any string, response, or prompt.
 
 ### Concurrency & scale (category 2)
 
-- [SEV2] routers/tasks.py:77 + worker/progress.py:214-232 — concurrent-cap
-  recovery window is up to 1 hour on abnormal process exit. The cap counter
-  `sse:count:{creator_id}` is INCR'd on slot acquire and DECR'd in the
-  generator's `finally:`. If the API replica is `SIGKILL`'d / OOM-killed /
-  hard-crashed mid-stream, the `finally:` never runs and the counter stays
-  inflated until the 3600s TTL set on first-INCR expires. A creator who hit
-  the cap (3) at the moment of crash is then locked out for up to an hour
-  with no manual recovery path. With ~hundreds of creators and one OOM, this
-  becomes a small but real support load. | fix: lower the TTL on
-  `sse:count:{creator_id}` to ~120-300s (an SSE stream that hasn't sent a
-  keepalive in that window is dead anyway, and the active streams will
-  re-INCR + re-set TTL on each reconnect — they self-heal). Alternatively,
-  refresh the TTL on every keepalive iteration of `_event_stream` so a
-  healthy long-running stream keeps the key fresh and a crashed stream's
-  key actually expires promptly.
+- [SEV2 — CARRIED, still open] videos.py:77-82, clips.py:118-123,
+  upload_intel.py:37-40 — unbounded `list(result.scalars())` with no
+  LIMIT/pagination on `GET /videos`, `GET /videos/{video_id}/clips`, and
+  `GET /me/upload-intel`. With Issue-87's catalog sync now bulk-loading
+  full upload playlists into `videos` (hundreds–thousands of rows for
+  established creators), the videos endpoint is the most acute: even
+  after the Issue-90 `source_uri IS NULL` filter, a creator with hundreds
+  of ingested videos still serializes the entire list per dashboard
+  hit. | fix: keyset pagination `?limit=&before=` with a hard cap (e.g.
+  100) on list_videos and list_clips; bound the AudienceActivity read by
+  the documented 168-row max (7 days × 24 hours).
 
-- routers/tasks.py:89 disconnect-poll cadence: `request.is_disconnected()`
-  is only consulted once per loop iteration, and `aread_since` then blocks
-  up to 12s on `XREAD`. A client that disconnects right after iteration
-  start can therefore waste one slot for ~12s before detection. This is
-  the design — `KEEPALIVE_INTERVAL_S = 12.0` is the intentional ceiling on
-  detection latency — and is acceptable given the 3-slot cap + 600s
-  lifetime ceiling. No change required.
+- routers/tasks.py:89 disconnect-poll cadence (12 s detection ceiling)
+  is documented and acceptable given the 3-slot cap + 600s lifetime
+  ceiling. No change.
 
-- routers/tasks.py:142-145 + worker/progress.py:204 — `StreamingResponse`
-  with `media_type="text/event-stream"` correctly emits headers before
-  iterating the async generator. The `_event_stream` body uses
-  `await client.xread(...)` (async redis) and `await request.is_disconnected()`
-  — no sync/blocking call lands on the loop thread. Clean.
+- routers/tasks.py:142-150 — StreamingResponse with `text/event-stream`,
+  three Cloudflare-safe headers all emitted; no sync/blocking call lands
+  on the loop thread (`await client.xread(...)`, `await
+  request.is_disconnected()`). Clean.
 
-- creators.py:158 `await progress.aset_owner(task.id, str(creator.id))` —
-  runs BEFORE the 202 response is returned to the client. Even though
-  `build_dna_task.delay()` could in principle dispatch + complete (and the
-  worker emit a `done` event) faster than this two-Redis-call sequence, the
-  client cannot see the `stream_url` until *after* `aset_owner` has
-  succeeded. So the documented race ("task fires + completes between
-  `.delay()` and `aset_owner`") only matters for the events emitted by the
-  worker between `.delay()` returning and `aset_owner` finishing — the
-  stream is persistent in Redis (XADD), so the client's subsequent
-  subscribe will simply replay those events from `0-0`. No correctness
-  issue.
-
-- routers/tasks.py:118 `@limiter.limit("120/minute")` shape correct for an
-  SSE endpoint: slowapi consults the limiter once per request, at connect.
-  Long-lived stream → one limiter check per stream → bounded reconnect
-  storms (max 120 connects/min/creator). The actual stream lifetime is
-  hard-capped to 600s via `MAX_STREAM_LIFETIME_S` so the limiter is not
-  responsible for stream-length enforcement.
-
-- All Cloudflare-safe headers confirmed emitted (routers/tasks.py:148-150):
-  `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`.
-  All three required for the prod Cloudflare Tunnel + Nginx-style proxy
-  buffering inhibition, all three present.
-
-- [SEV2 — carried from prior pass, still present] videos.py:65-66,
-  clips.py:118-123, upload_intel.py:37-40 — unbounded `list(result.scalars())`
-  with no LIMIT/pagination on `GET /videos`, `GET /videos/{id}/clips`, and
-  the audience-activity read. A creator with thousands of rows loads the
-  whole set into memory and serializes it in a single response. | fix:
-  add keyset or offset pagination (`?limit=&before=`) with a hard cap
-  (e.g. 100) on list_videos and list_clips; bound the AudienceActivity
-  read.
+- Module-level singletons (limiter, stripe client, `progress._SYNC` /
+  `_AIO` Redis clients) verified — no per-request client construction in
+  this slice.
 
 ### Resource lifecycle (category 1)
 
-- SSE generator slot release path verified: `aacquire_slot` runs INSIDE the
-  `try:` block (routers/tasks.py:77); `arelease_slot` runs in the `finally:`
-  at line 113-114. Python guarantees `finally:` executes on every normal
-  exit path (terminal event return, lifetime exceeded return, client
-  disconnect return) AND on every exception (including the `Last-Event-ID`
-  XREAD exception flagged above), AND when the async generator is GC'd
-  mid-iteration (StreamingResponse's anyio context calls `.aclose()` on
-  cancellation). The only case where DECR is skipped is hard process kill,
-  which is the SEV2 above. Clean apart from that.
+- DB sessions: every endpoint takes `session: AsyncSession = Depends(get_session)`
+  and FastAPI teardown closes them on every path including exception.
+  No bare `AsyncSession()` construction. Clean.
 
-- DB sessions across the module still come from `Depends(get_session)`;
-  closed on all paths by FastAPI dependency teardown. Clean.
+- videos.py:181-242 — temp-file lifecycle correct: `delete=False` for the
+  initial NamedTemporaryFile, `tmp_path.unlink(missing_ok=True)` runs on
+  (a) HTTPException during size-limit abort, (b) HTTPException from the
+  Issue-89 balance pre-check, (c) the duplicate-video 409 path, (d) the
+  R2 upload `finally`. All four exits verified. No leak.
 
-- Module-level singletons: `limiter`, stripe client, and now the
-  `worker/progress._SYNC` + `_AIO` Redis clients (used by the SSE endpoint).
-  No per-request Redis client construction. Clean.
+- SSE generator slot release verified: `aacquire_slot` inside `try:`,
+  `arelease_slot` in `finally:` (tasks.py:113-114). `finally:` runs on
+  every exit path including the unvalidated-Last-Event-ID exception
+  flagged above and on async-generator GC at StreamingResponse cancel.
 
-- Upload temp file removed in `finally` (videos.py:148-149, 165, 174) and
-  on the size-limit early-abort path. No leak.
-
-- billing webhook idempotency still in place (billing.py:144-148).
+- auth.py:189-193 — `httpx.AsyncClient(timeout=10)` constructed per
+  account-deletion call. This is at most ~5/hour per creator (the
+  rate-limit ceiling at :164) and only fires on right-to-erasure, so the
+  per-call construction is not a hot path. Acceptable.
 
 ### Error handling & API surface (category 7)
 
-- PRIOR SEV1 CLOSED: response_model coverage is now complete across the
-  module. All 18 endpoints listed in the 2026-05-29 pass now declare a
-  `*Out` Pydantic response_model (verified by grep of every `@router.` /
-  `@clips_router.` decorator against `response_model=`). The new
-  `routers/tasks.py:117` is the sole exemption — it returns
-  `text/event-stream`, not a JSON body, and is correctly listed in
-  `tests/test_response_models.py:23` with a citation to Issue 86. The
-  hand-built `_clip_response` dict at clips.py:45 is still present but
-  now flows through `ClipListOut`/`ClipOut`, so the response shape is
-  validated; it's a cleanup item, not a SEV.
+- Pydantic response_model coverage: every endpoint in the slice declares
+  a `*Out` model except `/tasks/{task_id}/events` (correctly exempt —
+  text/event-stream, not JSON) and the `/billing/webhook` (correctly
+  hidden from schema; returns dict to Stripe). Prior SEV1 stays closed.
+  19/19 endpoints conformant.
 
-- HTTP status codes correct on the new endpoint:
-  - 401 (via `get_current_creator` Depends) for unauthenticated requests
-  - 403 for ownership mismatch (see SEV2 enumeration-oracle finding above
-    for the recommendation to collapse to 404)
-  - 404 for unknown task
-  - 200 + `text/event-stream` for the streaming success path
-  All other status codes verified clean in the prior pass and unchanged.
+- HTTP status codes verified across all endpoints:
+  - 200 default; 201 on `/me/identity`, `/clips/{id}/feedback`; 202 on
+    queued jobs (catalog sync, DNA build, render, improvement-brief);
+    204 on account delete.
+  - 400 for invalid input / not-enough-data; 401 from `get_current_creator`
+    Depends; 402 from balance checks; 404 for not-found; 409 for
+    duplicate video / DNA-confirm race / render-in-progress; 413 for
+    upload size; 422 for invalid identity / youtube_video_id;
+    502 for Stripe upstream; 503 for billing-disabled.
+  - Webhook returns `{"status": "ignored"|"already_fulfilled"|"ok"}`
+    with 200 — correct Stripe contract (avoid retries on consumed
+    events).
 
-- Error messages safe across new code paths: tasks.py:136 / :138 details
-  are generic (`"Unknown task"` / `"Not your task"`); the in-stream
-  error events at lines 80 / 92 carry only short fixed strings — no
-  internal detail, no stack trace.
+- Error message safety: every `HTTPException(detail=...)` carries a
+  short generic string or the user-facing `check_balance_for_minutes`
+  copy. No DB error / stack trace / internal detail leaks to the client.
+  `auth.py:69` does include the upstream Google error string in the 400
+  detail — acceptable (Google's `error` query param is a fixed
+  vocabulary like `access_denied`, not stack data) but worth noting.
 
 ### Code cleanliness & typing (category 6)
 
-- [cleanup] clips.py:45 `_clip_response(clip: Clip) -> dict` — the
-  hand-maintained field mapping is now covered by `ClipListOut`/`ClipOut`
-  validation, but the dict shape is still maintained by hand and
-  duplicated by the response_model. Build the ClipOut directly:
-  `ClipOut.model_validate(...)` from a Clip → dict adapter or, better,
-  add `model_config = ConfigDict(from_attributes=True)` on ClipOut and
-  return `ClipOut.model_validate(clip)` directly so the field list lives
-  in exactly one place.
+- [cleanup — CARRIED, still open] clips.py:45 `_clip_response(clip: Clip) -> dict`
+  — the hand-mapped field dict is still maintained alongside `ClipOut`;
+  same fields in two places. | fix: add
+  `model_config = ConfigDict(from_attributes=True)` to `ClipOut` and
+  populate via `ClipOut.model_validate(clip)` so the field list lives
+  in one place. (Note: `principle`/`reasoning` come from
+  `signals_jsonb` so they need a `@model_validator(mode='before')` or
+  a thin pre-adapter — still simpler than a hand dict.)
 
-- [cleanup] routers/tasks.py:83 `loop = asyncio.get_event_loop()` —
-  deprecated in 3.12+ when not called from a coroutine that already has
-  a running loop. In this context there's always a running loop, so
-  prefer `loop = asyncio.get_running_loop()` to match the documented
-  3.12+ API and avoid a future deprecation warning.
+- [cleanup — CARRIED, still open] routers/tasks.py:83
+  `loop = asyncio.get_event_loop()` — deprecated when called from a
+  coroutine with a running loop in 3.12+. | fix: use
+  `asyncio.get_running_loop()`.
 
-- [cleanup] improvement.py:47 `_avg(lst)` from the prior pass — the file
-  no longer contains this helper; closed.
+- [cleanup] routers/videos.py:129 `import logging as _logging` inside
+  the `except` handler — the module already has logging available at
+  the top of `__init__` via the other routers, but this file has no
+  top-level `import logging`. Hoist `import logging` + `logger = logging.getLogger(__name__)`
+  to module scope to match the rest of the slice.
 
-- Inline `from ... import` inside handlers (clips.py / creators.py /
-  auth.py / improvement.py / tasks.py:154-155) remains deliberate
-  (import cycle / heavy-worker import avoidance) — not flagged.
+- Inline `from worker.tasks import ...` / `from observability import ...`
+  inside handlers is intentional (import-cycle / cold-import avoidance)
+  and matches the rest of the slice — not flagged.
+
+- All function signatures typed (mypy gate would catch any gap).
 
 ### Config & paths (category 8)
 
-- All paths absolute / tempfile-based.
-- New tunables in routers/tasks.py are module-level constants
-  (`MAX_CONCURRENT_SSE_PER_CREATOR=3`, `KEEPALIVE_INTERVAL_S=12.0`,
-  `MAX_STREAM_LIFETIME_S=600.0`) rather than `settings`. For a SSE-policy
-  knob this is fine (the values are operational defaults that rarely
-  change), and the choice is documented in-line. Not flagged — but if any
-  of the three need to be tuned in prod without a deploy, lift them into
-  `config.Settings`.
-- Per-creator rate limiting unchanged: `_creator_key` keys on JWT `sub`,
-  fallback to remote IP; acceptable.
+- All paths absolute (`tempfile.NamedTemporaryFile`, `Path(...)`).
+- New tunables (`MAX_CONCURRENT_SSE_PER_CREATOR=3`,
+  `KEEPALIVE_INTERVAL_S=12.0`, `MAX_STREAM_LIFETIME_S=600.0`) remain
+  module-level constants. Acceptable for SSE policy knobs that rarely
+  change in prod; not flagged.
+- No new env vars introduced this wave.
 
 ### Anthropic SDK (category 5)
 
-- n/a — the LLM streaming call lives in `worker/anthropic_stream.py` and
-  `dna/brief.py`; the router only opens / closes the SSE pipe. SDK
-  correctness is those modules' slice.
+- n/a — LLM streaming call lives in `worker/anthropic_stream.py` /
+  `dna/brief.py`. Routers only open / close the SSE pipe.
 
 ### Clip-quality correctness (category 4)
 
@@ -223,21 +219,21 @@ hardening), and confirmation of the prior carryover SEV1 (response_model gap).
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok (generator finally verified; one slot-recovery edge in cat. 2) |
-| 2 Concurrency & scale | 2 SEV2 (slot recovery on hard-kill; unbounded list endpoints carried over) |
-| 3 Security & compliance | 2 SEV2 (404/403 enumeration oracle; Last-Event-ID unvalidated) |
+| 1 Resource lifecycle | ok (Issue-89 temp-file cleanup verified; SSE slot release verified) |
+| 2 Concurrency & scale | 1 SEV2 (unbounded list endpoints — carried; the previous slot-recovery SEV2 is CLOSED by Wave-1 EXPIRE-on-every-INCR hotfix) |
+| 3 Security & compliance | 2 SEV2 (404/403 enumeration oracle; unvalidated Last-Event-ID) — both prompt-confirmed NOT addressed in Wave 1 |
 | 4 Clip-quality | n/a |
-| 5 Anthropic SDK | n/a (SDK call lives in worker/anthropic_stream.py + dna/brief.py) |
-| 6 Cleanliness & typing | 2 cleanup |
-| 7 Error handling / API | ok — PRIOR SEV1 response_model gap CLOSED (18/18 endpoints have *Out) |
+| 5 Anthropic SDK | n/a (lives in worker/anthropic_stream.py + dna/brief.py) |
+| 6 Cleanliness & typing | 3 cleanup (clip_response dup; get_event_loop deprecation; videos.py inline logging hoist) |
+| 7 Error handling / API | ok (19/19 endpoints have *Out or are correctly exempted; status codes correct) |
 | 8 Config & paths | ok |
 
 ## Module verdict
-NEEDS-WORK — no BLOCKERs; the prior SEV1 response_model gap is fully closed
-across all 18 endpoints, the new SSE endpoint correctly enforces ownership,
-emits all three Cloudflare-safe headers, hard-caps stream lifetime, and
-releases its concurrent-cap slot on every normal-exit path. Remaining work
-is small and isolated: collapse the 404/403 ownership oracle, validate the
-`Last-Event-ID` header before XREAD, and shorten the `sse:count` key TTL so
-a hard-killed API replica doesn't lock a creator out for an hour. The
-prior pagination SEV2 on three list endpoints is still open.
+NEEDS-WORK — no BLOCKERs; Wave-1's Issue-89 duration-aware balance pre-check
+and Issue-90 catalog-row filter are correctly wired and creator-scoped, and
+the upstream slot-recovery SEV2 from the prior pass is closed by the
+EXPIRE-on-every-INCR hotfix in `worker/progress.py`. Remaining open work
+is exactly the three SEV2s carried from the prior pass: collapse the
+tasks.py 404/403 ownership oracle, validate `Last-Event-ID` before XREAD,
+and add a hard-cap + keyset pagination on the three unbounded list
+endpoints (`/videos`, `/videos/{id}/clips`, `/me/upload-intel`).
