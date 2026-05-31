@@ -11,31 +11,136 @@
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <style>
-    /* Issue 99 Phase B — insights.html retrofit. */
+    /* Issue 93 — insights rebuild. Channel totals, DNA snapshot, top
+       & bottom performers, upload windows, improvement brief. Mono
+       data register on every numeric value. */
 
-    main { max-width: 720px; margin: 0 auto; padding: var(--space-8) var(--space-4); }
+    main { max-width: 880px; margin: 0 auto; padding: var(--space-8) var(--space-4); }
+
+    h2 {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 500;
+      margin-bottom: var(--space-3);
+    }
 
     .panel {
       background: var(--color-surface);
       border: 1px solid var(--color-border);
       border-radius: var(--radius);
-      padding: var(--space-6);
+      padding: var(--space-5);
       margin-bottom: var(--space-5);
     }
-    .panel h3 {
-      font-size: var(--text-md);
-      color: var(--color-text);
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
       margin-bottom: var(--space-4);
+    }
+    .panel-header h3 {
+      font-size: var(--text-md);
       font-weight: 500;
+      color: var(--color-text);
     }
     .panel-sub {
       font-size: var(--text-xs);
-      color: var(--color-text-muted);
-      margin-bottom: var(--space-4);
-      line-height: var(--leading-relaxed);
+      color: var(--color-text-subtle);
+    }
+    .panel-empty {
+      color: var(--color-text-subtle);
+      font-size: var(--text-sm);
+      font-style: italic;
     }
 
-    /* Upload-window rows — mono register for the activity % */
+    /* ── Channel totals (mono everywhere) ─────────────────────── */
+    .totals-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: var(--space-3);
+    }
+    .totals-cell {
+      padding: var(--space-3) var(--space-4);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      background: var(--color-bg);
+    }
+    .totals-cell .label {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .totals-cell .value {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-lg);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-top: var(--space-1);
+    }
+
+    /* ── DNA snapshot ──────────────────────────────────────────── */
+    .dna-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: var(--space-3);
+    }
+    .dna-cell {
+      padding: var(--space-3) var(--space-4);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      background: var(--color-bg);
+    }
+    .dna-cell .label {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .dna-cell .value {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-md);
+      color: var(--color-text);
+      font-weight: 500;
+      margin-top: var(--space-1);
+    }
+
+    /* ── Performer lists ───────────────────────────────────────── */
+    .perf-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: var(--space-3);
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--color-border);
+      align-items: baseline;
+    }
+    .perf-row:last-child { border-bottom: none; }
+    .perf-title {
+      color: var(--color-text);
+      font-size: var(--text-sm);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .perf-kind {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+    }
+    .perf-stat {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-sm);
+      color: var(--color-accent);
+      font-weight: 500;
+      text-align: right;
+    }
+
+    /* ── Upload windows ───────────────────────────────────────── */
     .window-row {
       display: flex;
       align-items: center;
@@ -52,7 +157,6 @@
       color: var(--color-accent);
       font-weight: 600;
     }
-
     .gap-section {
       margin-top: var(--space-5);
       padding-top: var(--space-5);
@@ -73,6 +177,7 @@
       color: var(--color-success);
     }
 
+    /* ── Brief output ─────────────────────────────────────────── */
     #brief-output {
       white-space: pre-wrap;
       font-size: var(--text-sm);
@@ -95,7 +200,6 @@
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-word;
-      line-height: var(--leading-normal);
     }
     .loading { color: var(--color-text-subtle); font-size: var(--text-sm); font-style: italic; }
     .error { color: var(--color-danger); font-size: var(--text-sm); }
@@ -121,9 +225,51 @@
   </div>
 
   <main>
+    <!-- Channel totals -->
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Channel snapshot</h3>
+        <span class="panel-sub">Last refresh from your YouTube analytics</span>
+      </div>
+      <div class="totals-grid" id="totals-grid">
+        <div class="totals-cell"><div class="label">Loading…</div><div class="value">—</div></div>
+      </div>
+    </div>
+
+    <!-- DNA stats -->
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Your DNA at a glance</h3>
+        <span class="panel-sub" id="dna-version">—</span>
+      </div>
+      <div class="dna-grid" id="dna-grid">
+        <div class="dna-cell"><div class="label">Loading…</div><div class="value">—</div></div>
+      </div>
+    </div>
+
+    <!-- Top performers -->
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Top performers</h3>
+        <span class="panel-sub">Drove your DNA. Lean into what worked.</span>
+      </div>
+      <div id="top-performers"><span class="loading">Loading…</span></div>
+    </div>
+
+    <!-- Bottom performers -->
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Underperformers</h3>
+        <span class="panel-sub">Useful contrast — patterns you've moved past.</span>
+      </div>
+      <div id="bottom-performers"><span class="loading">Loading…</span></div>
+    </div>
+
     <!-- Upload timing -->
     <div class="panel">
-      <h3>Best upload windows</h3>
+      <div class="panel-header">
+        <h3>Best upload windows</h3>
+      </div>
       <div id="timing-content" class="loading">Loading…</div>
       <div class="gap-section" id="gap-section" style="display:none">
         <div class="gap-label">Optimal gap between long-form → Short</div>
@@ -133,10 +279,10 @@
 
     <!-- Improvement brief -->
     <div class="panel">
-      <h3>Content improvement brief</h3>
-      <p class="panel-sub">
-        Uses live web research + your channel data. Takes ~15 seconds.
-      </p>
+      <div class="panel-header">
+        <h3>Content improvement brief</h3>
+        <span class="panel-sub">Live web research + your channel data. ~15s.</span>
+      </div>
       <button class="btn btn-primary" id="brief-btn" onclick="loadBrief()">
         Generate brief
       </button>
@@ -151,7 +297,65 @@
       window.location = '/auth/login';
     }
 
-    async function init() {
+    function formatNumber(n) {
+      if (n == null) return '—';
+      return n.toLocaleString();
+    }
+    function formatRate(r) {
+      if (r == null) return '—';
+      return (r * 100).toFixed(1) + '%';
+    }
+
+    async function loadInsights() {
+      const resp = await fetch('/creators/me/insights', { credentials: 'include' });
+      if (!resp.ok) {
+        document.getElementById('totals-grid').innerHTML =
+          '<span class="error">Could not load insights — try again.</span>';
+        return;
+      }
+      const data = await resp.json();
+
+      // Channel totals
+      const t = data.totals || {};
+      document.getElementById('totals-grid').innerHTML = `
+        <div class="totals-cell"><div class="label">Videos analysed</div><div class="value">${formatNumber(t.videos_analyzed)}</div></div>
+        <div class="totals-cell"><div class="label">Long-form</div><div class="value">${formatNumber(t.longs)}</div></div>
+        <div class="totals-cell"><div class="label">Shorts</div><div class="value">${formatNumber(t.shorts)}</div></div>
+        <div class="totals-cell"><div class="label">Ingested</div><div class="value">${formatNumber(t.ingested_done)}</div></div>
+        <div class="totals-cell"><div class="label">Minutes processed</div><div class="value">${formatNumber(t.total_minutes_processed)}</div></div>
+      `;
+
+      // DNA snapshot
+      const d = data.dna || {};
+      document.getElementById('dna-version').textContent =
+        d.version != null ? `v${d.version} · ${d.status}` : 'Not built yet';
+      const dnaCells = [
+        { label: 'Optimal clip', value: d.optimal_clip_len_s != null ? `${d.optimal_clip_len_s.toFixed(0)}s` : '—' },
+        { label: 'Best region',  value: d.best_source_region ? d.best_source_region.replace('_', ' ') : '—' },
+        { label: 'Upload gap',   value: d.optimal_upload_gap_h != null ? `${d.optimal_upload_gap_h.toFixed(1)}h` : '—' },
+      ];
+      document.getElementById('dna-grid').innerHTML = dnaCells.map(c =>
+        `<div class="dna-cell"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
+      ).join('');
+
+      // Performers
+      const renderPerf = (rows) => {
+        if (!rows || !rows.length) {
+          return '<div class="panel-empty">Build your DNA to surface this list.</div>';
+        }
+        return rows.map(p => `
+          <div class="perf-row">
+            <span class="perf-title">${p.title || p.youtube_video_id}</span>
+            <span class="perf-kind">${p.kind}</span>
+            <span class="perf-stat">${formatRate(p.engagement_rate)}</span>
+          </div>
+        `).join('');
+      };
+      document.getElementById('top-performers').innerHTML = renderPerf(data.top_performers);
+      document.getElementById('bottom-performers').innerHTML = renderPerf(data.bottom_performers);
+    }
+
+    async function loadTiming() {
       const resp = await fetch('/creators/me/upload-intel', { credentials: 'include' });
       const el = document.getElementById('timing-content');
       if (!resp.ok) {
@@ -160,17 +364,15 @@
       }
       const data = await resp.json();
       if (!data.data_available || !data.best_windows.length) {
-        el.innerHTML = '<span style="color:var(--color-text-subtle)">Not enough audience activity data yet. Connect your channel and sync data first.</span>';
+        el.innerHTML = '<span class="panel-empty">Not enough audience activity data yet. Connect your channel and sync data first.</span>';
         return;
       }
-
       el.innerHTML = data.best_windows.map(w => `
         <div class="window-row">
           <span class="window-label">${w.day_name} ${w.label}</span>
           <span class="window-score">${(w.activity_index * 100).toFixed(0)}%</span>
         </div>
       `).join('');
-
       if (data.optimal_gap_hours != null) {
         document.getElementById('gap-section').style.display = 'block';
         document.getElementById('gap-value').textContent = `${data.optimal_gap_hours.toFixed(1)}h`;
@@ -249,7 +451,10 @@
       setTimeout(poll, 3000);
     }
 
-    document.addEventListener('auth:ready', init);
+    document.addEventListener('auth:ready', () => {
+      loadInsights();
+      loadTiming();
+    });
   </script>
 
   <footer class="footer">

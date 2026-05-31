@@ -342,6 +342,30 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     )
 
 
+def test_insights_page_consumes_new_insights_endpoint():
+    """Issue 93 — rebuilt insights.html surfaces channel totals, DNA
+    snapshot, top + bottom performers, upload windows, improvement
+    brief. The Channel snapshot and DNA grid panels depend on
+    GET /creators/me/insights — pin the consumption."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "insights.html").read_text()
+
+    assert "/creators/me/insights" in src, (
+        "insights.html must fetch /creators/me/insights — the new "
+        "single-call aggregation endpoint (Issue 93)."
+    )
+    # Pin the new panels exist (the old version had only 2 panels)
+    for panel_id in ("totals-grid", "dna-grid", "top-performers", "bottom-performers"):
+        assert f'id="{panel_id}"' in src, (
+            f"insights.html must include the {panel_id} panel introduced "
+            f"by Issue 93. The pre-rebuild version had only timing + brief."
+        )
+    # Still has the existing upload-windows + brief panels
+    assert "/creators/me/upload-intel" in src
+    assert "/creators/me/improvement-brief" in src
+
+
 def test_walkthrough_page_exists_with_five_panels():
     """Issue 100 — first-run walkthrough has exactly 5 panels (the
     user-locked structure: what-this-is / DNA / what-a-clip-is /
