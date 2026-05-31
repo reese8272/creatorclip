@@ -40,7 +40,9 @@ class ClipListOut(BaseModel):
 class RenderQueuedOut(BaseModel):
     task_id: str
     status: str
-    stream_url: str  # Issue 92: SSE endpoint for render progress
+    stream_url: str | None = (
+        None  # Issue 92: SSE endpoint for render progress. Wave-5 Fix 1 — Optional: None on Redis aset_owner failure.
+    )
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -145,6 +147,8 @@ async def render_clip(
     if clip.render_status == RenderStatus.running:
         raise HTTPException(status_code=409, detail="Render already in progress")
 
+    import redis as _redis_pkg
+
     from worker import progress
     from worker.tasks import render_clip as render_task
 
@@ -152,12 +156,26 @@ async def render_clip(
     # Issue 92: use clip_id (not task.id) as the SSE stream key — the worker
     # task emits to task:{clip_id}:events for the same deterministic-lookup
     # reason as the upload chain (the frontend already has clip_id in URL).
-    # Ownership is stamped against clip_id, not task.id.
-    await progress.aset_owner(str(clip_id), str(creator.id))
+    # Wave-5 Fix 1: same fail-open posture as the other aset_owner sites —
+    # a Redis blip returns stream_url=None instead of 500-ing the request.
+    # The render task is already enqueued and will run.
+    stream_url: str | None = f"/tasks/{clip_id}/events"
+    try:
+        await progress.aset_owner(str(clip_id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "render aset_owner failed (Redis down?) clip_id=%s err=%s",
+            clip_id,
+            exc,
+        )
+        stream_url = None
+
     return {
         "task_id": task.id,
         "status": "queued",
-        "stream_url": f"/tasks/{clip_id}/events",
+        "stream_url": stream_url,
     }
 
 

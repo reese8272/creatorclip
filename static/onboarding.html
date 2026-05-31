@@ -7,6 +7,8 @@
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/progressStream.js"></script>
+  <script src="/static/activeTasks.js" defer></script>
+  <script src="/static/activityPanel.js" defer></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0;
@@ -163,6 +165,17 @@
               },
             });
           }
+          // Wave 5: also register with the global active-tasks store so the
+          // floating activity panel shows it AND the user can navigate to
+          // another page mid-sync without losing visibility.
+          if (window.activeTasks && data.stream_url && data.task_id) {
+            window.activeTasks.registerTask({
+              task_id: data.task_id,
+              kind: 'catalog_sync',
+              label: 'Syncing channel catalog',
+              stream_url: data.stream_url,
+            });
+          }
         }
       } catch (e) { /* fall through — we'll still poll the gate */ }
 
@@ -257,6 +270,17 @@
               status.innerHTML = '<span class="wait">' + msg + '</span>';
               btn.disabled = false;
             },
+          });
+        }
+        // Wave 5: also register with the global active-tasks store so the
+        // user can leave this page mid-build and still see progress on
+        // any other page via the floating activity panel.
+        if (window.activeTasks && data.stream_url && data.task_id) {
+          window.activeTasks.registerTask({
+            task_id: data.task_id,
+            kind: 'dna_build',
+            label: 'Building your Creator DNA',
+            stream_url: data.stream_url,
           });
         }
         // Belt-and-suspenders: also poll the DB so the UI converges even if

@@ -495,6 +495,161 @@ async def test_sync_channel_catalog_silent_when_no_task_id(mocker):
 # ── Routers — stream_url + aset_owner wiring ────────────────────────────────
 
 
+# ── Wave-5 Fix 1: fail-open aset_owner across all 3 remaining sites ──────────
+
+
+@pytest.mark.asyncio
+async def test_sync_catalog_router_fails_open_on_redis_down(mocker):
+    """Wave-5 Fix 1 — sync_catalog: Redis blip during aset_owner MUST NOT 500
+    the request. Same fail-open posture as Wave-3 Fix B (improvement brief)
+    and Wave-4 Fix 1 (upload)."""
+    import redis
+
+    from auth import SESSION_COOKIE, create_session_token, get_current_creator
+    from main import app
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+    # Per-creator cookie so the slowapi rate-limit bucket is unique per test
+    # (see docs/OFF_COURSE_BUGS.md 2026-05-31 entry).
+    session_cookie = {SESSION_COOKIE: create_session_token(creator.id)}
+
+    fake_task = MagicMock()
+    fake_task.id = "celery-sync-redis-down"
+    mocker.patch("worker.tasks.sync_channel_catalog.delay", return_value=fake_task)
+    aset_owner_mock = mocker.patch(
+        "worker.progress.aset_owner",
+        new_callable=AsyncMock,
+        side_effect=redis.ConnectionError("Redis down"),
+    )
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    try:
+        from fastapi.testclient import TestClient
+
+        with TestClient(app, raise_server_exceptions=False, cookies=session_cookie) as c:
+            resp = c.post("/creators/me/catalog/sync")
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert resp.status_code == 202, (
+        f"Wave-5 Fix 1: Redis-down on sync_catalog aset_owner MUST NOT 500. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert body["task_id"] == "celery-sync-redis-down"
+    assert body["stream_url"] is None, (
+        "Wave-5 Fix 1: stream_url MUST be None when aset_owner fails."
+    )
+    aset_owner_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_build_dna_router_fails_open_on_redis_down(mocker):
+    """Wave-5 Fix 1 — build_dna: same fail-open shape."""
+    import redis
+
+    from auth import SESSION_COOKIE, create_session_token, get_current_creator
+    from main import app
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+    session_cookie = {SESSION_COOKIE: create_session_token(creator.id)}
+
+    fake_task = MagicMock()
+    fake_task.id = "celery-dna-redis-down"
+    delay_mock = mocker.patch(
+        "worker.tasks.build_dna.delay",
+        return_value=fake_task,
+    )
+    aset_owner_mock = mocker.patch(
+        "worker.progress.aset_owner",
+        new_callable=AsyncMock,
+        side_effect=redis.ConnectionError("Redis down"),
+    )
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    try:
+        from fastapi.testclient import TestClient
+
+        with TestClient(app, raise_server_exceptions=False, cookies=session_cookie) as c:
+            resp = c.post("/creators/me/dna/build")
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert resp.status_code == 202, (
+        f"Wave-5 Fix 1: Redis-down on build_dna aset_owner MUST NOT 500. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert body["task_id"] == "celery-dna-redis-down"
+    assert body["stream_url"] is None
+    # The Celery task was still enqueued — the work proceeds even without SSE.
+    delay_mock.assert_called_once_with(str(creator.id))
+    aset_owner_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_render_router_fails_open_on_redis_down(mocker):
+    """Wave-5 Fix 1 — render_clip: same fail-open shape. aset_owner uses
+    clip_id (NOT task.id) as the stream key (Issue 92 design); fail-open
+    must use the SAME key for consistency."""
+    import redis
+
+    from auth import SESSION_COOKIE, create_session_token, get_current_creator
+    from db import get_session
+    from main import app
+    from models import Clip, RenderStatus
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+    clip_id = uuid.uuid4()
+    session_cookie = {SESSION_COOKIE: create_session_token(creator.id)}
+
+    clip_stub = MagicMock(spec=Clip)
+    clip_stub.creator_id = creator.id
+    clip_stub.render_status = RenderStatus.pending
+
+    fake_session = AsyncMock()
+    fake_session.scalar = AsyncMock(return_value=100)  # balance check passes
+    fake_session.get = AsyncMock(return_value=clip_stub)
+
+    async def _fake_session_gen():
+        yield fake_session
+
+    fake_task = MagicMock()
+    fake_task.id = "celery-render-redis-down"
+    delay_mock = mocker.patch("worker.tasks.render_clip.delay", return_value=fake_task)
+    aset_owner_mock = mocker.patch(
+        "worker.progress.aset_owner",
+        new_callable=AsyncMock,
+        side_effect=redis.ConnectionError("Redis down"),
+    )
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session_gen
+    try:
+        from fastapi.testclient import TestClient
+
+        with TestClient(app, raise_server_exceptions=False, cookies=session_cookie) as c:
+            resp = c.post(f"/clips/{clip_id}/render")
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 202, (
+        f"Wave-5 Fix 1: Redis-down on render aset_owner MUST NOT 500. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert body["task_id"] == "celery-render-redis-down"
+    assert body["stream_url"] is None
+    delay_mock.assert_called_once()
+    # Critically: aset_owner was called with clip_id (NOT task.id) — pins the
+    # Issue-92 deterministic-stream-key invariant even on the failure path.
+    aset_owner_mock.assert_awaited_once_with(str(clip_id), str(creator.id))
+
+
 @pytest.mark.asyncio
 async def test_sync_catalog_router_stamps_owner_and_returns_stream_url(mocker):
     """POST /me/catalog/sync must stamp ownership on the Celery task_id and

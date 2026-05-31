@@ -5,6 +5,73 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Wave 5: SEV1 hotfix + cross-tab task persistence + frontend visibility
+
+### What was decided
+
+Three fixes shipped as one wave because they share the SSE primitive's surface and ship together as a frontend resilience pass.
+
+**Fix 1 (SEV1 — Wave-4 regression closed)** — extended the fail-open `try/except redis.RedisError` posture to the 3 remaining `aset_owner` sites: `routers/creators.py::sync_catalog`, `routers/creators.py::build_dna`, `routers/clips.py::render_clip`. Each: 1-line wrap mirroring Wave-3 Fix B exactly. Response models updated to `stream_url: str | None = None`. Returns SEV1 count to 0. (The "uniform across every aset_owner site" claim from Wave-4 Fix 1's Phase-1 brief is now actually true.)
+
+**Fix 2 (cross-tab persistence)** — new `static/activeTasks.js` library managing localStorage + EventSource lifecycle for every in-progress background task. localStorage key `creatorclip:active_tasks`. On every page mount: prune entries older than 1h (matches server-side stream TTL), open EventSource per remaining entry, forward events to subscribers AND update entry's `last_event_id` for resume. Public API on `window.activeTasks`: `registerTask`, `getActiveTasks`, `subscribe`, `removeTask`. Single source of truth replacing the per-page subscription logic.
+
+**Fix 3 (global activity panel + frontend visibility)** — new `static/activityPanel.js` (~80 LOC + ~30 LOC CSS). Floating bottom-right widget on every authenticated page. Hidden when no tasks; collapsed badge "⚡ N running"; expanded shows per-task terminal-style streams. Reacts to `activeTasks.subscribe()`. Wired into all 6 authenticated templates (`index.html`, `onboarding.html`, `insights.html`, `profile.html`, `review.html`, `pricing.html`). The existing onboarding DNA-build and catalog-sync flows + insights improvement-brief flow now ALSO call `activeTasks.registerTask(...)` after their POST, so the global panel sees them. User can navigate away mid-build and still see live progress on whatever page they land on.
+
+### Why
+
+User's stated requirements (2026-05-31):
+- "When we are going from tab to tab, we are not refreshing the information. When we do an analysis or a DNA update, we let that run regardless of what tab they are on."
+- "I do not see a lot of the new features on the website."
+
+Backend already supported `Last-Event-ID` resume (Issue 86) and shipped `stream_url` on 5 endpoints (DNA build, catalog sync, improvement brief, upload, render). Only the frontend was making page-navigation drop the connection AND only 2 surfaces (`onboarding.html`, `insights.html`) had any UI to display the streams. The activity panel solves both at once: it persists across navigation AND it surfaces every active task on every page.
+
+Fix 1 closes the SEV1 from post-Wave-4 /assess that flagged the Wave-4 scope-discipline mistake (Fix 1's brief claimed "uniform across every aset_owner site" but only audited 1 of 4).
+
+### Industry standard checked
+
+**localStorage for ephemeral task state** — canonical 2026 pattern for SPA-like navigation without a framework. Prefix-namespaced (`creatorclip:`) to avoid collisions. 5MB browser quota is plenty for ≤3 concurrent tasks (matches our `aacquire_slot` cap from Issue 86). Cleanup on terminal events + 1h GC window matches the server-side stream TTL.
+
+**EventSource `Last-Event-ID` for resume** — native browser feature; the server-side primitive at `routers/tasks.py` already reads it. No polyfill needed; works in every modern browser.
+
+**No BroadcastChannel / SharedWorker** — these would help if the user wanted multiple BROWSER tabs of the app to share one EventSource. The user's stated need is page-navigation within ONE tab, which localStorage + resume handles cleanly. BroadcastChannel could be added later if the multi-browser-tab case arises; not part of this scope.
+
+**Floating bottom-right activity tray** — canonical 2026 pattern (Linear, Vercel deployments, Notion sync indicator, GitHub Actions). Bottom-right doesn't compete with primary content above the fold and stays out of keyboard nav from the top nav. Click-to-expand interaction (Linear's pattern).
+
+**No framework** — keep the vanilla-JS posture from `docs/SOT.md`. One-DOM-element widget + one localStorage interface + one subscribe() pattern is small enough to maintain without React/Vue/etc.
+
+### Alternatives ruled out
+
+- **sessionStorage instead of localStorage** (Fix 2) — clears on browser tab close, losing the resume. localStorage matches the user's intent.
+- **SharedWorker** (Fix 2) — overkill for ≤3 concurrent streams per creator; adds browser-compat complexity.
+- **Service Worker push notifications** (Fix 2) — would be the right shape if the user wanted notifications when the tab is closed entirely. Different concern; deferred.
+- **Top-nav badge with dropdown** (Fix 3) — competes with existing nav links; harder to reach with mouse from anywhere on the page.
+- **Per-page widgets only** (Fix 3) — what we had pre-Wave-5; doesn't solve the cross-tab visibility problem.
+- **Refactor existing per-page subscription logic to consume `activeTasks.js`** — would be the natural follow-up but I'd ship the new library + panel first, validate, then refactor. Keeps Wave 5 scope bounded; existing `subscribeToTaskStream` flows still work and ALSO register with activeTasks for the global panel.
+
+### Tradeoffs accepted
+
+- **The dashboard (`index.html`) doesn't trigger any SSE-returning endpoint today.** Upload + render endpoints return `stream_url` but the dashboard has no UI that calls `/videos/upload` (file upload is API-only today) or `/clips/{id}/render` (manual render is triggered from review.html). The script tags are still added so when those UIs land (Issue 95/100), the activity panel works without further wiring.
+- **Vanilla JS, no build step, no TypeScript.** Aligns with `docs/SOT.md`'s stance — review-UI framework is a flagged DECISIONS candidate, not a Wave-5 choice. The 2 new files are ~200 LOC total; would not benefit from a framework.
+- **No multi-browser-tab coordination.** Each open browser tab independently subscribes to its localStorage entries; the server-side `aacquire_slot` cap (3 per creator) bounds this. If a user opens 3 tabs of the app during a DNA build, each connects independently — the cap fires if they go for a 4th.
+- **The 1h GC window is fixed.** Matches `_STREAM_TTL_SECONDS=3600` in `worker/progress.py`. If we ever raise that TTL, the GC window should track.
+
+### Files & tests
+
+- `routers/creators.py` — Fix 1 (sync_catalog + build_dna fail-open, `BuildQueuedOut.stream_url`/`CatalogSyncQueuedOut.stream_url` now Optional)
+- `routers/clips.py` — Fix 1 (render_clip fail-open, `RenderQueuedOut.stream_url` Optional)
+- `static/activeTasks.js` — Fix 2 (NEW)
+- `static/activityPanel.js` — Fix 3 (NEW)
+- 6 authenticated templates — Fix 3 (script tag additions in `index.html`, `onboarding.html`, `insights.html`, `profile.html`, `review.html`, `pricing.html`)
+- `static/onboarding.html` — Fix 3 (existing DNA build + catalog sync flows now also call `activeTasks.registerTask`)
+- `static/insights.html` — Fix 3 (existing improvement brief flow now also calls `activeTasks.registerTask`)
+- `docs/SOT.md` — Fix 3 (static/ tree updated to list the two new files)
+- `tests/test_progress_emit_wiring.py` — Fix 1 (3 new tests: `test_sync_catalog_router_fails_open_on_redis_down`, `test_build_dna_router_fails_open_on_redis_down`, `test_render_router_fails_open_on_redis_down`)
+- `tests/test_static.py` — Fix 2 + Fix 3 (3 new tests: `test_active_tasks_library_exists_and_exports_api`, `test_activity_panel_library_exists_with_canonical_position`, `test_all_authenticated_templates_include_active_tasks_and_panel`)
+
+**Tests:** 553 passed / 1 skipped / 94 deselected (default lane). Layer 0: ruff 0 / mypy 0 / format clean.
+
+---
+
 ## 2026-05-31 — Wave 4: compliance + scale prep (3-fix batch)
 
 ### What was decided

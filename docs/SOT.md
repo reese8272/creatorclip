@@ -159,7 +159,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── review.html             # Fast clip review (player-first, single-player + Next)
 │   ├── profile.html            # Creator DNA view/edit
 │   ├── insights.html           # Upload timing + improvement brief
-│   └── progressStream.js       # Issue 86 — EventSource consumer that renders live task progress
+│   ├── progressStream.js       # Issue 86 — EventSource consumer that renders live task progress
+│   ├── activeTasks.js          # Wave 5 — localStorage + SSE resume across page navigation; window.activeTasks
+│   └── activityPanel.js        # Wave 5 — floating bottom-right widget; reacts to activeTasks.subscribe
 │
 ├── tests/
 │   ├── conftest.py

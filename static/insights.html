@@ -7,6 +7,8 @@
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/progressStream.js"></script>
+  <script src="/static/activeTasks.js" defer></script>
+  <script src="/static/activityPanel.js" defer></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
@@ -174,6 +176,16 @@
               stream.textContent = text;
               stream.scrollTop = stream.scrollHeight;
             },
+          });
+        }
+        // Wave 5: register with the global active-tasks store so the
+        // floating activity panel surfaces the brief on every page.
+        if (window.activeTasks && startData.stream_url && startData.task_id) {
+          window.activeTasks.registerTask({
+            task_id: startData.task_id,
+            kind: 'improvement_brief',
+            label: 'Generating improvement brief',
+            stream_url: startData.stream_url,
           });
         }
       } catch (e) { /* stream is optional; poll resolves anyway */ }

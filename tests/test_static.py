@@ -190,6 +190,118 @@ def test_dashboard_clips_counter_filters_by_render_status():
     )
 
 
+# ── Wave 5: global activity panel wired into every authenticated template ───
+
+
+def test_activity_panel_library_exists_with_canonical_position():
+    """Wave-5 Fix 3: static/activityPanel.js is the floating bottom-right
+    widget that surfaces in-progress background tasks across all pages.
+    Pins (a) the file exists, (b) the canonical bottom-right Linear/Vercel-
+    style position, (c) the dependency contract on activeTasks.js."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "activityPanel.js").read_text()
+
+    assert "window.activeTasks" in src or "global.activeTasks" in src, (
+        "activityPanel.js MUST consume window.activeTasks — it's the "
+        "single source of truth for in-progress tasks (Wave-5 Fix 2)."
+    )
+    # Industry-standard 2026 floating activity tray position (Linear, Vercel,
+    # Notion). Bottom-right doesn't compete with primary content above the
+    # fold and stays out of keyboard nav from the top nav.
+    assert "bottom" in src and "right" in src, (
+        "activityPanel.js must use the canonical bottom-right floating "
+        "position; pins the design decision so a future restyle doesn't "
+        "regress it without intent."
+    )
+    # Hidden when nothing's running — the panel only appears when there's
+    # actual work to show.
+    assert "cc-hidden" in src, "activityPanel.js must hide itself when no tasks are active."
+
+
+def test_all_authenticated_templates_include_active_tasks_and_panel():
+    """Wave-5 Fix 3: every authenticated static template includes BOTH
+    activeTasks.js and activityPanel.js so the cross-page task panel
+    is present on every page. The user's stated need: 'when going from
+    tab to tab, we are not refreshing the information.'
+
+    Static (unauthenticated) pages — privacy.html, tos.html,
+    early-access.html — are deliberately excluded; they're public
+    marketing/legal surfaces with no user state.
+    """
+    import pathlib
+
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    authenticated_templates = [
+        "index.html",
+        "onboarding.html",
+        "insights.html",
+        "profile.html",
+        "review.html",
+        "pricing.html",
+    ]
+
+    for name in authenticated_templates:
+        src = (static_dir / name).read_text()
+        assert "/static/activeTasks.js" in src, (
+            f"Wave-5 Fix 3: {name} must include /static/activeTasks.js — "
+            f"otherwise the cross-page task state is lost on navigation."
+        )
+        assert "/static/activityPanel.js" in src, (
+            f"Wave-5 Fix 3: {name} must include /static/activityPanel.js — "
+            f"otherwise the user cannot see in-progress tasks from this page."
+        )
+
+
+# ── Wave 5: activeTasks.js library exists + exposes documented API ──────────
+
+
+def test_active_tasks_library_exists_and_exports_api():
+    """Wave-5 Fix 2: static/activeTasks.js manages localStorage + SSE
+    EventSource resume so background work (DNA build, catalog sync,
+    improvement brief, upload chain, render) survives page-to-page
+    navigation. This test pins the file exists + exposes the documented
+    public API to `window.activeTasks`.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "activeTasks.js").read_text()
+
+    # The file must declare its localStorage key — pins the namespace.
+    assert "creatorclip:active_tasks" in src, (
+        "activeTasks.js must use the `creatorclip:active_tasks` localStorage "
+        "key (prefix-namespaced per industry-standard practice)."
+    )
+
+    # Public API surface: every consumer (the global activity panel +
+    # page-specific UI) depends on these being exposed on window.activeTasks.
+    for symbol in (
+        "registerTask",
+        "getActiveTasks",
+        "subscribe",
+        "removeTask",
+    ):
+        assert symbol + ":" in src or symbol + " :" in src, (
+            f"activeTasks.js must export `{symbol}` on window.activeTasks. "
+            f"The global activity panel and page-specific UI both depend on it."
+        )
+
+    # The Last-Event-ID resume contract: every received event updates
+    # last_event_id so a navigation mid-stream resumes from the right cursor.
+    assert "last_event_id" in src, (
+        "activeTasks.js must track last_event_id so page navigation mid-stream "
+        "resumes from the right XREAD cursor (Issue 86 SSE contract)."
+    )
+
+    # Stale entries (> server-side stream TTL of 1h) get garbage-collected
+    # on every page load — pins the cleanup invariant.
+    assert "STALE_AFTER_MS" in src and "60 * 60 * 1000" in src, (
+        "activeTasks.js must GC entries older than 1h (matches the "
+        "_STREAM_TTL_SECONDS=3600 in worker/progress.py — beyond this window "
+        "the server can't resume the stream anyway)."
+    )
+
+
 def test_list_videos_excludes_catalog_only_rows(client):
     """The SELECT must filter `Video.source_uri IS NOT NULL`. Verified by
     introspecting the SQLAlchemy statement passed to session.execute.
