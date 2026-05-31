@@ -120,9 +120,7 @@ async def test_sync_channel_catalog_no_token_is_a_clean_no_op():
 def _override_auth_and_session():
     creator = MagicMock(id=uuid.uuid4())
     fake_session = AsyncMock()
-    fake_session.execute = AsyncMock(
-        return_value=MagicMock(scalar_one_or_none=lambda: None)
-    )
+    fake_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
     fake_session.add = MagicMock()
     fake_session.commit = AsyncMock()
 
@@ -169,9 +167,7 @@ def test_link_video_resolves_short_via_youtube_metadata():
             ),
         ):
             client = TestClient(app, raise_server_exceptions=False)
-            resp = client.post(
-                "/videos/link", data={"youtube_video_id": "abcdefghijk"}
-            )
+            resp = client.post("/videos/link", data={"youtube_video_id": "abcdefghijk"})
         assert resp.status_code == 200
         added = fake_session.add.call_args[0][0]
         assert added.kind == VideoKind.short
@@ -193,9 +189,7 @@ def test_link_video_falls_back_to_long_when_youtube_call_fails():
             patch("routers.videos.get_videos_metadata", new=AsyncMock()) as gvm,
         ):
             client = TestClient(app, raise_server_exceptions=False)
-            resp = client.post(
-                "/videos/link", data={"youtube_video_id": "abcdefghijk"}
-            )
+            resp = client.post("/videos/link", data={"youtube_video_id": "abcdefghijk"})
         assert resp.status_code == 200
         added = fake_session.add.call_args[0][0]
         assert added.kind == VideoKind.long
@@ -217,9 +211,7 @@ def test_upload_video_resolves_short_from_probe(monkeypatch):
         with (
             patch("routers.videos.probe_duration_s", return_value=45.0),
             patch("routers.videos.upload_file", return_value="local://x"),
-            patch(
-                "routers.videos.check_positive_balance", new=AsyncMock()
-            ),
+            patch("routers.videos.check_positive_balance", new=AsyncMock()),
             patch("routers.videos.start_pipeline"),
         ):
             client = TestClient(app, raise_server_exceptions=False)

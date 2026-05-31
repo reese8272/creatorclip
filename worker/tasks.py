@@ -176,7 +176,9 @@ def refresh_youtube_analytics() -> None:
     run_async(_refresh_youtube_analytics_async())
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.sync_channel_catalog")
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.sync_channel_catalog"
+)
 def sync_channel_catalog(self, creator_id: str) -> str:
     """Pull the creator's uploads playlist into the videos table (Issue 87).
 

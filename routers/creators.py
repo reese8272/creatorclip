@@ -148,9 +148,7 @@ async def get_data_gate(
 
 @router.post("/me/catalog/sync", status_code=202, response_model=CatalogSyncQueuedOut)
 @limiter.limit("5/minute")
-async def sync_catalog(
-    request: Request, creator: Creator = Depends(get_current_creator)
-) -> dict:
+async def sync_catalog(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Pull the creator's YouTube uploads playlist into the videos table.
 
     Async via Celery — the playlistItems + per-video duration fan-out can

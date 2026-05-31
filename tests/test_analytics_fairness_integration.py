@@ -86,6 +86,7 @@ async def test_quota_exhaustion_does_not_starve_creators(db_session):
                     new_callable=AsyncMock,
                     return_value="tok",
                 ),
+                patch("youtube.analytics.sync_video_catalog", new_callable=AsyncMock),
                 patch("youtube.analytics.sync_video_analytics", new_callable=AsyncMock),
                 patch(
                     "youtube.analytics.sync_audience_data",
