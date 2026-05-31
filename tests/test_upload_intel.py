@@ -103,7 +103,14 @@ def test_improvement_brief_disclaimer_always_present():
 
 
 def test_improvement_brief_uses_web_search_tool():
-    """Must pass web_search tool to Claude per the approved plan."""
+    """Must pass web_search tool to Claude per the approved plan.
+
+    Issue 84: bumped from `web_search_20250305` to `web_search_20260209`
+    (GA with dynamic filtering). The default is asserted against the
+    config setting directly so the test moves with the config.
+    """
+    from config import settings
+
     mock_resp = _mock_brief_response("Recommendations here.")
     with patch("improvement.brief._ANTHROPIC") as mock_client:
         mock_client.with_options.return_value.messages.create.return_value = mock_resp
@@ -112,7 +119,8 @@ def test_improvement_brief_uses_web_search_tool():
     call_kwargs = mock_client.with_options.return_value.messages.create.call_args.kwargs
     tools = call_kwargs.get("tools", [])
     tool_types = [t.get("type") for t in tools]
-    assert "web_search_20250305" in tool_types
+    assert settings.ANTHROPIC_WEB_SEARCH_TOOL in tool_types
+    assert tools[0]["name"] == "web_search"
 
 
 def test_improvement_brief_uses_prompt_caching():

@@ -48,7 +48,12 @@ class Settings(BaseSettings):
     # perishable: verify against the live Anthropic model/tool catalog
     # (via the /claude-api skill) before each launch.
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
-    ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20250305"
+    # web_search_20260209 is the GA version with dynamic filtering: Claude
+    # writes code to pre-filter search results before they reach the context
+    # window, reducing tokens read and improving accuracy. Same tool API
+    # shape as the prior _20250305 (`name: "web_search"`); no call-site
+    # changes required to swap. (Issue 84)
+    ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20260209"
     TRANSCRIPTION_BACKEND: str = "deepgram"
     # Job-level upper bound for a single transcription (Issue 68). A hung provider
     # fails the task after this many seconds (→ Celery retry) instead of stalling

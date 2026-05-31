@@ -94,3 +94,51 @@ def test_improvement_brief_raises_when_no_text(mocker):
 
     with pytest.raises(RuntimeError, match="no text"):
         b.generate_improvement_brief(channel_title="Ch", analytics={})
+
+
+# ── Issue 84 — web_search tool string is the current GA version ──────────────
+
+
+def test_default_web_search_tool_is_current_ga_version():
+    """Issue 84 Win A: ANTHROPIC_WEB_SEARCH_TOOL must default to the GA tool with
+    dynamic filtering (web_search_20260209), not the legacy _20250305. Dynamic
+    filtering lets Claude pre-filter search results in a sandboxed code-exec
+    step before they reach the main context — measurable token-cost + latency
+    win on the improvement brief. Tool API shape is unchanged; the bump is the
+    config-default change."""
+    from config import Settings
+
+    s = Settings()
+    assert s.ANTHROPIC_WEB_SEARCH_TOOL == "web_search_20260209", (
+        "Issue 84 — default web_search tool must be _20260209 (GA with dynamic "
+        "filtering). _20250305 is still functional but lacks dynamic filtering."
+    )
+
+
+def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
+    """The improvement brief request body must carry the configured tool string
+    on the tools list. Pins the wiring from config → call site so a future
+    config change is actually reflected in the Anthropic call."""
+    import improvement.brief as b
+
+    captured: dict = {}
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _Resp([_Block("text", "FINAL")])
+
+    mock_client = mocker.MagicMock()
+    mock_client.messages.create.side_effect = _create
+    mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
+
+    b.generate_improvement_brief(channel_title="Ch", analytics={"avg_views": 100})
+
+    tools = captured["tools"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "web_search"
+    # Issue 84 Win A: the type must be the current GA tool version, not legacy.
+    assert tools[0]["type"] == "web_search_20260209", (
+        f"Improvement brief must use the GA web_search tool (_20260209 with "
+        f"dynamic filtering); got {tools[0]['type']!r}. Check "
+        f"ANTHROPIC_WEB_SEARCH_TOOL config wiring."
+    )
