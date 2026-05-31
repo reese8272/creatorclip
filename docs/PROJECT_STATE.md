@@ -6,8 +6,41 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 88 just closed. Queued: Issues 89 (silent upload failure on low balance), 90 (catalog-synced videos polluting /videos list), 91 ("Clips ready" counter wrong) — all SEV-1/2 spawned by Issue 88's targeted audit. Also AI/LLM efficiency assessment (Issue 84) and UI redesign (Issue 85) still queued.
-**Last completed**: Issue 88 — DNA filter parity + business-event observability. Closed the SEV-0 logical bug surfaced live on `reesepludwick@gmail.com` ("data-gate said 3 long + 20 shorts, build said insufficient 0/0"). Root cause: `check_data_gate` counted every Video row by kind; `rank_videos` required `ingest_status==done` AND metrics — two queries on the same table with diverging predicates. Fixes: `rank_videos` no longer requires `ingest_status==done` (DNA needs metrics only, not local-pipeline state); `check_data_gate` joins VideoMetrics + uses OR semantics (matches `build_patterns` raise condition); `sync_channel_catalog` chains a phase-2 `sync_video_analytics` call so metrics are present immediately (was waiting up to an hour for Beat refresh). New `observability.log_event(event, **fields)` helper emits structured JSON; wired into 7 user surfaces (auth callback, link, upload, sync_catalog, build_dna, confirm_dna, feedback) + diagnostic `dna_build_insufficient_data` event with total/metered/per-kind counts. Targeted display-vs-filter audit returned 4 findings (2 SEV-1, 2 SEV-2) — one fixed inline (data-gate `ready` used AND, blocking long-only/shorts-only creators), three filed as Issues 89-91. 8 new tests. **509 passed / 1 skipped / 85 deselected**; ruff 0 / mypy 0.
+**Active issue**: _(none in flight)_ — Issue 88 closed end-to-end (DNA built + confirmed live for Backboard Media: 21 videos analyzed, 6 longs + 15 shorts, brief generated, 63 pgvector embeddings, v2 = confirmed). User reviewed the result, then filed 9 next-priority issues via close-out.
+**Last completed**: Issue 88 — DNA filter parity + business-event observability (with a follow-up hotfix commit `b464a34` that bumped the YouTube Analytics httpx read timeout 15s→60s and caught `httpx.RequestError` in the retry loop — surfaced during the live first build attempt, which silently timed out on every video because Google's per-video Analytics endpoint takes ~13s and our 15s budget didn't include retry-on-timeout).
+
+**Queued for next session (in priority order from the 2026-05-31 user close-out)**:
+- **Issue 92** — Universal progress visibility (extend the Issue-86 SSE primitive to every long-running op). SEV-1 UX.
+- **Issue 93** — Insights page rebuild ("what is it even showing?"). SEV-1 UX.
+- **Issue 94** — Clip-engine transparency (why this clip, why-not for skipped videos). SEV-1 UX.
+- **Issue 95** — Hotkey + OBS/streaming-software integration (instant-replay rolling-buffer clips). SEV-2 new feature.
+- **Issue 96** — Multi-step / chat-driven intake form (CFO-Agent pattern; supersedes Issue 83 "optional" decision).
+- **Issue 97** — Livestream recap video (subscription-tier candidate; recurring vs minute-pack pricing).
+- **Issue 98** — "Build your DNA" CTA still showing post-build (frontend gate + possibly `onboarding_state` advancement bug — the live state on Backboard Media was still `connected` despite v2 being `confirmed`).
+- **Issue 99** — UI redesign (supersedes Issue 85). Phase 1 must present 5–8 reference sites for the user to pick patterns from.
+- **Issue 100** — Onboarding tutorial + mandatory intake (related to Issues 96, 98, 99). Replaces today's silent "pending" status badges with self-explaining text.
+
+Also still queued from prior sessions: Issue 84 (AI/LLM efficiency assessment) and Issues 89–91 (SEV-1/2 spinoffs from Issue 88's targeted audit — balance pre-check vs deduction, catalog-synced videos polluting /videos list, "Clips ready" counter ignoring render_status).
+
+**Blocked**: _(none)_
+
+> **Closed Issue 88 — end-to-end verification** (2026-05-31): Initial Issue 88 deploy
+> (commit `e9a2c3f`) shipped the filter-parity fix + `log_event` observability +
+> targeted audit, all CI green. But when the user retried the build live, the
+> data-gate still showed 0/0 because catalog sync phase 2 was silently failing
+> on every video. Live ssh diagnostic against the worker container caught the
+> real exception (`httpx.ReadTimeout`) — empty `str()` was why the warning log
+> was blank. Hotfix `b464a34`: bumped read timeout 15s→60s, wrapped both YT
+> retry loops in `try/except httpx.RequestError`, changed the catalog-sync
+> warning to `%r` + `exc_info=True`. Re-verified: 3/3 manual `sync_video_analytics`
+> calls returned OK; `metered_count_now: 21`. User then rebuilt DNA successfully
+> — backend now has 3 `creator_dna` rows for Backboard Media (v1 draft, v2
+> confirmed, v3 draft from a rebuild), 21 videos analyzed (6 longs + 15 shorts),
+> 63 `dna_embeddings` rows, `optimal_clip_len_s=14.5`, `best_source_region=first_third`.
+> Carry-over: `onboarding_state` did not advance to `active` despite v2 being
+> `confirmed` — captured in Issue 98 ACs.
+
+> **Closed Issue 88 — DNA filter parity + business-event observability** (2026-05-30): Closed the SEV-0 logical bug surfaced live on `reesepludwick@gmail.com` ("data-gate said 3 long + 20 shorts, build said insufficient 0/0"). Root cause: `check_data_gate` counted every Video row by kind; `rank_videos` required `ingest_status==done` AND metrics — two queries on the same table with diverging predicates. Fixes: `rank_videos` no longer requires `ingest_status==done` (DNA needs metrics only, not local-pipeline state); `check_data_gate` joins VideoMetrics + uses OR semantics (matches `build_patterns` raise condition); `sync_channel_catalog` chains a phase-2 `sync_video_analytics` call so metrics are present immediately (was waiting up to an hour for Beat refresh). New `observability.log_event(event, **fields)` helper emits structured JSON; wired into 7 user surfaces (auth callback, link, upload, sync_catalog, build_dna, confirm_dna, feedback) + diagnostic `dna_build_insufficient_data` event with total/metered/per-kind counts. Targeted display-vs-filter audit returned 4 findings (2 SEV-1, 2 SEV-2) — one fixed inline (data-gate `ready` used AND, blocking long-only/shorts-only creators), three filed as Issues 89-91. 8 new tests. **509 passed / 1 skipped / 85 deselected**; ruff 0 / mypy 0.
 **Blocked**: _(none)_
 
 > **Closed Issue 88 — DNA filter parity + business-event observability** (2026-05-30):

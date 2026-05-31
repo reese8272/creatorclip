@@ -1971,6 +1971,284 @@ build couldn't see a single eligible video.
 
 ---
 
+## Issues 92–100: 2026-05-31 user close-out — UX / product priorities
+
+Captured from live session after Issue 88 closed and user successfully built
+Backboard Media's DNA. Numbered in the order the user raised them; severities
+and dependencies noted. Several extend or supersede existing queued issues
+(85 = UI redesign, 84 = LLM efficiency, 83 = intake form) — call those out
+at start of each issue's Phase 1.
+
+---
+
+## Issue 92: Universal progress visibility for every long-running operation (extends Issue 86)
+**Status**: 🔲 Not started · **Severity**: SEV-1 UX
+
+**What**: Issue 86 shipped live SSE progress for DNA build — should become the
+default for EVERY long-running op, not the exception. User quote: "I want
+thinking on literally [anything] that takes time to load. You want the user
+to always see what's going on. The biggest thing I always have an issue with
+is that you don't know how long something may or may not take. You want to
+always have concrete looks at what's happening."
+
+**Surfaces that currently spin without telling the user anything**:
+- `POST /creators/me/catalog/sync` → just shows "Syncing your channel…" then
+  polls; no per-video progress, no ETA, no count.
+- `POST /creators/me/improvement-brief` → 202 + poll with no progress events.
+- `POST /videos/upload` → upload bar exists but the post-upload ingest
+  pipeline (ingest → transcribe → signals → clips) is opaque.
+- `POST /clips/{id}/render` → render runs in worker, UI just polls status.
+
+**Approach (Phase 1 should research)**: extend the Issue-86 SSE primitive
+(`worker/progress.py` + `routers/tasks.py` + `static/progressStream.js`) to
+each of the above tasks. Emit `step` events at every meaningful boundary +
+include ETA when computable. Pattern is already proven on `_build_dna_async`.
+
+**ACs (draft)**:
+- [ ] Every Celery task fronted by a 202+task_id endpoint emits ≥3 step events
+- [ ] Per-step ETA when bounded (catalog sync = "fetching metrics 14/21");
+      "indeterminate" only when truly unknown (the LLM call)
+- [ ] Frontend shows a terminal-style stream (Issue 86 pattern) for every
+      long-running click
+- [ ] One regression test per task asserting the events fire
+
+---
+
+## Issue 93: Insights page is bland — what is it even showing? (rebuild)
+**Status**: 🔲 Not started · **Severity**: SEV-1 UX/value
+
+**What**: User quote: "The insights page is bland. There isn't anything worth
+knowing or keeping or the ability to get some good reviews. What exactly is
+insights showing? It doesn't seem like you are able to understand what it's
+actually doing."
+
+**Current state**: `static/insights.html` shows (a) best upload window from
+audience activity, (b) the improvement brief (LLM-generated). Both are
+single short blocks. No comparisons, no charts, no creator-specific "this is
+why" tied back to their actual videos.
+
+**Approach (Phase 1 should research)**: research what creator-analytics
+tools (TubeBuddy, VidIQ, Tella, Frame.io) surface as "insights." Likely
+needs: (i) ranked list of top/bottom performers with one-line "why" pulled
+from DNA patterns; (ii) retention-curve thumbnails for the top 5; (iii) the
+improvement brief with citations linking to specific video rows; (iv) a
+"what changed since last week" diff.
+
+**ACs (draft)**:
+- [ ] Page communicates a clear answer to "what's working / what's not / what
+      to try next" — tied to specific videos, not generic advice
+- [ ] All claims cite specific video rows (no "experts recommend…")
+- [ ] Honesty disclaimer present (CLAUDE.md rule)
+- [ ] Loads in <3s perceived; long parts use the Issue 92 streaming pattern
+
+---
+
+## Issue 94: Clip-engine transparency — show what's being clipped, why, and what's not
+**Status**: 🔲 Not started · **Severity**: SEV-1 UX
+
+**What**: User quote: "The clip idea, what is it gonna do? How do I know
+what videos are being clipped or not clipped?"
+
+The user doesn't have a mental model of how the clip engine selects
+candidates. Today: link a video → Celery pipeline runs silently → some
+clips appear in `/review` with no provenance. No way to see "we considered
+this video but didn't clip it because X" or "we picked this 14s window
+because peak energy at 2:14 and DNA-match score 0.87."
+
+**Approach (Phase 1)**: surface (a) a per-video "clip plan" before the
+render fires (candidates + scores + named principle citations from
+`docs/CLIPPING_PRINCIPLES.md`); (b) a "why these clips" tooltip per clip in
+review; (c) a creator-visible log of videos that were considered and
+skipped, with the reason ("no engagement signal above threshold",
+"insufficient retention data", etc.). Lean on the Issue-86 SSE primitive
+again for the live pipeline view.
+
+**ACs (draft)**:
+- [ ] Every rendered clip surfaces its score, its DNA-match number, and the
+      principle citation in the Review UI
+- [ ] Videos for which no clip was generated show a "why not" badge on the
+      dashboard
+- [ ] Phase 1 must reconcile this with the existing `clip_engine/scoring.py`
+      `clipScoringRationale` that Claude already produces
+
+---
+
+## Issue 95: Hotkey + livestream-software integration (OBS / Streamlabs / vMix)
+**Status**: 🔲 Not started · **Severity**: SEV-2 feature · **New product surface**
+
+**What**: User quote: "Have a hotkey to automatically record and save the
+last few seconds of a video or stream, so that means you need to find a
+way to hook up to a video software or multiple softwares like OBS."
+
+This is a **rolling-buffer instant-replay** feature: while streaming, the
+creator hits a hotkey → the last N seconds (configurable, e.g. 30-90s) are
+saved as a clip candidate. Same downstream pipeline (DNA score, render,
+review) as catalog-sourced clips.
+
+**Approach (Phase 1 must research)**: OBS has a websocket plugin (obs-websocket
+v5) + a built-in **Replay Buffer** feature that can be triggered remotely.
+Streamlabs has an HTTP API. vMix has an HTTP API. A small companion app
+(electron? menu-bar Mac/Win?) listens for a global hotkey, asks OBS to
+save its replay buffer, then uploads the saved clip to AutoClip via
+`/videos/upload`. AutoClip itself just needs to accept that upload — most
+work is in the companion app + a per-creator API key for uploads.
+
+**ACs (draft)**:
+- [ ] Phase 1 picks one streaming app to support first (likely OBS via
+      obs-websocket v5 — biggest install base, official integration story)
+- [ ] AutoClip exposes an API-key-auth upload endpoint (don't require a
+      browser session for the companion app)
+- [ ] Companion app design doc (separate repo) + hotkey UX research
+- [ ] End-to-end demo: hit hotkey during OBS stream → clip in /review queue
+      within 60s
+
+---
+
+## Issue 96: Multi-step intake form (CFO-Agent style) — chat-driven, becomes clip context
+**Status**: 🔲 Not started · **Severity**: SEV-2 UX · **Supersedes Issue 83**
+
+**What**: User quote: "For the intake form, I want to have more of an intake
+form that my other project, CFO-Agent does. It's more of a multi-step
+process that takes your information and/or you can chat about it, then you
+build a form, and you use that form as context for everything you do."
+
+Today's intake (Issue 83) is a single optional card on onboarding.html
+(3 required fields + 4 optional). User wants the CFO-Agent shape: a
+guided wizard the user can complete by **chatting** with an LLM, which
+then proposes a populated form for review, then becomes context for the
+clip engine.
+
+**Approach (Phase 1)**: borrow the CFO-Agent flow (the user has a working
+implementation to reference). Likely needs: (i) a new `/onboarding/chat`
+SSE stream where Claude asks one question at a time about audience, tone,
+hard-nos; (ii) a "review your profile" page the user confirms; (iii)
+write to the existing `creator_identity` table (Issue 83 schema is fine —
+append-only versioning already in place).
+
+**ACs (draft)**:
+- [ ] Wizard mode + chat mode available; user picks per session
+- [ ] Final output is the same `CreatorIdentity` row shape (no schema churn)
+- [ ] Honesty constraint baked into Claude prompts (no virality language)
+- [ ] Phase 1 must compare with `static/profile.html` edit flow (Issue 83
+      shipped this already) — avoid duplicate UX
+
+---
+
+## Issue 97: Livestream recap video — auto-generate a summary clip from each stream (subscription perk)
+**Status**: 🔲 Not started · **Severity**: SEV-3 feature · **Subscription-tier candidate**
+
+**What**: User quote: "You want a way to take a livestream and make a recap
+video for it - always. And the creator can decide whether they want to keep
+it or not. This can be part of a subscription program that has specific
+perks like 'will create a summary video of all your livestreams'."
+
+A 3-10 minute recap auto-built from each ingested livestream — uses
+existing transcript + signals + clip_engine pipeline but with a "recap"
+length budget (vs single-moment clip). Creator chooses keep / discard.
+
+**Approach (Phase 1)**: requires (i) ingesting livestream VODs (already
+covered by the existing video pipeline), (ii) a new `clip_engine` mode
+that targets 3-10min summaries (today's engine targets 14-90s clips),
+(iii) a subscription tier (Stripe — minute packs are already wired in
+Issue 21). May be the most natural justification for a recurring sub
+vs the current one-time minute packs.
+
+**ACs (draft)**:
+- [ ] Phase 1 picks a summarization approach: extract-top-N-clips vs
+      generate-narrated-recap-with-transitions
+- [ ] Gated on subscription tier (not minute packs)
+- [ ] Creator preview UI: see recap, accept/reject before any render cost
+- [ ] Pricing decision logged in DECISIONS.md
+
+---
+
+## Issue 98: "Build your DNA" banner still shows on dashboard after DNA is built
+**Status**: 🔲 Not started · **Severity**: SEV-2 bug
+
+**What**: User quote: "It says build your DNA on the top of the dashboard
+even though it's completely done. Can't have that when we already built it."
+
+**Where**: `static/index.html` — the build-DNA CTA isn't gated on the
+existence of an active `creator_dna` row. Should hide / replace with a
+"View your DNA" link to `profile.html` once `GET /creators/me/dna`
+returns a profile.
+
+**Fix is small** (frontend conditional render) but blocked on Issue 88
+verifying that `onboarding_state` flips from `connected` → `active` on
+DNA confirm — the live state showed `connected` even though v2 is
+`status=confirmed` (see Issue 88 session log). The state-machine bump
+might be the actual gating field, in which case the bug is twofold.
+
+**ACs (draft)**:
+- [ ] CTA hidden when active DNA exists
+- [ ] Replaced with "View / rebuild your DNA" link
+- [ ] `onboarding_state` correctly progresses to `active` on first confirm
+      (separately verify — may need fix in `dna/profile.py::confirm_draft`)
+
+---
+
+## Issue 99: UI redesign — sharper edges, more "tech" less "AI" (supersedes Issue 85)
+**Status**: 🔲 Not started · **Severity**: SEV-2 UX · **Supersedes Issue 85**
+
+**What**: User quote: "The UI is super bland. I want sharper edges and more
+'tech' feel, not an AI feel. I am thinking when we get to this issue, to
+give me websites to pick from / look at for inspiration and we can pick
+and choose different concepts from different websites."
+
+**Approach (Phase 1)**: the agent compiles a short list of reference
+sites (Linear, Vercel dashboard, Raycast, Cursor, Arc Search, Frame.io,
+Descript, Capcut Web) with screenshots of specific patterns — typography,
+edge treatment, color palette, motion, data-density. User picks elements
+they like. Build a small `static/_design-tokens.css` first; refactor
+the existing pages on top of that. Issue 85's deferred review-UI
+framework decision merges into this issue (vanilla JS or HTMX vs.
+something heavier).
+
+**ACs (draft)**:
+- [ ] Phase 1 deliverable: design-direction doc with 5–8 reference sites,
+      annotated, user-picked elements
+- [ ] `static/_design-tokens.css` (or Tailwind config) lands first; pages
+      retrofit
+- [ ] No regression in load perf; no new build step unless picked in Phase 1
+- [ ] Existing tests still green (no behavior change)
+
+---
+
+## Issue 100: Onboarding tutorial / "what this app does" gate — force intake before dashboard
+**Status**: 🔲 Not started · **Severity**: SEV-2 UX · **Related to Issues 96, 98, 99**
+
+**What**: User quote: "What is this pending status on the videos? I don't
+know what this is. I am thinking that we should absolutely create a 'how
+to use this app' sort of tutorial before someone jumps in, and THEN have
+them take an intake form (don't have the option, rather, have them fill
+it out first after the tutorial or the guide or the 'what this product
+is', this should get them in the seat and driving)."
+
+Two coupled changes:
+1. **First-run "what this is" walkthrough** — 3–5 panels explaining what
+   AutoClip does, what a clip is, what the DNA does, what the dashboard
+   states mean (kills the "pending status" confusion).
+2. **Intake is mandatory** — supersedes Issue 83's "optional 45-second
+   card" decision. Phase 1 must re-litigate the 70%-drop-off concern that
+   drove the original "optional" design. Likely the right answer is to
+   make the tutorial **so good** that the intake is enthusiastically filled
+   in, not forced — but the user's intent is clear.
+
+**Approach (Phase 1)**: research 2026 SaaS onboarding wizards (Linear,
+Notion, Cursor first-run, Descript first-run). Pair with Issue 99 visual
+direction. Probably wants to slot in BEFORE Issue 96's chat-driven intake.
+
+**ACs (draft)**:
+- [ ] First session post-signup goes: walkthrough → intake (mandatory) →
+      sync status → DNA build
+- [ ] Dashboard "pending" badges replaced with self-explaining text or
+      hover tooltip ("Ingesting source — ~30s")
+- [ ] Skipping intake disallowed (or so well-justified by walkthrough that
+      bypass is rare)
+- [ ] Reconcile with Issue 96 (chat-driven intake) — same form, two entry modes
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
