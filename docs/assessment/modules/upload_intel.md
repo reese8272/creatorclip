@@ -1,13 +1,13 @@
 # upload_intel — assessed 2026-05-31
 
-Re-assessment after Wave 2 (baseline `f5d44df`). Confirmed by
-`git log f5d44df..HEAD -- upload_intel/` returning empty — no Wave 2 commit
-touched the slice; the last (and only) edit to this module remains commit
+Wave 3 re-assessment (baseline `84a7e9f`). Confirmed by
+`git log 84a7e9f..HEAD -- upload_intel/` returning empty — no Wave 3 commit
+touched the slice. The last (and only) edit to this module remains commit
 `c2d6335` (Batch 8, Issues 73/74/75). Findings carry forward unchanged from
-the 2026-05-30 Wave 1 assessment.
+the Wave 2 (2026-05-31 earlier today) and Wave 1 (2026-05-30) assessments.
 
 Slice: `upload_intel/__init__.py` (empty, 0 lines — confirmed via `wc -l`),
-and `upload_intel/timing.py` (60 lines, 2 pure functions:
+and `upload_intel/timing.py` (59 lines, 2 pure functions:
 `best_upload_windows`, `optimal_gap_hours`). No LLM, no DB session, no
 external client, no I/O, no async, no Celery task, no file/subprocess
 handling. Per-creator isolation is enforced one layer up in
@@ -27,43 +27,45 @@ which is what makes the consistency gap between them load-bearing.
   dropped, not raised. Regression test
   `tests/test_input_hardening.py:33` (`test_best_upload_windows_skips_malformed_rows`)
   still in place by inspection. Confirmed by reading.
-- [SEV2] upload_intel/timing.py:54-55 — CARRIED FORWARD (rubric 6
-  Cleanliness, with cross-cutting correctness impact). `optimal_gap_hours`
-  still does NOT receive the same hardening as its sibling. Line 54 sorts on
-  raw `r.activity_index`; line 55 computes `r.day_of_week * 24 + r.hour` on
-  raw, unvalidated attributes with no `int()` coercion and no bounds check.
-  A malformed row that `best_upload_windows` correctly drops is silently
-  consumed here, corrupting the `optimal_gap_hours` value returned alongside
-  the windows in the SAME response (`routers/upload_intel.py:42-43,47`). The
-  two functions consuming one payload now disagree on what a valid row is —
-  the exact inconsistency Issue 75d aimed to eliminate. No crash, so not a
-  500, but the returned `optimal_gap_hours` becomes misleading whenever any
-  row has out-of-range fields. | fix: filter and coerce first —
+- [SEV2] upload_intel/timing.py:54-55 — CARRIED FORWARD from Waves 1 and 2
+  (rubric 6 Cleanliness, with cross-cutting correctness impact).
+  `optimal_gap_hours` still does NOT receive the same hardening as its
+  sibling. Line 54 sorts on raw `r.activity_index`; line 55 computes
+  `r.day_of_week * 24 + r.hour` on raw, unvalidated attributes with no
+  `int()` coercion and no bounds check. A malformed row that
+  `best_upload_windows` correctly drops is silently consumed here,
+  corrupting the `optimal_gap_hours` value returned alongside the windows
+  in the SAME response (`routers/upload_intel.py:42-43,47`). The two
+  functions consuming one payload now disagree on what a valid row is —
+  the exact inconsistency Issue 75d aimed to eliminate. No crash, so not
+  a 500, but the returned `optimal_gap_hours` becomes misleading whenever
+  any row has out-of-range fields. | fix: filter and coerce first —
   `valid = [(int(r.day_of_week), int(r.hour), float(r.activity_index)) for r in activity_rows if 0 <= int(r.day_of_week) <= 6 and 0 <= int(r.hour) <= 23]`;
   return `None` if `len(valid) < 2`; do the sort / `dow*24+hour` / gap
   computation over the coerced tuples only. Add a regression test mirroring
-  `test_best_upload_windows_skips_malformed_rows` that feeds one bad row and
-  asserts the returned gap equals the gap computed from the valid rows alone.
+  `test_best_upload_windows_skips_malformed_rows` that feeds one bad row
+  and asserts the returned gap equals the gap computed from the valid
+  rows alone.
 - [cleanup] upload_intel/timing.py:10 and :47 — CARRIED FORWARD (rubric 6).
   `activity_rows: list` is a bare `list` with no element type; both
-  functions duck-type `.activity_index`, `.day_of_week`, `.hour`, so the real
-  row contract is invisible to mypy and to callers (CLAUDE.md mandates "type
-  hints on every signature"). | fix: define a `typing.Protocol`
+  functions duck-type `.activity_index`, `.day_of_week`, `.hour`, so the
+  real row contract is invisible to mypy and to callers (CLAUDE.md mandates
+  "type hints on every signature"). | fix: define a `typing.Protocol`
   (`class ActivityRow(Protocol): day_of_week: int; hour: int; activity_index: float`)
-  and annotate params `Sequence[ActivityRow]`. Folds naturally into the SEV2
-  fix.
+  and annotate params `Sequence[ActivityRow]`. Folds naturally into the
+  SEV2 fix.
 - [cleanup] upload_intel/timing.py:22 and :54 — CARRIED FORWARD (rubric 6,
   DRY). The sort
-  `sorted(rows, key=lambda r: r.activity_index, reverse=True)` is duplicated
-  across both functions. | fix: extract `_by_activity_desc(rows)` and call
-  from both, keeping the `[:top_n]` / `[:3]` slicing at each call site. Folds
-  naturally into the SEV2 fix.
+  `sorted(rows, key=lambda r: r.activity_index, reverse=True)` is
+  duplicated across both functions. | fix: extract
+  `_by_activity_desc(rows)` and call from both, keeping the `[:top_n]` /
+  `[:3]` slicing at each call site. Folds naturally into the SEV2 fix.
 - [cleanup] upload_intel/timing.py:54 — CARRIED FORWARD (rubric 6, KISS /
   consistency). `optimal_gap_hours` hardcodes a top-3 peak count while
   `best_upload_windows` exposes a configurable `top_n`; the docstring says
-  "top-3" but the function actually runs with as few as 2 rows. No behavior
-  bug. | fix: accept `top_n: int = 3` for symmetry, or note in the docstring
-  that fewer than 3 rows uses all available.
+  "top-3" but the function actually runs with as few as 2 rows. No
+  behavior bug. | fix: accept `top_n: int = 3` for symmetry, or note in
+  the docstring that fewer than 3 rows uses all available.
 
 ## Rubric coverage
 | Category | Status |
@@ -78,8 +80,9 @@ which is what makes the consistency gap between them load-bearing.
 | 8 Config & paths | n/a (no config, no filesystem paths) |
 
 ## Module verdict
-NEEDS-WORK — Wave 2 did not touch this module, so the prior SEV2 on
-`optimal_gap_hours` (timing.py:54-55) carries forward: it was left out of
-the Issue 75d bounds/coercion guard that hardened `best_upload_windows`, so
-the two functions consuming the same payload still disagree on what a valid
-row is. Three typing/DRY cleanups also carry forward. No BLOCKER.
+NEEDS-WORK — Wave 3 did not touch this module, so the SEV2 on
+`optimal_gap_hours` (timing.py:54-55) carries forward unchanged from
+Waves 1 and 2: it was left out of the Issue 75d bounds/coercion guard
+that hardened `best_upload_windows`, so the two functions consuming the
+same payload still disagree on what a valid row is. Three typing/DRY
+cleanups also carry forward. No BLOCKER.

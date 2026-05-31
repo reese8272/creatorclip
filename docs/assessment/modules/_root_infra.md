@@ -4,15 +4,14 @@ Slice: db.py, crypto.py, config.py, auth.py, limiter.py, models.py, main.py,
 observability.py, Dockerfile. (alembic/ owned by its own slice; migrations
 referenced where load-bearing for findings here.)
 
-WAVE-2 re-verification against current `main` head (baseline commit
-`f5d44df`). WAVE-2 delta in this slice was Issue 84 bumping
-`ANTHROPIC_WEB_SEARCH_TOOL` from `web_search_20250305` to
-`web_search_20260209` (GA, dynamic filtering). Both `config.py:56` and
-`.env.example:12` carry the new default with the documented rationale
-referenced inline (lines 47-55). Same tool API shape; no call-site change
-required. Every prior finding was traced line-by-line against the files as
-they stand today. All three carry-forward SEV2s remain unchanged; the
-Cat-8 cleanup logged last cycle is still unresolved.
+WAVE-3 re-verification against current `main` head (baseline commit
+`84a7e9f`). `git diff --stat 84a7e9f..HEAD` on the slice is empty — Wave 3
+did not touch any file in this module. Every prior finding was re-traced
+line-by-line against the files at HEAD. All three carry-forward SEV2s
+remain unchanged; the Cat-8 cleanup logged in prior cycles
+(`DATABASE_MIGRATION_URL` missing from `.env.example`) is still
+unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
+`DATABASE_URL` line is present).
 
 ## Findings
 
@@ -49,11 +48,9 @@ Cat-8 cleanup logged last cycle is still unresolved.
   `TokenDecryptError` with a message that carries no ciphertext or key
   material. Safe for logs and error responses.
 - config.py:50-56 — Anthropic model + web_search tool versions live in
-  one place. WAVE-2: default tool is now `web_search_20260209` (GA,
-  dynamic filtering — Issue 84). Comment block at 51-55 cites the
-  rationale and notes the same `name: "web_search"` call shape, so no
-  call-site migration required. `.env.example:12` mirrors the new
-  default with the explanatory comment.
+  one place. Default tool is `web_search_20260209` (GA, dynamic
+  filtering — Issue 84). Comment block at 51-55 cites the rationale.
+  `.env.example:12` mirrors the default with the explanatory comment.
 - config.py:136-158 — `_require_prod_secrets` fail-fast on
   `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` when `ENV=="production"`,
   AND fail-SAFE on the `/metrics` scrape surface: if `METRICS_TOKEN` is
@@ -108,8 +105,8 @@ Cat-8 cleanup logged last cycle is still unresolved.
   ONLY under the prefork pool. If the worker is ever started with
   `--pool=gevent/eventlet/threads`, concurrent tasks in one process
   will overwrite each other's request id and start time → mislabelled
-  durations and broken log correlation. Carry-forward, unverified
-  fix. (rubric cat 2) |
+  durations and broken log correlation. Carry-forward from prior
+  waves, no fix in Wave 3. (rubric cat 2) |
   fix: at worker startup (`worker/celery_app.py`), assert
   `app.conf.worker_pool == "prefork"` and refuse to boot otherwise;
   OR key task start off `task.request.id` via a per-task dict guarded
@@ -123,7 +120,7 @@ Cat-8 cleanup logged last cycle is still unresolved.
   dependency (ffmpeg, whisperx, ytdlp) would have full container
   privilege. Industry standard is a non-root user even when k8s
   `securityContext: runAsNonRoot` is set externally (defense in depth).
-  Carry-forward. (rubric cat 3) |
+  Carry-forward from prior waves. (rubric cat 3) |
   fix: after `COPY . .`, add
   `RUN useradd --create-home --uid 1000 app && chown -R app:app /app /root/.local`
   then `USER app`. Verify Celery worker can still write its
@@ -135,7 +132,7 @@ Cat-8 cleanup logged last cycle is still unresolved.
   relies on every deployer remembering to override. A forgotten
   override in a prod manifest starts uvicorn in dev mode: filesystem
   watcher running, single worker, no graceful shutdown guarantees.
-  Carry-forward. (rubric cat 3 / cat 8) |
+  Carry-forward from prior waves. (rubric cat 3 / cat 8) |
   fix: make the default safe-for-prod
   (`gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app
   --bind 0.0.0.0:8000`) and move the `--reload` invocation into
@@ -172,12 +169,13 @@ Cat-8 cleanup logged last cycle is still unresolved.
 - [cleanup] config.py:23 + .env.example — `DATABASE_MIGRATION_URL`
   (Issue 79 RLS admin role) is declared in `Settings` with a
   documented fallback to `DATABASE_URL`, but it is STILL NOT listed
-  in `.env.example` (verified at .env.example:15-17 — the only
-  database stanza is `DATABASE_URL`). Anyone copying `.env.example`
+  in `.env.example` (re-verified at .env.example:15-17 — the only
+  database stanza is `DATABASE_URL`; `grep -i DATABASE_MIGRATION
+  .env.example` returns NOT FOUND). Anyone copying `.env.example`
   to `.env` for a production setup will silently end up with
-  `database_migration_url == DATABASE_URL` (single role; no BYPASSRLS
-  split). Carried forward from 2026-05-30; new this WAVE-2 cycle
-  remains the absence of any fix. (rubric cat 8) |
+  `database_migration_url == DATABASE_URL` (single role; no
+  BYPASSRLS split). Carried forward from 2026-05-30 and prior
+  waves; no fix in Wave 3. (rubric cat 8) |
   fix: add a stanza to `.env.example` immediately under `DATABASE_URL`:
   ```
   DATABASE_MIGRATION_URL=                  # REQUIRED in production — BYPASSRLS role for Alembic + worker cross-tenant sweeps. Leave blank in dev (falls back to DATABASE_URL).
@@ -190,19 +188,18 @@ Cat-8 cleanup logged last cycle is still unresolved.
 | 2 Concurrency & scale | ok — pool math correct, RLS via parameterized `set_config` (not SET LOCAL); no blocking call in async paths; 1 SEV2 (ContextVar correlation safe only under prefork) |
 | 3 Security & compliance | ok — `/metrics` SEV2 closed (prod fail-safe + bearer-token gate); tokens via decrypt()/MultiFernet, no PII in logs, CORS locked, fail-fast prod secrets verified; RLS makes per-creator isolation structural; 2 SEV2 Docker hardening gaps remain (root user, --reload default) |
 | 4 Clip-quality | n/a — infra module |
-| 5 Anthropic SDK | n/a — no LLM call in slice (model + web_search tool versions declared in config.py:50-56 only; WAVE-2 Issue 84 bump to `web_search_20260209` verified) |
+| 5 Anthropic SDK | n/a — no LLM call in slice (model + web_search tool versions declared in config.py:50-56 only; `web_search_20260209` default verified) |
 | 6 Cleanliness & typing | 4 cleanups (lifespan coupling, typing gaps in auth/limiter, silent except) |
 | 7 Error handling / API | ok — main.py is app wiring not a router; /health returns safe statuses, no stack traces; /metrics 401 detail is safe |
-| 8 Config & paths | ok — pydantic-settings fail-fast, `_STATIC` absolute via `Path(__file__).parent`, `PYTHONPATH=/app` present, WAVE-2 web-search default updated in both Settings and `.env.example`; 1 carry-forward cleanup (DATABASE_MIGRATION_URL still missing from `.env.example`) |
+| 8 Config & paths | ok — pydantic-settings fail-fast, `_STATIC` absolute via `Path(__file__).parent`, `PYTHONPATH=/app` present; 1 carry-forward cleanup (DATABASE_MIGRATION_URL still missing from `.env.example`) |
 
 ## Module verdict
 NEEDS-WORK — no BLOCKER and no cross-tenant leak in this slice (RLS
-enforces creator isolation structurally at the DB layer). Three SEV2s
-remain, all carried forward unchanged from 2026-05-30: the Celery
-ContextVar correlation that is safe only under prefork, and the two
-Dockerfile production-hardening gaps (container runs as root; default
-CMD ships uvicorn --reload). WAVE-2 Issue 84 (`ANTHROPIC_WEB_SEARCH_TOOL`
-→ `web_search_20260209`) is correctly propagated to both `config.py:56`
-and `.env.example:12`. The Cat-8 cleanup logged last cycle —
-`DATABASE_MIGRATION_URL` declared in Settings but absent from
-`.env.example` — is still unresolved.
+enforces creator isolation structurally at the DB layer). Wave 3 did
+not touch this module (`git diff --stat 84a7e9f..HEAD` empty for the
+slice). All three SEV2s carry forward unchanged: Celery ContextVar
+correlation safe only under prefork; container runs as root; default
+CMD ships `uvicorn --reload`. The Cat-8 cleanup
+(`DATABASE_MIGRATION_URL` declared in `Settings` but absent from
+`.env.example`) also remains unresolved — a footgun for any operator
+copying the example to bootstrap a production deploy.

@@ -1,14 +1,17 @@
-# preference — assessed 2026-05-31 (Wave 2 re-verification)
+# preference — assessed 2026-05-31 (Wave 3 re-verification)
 
-Wave 2 did not touch this module — `git log f5d44df..HEAD -- preference/` is empty; the last
-commits to `preference/` remain `eb0953f` Issue 78c and `a4fcb56` Issue 78a (both pre-baseline).
-Slice walked: `preference/__init__.py`, `preference/_scorer_cache.py`, `preference/decay.py`,
-`preference/features.py`, `preference/model.py`, `preference/train.py`. Callers in
-`clip_engine/ranking.py` and `worker/tasks.py` traced for wiring confirmation only (those
-files belong to other agents and are not scored here). Both SEV2s from the 2026-05-30 (Wave 1)
-report are carried forward verbatim — verified by re-reading the same line numbers in the
-unchanged files, and `tests/test_preference.py` still contains no `lightgbm` / `LGBMClassifier`
-round-trip (confirmed by grep), so the silent-degrade risk remains live.
+Wave 3 did not touch this module — `git log 84a7e9f..HEAD -- preference/` is empty; the
+last commits to `preference/` remain `eb0953f` Issue 78c and `a4fcb56` Issue 78a (both
+pre-baseline). Slice walked: `preference/__init__.py`, `preference/_scorer_cache.py`,
+`preference/decay.py`, `preference/features.py`, `preference/model.py`,
+`preference/train.py`. Callers in `clip_engine/ranking.py` and `worker/tasks.py` traced
+for wiring confirmation only (those files belong to other agents and are not scored
+here). Both carry-forward SEV2s from Wave 1 (2026-05-30) and Wave 2 are re-verified by
+re-reading the same line numbers in the unchanged files. `tests/test_preference.py` is
+re-checked: `grep -nE "lightgbm|LGBMClassifier|LightGBM"` returns zero matches, so the
+LightGBM round-trip is still absent and the silent-degrade risk remains live.
+`grep -rn "joblib.load|joblib.dump"` outside this module returns zero hits, so the
+process-global unpickler swap in `from_bytes` still has only the one caller.
 
 ## Findings
 
@@ -26,7 +29,8 @@ round-trip (confirmed by grep), so the silent-degrade risk remains live.
   **not** round-tripped, so a relocation of any of those would pass CI and silently degrade
   in prod. Rubric category 3 (security/compliance — the allowlist is the RCE guard, and a
   failure mode that maps "blob rejected" onto "no personalization" is a correctness
-  defect we cannot observe). Carry-forward from 2026-05-30. | fix: add
+  defect we cannot observe). Carry-forward from 2026-05-30 and 2026-05-31 (Wave 2);
+  re-verified Wave 3: still no LightGBM symbol in `tests/test_preference.py`. | fix: add
   `tests/test_preference.py::test_scorer_round_trips_lightgbm` that calls
   `fit(X, y, w, threshold=1)` (or `threshold=len(y)`) with enough samples in both classes
   to force the LGBM branch, then asserts
@@ -34,8 +38,8 @@ round-trip (confirmed by grep), so the silent-degrade risk remains live.
   tolerance. Same shape as the existing logistic round-trip — the assertion catches a
   future module-path move at build time instead of in production. Additionally,
   `load_latest` should log at WARNING with the exception type (it does — `train.py:162`)
-  and a metric on "preference_deserialize_failed" so silent-degrade is observable. The
-  metric is the secondary mitigation; the test is the primary fix.
+  and emit a metric on "preference_deserialize_failed" so silent-degrade is observable.
+  The metric is the secondary mitigation; the test is the primary fix.
 
 - [SEV2] preference/_scorer_cache.py:23 — module-level `_cache` is keyed by
   `(creator_id, version)` and shared by all creators on the worker process; with Celery
@@ -47,9 +51,11 @@ round-trip (confirmed by grep), so the silent-degrade risk remains live.
   `worker_prefetch_multiplier=1` keeps this bounded, but a future tuning that raises
   concurrency will silently inflate footprint. Rubric category 2 (concurrency & scale —
   bounded work / no unbounded in-memory accumulation per creator). Carry-forward from
-  2026-05-30. | fix: pick one — (a) document per-entry estimate in the docstring and lower
-  the default to match the expected concurrent-creator working set per worker (e.g. 32),
-  (b) gate the cap on bytes using a stored size estimate at `put` time
+  2026-05-30 and 2026-05-31 (Wave 2); re-verified Wave 3: `_scorer_cache.py:40` still uses
+  `len(_cache) > settings.PREFERENCE_SCORER_CACHE_SIZE` (entries, not bytes). | fix: pick
+  one — (a) document per-entry estimate in the docstring and lower the default to match
+  the expected concurrent-creator working set per worker (e.g. 32), (b) gate the cap on
+  bytes using a stored size estimate at `put` time
   (`scorer._size = len(scorer.to_bytes())` cached once) summed across the OrderedDict, or
   (c) clarify in the docstring that this is a per-worker-process cache and the operator
   must size `PREFERENCE_SCORER_CACHE_SIZE × worker_concurrency × replicas × ~few-MB`
@@ -62,9 +68,9 @@ round-trip (confirmed by grep), so the silent-degrade risk remains live.
 - [cleanup] preference/model.py:37 — `_UNPICKLER_LOCK` correctly serializes the
   process-global `NumpyUnpickler` swap, but if any other code in the same process called
   `joblib.load` while the lock was held it would also pick up the restricted unpickler
-  (currently nothing else in the codebase does — `rg "joblib.load" --type py` confirms
-  only `preference/model.py` uses it). No action needed; tracked here so a future direct
-  `joblib.load` import elsewhere triggers a second look.
+  (currently nothing else in the codebase does — re-verified Wave 3 with
+  `rg "joblib.load" --type py`: only `preference/model.py:130` uses it). No action needed;
+  tracked here so a future direct `joblib.load` import elsewhere triggers a second look.
 
 ## Verified correct (no finding)
 
@@ -126,8 +132,8 @@ round-trip (confirmed by grep), so the silent-degrade risk remains live.
   ids logged are UUIDs (`train.py:73,112,141`; `model.py:177,183`). No PII or secret.
 - Config (rubric category 8): `PERSONALIZATION_THRESHOLD_LABELS=20`,
   `PREFERENCE_WEIGHT_CAP=0.5`, and `PREFERENCE_SCORER_CACHE_SIZE=128` are all in
-  `config.py:91,95,99` with defaults and in `.env.example:73` with descriptions
-  (verified).
+  `config.py:96,100,104` with defaults and in `.env.example:10,72,73` with descriptions
+  (re-verified Wave 3).
 
 ## Rubric coverage
 | Category | Status |
@@ -142,7 +148,8 @@ round-trip (confirmed by grep), so the silent-degrade risk remains live.
 | 8 Config & paths | ok (cache size in .env.example with description) |
 
 ## Module verdict
-NEEDS-WORK — no regressions, no Wave 2 changes to this module; the two SEV2s carry forward
-unchanged from 2026-05-30: the allowlist still needs a LightGBM round-trip in CI to avoid
-silent personalization loss on a library upgrade, and the cache's memory bound is by entry
-count not bytes, which will inflate footprint if worker concurrency is raised later.
+NEEDS-WORK — no regressions, no Wave 3 changes to this module; the two SEV2s carry forward
+unchanged from 2026-05-30 and 2026-05-31 (Wave 2): the allowlist still needs a LightGBM
+round-trip in CI to avoid silent personalization loss on a library upgrade, and the
+cache's memory bound is by entry count not bytes, which will inflate footprint if worker
+concurrency is raised later.
