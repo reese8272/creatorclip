@@ -1,162 +1,135 @@
 # LEFT_OFF — Session Handoff Contract
 
-> **Read this first.** Living "where we are right now" file. Not a changelog, not a source
-> of truth — those live in `docs/`. Updated at the end of every session.
+> **Read this first.** Living "where we are right now" file. Not a changelog, not a
+> source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-30 (Issue 86 closed end-to-end · Dockerfile PYTHONPATH hotfix · full `/assess` re-run)
-**Branch:** `main` — HEAD `bbfa3c8`. Only `main` exists locally and on origin.
-**Working tree:** dirty — `LEFT_OFF.md` (this file, in-flight), `docs/assessment/REPORT.md` + all 11 `docs/assessment/modules/*.md` + new `docs/assessment/history/2026-05-30-post-issue-86-REPORT.md` (fresh `/assess` output). Plus untracked `Screenshot 2026-05-30 155339.png` (the user's stuck-DNA screenshot that kicked off the session — can be deleted).
+**Last updated:** 2026-05-31 (Wave 5 closed end-to-end — SEV1 hotfix + cross-tab task persistence + global activity panel — but the deploy to production is blocked, see below)
+**Branch:** `main` — HEAD `2c7b34d`. Only `main` exists locally and on origin.
 **Sync with `origin/main`:** **0 / 0** — in sync.
-**Production:** ✅ Deployed. Last deploy `26696877304` succeeded on commit `bbfa3c8`; `/health` returning `{"status":"ok","postgres":"ok","redis":"ok"}`. All 5 CI lanes green on HEAD (CI, Quality Gates, Integration tests, Docker publish, Deploy).
-**RLS posture:** ⚠️ unchanged from prior session — migration `0010_rls_policies` applied, roles exist, BUT not yet *enforced*. App still connects as SUPERUSER `creatorclip`. Activation is a manual one-time step via `.github/workflows/activate-rls.yml` once the user adds the two `POSTGRES_*_PASSWORD` repo Secrets.
+**Working tree:** clean (untracked `Screenshot 2026-05-30 155339.png` only — the user's stuck-DNA screenshot from yesterday; delete-OK).
+**Production:** ⚠️ **Wave 5 is NOT live yet.** Production is still serving commit `67fddc9` (the last successful Deploy, 2026-05-31 15:50). `/health` returns `{"status":"ok","postgres":"ok","redis":"ok"}` from the previous image. Wave 5's user-visible changes (the global activity panel + cross-tab persistence) are committed but not deployed.
+**Tests (local, default lane):** 553 passed / 1 skipped / 94 deselected. **CI (GitHub Actions) is RED — see Blocker A below.**
 
 ---
 
-## 1. CURRENT FOCUS
+## CURRENT FOCUS
 
-**Nothing in flight.** Issue 86 closed this session — live SSE progress streaming for long-running LLM + worker tasks (DNA build is the first wired call site). A full `/assess` was run after: **PRODUCTION-READY = CONDITIONAL**, 0 BLOCKERs, 2 SEV1s, 27 SEV2s, 28 cleanups. Pre-existing CONDITIONAL posture maintained; SEV1 count went 4 → 2 (net improvement); scale axis D moved ⚠️ → ✅ via RLS structural enforcement; scale axis B moved ⚠️ → ✅ via clip_engine CPU off the loop.
+Two stop-the-world items are blocking the Wave 5 user-facing rollout. Both must clear before the user sees the new activity panel and cross-tab task persistence in production.
 
-Four independent threads are queued. The user picks which to start next — each has a clean Phase-1 CHECK in front of it; do NOT start any without one.
+### → BLOCKER A — Fix the CI unit-test failure (code-side, 1-line fix)
 
-### → NEXT ACTION (pick one, in any order)
+The new test I added in Wave 3 — `tests/test_billing.py::test_checkout_offloads_sync_stripe_to_thread` — passes locally but fails on CI with `assert 503 == 200`. Root cause: `routers/billing.py` returns 503 at the top of `create_checkout` when `settings.STRIPE_SECRET_KEY` is empty. My laptop's env has the key set; the CI runner does not. The other test in the same file (`test_checkout_returns_503_when_stripe_key_empty`) intentionally clears the key with `monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "")` — the new test must do the opposite.
 
-1. **Commit the `/assess` artifacts + this LEFT_OFF.md** — currently dirty in the working tree, not yet on `main`. Single commit, no code change, safe to land:
-   ```bash
-   git add LEFT_OFF.md docs/assessment/REPORT.md docs/assessment/modules/*.md docs/assessment/history/2026-05-30-post-issue-86-REPORT.md
-   git commit -m "chore(assessment): /assess re-run post Issue 86 — VERDICT: CONDITIONAL"
-   git push origin main
-   ```
-   The untracked screenshot can be deleted (`rm "Screenshot 2026-05-30 155339.png"`) — it was the user's stuck-DNA screenshot that triggered the PYTHONPATH hotfix; no longer needed.
+**Exact fix:** open `tests/test_billing.py`, find `test_checkout_offloads_sync_stripe_to_thread`, and add at the top of the body, before the existing monkeypatch lines:
 
-2. **Fix the top SEV1 from this morning's `/assess`** (`worker/progress.py:214-232`, ~5 lines). `aacquire_slot` only sets EXPIRE on the INCR→1 transition — a creator holding ≥1 SSE streams continuously past 1h has the counter TTL elapse → cap silently bypassed. One-line fix: `EXPIRE` on every INCR, not just count==1. **Only SEV1 a misbehaving client can exploit today; lowest-LOC highest-leverage fix on the register.** Full backing in `docs/assessment/REPORT.md` row 1.
+```python
+from config import settings as _settings
+monkeypatch.setattr(_settings, "STRIPE_SECRET_KEY", "sk_test_fake_key_for_test")
+```
 
-3. **Fix the latent SEV1 in `billing/refund.py:41`** (~1 line + 1 test). `refund_for_video` opens `db.AsyncSessionLocal()` (RLS-gated app role) without setting `session.info["creator_id"]` → silently no-ops once the prod RLS role split flips. Mechanical fix: switch to `db.AdminSessionLocal()` to match the rest of the worker surface. Must land **before** the RLS activation step (#5 below) — flagged in CLAUDE.md as pending.
+Then `pytest tests/test_billing.py::test_checkout_offloads_sync_stripe_to_thread -q` to confirm, commit as a one-line `fix(tests):` and push. CI's `Unit tests (pytest)` lane will go green. **Do not** weaken the prod 503 guard — the guard is correct; the test is wrong.
 
-4. **Activate RLS on prod** (manual, ~5 min, no new code) — same procedure as last session, still pending. **Land action #3 above first** so refund doesn't silently break the moment RLS is enforced:
-   1. Generate two passwords: `echo "APP: $(openssl rand -hex 24)"; echo "MIGRATE: $(openssl rand -hex 24)"`
-   2. Add as repo Secrets at **Settings → Secrets and variables → Actions**: `POSTGRES_APP_PASSWORD` and `POSTGRES_MIGRATE_PASSWORD`.
-   3. Trigger **Actions → "Activate RLS (Issue 79)" → Run workflow** with `dry_run=true`. Verify printed SQL + .env plan.
-   4. Re-run with `dry_run=false` to apply. Workflow rolls back automatically on a failed verification; timestamped `/opt/autoclip/.env.backup-…` is created first.
+### → BLOCKER B — GitHub Actions billing (external, user-only)
 
-5. **Issue 84 — AI/LLM efficiency assessment** (user-requested follow-up, prerequisite for the Issue 86 streaming wrapper to ever surface real `thinking_delta` events). The Issue-86 build also produced **free cache-hit observability** at every Anthropic call site via the new `cache` SSE event — that data is now Issue 84's raw material. **Start with a Phase-1 CHECK** — Anthropic SDK + caching state moves fast. Scope brief at `docs/issues.md::Issue 84`.
+The Wave 5 Deploy workflow (`gh run 26717953473`) was **not started by GitHub** — annotation reads verbatim:
 
-6. **Issue 85 — UI redesign** (user-requested follow-up). Same scope as last session — sleek modern editing-tool aesthetic (CapCut / Descript / Riverside / Final Cut for web). Includes reworking the Issue 83 intake form **and** dressing up the brand-new Issue 86 terminal-style progress block. Soft-depends on Issue 84. Scope brief at `docs/issues.md::Issue 85`.
+> "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings"
 
-7. **Backboard Media data investigation** (incidental finding from today's hotfix session). User's own creator account (`eb9af967-5d2f-4063-a05e-9f4f070ce840`, channel "Backboard Media", state `connected`) has **0 videos in the DB** — `build_dna` correctly raises `ValueError: Insufficient data for DNA build: 0 long videos (min 10), 0 shorts (min 5)`. The YouTube analytics fetch from Issue 4 either never completed for this account or hasn't run since. Worth investigating before the user retries the DNA flow.
+This is an Actions-runner billing issue, not a code problem. Until you (the human user) resolve it at https://github.com/settings/billing, no workflow_run-triggered Deploy will execute, regardless of what we push. Quality Gates + Docker publish still run on push (those are push-triggered, not workflow_run-triggered), so the image is published — the deploy step is the one that's gated.
 
-### Other open work (not user-prioritized this session)
+**Order matters:** fix Blocker A first (Quality Gates is already green, but a red CI lane is a bad look + the Wave 5 image needs the test fix anyway); then fix Blocker B; then push or trigger a manual deploy; then verify https://autoclip.studio is serving the new code (look for `<script defer src="/static/activeTasks.js"></script>` in the index.html source).
 
-- **Top SEV2s from `/assess` row 3-10** (worker progress.py XREAD pool sizing, routers/tasks.py 404/403 enumeration oracle, unvalidated Last-Event-ID, Anthropic stream mid-interrupt no terminal emit, Dockerfile root user + `--reload` default, refund pack_id needs UNIQUE). All small and well-backed. See `docs/assessment/REPORT.md` for the full ranked register.
-- **Issue 78e** — YouTube analytics-retention purge. Still needs ToS staleness figure in `docs/COMPLIANCE.md` §2 and sign-off to delete creator analytics.
-- **Issue 78f** — PgBouncer load-test harness. Needs a real staging cluster. This is the single highest-leverage action for moving the overall verdict from CONDITIONAL to YES — converts scale axes A/C/E/F from ⚠️ to ✅.
-- **`disallow_untyped_defs` ratchet** (deferred from 78c). Still ~20 pre-existing untyped-def signatures.
-- **Local-track placeholders** (Issues 80–82): transactional email, in-app notifications, Wave 2 of Issue 38.
+### → THEN (post-blocker, pick one)
+
+1. Run `/assess` to confirm SEV1=0 and refresh `docs/assessment/REPORT.md` (the post-Wave-4 assessment is now stale — it pre-dates Wave 5).
+2. **Locust load test on staging** (Issue 78f) — the only remaining structural gate between `CONDITIONAL` and `YES` on the production-readiness verdict.
+3. **Submit Google OAuth app verification** — fully unblocked since Wave 4 Fix 3 closed Issue 75b (30-day YouTube retention purge is live).
+4. **Anthropic SDK 0.40 → 0.105.2** bump (Issue 84 follow-up) + drop unproductive `cache_control` markers on DNA + improvement-brief paths.
+5. **Feature work:** Issues 93–100 (insights rebuild, clip-engine transparency, OBS hotkey, chat-driven intake, livestream recap, UI redesign, onboarding tutorial). Filed 2026-05-31 from the user's close-out list.
 
 ---
 
-## 2. WHAT WORKS NOW (do not re-investigate)
+## WHAT WORKS NOW (verified this session — do not re-investigate)
 
-### Just-shipped this session (Issue 86 + the PYTHONPATH hotfix that preceded it)
-
-**Dockerfile PYTHONPATH hotfix (commit `c2a76d4`)** — prod incident root cause was Celery's console-script entry at `/root/.local/bin/celery` setting `sys.path[0]` to the script dir instead of `/app`. Forked pool workers couldn't import first-party packages → `ModuleNotFoundError("No module named 'dna'")` → 4-retry crash-loop with UI frozen for 3+ min. Fix: `ENV PYTHONPATH=/app` in Dockerfile. Subprocess integration test at `tests/test_worker_imports_integration.py` guards it forever — spawns a real Celery worker subprocess and asserts `from dna.brief import generate_brief` succeeds. Decision logged in `docs/DECISIONS.md`.
-
-**Issue 86 — live SSE progress surface (commits `8cf33a4` → `bbfa3c8`)** — DNA build no longer feels like a frozen spinner. Six commits including four post-push CI fixes (cross-loop Redis binding, generate_brief streaming unification, aclose defensive teardown, mypy 1.14.1 type narrowing). All 5 CI lanes green; production deploy succeeded.
-
-- **`worker/progress.py`** (NEW) — `sync_emit` (for inside `asyncio.to_thread`) / `aemit` (async) + `aset_owner` / `aget_owner` / `aacquire_slot` / `arelease_slot` / `aread_since` / `aclose`. Per-task Redis Stream `task:{task_id}:events` with `MAXLEN ~200` + `EXPIRE 3600` on terminal events. Per-creator concurrent SSE counter (cap 3). Ownership key for SSE auth. Loop-aware singleton survives pytest's per-test loop scope.
-- **`worker/anthropic_stream.py`** (NEW) — wraps `Anthropic.messages.stream()` to forward `message_start.usage` as `cache` event (HIT/miss visible BEFORE first token), `text_delta` as `token`, `thinking_delta` as `thinking` (forward-compat — fires once SDK is bumped in Issue 84). Returns `(final_text, usage_dict)`.
-- **`dna/brief.py`** — extracted `_build_request` helper; `generate_brief()` got a `task_id: str | None = None` kwarg that internally routes to the streaming path when set. **Same prompt structure either way** — cache breakpoint identical, so prior cache writes are interchangeable between paths. Existing unit-test mocks of `generate_brief` keep working untouched.
-- **`worker/tasks.py::_build_dna_async`** — `aemit("step", label=...)` at every stage boundary (`acquire_lock`, `analyze_patterns`, `analyzed_patterns` with counts, `call_claude`, `embed`); terminal `done`/`error` with safe messages; whole flow wrapped in try/except for clean error propagation.
-- **`routers/tasks.py`** (NEW) — `GET /tasks/{task_id}/events` SSE endpoint with session-cookie auth, ownership check via Redis key, EventSource `Last-Event-ID` resume, 12s `: keepalive` comment, 600s hard lifetime cap, per-creator concurrent cap = 3. Cloudflare-Tunnel-safe headers (`Cache-Control: no-cache` + `X-Accel-Buffering: no`).
-- **`routers/creators.py::build_dna`** — sets ownership in Redis after `.delay()`, returns `stream_url` in the 202 response.
-- **`static/progressStream.js`** (NEW) + **`static/onboarding.html`** — vanilla-JS EventSource reducer renders progress into a terminal-style `<pre>` block. Pollers stay as belt-and-suspenders fallback.
-- **`main.py`** — mounts the new router; lifespan shutdown drains `worker.progress.aclose()`.
-- **Tests**: +24 unit + 1 subprocess integration test. **492 passed / 1 skipped / 85 deselected** on default lane; integration lane green on CI. Seven sub-decisions captured in `docs/DECISIONS.md`.
-
-**Today's `/assess` re-run** — `docs/assessment/REPORT.md` plus snapshot at `docs/assessment/history/2026-05-30-post-issue-86-REPORT.md`. **VERDICT: CONDITIONAL** (was CONDITIONAL — held with improvements). 11 module files refreshed. Net SEV1 trend: −2 (closed 4 prior, surfaced 2 new). Scale axes B and D moved ⚠️ → ✅. The single gating action between CONDITIONAL and YES is the Locust-behind-PgBouncer load test (Issue 78f) — no code reading can substitute.
-
-### Stable foundations from prior sessions (unchanged this session)
-
-- **Beta production** live at `https://autoclip.studio` (Cloudflare Tunnel → VM `app:8000`).
-- **Reconcile merge + RLS + Issue 83 identity** all deployed. Migration head `0012_creator_identity`.
-- **`activate-rls.yml`** workflow ready (`workflow_dispatch`, `dry_run=true` default, idempotent SQL, timestamped `.env` backup before edit). Sanity check accepts any head ≥ `0010_rls_policies`.
-- **mypy baseline 0** (CI pinned to `1.14.1`; local `.venv` runs `2.1.0` — re-pin if you re-baseline).
+- **Cross-tab task persistence.** `static/activeTasks.js` stores active tasks in `localStorage` (`creatorclip:active_tasks`), prunes stale entries > 1h (matches `_STREAM_TTL_SECONDS=3600` in `worker/progress.py`), and re-opens `EventSource` with `Last-Event-ID` on every page load. Public API: `window.activeTasks.{registerTask,getActiveTasks,findTask,subscribe,removeTask}`. Pinned by `tests/test_static.py::test_active_tasks_library_exists_and_exports_api`.
+- **Global activity panel.** `static/activityPanel.js` mounts a bottom-right floating widget (Linear/Vercel-style) on every authenticated page (`index.html`, `onboarding.html`, `insights.html`, `profile.html`, `review.html`, `pricing.html`). Hidden when no tasks; expanded tray shows terminal-style streams per task. Pinned by `tests/test_static.py::test_all_authenticated_templates_include_active_tasks_and_panel`.
+- **Fail-open `aset_owner` invariant — uniform across all 6 call sites.** Waves 3/4/5 closed: `routers/improvement.py:91-110` (brief), `routers/auth.py:117-119` (OAuth callback), `routers/videos.py:262-279` (upload), `routers/creators.py::sync_catalog` (~167), `routers/creators.py::build_dna` (~195), `routers/clips.py::render_clip` (~145). Every site wraps `await progress.aset_owner(...)` in `try/except redis.RedisError`; on failure, returns `stream_url=None` (client polls instead of streaming). Every response model now has `stream_url: str | None = None`.
+- **YouTube ToS 30-day retention compliance (Wave 4 Fix 3 / Issue 75b).** `worker/tasks.py::_purge_stale_youtube_analytics_async` runs daily via Celery Beat (`worker/schedule.py`), deletes `VideoMetrics + RetentionCurve` (lock-step), `AudienceActivity`, `Demographics` past `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30`. Inline ToS §III.E.4.b citation in `config.py`. Pre-monetization checkbox in `CLAUDE.md` ✅.
+- **Refund pack_id partial UNIQUE race closed (Wave 4 Fix 2).** Migration `0013_refund_pack_id_unique` creates partial UNIQUE on `(pack_id) WHERE reason='refund'` via `CREATE INDEX CONCURRENTLY` in `autocommit_block`. `billing/refund.py` simplified: removed read-then-write SELECT guard; catches `IntegrityError` + rollback + return 0.
+- **Streaming tools forwarding (Wave 3 Fix A).** `worker/anthropic_stream.py::stream_and_emit` extended with `tools: list | None = None`; dict-based `stream_kwargs` omits `tools` when None (preserves `dna/brief.py` shape). `improvement/brief.py:124-131` passes `tools=tools`. The Issue 84 web_search bump is now propagated through the streaming path, not just `.create()`.
+- **Sync Stripe SDK off the event loop (Wave 3 Fix C).** `routers/billing.py:94` wraps `create_checkout_session` in `await asyncio.to_thread(...)`. Test `test_checkout_offloads_sync_stripe_to_thread` validates this, but **currently fails on CI — see Blocker A**.
+- **Terminal-stage promotion (Wave 3 Fix E).** `worker/tasks.py::_signals_async` no longer emits terminal `done`; emits `step:ingest_complete` (non-terminal). `_generate_clips_async` now fires `step:generate_clips_start`, `step:score_and_rank`, and terminal `done` with `clip_count`. Stream key is `video_id` across both stages.
+- **Anthropic SDK 0.40 audit (Wave 2 / Issue 84).** All 3 call sites verified compatible with current SDK; no breaking changes. Bumped `web_search` tool to GA (`web_search_20260209`) with dynamic filtering. Full assessment in `docs/assessment/llm/{dna_brief,clip_scoring,improvement_brief,REPORT}.md`.
+- **Universal SSE progress visibility (Wave 2 / Issue 92).** Every long-running background task (DNA build, catalog sync, improvement brief, upload pipeline, render) emits via the Issue 86 SSE primitive on `/tasks/{task_id}/events`.
 
 ---
 
-## 3. THE ARC THAT LED HERE
+## THE ARC THAT LED HERE
 
-1. **2026-05-30 (this session, pt 1)** — user reported stuck DNA build screenshot. Traced to prod worker `ModuleNotFoundError: 'dna'` 4× crash-loop. Filed as off-course bug, hotfixed with `ENV PYTHONPATH=/app` in Dockerfile + subprocess integration test as a permanent guard. Pushed and deployed before continuing.
-2. **2026-05-30 (pt 2)** — user asked "what's a good way to test this internally? Maybe for the DNA testing or really ANY LLM analysis, I think having it show it's thinking is HUGE." Phase-1 CHECK with deep industry-standards research → SSE + Redis Streams + Anthropic streaming wrapper, plain JSON wire format. User approved with "good to go, make sure we test while we build, and then do a deep assessment after."
-3. **2026-05-30 (pt 3)** — built Issue 86 end-to-end: test-first (TDD red → green for `worker/progress.py` and `worker/anthropic_stream.py`), then wiring into DNA build, the SSE endpoint, the frontend reducer. Invoked `/claude-api` before writing the streaming wrapper per CLAUDE.md project rule. Single feature commit (`8cf33a4`) followed by four CI-driven fix-forwards as integration tests + Quality Gates surfaced cross-loop Redis binding, test-mock unification, aclose defensiveness, and mypy 1.14.1 type-narrowing. All five CI lanes green on `bbfa3c8`.
-4. **2026-05-30 (pt 4 — current)** — ran `/assess` (full 3-layer: deterministic gates + 11 parallel module subagents + Layer-2 verdict). Result: CONDITIONAL, SEV1 4→2, scale axes B+D promoted to ✅. Report + 11 module findings + history snapshot written; not yet committed.
+Five waves in one autonomous session (2026-05-31):
+
+1. **Wave 1** — 6 hotfix batch (2 SEV-1s from `/assess` + Issues 89/90/91/98 — balance pre-check, catalog list filter, clips counter filter, DNA banner state machine).
+2. **Wave 2** — Issue 84 (Anthropic SDK + web_search audit + bump to GA) + Issue 92 (universal SSE progress visibility for every long-running background task).
+3. **Wave 3** — 6 regression fixes from the new SSE coverage: streaming tools drop, `aset_owner` ordering, sync Stripe in async path, OAuth callback `aset_owner` gap, premature done event from `_signals_async`, silent skip-video — plus carry-forward Stripe SEV1.
+4. **Wave 4** — 3 fixes: `videos.py` upload fail-open, refund `pack_id` partial UNIQUE (migration 0013), YouTube ToS 30-day retention purge (Issue 75b compliance gap).
+5. **Wave 5** — 3 fixes: SEV1 hotfix extending fail-open to 3 remaining `aset_owner` sites (`creators.py::sync_catalog`, `creators.py::build_dna`, `clips.py::render_clip`); cross-tab task persistence (`static/activeTasks.js`); global activity panel on every authenticated page (`static/activityPanel.js`).
+
+The user's two stated UX needs that drove Wave 5 directly:
+
+- *"when we are going from tab to tab, we are not refreshing the information. When we do an analysis or a DNA update, we let that run regardless of what tab they are on"* → Wave 5 Fix 2.
+- *"I do not see a lot of the new features on the website"* → Wave 5 Fix 3.
+
+The user invoked `/close-out` immediately after Wave 5 was pushed; they did NOT pick a next direction, and the post-Wave-5 `/assess` has not been run.
 
 ---
 
-## 4. KEY COORDINATES & FACTS
+## KEY COORDINATES & FACTS
 
-| Thing | Value |
+| Item | Value |
 |---|---|
-| **Public URL / health** | `https://autoclip.studio` · `/health` |
-| **VM / SSH / deploy dir** | `147.182.136.107` (Ubuntu 24.04) · `ssh creatorclip-vm` · `/opt/autoclip/` |
-| **R2 bucket / image** | `creatorclip-beta` · `ghcr.io/reese8272/creatorclip:latest` |
-| **GitHub repo** | `github.com/reese8272/creatorclip` (private) — single branch `main` |
-| **Test runner** | `.venv/bin/python -m pytest -q` — venv MUST be Python 3.12. Needs a running Redis. |
-| **Lint runner** | `ruff check .` AND `ruff format --check .` — CI runs both. `ruff==0.15.15`. |
-| **mypy** | `.venv/bin/python -m mypy .` — **CI pins `mypy==1.14.1`**; local `.venv` may have newer. Re-pin (`pip install "mypy==1.14.1"`) if a baseline diverges. Baseline: 0. |
-| **Assessment gate** | `python3 .claude/skills/production-assessment/scripts/run_layer0.py` |
-| **Latest assessment** | `docs/assessment/REPORT.md` (today, post Issue 86) · snapshot `history/2026-05-30-post-issue-86-REPORT.md` |
-| **Active issue** | _(none in flight)_ — pick from NEXT ACTION above |
-| **Last completed** | Issue 86 — live SSE progress streaming (this session) |
-| **Latest alembic head** | `0012_creator_identity` (deployed) |
-| **Test count** | 492 passed, 1 skipped, 85 deselected (default); integration lane green |
-| **Safety tag (pre-merge rollback)** | `safety/pre-reconcile-2026-05-30` |
-| **Secrets registry** | `docs/SECRETS.md` — names only, values in `.env` / GitHub Secrets |
-| **Secrets needed for RLS activation** | `POSTGRES_APP_PASSWORD`, `POSTGRES_MIGRATE_PASSWORD` (both write-only — generate fresh with `openssl rand -hex 24`) |
-| **Memory dir** | `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` |
-| **Backboard Media creator id** | `eb9af967-5d2f-4063-a05e-9f4f070ce840` — currently 0 videos in DB (see Next Action #7) |
+| Public URL | `https://autoclip.studio` |
+| Deploy VM | `147.182.136.107` |
+| Container image | `ghcr.io/reese8272/creatorclip:latest` |
+| Branch policy | `main` is the only branch; pushing to `main` triggers the Docker publish → workflow_run → Deploy pipeline |
+| Alembic head | `0013_refund_pack_id_unique` (Wave 4 Fix 2) |
+| Latest assessment | `docs/assessment/REPORT.md` (post-Wave-4 — STALE; Wave 5 not yet captured) |
+| Assessment history | `docs/assessment/history/2026-05-31-post-wave-{1,2,3,4}-REPORT.md` |
+| OFF_COURSE_BUGS additions this session | slowapi 429 TestClient collision (logged; workaround = per-creator session cookie keys the limiter per-UUID, not per-IP) |
+| `CLAUDE.md` pre-monetization | YouTube data-retention/refresh fully compliant ✅; Google OAuth app verification ❌ (external — user action) |
+| Memory dir | `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |
+| Secret names (NEVER log values) | `STRIPE_SECRET_KEY`, `JWT_SECRET`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
+| Last successful prod commit | `67fddc9` (Deploy run `26717189318`, 2026-05-31 15:50) |
+| Failed Wave-5 Deploy | `gh run view 26717953473` — annotation: GitHub Actions billing problem (NOT a code defect) |
+| Failing CI run on HEAD | `gh run view 26717928786` — `tests/test_billing.py::test_checkout_offloads_sync_stripe_to_thread` returns 503 (STRIPE_SECRET_KEY unset on CI) |
 
 ---
 
-## 5. CONSTRAINTS & GOTCHAS
+## CONSTRAINTS & GOTCHAS (next session: read before acting)
 
-- **Pushing to `main` triggers the production deploy pipeline.** No staging gate today. CI must be green before push; alembic `upgrade head` runs as part of deploy. The dirty assessment artifacts in the working tree right now (`docs/assessment/*.md` + this file) are doc-only and safe to push.
-- **RLS is on the tables but NOT yet enforced** — the app still uses SUPERUSER. The `creator_identity.uq_one_current_identity_per_creator` invariant + every other tenant-scoped invariant is defended only by the application layer + indices until the activation workflow runs. **Land action #3 (refund AdminSessionLocal fix) BEFORE running the activation workflow** — otherwise terminal-ingest refunds will silently no-op the moment RLS is enforced.
-- **`SET LOCAL` does NOT accept bind parameters in Postgres** — always use `SELECT set_config('name', :value, true)` instead. Caught the hard way; see `db.py:138` for canonical pattern.
-- **`pack_id` is now VARCHAR(64)** (was 32) — long enough for `refund:<uuid>` (43 chars). If you invent any longer pack_id shape, re-check the column width.
-- **`dna_brief` is the cached prefix for clip scoring** — identity reaches the scorer transitively via the brief, NOT through a separate scorer-prompt block. Identity edits don't take effect on scoring until the next DNA rebuild.
-- **Anthropic prompt-cache TTL is 5 minutes** (2026 change). Identity caching rarely engages for a creator's single isolated DNA build. **Issue 86 added free cache-hit observability** via the new `cache` SSE event — Issue 84 inherits this as evidence.
-- **Worker tasks use `db.AdminSessionLocal()`** — when RLS is activated, this is the BYPASSRLS role. New worker tasks must use `AdminSessionLocal`, NOT `AsyncSessionLocal`, or cross-tenant sweeps (purge, poll, refresh, refund) will silently see zero rows. **`billing/refund.py:41` is the one place this is wrong today — fix it before RLS flip.**
-- **`_build_dna_async` holds a `pg_advisory_xact_lock`** + double-checks `job_id` idempotency. Both must stay — they close a double-spend race on paid LLM/Voyage calls.
-- **Anthropic SDK 0.40 TextBlockParam stub predates `cache_control`** — hence the targeted `# type: ignore[arg-type]` on the `system=` kwarg. Asymmetric: `.create()` has the ignore, `stream_and_emit` doesn't — fine today (stream_and_emit's signature is `Any`), but watch when Issue 84 bumps the SDK.
-- **`worker.progress` async Redis singleton is loop-aware** (rebinds on `asyncio.get_running_loop()` mismatch) so it survives pytest's per-test loop scope. Production cost: zero (one loop per worker process). Resets singleton on emit failure to recover from a wedged client — observability NEVER load-bearing.
-- **`worker.progress.aset_owner` / `aget_owner` MUST raise on Redis failure** (unlike `aemit` which swallows). They are the SSE authorization invariant — a swallow would let a leaked task_id read another creator's stream after a Redis blip. Asymmetry is intentional; documented inline.
-- **Integration tests are deselected from default `pytest -q`** (`pytest.ini`); only the integration-tests CI lane runs them (needs real Postgres + Redis).
-- **mypy version mismatch trap**: CI pins `1.14.1`, local `.venv` may have `2.x`. `2.x` narrows union types more aggressively, so a local-green change can fail Quality Gates. If you ever see "passes locally, fails CI" on mypy, pin locally first.
-- **Google OAuth app still in Testing mode.** Verification required before public launch.
-- **Cannot delete remote branches from a fresh agent env** sometimes — git proxy has returned 403 on delete-refspec pushes. Branch cleanup may need the GitHub UI.
+- **Pushing to `main` deploys to production.** No staging gate. The image goes to autoclip.studio on every green push. **Until Blocker B is resolved, Deploy will not run regardless of what you push** — the image still publishes, just doesn't deploy.
+- **Production is currently STALE relative to `main`.** Wave 5 is committed but not deployed. Don't tell the user "the activity panel is live in prod" until you have verified `view-source:https://autoclip.studio/` contains `/static/activityPanel.js`.
+- **RLS posture:** request-scoped sessions use `AsyncSessionLocal` with `session.info["creator_id"]` set. Refund and worker actions use `AdminSessionLocal()` (BYPASSRLS by design — the refund Beat task and stream-cleanup background tasks have no JWT to derive `creator_id` from).
+- **slowapi rate-limit collision trap in TestClient.** Tests that hit a rate-limited router and use a shared in-memory limiter will collide at 30+/min on full-suite runs. Workaround: each test creates its own `Creator` row and uses `create_session_token(creator.id)` so slowapi keys per-creator-UUID. Logged in `docs/OFF_COURSE_BUGS.md`.
+- **`AsyncMock(return_value=_FakeSession())` does NOT work for `AdminSessionLocal()` patching** — the factory is called synchronously by `async with`. Use `MagicMock(return_value=_FakeSession())`.
+- **Refund SAVEPOINT requires `await session.rollback()` after `IntegrityError`.** The partial-UNIQUE catch in `billing/refund.py` MUST roll back the txn before returning 0; otherwise the next DB call in the same session errors with "current transaction is aborted".
+- **`YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30` is ToS-mandated upper bound** (§III.E.4.b). Do not increase it. Decreasing is fine if storage cost demands it.
+- **`# type: ignore` comments on Anthropic SDK call sites are obsolete after the SDK bump.** If/when Issue 84 follow-up lands, sweep them; mypy will surface the unused ones with `--warn-unused-ignores`.
+- **Pre-existing `Event loop is closed` warnings in `tests/test_progress.py`** are a SEV2 carry-forward — not a Wave 5 regression. Don't chase them.
+- **No virality promise anywhere.** Structural test pins this. Don't accidentally add one in marketing copy or LLM prompts during feature work.
+- **OAuth tokens are Fernet-encrypted at rest** and must be read via `decrypt()`. Never log token values or return them in API responses.
+- **Per-creator isolation on every query** touching creator-scoped tables. Missing `WHERE creator_id = ...` is a BLOCKER for review.
 
 ---
 
-## 6. POINTERS
+## POINTERS
 
-| Doc / path | Purpose |
-|---|---|
-| `docs/assessment/REPORT.md` | **TODAY'S** production-readiness verdict (CONDITIONAL); top-10 register; scale checklist with axis-by-axis evidence |
-| `docs/assessment/history/2026-05-30-post-issue-86-REPORT.md` | Immutable snapshot of today's run |
-| `docs/assessment/modules/*.md` | Per-module findings (11 files, all refreshed today) |
-| `docs/PROJECT_STATE.md` | Per-issue close log (reverse chronological; Issue 86 at top) |
-| `docs/issues.md` | Backlog incl. Issue 86 closed + Issues 84 + 85 open |
-| `docs/DECISIONS.md` | Architecture decisions — Issue 86 (7 sub-decisions) + Dockerfile PYTHONPATH hotfix both captured today |
-| `docs/SOT.md` | Tech stack + data model + file tree (Issue 86 additions reflected: `routers/tasks.py`, `worker/progress.py`, `worker/anthropic_stream.py`, `static/progressStream.js`) |
-| `docs/COMPLIANCE.md` | YouTube ToS posture + retention + honesty constraint |
-| `docs/CLIPPING_PRINCIPLES.md` | Named principles registry the clip engine cites |
-| `docs/DEPLOYMENT.md` | Dev setup + RLS one-time setup runbook (Issue 79) |
-| `docs/SECRETS.md` | Every secret by NAME (incl. the two `POSTGRES_*_PASSWORD` slots for RLS activation) |
-| `docs/ACCESS.md` | SSH + Cloudflare Tunnel runbook |
-| `docs/OFF_COURSE_BUGS.md` | Off-course bug log — PYTHONPATH ModuleNotFoundError entry added this session |
-| `.github/workflows/activate-rls.yml` | Manual one-time RLS activation (workflow_dispatch only) |
-| `.github/workflows/quality.yml` | Ratcheted CI gates (types/coverage/SAST/CVEs) |
-| `.github/workflows/deploy.yml` | CD pipeline (gated on Docker publish, runs alembic upgrade) |
-| `alembic/versions/0001..0012` | Migration chain (head: `0012_creator_identity`) |
-| `CLAUDE.md` | Project rules + Check→Approve→Build→Review workflow |
-| `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` | Auto-memory index |
+- `docs/SOT.md` — current stack, file structure, schema (static/ tree now includes `activeTasks.js` + `activityPanel.js`)
+- `docs/PROJECT_STATE.md` — every issue's status and session log
+- `docs/issues.md` — work queue (Issues 84, 89, 90, 91, 92, 98 ✅; 93-100 ready)
+- `docs/DECISIONS.md` — deviation log (Waves 1-5 entries in reverse-chronological order)
+- `docs/COMPLIANCE.md` — YouTube ToS, retention, privacy posture (§2 expanded Wave 4)
+- `docs/CLIPPING_PRINCIPLES.md` — named principles the engine cites
+- `docs/OFF_COURSE_BUGS.md` — incidental defects log
+- `docs/assessment/REPORT.md` — latest verdict (CONDITIONAL — stale, pre-Wave-5)
+- `CLAUDE.md` — project rules; the One Rule (research industry standard FIRST) is non-negotiable
+- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md`
