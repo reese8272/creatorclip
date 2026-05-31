@@ -4,170 +4,271 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Your DNA</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
-    nav {
-      display: flex; align-items: center; gap: 24px;
-      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
-    }
-    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
-    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
-    nav a:hover, nav a.active { color: #e0e0e0; }
-    nav .right { margin-left: auto; }
-    .page-content { max-width: 680px; margin: 0 auto; padding: 32px 16px; }
-    .disclaimer { background: #1a1a2e; border-left: 3px solid #6c63ff;
-                  padding: 8px 14px; font-size: 0.75rem; color: #aaa; margin-bottom: 24px; }
-    h1 { font-size: 1.5rem; margin-bottom: 4px; }
-    .version-badge { font-size: 0.75rem; color: #888; margin-bottom: 24px; }
-    .brief-box {
-      background: #1e1e1e; border-radius: 8px; padding: 20px;
-      white-space: pre-wrap; font-size: 0.875rem; line-height: 1.6;
-      margin-bottom: 20px;
-    }
-    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
-    .stat { background: #1e1e1e; border-radius: 6px; padding: 12px 16px; flex: 1; min-width: 120px; }
-    .stat .label { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
-    .stat .value { font-size: 1.1rem; font-weight: 700; color: #e0e0e0; margin-top: 4px; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-    button { padding: 10px 20px; border-radius: 6px; border: none; font-size: 0.9rem;
-             cursor: pointer; font-weight: 600; }
-    .btn-confirm { background: #2ecc71; color: #000; }
-    .btn-rebuild { background: #333; color: #e0e0e0; }
-    .btn-save { background: #6c63ff; color: #fff; }
-    #confirm-status { font-size: 0.8rem; margin-top: 10px; color: #aaa; min-height: 20px; }
+    /* Issue 99 Phase B — profile.html retrofit (DNA view + identity edit). */
 
-    /* Identity section (Issue 83) */
-    .section { margin-top: 40px; }
-    .section h2 { font-size: 1.15rem; margin-bottom: 4px; }
-    .section .sub { color: #888; font-size: 0.85rem; margin-bottom: 16px; }
+    .page-content { max-width: 680px; margin: 0 auto; padding: var(--space-8) var(--space-4); }
+    h1 { font-size: var(--text-xl); margin-bottom: var(--space-1); }
+    .version-badge {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-bottom: var(--space-6);
+    }
+
+    .brief-box {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
+      white-space: pre-wrap;
+      font-size: var(--text-sm);
+      line-height: var(--leading-relaxed);
+      margin-bottom: var(--space-5);
+    }
+
+    .stats {
+      display: flex;
+      gap: var(--space-3);
+      flex-wrap: wrap;
+      margin-bottom: var(--space-6);
+    }
+    .stat {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-3) var(--space-4);
+      flex: 1;
+      min-width: 140px;
+    }
+    .stat .label {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .stat .value {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-md);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-top: var(--space-1);
+    }
+
+    .top-actions {
+      display: flex;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+    .btn-confirm { background: var(--color-success); color: #000; }
+    .btn-confirm:hover { opacity: 0.88; background: var(--color-success); }
+    .btn-rebuild {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      color: var(--color-text);
+    }
+    .btn-rebuild:hover {
+      background: var(--color-elevated);
+      border-color: var(--color-accent);
+    }
+    #confirm-status {
+      font-size: var(--text-xs);
+      margin-top: var(--space-3);
+      color: var(--color-text-muted);
+      min-height: 18px;
+    }
+
+    /* ── Identity section (Issue 83) ────────────────────────────── */
+    .identity-section { margin-top: var(--space-10); }
+    .identity-section h2 {
+      font-size: var(--text-lg);
+      margin-bottom: var(--space-1);
+    }
+    .identity-section .sub {
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-5);
+      line-height: var(--leading-relaxed);
+    }
     .nudge {
-      background: #2a1d10; border-left: 3px solid #f39c12;
-      padding: 10px 14px; font-size: 0.82rem; color: #e0c890;
-      border-radius: 4px; margin-bottom: 16px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-left: 2px solid var(--color-warning);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-sm);
+      color: var(--color-text);
+      border-radius: var(--radius);
+      margin-bottom: var(--space-4);
     }
-    .form-field { margin-bottom: 14px; }
+    .form-field { margin-bottom: var(--space-4); }
     .form-field label {
-      display: block; font-size: 0.78rem; color: #aaa;
-      margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em;
+      display: block;
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-2);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
-    .form-field label .req { color: #f39c12; margin-left: 4px; }
+    .form-field label .req { color: var(--color-warning); margin-left: var(--space-1); }
+    .form-field label .opt {
+      text-transform: none;
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-left: var(--space-1);
+      letter-spacing: 0;
+    }
     .form-field input[type="text"],
     .form-field textarea {
-      width: 100%; background: #141414; border: 1px solid #2a2a2a;
-      border-radius: 6px; padding: 10px 12px; color: #e0e0e0;
-      font-family: inherit; font-size: 0.88rem; resize: vertical;
+      width: 100%;
+      font-size: var(--text-sm);
+      resize: vertical;
     }
-    .form-field input:focus,
-    .form-field textarea:focus { border-color: #6c63ff; outline: none; }
-    .form-field .hint { font-size: 0.72rem; color: #666; margin-top: 4px; }
+    .form-field .hint {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-1);
+    }
     .niche-grid {
-      display: flex; flex-wrap: wrap; gap: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
     }
-    .niche-chip {
-      background: #1e1e1e; border: 1px solid #2a2a2a;
-      padding: 6px 12px; border-radius: 999px; font-size: 0.78rem;
-      cursor: pointer; user-select: none; color: #aaa;
+    .chip {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      padding: var(--space-1) var(--space-3);
+      border-radius: var(--radius);
+      font-size: var(--text-xs);
+      cursor: pointer;
+      user-select: none;
+      color: var(--color-text-muted);
+      transition: border-color var(--duration-fast) var(--ease),
+                  color var(--duration-fast) var(--ease),
+                  background var(--duration-fast) var(--ease);
     }
-    .niche-chip.selected {
-      background: #6c63ff; border-color: #6c63ff; color: #fff;
+    .chip.selected {
+      background: var(--color-accent-soft);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
-    .niche-chip:hover:not(.selected) { border-color: #6c63ff; color: #e0e0e0; }
-    #identity-status { font-size: 0.8rem; margin-top: 8px; min-height: 20px; }
-    .identity-current { background: #1e1e1e; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    .identity-current .field { margin-bottom: 8px; font-size: 0.85rem; }
-    .identity-current .field-label { color: #888; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .chip:hover:not(.selected) { border-color: var(--color-text-muted); color: var(--color-text); }
+    #identity-status { font-size: var(--text-xs); margin-top: var(--space-2); min-height: 18px; }
+
+    .identity-current {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      margin-bottom: var(--space-4);
+    }
+    .identity-current .field { margin-bottom: var(--space-2); font-size: var(--text-sm); }
+    .identity-current .field-label {
+      color: var(--color-text-subtle);
+      font-size: var(--text-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
   </style>
 </head>
 <body>
-<nav>
-  <a class="brand" href="/">AutoClip</a>
-  <a href="/">Dashboard</a>
-  <a href="/static/review.html">Review</a>
-  <a href="/static/insights.html">Insights</a>
-  <a href="/static/profile.html" class="active">Profile</a>
-  <a href="/static/pricing.html">Pricing</a>
-  <div class="right">
-    <a href="#" style="font-size:0.8rem;color:#888" onclick="logout()">Logout</a>
-  </div>
-</nav>
+  <nav class="nav">
+    <a class="nav-brand" href="/">AutoClip</a>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/static/review.html">Review</a>
+      <a href="/static/insights.html">Insights</a>
+      <a href="/static/profile.html" class="active">Profile</a>
+      <a href="/static/pricing.html">Pricing</a>
+    </div>
+    <span class="nav-spacer"></span>
+    <a href="#" style="font-size:var(--text-xs);color:var(--color-text-muted)" onclick="logout()">Logout</a>
+  </nav>
 
-<div class="page-content">
   <div class="disclaimer">
     AutoClip predicts fit with your style and audience — it does not promise virality.
     This brief is grounded in your own channel data.
   </div>
 
-  <h1>Your Creator DNA</h1>
-  <div class="version-badge" id="version-badge">Loading…</div>
+  <div class="page-content">
+    <h1>Your Creator DNA</h1>
+    <div class="version-badge" id="version-badge">Loading…</div>
 
-  <div class="brief-box" id="brief-content">Loading your creator brief…</div>
+    <div class="brief-box" id="brief-content">Loading your creator brief…</div>
 
-  <div class="stats" id="stats-row"></div>
+    <div class="stats" id="stats-row"></div>
 
-  <div class="actions">
-    <button class="btn-confirm" onclick="confirmDna()">✓ Confirm &amp; activate</button>
-    <button class="btn-rebuild" onclick="rebuildDna()">↺ Rebuild DNA</button>
+    <div class="top-actions">
+      <button class="btn btn-confirm" onclick="confirmDna()">✓ Confirm &amp; activate</button>
+      <button class="btn btn-rebuild" onclick="rebuildDna()">↺ Rebuild DNA</button>
+    </div>
+    <div id="confirm-status"></div>
+
+    <!-- Stated identity (Issue 83) -->
+    <section class="identity-section">
+      <h2>Your identity</h2>
+      <p class="sub">
+        Tell us who you are — we'll fuse this with the patterns we infer from your videos.
+        Used to honour your boundaries and surface clips that fit your actual direction,
+        not just what's accidentally performed well.
+      </p>
+
+      <div id="identity-nudge" style="display:none"></div>
+      <div id="identity-current"></div>
+
+      <form id="identity-form" onsubmit="event.preventDefault(); saveIdentity();">
+        <div class="form-field">
+          <label>Niche<span class="req">*</span> <span class="opt">(pick 1–3)</span></label>
+          <div class="niche-grid" id="niche-grid">Loading…</div>
+        </div>
+
+        <div class="form-field">
+          <label for="audience">Who's your audience?<span class="req">*</span></label>
+          <textarea id="audience" rows="2" placeholder="e.g. 'College students trying to learn investing without the YouTube finance bro vibe.'" required></textarea>
+          <div class="hint">1–3 sentences. The clearer you are, the better the fit.</div>
+        </div>
+
+        <div class="form-field">
+          <label for="mission">What are you trying to build? <span class="opt">(optional)</span></label>
+          <textarea id="mission" rows="2" placeholder="e.g. 'The most trusted intro-to-investing channel for under-25s.'"></textarea>
+        </div>
+
+        <div class="form-field">
+          <label for="pillars">Content pillars <span class="opt">(optional, comma-separated)</span></label>
+          <input type="text" id="pillars" placeholder="e.g. portfolio breakdowns, market explainers, Q&amp;A">
+        </div>
+
+        <div class="form-field">
+          <label for="tone">Voice / tone <span class="opt">(optional, comma-separated)</span></label>
+          <input type="text" id="tone" placeholder="e.g. calm, plainspoken, dry humour">
+        </div>
+
+        <div class="form-field">
+          <label for="hardnos">What you will NOT do <span class="opt">(optional, comma-separated)</span></label>
+          <input type="text" id="hardnos" placeholder="e.g. clickbait, fearmongering, crypto promos">
+          <div class="hint">We'll respect these in every clip we suggest.</div>
+        </div>
+
+        <div class="top-actions">
+          <button type="submit" class="btn btn-primary">Save identity</button>
+        </div>
+        <div id="identity-status"></div>
+      </form>
+    </section>
   </div>
-  <div id="confirm-status"></div>
-
-  <!-- Stated identity (Issue 83) -->
-  <section class="section">
-    <h2>Your identity</h2>
-    <p class="sub">
-      Tell us who you are — we'll fuse this with the patterns we infer from your videos.
-      Used to honour your boundaries and surface clips that fit your actual direction,
-      not just what's accidentally performed well.
-    </p>
-
-    <div id="identity-nudge" style="display:none"></div>
-    <div id="identity-current"></div>
-
-    <form id="identity-form" onsubmit="event.preventDefault(); saveIdentity();">
-      <div class="form-field">
-        <label>Niche<span class="req">*</span> <span style="text-transform:none;font-size:0.7rem;color:#666">(pick 1–3)</span></label>
-        <div class="niche-grid" id="niche-grid">Loading…</div>
-      </div>
-
-      <div class="form-field">
-        <label for="audience">Who's your audience?<span class="req">*</span></label>
-        <textarea id="audience" rows="2" placeholder="e.g. 'College students trying to learn investing without the YouTube finance bro vibe.'" required></textarea>
-        <div class="hint">1–3 sentences. The clearer you are, the better the fit.</div>
-      </div>
-
-      <div class="form-field">
-        <label for="mission">What are you trying to build? <span style="text-transform:none;font-size:0.7rem;color:#666">(optional)</span></label>
-        <textarea id="mission" rows="2" placeholder="e.g. 'The most trusted intro-to-investing channel for under-25s.'"></textarea>
-      </div>
-
-      <div class="form-field">
-        <label for="pillars">Content pillars <span style="text-transform:none;font-size:0.7rem;color:#666">(optional, comma-separated)</span></label>
-        <input type="text" id="pillars" placeholder="e.g. portfolio breakdowns, market explainers, Q&amp;A">
-      </div>
-
-      <div class="form-field">
-        <label for="tone">Voice / tone <span style="text-transform:none;font-size:0.7rem;color:#666">(optional, comma-separated)</span></label>
-        <input type="text" id="tone" placeholder="e.g. calm, plainspoken, dry humour">
-      </div>
-
-      <div class="form-field">
-        <label for="hardnos">What you will NOT do <span style="text-transform:none;font-size:0.7rem;color:#666">(optional, comma-separated)</span></label>
-        <input type="text" id="hardnos" placeholder="e.g. clickbait, fearmongering, crypto promos">
-        <div class="hint">We'll respect these in every clip we suggest.</div>
-      </div>
-
-      <div class="actions">
-        <button type="submit" class="btn-save">Save identity</button>
-      </div>
-      <div id="identity-status"></div>
-    </form>
-  </section>
 
   <script>
+    async function logout() {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+      window.location = '/auth/login';
+    }
+
     async function loadDna() {
       const resp = await fetch('/creators/me/dna', { credentials: 'include' });
       const data = await resp.json();
@@ -178,7 +279,7 @@
       }
       const p = data.profile;
       document.getElementById('version-badge').textContent =
-        `Version ${p.version} · ${p.status} · ${new Date(p.created_at).toLocaleDateString()}`;
+        `v${p.version} · ${p.status} · ${new Date(p.created_at).toLocaleDateString()}`;
       document.getElementById('brief-content').textContent = p.brief_text || '(no brief text)';
 
       const stats = [];
@@ -198,8 +299,8 @@
       });
       const data = await resp.json();
       if (resp.ok) {
-        status.textContent = `✓ DNA v${data.version} confirmed and active! Redirecting…`;
-        status.style.color = '#2ecc71';
+        status.textContent = `✓ DNA v${data.version} confirmed and active. Redirecting…`;
+        status.style.color = 'var(--color-success)';
         setTimeout(() => { window.location = '/'; }, 1500);
       } else {
         status.textContent = data.detail || 'Error confirming.';
@@ -237,14 +338,14 @@
       grid.innerHTML = '';
       nicheOptions.forEach(opt => {
         const chip = document.createElement('span');
-        chip.className = 'niche-chip' + (selectedNiches.has(opt.id) ? ' selected' : '');
+        chip.className = 'chip' + (selectedNiches.has(opt.id) ? ' selected' : '');
         chip.textContent = opt.label;
         chip.dataset.id = opt.id;
         chip.addEventListener('click', () => {
           if (selectedNiches.has(opt.id)) {
             selectedNiches.delete(opt.id);
           } else {
-            if (selectedNiches.size >= 3) return;  // max 3
+            if (selectedNiches.size >= 3) return;
             selectedNiches.add(opt.id);
           }
           renderNicheGrid();
@@ -268,7 +369,6 @@
       if (!data.identity) return;
       const id = data.identity;
 
-      // Show current as a read-only summary above the form.
       const labelFor = (nid) => (nicheOptions.find(o => o.id === nid) || {}).label || nid;
       const cur = document.getElementById('identity-current');
       const pillars = (id.content_pillars || []).join(', ');
@@ -284,7 +384,6 @@
         (tone ? `<div class="field"><strong>Tone:</strong> ${tone}</div>` : '') +
         (nos ? `<div class="field"><strong>Won't do:</strong> ${nos}</div>` : '');
 
-      // Pre-fill the form so "save" feels like "edit" not "start over".
       id.niches.forEach(n => selectedNiches.add(n));
       renderNicheGrid();
       document.getElementById('audience').value = id.audience_summary || '';
@@ -301,7 +400,7 @@
     async function saveIdentity() {
       const status = document.getElementById('identity-status');
       status.textContent = '';
-      status.style.color = '#aaa';
+      status.style.color = 'var(--color-text-muted)';
 
       const payload = {
         niches: Array.from(selectedNiches),
@@ -313,10 +412,10 @@
       };
 
       if (payload.niches.length === 0) {
-        status.textContent = 'Pick at least one niche.'; status.style.color = '#e74c3c'; return;
+        status.textContent = 'Pick at least one niche.'; status.style.color = 'var(--color-danger)'; return;
       }
       if (!payload.audience_summary) {
-        status.textContent = 'Tell us who your audience is.'; status.style.color = '#e74c3c'; return;
+        status.textContent = 'Tell us who your audience is.'; status.style.color = 'var(--color-danger)'; return;
       }
 
       const resp = await fetch('/creators/me/identity', {
@@ -327,15 +426,12 @@
       });
       if (resp.ok) {
         const data = await resp.json();
-        // The clip scorer caches the DNA brief (which is what carries identity
-        // into the LLM prompt), so identity edits take effect on the NEXT
-        // DNA rebuild — point the creator at the Rebuild button explicitly.
-        status.innerHTML = `<span style="color:#2ecc71">✓ Saved as v${data.version}.</span> Click <strong>↺ Rebuild DNA</strong> above to apply this to your next clip pass.`;
+        status.innerHTML = `<span style="color:var(--color-success)">✓ Saved as v${data.version}.</span> Click <strong>↺ Rebuild DNA</strong> above to apply this to your next clip pass.`;
         await loadIdentity();
       } else {
         const data = await resp.json().catch(() => ({}));
         status.textContent = data.detail || 'Could not save — try again.';
-        status.style.color = '#e74c3c';
+        status.style.color = 'var(--color-danger)';
       }
     }
 
@@ -345,12 +441,11 @@
       await loadIdentity();
     });
   </script>
-</div>
 
-<footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px">
-  <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
-  <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
-  <span style="margin:0 8px">© AutoClip 2026</span>
-</footer>
+  <footer class="footer">
+    <a href="/static/tos.html">Terms</a>
+    <a href="/static/privacy.html">Privacy</a>
+    <span>© AutoClip 2026</span>
+  </footer>
 </body>
 </html>

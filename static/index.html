@@ -4,83 +4,173 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Dashboard</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+    /* Issue 99 Phase B — index.html retrofit. Tokens + components come
+       from _design-tokens.css; page-specific layout lives here. */
 
-    nav {
-      display: flex; align-items: center; gap: 24px;
-      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
+    main { max-width: 960px; margin: 0 auto; padding: var(--space-8) var(--space-4); }
+    h2 {
+      font-size: var(--text-md);
+      color: var(--color-text-muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: var(--space-4);
     }
-    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
-    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
-    nav a:hover { color: #e0e0e0; }
-    nav .right { margin-left: auto; display: flex; gap: 16px; align-items: center; }
-    nav .user { font-size: 0.8rem; color: #888; }
-
-    .disclaimer {
-      background: #1a1a2e; border-left: 3px solid #6c63ff;
-      padding: 8px 24px; font-size: 0.75rem; color: #aaa;
-    }
-
-    main { max-width: 860px; margin: 0 auto; padding: 32px 16px; }
-    h2 { font-size: 1.1rem; margin-bottom: 16px; color: #ccc; }
-
-    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }
-    .card { background: #1e1e1e; border-radius: 10px; padding: 20px; }
-    .card .label { font-size: 0.75rem; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
-    .card .value { font-size: 1.6rem; font-weight: 700; }
-    .card .sub   { font-size: 0.8rem; color: #888; margin-top: 4px; }
-
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
-    .badge-done    { background: #1a3a1a; color: #2ecc71; }
-    .badge-running { background: #3a2a00; color: #f39c12; }
-    .badge-pending { background: #2a2a2a; color: #888; }
-    .badge-failed  { background: #3a1a1a; color: #e74c3c; }
-    .badge-dna     { background: #1a1a3a; color: #6c63ff; }
-
-    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-    .btn { padding: 8px 18px; border-radius: 6px; border: none; font-size: 0.85rem;
-           cursor: pointer; font-weight: 600; text-decoration: none; display: inline-block; }
-    .btn-primary { background: #6c63ff; color: #fff; }
-    .btn-secondary { background: #2a2a2a; color: #e0e0e0; }
-    .btn:hover { opacity: 0.85; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th { text-align: left; padding: 8px 12px; color: #888; font-weight: 500; border-bottom: 1px solid #2a2a2a; }
-    td { padding: 10px 12px; border-bottom: 1px solid #1a1a1a; vertical-align: middle; }
-    tr:hover td { background: #1a1a1a; }
-    .yt-id { color: #888; font-size: 0.8rem; font-family: monospace; }
-    .title-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-    #link-form { display: flex; gap: 10px; margin-top: 8px; }
-    #link-form input {
-      flex: 1; padding: 9px 12px; border-radius: 6px; border: 1px solid #333;
-      background: #1e1e1e; color: #e0e0e0; font-size: 0.85rem;
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-3);
     }
 
-    .dna-cta { background: #1a1a3a; border: 1px solid #2a2a5a; border-radius: 10px;
-               padding: 18px 20px; margin-bottom: 28px; display: flex; align-items: center;
-               justify-content: space-between; gap: 16px; }
-    .dna-cta p { font-size: 0.88rem; color: #aaa; }
-    .empty { color: #555; font-size: 0.88rem; padding: 24px 0; text-align: center; }
+    /* ── Summary cards (3-up grid) ─────────────────────────────── */
+    .summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: var(--space-3);
+      margin-bottom: var(--space-8);
+    }
+    .summary-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
+    }
+    .summary-card .label {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-bottom: var(--space-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .summary-card .value {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xl);
+      font-weight: 600;
+      color: var(--color-text);
+      line-height: var(--leading-tight);
+    }
+    .summary-card .sub {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-2);
+    }
+    .summary-card .sub a { color: var(--color-accent); }
+    .summary-card .sub a:hover { color: var(--color-accent-hover); }
+
+    /* ── DNA CTA banner (shown until onboarding_state=active) ─── */
+    .dna-cta {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-left: 2px solid var(--color-accent);
+      border-radius: var(--radius);
+      padding: var(--space-4) var(--space-5);
+      margin-bottom: var(--space-6);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+    }
+    .dna-cta p {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+    }
+
+    /* ── Link a video form ─────────────────────────────────────── */
+    .link-form { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+    .link-form input {
+      flex: 1;
+      padding: var(--space-2) var(--space-3);
+      font-size: var(--text-sm);
+    }
+    #link-status {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-2);
+      min-height: 16px;
+    }
+
+    /* ── Video table ───────────────────────────────────────────── */
+    .video-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--text-sm);
+    }
+    .video-table th {
+      text-align: left;
+      padding: var(--space-2) var(--space-3);
+      color: var(--color-text-subtle);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: var(--text-xs);
+      border-bottom: 1px solid var(--color-border);
+    }
+    .video-table td {
+      padding: var(--space-3);
+      border-bottom: 1px solid var(--color-border);
+      vertical-align: middle;
+      height: var(--row-height);
+    }
+    .video-table tr:hover td { background: var(--color-elevated); }
+    .yt-id {
+      color: var(--color-text-subtle);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }
+    .title-cell {
+      max-width: 320px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .empty {
+      color: var(--color-text-subtle);
+      font-size: var(--text-sm);
+      padding: var(--space-8) 0;
+      text-align: center;
+    }
+
+    /* ── Status badges (mapped from ingest_status enum) ────────── */
+    /* `badge` base + state variants come from _design-tokens.css. The
+       status enum (pending / running / done / failed) maps to badge
+       variants via the JS STATUS_BADGE table below. */
+
+    /* Logout link in nav-spacer position */
+    .logout-link {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      cursor: pointer;
+    }
+    .logout-link:hover { color: var(--color-text); }
+    .user-name {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      font-family: var(--font-mono);
+      margin-right: var(--space-3);
+    }
   </style>
 </head>
 <body>
-  <nav>
-    <a class="brand" href="/">AutoClip</a>
-    <a href="/static/review.html">Review</a>
-    <a href="/static/insights.html">Insights</a>
-    <a href="/static/profile.html">Profile</a>
-    <a href="/static/pricing.html">Pricing</a>
-    <div class="right">
-      <span class="user" id="nav-user"></span>
-      <a href="#" class="btn btn-secondary" style="font-size:0.8rem;padding:6px 12px" onclick="logout()">Logout</a>
+  <nav class="nav">
+    <a class="nav-brand" href="/">AutoClip</a>
+    <div class="nav-links">
+      <a href="/" class="active">Dashboard</a>
+      <a href="/static/review.html">Review</a>
+      <a href="/static/insights.html">Insights</a>
+      <a href="/static/profile.html">Profile</a>
+      <a href="/static/pricing.html">Pricing</a>
     </div>
+    <span class="nav-spacer"></span>
+    <span class="user-name" id="nav-user"></span>
+    <a href="#" class="logout-link" onclick="logout()">Logout</a>
   </nav>
 
   <div class="disclaimer">
@@ -89,46 +179,46 @@
   </div>
 
   <main>
-    <!-- DNA CTA (hidden once active) -->
+    <!-- DNA CTA (hidden once onboarding_state = active) -->
     <div class="dna-cta" id="dna-cta" style="display:none">
       <p id="dna-cta-text">Build your Creator DNA to unlock personalised clip scoring.</p>
       <a href="/static/onboarding.html" class="btn btn-primary">Set up →</a>
     </div>
 
     <!-- Summary cards -->
-    <div class="cards">
-      <div class="card">
+    <div class="summary-cards">
+      <div class="summary-card">
         <div class="label">Creator DNA</div>
         <div class="value" id="dna-status">—</div>
         <div class="sub" id="dna-version"></div>
       </div>
-      <div class="card">
+      <div class="summary-card">
         <div class="label">Videos</div>
         <div class="value" id="video-count">—</div>
         <div class="sub">in library</div>
       </div>
-      <div class="card">
+      <div class="summary-card">
         <div class="label">Clips rendered</div>
         <div class="value" id="clips-ready">—</div>
-        <div class="sub"><a href="/static/review.html" style="color:#6c63ff">Review queue →</a></div>
+        <div class="sub"><a href="/static/review.html">Review queue →</a></div>
       </div>
     </div>
 
     <!-- Link a video -->
-    <div class="section-header">
+    <div class="section-header" style="margin-top:var(--space-8)">
       <h2>Link a video</h2>
     </div>
-    <div id="link-form">
-      <input id="yt-id-input" type="text" placeholder="YouTube video ID or URL" />
+    <div class="link-form">
+      <input id="yt-id-input" type="text" placeholder="YouTube video ID or URL">
       <button class="btn btn-primary" onclick="linkVideo()">Link video</button>
     </div>
-    <p id="link-status" style="font-size:0.8rem;color:#888;margin-top:8px;min-height:18px"></p>
+    <p id="link-status"></p>
 
     <!-- Video list -->
-    <div class="section-header" style="margin-top:32px">
+    <div class="section-header" style="margin-top:var(--space-10)">
       <h2>Your videos</h2>
     </div>
-    <table id="video-table">
+    <table class="video-table">
       <thead>
         <tr>
           <th>Title / ID</th>
@@ -144,9 +234,13 @@
   </main>
 
   <script>
+    // Map ingest_status → badge variant from _design-tokens.css.
+    // `pending` uses the default (muted) badge with no state class.
     const STATUS_BADGE = {
-      pending: 'badge-pending', running: 'badge-running',
-      done: 'badge-done', failed: 'badge-failed'
+      pending: '',
+      running: 'badge-warning',
+      done:    'badge-success',
+      failed:  'badge-danger',
     };
 
     async function logout() {
@@ -155,15 +249,15 @@
     }
 
     async function init(me) {
-
       document.getElementById('nav-user').textContent = me.channel_title || me.email || '';
 
-      // DNA status
+      // DNA status — banner shows until state advances past pending.
       const state = me.onboarding_state;
       if (state !== 'active') {
         document.getElementById('dna-cta').style.display = 'flex';
         if (state === 'dna_pending') {
-          document.getElementById('dna-cta-text').textContent = 'Your DNA is ready — confirm your Creator Brief to activate personalised scoring.';
+          document.getElementById('dna-cta-text').textContent =
+            'Your DNA is ready — confirm your Creator Brief to activate personalised scoring.';
           document.querySelector('#dna-cta a').href = '/static/profile.html';
         }
       }
@@ -172,7 +266,8 @@
       const dna = dnaResp.ok ? await dnaResp.json() : null;
       const profile = dna && dna.profile;
       if (profile) {
-        document.getElementById('dna-status').innerHTML = `<span class="badge badge-dna">${profile.status}</span>`;
+        document.getElementById('dna-status').innerHTML =
+          `<span class="badge badge-accent">${profile.status}</span>`;
         document.getElementById('dna-version').textContent = `v${profile.version}`;
       } else {
         document.getElementById('dna-status').textContent = 'Not built';
@@ -215,20 +310,20 @@
               const label = renderedClips.length === allClips.length
                 ? `${allClips.length} clips`
                 : `${renderedClips.length}/${allClips.length} rendered`;
-              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary" style="font-size:0.78rem;padding:4px 10px">${label}</a>`;
+              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary">${label}</a>`;
             } else {
-              clipsHtml = `<button class="btn btn-primary" style="font-size:0.78rem;padding:4px 10px" onclick="generateClips('${v.id}',this)">Generate clips</button>`;
+              clipsHtml = `<button class="btn btn-primary" onclick="generateClips('${v.id}',this)">Generate clips</button>`;
             }
           }
         }
-        const badge = STATUS_BADGE[v.ingest_status] || 'badge-pending';
+        const badgeVariant = STATUS_BADGE[v.ingest_status] || '';
         return `<tr data-video-id="${v.id}" data-status="${v.ingest_status}">
           <td>
             <div class="title-cell">${v.title || '—'}</div>
             <div class="yt-id">${v.youtube_video_id}</div>
           </td>
           <td>${v.kind}</td>
-          <td><span class="badge ${badge}">${v.ingest_status}</span></td>
+          <td><span class="badge ${badgeVariant}">${v.ingest_status}</span></td>
           <td>${clipsHtml}</td>
         </tr>`;
       }));
@@ -342,10 +437,10 @@
     }
   </script>
 
-  <footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px">
-    <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
-    <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
-    <span style="margin:0 8px">© AutoClip 2026</span>
+  <footer class="footer">
+    <a href="/static/tos.html">Terms</a>
+    <a href="/static/privacy.html">Privacy</a>
+    <span>© AutoClip 2026</span>
   </footer>
 </body>
 </html>

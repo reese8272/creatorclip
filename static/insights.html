@@ -4,74 +4,115 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Insights</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/progressStream.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+    /* Issue 99 Phase B — insights.html retrofit. */
 
-    nav {
-      display: flex; align-items: center; gap: 24px;
-      padding: 14px 24px; background: #161616; border-bottom: 1px solid #2a2a2a;
+    main { max-width: 720px; margin: 0 auto; padding: var(--space-8) var(--space-4); }
+
+    .panel {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-6);
+      margin-bottom: var(--space-5);
     }
-    nav .brand { font-weight: 700; color: #6c63ff; font-size: 1.05rem; text-decoration: none; }
-    nav a { color: #aaa; text-decoration: none; font-size: 0.88rem; }
-    nav a:hover { color: #e0e0e0; }
-    nav .right { margin-left: auto; display: flex; gap: 16px; align-items: center; }
-
-    .disclaimer {
-      background: #1a1a2e; border-left: 3px solid #6c63ff;
-      padding: 8px 24px; font-size: 0.75rem; color: #aaa;
+    .panel h3 {
+      font-size: var(--text-md);
+      color: var(--color-text);
+      margin-bottom: var(--space-4);
+      font-weight: 500;
+    }
+    .panel-sub {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-4);
+      line-height: var(--leading-relaxed);
     }
 
-    main { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
-    h2 { font-size: 1.1rem; margin-bottom: 16px; color: #ccc; }
-
-    .card { background: #1e1e1e; border-radius: 10px; padding: 24px; margin-bottom: 24px; }
-    .card h3 { font-size: 0.95rem; color: #ccc; margin-bottom: 16px; }
-
+    /* Upload-window rows — mono register for the activity % */
     .window-row {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 0; border-bottom: 1px solid #2a2a2a; font-size: 0.88rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--color-border);
+      font-size: var(--text-sm);
     }
     .window-row:last-child { border-bottom: none; }
-    .window-label { color: #e0e0e0; }
-    .window-score { color: #6c63ff; font-weight: 600; }
-    .gap-value { font-size: 1.4rem; font-weight: 700; color: #2ecc71; }
+    .window-label { color: var(--color-text); }
+    .window-score {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      color: var(--color-accent);
+      font-weight: 600;
+    }
 
-    .btn { padding: 10px 24px; border-radius: 6px; border: none;
-           font-size: 0.9rem; cursor: pointer; font-weight: 600; }
-    .btn-primary { background: #6c63ff; color: #fff; }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .gap-section {
+      margin-top: var(--space-5);
+      padding-top: var(--space-5);
+      border-top: 1px solid var(--color-border);
+    }
+    .gap-label {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: var(--space-2);
+    }
+    .gap-value {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xl);
+      font-weight: 600;
+      color: var(--color-success);
+    }
 
     #brief-output {
-      white-space: pre-wrap; font-size: 0.85rem; line-height: 1.65;
-      color: #d0d0d0; margin-top: 16px; min-height: 40px;
+      white-space: pre-wrap;
+      font-size: var(--text-sm);
+      line-height: var(--leading-relaxed);
+      color: var(--color-text);
+      margin-top: var(--space-4);
+      min-height: 40px;
     }
-    #brief-stream {
-      display: none; background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px;
-      padding: 10px 12px; margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.72rem; color: #c8c8c8; max-height: 180px; overflow-y: auto;
-      white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+    .stream-output {
+      display: none;
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-3);
+      margin-top: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      max-height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: var(--leading-normal);
     }
-    .loading { color: #888; font-size: 0.85rem; font-style: italic; }
-    .error { color: #e74c3c; font-size: 0.85rem; }
+    .loading { color: var(--color-text-subtle); font-size: var(--text-sm); font-style: italic; }
+    .error { color: var(--color-danger); font-size: var(--text-sm); }
   </style>
 </head>
 <body>
-  <nav>
-    <a class="brand" href="/">AutoClip</a>
-    <a href="/">Dashboard</a>
-    <a href="/static/review.html">Review</a>
-    <a href="/static/insights.html" style="color:#e0e0e0">Insights</a>
-    <a href="/static/profile.html">Profile</a>
-    <a href="/static/pricing.html">Pricing</a>
-    <div class="right">
-      <a href="#" style="font-size:0.8rem;color:#888" onclick="logout()">Logout</a>
+  <nav class="nav">
+    <a class="nav-brand" href="/">AutoClip</a>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/static/review.html">Review</a>
+      <a href="/static/insights.html" class="active">Insights</a>
+      <a href="/static/profile.html">Profile</a>
+      <a href="/static/pricing.html">Pricing</a>
     </div>
+    <span class="nav-spacer"></span>
+    <a href="#" style="font-size:var(--text-xs);color:var(--color-text-muted)" onclick="logout()">Logout</a>
   </nav>
 
   <div class="disclaimer">
@@ -81,25 +122,25 @@
 
   <main>
     <!-- Upload timing -->
-    <div class="card">
+    <div class="panel">
       <h3>Best upload windows</h3>
       <div id="timing-content" class="loading">Loading…</div>
-      <div id="gap-section" style="margin-top:20px;display:none">
-        <div style="font-size:0.8rem;color:#888;margin-bottom:4px">Optimal gap between long-form → Short</div>
+      <div class="gap-section" id="gap-section" style="display:none">
+        <div class="gap-label">Optimal gap between long-form → Short</div>
         <div class="gap-value" id="gap-value"></div>
       </div>
     </div>
 
     <!-- Improvement brief -->
-    <div class="card">
+    <div class="panel">
       <h3>Content improvement brief</h3>
-      <p style="font-size:0.82rem;color:#888;margin-bottom:16px">
+      <p class="panel-sub">
         Uses live web research + your channel data. Takes ~15 seconds.
       </p>
       <button class="btn btn-primary" id="brief-btn" onclick="loadBrief()">
         Generate brief
       </button>
-      <pre id="brief-stream"></pre>
+      <pre class="stream-output" id="brief-stream"></pre>
       <div id="brief-output"></div>
     </div>
   </main>
@@ -119,20 +160,20 @@
       }
       const data = await resp.json();
       if (!data.data_available || !data.best_windows.length) {
-        el.innerHTML = '<span style="color:#888">Not enough audience activity data yet. Connect your channel and sync data first.</span>';
+        el.innerHTML = '<span style="color:var(--color-text-subtle)">Not enough audience activity data yet. Connect your channel and sync data first.</span>';
         return;
       }
 
       el.innerHTML = data.best_windows.map(w => `
         <div class="window-row">
           <span class="window-label">${w.day_name} ${w.label}</span>
-          <span class="window-score">${(w.activity_index * 100).toFixed(0)}% activity</span>
+          <span class="window-score">${(w.activity_index * 100).toFixed(0)}%</span>
         </div>
       `).join('');
 
       if (data.optimal_gap_hours != null) {
         document.getElementById('gap-section').style.display = 'block';
-        document.getElementById('gap-value').textContent = `${data.optimal_gap_hours.toFixed(1)} hours`;
+        document.getElementById('gap-value').textContent = `${data.optimal_gap_hours.toFixed(1)}h`;
       }
     }
 
@@ -148,8 +189,6 @@
       stream.style.display = 'none';
       stream.textContent = '';
 
-      // Kick off the background build (202). The brief is a ~minute-long
-      // research call, so the GET below polls for the stored result.
       const start = await fetch('/creators/me/improvement-brief', {
         method: 'POST',
         credentials: 'include',
@@ -165,9 +204,6 @@
         return;
       }
 
-      // Issue 92: subscribe to live brief progress (cache + step + token deltas)
-      // while the GET poll below picks up the stored final text. Belt-and-
-      // suspenders — if the stream drops, the poll still resolves.
       try {
         const startData = await start.clone().json();
         if (typeof window.subscribeToTaskStream === 'function' && startData.stream_url) {
@@ -179,8 +215,6 @@
             },
           });
         }
-        // Wave 5: register with the global active-tasks store so the
-        // floating activity panel surfaces the brief on every page.
         if (window.activeTasks && startData.stream_url && startData.task_id) {
           window.activeTasks.registerTask({
             task_id: startData.task_id,
@@ -218,10 +252,10 @@
     document.addEventListener('auth:ready', init);
   </script>
 
-  <footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px">
-    <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
-    <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
-    <span style="margin:0 8px">© AutoClip 2026</span>
+  <footer class="footer">
+    <a href="/static/tos.html">Terms</a>
+    <a href="/static/privacy.html">Privacy</a>
+    <span>© AutoClip 2026</span>
   </footer>
 </body>
 </html>

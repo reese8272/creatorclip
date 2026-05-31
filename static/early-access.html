@@ -4,171 +4,216 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AutoClip — Early Access</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css" />
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* Issue 99 Phase B — early-access.html marketing/conversion funnel.
+       Uses the system tokens for everything except the primary CTA,
+       which keeps the conversion-tested red accent as a page-specific
+       override. The rest of the page (tier cards, inputs, success
+       state) inherits the Linear aesthetic. */
+    :root {
+      --cta-color:       #5e6ad2;  /* Linear indigo — picked accent stays consistent */
+      --cta-color-hover: #6b7ae8;
+    }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0a0a0a;
-      color: #f0f0f0;
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px;
+      padding: var(--space-6);
     }
 
     .card {
-      background: #141414;
-      border: 1px solid #222;
-      border-radius: 16px;
-      padding: 48px 40px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-12) var(--space-10);
       max-width: 480px;
       width: 100%;
     }
 
     .logo {
-      font-size: 22px;
+      font-size: var(--text-md);
       font-weight: 700;
-      letter-spacing: -0.5px;
-      margin-bottom: 32px;
-      color: #fff;
+      letter-spacing: -0.02em;
+      margin-bottom: var(--space-8);
+      color: var(--color-text);
     }
-    .logo span { color: #e63946; }
+    .logo span { color: var(--color-accent); }
 
     h1 {
-      font-size: 28px;
-      font-weight: 700;
-      line-height: 1.2;
-      margin-bottom: 12px;
+      font-size: var(--text-2xl);
+      font-weight: 600;
+      line-height: var(--leading-tight);
+      margin-bottom: var(--space-3);
     }
 
     .sub {
-      color: #888;
-      font-size: 15px;
-      line-height: 1.6;
-      margin-bottom: 32px;
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      line-height: var(--leading-relaxed);
+      margin-bottom: var(--space-8);
     }
 
     .tiers {
       display: flex;
-      gap: 12px;
-      margin-bottom: 28px;
+      gap: var(--space-3);
+      margin-bottom: var(--space-6);
     }
 
     .tier {
       flex: 1;
-      border: 2px solid #222;
-      border-radius: 10px;
-      padding: 16px;
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius);
+      padding: var(--space-4);
       cursor: pointer;
-      transition: border-color 0.15s;
+      transition: border-color var(--duration) var(--ease),
+                  background var(--duration) var(--ease);
       text-align: center;
+      background: var(--color-surface);
     }
-    .tier.selected { border-color: #e63946; }
-    .tier:hover { border-color: #444; }
-    .tier .name { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-    .tier .price { font-size: 22px; font-weight: 700; color: #fff; }
-    .tier .price span { font-size: 13px; font-weight: 400; color: #888; }
-    .tier .features { font-size: 12px; color: #666; margin-top: 6px; line-height: 1.5; }
+    .tier.selected {
+      border-color: var(--color-accent);
+      background: var(--color-elevated);
+    }
+    .tier:hover:not(.selected) { border-color: var(--color-text-muted); }
+    .tier .name {
+      font-weight: 500;
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: var(--space-1);
+    }
+    .tier .price {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xl);
+      font-weight: 600;
+      color: var(--color-text);
+    }
+    .tier .price span {
+      font-family: var(--font-sans);
+      font-size: var(--text-xs);
+      font-weight: 400;
+      color: var(--color-text-subtle);
+    }
+    .tier .features {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-2);
+      line-height: var(--leading-relaxed);
+    }
 
     label {
       display: block;
-      font-size: 13px;
-      color: #888;
-      margin-bottom: 6px;
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-2);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
 
     input[type="email"] {
       width: 100%;
-      background: #0a0a0a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 12px 14px;
-      color: #f0f0f0;
-      font-size: 15px;
-      outline: none;
-      margin-bottom: 16px;
-      transition: border-color 0.15s;
+      font-size: var(--text-base);
+      margin-bottom: var(--space-4);
     }
-    input[type="email"]:focus { border-color: #444; }
-    input[type="email"]::placeholder { color: #444; }
+    input[type="email"]::placeholder { color: var(--color-text-subtle); }
 
-    .btn {
+    .pay-btn {
       width: 100%;
-      background: #e63946;
-      color: #fff;
+      background: var(--cta-color);
+      color: #ffffff;
       border: none;
-      border-radius: 8px;
-      padding: 14px;
-      font-size: 15px;
-      font-weight: 600;
+      border-radius: var(--radius);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-sm);
+      font-weight: 500;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: background var(--duration-fast) var(--ease);
     }
-    .btn:hover { opacity: 0.88; }
-    .btn:disabled { opacity: 0.5; cursor: default; }
+    .pay-btn:hover { background: var(--cta-color-hover); }
+    .pay-btn:disabled { opacity: 0.5; cursor: default; }
 
     .notice {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 14px 16px;
-      font-size: 13px;
-      color: #888;
-      line-height: 1.6;
-      margin-top: 20px;
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-left: 2px solid var(--color-accent);
+      border-radius: var(--radius);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      line-height: var(--leading-relaxed);
+      margin-top: var(--space-5);
     }
-    .notice strong { color: #aaa; }
+    .notice strong { color: var(--color-text); }
 
-    .error { color: #e63946; font-size: 13px; margin-top: 8px; display: none; }
+    .error {
+      color: var(--color-danger);
+      font-size: var(--text-xs);
+      margin-top: var(--space-2);
+      display: none;
+    }
 
-    /* Success state */
     .success-state { display: none; text-align: center; }
     .success-state .check {
       font-size: 48px;
-      margin-bottom: 20px;
+      margin-bottom: var(--space-5);
+      color: var(--color-success);
     }
-    .success-state h2 { font-size: 24px; font-weight: 700; margin-bottom: 12px; }
-    .success-state p { color: #888; line-height: 1.7; font-size: 15px; }
+    .success-state h2 {
+      font-size: var(--text-xl);
+      font-weight: 600;
+      margin-bottom: var(--space-3);
+    }
+    .success-state p {
+      color: var(--color-text-muted);
+      line-height: var(--leading-relaxed);
+      font-size: var(--text-sm);
+    }
     .success-state .steps {
       text-align: left;
-      margin-top: 24px;
-      background: #0a0a0a;
-      border-radius: 10px;
-      padding: 20px;
+      margin-top: var(--space-6);
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
     }
     .success-state .steps li {
-      color: #ccc;
-      font-size: 14px;
-      margin-bottom: 10px;
-      padding-left: 8px;
-      line-height: 1.5;
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-3);
+      padding-left: var(--space-2);
+      line-height: var(--leading-relaxed);
     }
+    .success-state .steps li strong { color: var(--color-text); }
     .connect-btn {
       display: block;
-      margin-top: 24px;
+      margin-top: var(--space-6);
       width: 100%;
-      background: #fff;
-      color: #0a0a0a;
+      background: var(--color-text);
+      color: var(--color-bg);
       border: none;
-      border-radius: 8px;
-      padding: 14px;
-      font-size: 15px;
-      font-weight: 600;
+      border-radius: var(--radius);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-sm);
+      font-weight: 500;
       cursor: pointer;
       text-decoration: none;
       text-align: center;
     }
+    .connect-btn:hover { color: var(--color-bg); background: var(--color-text-muted); }
   </style>
 </head>
 <body>
 <div class="card">
-  <div class="logo">Creator<span>Clip</span></div>
+  <div class="logo">Auto<span>Clip</span></div>
 
   <!-- Payment form -->
   <div id="form-state">
-    <h1>Get Early Access</h1>
+    <h1>Get early access</h1>
     <p class="sub">
       The AI editor that learns your channel — clips your best moments,
       scores them against your own audience, and gets smarter every time you use it.
@@ -195,7 +240,7 @@
       autocomplete="email"
     />
 
-    <button class="btn" id="pay-btn" onclick="startCheckout()">
+    <button class="pay-btn" id="pay-btn" onclick="startCheckout()">
       Continue to payment
     </button>
     <div class="error" id="error-msg"></div>
@@ -275,10 +320,10 @@
   }
 </script>
 
-<footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px">
-  <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
-  <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
-  <span style="margin:0 8px">© AutoClip 2026</span>
+<footer class="footer">
+  <a href="/static/tos.html">Terms</a>
+  <a href="/static/privacy.html">Privacy</a>
+  <span>© AutoClip 2026</span>
 </footer>
 </body>
 </html>

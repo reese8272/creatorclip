@@ -4,121 +4,212 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Setup</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/progressStream.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0;
-           display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 40px 16px; }
-    h1 { font-size: 1.6rem; margin-bottom: 8px; }
-    .sub { color: #888; font-size: 0.9rem; margin-bottom: 32px; text-align: center; }
-    .disclaimer { background: #1a1a2e; border-left: 3px solid #6c63ff;
-                  padding: 8px 14px; font-size: 0.75rem; color: #aaa; max-width: 480px; width: 100%; margin-bottom: 24px; }
-    .card { background: #1e1e1e; border-radius: 10px; padding: 24px; max-width: 480px; width: 100%; margin-bottom: 16px; }
-    .card h2 { font-size: 1rem; margin-bottom: 12px; color: #ccc; }
-    .status { font-size: 0.85rem; color: #aaa; margin-bottom: 16px; }
-    .status .ok  { color: #2ecc71; }
-    .status .wait { color: #f39c12; }
-    button {
-      padding: 10px 24px; border-radius: 6px; border: none;
-      font-size: 0.9rem; cursor: pointer; font-weight: 600; width: 100%;
+    /* Issue 99 Phase B — onboarding.html retrofit. Focused single-task
+       layout (no full nav), Linear-style cards in a vertical stack. */
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
     }
-    .btn-primary { background: #6c63ff; color: #fff; }
-    .btn-secondary { background: #333; color: #e0e0e0; margin-top: 8px; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-    #dna-status { font-size: 0.8rem; color: #aaa; margin-top: 8px; min-height: 20px; text-align: center; }
-    #dna-stream, #catalog-stream {
-      display: none; background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px;
-      padding: 10px 12px; margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.72rem; color: #c8c8c8; max-height: 180px; overflow-y: auto;
-      white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+    main {
+      max-width: 520px;
+      width: 100%;
+      padding: var(--space-10) var(--space-4) var(--space-6);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+    h1 {
+      font-size: var(--text-xl);
+      text-align: center;
+      margin-top: var(--space-6);
+      margin-bottom: var(--space-2);
+    }
+    .sub {
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-6);
+      text-align: center;
+    }
+    .step-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
+    }
+    .step-card h2 {
+      font-size: var(--text-base);
+      color: var(--color-text);
+      margin-bottom: var(--space-3);
+      font-weight: 500;
+    }
+    .step-meta { color: var(--color-text-subtle); font-weight: 400; font-size: var(--text-xs); }
+    .status-line {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-4);
+    }
+    .status-line .ok   { color: var(--color-success); }
+    .status-line .wait { color: var(--color-warning); }
+    .step-card button { width: 100%; }
+    .step-card .secondary-btn { margin-top: var(--space-2); }
+
+    /* Niche chips (Issue 83 identity intake) */
+    .niche-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+    .chip {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      padding: var(--space-1) var(--space-3);
+      border-radius: var(--radius);
+      font-size: var(--text-xs);
+      cursor: pointer;
+      color: var(--color-text-muted);
+      user-select: none;
+      transition: border-color var(--duration-fast) var(--ease),
+                  color var(--duration-fast) var(--ease),
+                  background var(--duration-fast) var(--ease);
+    }
+    .chip:hover:not(.selected) { border-color: var(--color-text-muted); color: var(--color-text); }
+    .chip.selected {
+      background: var(--color-accent-soft);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+    }
+
+    .field-label {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: var(--space-2);
+    }
+    textarea {
+      width: 100%;
+      resize: vertical;
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-3);
+    }
+
+    /* Terminal-style live progress stream — uses .mono register. */
+    .stream-output {
+      display: none;
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-3);
+      margin-top: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      max-height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: var(--leading-normal);
+    }
+
+    #dna-status, #onb-identity-status {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      margin-top: var(--space-2);
+      min-height: 18px;
+      text-align: center;
     }
   </style>
 </head>
 <body>
-  <nav style="display:flex;align-items:center;gap:24px;padding:14px 24px;background:#161616;border-bottom:1px solid #2a2a2a;margin-bottom:0">
-    <a href="/" style="font-weight:700;color:#6c63ff;font-size:1.05rem;text-decoration:none">AutoClip</a>
-    <div style="margin-left:auto">
-      <a href="#" style="font-size:0.8rem;color:#888;text-decoration:none" onclick="logout()">Logout</a>
-    </div>
+  <nav class="nav">
+    <a class="nav-brand" href="/">AutoClip</a>
+    <span class="nav-spacer"></span>
+    <a href="#" style="font-size:var(--text-xs);color:var(--color-text-muted)" onclick="logout()">Logout</a>
   </nav>
 
-  <h1 style="margin-top:32px;text-align:center">Set up AutoClip</h1>
-  <p class="sub">Connect your channel once. We learn the rest from your data.</p>
+  <main>
+    <h1>Set up AutoClip</h1>
+    <p class="sub">Connect your channel once. We learn the rest from your data.</p>
 
-  <div class="disclaimer">
-    AutoClip predicts fit with your style and audience — it does not promise virality.
-  </div>
+    <div class="disclaimer" style="border-radius:var(--radius);margin-bottom:var(--space-4)">
+      AutoClip predicts fit with your style and audience — it does not promise virality.
+    </div>
 
-  <!-- Step 1: Connect YouTube -->
-  <div class="card">
-    <h2>1. Connect your YouTube channel</h2>
-    <p class="status" id="auth-status">
-      <span class="wait">Not connected</span>
-    </p>
-    <button class="btn-primary" onclick="window.location='/auth/login'">Connect YouTube</button>
-  </div>
+    <!-- Step 1: Connect YouTube -->
+    <div class="step-card">
+      <h2>1. Connect your YouTube channel</h2>
+      <p class="status-line" id="auth-status">
+        <span class="wait">Not connected</span>
+      </p>
+      <button class="btn btn-primary" onclick="window.location='/auth/login'">Connect YouTube</button>
+    </div>
 
-  <!-- Step 2: Data gate -->
-  <div class="card">
-    <h2>2. Channel data</h2>
-    <p class="status" id="data-gate-status">
-      Checking…
-    </p>
-    <button class="btn-secondary" id="refresh-data-btn" onclick="refreshDataGate()">
-      Refresh data status
-    </button>
-    <pre id="catalog-stream"></pre>
-  </div>
+    <!-- Step 2: Data gate -->
+    <div class="step-card">
+      <h2>2. Channel data</h2>
+      <p class="status-line" id="data-gate-status">
+        Checking…
+      </p>
+      <button class="btn btn-secondary" id="refresh-data-btn" onclick="refreshDataGate()">
+        Refresh data status
+      </button>
+      <pre class="stream-output" id="catalog-stream"></pre>
+    </div>
 
-  <!-- Step 3 (optional): Tell us about yourself (Issue 83) -->
-  <div class="card">
-    <h2>3. Tell us about yourself <span style="color:#666;font-weight:400;font-size:0.8rem">(optional — 45 seconds)</span></h2>
-    <p class="status">
-      Speeds up your DNA and keeps recommendations honest. Skip and we'll use your video data only.
-    </p>
+    <!-- Step 3 (optional): Tell us about yourself (Issue 83) -->
+    <div class="step-card">
+      <h2>3. Tell us about yourself <span class="step-meta">(optional — 45 seconds)</span></h2>
+      <p class="status-line">
+        Speeds up your DNA and keeps recommendations honest. Skip and we'll use your video data only.
+      </p>
 
-    <div style="margin-top:12px">
-      <div style="font-size:0.78rem;color:#aaa;margin-bottom:6px">NICHE (pick 1–3)</div>
-      <div id="onb-niche-grid" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">Loading…</div>
+      <div class="field-label">Niche (pick 1–3)</div>
+      <div class="niche-grid" id="onb-niche-grid">Loading…</div>
 
-      <div style="font-size:0.78rem;color:#aaa;margin-bottom:6px">WHO'S YOUR AUDIENCE?</div>
+      <div class="field-label">Who's your audience?</div>
       <textarea id="onb-audience" rows="2"
-        style="width:100%;background:#141414;border:1px solid #2a2a2a;border-radius:6px;padding:10px 12px;color:#e0e0e0;font-family:inherit;font-size:0.85rem;resize:vertical;margin-bottom:12px"
         placeholder="e.g. 'College students learning to invest.'"></textarea>
 
-      <button class="btn-primary" onclick="saveOnboardingIdentity()">Save &amp; continue</button>
-      <button class="btn-secondary" onclick="skipIdentity()">Skip for now</button>
-      <div id="onb-identity-status" style="font-size:0.8rem;color:#aaa;min-height:20px;margin-top:8px;text-align:center"></div>
+      <button class="btn btn-primary" onclick="saveOnboardingIdentity()">Save &amp; continue</button>
+      <button class="btn btn-secondary secondary-btn" onclick="skipIdentity()">Skip for now</button>
+      <div id="onb-identity-status"></div>
     </div>
-  </div>
 
-  <!-- Step 4: Build DNA -->
-  <div class="card">
-    <h2>4. Build your Creator DNA</h2>
-    <p class="status">
-      Analyses your top &amp; bottom performers to generate a personalised brief.
-    </p>
-    <button class="btn-primary" id="build-dna-btn" onclick="buildDna()">
-      Build Creator DNA
-    </button>
-    <div id="dna-status"></div>
-    <pre id="dna-stream"></pre>
-  </div>
+    <!-- Step 4: Build DNA -->
+    <div class="step-card">
+      <h2>4. Build your Creator DNA</h2>
+      <p class="status-line">
+        Analyses your top &amp; bottom performers to generate a personalised brief.
+      </p>
+      <button class="btn btn-primary" id="build-dna-btn" onclick="buildDna()">
+        Build Creator DNA
+      </button>
+      <div id="dna-status"></div>
+      <pre class="stream-output" id="dna-stream"></pre>
+    </div>
 
-  <!-- Step 5: Confirm DNA -->
-  <div class="card">
-    <h2>5. Review &amp; confirm your brief</h2>
-    <p class="status">
-      Check your Creator Brief, then confirm to activate personalised clip scoring.
-    </p>
-    <button class="btn-secondary" onclick="window.location='/static/profile.html'">
-      View &amp; confirm brief →
-    </button>
-  </div>
+    <!-- Step 5: Confirm DNA -->
+    <div class="step-card">
+      <h2>5. Review &amp; confirm your brief</h2>
+      <p class="status-line">
+        Check your Creator Brief, then confirm to activate personalised clip scoring.
+      </p>
+      <button class="btn btn-secondary" onclick="window.location='/static/profile.html'">
+        View &amp; confirm brief →
+      </button>
+    </div>
+  </main>
 
   <script>
     function renderDataGate(d) {
@@ -133,10 +224,6 @@
           : 'Link more of your published videos to unlock DNA.');
     }
 
-    // Issue 87: clicking "Refresh data status" kicks off an async catalog
-    // sync (POST /creators/me/catalog/sync) and then polls the data-gate
-    // until the row count stops growing — otherwise the gate just counts
-    // an empty videos table forever for a freshly connected creator.
     let _gatePoll = null;
     let _catalogSub = null;
     async function refreshDataGate() {
@@ -149,11 +236,9 @@
 
       el.textContent = 'Syncing your channel…';
       try {
-        // Fire the sync; ignore 429 (a recent sync is still running).
         const resp = await fetch('/creators/me/catalog/sync', {
           method: 'POST', credentials: 'include'
         });
-        // Issue 92: subscribe to per-video metric progress events.
         if (resp.ok) {
           const data = await resp.json();
           if (typeof window.subscribeToTaskStream === 'function' && data.stream_url) {
@@ -165,9 +250,6 @@
               },
             });
           }
-          // Wave 5: also register with the global active-tasks store so the
-          // floating activity panel shows it AND the user can navigate to
-          // another page mid-sync without losing visibility.
           if (window.activeTasks && data.stream_url && data.task_id) {
             window.activeTasks.registerTask({
               task_id: data.task_id,
@@ -177,10 +259,8 @@
             });
           }
         }
-      } catch (e) { /* fall through — we'll still poll the gate */ }
+      } catch (e) { /* fall through */ }
 
-      // Poll the gate every 4s for up to ~90s, stopping early once
-      // we see the count stabilize OR ready=true.
       let tries = 0;
       let lastTotal = -1;
       let stableTicks = 0;
@@ -208,8 +288,6 @@
       _gatePoll = setInterval(tick, 4000);
     }
 
-    // After a build is kicked off, watch for the brief to land instead of asking
-    // the user to guess when "~30 seconds" is up.
     let _dnaPoll = null;
     function pollForBrief() {
       if (_dnaPoll) return;
@@ -222,10 +300,10 @@
           if (data && data.profile) {
             clearInterval(_dnaPoll); _dnaPoll = null;
             document.getElementById('dna-status').innerHTML =
-              '<span class="ok">✓ Your Creator Brief is ready — review &amp; confirm it in step 4 below.</span>';
+              '<span class="ok">✓ Your Creator Brief is ready — review &amp; confirm it in step 5 below.</span>';
           }
         } catch (e) { /* transient — keep polling */ }
-        if (tries >= 24) { clearInterval(_dnaPoll); _dnaPoll = null; }  // ~2 min safety cap
+        if (tries >= 24) { clearInterval(_dnaPoll); _dnaPoll = null; }
       }, 5000);
     }
 
@@ -249,9 +327,6 @@
           return;
         }
 
-        // Subscribe to live progress (Issue 86). Falls back to the DB poll if
-        // EventSource isn't available (very old browsers) or the SSE endpoint
-        // fails — pollForBrief still hits /creators/me/dna periodically.
         status.textContent = 'Live progress —';
         stream.style.display = 'block';
 
@@ -272,9 +347,6 @@
             },
           });
         }
-        // Wave 5: also register with the global active-tasks store so the
-        // user can leave this page mid-build and still see progress on
-        // any other page via the floating activity panel.
         if (window.activeTasks && data.stream_url && data.task_id) {
           window.activeTasks.registerTask({
             task_id: data.task_id,
@@ -283,8 +355,6 @@
             stream_url: data.stream_url,
           });
         }
-        // Belt-and-suspenders: also poll the DB so the UI converges even if
-        // the SSE stream silently drops (mobile network blip, proxy quirk).
         pollForBrief();
       } catch (e) {
         status.textContent = 'Network error — try again.';
@@ -304,22 +374,16 @@
         grid.innerHTML = '';
         data.options.forEach(opt => {
           const chip = document.createElement('span');
+          chip.className = 'chip';
           chip.textContent = opt.label;
-          chip.style.cssText =
-            'background:#1e1e1e;border:1px solid #2a2a2a;padding:6px 12px;border-radius:999px;' +
-            'font-size:0.78rem;cursor:pointer;color:#aaa;user-select:none';
           chip.addEventListener('click', () => {
             if (_onbSelectedNiches.has(opt.id)) {
               _onbSelectedNiches.delete(opt.id);
-              chip.style.background = '#1e1e1e';
-              chip.style.color = '#aaa';
-              chip.style.borderColor = '#2a2a2a';
+              chip.classList.remove('selected');
             } else {
               if (_onbSelectedNiches.size >= 3) return;
               _onbSelectedNiches.add(opt.id);
-              chip.style.background = '#6c63ff';
-              chip.style.color = '#fff';
-              chip.style.borderColor = '#6c63ff';
+              chip.classList.add('selected');
             }
           });
           grid.appendChild(chip);
@@ -356,7 +420,12 @@
 
     function skipIdentity() {
       document.getElementById('onb-identity-status').innerHTML =
-        '<span style="color:#888">Skipped — you can fill this in later on the Profile page.</span>';
+        '<span style="color:var(--color-text-subtle)">Skipped — you can fill this in later on the Profile page.</span>';
+    }
+
+    async function logout() {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+      window.location = '/auth/login';
     }
 
     document.addEventListener('auth:ready', (e) => {
@@ -370,10 +439,10 @@
     });
   </script>
 
-  <footer style="text-align:center;padding:24px 16px;border-top:1px solid #2a2a2a;color:#666;font-size:0.75rem;margin-top:48px;width:100%">
-    <a href="/static/tos.html" style="color:#888;text-decoration:none;margin:0 8px">Terms</a>
-    <a href="/static/privacy.html" style="color:#888;text-decoration:none;margin:0 8px">Privacy</a>
-    <span style="margin:0 8px">© AutoClip 2026</span>
+  <footer class="footer" style="width:100%">
+    <a href="/static/tos.html">Terms</a>
+    <a href="/static/privacy.html">Privacy</a>
+    <span>© AutoClip 2026</span>
   </footer>
 </body>
 </html>

@@ -2303,13 +2303,17 @@ renders instantly.
 - [x] `static/_design-tokens.css` lands with full :root, typography,
       component layer (Phase A, 2026-05-31)
 - [x] pricing.html retrofit as Phase-A proof (2026-05-31)
-- [ ] 8 remaining templates retrofit (Phase B, one commit each)
-- [ ] `.mono` data register applied to clip metadata, transcript,
-      timestamps (Phase C)
+- [x] 8 remaining templates retrofit (Phase B, 2026-05-31 — bundled
+      into one commit since the mechanical changes were identical
+      across templates)
+- [~] `.mono` data register applied — initial application on
+      dashboard counts, profile DNA stats, video-table IDs, insights
+      activity %. Clip metadata / transcript timestamps (Phase C)
+      defer until those views build
 - [x] No regression in load perf (existing static-page tests stay green)
 - [x] No new build step; vanilla CSS only
-- [~] Static-page test pins `_design-tokens.css` is included on every
-      template — currently pins pricing.html only; Phase B expands
+- [x] Static-page test pins `_design-tokens.css` is included on every
+      template (parametric over all 9 templates as of Phase B)
 
 ---
 

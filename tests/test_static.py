@@ -342,6 +342,43 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     )
 
 
+def test_all_templates_use_design_tokens():
+    """Issue 99 Phase B (full rollout): every static template must link
+    the shared `_design-tokens.css` and consume at least one `--color-*`
+    semantic token. Pinning per-template avoids a future "let me restyle
+    this one page" PR silently regressing back to inline hex values.
+
+    pricing.html is also covered by `test_pricing_page_uses_design_tokens`
+    below (which additionally asserts the broken-Wave-7 link is gone)."""
+    import pathlib
+
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    templates = [
+        "index.html",
+        "onboarding.html",
+        "insights.html",
+        "profile.html",
+        "review.html",
+        "pricing.html",
+        "tos.html",
+        "privacy.html",
+        "early-access.html",
+    ]
+    for name in templates:
+        src = (static_dir / name).read_text()
+        assert 'href="/static/_design-tokens.css"' in src, (
+            f"{name} must link /static/_design-tokens.css — the shared "
+            f"design system. (Issue 99 Phase B retrofit.)"
+        )
+        # Some pages use only --color-text, others --color-bg, etc. — assert
+        # the prefix appears at all rather than enumerating every var.
+        assert "var(--color-" in src, (
+            f"{name} must consume at least one --color-* semantic token "
+            f"from _design-tokens.css. Raw hex values inline are the "
+            f"pre-Phase-B pattern this test guards against."
+        )
+
+
 def test_pricing_page_uses_design_tokens():
     """Issue 99 Phase A: pricing.html is the proof retrofit. It must
     consume the shared _design-tokens.css (not redefine its own palette
