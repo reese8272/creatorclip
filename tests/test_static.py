@@ -342,6 +342,110 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     )
 
 
+def test_walkthrough_page_exists_with_five_panels():
+    """Issue 100 — first-run walkthrough has exactly 5 panels (the
+    user-locked structure: what-this-is / DNA / what-a-clip-is /
+    badges / tell-us-about-you). Pinning the count prevents a future
+    panel addition from silently throwing off the dots indicator
+    or the keyboard-nav cap."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "walkthrough.html").read_text()
+
+    assert 'href="/static/_design-tokens.css"' in src, (
+        "walkthrough.html must use the shared design system."
+    )
+    # 5 panels — pin each data-panel attribute
+    for n in range(1, 6):
+        assert f'data-panel="{n}"' in src, (
+            f"walkthrough.html must include panel {n} (Issue 100 5-panel structure)."
+        )
+    assert 'const PANELS = 5;' in src, (
+        "Panel count constant must stay at 5 — drives the keyboard-nav "
+        "cap and the dots indicator."
+    )
+    # The required honesty disclaimer (CLAUDE.md North Star constraint).
+    # Match on the substring that's invariant across line breaks.
+    assert "promise virality" in src, (
+        "walkthrough.html must include the honesty disclaimer "
+        "(CLAUDE.md no-virality rule)."
+    )
+    # The completion flag — auth.js reads this to skip the walkthrough
+    # on subsequent visits.
+    assert 'creatorclip:walkthrough_seen' in src, (
+        "walkthrough.html must set the localStorage flag on completion "
+        "so auth.js's first-run gate doesn't re-redirect."
+    )
+
+
+def test_auth_js_redirects_new_creators_to_walkthrough():
+    """Issue 100 — auth.js's first-run gate. New creators
+    (onboarding_state = 'connected', walkthrough not yet seen, not
+    already on a setup surface) must be routed to /static/walkthrough.html.
+
+    Pin all four gate conditions so a future "let me simplify this"
+    PR can't accidentally break the redirect loop guards."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
+
+    # The state check — only first-run creators trigger
+    assert "onboarding_state === 'connected'" in src, (
+        "auth.js gate must trigger only on onboarding_state='connected' "
+        "— established creators with state=active should never see the "
+        "walkthrough again."
+    )
+    # The localStorage skip — walkthrough is one-time
+    assert 'creatorclip:walkthrough_seen' in src, (
+        "auth.js must check the localStorage flag set by walkthrough.html "
+        "on completion so we don't loop the creator through it on every "
+        "session refresh."
+    )
+    # The on-setup-surface guard — prevents redirect loop FROM
+    # walkthrough.html and onboarding.html
+    assert "walkthrough.html" in src and "onboarding.html" in src, (
+        "auth.js must exempt walkthrough.html AND onboarding.html from "
+        "the redirect — otherwise the user gets caught in a loop the "
+        "moment they reach either page."
+    )
+    # The redirect destination
+    assert "/static/walkthrough.html" in src, (
+        "auth.js must redirect to the walkthrough page when the gate fires."
+    )
+
+
+def test_onboarding_intake_is_mandatory():
+    """Issue 100 — intake step on onboarding.html is no longer skippable.
+    The 'Skip for now' button was removed (Issue 83's optional decision
+    explicitly superseded). Pin both halves: button gone, Build DNA
+    locked until identity exists."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "onboarding.html").read_text()
+
+    assert 'skipIdentity' not in src, (
+        "Issue 100 superseded Issue 83's optional intake — the "
+        "'Skip for now' button + skipIdentity() function must be gone."
+    )
+    # Build DNA button starts disabled (gated on identity-exists)
+    assert 'id="build-dna-btn"' in src
+    # The disabled attribute must be present near build-dna-btn — search
+    # the snippet to be precise about it being the initial state.
+    btn_idx = src.find('id="build-dna-btn"')
+    btn_snippet = src[btn_idx : btn_idx + 200]
+    assert 'disabled' in btn_snippet, (
+        "Build DNA button must start disabled — Issue 100 gates step 4 "
+        "on step 3 completion. _enableDnaBuild flips the lock after "
+        "identity is saved (or already on file)."
+    )
+    # The gating helpers must exist
+    assert '_enableDnaBuild' in src and '_lockDnaBuild' in src and \
+           '_checkIdentityExists' in src, (
+        "Issue 100 gating helpers (_checkIdentityExists, _enableDnaBuild, "
+        "_lockDnaBuild) must be defined."
+    )
+
+
 def test_all_templates_use_design_tokens():
     """Issue 99 Phase B (full rollout): every static template must link
     the shared `_design-tokens.css` and consume at least one `--color-*`

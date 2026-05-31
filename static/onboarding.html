@@ -182,17 +182,16 @@
         placeholder="e.g. 'College students learning to invest.'"></textarea>
 
       <button class="btn btn-primary" onclick="saveOnboardingIdentity()">Save &amp; continue</button>
-      <button class="btn btn-secondary secondary-btn" onclick="skipIdentity()">Skip for now</button>
       <div id="onb-identity-status"></div>
     </div>
 
     <!-- Step 4: Build DNA -->
     <div class="step-card">
       <h2>4. Build your Creator DNA</h2>
-      <p class="status-line">
+      <p class="status-line" id="dna-prereq-status">
         Analyses your top &amp; bottom performers to generate a personalised brief.
       </p>
-      <button class="btn btn-primary" id="build-dna-btn" onclick="buildDna()">
+      <button class="btn btn-primary" id="build-dna-btn" onclick="buildDna()" disabled>
         Build Creator DNA
       </button>
       <div id="dna-status"></div>
@@ -412,15 +411,39 @@
       });
       if (resp.ok) {
         status.innerHTML = '<span class="ok">✓ Saved. Continue to step 4.</span>';
+        // Issue 100: now that identity is saved, unlock step 4.
+        _enableDnaBuild();
       } else {
         const data = await resp.json().catch(() => ({}));
-        status.textContent = data.detail || 'Could not save — try again or skip.';
+        status.textContent = data.detail || 'Could not save — try again.';
       }
     }
 
-    function skipIdentity() {
-      document.getElementById('onb-identity-status').innerHTML =
-        '<span style="color:var(--color-text-subtle)">Skipped — you can fill this in later on the Profile page.</span>';
+    // Issue 100 — intake gating. Step 4 (Build DNA) stays disabled until
+    // the creator's identity row exists. Either they fill in step 3 in
+    // this session, or it already exists from a prior visit. Polled on
+    // page load so a returning creator who already has identity sees
+    // step 4 unlocked immediately.
+    async function _checkIdentityExists() {
+      try {
+        const resp = await fetch('/creators/me/identity', { credentials: 'include' });
+        if (!resp.ok) return false;
+        const data = await resp.json();
+        return Boolean(data && data.identity);
+      } catch (_) { return false; }
+    }
+
+    function _enableDnaBuild() {
+      const btn = document.getElementById('build-dna-btn');
+      const status = document.getElementById('dna-prereq-status');
+      btn.disabled = false;
+      status.textContent = 'Analyses your top & bottom performers to generate a personalised brief.';
+    }
+    function _lockDnaBuild() {
+      const btn = document.getElementById('build-dna-btn');
+      const status = document.getElementById('dna-prereq-status');
+      btn.disabled = true;
+      status.innerHTML = '<span class="wait">→ Finish step 3 first — your identity tells us what fit means for you.</span>';
     }
 
     async function logout() {
@@ -428,7 +451,7 @@
       window.location = '/auth/login';
     }
 
-    document.addEventListener('auth:ready', (e) => {
+    document.addEventListener('auth:ready', async (e) => {
       const user = e.detail;
       const el = document.getElementById('auth-status');
       if (user) {
@@ -436,6 +459,13 @@
       }
       refreshDataGate();
       _onbLoadNiches();
+
+      // Issue 100: unlock step 4 if identity is already on file.
+      if (await _checkIdentityExists()) {
+        _enableDnaBuild();
+      } else {
+        _lockDnaBuild();
+      }
     });
   </script>
 
