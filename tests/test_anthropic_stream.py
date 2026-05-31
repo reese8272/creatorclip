@@ -278,3 +278,64 @@ def test_emit_failures_inside_loop_do_not_abort_iteration(monkeypatch) -> None:
         client, "task-8", model="m", max_tokens=2000, system=[], messages=[]
     )
     assert text == "abc"
+
+
+# ── Wave-3 Fix A: tools kwarg flows through to client.messages.stream ────────
+
+
+def test_tools_kwarg_forwarded_to_stream_when_provided() -> None:
+    """Wave-3 Fix A: ``stream_and_emit`` must forward ``tools`` to
+    ``client.messages.stream(...)`` when the caller supplies them. Without
+    this, callers like ``improvement/brief.py`` that depend on ``web_search``
+    silently lose grounding — the SEV1 closed by Wave 3.
+    """
+    final = _build_final_message("brief")
+    stream = _FakeStream([], final)
+    client = MagicMock()
+    client.messages.stream.return_value = stream
+
+    tools = [{"type": "web_search_20260209", "name": "web_search"}]
+    anthropic_stream.stream_and_emit(
+        client,
+        "task-tools",
+        model="m",
+        max_tokens=2000,
+        system=[],
+        messages=[],
+        tools=tools,
+    )
+
+    # The SDK call must have received the tools argument verbatim.
+    assert client.messages.stream.call_count == 1
+    call_kwargs = client.messages.stream.call_args.kwargs
+    assert "tools" in call_kwargs, (
+        "stream_and_emit must forward `tools` to client.messages.stream(...) "
+        "— Wave-3 Fix A closes the SEV1 where improvement brief streamed "
+        "without web_search grounding."
+    )
+    assert call_kwargs["tools"] == tools
+
+
+def test_tools_kwarg_dropped_when_none() -> None:
+    """When `tools` is not provided (default None), the SDK kwarg must be
+    absent — passing `tools=None` to older SDK shapes can raise.
+    ``dna/brief.py``'s call path (no tools) must keep working unchanged."""
+    final = _build_final_message("brief")
+    stream = _FakeStream([], final)
+    client = MagicMock()
+    client.messages.stream.return_value = stream
+
+    anthropic_stream.stream_and_emit(
+        client,
+        "task-no-tools",
+        model="m",
+        max_tokens=2000,
+        system=[],
+        messages=[],
+    )
+
+    call_kwargs = client.messages.stream.call_args.kwargs
+    assert "tools" not in call_kwargs, (
+        "No-tools callers must produce a call without the tools kwarg "
+        "(older SDKs reject tools=None) — pinning the dna/brief.py shape."
+    )

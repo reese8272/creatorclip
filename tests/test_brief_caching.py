@@ -142,3 +142,64 @@ def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
         f"dynamic filtering); got {tools[0]['type']!r}. Check "
         f"ANTHROPIC_WEB_SEARCH_TOOL config wiring."
     )
+
+
+# ── Wave-3 Fix A: streaming path also receives web_search tools ──────────────
+
+
+def test_improvement_brief_streaming_path_passes_tools_to_stream_and_emit(mocker):
+    """SEV1 regression: Wave 2 added a streaming branch that silently dropped
+    the ``tools=[web_search]`` argument that the non-streaming branch forwarded.
+    Net effect: every production improvement brief (which now always passes
+    ``task_id``) ran un-grounded — no web search, no current YouTube guidance.
+    Wave-3 Fix A makes ``stream_and_emit`` tools-aware and threads them
+    through. This test pins it: when ``task_id`` is set, ``stream_and_emit``
+    must receive ``tools=[{"type": "web_search_20260209", "name":
+    "web_search"}]``.
+    """
+    import improvement.brief as b
+    from config import settings
+
+    captured: dict = {}
+
+    def _fake_stream_and_emit(client, task_id, **kwargs):
+        captured.update(kwargs)
+        captured["task_id"] = task_id
+        return (
+            "FINAL ANSWER",
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read": 0,
+                "cache_creation": 0,
+            },
+        )
+
+    # Patch at the import path used by improvement.brief (it imports
+    # function-locally inside the streaming branch).
+    mocker.patch("worker.anthropic_stream.stream_and_emit", side_effect=_fake_stream_and_emit)
+
+    # with_options(...) returns the client we pass into stream_and_emit; just
+    # let the real Anthropic singleton return its real with_options output —
+    # stream_and_emit itself is fully mocked so no actual SDK call fires.
+    result = b.generate_improvement_brief(
+        channel_title="Ch",
+        analytics={"avg_views": 100},
+        task_id="task-w3-fix-a",
+    )
+
+    # The streaming path must have been taken.
+    assert captured["task_id"] == "task-w3-fix-a"
+    # Tools must be threaded through — the Wave-3 fix.
+    assert "tools" in captured, (
+        "Wave-3 Fix A: streaming branch must pass tools=tools to "
+        "stream_and_emit, NOT drop it. Without this the improvement brief "
+        "loses web_search grounding (SEV1)."
+    )
+    tools = captured["tools"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "web_search"
+    assert tools[0]["type"] == settings.ANTHROPIC_WEB_SEARCH_TOOL
+    # Disclaimer still appended on streaming path.
+    assert "FINAL ANSWER" in result
+    assert "does not promise virality" in result

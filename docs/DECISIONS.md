@@ -5,6 +5,64 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Wave 3 hotfix batch — 3 SEV1s + 3 SEV2s from post-Wave-2 /assess
+
+### What was decided
+
+Six small mechanical fixes addressing the regressions Wave 2 introduced (5 of 6) plus the carry-forward Stripe-sync-in-async SEV1 (1 of 6). All flagged in `docs/assessment/REPORT.md` (2026-05-31 post-Wave-2) and `docs/assessment/history/2026-05-31-post-wave-2-REPORT.md`.
+
+**Fix A (SEV1)** — `worker/anthropic_stream.stream_and_emit` now accepts an optional `tools: list | None = None` kwarg and forwards it to `client.messages.stream(...)` when not None. `improvement/brief.py:124-131` threads `tools=tools` through. Closes the SEV1 where 100% of production improvement briefs (Wave 2 always passes `task_id`) ran without web_search grounding. The no-tools call shape (`dna/brief.py`'s caller) drops the kwarg entirely — preserves older-SDK compatibility.
+
+**Fix B (SEV1)** — `routers/improvement.py:91-110` reorders so `aset_owner` runs AFTER the row's job_id is committed, wrapped in `try/except redis.RedisError`. Failure logs a warning and returns `stream_url=None` — the brief still gets enqueued, the row carries the job_id, the client falls back to GET polling. Same fail-open posture `progress.aemit` already takes.
+
+**Fix C (SEV1, carry-forward)** — `routers/billing.py:94` wraps `create_checkout_session` in `await asyncio.to_thread(...)`. Keeps `billing/stripe_client.py` shape unchanged (still a sync function, all existing direct-import tests work). Closes the SEV1 where every checkout blocked the FastAPI event loop for 300-800ms p95. Smallest-blast-radius fix.
+
+**Fix D (SEV2)** — `routers/auth.py:117-119` now calls `progress.aset_owner(task.id, str(creator.id))` after enqueuing the post-OAuth catalog sync. Same fail-open posture as Fix B. Closes the gap where the post-OAuth catalog sync emitted a full progress stream to a key nothing could authorize. Pre-emptive — no user impact today; Issue 100's onboarding tutorial would surface it.
+
+**Fix E (SEV2)** — `_signals_async` now emits a non-terminal `step:ingest_complete` instead of terminal `done`. `_generate_clips_async` now emits its own `step:generate_clips_start`, `step:score_and_rank`, terminal `done` carrying the clip count — on the same `video_id` stream key. The SSE consumer stays subscribed through clip generation under one stream rather than seeing "Ingest complete" while clips are still being prepared.
+
+**Fix F (SEV2)** — `_sync_channel_catalog_async`'s per-video failure handler now emits `step:sync_metrics_skipped` with `i`, `total`, and `reason=type(exc).__name__`. The `i/N` math stays contiguous in the UI. Class name only — never the exception message — preserves the worker module's no-PII-in-emit-payload invariant.
+
+### Why
+
+Wave 2's /assess explicitly flagged each of these as a regression OR carry-forward. The SEV1 count was 4 → 2 → 1 → 3 — Wave 3 returns the trajectory to 0 SEV1s and closes 3 SEV2s. Each fix has well-bounded LOC + a regression test; bundling them in one wave amortizes the deploy cycle while keeping per-fix attribution clear via separate commits per change.
+
+### Industry standard checked
+
+- **Anthropic SDK tools through streaming wrapper:** Confirmed via `/claude-api` skill content (this session) + Anthropic streaming docs — `client.messages.stream()` accepts `tools` identically to `.create()`. Tool-use blocks arrive on the same content stream; final answer extracted via `get_final_message().content[-1].text` (Issue-69 pattern) regardless of whether tools were called.
+- **Fail-open on observational dependencies:** matches the canonical "observability never load-bearing" posture (Stripe, Anthropic, AWS docs all cite this for their non-load-bearing observability channels). `progress.aemit` already does this; Wave 3 extends the same shape to the `aset_owner` call sites.
+- **`asyncio.to_thread` for sync SDK in async route:** canonical Python 3.9+ mitigation (PEP 631 successor); same recipe Issue 78d used for transcription + Voyage.
+
+### Alternatives ruled out
+
+- **Swap to `stripe.AsyncStripeClient`** (Fix C alternative): would require a package-version check first; the `asyncio.to_thread` wrap is universally available + zero new dependency surface.
+- **Move terminal `done` emit to the `build_signals` wrapper after `generate_clips.delay()`** (Fix E alternative): preserves the misleading "done = ingest complete" semantic without giving the user any visibility into clip generation. The `_generate_clips_async` emits added in Fix E are mechanical mirrors of what `_signals_async` already does — net code grows ~20 LOC for a much better UX.
+- **Surfacing `str(exc)` on the skipped-video event** (Fix F alternative): re-opens the structural-trust SEV2 the worker module already flagged. Class name only is the conservative choice.
+- **Deferring Fix D to Issue 100** (the onboarding tutorial wave): one-line fix; cheaper to close now than re-discover during Issue 100's Phase-1.
+
+### Tradeoffs accepted
+
+- **Fix B fails open instead of fail-fast.** A Redis blip during a brief enqueue means the user can't subscribe to live progress — they fall back to GET polling. The alternative (500 + leave row in pending with no job_id) was strictly worse. Same trade applies to Fix D (OAuth callback) and the existing dna build pattern.
+- **Fix C's regression test uses thread-id comparison instead of a wall-clock concurrency probe.** Detecting "are these running on the same thread" is sufficient signal; a true wall-clock parallelism test would need an async test fixture, a synthetic delay in the mock, and would add ~20 LOC for marginal coverage. Thread-id is the load-bearing assertion.
+- **Fix E adds emits to `_generate_clips_async` despite Wave 2 deliberately scoping it out.** Wave 2 focused on the upload chain proper (ingest/transcribe/signals); `_generate_clips_async` was deliberately deferred. Fix E completes the surface because the deferral led to a UX bug. The added emits follow the same pattern as the other upload-chain stages; no design departure.
+
+### Files & tests
+
+- `worker/anthropic_stream.py` — `tools` kwarg + dict-based `stream_kwargs` so `None` is dropped rather than forwarded
+- `worker/tasks.py` — `_signals_async` terminal emit → non-terminal; `_generate_clips_async` gets full emit instrumentation; `_sync_channel_catalog_async` per-video skip event
+- `improvement/brief.py` — pass `tools=tools` on streaming path
+- `routers/improvement.py` — aset_owner reorder + fail-open
+- `routers/billing.py` — `asyncio.to_thread` wrap on checkout
+- `routers/auth.py` — aset_owner after catalog-sync delay + fail-open
+- `tests/test_anthropic_stream.py` — 2 new tests (tools-forwarded, tools-dropped-when-None)
+- `tests/test_brief_caching.py` — 1 new test (improvement brief streaming path forwards tools)
+- `tests/test_billing.py` — 1 new test (Stripe runs on different thread than event loop)
+- `tests/test_progress_emit_wiring.py` — 8 tests: 2 for improvement-brief router (happy path + Redis-down fail-open); 1 source-inspect for auth callback aset_owner; 1 reworked signals test + 2 new generate_clips tests; 1 catalog-sync skip-video test. Existing signals-emit test (`test_signals_async_emits_terminal_done_event`) renamed + rewritten to assert the new non-terminal semantic.
+
+**Tests:** 543 passed / 1 skipped / 89 deselected. Layer 0: ruff 0 / mypy 0 / format clean.
+
+---
+
 ## 2026-05-31 — Issue 92: universal progress visibility (extends Issue 86 SSE primitive)
 
 ### What was decided

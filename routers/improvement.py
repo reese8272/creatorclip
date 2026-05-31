@@ -90,20 +90,37 @@ async def start_improvement_brief(
     row.job_id = None
     await session.commit()
 
+    import redis as _redis_pkg
+
     from worker import progress
     from worker.tasks import generate_improvement_brief as generate_improvement_brief_task
 
     task = generate_improvement_brief_task.delay(str(creator.id))
-    # Issue 92: stamp ownership so /tasks/{task.id}/events authorizes the stream.
-    await progress.aset_owner(task.id, str(creator.id))
     row.job_id = task.id
     await session.commit()
+
+    # Wave-3 Fix B: stamp ownership for the SSE stream. Failure here is
+    # observational — the brief is already enqueued and the row carries
+    # the job_id, so the user can still poll the result. We fail open
+    # (log + return stream_url=None) instead of 500-ing and leaving the
+    # row in an inconsistent state. Same posture progress.aemit takes.
+    stream_url = f"/tasks/{task.id}/events"
+    try:
+        await progress.aset_owner(task.id, str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning(
+            "improvement_brief aset_owner failed (Redis down?) task=%s err=%s",
+            task.id,
+            exc,
+        )
+        stream_url = None
+
     logger.info("Improvement brief queued for creator %s (task %s)", creator.id, task.id)
 
     return {
         "status": "pending",
         "task_id": task.id,
-        "stream_url": f"/tasks/{task.id}/events",
+        "stream_url": stream_url,
     }
 
 

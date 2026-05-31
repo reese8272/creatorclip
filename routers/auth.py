@@ -114,9 +114,27 @@ async def callback(
     # playlistItems + per-video duration fan-out can take >10s on large
     # channels — far longer than the OAuth redirect budget. (Issue 87)
     if is_new:
+        import redis as _redis_pkg
+
+        from worker import progress
         from worker.tasks import sync_channel_catalog
 
-        sync_channel_catalog.delay(str(creator.id))
+        task = sync_channel_catalog.delay(str(creator.id))
+        # Wave-3 Fix D: stamp ownership so the catalog-sync SSE stream
+        # (added in Issue 92) is reachable when Issue 100's onboarding
+        # tutorial wires the post-OAuth UI. Same fail-open posture as the
+        # other Issue-92 routers — a Redis blip during onboarding logs
+        # and continues; the catalog sync itself still runs.
+        try:
+            await progress.aset_owner(task.id, str(creator.id))
+        except _redis_pkg.RedisError as exc:
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "auth callback aset_owner failed (Redis down?) task=%s err=%s",
+                task.id,
+                exc,
+            )
 
     from observability import log_event
 

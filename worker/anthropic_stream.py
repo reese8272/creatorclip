@@ -41,6 +41,7 @@ def stream_and_emit(
     max_tokens: int,
     system: Any,
     messages: list,
+    tools: list | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Run a streamed Anthropic call, forwarding deltas as progress events.
 
@@ -51,15 +52,30 @@ def stream_and_emit(
         in the existing non-streaming ``dna/brief.py``). ``usage_dict`` has
         ``input_tokens``, ``output_tokens``, ``cache_read``, ``cache_creation``.
 
+    The ``tools`` parameter (Wave-3 Fix A) is forwarded to
+    ``client.messages.stream(...)`` when not None — needed for callers like
+    ``improvement/brief.py`` that use ``web_search``. Tool-use blocks land on
+    the same content stream as text; the FINAL text block of the response
+    remains the synthesised answer (Issue-69 pattern), so we still return
+    ``text_blocks[-1].text`` and don't need to handle ``tool_use`` deltas
+    explicitly.
+
     The caller is responsible for emitting the terminal ``done`` / ``error``
     event after this returns — this function only forwards intra-stream events.
     """
-    with client.messages.stream(
-        model=model,
-        max_tokens=max_tokens,
-        system=system,
-        messages=messages,
-    ) as stream:
+    # Only forward `tools` to the SDK when the caller actually has tools to
+    # pass. Older SDK shapes raise on `tools=None`, so we drop the kwarg
+    # entirely in the no-tools case — matches `dna/brief.py`'s call shape.
+    stream_kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if tools is not None:
+        stream_kwargs["tools"] = tools
+
+    with client.messages.stream(**stream_kwargs) as stream:
         for event in stream:
             try:
                 _forward_event(task_id, event)

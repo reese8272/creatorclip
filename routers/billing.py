@@ -2,6 +2,7 @@
 Billing endpoints: balance, pack listing, Stripe checkout, and webhook fulfillment.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -91,12 +92,19 @@ async def checkout(
     if body.pack_id not in PURCHASABLE_PACKS:
         raise HTTPException(status_code=400, detail="Invalid pack_id")
     try:
-        url = create_checkout_session(
-            pack_id=body.pack_id,
-            creator_id=str(creator.id),
-            stripe_customer_id=creator.stripe_customer_id,
-            success_url=body.success_url,
-            cancel_url=body.cancel_url,
+        # Wave-3 Fix C: Stripe's StripeClient is sync (urllib3 under the hood);
+        # calling it directly inside this async route blocks the FastAPI event
+        # loop for the 300-800ms p95 Stripe round-trip and serializes
+        # concurrent checkouts on one worker process. Offload to a thread so
+        # the loop stays free for other requests. (SEV1 from post-Wave-2
+        # /assess; same recipe Issue 78d used for transcription + Voyage.)
+        url = await asyncio.to_thread(
+            create_checkout_session,
+            body.pack_id,
+            str(creator.id),
+            creator.stripe_customer_id,
+            body.success_url,
+            body.cancel_url,
         )
     except Exception as exc:
         logger.error("Stripe checkout creation failed: %s", exc)

@@ -114,8 +114,11 @@ def generate_improvement_brief(
 
     if task_id is not None:
         # Streaming path (Issue 92) — forwards message_start.usage + text_delta
-        # events to the SSE consumer. Same prompt structure as the .create()
-        # path so cache breakpoints are interchangeable between the two.
+        # events to the SSE consumer. Same prompt structure AND same tools as
+        # the .create() path so the LLM sees an identical contract on both
+        # paths (cache breakpoints + web_search both intact). The tools=tools
+        # kwarg matters: without it, the brief loses web_search grounding —
+        # Wave-3 Fix A closed that SEV1.
         from worker.anthropic_stream import stream_and_emit
 
         # The 120s timeout matters more here than on the streaming path
@@ -128,6 +131,7 @@ def generate_improvement_brief(
             max_tokens=2000,
             system=system,
             messages=messages,
+            tools=tools,
         )
         logger.info(
             "improvement_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
@@ -136,9 +140,9 @@ def generate_improvement_brief(
             usage["cache_creation"],
             usage["output_tokens"],
         )
-        # stream_and_emit doesn't carry tool-result blocks today (web_search
-        # interleaves text/tool_use; stream_and_emit returns the LAST text
-        # block, which is the synthesised brief per Issue 69 pattern).
+        # web_search interleaves text + tool_use blocks under streaming too;
+        # stream_and_emit returns the LAST text block (the synthesised
+        # answer), matching the Issue 69 pattern the .create() path uses.
         return final_text + _DISCLAIMER
 
     # web_search tool can take 60-120s; override the default 60s timeout per-call.

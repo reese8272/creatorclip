@@ -485,9 +485,14 @@ async def _signals_async(video_id: str) -> None:
                     video.ingest_done_at = datetime.now(UTC)
             await session.commit()
 
-        # Terminal event — the upload chain is done. Sets TTL on the stream
-        # so a creator who comes back ~1h later can still see the result.
-        await aemit(video_id, "done", stage="signals", message="Ingest complete.")
+        # Wave-3 Fix E: NON-terminal — the upload pipeline isn't done yet,
+        # `generate_clips.delay(video_id)` is enqueued by the sync wrapper
+        # AFTER this function returns. Previously this emitted a terminal
+        # `done` event here, so the UI closed the SSE while clips were
+        # still being prepared. `_generate_clips_async` now emits its own
+        # terminal `done` on the same stream key so the consumer stays
+        # subscribed through clip generation.
+        await aemit(video_id, "step", label="ingest_complete", stage="signals")
     except Exception as exc:
         await aemit(
             video_id,
@@ -890,58 +895,98 @@ async def _poll_clip_outcomes_async() -> None:
 
 
 async def _generate_clips_async(video_id: str) -> None:
+    """Generate ranked clip candidates for a fully-ingested video.
 
+    Wave-3 Fix E: emits progress events on the **same** ``task:{video_id}:events``
+    stream that the upload chain (`_ingest`/`_transcribe`/`_signals`) uses, so
+    the SSE consumer stays subscribed through clip generation. The terminal
+    ``done`` event now fires here (not in `_signals_async`) — that's the
+    moment the user-visible work is actually complete.
+    """
     from sqlalchemy import select
 
     from clip_engine.ranking import generate_and_rank_clips
     from config import settings
     from dna.profile import get_active
     from models import Signals, Transcript
+    from worker.progress import aemit
 
-    video_uuid = uuid.UUID(video_id)
+    try:
+        await aemit(video_id, "step", label="generate_clips_start", stage="generate_clips")
 
-    async with db.AdminSessionLocal() as session:
-        video = await session.get(Video, video_uuid)
-        if not video:
-            raise ValueError(f"Video {video_id} not found")
+        video_uuid = uuid.UUID(video_id)
 
-        # Idempotency guard (Issue 46): a late retry on a video whose clips are
-        # already rendered is a no-op. Without this, generate_and_rank_clips would
-        # re-extract candidates and insert duplicate pending rows alongside the
-        # already-done clips.
-        existing_done = await session.scalar(
-            select(Clip.id)
-            .where(Clip.video_id == video_uuid, Clip.render_status == RenderStatus.done)
-            .limit(1)
-        )
-        if existing_done is not None:
-            logger.info(
-                "Skipping generate_clips for video %s — rendered clips already exist",
-                video_id,
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, video_uuid)
+            if not video:
+                raise ValueError(f"Video {video_id} not found")
+
+            # Idempotency guard (Issue 46): a late retry on a video whose clips are
+            # already rendered is a no-op. Without this, generate_and_rank_clips would
+            # re-extract candidates and insert duplicate pending rows alongside the
+            # already-done clips.
+            existing_done = await session.scalar(
+                select(Clip.id)
+                .where(Clip.video_id == video_uuid, Clip.render_status == RenderStatus.done)
+                .limit(1)
             )
-            return
+            if existing_done is not None:
+                logger.info(
+                    "Skipping generate_clips for video %s — rendered clips already exist",
+                    video_id,
+                )
+                # Terminal `done` still fires so the SSE consumer auto-closes.
+                await aemit(
+                    video_id,
+                    "done",
+                    stage="generate_clips",
+                    message="Clips already generated.",
+                )
+                return
 
-        signals = await session.get(Signals, video_uuid)
-        if not signals:
-            raise ValueError(f"Signals not available for video {video_id}")
+            signals = await session.get(Signals, video_uuid)
+            if not signals:
+                raise ValueError(f"Signals not available for video {video_id}")
 
-        transcript = await session.get(Transcript, video_uuid)
-        transcript_segments = transcript.segments_jsonb.get("segments", []) if transcript else []
+            transcript = await session.get(Transcript, video_uuid)
+            transcript_segments = (
+                transcript.segments_jsonb.get("segments", []) if transcript else []
+            )
 
-        dna_profile = await get_active(session, video.creator_id)
-        dna_brief = dna_profile.brief_text if dna_profile else None
+            dna_profile = await get_active(session, video.creator_id)
+            dna_brief = dna_profile.brief_text if dna_profile else None
 
-        clips = await generate_and_rank_clips(
-            session=session,
-            video_id=video_uuid,
-            creator_id=video.creator_id,
-            timeline=signals.timeline_jsonb,
-            dna_brief=dna_brief,
-            transcript_segments=transcript_segments,
-            max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
+            await aemit(video_id, "step", label="score_and_rank", stage="generate_clips")
+            clips = await generate_and_rank_clips(
+                session=session,
+                video_id=video_uuid,
+                creator_id=video.creator_id,
+                timeline=signals.timeline_jsonb,
+                dna_brief=dna_brief,
+                transcript_segments=transcript_segments,
+                max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
+            )
+
+            logger.info("Generated %d clips for video %s", len(clips), video_id)
+
+        # Terminal event — the upload-to-clips pipeline is now done.
+        # Sets TTL on the stream so a creator who comes back later can still see it.
+        await aemit(
+            video_id,
+            "done",
+            stage="generate_clips",
+            message=f"Generated {len(clips)} clip(s).",
+            clip_count=len(clips),
         )
-
-        logger.info("Generated %d clips for video %s", len(clips), video_id)
+    except Exception as exc:
+        await aemit(
+            video_id,
+            "error",
+            stage="generate_clips",
+            message="Clip generation failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
+        raise
 
 
 async def _purge_stale_source_media_async() -> None:
@@ -1107,6 +1152,20 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                         video.id,
                         exc,
                         exc_info=True,
+                    )
+                    # Wave-3 Fix F: emit a step event for the skipped video so
+                    # the SSE consumer's `i/total` math stays contiguous. Class
+                    # name only — never the exception message — to keep the
+                    # progress wire-shape's no-PII / no-internal-detail
+                    # invariant the worker module's structural-trust SEV2s
+                    # depend on.
+                    await _emit(
+                        "step",
+                        label="sync_metrics_skipped",
+                        stage="catalog_sync",
+                        i=i,
+                        total=total,
+                        reason=type(exc).__name__,
                     )
             await session.commit()
             logger.info(

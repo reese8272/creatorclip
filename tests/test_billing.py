@@ -281,3 +281,64 @@ def test_checkout_returns_503_when_stripe_key_empty(monkeypatch):
         f"Expected 503 Service Unavailable when STRIPE_SECRET_KEY is empty, "
         f"got {response.status_code}: {response.text}"
     )
+
+
+# ── Wave-3 Fix C: Stripe sync SDK runs off the event loop ────────────────────
+
+
+def test_checkout_offloads_sync_stripe_to_thread(monkeypatch):
+    """Wave-3 Fix C (SEV1): the Stripe Python SDK is synchronous (urllib3
+    under the hood). Calling `create_checkout_session` directly inside the
+    async `/checkout` route blocked the FastAPI event loop for every
+    300-800ms p95 Stripe round-trip and serialized concurrent checkouts on
+    one worker process.
+
+    Verify the fix by recording which thread `create_checkout_session` runs
+    in: if the route uses `await asyncio.to_thread(...)`, the call happens
+    in a worker thread distinct from the main thread that runs the event
+    loop. Without the fix, both run in the same thread (the loop thread).
+    """
+    import threading
+
+    from auth import get_current_creator
+    from main import app
+
+    fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
+    main_thread_id = threading.get_ident()
+    call_thread_ids: list[int] = []
+
+    def _fake_create_checkout_session(*args, **kwargs):
+        call_thread_ids.append(threading.get_ident())
+        return "https://checkout.stripe.test/session/abc"
+
+    monkeypatch.setattr(
+        "routers.billing.create_checkout_session",
+        _fake_create_checkout_session,
+    )
+
+    app.dependency_overrides[get_current_creator] = lambda: fake_creator
+    try:
+        c = TestClient(app, raise_server_exceptions=False)
+        response = c.post(
+            "/billing/checkout",
+            json={
+                "pack_id": "creator",
+                "success_url": "http://example.com/ok",
+                "cancel_url": "http://example.com/no",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+
+    assert response.status_code == 200
+    assert len(call_thread_ids) == 1, "Stripe checkout should be called exactly once"
+    # The Stripe call MUST run in a different thread than the one running the
+    # async event loop — that's the whole point of `asyncio.to_thread`. If
+    # this assertion fails, the route is calling Stripe synchronously again
+    # and is back to blocking the event loop per checkout.
+    assert call_thread_ids[0] != main_thread_id, (
+        "Wave-3 Fix C: create_checkout_session must run via asyncio.to_thread "
+        "so the sync Stripe SDK doesn't block the FastAPI event loop. "
+        "Detected call running in the same thread as the test — the offload "
+        "regressed."
+    )
