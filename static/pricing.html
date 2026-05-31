@@ -4,8 +4,41 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pricing — AutoClip</title>
-  <link rel="stylesheet" href="/static/style.css" />
   <style>
+    /* Wave 7 — pricing.html previously linked /static/style.css which did
+       not exist, so every var(--…) below resolved to the empty string and
+       the browser fell back to default styles. These :root values match the
+       inline palette used by index.html / insights.html / profile.html /
+       review.html (the current dark + purple aesthetic). Issue 99 will
+       supersede this with the canonical _design-tokens.css. */
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1e1e1e;
+      --border: #2a2a2a;
+      --text: #e0e0e0;
+      --muted: #888888;
+      --accent: #6c63ff;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    a { color: var(--text); text-decoration: none; }
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: #161616;
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-brand { font-weight: 700; color: var(--accent); font-size: 1.05rem; }
+    .nav-links { display: flex; gap: 18px; align-items: center; font-size: 0.88rem; }
+    .nav-links a { color: #aaa; }
+    .nav-links a:hover, .nav-links a.active { color: var(--text); }
     .pricing-hero {
       text-align: center;
       padding: 3rem 1rem 1rem;

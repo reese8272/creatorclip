@@ -5,6 +5,227 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Issue 99 design direction: Linear-style base + monospace data register
+
+### What was decided
+
+Research surveyed 8 dark/sharp/dense 2026 design systems (Linear, Vercel, VS
+Code/Cursor, OBS panel, Figma panel, GitHub Primer dark, Raycast/Arc,
+Warp terminal) against the user's verbal brief: "sharper edges, more
+'tech' feel, not AI feel, purple+black/dark-gray, editor-style font,
+more modern."
+
+**User picked Linear-style as the foundation** + **monospace second
+register for data panels**.
+
+- **Foundation palette**: `#0a0a0a` bg / `#111111` surface / `#1f1f1f`
+  elevated / `#2a2a2a` border / `#ededed` primary text / `#666666`
+  muted / `#5e6ad2` indigo accent / `#6b7ae8` accent-hover.
+- **Typography**: Inter Variable (heading + body), JetBrains Mono
+  (metadata/timestamps + data register). System fallback:
+  `-apple-system, 'Helvetica Neue', sans-serif`.
+- **Spacing**: 4px base. Row height 32px standard.
+- **Borders**: 1px solid, 0–2px radius max, hairline (`#1f1f1f`).
+- **Interactions**: 80–120ms transitions; hover = background lift only
+  (`#1a1a1a`); focus = 2px `#5e6ad2` ring offset-1; kbd shortcut chips
+  visible in the UI.
+- **Mono data register**: every clip-metadata value (start, end,
+  duration, score, ID), every transcript timestamp, every numeric stat
+  on the DNA / insights / dashboard cards renders in JetBrains Mono.
+  Sans-vs-mono is the visual register shift that signals "UI vs data."
+
+### Why
+
+- The user's verbal brief precisely matched Linear's design language
+  (precision tool, kbd-first, hairline borders, no decoration). Linear
+  is also the most-documented and most-trodden of the 8 — safest
+  vanilla-CSS implementation.
+- The user's stated brand affinity was "purple + black/dark gray."
+  Linear's `#5e6ad2` indigo accent is in the purple family but more
+  restrained than Raycast/Arc's `#7c3aed` (which permeates everything
+  and reads as "AI tool aesthetic" — explicitly rejected).
+- The monospace-data-register pattern is how Linear-the-product itself
+  composes (and Figma, Vercel, GitHub). Gives the editor-tool feel the
+  user wants WITHOUT going fully Warp-terminal mono-everywhere (which
+  is polarizing).
+
+### Industry standard checked
+
+- **Linear app + Linear's public design articles**: confirms the
+  exact palette + Inter/JetBrains Mono pairing + 4px spacing + hairline
+  borders. The kbd-chip pattern is documented in Linear's keyboard-
+  shortcuts page.
+- **Vercel Geist + Figma component library**: both validate the
+  sans-for-shell, mono-for-data composition pattern. Vercel uses
+  Geist Mono for every numeric value in their dashboard; Figma uses
+  mono in property inspectors.
+- **Inter Variable + JetBrains Mono**: both Google-Fonts-hosted, both
+  free for commercial use, both shipped with `font-display: swap` for
+  instant fallback render — matches the project's KISS / no-build-step
+  constraint.
+
+### Alternatives ruled out
+
+- **Raycast / Arc style** (option 7, purple-tinted everything): too
+  branded, reads as "AI tool" — the exact aesthetic the user rejected.
+- **Warp terminal style** (option 8, monospace everywhere): too
+  polarizing for non-technical creators; user wants editor-feel,
+  not terminal-feel.
+- **VS Code / Cursor style** (option 3): risk of feeling too
+  developer-tool-y for a creator-facing SaaS; tabs/sidebars are
+  power-user patterns.
+- **Vercel monochrome** (option 2): no purple accent — loses the
+  user's stated brand affinity.
+- **Tailwind / a build step**: rejected by the project's no-build-step
+  rule (CLAUDE.md). Vanilla CSS is the path.
+- **React + shadcn/ui**: rejected — wrong stack; the project is
+  vanilla HTML+JS by deliberate choice.
+
+### Tradeoffs accepted
+
+- **Three-phase Phase 3 rollout** (tokens + 1-page proof; rest of
+  templates; mono data register applied): means the visual is
+  inconsistent during rollout. Mitigated by retrofitting pricing.html
+  first (smallest + currently-most-broken page) so the visible
+  inconsistency is on a page that already looks broken.
+- **Google Fonts CDN dependency**: introduces one external font load.
+  Mitigated by `font-display: swap` (system font renders instantly)
+  and the fact that Cloudflare already fronts every static asset.
+
+---
+
+## 2026-05-31 — Issue 95 architecture: companion app + folder watcher (Medal.tv pattern)
+
+### What was decided
+
+Research surveyed 4 architectures for OBS hotkey integration: (A)
+browser source + WebSocket v5, (B) local companion app watching the
+replay folder, (C) WebSocket relay control-plane only, (D) RTMP/WHIP
+server-side buffer.
+
+**User picked Architecture B** — a small Go binary on the streamer's
+machine watches OBS's configured replay-buffer output directory using
+`fsnotify`. When OBS writes a new clip file, the watcher reads it and
+uploads it to our backend's API-key-authenticated `POST /clips/ingest`
+endpoint. Same downstream pipeline as `/videos/upload` from there
+(start_pipeline → ingest → transcribe → signals → clip generation).
+
+### Why
+
+- **Reliability**: Architecture A (browser source) depends on OBS's
+  embedded CEF browser exposing the File System Access API, which is
+  version-dependent and may silently sandbox file reads. Cannot ship
+  a feature that fails for a fraction of users.
+- **Streamer UX matches existing muscle memory**: the streamer uses
+  OBS's NATIVE replay-save hotkey (no second hotkey in our app, no
+  conflict). The companion app is invisible after install.
+- **Validated at scale**: this is the Medal.tv, Outplayed (Plays.tv),
+  and NVIDIA Highlights pattern. Production-proven.
+- **Cross-platform with one Go binary**: cross-compile to
+  Win/macOS/Linux from one CI; ~15MB single static executable, no
+  runtime dependency.
+- **Cost-neutral on our side**: we receive a file only when the user
+  hits the hotkey. No live ingest server, no rolling bandwidth cost.
+
+### Industry standard checked
+
+- **OBS WebSocket v5**: shipped built-in since OBS 28 (Oct 2022). No
+  plugin install. Fires `ReplayBufferSaved` event with local file
+  path — Architecture A is the elegant ideal but the CEF File System
+  Access API surface is the blocker.
+- **Medal.tv architecture**: documented in their engineering blog
+  posts as "local agent watches game clip directory, uploads to
+  cloud." Same pattern we're adopting.
+- **Streamlabs Clips**: uses Architecture A (browser source) — has
+  documented edge cases when OBS's CEF lags behind.
+- **WHIP (WebRTC-HTTP Ingest Protocol)**: emerging standard (2023+)
+  for low-latency ingest; OBS 30+ supports it. Right call for media
+  servers, wrong call for a solo-dev SaaS at our scale.
+
+### Alternatives ruled out
+
+- **A (browser source + WebSocket v5)**: too fragile — CEF File System
+  Access API sandboxing is non-deterministic across OBS versions.
+- **C (WebSocket relay control plane)**: cannot transfer the file
+  alone — useful only as a layer on top of B (for an in-app "Save Clip
+  Now" button that triggers OBS remotely). Not standalone-viable.
+- **D (RTMP/WHIP server-side buffer)**: infrastructure cost (media
+  ingest server) and bandwidth scale with concurrent streamers. Wrong
+  layer for a solo-dev SaaS until paying-customer scale demands sub-2s
+  latency.
+- **Electron for the companion app**: ~100MB binary, includes Chromium,
+  high install friction. Go is ~15MB single binary, no runtime
+  dependency — much lower friction for non-technical creators.
+
+### Tradeoffs accepted
+
+- **One-time companion app install** is the friction point. Mitigated
+  by Code-signed installers + clear install instructions; semi-pro
+  streamers (the target market) routinely install OBS plugins and
+  capture utilities, so this is in the expected complexity envelope.
+- **Two-repo split**: backend changes in this monorepo; companion app
+  lives in `creatorclip-obs-companion` (separate repo). Necessary —
+  Go in this Python monorepo would be awkward, and the companion app
+  has its own release/distribution pipeline (code signing, app
+  store optionally).
+- **API-key auth surface**: introduces a new credential class.
+  Mitigated by SHA-256 storage (never the raw key), per-creator
+  rate limits, and a profile.html management UI for revocation.
+
+---
+
+## 2026-05-31 — Wave 7: pricing.html CSS hotfix
+
+### What was decided
+
+`pricing.html` linked `/static/style.css` which never existed in the
+repo (verified: `ls static/` shows no .css file). Every `var(--surface)`
+/ `var(--accent)` / etc. in the inline `<style>` block resolved to empty
+string; browser fell back to default styles (Times New Roman + blue
+underlined links). User saw this live on the freshly-deployed
+autoclip.studio after the Issue 101 self-hosted-runner unblock.
+
+Fix: dropped the broken `<link rel="stylesheet">`; added a `:root`
+block to pricing.html defining `--bg / --surface / --border / --text /
+--muted / --accent` matching the inline-style palette other
+authenticated templates use (`#0f0f0f / #1e1e1e / #2a2a2a / #e0e0e0 /
+#888 / #6c63ff`); added minimal `.nav` / `.nav-brand` / `.nav-links`
+component rules so the nav stops rendering as default browser links.
+
+### Why
+
+- Page is user-observable broken. Wait-for-Issue-99 means weeks of
+  broken pricing on the live site.
+- **Deliberate stopgap.** The inline `:root` values are the CURRENT
+  ad-hoc palette already used by index/insights/profile/review. Issue
+  99's `_design-tokens.css` will supersede every inline palette in
+  one pass.
+- No new shared file. A shared `style.css` would be premature — Issue
+  99 will replace it on day 1, so creating it now is waste.
+
+### Alternatives ruled out
+
+- **Wait for Issue 99**: leaves the page visibly broken on production
+  for as long as Issue 99 takes. Not acceptable.
+- **Create a real `static/style.css` now**: premature; Issue 99 will
+  define the canonical design system. Building two CSS systems in
+  rapid succession is waste.
+
+### Files & tests
+
+- `static/pricing.html` (remove broken link, add :root + nav rules).
+- `tests/test_static.py` (+1 test pinning the fix: no broken
+  stylesheet ref + :root block + 6 expected CSS vars defined).
+
+**Layer 0**: ruff 0 / mypy 0 / freshness ok. **Tests**: 561 passed
+(+1) / 1 skipped / 100 deselected.
+
+### Date
+
+2026-05-31
+
+---
+
 ## 2026-05-31 — Issue 101: move docker-publish.yml to self-hosted runner
 
 ### What was decided

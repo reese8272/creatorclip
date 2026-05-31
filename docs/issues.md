@@ -2070,34 +2070,91 @@ again for the live pipeline view.
 
 ---
 
-## Issue 95: Hotkey + livestream-software integration (OBS / Streamlabs / vMix)
-**Status**: 🔲 Not started · **Severity**: SEV-2 feature · **New product surface**
+## Issue 95: OBS hotkey integration — companion app + folder watcher (Architecture B)
+**Status**: 🔲 Phase 1 complete; Phase 3 not started · **Severity**: SEV-2 feature · **New product surface** · **Depends on Issue 99**
 
 **What**: User quote: "Have a hotkey to automatically record and save the
 last few seconds of a video or stream, so that means you need to find a
 way to hook up to a video software or multiple softwares like OBS."
 
-This is a **rolling-buffer instant-replay** feature: while streaming, the
-creator hits a hotkey → the last N seconds (configurable, e.g. 30-90s) are
-saved as a clip candidate. Same downstream pipeline (DNA score, render,
-review) as catalog-sourced clips.
+Rolling-buffer instant-replay: streamer presses OBS's native replay-save
+hotkey while streaming → the last N seconds (set in OBS, typically 30–90s)
+land in our backend within ~30s and enter the standard clip pipeline
+(DNA score → render → review queue).
 
-**Approach (Phase 1 must research)**: OBS has a websocket plugin (obs-websocket
-v5) + a built-in **Replay Buffer** feature that can be triggered remotely.
-Streamlabs has an HTTP API. vMix has an HTTP API. A small companion app
-(electron? menu-bar Mac/Win?) listens for a global hotkey, asks OBS to
-save its replay buffer, then uploads the saved clip to AutoClip via
-`/videos/upload`. AutoClip itself just needs to accept that upload — most
-work is in the companion app + a per-creator API key for uploads.
+**Picked architecture (2026-05-31, user-confirmed from 4-option survey)**:
 
-**ACs (draft)**:
-- [ ] Phase 1 picks one streaming app to support first (likely OBS via
-      obs-websocket v5 — biggest install base, official integration story)
-- [ ] AutoClip exposes an API-key-auth upload endpoint (don't require a
-      browser session for the companion app)
-- [ ] Companion app design doc (separate repo) + hotkey UX research
-- [ ] End-to-end demo: hit hotkey during OBS stream → clip in /review queue
-      within 60s
+**Architecture B — local companion app + folder watcher** (Medal.tv,
+Outplayed, NVIDIA Highlights pattern). A small Go binary (~15MB single
+static executable, cross-compiled to Win/macOS/Linux) watches OBS's
+configured replay-buffer output directory using `fsnotify`. When OBS
+writes a new `.mkv` or `.mp4`, the watcher reads the file and uploads
+it to our backend's API-key-authenticated `POST /clips/ingest` endpoint.
+
+Why Architecture B (not A, C, D):
+- **A (browser source + WebSocket v5)** is more elegant (zero install)
+  but depends on OBS's embedded CEF supporting File System Access API,
+  which is version-dependent and can silently sandbox file reads.
+  Cannot ship a feature that fails for a fraction of users.
+- **C (WebSocket relay)** is a control plane only — it can trigger
+  OBS's `SaveReplayBuffer` command remotely but can't transfer the
+  file. Useful to LAYER on top of B later (for an in-app "Save Clip Now"
+  button), not viable standalone.
+- **D (RTMP/WHIP server-side buffer)** has sub-2s latency but YOU pay
+  the bandwidth cost for every concurrent streamer. Skip until paying-
+  customer scale demands it.
+
+**Approach (Phase 3)** — split into two scopes:
+
+**Backend scope (this monorepo)**:
+1. New `creator_api_keys` table — `id, creator_id (FK), name, key_hash
+   (SHA-256), last_used_at, created_at, revoked_at` + Alembic migration.
+2. New `routers/api_keys.py` — `GET/POST/DELETE /me/api-keys` for the
+   creator-facing key management UI on profile.html.
+3. New `POST /clips/ingest` endpoint — accepts multipart upload with
+   `Authorization: Bearer <api_key>` header. Looks up the key by hash,
+   resolves creator, writes the file to R2 under
+   `source/{creator_id}/obs-{uuid}.mkv`, creates a Video row + kicks
+   off `start_pipeline()`. Returns `{video_id, status, stream_url}`.
+4. Rate limit: 20/hour per API key (same default cap as `/videos/upload`).
+5. Per-creator isolation: same as every other write surface.
+6. Static page for key management on `profile.html` (depends on Issue 99
+   design system for the visual).
+
+**Companion app scope (separate repo, `creatorclip-obs-companion`)**:
+1. Go binary using `fyne` or `wails` for the minimal GUI (system tray
+   + sign-in + status indicator).
+2. `fsnotify` watch on the configured OBS replay-buffer folder.
+3. OAuth-style first-run sign-in → receives an API key from the
+   backend's `/me/api-keys` endpoint → stores in OS keyring (macOS
+   Keychain, Windows Credential Manager, libsecret on Linux) — never
+   on disk in plain text.
+4. Upload via `multipart/form-data` POST to `/clips/ingest` with
+   bearer auth.
+5. Retry with exponential backoff on transient failures; surface
+   persistent failures in the tray icon.
+6. Code-signed binaries on macOS/Windows (separate ops concern; cert
+   purchase needed).
+
+**Streamer UX**:
+- Install companion app (one-time, ~20MB download).
+- Sign in (OAuth flow opens autoclip.studio in browser).
+- Configure OBS replay-buffer output to point at any folder (most
+  streamers already have this set).
+- Use OBS's native replay-save hotkey (no second hotkey in our app —
+  no conflict with their existing OBS muscle memory).
+- Clip appears in `/review` within ~30s.
+
+**ACs**:
+- [x] Phase 1 architecture picked (B — companion app + folder watcher)
+- [ ] `creator_api_keys` table + migration
+- [ ] `routers/api_keys.py` GET/POST/DELETE + tests
+- [ ] `POST /clips/ingest` + integration test
+- [ ] API key management UI on profile.html (post-Issue-99)
+- [ ] Companion app: design doc + repo bootstrap (separate)
+- [ ] End-to-end demo: hit hotkey during OBS stream → clip in `/review`
+      queue within 60s
+- [ ] Per-creator isolation test on `/clips/ingest`
 
 ---
 
@@ -2189,30 +2246,70 @@ canonical arc completes.
 
 ---
 
-## Issue 99: UI redesign — sharper edges, more "tech" less "AI" (supersedes Issue 85)
-**Status**: 🔲 Not started · **Severity**: SEV-2 UX · **Supersedes Issue 85**
+## Issue 99: UI redesign — Linear-style base + monospace data register
+**Status**: 🔲 Phase 1 complete; Phase 3 not started · **Severity**: SEV-2 UX · **Supersedes Issue 85** · **Blocks Issues 93, 94, 96, 100**
 
 **What**: User quote: "The UI is super bland. I want sharper edges and more
-'tech' feel, not an AI feel. I am thinking when we get to this issue, to
-give me websites to pick from / look at for inspiration and we can pick
-and choose different concepts from different websites."
+'tech' feel, not an AI feel."
 
-**Approach (Phase 1)**: the agent compiles a short list of reference
-sites (Linear, Vercel dashboard, Raycast, Cursor, Arc Search, Frame.io,
-Descript, Capcut Web) with screenshots of specific patterns — typography,
-edge treatment, color palette, motion, data-density. User picks elements
-they like. Build a small `static/_design-tokens.css` first; refactor
-the existing pages on top of that. Issue 85's deferred review-UI
-framework decision merges into this issue (vanilla JS or HTMX vs.
-something heavier).
+**Picked direction (2026-05-31, user-confirmed from 8-option survey)**:
 
-**ACs (draft)**:
-- [ ] Phase 1 deliverable: design-direction doc with 5–8 reference sites,
-      annotated, user-picked elements
-- [ ] `static/_design-tokens.css` (or Tailwind config) lands first; pages
-      retrofit
-- [ ] No regression in load perf; no new build step unless picked in Phase 1
-- [ ] Existing tests still green (no behavior change)
+**Foundation: Linear-style command-interface dark.**
+- **Palette**: `#0a0a0a` bg / `#111111` surface / `#1f1f1f` elevated /
+  `#2a2a2a` border / `#ededed` primary text / `#666666` muted /
+  `#5e6ad2` indigo accent / `#6b7ae8` accent-hover.
+- **Typography**: Inter Variable (heading + body), JetBrains Mono
+  (metadata/timestamps). System fallback: `-apple-system, 'Helvetica
+  Neue', sans-serif`.
+- **Spacing**: 4px base, multiples of 4 throughout. Row height
+  standardized to 32px.
+- **Borders**: 1px solid, 0–2px radius maximum. Hairline borders
+  (`#1f1f1f`), not dividers.
+- **Interactions**: Hover adds `#1a1a1a` background lift only — no
+  scale, no shadow. Focus rings: 2px `#5e6ad2` offset-1. Transitions
+  80–120ms max.
+- **Distinct**: Keyboard-first affordances (kbd shortcut chips). No
+  decorative elements — every pixel is data.
+
+**Second register: monospace for data panels.** Sans for the shell;
+JetBrains Mono for clip metadata (start/end timestamps, scores,
+durations, IDs), transcript timestamps, and any timeline value. This
+is how Linear-the-product actually composes — sans for UI, mono for
+data — and gives the clear "this is the editor surface" feel the user
+wants.
+
+**Approach (Phase 3)**:
+- **Phase A** (proof): create `static/_design-tokens.css` with the
+  full Linear-style :root + base typography rules + a minimal
+  component layer (nav, card, button, table, kbd-chip, focus ring).
+  Retrofit ONE page (pricing.html — the smallest + most-visibly-
+  broken — perfect proof case). Land. Review.
+- **Phase B** (rollout): retrofit the remaining 8 templates
+  (index, onboarding, insights, profile, review, tos, privacy,
+  early-access) one at a time. Each retrofit is its own commit;
+  each preserves all existing behavior (no JS changes, no endpoint
+  changes — pure visual).
+- **Phase C** (mono data register): introduce a `.mono` utility
+  class + retrofit the specific surfaces that should read as data
+  (the clip card metadata, transcript view, video table timestamps,
+  DNA stats row).
+
+No build step. No Tailwind. Vanilla CSS. Inter + JetBrains Mono via
+Google Fonts CDN with `font-display: swap` so the system fallback
+renders instantly.
+
+**ACs**:
+- [x] Phase 1 design direction picked (Linear-style + mono data layer)
+- [ ] `static/_design-tokens.css` lands with full :root, typography,
+      component layer
+- [ ] pricing.html retrofit as Phase-A proof
+- [ ] 8 remaining templates retrofit (Phase B, one commit each)
+- [ ] `.mono` data register applied to clip metadata, transcript,
+      timestamps (Phase C)
+- [ ] No regression in load perf (existing static-page tests stay green)
+- [ ] No new build step; vanilla CSS only
+- [ ] Static-page test pins `_design-tokens.css` is included on every
+      template
 
 ---
 

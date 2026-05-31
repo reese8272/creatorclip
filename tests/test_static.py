@@ -281,6 +281,39 @@ def test_link_video_input_accepts_full_urls():
     assert extractor_call, "linkVideo() must call extractYouTubeId() on the raw input"
 
 
+def test_pricing_page_renders_without_missing_stylesheet():
+    """Wave 7: pricing.html previously linked /static/style.css which did
+    not exist in the repo, so every var(--…) below resolved to the empty
+    string and the page rendered in browser defaults (Times New Roman,
+    blue underlined links — captured live by the user on autoclip.studio
+    2026-05-31).
+
+    Pin both halves of the fix: the broken link is gone, AND the CSS
+    variables the page uses are defined in a :root block.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "pricing.html").read_text()
+
+    assert 'href="/static/style.css"' not in src, (
+        "pricing.html must not link /static/style.css — the file "
+        "doesn't exist and the page falls back to browser defaults. "
+        "Issue 99 will replace the inline tokens with the canonical "
+        "_design-tokens.css when the design system lands."
+    )
+    assert ":root {" in src, (
+        "pricing.html must define a :root block with CSS variables — "
+        "every var(--…) used in the inline <style> needs a value."
+    )
+    # Pin the variables the inline <style> consumes, so a future cleanup
+    # that drops one accidentally breaks the test, not the live site.
+    for var_name in ("--bg", "--surface", "--border", "--text", "--muted", "--accent"):
+        assert f"{var_name}:" in src, (
+            f"pricing.html :root block must define {var_name} — the inline "
+            f"<style> block references var({var_name})."
+        )
+
+
 def test_dashboard_registers_in_flight_ingests_with_active_tasks():
     """Wave 6 Fix D: the dashboard's loadVideos() must call into
     window.activeTasks.registerTask for any video in pending/running
