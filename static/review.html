@@ -45,6 +45,68 @@
       text-align: center;
     }
 
+    /* Issue 94 — clip transparency. The "Why this clip?" expander shows
+       Claude's reasoning + the named principle that the scoring engine
+       cited. Closed by default so the player stays the focus; the user
+       expands when they want to know what the system saw. */
+    .why-clip {
+      width: 100%;
+      max-width: 360px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .why-clip summary {
+      list-style: none;
+      cursor: pointer;
+      padding: var(--space-2) var(--space-4);
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+    }
+    .why-clip summary::after {
+      content: '+';
+      font-family: var(--font-mono);
+      color: var(--color-text-subtle);
+    }
+    .why-clip[open] summary::after { content: '−'; color: var(--color-accent); }
+    .why-clip .body {
+      padding: 0 var(--space-4) var(--space-4);
+      font-size: var(--text-sm);
+      color: var(--color-text);
+      line-height: var(--leading-relaxed);
+      border-top: 1px solid var(--color-border);
+      padding-top: var(--space-3);
+      margin-top: var(--space-2);
+    }
+    .why-clip .principle-cite {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-accent);
+      margin-bottom: var(--space-3);
+      padding-bottom: var(--space-2);
+      border-bottom: 1px solid var(--color-border);
+    }
+    .why-clip .score-row {
+      display: flex;
+      justify-content: space-between;
+      margin-top: var(--space-3);
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--color-border);
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+    .why-clip .score-row strong {
+      color: var(--color-text);
+      font-weight: 500;
+    }
+
     /* Trim handles */
     .trim-section { width: 100%; max-width: 360px; }
     .trim-section label {
@@ -131,6 +193,20 @@
     <div class="clip-meta" id="clip-meta">Loading clip…</div>
     <div class="clip-principle" id="clip-principle"></div>
 
+    <details class="why-clip" id="why-clip">
+      <summary>Why this clip?</summary>
+      <div class="body">
+        <div class="principle-cite" id="why-principle"></div>
+        <div id="why-reasoning"></div>
+        <div class="score-row">
+          <span>Score</span><strong id="why-score">—</strong>
+        </div>
+        <div class="score-row" style="margin-top:0;padding-top:0;border-top:none">
+          <span>Setup → peak → end</span><strong id="why-timing">—</strong>
+        </div>
+      </div>
+    </details>
+
     <div class="trim-section">
       <label>Trim start</label>
       <div class="trim-row">
@@ -211,6 +287,24 @@
       const dur = (clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1);
       metaEl.textContent = `Clip #${clip.rank ?? currentIndex + 1} · ${dur}s · score ${(clip.score || 0).toFixed(2)}`;
       princEl.textContent = clip.principle ? `Principle: ${clip.principle}` : '';
+
+      // Issue 94 — populate the Why-this-clip expander
+      const why = document.getElementById('why-clip');
+      const setupStart = clip.setup_start_s ?? clip.start_s;
+      document.getElementById('why-principle').textContent =
+        clip.principle ? `[principle] ${clip.principle}` : '[principle] —';
+      document.getElementById('why-reasoning').textContent =
+        clip.reasoning || 'No reasoning recorded for this clip. The scoring engine still ranked it — the explanation is just not on file.';
+      document.getElementById('why-score').textContent =
+        clip.score != null ? clip.score.toFixed(2) : '—';
+      document.getElementById('why-timing').textContent =
+        `${setupStart.toFixed(1)}s → ${(clip.peak_s ?? clip.start_s).toFixed(1)}s → ${clip.end_s.toFixed(1)}s`;
+      // Open the panel for the first clip to teach the affordance,
+      // then keep the user's choice on subsequent clips.
+      if (currentIndex === 0 && !why.dataset.userToggled) {
+        why.open = true;
+        why.addEventListener('toggle', () => { why.dataset.userToggled = '1'; }, { once: true });
+      }
 
       const clipDur = clip.end_s - clip.start_s;
       trimStart.min = 0; trimStart.max = clipDur; trimStart.value = 0;

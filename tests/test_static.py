@@ -342,6 +342,37 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     )
 
 
+def test_review_page_exposes_why_this_clip_panel():
+    """Issue 94 — clip transparency. review.html must surface the
+    Claude-authored reasoning + cited principle + score + timing
+    structure for every clip via a 'Why this clip?' expander. Each
+    clip in the queue already has principle/reasoning fields in the
+    /clips response (ClipOut); this pin guards the UI consumption."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "review.html").read_text()
+
+    assert 'id="why-clip"' in src and 'Why this clip?' in src, (
+        "review.html must include a Why-this-clip details panel (Issue 94)."
+    )
+    # The four fields the panel surfaces must be populated by loadClip
+    for slot in ("why-principle", "why-reasoning", "why-score", "why-timing"):
+        assert f'id="{slot}"' in src, (
+            f"Why-this-clip panel must include the {slot} populated "
+            f"by loadClip — Issue 94 transparency contract."
+        )
+    # The Claude reasoning field must be consumed from the API response
+    assert "clip.reasoning" in src, (
+        "review.html must consume clip.reasoning (already on ClipOut "
+        "from the scoring engine). Issue 94's whole point is surfacing it."
+    )
+    # First-clip open behavior — teaches the affordance once
+    assert "userToggled" in src, (
+        "The expander must auto-open on the first clip to teach the "
+        "affordance, then respect the user's subsequent toggles."
+    )
+
+
 def test_insights_page_consumes_new_insights_endpoint():
     """Issue 93 — rebuilt insights.html surfaces channel totals, DNA
     snapshot, top + bottom performers, upload windows, improvement
