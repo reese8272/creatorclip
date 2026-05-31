@@ -175,6 +175,134 @@
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }
+
+    /* ── API keys section (Issue 95) ───────────────────────────── */
+    .api-keys-section { margin-top: var(--space-10); }
+    .api-keys-section h2 {
+      font-size: var(--text-lg);
+      margin-bottom: var(--space-1);
+    }
+    .api-keys-section .sub {
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-5);
+      line-height: var(--leading-relaxed);
+    }
+
+    .api-keys-create {
+      display: flex;
+      gap: var(--space-2);
+      align-items: stretch;
+      margin-bottom: var(--space-4);
+    }
+    .api-keys-create input { flex: 1; font-size: var(--text-sm); }
+
+    .api-keys-empty {
+      text-align: center;
+      padding: var(--space-6) var(--space-4);
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      background: var(--color-surface);
+      border: 1px dashed var(--color-border-strong);
+      border-radius: var(--radius);
+    }
+
+    .api-key-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+    .api-key-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+    }
+    .api-key-info {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+    .api-key-name {
+      font-size: var(--text-sm);
+      color: var(--color-text);
+      font-weight: 500;
+    }
+    .api-key-prefix {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+    }
+    .api-key-meta {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+    .btn-danger {
+      background: transparent;
+      border: 1px solid var(--color-border-strong);
+      color: var(--color-danger);
+    }
+    .btn-danger:hover {
+      background: rgba(231, 76, 60, 0.08);
+      border-color: var(--color-danger);
+    }
+    #api-keys-status { font-size: var(--text-xs); margin-top: var(--space-2); min-height: 18px; }
+
+    /* ── Modal (uses native <dialog>) ──────────────────────────── */
+    dialog {
+      background: var(--color-surface);
+      color: var(--color-text);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius);
+      padding: var(--space-6);
+      max-width: 520px;
+      width: calc(100% - var(--space-8));
+      font-family: var(--font-sans);
+    }
+    dialog::backdrop {
+      background: rgba(0, 0, 0, 0.6);
+    }
+    dialog h3 {
+      font-size: var(--text-md);
+      margin-bottom: var(--space-3);
+    }
+    .modal-warning {
+      background: var(--color-elevated);
+      border-left: 2px solid var(--color-warning);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text);
+      margin-bottom: var(--space-4);
+      border-radius: var(--radius);
+    }
+    .reveal-key-row {
+      display: flex;
+      gap: var(--space-2);
+      margin-bottom: var(--space-5);
+    }
+    .reveal-key-row input {
+      flex: 1;
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-sm);
+    }
+    .modal-actions {
+      display: flex;
+      gap: var(--space-2);
+      justify-content: flex-end;
+    }
+    #revoke-detail {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-4);
+    }
   </style>
 </head>
 <body>
@@ -261,7 +389,53 @@
         <div id="identity-status"></div>
       </form>
     </section>
+
+    <!-- API keys (Issue 95) -->
+    <section class="api-keys-section">
+      <h2>API keys</h2>
+      <p class="sub">
+        For the OBS companion app. Generate a key on the device that runs OBS — the
+        companion app stores it in your OS keyring and uploads replay-buffer clips
+        straight into your review queue. One key per device is the convention.
+      </p>
+
+      <form id="api-keys-create-form" class="api-keys-create" onsubmit="event.preventDefault(); createApiKey();">
+        <input type="text" id="api-key-name" placeholder="OBS MacBook" maxlength="64" required>
+        <button type="submit" class="btn btn-primary">Generate API key</button>
+      </form>
+      <div id="api-keys-status"></div>
+
+      <div id="api-keys-list-container"></div>
+    </section>
   </div>
+
+  <!-- Reveal modal: shown ONCE after key creation -->
+  <dialog id="reveal-modal">
+    <h3>Copy your API key</h3>
+    <div class="modal-warning">
+      Make sure to copy your key now — you won't be able to see it again.
+    </div>
+    <div class="reveal-key-row">
+      <input type="text" id="reveal-key-input" readonly>
+      <button type="button" class="btn btn-secondary" id="reveal-copy-btn" onclick="copyRevealedKey()">Copy</button>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" onclick="closeRevealModal()">Done</button>
+    </div>
+  </dialog>
+
+  <!-- Revoke confirm modal -->
+  <dialog id="revoke-modal">
+    <h3>Revoke this API key?</h3>
+    <div id="revoke-detail"></div>
+    <div class="modal-warning">
+      Any applications using this key will stop working immediately. This cannot be undone.
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" onclick="closeRevokeModal()">Cancel</button>
+      <button type="button" class="btn btn-danger" id="revoke-confirm-btn" onclick="confirmRevoke()">Revoke key</button>
+    </div>
+  </dialog>
 
   <script>
     async function logout() {
@@ -435,10 +609,155 @@
       }
     }
 
+    // ── API keys (Issue 95) ────────────────────────────────────────────────
+    let _revokeTargetId = null;
+
+    function _relativeTime(iso) {
+      if (!iso) return 'Never';
+      const then = new Date(iso).getTime();
+      const diffS = Math.max(0, Math.floor((Date.now() - then) / 1000));
+      if (diffS < 60) return 'Just now';
+      if (diffS < 3600) return Math.floor(diffS / 60) + 'm ago';
+      if (diffS < 86400) return Math.floor(diffS / 3600) + 'h ago';
+      const days = Math.floor(diffS / 86400);
+      if (days < 30) return days + 'd ago';
+      const months = Math.floor(days / 30);
+      if (months < 12) return months + 'mo ago';
+      return Math.floor(months / 12) + 'y ago';
+    }
+
+    function _escape(s) {
+      return String(s).replace(/[&<>"']/g, c => (
+        {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+      ));
+    }
+
+    async function loadApiKeys() {
+      const container = document.getElementById('api-keys-list-container');
+      try {
+        const resp = await fetch('/creators/me/api-keys', { credentials: 'include' });
+        if (!resp.ok) throw new Error('list');
+        const data = await resp.json();
+        if (!data.keys || data.keys.length === 0) {
+          container.innerHTML =
+            '<div class="api-keys-empty">No API keys yet. Generate one above to connect the OBS companion app.</div>';
+          return;
+        }
+        const rows = data.keys.map(k => `
+          <div class="api-key-row" data-key-id="${_escape(k.id)}">
+            <div class="api-key-info">
+              <span class="api-key-name">${_escape(k.name)}</span>
+              <span class="api-key-prefix">ack_${_escape(k.key_prefix)}••••••••••••••••••••••••</span>
+              <span class="api-key-meta">Last used ${_escape(_relativeTime(k.last_used_at))} · Created ${_escape(_relativeTime(k.created_at))}</span>
+            </div>
+            <button type="button" class="btn btn-danger" onclick="openRevokeModal('${_escape(k.id)}','${_escape(k.name)}')">Revoke</button>
+          </div>
+        `).join('');
+        container.innerHTML = '<div class="api-key-list">' + rows + '</div>';
+      } catch (e) {
+        container.innerHTML =
+          '<div class="api-keys-empty">Could not load API keys — refresh to retry.</div>';
+      }
+    }
+
+    async function createApiKey() {
+      const status = document.getElementById('api-keys-status');
+      const nameInput = document.getElementById('api-key-name');
+      const name = nameInput.value.trim();
+      status.textContent = '';
+      if (!name) {
+        status.textContent = 'Name is required.';
+        status.style.color = 'var(--color-danger)';
+        return;
+      }
+      const resp = await fetch('/creators/me/api-keys', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        nameInput.value = '';
+        status.textContent = '';
+        showRevealModal(data.raw_key);
+        await loadApiKeys();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        status.textContent = data.detail || 'Could not create key — try again.';
+        status.style.color = 'var(--color-danger)';
+      }
+    }
+
+    function showRevealModal(rawKey) {
+      const dlg = document.getElementById('reveal-modal');
+      const input = document.getElementById('reveal-key-input');
+      const btn = document.getElementById('reveal-copy-btn');
+      input.value = rawKey;
+      btn.textContent = 'Copy';
+      dlg.showModal();
+      // Pre-select so the user can ⌘C / Ctrl-C immediately
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+    }
+
+    function closeRevealModal() {
+      const dlg = document.getElementById('reveal-modal');
+      const input = document.getElementById('reveal-key-input');
+      input.value = '';  // wipe from the DOM
+      dlg.close();
+    }
+
+    async function copyRevealedKey() {
+      const input = document.getElementById('reveal-key-input');
+      const btn = document.getElementById('reveal-copy-btn');
+      try {
+        await navigator.clipboard.writeText(input.value);
+      } catch (e) {
+        input.select();
+        document.execCommand('copy');
+      }
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    }
+
+    function openRevokeModal(keyId, keyName) {
+      _revokeTargetId = keyId;
+      document.getElementById('revoke-detail').textContent =
+        'Key "' + keyName + '" will be revoked.';
+      document.getElementById('revoke-modal').showModal();
+    }
+
+    function closeRevokeModal() {
+      _revokeTargetId = null;
+      document.getElementById('revoke-modal').close();
+    }
+
+    async function confirmRevoke() {
+      if (!_revokeTargetId) return;
+      const btn = document.getElementById('revoke-confirm-btn');
+      btn.disabled = true;
+      const resp = await fetch('/creators/me/api-keys/' + encodeURIComponent(_revokeTargetId), {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      btn.disabled = false;
+      closeRevokeModal();
+      const status = document.getElementById('api-keys-status');
+      if (resp.ok) {
+        status.textContent = 'Key revoked.';
+        status.style.color = 'var(--color-text-muted)';
+      } else {
+        status.textContent = 'Could not revoke — refresh and try again.';
+        status.style.color = 'var(--color-danger)';
+      }
+      await loadApiKeys();
+    }
+
     document.addEventListener('auth:ready', async () => {
       await loadDna();
       await loadNiches();
       await loadIdentity();
+      await loadApiKeys();
     });
   </script>
 

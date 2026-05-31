@@ -715,6 +715,93 @@ def test_active_tasks_library_exists_and_exports_api():
     )
 
 
+def test_profile_page_exposes_api_keys_section():
+    """Issue 95 frontend — profile.html surfaces the API-key management
+    card for the OBS companion app. Pins:
+      (a) section + form + list container exist;
+      (b) JS wires the three backend endpoints (list/create/revoke);
+      (c) the one-time-reveal modal is present with the canonical
+          security copy (industry-standard GitHub/OpenAI/Anthropic wording);
+      (d) the revoke confirm modal includes the destructive-action
+          warning (industry-standard GitHub/Stripe wording);
+      (e) the masked-prefix list rendering uses the mono data register
+          (Issue 99 Phase C convention for IDs/tokens).
+    Without these pins a future "let me simplify this" PR could silently
+    regress the one-time-reveal pattern or the revoke confirmation —
+    both of which are load-bearing for key security and for not letting
+    a creator self-lock their OBS upload pipeline.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "profile.html").read_text()
+
+    # (a) section + form + list container
+    assert 'class="api-keys-section"' in src, (
+        "profile.html must include the API-keys section (Issue 95 frontend AC)."
+    )
+    assert 'id="api-keys-create-form"' in src
+    assert 'id="api-keys-list-container"' in src
+    assert 'id="api-key-name"' in src
+    assert 'placeholder="OBS MacBook"' in src, (
+        "Name field should use a concrete OBS-device placeholder — the "
+        "convention surfaced by industry research (Stripe/GitHub/Linear)."
+    )
+
+    # (b) JS wires all three backend endpoints
+    assert "'/creators/me/api-keys'" in src, (
+        "profile.html JS must call GET/POST /creators/me/api-keys."
+    )
+    assert "method: 'POST'" in src and "method: 'DELETE'" in src, (
+        "profile.html JS must call POST (create) + DELETE (revoke) on "
+        "/creators/me/api-keys."
+    )
+
+    # (c) one-time reveal modal + canonical security copy
+    assert 'id="reveal-modal"' in src, (
+        "Reveal modal must exist — industry-standard one-time reveal "
+        "pattern (Stripe/GitHub/Linear). Inline reveal is rejected: "
+        "too easy to dismiss accidentally."
+    )
+    assert "won't be able to see it again" in src, (
+        "Reveal modal must include the canonical 'won't be able to see "
+        "it again' warning (GitHub/OpenAI/Anthropic phrasing)."
+    )
+    assert 'id="reveal-copy-btn"' in src, (
+        "Reveal modal must include a Copy button next to the key input."
+    )
+
+    # (d) revoke confirm modal + destructive-action wording
+    assert 'id="revoke-modal"' in src, (
+        "Revoke must be confirmed via a modal (industry standard — no "
+        "major product allows single-click revoke). Without this, a "
+        "creator can accidentally self-lock the OBS upload pipeline."
+    )
+    assert "This cannot be undone" in src, (
+        "Revoke modal must warn that the action cannot be undone "
+        "(GitHub canonical phrasing)."
+    )
+    assert "stop working immediately" in src, (
+        "Revoke modal must make the immediacy explicit — applications "
+        "stop working the moment we soft-delete the key."
+    )
+
+    # (e) masked-prefix display in the mono data register
+    assert "api-key-prefix" in src, (
+        "Listed keys must be rendered as masked prefix (ack_xxxxxxxx••...)."
+    )
+    assert "var(--font-mono)" in src, (
+        "Key prefix should be rendered in the mono data register (Issue 99 "
+        "Phase C convention — IDs/tokens use JetBrains Mono with tnum)."
+    )
+
+    # The companion-app context line — without this users have no idea
+    # what these keys are for.
+    assert "OBS companion app" in src or "companion app" in src, (
+        "Section subhead must explain these keys are for the OBS companion "
+        "app — otherwise the surface is meaningless to first-time visitors."
+    )
+
+
 def test_list_videos_excludes_catalog_only_rows(client):
     """The SELECT must filter `Video.source_uri IS NOT NULL`. Verified by
     introspecting the SQLAlchemy statement passed to session.execute.

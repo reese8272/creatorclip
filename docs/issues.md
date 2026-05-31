@@ -2071,7 +2071,7 @@ again for the live pipeline view.
 ---
 
 ## Issue 95: OBS hotkey integration — companion app + folder watcher (Architecture B)
-**Status**: 🔲 Phase 1 complete; Phase 3 not started · **Severity**: SEV-2 feature · **New product surface** · **Depends on Issue 99**
+**Status**: 🟢 Backend + frontend done (2026-05-31, Wave 9); companion-app repo separate · **Severity**: SEV-2 feature · **New product surface**
 
 **What**: User quote: "Have a hotkey to automatically record and save the
 last few seconds of a video or stream, so that means you need to find a
@@ -2150,7 +2150,7 @@ Why Architecture B (not A, C, D):
 - [ ] `creator_api_keys` table + migration
 - [ ] `routers/api_keys.py` GET/POST/DELETE + tests
 - [ ] `POST /clips/ingest` + integration test
-- [ ] API key management UI on profile.html (post-Issue-99)
+- [x] API key management UI on profile.html (Wave 9 — list/create/revoke with one-time-reveal modal + revoke confirm modal)
 - [ ] Companion app: design doc + repo bootstrap (separate)
 - [ ] End-to-end demo: hit hotkey during OBS stream → clip in `/review`
       queue within 60s
