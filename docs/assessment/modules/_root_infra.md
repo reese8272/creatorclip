@@ -4,16 +4,28 @@ Slice: db.py, crypto.py, config.py, auth.py, limiter.py, models.py, main.py,
 observability.py, Dockerfile. (alembic/ owned by its own slice; migrations
 referenced where load-bearing for findings here.)
 
-WAVE-3 re-verification against current `main` head (baseline commit
-`84a7e9f`). `git diff --stat 84a7e9f..HEAD` on the slice is empty — Wave 3
-did not touch any file in this module. Every prior finding was re-traced
-line-by-line against the files at HEAD. All three carry-forward SEV2s
-remain unchanged; the Cat-8 cleanup logged in prior cycles
-(`DATABASE_MIGRATION_URL` missing from `.env.example`) is still
-unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
-`DATABASE_URL` line is present).
+WAVE-4 re-verification against baseline commit `67fddc9`. The only Wave-4
+delta inside the slice is `config.py:84-95` (+ mirrored stanza at
+`.env.example:62`) introducing
+`YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30`. Trace below confirms the
+value AND the inline policy citation are accurate. None of the three
+carry-forward SEV2s and none of the cleanup items were addressed by Wave 4;
+all re-traced line-by-line against HEAD and re-stated below.
 
 ## Findings
+
+### Wave-4 delta — verified
+
+- config.py:95 — `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30`. Default
+  value matches the number cited in the inline comment block (config.py:84-94)
+  AND the .env.example stanza (`.env.example:62`). Comment correctly attributes
+  the 30-day window to YouTube API Services Developer Policies §III.E.4.b
+  (periodic re-verification or deletion of stored API data) with cross-reference
+  to §III.D.2.3.b. Policy citation is accurate — the YouTube Developer Policies
+  require API clients to either refresh authorization within 30 calendar days or
+  delete the affected stored API data. Comment also correctly states the
+  asymmetry: lengthening past 30 days is a documented ToS violation; shortening
+  is safe-but-fresher. No defect.
 
 ### Verified-present hardening (traced, no defect)
 
@@ -27,10 +39,10 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
 - db.py:80-103 — `recreate_engine()` disposes BOTH pools with
   `close=False` before rebinding fresh engines and session factories
   (Issue 39 fork safety). Single-shot per fork from
-  `worker/celery_app.py:80` (`worker_process_init`) — no concurrent
+  `worker/celery_app.py` (`worker_process_init`) — no concurrent
   rebind hazard. Workers reference `db.AsyncSessionLocal` /
   `db.AdminSessionLocal` via attribute lookup, so rebind is visible to
-  every subsequent task. Confirmed across worker/tasks.py callers.
+  every subsequent task.
 - db.py:106-109 — `dispose_engine()` awaits both engines on shutdown.
 - db.py:119-148 — RLS `set_config('app.creator_id', :cid, true)`
   listener uses a parameterized function call (not `SET LOCAL` which
@@ -51,12 +63,12 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
   one place. Default tool is `web_search_20260209` (GA, dynamic
   filtering — Issue 84). Comment block at 51-55 cites the rationale.
   `.env.example:12` mirrors the default with the explanatory comment.
-- config.py:136-158 — `_require_prod_secrets` fail-fast on
+- config.py:148-170 — `_require_prod_secrets` fail-fast on
   `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` when `ENV=="production"`,
   AND fail-SAFE on the `/metrics` scrape surface: if `METRICS_TOKEN` is
   unset in prod the endpoint is automatically disabled with a warning
   instead of crashing the app. The `ValidationError` handler
-  (161-172) prints field NAMES only → no value leakage on
+  (173-184) prints field NAMES only → no value leakage on
   missing-required config.
 - auth.py:31-55 — identity is JWT-derived (`sub` → UUID → DB lookup on
   `Creator.id`); all failure modes → 401 with a safe `detail`.
@@ -100,13 +112,13 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
 
 - [SEV2] observability.py:224-241 — Celery `_bind_request_id` /
   `_record_task_and_clear` use the single module-level `request_id_ctx`
-  and `_task_start_ctx` ContextVars. Comment at line 44 documents this
+  and `_task_start_ctx` ContextVars. Comment at line 43 documents this
   is "safe because each worker process runs one task at a time" — true
   ONLY under the prefork pool. If the worker is ever started with
   `--pool=gevent/eventlet/threads`, concurrent tasks in one process
   will overwrite each other's request id and start time → mislabelled
-  durations and broken log correlation. Carry-forward from prior
-  waves, no fix in Wave 3. (rubric cat 2) |
+  durations and broken log correlation. Carry-forward through Wave 4,
+  unchanged. (rubric cat 2) |
   fix: at worker startup (`worker/celery_app.py`), assert
   `app.conf.worker_pool == "prefork"` and refuse to boot otherwise;
   OR key task start off `task.request.id` via a per-task dict guarded
@@ -120,7 +132,7 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
   dependency (ffmpeg, whisperx, ytdlp) would have full container
   privilege. Industry standard is a non-root user even when k8s
   `securityContext: runAsNonRoot` is set externally (defense in depth).
-  Carry-forward from prior waves. (rubric cat 3) |
+  Carry-forward through Wave 4, unchanged. (rubric cat 3) |
   fix: after `COPY . .`, add
   `RUN useradd --create-home --uid 1000 app && chown -R app:app /app /root/.local`
   then `USER app`. Verify Celery worker can still write its
@@ -128,11 +140,11 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
   docs/DEPLOYMENT.md with the chosen UID/GID.
 
 - [SEV2] Dockerfile:34 — default `CMD` ships `uvicorn … --reload`. The
-  line-33 comment ("override in docker-compose or production deploy")
+  line-32 comment ("override in docker-compose or production deploy")
   relies on every deployer remembering to override. A forgotten
   override in a prod manifest starts uvicorn in dev mode: filesystem
   watcher running, single worker, no graceful shutdown guarantees.
-  Carry-forward from prior waves. (rubric cat 3 / cat 8) |
+  Carry-forward through Wave 4, unchanged. (rubric cat 3 / cat 8) |
   fix: make the default safe-for-prod
   (`gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app
   --bind 0.0.0.0:8000`) and move the `--reload` invocation into
@@ -169,13 +181,12 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
 - [cleanup] config.py:23 + .env.example — `DATABASE_MIGRATION_URL`
   (Issue 79 RLS admin role) is declared in `Settings` with a
   documented fallback to `DATABASE_URL`, but it is STILL NOT listed
-  in `.env.example` (re-verified at .env.example:15-17 — the only
-  database stanza is `DATABASE_URL`; `grep -i DATABASE_MIGRATION
+  in `.env.example` (re-verified at .env.example:15-17 — only
+  `DATABASE_URL` stanza is present; `grep -i DATABASE_MIGRATION
   .env.example` returns NOT FOUND). Anyone copying `.env.example`
   to `.env` for a production setup will silently end up with
   `database_migration_url == DATABASE_URL` (single role; no
-  BYPASSRLS split). Carried forward from 2026-05-30 and prior
-  waves; no fix in Wave 3. (rubric cat 8) |
+  BYPASSRLS split). Carried forward through Wave 4. (rubric cat 8) |
   fix: add a stanza to `.env.example` immediately under `DATABASE_URL`:
   ```
   DATABASE_MIGRATION_URL=                  # REQUIRED in production — BYPASSRLS role for Alembic + worker cross-tenant sweeps. Leave blank in dev (falls back to DATABASE_URL).
@@ -186,20 +197,20 @@ unresolved (confirmed `NOT FOUND` in .env.example:15-17 — only the
 |---|---|
 | 1 Resource lifecycle | ok — engine dispose/recreate correct; `get_session` async-context manager guarantees close; lifespan drains BOTH `youtube._http` and `worker.progress` Redis client |
 | 2 Concurrency & scale | ok — pool math correct, RLS via parameterized `set_config` (not SET LOCAL); no blocking call in async paths; 1 SEV2 (ContextVar correlation safe only under prefork) |
-| 3 Security & compliance | ok — `/metrics` SEV2 closed (prod fail-safe + bearer-token gate); tokens via decrypt()/MultiFernet, no PII in logs, CORS locked, fail-fast prod secrets verified; RLS makes per-creator isolation structural; 2 SEV2 Docker hardening gaps remain (root user, --reload default) |
+| 3 Security & compliance | ok — `/metrics` SEV2 closed (prod fail-safe + bearer-token gate); tokens via decrypt()/MultiFernet, no PII in logs, CORS locked, fail-fast prod secrets verified; RLS makes per-creator isolation structural; YouTube 30-day retention cap (Wave-4) accurately cites Developer Policies §III.E.4.b; 2 SEV2 Docker hardening gaps remain (root user, --reload default) |
 | 4 Clip-quality | n/a — infra module |
 | 5 Anthropic SDK | n/a — no LLM call in slice (model + web_search tool versions declared in config.py:50-56 only; `web_search_20260209` default verified) |
 | 6 Cleanliness & typing | 4 cleanups (lifespan coupling, typing gaps in auth/limiter, silent except) |
 | 7 Error handling / API | ok — main.py is app wiring not a router; /health returns safe statuses, no stack traces; /metrics 401 detail is safe |
-| 8 Config & paths | ok — pydantic-settings fail-fast, `_STATIC` absolute via `Path(__file__).parent`, `PYTHONPATH=/app` present; 1 carry-forward cleanup (DATABASE_MIGRATION_URL still missing from `.env.example`) |
+| 8 Config & paths | ok — pydantic-settings fail-fast, `_STATIC` absolute via `Path(__file__).parent`, `PYTHONPATH=/app` present; Wave-4 `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30` mirrored in `.env.example:62` with policy citation; 1 carry-forward cleanup (`DATABASE_MIGRATION_URL` still missing from `.env.example`) |
 
 ## Module verdict
 NEEDS-WORK — no BLOCKER and no cross-tenant leak in this slice (RLS
-enforces creator isolation structurally at the DB layer). Wave 3 did
-not touch this module (`git diff --stat 84a7e9f..HEAD` empty for the
-slice). All three SEV2s carry forward unchanged: Celery ContextVar
-correlation safe only under prefork; container runs as root; default
-CMD ships `uvicorn --reload`. The Cat-8 cleanup
-(`DATABASE_MIGRATION_URL` declared in `Settings` but absent from
+enforces creator isolation structurally at the DB layer). Wave-4 delta
+(`YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30`) is correct: value matches the
+inline ToS citation and the .env.example mirror. All three carry-forward
+SEV2s remain: Celery ContextVar correlation safe only under prefork;
+container runs as root; default CMD ships `uvicorn --reload`. The Cat-8
+cleanup (`DATABASE_MIGRATION_URL` declared in `Settings` but absent from
 `.env.example`) also remains unresolved — a footgun for any operator
 copying the example to bootstrap a production deploy.

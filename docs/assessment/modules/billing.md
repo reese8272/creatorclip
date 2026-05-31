@@ -1,137 +1,144 @@
 # billing — assessed 2026-05-31
 
-Wave 3 (commit `04ca3da`) did NOT modify any file in `billing/` — verified
-`git log 84a7e9f..HEAD -- billing/` returns empty. The previously-flagged
-SEV1 "sync Stripe SDK in async checkout route" was closed at the **caller
-side**: `routers/billing.py:101-108` now wraps `create_checkout_session(...)`
-in `await asyncio.to_thread(...)`. The billing slice itself still ships a
-sync `_STRIPE.checkout.sessions.create(params)` at `billing/stripe_client.py:65`;
-that is intentional under Fix C's design (keep the helper sync, offload at
-the route boundary). All other post-Wave-2 SEV2s reverified open with
-identical `file:line` shape.
+Wave-4 Fix 2 closed the carry-forward SEV2 "refund idempotency is a read-then-
+write on `pack_id`". Verified: migration `alembic/versions/0013_refund_pack_id_unique.py`
+creates `uq_minute_packs_refund_pack_id ON minute_packs (pack_id) WHERE
+reason = 'refund'` CONCURRENTLY inside `autocommit_block()` (matches the 0006 /
+0010 / 0011 pattern). `billing/refund.py:36-87` dropped the read-then-write
+SELECT and now wraps `grant_minutes(...) + session.commit()` in
+`try/except IntegrityError → rollback; return 0` — same shape as
+`deduct_for_video`'s UNIQUE-race handler at `billing/ledger.py:159-161`.
+
+Critical chain verified by reading: `grant_minutes` is called from refund with
+`stripe_session_id=None`. The IntegrityError handler at
+`billing/ledger.py:89-98` *re-raises* when `stripe_session_id is None` (because
+the only UNIQUE race for keyed grants is the Stripe session race). The new
+partial UNIQUE on `pack_id WHERE reason='refund'` produces an IntegrityError
+that propagates UP through `grant_minutes` and lands in
+`refund.py:68`'s except block → clean rollback + `return 0`. Pattern parity
+with `MinuteDeduction.UNIQUE(video_id)` (Issue 34) and the
+`creator_dna.build_job_id` partial UNIQUE (Issue 76 / migration 0008) holds.
+
+No SEV1 introduced. Two carry-forward SEV2s re-verified open with identical
+`file:line` shape; one SEV2 (refund transaction-boundary ambiguity) lingers
+with reduced surface — early-return paths are still implicit-no-op only.
 
 ## Findings
-
-- [SEV2] billing/refund.py:57-71 — refund idempotency is still a
-  read-then-write on `pack_id`: `select(MinutePack.id).where(
-  MinutePack.pack_id == pack_id)` (line 58) followed by
-  `grant_minutes(... pack_id=pack_id ...)` (line 64). `models.py:498-516`
-  confirms `MinutePack` has NO UNIQUE constraint on `pack_id` or
-  `(reason, pack_id)` — only `stripe_session_id` is unique
-  (`models.py:510-512`). Two concurrent `on_failure` callbacks for the
-  same `video_id` would both see "no existing refund" and both insert a
-  refund row + double-credit the balance. The module's own docstring
-  acknowledges this (`billing/refund.py:11-15`). Carry-forward SEV2
-  confirmed open after Wave 3. Rubric 1/3. | fix: add an Alembic
-  migration creating `CREATE UNIQUE INDEX minute_packs_refund_key ON
-  minute_packs (pack_id) WHERE reason = 'refund'` (partial index —
-  required because non-refund rows reuse `pack_id` literals like
-  `"trial"`/`"starter"`/`"grant"`, see `routers/auth.py` and
-  `billing/ledger.py:45`). Then drop the read-then-write guard at lines
-  57-62 and let `grant_minutes`'s existing `IntegrityError` catch in
-  `billing/ledger.py:89-98` no-op the duplicate (note: that catch
-  currently only swallows when `stripe_session_id is not None` — extend
-  it to also swallow on the refund pack_id UNIQUE, or have
-  `refund_for_video` catch `IntegrityError` itself). Update the docstring
-  ("not reachable in the current pipeline") — Celery `task_acks_late=True`
-  + worker preemption CAN produce concurrent terminal failures for the
-  same task id; the no-UNIQUE claim is wrong even on a single chain.
 
 - [SEV2] billing/stripe_client.py:20 — `_STRIPE = stripe.StripeClient(
   settings.STRIPE_SECRET_KEY)` is constructed at import time with whatever
   `STRIPE_SECRET_KEY` is in the environment, even in dev where it defaults
-  to `""` (`config.py`). `Settings._require_prod_secrets` only fails-fast
-  in `ENV == "production"`, so a misconfigured staging/preview deploy
-  (e.g. `ENV=staging` with no key) silently binds an empty client; the
-  failure surfaces only at first `/checkout`. The router's 503 gate
-  (`routers/billing.py:90-91`) papers over it for that route but `_STRIPE`
-  is now a global landmine — `construct_webhook_event` does not have the
-  same guard. Rubric 8. | fix: lazy-init via `functools.lru_cache`
-  returning the client only when `settings.STRIPE_SECRET_KEY` is set, and
-  raise a clear `RuntimeError("Stripe not configured")` from the accessor;
-  or extend `_require_prod_secrets` to also fail for `ENV == "staging"`.
+  to `""` (`config.py:142`). `Settings._require_prod_secrets`
+  (`config.py:148-160`) only fails fast when `ENV == "production"` — a
+  misconfigured `ENV=staging`/`preview` deploy silently binds an empty client;
+  the failure surfaces only at first `/checkout` or `/webhook`. The router's
+  503 gate (`routers/billing.py:90-91`) papers over `/checkout` but
+  `construct_webhook_event` (`billing/stripe_client.py:70`) has no equivalent
+  guard — a staging webhook delivery would raise a raw `stripe.SignatureVerificationError`
+  with no clear "Stripe not configured" diagnostic. Carry-forward SEV2,
+  re-verified open. Rubric 8. | fix: lazy-init via `functools.lru_cache`
+  returning the client only when `settings.STRIPE_SECRET_KEY` is set and
+  raising `RuntimeError("Stripe not configured")` from the accessor; OR
+  extend `_require_prod_secrets` to also fail when `ENV in {"staging",
+  "preview"}` and the keys are unset.
 
-- [SEV2] billing/refund.py:48-72 — refund opens its own
-  `AdminSessionLocal()` and explicitly commits at the end (line 72), but
-  the inner `grant_minutes` call uses `session.begin_nested()` SAVEPOINT
-  (`billing/ledger.py:71`). The early-return paths (`return 0` at lines
-  53 and 62) exit the `async with` block without explicitly committing
-  or rolling back — currently harmless because only read queries
-  occurred (no writes to roll back), but the intent is ambiguous and a
-  future refactor that adds a write before the early-return would
-  silently lose it. Rubric 1. | fix: wrap the body in
-  `async with session.begin():` to make the outer transaction explicit
-  and drop the trailing `await session.commit()` — documents the
-  unit-of-work boundary and removes the early-return ambiguity.
+- [SEV2] billing/refund.py:36-87 — refund still triggers purely on Celery
+  `on_failure` invocation (`worker/tasks.py:64`) without re-checking
+  `Video.ingest_status`/`render_status`. If `on_failure` is ever invoked on
+  a still-completable task (broker replay during chain reschedule, duplicate
+  retry-exhausted firing), the `MinuteDeduction` row exists and the refund
+  proceeds, double-crediting against an eventually-successful run. The new
+  partial UNIQUE on `pack_id WHERE reason='refund'` catches a *duplicate
+  refund* but NOT an *erroneous-first refund* against a video that ultimately
+  succeeds. Carry-forward SEV2, re-verified open after Fix 2. Rubric 1
+  (idempotency). | fix: gate refund on
+  `select(Video.ingest_status).where(Video.id == video_id)` returning a
+  terminal status (`IngestStatus.failed`) before calling `grant_minutes` —
+  one extra SELECT in the same session. Or document the trade-off explicitly
+  in `docs/DECISIONS.md` if the Celery chain is provably one-shot per video
+  (the `worker/tasks.py:59-61` docstring claim that `on_failure` only fires
+  on terminal exhaustion is a Celery contract, not an empirical guarantee
+  under broker replay). (needs-runtime-confirmation that the Celery chain
+  truly cannot fire `on_failure` on a succeeded task under broker replay.)
 
-- [SEV2] billing/refund.py:34-72 — refund triggers purely on Celery
-  `on_failure` invocation (`worker/tasks.py`) without re-checking the
-  video's terminal state (`video.render_status`). If `on_failure` were
-  ever invoked on a still-completable task (broker replay during chain
-  reschedule, duplicate retry-exhausted firing), the `MinuteDeduction`
-  row exists and the refund proceeds, double-crediting against an
-  eventually-successful run. The pack_id UNIQUE partial index above
-  would catch a *duplicate refund* but not an *erroneous-first refund*
-  against a video that ultimately succeeds. Rubric 1 (idempotency).
-  | fix: gate refund on `select(Video.render_status).where(
-  Video.id == video_id)` returning a terminal status (`failed`/`errored`)
-  before calling `grant_minutes` — single extra SELECT inside the same
-  session. Or document the trade explicitly in `docs/DECISIONS.md` if
-  the chain is provably one-shot per video.
-  (needs-runtime-confirmation that the Celery chain truly cannot fire
-  `on_failure` on a succeeded task under broker replay.)
+- [SEV2] billing/refund.py:50-79 — outer transaction boundary is still
+  implicit. The `async with db.AdminSessionLocal() as session:` block opens
+  a session, the early-return path at line 54-56 (`return 0` when no
+  deduction exists) exits without commit/rollback, and the success path
+  hits `await session.commit()` at line 67. Currently harmless because the
+  early-return path performed only a SELECT, but the intent is ambiguous
+  and a future refactor that adds a write before the early-return would
+  silently drop it (auto-commit on session close is NOT the SQLAlchemy
+  async default). The IntegrityError path at line 74 now explicitly
+  rollbacks — good — but the no-deduction path at line 54 still does not.
+  Rubric 1. | fix: wrap the body in `async with session.begin():` to make
+  the outer transaction explicit and drop the trailing
+  `await session.commit()` — documents the unit-of-work boundary and
+  removes the early-return ambiguity. (Reduced from Wave-3 to Wave-4: Fix
+  2 made the success/race paths explicit; only the no-deduction early
+  return remains implicit.)
 
 - [cleanup] billing/stripe_client.py:36 — `params: dict = {...}` missing
   generic type parameters. Rubric 6. | fix: annotate
   `params: dict[str, object] = {...}` (or a `TypedDict` if the structure
-  is to be locked down).
+  should be locked down).
 
 - [cleanup] billing/stripe_client.py:65-67 — `session.url` is typed as
-  `str | None` by the Stripe typestubs; `create_checkout_session`
-  declares `-> str` (`stripe_client.py:29`) and returns `session.url`
-  without a None check. Rubric 6/7. | fix:
+  `str | None` by the Stripe typestubs; `create_checkout_session` declares
+  `-> str` (`stripe_client.py:29`) and returns `session.url` without a None
+  check. Rubric 6/7. | fix:
   `assert session.url is not None, "Stripe Checkout session missing url"`
-  before the return, or change the return type to `str | None` and
-  surface the None to the router as a 502 in
-  `routers/billing.py:94-112`.
+  before the return, or widen the return type to `str | None` and have
+  `routers/billing.py:101-112` surface the None as a 502.
 
 - [cleanup] billing/ledger.py:35 / 182 / 204 — duplicated `HTTPException(
   status_code=402, detail="...Purchase a pack at /pricing...")` shape
-  across `get_balance` 404, `check_positive_balance`, and
-  `check_balance_for_minutes`/`deduct_for_video`. Rubric 6 (DRY). | fix:
-  extract `_raise_insufficient(detail: str) -> NoReturn` to centralize
-  the 402 + the "/pricing" copy so future copy edits don't drift across
-  three call sites.
+  across `get_balance` (404), `check_positive_balance`,
+  `check_balance_for_minutes`, and `deduct_for_video`. Rubric 6 (DRY).
+  | fix: extract `_raise_insufficient(detail: str) -> NoReturn` to
+  centralize the 402 + the "/pricing" copy so future copy edits don't
+  drift across four call sites.
 
-## Wave-3 closed (no longer open)
+- [cleanup] billing/refund.py:23 — `from sqlalchemy import select` is now
+  the only sqlalchemy import; `IntegrityError` is imported from
+  `sqlalchemy.exc`. Both used — no dead import, but worth a glance during
+  ruff sweep. Rubric 6 (housekeeping; no action required if ruff is green).
 
-- [SEV1 → CLOSED] billing/stripe_client.py:65 — sync
+## Wave-4 closed (no longer open)
+
+- [SEV2 → CLOSED] billing/refund.py — read-then-write idempotency
+  (Wave-3 finding). Closed by migration 0013 (partial UNIQUE on
+  `pack_id WHERE reason='refund'`) + IntegrityError catch in
+  `refund_for_video`. Verified: the `grant_minutes` re-raise path
+  (`billing/ledger.py:89-95`) propagates the IntegrityError up to refund
+  because the refund call passes `stripe_session_id=None`. The race is
+  now closed structurally at the DB layer, not at the application layer.
+
+- [SEV1 → CLOSED, Wave 3] billing/stripe_client.py:65 — sync
   `_STRIPE.checkout.sessions.create(params)` inside an async route.
-  Verified closed at the caller side: `routers/billing.py:101-108`
-  (Wave-3 Fix C) now wraps the call in
-  `url = await asyncio.to_thread(create_checkout_session, ...)`, so
-  the 300-800ms p95 Stripe round-trip no longer blocks the event loop.
-  The billing helper itself is correctly left sync — offloading at the
-  route boundary matches the Issue 78d recipe for transcription +
-  Voyage. `construct_webhook_event` is called from `routers/billing.py`
-  webhook handler against `request.body()` payload bytes (CPU-bound HMAC
-  verification, μs-scale) — no thread offload needed there.
+  Closed at the caller side: `routers/billing.py:101-108` wraps the call
+  in `asyncio.to_thread(...)`. `construct_webhook_event` is called from
+  the webhook route against `request.body()` payload bytes
+  (CPU-bound HMAC verification, μs-scale) — no thread offload needed.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 3 findings open (refund pack_id race, implicit outer tx, terminal-state gate) |
-| 2 Concurrency & scale | 0 open (SEV1 sync-Stripe-in-async closed by Wave-3 Fix C at caller side) |
-| 3 Security & compliance | ok — no token handling in this slice; per-tenant isolation OK (`MinuteDeduction.video_id UNIQUE`, deduction-tied `creator_id` used downstream); refund's `AdminSessionLocal` is intentional + documented; no PII in any log line (verified by reading every `logger.*` call in the slice) |
+| 1 Resource lifecycle | 2 open (terminal-state gate; refund outer-tx boundary). Refund pack_id race CLOSED by migration 0013. |
+| 2 Concurrency & scale | ok — sync-Stripe-in-async closed Wave-3; refund pack_id race closed Wave-4. |
+| 3 Security & compliance | ok — no token handling in this slice; per-tenant isolation preserved (`MinuteDeduction.video_id UNIQUE` + deduction-tied `creator_id` carried into the refund grant); refund's `AdminSessionLocal` is intentional + documented (`billing/refund.py:42-48`); no PII in any `logger.*` call (verified). |
 | 4 Clip-quality | n/a (not a clip module) |
 | 5 Anthropic SDK | n/a (no LLM calls in slice) |
-| 6 Cleanliness & typing | 3 cleanups (dict generics, return-type narrowing, 402 DRY) |
+| 6 Cleanliness & typing | 3 cleanups (dict generics, `session.url` None-narrow, 402 DRY). |
 | 7 Error handling / API | n/a (router lives in `routers/billing.py`, not this slice) |
-| 8 Config & paths | 1 SEV2 (module-level Stripe client + non-prod fail-fast gap) |
+| 8 Config & paths | 1 SEV2 carry-forward (module-level Stripe client + non-prod fail-fast gap). |
 
 ## Module verdict
-NEEDS-WORK — Wave 3 closed the sync-Stripe-in-async SEV1 at the caller
-side; the billing slice itself is unchanged. Three SEV2s remain open
-(refund pack_id race, module-level Stripe client, terminal-state gate)
-plus one tx-boundary SEV2; none are blockers, but the refund double-credit
-race must close before launch given Celery at-least-once delivery semantics.
+NEEDS-WORK — Wave-4 Fix 2 closed the refund pack_id double-credit race
+structurally (migration 0013 + IntegrityError catch). Two SEV2s remain open
+(Stripe client landmine on non-prod envs; refund without terminal-state
+re-check) plus one reduced-surface tx-boundary SEV2. None are blockers; the
+billing slice is now race-safe under Celery at-least-once delivery for the
+duplicate-on_failure case, but the erroneous-first-refund case (broker
+replay against a succeeded task) is still unresolved and should be either
+gated or explicitly documented in `docs/DECISIONS.md` before launch.

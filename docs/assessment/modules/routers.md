@@ -1,394 +1,232 @@
-# routers — assessed 2026-05-31 (Wave-3)
+# routers — assessed 2026-05-31
 
-Slice: routers/auth.py, billing.py, clips.py, creators.py, improvement.py,
-review.py, tasks.py, upload_intel.py, videos.py.
-
-**Wave-3 focus (verify three critical fixes from the post-Wave-2 sweep):**
-- **Fix B (improvement.py)** — was Wave-2 SEV1 ("orphan-pending on Redis blip").
-  Expected delta: `aset_owner` reordered AFTER the `row.job_id = task.id`
-  commit, wrapped in `try/except redis.RedisError`, fail-open returns
-  `stream_url=None` (no 500).
-- **Fix C (billing.py)** — was Wave-2 SEV1 (sync Stripe SDK on the loop
-  thread). Expected delta: `await asyncio.to_thread(create_checkout_session,
-  ...)` with positional args; HTTPException 502 still on any exception;
-  new `import asyncio` at the top.
-- **Fix D (auth.py)** — was Wave-2 SEV2 (catalog-sync task discarded after
-  `.delay()`, no SSE ownership stamped). Expected delta: `task` bound from
-  `.delay()`, `aset_owner` called, wrapped in `try/except redis.RedisError`,
-  fail-open log + continue.
-
-**Carry-forward SEV2s** (re-checked, all still open):
-- `tasks.py:131-138` 404 vs 403 enumeration oracle.
-- `tasks.py:140` unvalidated `Last-Event-ID` → 500 on malformed reconnect.
-- `videos.py`/`clips.py`/`upload_intel.py` unbounded list endpoints.
+Baseline commit: `67fddc9`. Slice: `routers/{auth,billing,clips,creators,improvement,review,tasks,upload_intel,videos}.py`.
 
 ## Findings
 
-### Wave-3 deltas verified
+- [SEV1] routers/creators.py:167, routers/creators.py:195, routers/clips.py:156 —
+  three `await progress.aset_owner(...)` call sites are still NOT wrapped in
+  `try/except redis.RedisError`, so a transient Redis blip on `/me/catalog/sync`,
+  `/me/dna/build`, or `/clips/{clip_id}/render` raises through the route and
+  returns a 500 — even though the underlying Celery `.delay()` has already
+  succeeded (rubric category 7 + 1). Wave-4 Fix 1 partially closed this for
+  `routers/videos.py:upload_video`; Wave-3 Fixes B/D closed it for
+  `routers/improvement.py` and `routers/auth.py`. The invariant the WAVE-4
+  delta asks me to verify is therefore **NOT uniform across all four sites** —
+  three are still bare. | fix: apply the exact same pattern as
+  `routers/videos.py:269-284` to each call site: import `redis`, wrap
+  `aset_owner` in `try/except redis.RedisError`, log a warning, and either
+  return `stream_url=None` (for `sync_catalog` and `build_dna`, which already
+  have a `stream_url` field in their response models) or skip the stream
+  entirely (for `render_clip`, which currently returns a non-optional
+  `stream_url: str` — make the field `str | None` first, then fail open). The
+  Celery enqueue has already returned a task id; the response should still be
+  202 and the user can still poll job status by the documented fallback route.
 
-- [SEV1 → CLOSED] **improvement.py:91-116 (Fix B)** — verified applied correctly.
-  Ordering is now: line 91 `await session.commit()` (commits `pending` row
-  with `job_id=None`) → line 98 `task = ...delay(...)` → line 99
-  `row.job_id = task.id` → line 100 `await session.commit()` (commits
-  job_id) → line 107 `stream_url = f"/tasks/{task.id}/events"` → lines
-  108-116 `try/except redis.RedisError` around `await
-  progress.aset_owner(task.id, str(creator.id))`. On Redis failure: warning
-  log via `logger.warning(...)` + `stream_url = None`. The endpoint still
-  returns 202 with `task_id=task.id`. The previously-flagged orphan-pending
-  scenario is closed: even on Redis blip, `row.job_id` IS set, so the
-  debounce-collapse path at :77-80 derives a `stream_url` from `row.job_id`
-  on the next call (the SSE endpoint will 404 it since no owner key exists,
-  but the brief itself completes via the worker and the user recovers via
-  the GET poll). **Posture-correctness note:** this matches `progress.aemit`
-  precisely (aemit logs + swallows; aset_owner now also logs + degrades
-  gracefully). Worker assessment's earlier claim that aset_owner is
-  "load-bearing — must raise" was overruled by Wave-3's product-level call
-  (graceful degradation > 500-on-Redis-blip), which is the right call given
-  the GET-poll fallback. Clean.
+- [SEV2] routers/tasks.py:131-138 — owner-presence vs owner-mismatch returns
+  distinct status codes (404 "Unknown task" when the owner key is absent vs 403
+  "Not your task" when present-but-wrong). This is the carry-forward
+  enumeration oracle: an attacker (with valid session, rate-limited at 120/min)
+  can enumerate which `task_id` strings correspond to real in-flight jobs
+  system wide (rubric category 3 — disclosure of cross-tenant resource
+  existence). Note the `aget_owner` TTL also makes 404 leak "task is recent"
+  vs "task is old / never existed". | fix: collapse both branches into a
+  single `HTTPException(status_code=404, detail="Unknown task")`. The owner
+  check becomes `if owner is None or owner != str(creator.id): raise 404`.
+  The legitimate-but-wrong-creator path is functionally identical to the
+  nonexistent path from the caller's perspective.
 
-- [SEV1 → CLOSED] **billing.py:94-111 (Fix C)** — verified applied correctly.
-  `import asyncio` present at the top (line 1). The Stripe call is now:
-  ```
-  url = await asyncio.to_thread(
-      create_checkout_session,
-      body.pack_id,
-      str(creator.id),
-      creator.stripe_customer_id,
-      body.success_url,
-      body.cancel_url,
-  )
-  ```
-  Positional args verified against `billing/stripe_client.py:23-29` —
-  `create_checkout_session(pack_id, creator_id, stripe_customer_id,
-  success_url, cancel_url) -> str` matches exactly. The `try/except
-  Exception` wrapper still preserves the 502 ("Could not create checkout
-  session") path on any failure (including `asyncio.to_thread` re-raising
-  Stripe SDK errors). The 503 / 400 pre-checks for missing key /
-  invalid pack are still upstream of the threadpool offload. Clean.
+- [SEV2] routers/tasks.py:96 (call site of `progress.aread_since`) — the
+  `Last-Event-ID` request header (line 140) is forwarded verbatim into
+  `cursor`, which becomes the `last_id` argument to `client.xread({key: cursor})`.
+  Redis Streams rejects malformed IDs (e.g. `"abc"`, `"1-2-3"`,
+  empty-but-not-`"0-0"`) with `redis.exceptions.ResponseError`, which is NOT
+  caught and propagates as a 500 on every reconnect from a broken / hostile
+  client (rubric category 7). At scale this is also a cheap availability
+  attack: a single malformed `EventSource` polyfill on a misbehaving browser
+  hammers `/tasks/{task_id}/events` with 500s and chews through the
+  per-creator SSE slot (which only releases via the `finally` in
+  `_event_stream`, but the slot is acquired before the bad XREAD). | fix:
+  validate `last_event_id` against `^\d+-\d+$` before entering the generator;
+  on miss, coerce to `"0-0"` (the documented "from beginning" sentinel) and
+  log a warning with `creator_id` + `task_id` + the offending value
+  (truncated). Add a unit test that hits `/tasks/X/events` with
+  `Last-Event-ID: bogus` and asserts 200 + start-from-zero, not 500.
 
-- [SEV2 → CLOSED] **auth.py:116-137 (Fix D)** — verified applied correctly.
-  Structural change confirmed: `task = sync_channel_catalog.delay(str(creator.id))`
-  at :122 (previously this was a bare `.delay()` whose return was
-  discarded — that was the load-bearing pre-fix gap). Now `task.id` flows
-  into `await progress.aset_owner(task.id, str(creator.id))` at :129, all
-  wrapped in `try/except _redis_pkg.RedisError as exc` (:130) with a
-  warning-log fallback (:131-137). Posture matches Fix B. The catalog sync
-  itself runs regardless of Redis state. Caveat: there's no `stream_url`
-  returned to the OAuth callback (this is a RedirectResponse to `/`, not a
-  JSON body), so the frontend onboarding tutorial (Issue 100) will need to
-  reconstruct the SSE URL on its own from a follow-up `/me/catalog/sync`
-  or by polling the data-gate. Outside this module's responsibility —
-  acceptable. Clean.
+- [SEV2] routers/videos.py:63-97 (`list_videos`) — unbounded `select(Video)
+  .where(creator_id, source_uri IS NOT NULL).order_by(created_at.desc())`. A
+  creator with 1k+ uploads (the PRD scale target is 10k) returns the entire
+  catalog in a single hop, both to the DB cursor and to the JSON response.
+  Heap, latency, and JSON-serialize all blow up linearly (rubric category 2).
+  The `/videos` consumer is the dashboard — pagination is a real UX win, not
+  speculative. | fix: add `limit` + `cursor` query params (default
+  `limit=50`, max 200; cursor-paginate on `(created_at DESC, id DESC)` —
+  not `OFFSET`, which is O(N) at depth). Ensure the existing index covers
+  `(creator_id, source_uri, created_at DESC, id DESC)` — if not, file a
+  migration as a follow-up. Same shape for `routers/clips.py:106-125`
+  (`list_clips`) — even capped at `CLIPS_PER_VIDEO_DEFAULT=8` per video,
+  the endpoint should still bound at the query level rather than relying
+  on a separate config to enforce the cap.
 
-### Industry-standard check for Fix C (asyncio.to_thread for sync SDKs)
+- [SEV2] routers/auth.py:128-137 — the OAuth-callback `aset_owner` wrap is
+  fail-open as required, but on Redis failure the route still issues the
+  session cookie and 302-redirects to `/`. The new creator therefore lands
+  on the onboarding tutorial with NO live progress stream available and the
+  catalog-sync Celery task running blind. The user-visible failure mode is
+  "tutorial shows zero videos forever" until the periodic refresh fires.
+  Functionally not a regression (matches Wave-3 Fix D intent), but worth
+  capturing the UX consequence so the onboarding screen (Issue 100) detects
+  the missing stream and falls back to the polling endpoint. | fix: in the
+  `except _redis_pkg.RedisError` branch, also set a short-lived cookie
+  `cc_sse_unavailable=1; Max-Age=120` so the tutorial JS knows to poll
+  `/videos` instead of attaching `EventSource`. Add an integration test that
+  monkey-patches `progress.aset_owner` to raise and asserts the redirect
+  still succeeds. (Non-blocking — flagging because the Wave-4 delta asked
+  for a uniformity check.)
 
-`asyncio.to_thread(sync_callable, *args)` is the canonical 2026 idiom (Python
-3.9+, recommended by both CPython docs and the FastAPI/Starlette async-best-
-practices guide) when an SDK is sync-only and you don't want to block the
-event loop. Confirmed pattern matches the Anthropic-SDK / Voyage-SDK
-treatment from Issue 78d and the Issue 84 research outcome. Stripe's
-`StripeClient` (urllib3 under the hood) is in the same sync-only category
-as Anthropic's pre-async SDK, so the same recipe applies. No alternative
-considered: `httpx.AsyncClient` + manual Stripe REST construction would
-duplicate signature/retry logic the SDK already encapsulates, and Stripe's
-official async SDK is still labeled experimental as of 2026-05. The
-`asyncio.to_thread` route is the documented best practice.
+- [SEV2] routers/auth.py:229 — `except Exception as exc:` around the OAuth
+  revocation block is over-broad and would also swallow
+  `asyncio.CancelledError` if the client disconnects mid-revoke. The intent
+  is "revocation is best-effort"; the implementation also catches programming
+  errors silently (rubric category 6). | fix: narrow to
+  `except (httpx.HTTPError, ValueError, sqlalchemy.exc.SQLAlchemyError) as exc`,
+  let `asyncio.CancelledError` propagate.
 
-### Wave-2 deltas re-verified (Issue 92 owner-stamp + stream_url)
+- [SEV2] routers/clips.py:40-43 (`RenderQueuedOut.stream_url: str`) — the
+  field is declared non-optional, so the SEV1 fix above CANNOT be applied to
+  `render_clip` without first widening the schema. When the route hits the
+  `RedisError` branch and tries to return `stream_url=None`, pydantic will
+  500 on `response_model_validate` (rubric category 7). | fix: change line
+  43 from `stream_url: str` to `stream_url: str | None` and document the
+  None case in the field description ("None when the SSE channel is
+  unavailable; poll `/clips/{clip_id}` instead"). Apply the same widen to
+  `CatalogSyncQueuedOut.stream_url` and `BuildQueuedOut.stream_url` in
+  `routers/creators.py:36, 42` so the SEV1 fix is mechanically possible.
 
-- creators.py:152-177 (sync_catalog) — unchanged. Stamps `task.id` (Celery
-  UUID) under the authenticated principal. `CatalogSyncQueuedOut.stream_url:
-  str` matches handler. Clean. **Note:** unlike Fix B / D, this endpoint's
-  `aset_owner` is NOT wrapped in `try/except redis.RedisError` — a Redis
-  blip here 500s the request. Lower blast radius than improvement.py's
-  former orphan-pending (no DB row written), but a Wave-3 consistency fix
-  would either (a) wrap this too, or (b) document that the
-  fail-open-on-Redis posture is only applied to endpoints that wrote DB
-  state before the stamp. SEV-cleanup, flagged below.
+- [SEV2] routers/billing.py:109 — `except Exception as exc:` catches
+  everything (including `stripe.AuthenticationError`, which deserves a
+  distinct 500 + alert vs the user-facing 502, and including
+  `asyncio.CancelledError`). Currently masks misconfigured API keys as
+  generic "Could not create checkout session" (rubric category 6 +
+  observability). | fix: catch `stripe.error.StripeError` plus
+  `asyncio.TimeoutError`; let `CancelledError` propagate; log the exception
+  type so misconfig vs Stripe-outage is distinguishable in metrics.
 
-- creators.py:180-205 (build_dna) — same shape, same lack of try/except.
-  Same SEV-cleanup note.
+- [cleanup] routers/upload_intel.py:37-40 — `select(AudienceActivity)
+  .where(creator_id == creator.id)` returns the per-creator day×hour grid
+  (bounded by composite PK at 7×24=168 rows). Not an unbounded fetch, but
+  no defensive `.limit()` ceiling guards against a future migration
+  broadening the PK. | fix: add `.limit(200)` as defense-in-depth.
 
-- improvement.py:96-116 — see Fix B above.
+- [cleanup] routers/auth.py:117, routers/auth.py:131, routers/auth.py:199,
+  routers/clips.py:86, routers/clips.py:91, routers/creators.py:160,
+  routers/creators.py:192, routers/creators.py:216, routers/creators.py:246,
+  routers/creators.py:291, routers/improvement.py:93, routers/improvement.py:96,
+  routers/review.py:65, routers/review.py:77, routers/videos.py:132,
+  routers/videos.py:149, routers/videos.py:269, routers/videos.py:271,
+  routers/videos.py:288 — heavy use of *function-local* `import` statements
+  (a dozen+ in this slice). These re-execute the import-cache lookup on
+  every request; for `from worker import progress` and `from observability
+  import log_event` that's measurable hot-path overhead under load. Some are
+  load-order-driven (circular imports between `worker.tasks` and `routers`),
+  but most are not (rubric category 6 / cleanliness). | fix: hoist
+  side-effect-free imports (`observability.log_event`, `worker.progress`,
+  `redis`, `logging`) to module top. Keep only the genuinely cyclic ones
+  (`worker.tasks.*`, `billing.ledger.grant_minutes` inside the OAuth
+  callback) local.
 
-- clips.py:131-161 (render_clip) — `aset_owner(str(clip_id), str(creator.id))`
-  at :156 runs AFTER the creator-isolation check at :143 (`clip.creator_id
-  != creator.id → 404`), so stamp can never be wrong-creator. NOT wrapped
-  in try/except. On Redis blip: the Celery task is enqueued (line 151
-  before stamp), the stamp 500s, and the client retries — but the next
-  call hits the same "render already in progress" check at :145 only if
-  the worker has updated `RenderStatus.running` yet. Bounded race; the
-  worker's idempotency guards handle a double-enqueue. SEV-cleanup; flagged
-  with the other unwrapped `aset_owner` calls.
+- [cleanup] routers/auth.py:131, routers/videos.py:132, routers/videos.py:277
+  — `import logging as _logging; _logging.getLogger(__name__).warning(...)`
+  is a workaround for not importing `logging` at module top. Both modules
+  already have `logger = logging.getLogger(__name__)`; the local `_logging`
+  alias is dead-weight. | fix: drop the local re-import and use the existing
+  module-level `logger`.
 
-- videos.py:262-266 (upload_video) — **NOT touched by Wave-3.** Still has
-  the previously-flagged SEV2 ordering: Video row committed (:255) →
-  `aset_owner` (:265) → `start_pipeline` (:266). On Redis blip, the Video
-  row is committed `pending` with `source_uri` set, the pipeline never
-  starts, and the row sits at `ingest_status=pending` until manual
-  cleanup. The dashboard's Issue-90 filter (`source_uri IS NOT NULL`)
-  surfaces this row. The Fix-B treatment (wrap stamp + return
-  `stream_url=None` on Redis blip) would NOT close this — the bug here
-  isn't the 500 response, it's that `start_pipeline(...)` runs UNCONDITIONALLY
-  inside the same handler, so if the stamp raises, start_pipeline never
-  reaches line 266 and the row is orphaned. Carried forward as SEV2 below.
+- [cleanup] routers/clips.py:142, routers/clips.py:173, routers/review.py:49,
+  routers/clips.py:73, routers/clips.py:115, routers/videos.py:315 —
+  `session.get(Clip, clip_id)` (or `Video, video_id`) then post-fetch
+  `creator_id` check is fetch-then-validate, which pulls one extra row over
+  the wire when the entity belongs to a different creator. Not a leak (the
+  check is present and correct, so rubric category 3 is ok), but a single
+  `select(Clip).where(Clip.id == clip_id, Clip.creator_id == creator.id)`
+  is one query at the same cost and avoids loading the foreign row at all
+  (rubric category 2). | fix: replace each `session.get(...)` with a scoped
+  `session.scalar(select(...).where(...))`.
 
-### Security & compliance (category 3)
+- [cleanup] routers/videos.py:184-204 — temp-file lifecycle uses
+  `tempfile.NamedTemporaryFile(... delete=False)` + manual `unlink` only in
+  the `except HTTPException` branch. If a non-HTTP exception fires inside
+  the read loop (e.g. `OSError` on disk full, `CancelledError` on client
+  disconnect mid-upload), the temp file leaks (rubric category 1, disk leak
+  on error path). | fix: wrap the whole block in
+  `try / except BaseException: tmp_path.unlink(missing_ok=True); raise` —
+  or copy the `try/finally` shape used at line 238-244 for the R2 PUT.
 
-- [SEV2 — CARRIED, STILL OPEN] **videos.py:262-266** — orphan-pending Video
-  row + orphan R2 source blob on `aset_owner` Redis blip. Same as Wave-2
-  finding; Wave-3 did not address this. | fix: either (a) move the
-  `aset_owner` call BEFORE the Video INSERT/commit so a Redis failure
-  surfaces as 503 before any DB state or R2 blob lands; or (b) wrap the
-  stamp in `try/except redis.RedisError` matching Fix B, AND call
-  `start_pipeline(...)` regardless (the SSE feature degrades gracefully,
-  the pipeline still runs, status moves to `done` or `failed` via the
-  worker). Option (b) is the more aligned-with-Fix-B fix. Add a regression
-  test that monkey-patches `progress.aset_owner` to raise and asserts the
-  Video row reaches a terminal state.
+- [cleanup] routers/upload_intel.py — module is missing
+  `logger = logging.getLogger(__name__)`. No defects today (no error paths),
+  but the inconsistency with the rest of the slice is jarring. | fix: add
+  the logger declaration for grep-uniformity with the rest of the slice.
 
-- [SEV2 — CARRIED, STILL OPEN] **routers/tasks.py:131-138** — ownership
-  check is an enumeration oracle. `owner is None → 404 "Unknown task"` vs
-  `owner != creator.id → 403 "Not your task"` lets an authenticated
-  creator distinguish "task_id never existed" from "exists but belongs
-  to another creator". The in-code comment at :133-135 explicitly says
-  "don't leak whether the task ever existed" but the implementation
-  contradicts itself. With Issue 92's deterministic clip_id/video.id keys,
-  this also leaks "this entity exists in the system" — UUID4 entropy blunts
-  it but the principle violation stands. | fix: return 404 `"Unknown task"`
-  for BOTH branches; log differentiating reason server-side only via
-  `logger.info("sse_auth_denied task_id=%s reason=%s", task_id, "wrong_owner"|"missing")`.
-  Add a regression test asserting creator B sees 404 (not 403) when
-  probing creator A's task_id.
+- [cleanup] routers/creators.py:33-43, routers/clips.py:40-43,
+  routers/improvement.py:18-24 — `BuildQueuedOut`, `CatalogSyncQueuedOut`,
+  `RenderQueuedOut`, `BriefQueuedOut` are four near-identical Pydantic
+  models (`task_id`, `status`, `stream_url`). DRY violation — four copies,
+  one shape (rubric category 6). | fix: extract a `TaskQueuedOut` base in a
+  shared `routers/_schemas.py` and let each router subclass or alias it.
+  Pair this with the SEV2 widening of `stream_url` to `str | None` so the
+  fail-open invariant is enforced at the base type.
 
-- [SEV2 — CARRIED, STILL OPEN] **routers/tasks.py:140** — the
-  client-supplied `Last-Event-ID` header is forwarded raw into `XREAD` at
-  `worker/progress.py:204` with no validation. Redis expects `<ms>-<seq>`
-  (or `$` / `0-0`); any other string raises
-  `redis.exceptions.ResponseError: Invalid stream ID...`, which
-  `aread_since` does not catch. The exception escapes `_event_stream`;
-  the `finally:` does release the slot (Python guarantees), but the client
-  sees a 500 / connection drop and the server log fills with errors per
-  malformed reconnect. | fix: at the top of `_event_stream`, after
-  acquiring the slot, validate `last_event_id` against `^\d+-\d+$` (or
-  empty); on mismatch reset `cursor = "0-0"`. Cap header length at e.g.
-  64 chars before parsing. Add a unit test sending
-  `Last-Event-ID: <evil>` and asserting a clean SSE error frame + slot
-  released.
-
-- Per-creator isolation re-verified across all 19 endpoints, including the
-  Fix-B/C/D code paths:
-  - auth.py: token decrypt only at `:206` (account deletion); cascade-delete
-    at :255. Fix-D's `aset_owner` uses `str(creator.id)` from the just-upserted
-    creator at :81-87 — no client input influences the owner key.
-  - billing.py: webhook signature-verified + idempotent at :152-155;
-    creator_id derived from Stripe metadata (:137). Fix-C's threadpool call
-    passes the authenticated `creator.id` and `creator.stripe_customer_id`
-    only — no client input substitution.
-  - clips.py: all reads/writes filter `creator_id == creator.id`
-    (:74, :116, :121, :143, :174). `aset_owner` at :156 stamps only AFTER
-    the :143 isolation check passes.
-  - creators.py: every `creator.id` derives from `get_current_creator`.
-    `aset_owner` at :167 and :195 both stamp the authenticated principal.
-  - improvement.py: VideoMetrics join scoped to `Video.creator_id`
-    (:59-64). `ImprovementBrief` filtered by `creator_id` on both POST and
-    GET (:74, :136). Fix-B's `aset_owner` at :109 stamps the authenticated
-    principal.
-  - review.py:50 — `clip.creator_id != creator.id` check before the
-    ClipFeedback write.
-  - tasks.py: ownership check at :131-138 (modulo the enumeration-oracle
-    SEV2 above; the isolation itself is enforced).
-  - upload_intel.py:38 — AudienceActivity filtered by `creator_id`.
-  - videos.py: every Video read/write is creator-scoped. `aset_owner` at
-    :265 stamps from `creator.id`.
-
-- OAuth token handling unchanged: `decrypt()` used at auth.py:206 for
-  revocation only; no token / refresh_token in any `logger.*` line. PII
-  safe in logs (channel_id / video_id / task_id / clip_id only). No
-  virality promise in any string, response, or prompt.
-
-### Concurrency & scale (category 2)
-
-- [SEV2 — CARRIED, STILL OPEN] **videos.py:80-85**, **clips.py:119-124**,
-  **upload_intel.py:37-40** — unbounded `list(result.scalars())` with no
-  LIMIT/pagination on `GET /videos`, `GET /videos/{video_id}/clips`, and
-  `GET /me/upload-intel`. Issue 87's catalog sync bulk-loads full upload
-  playlists (hundreds–thousands of rows for established creators); even
-  after Issue 90's `source_uri IS NULL` filter, a creator with hundreds
-  of ingested videos still serializes the entire list per dashboard hit.
-  | fix: keyset pagination `?limit=&before=` with a hard cap (e.g. 100)
-  on list_videos and list_clips; bound the AudienceActivity read by the
-  documented 168-row max (7 days × 24 hours).
-
-- billing.py:101 (Fix C) — verified: the threadpool offload uses the
-  default executor (`asyncio.to_thread` → `loop.run_in_executor(None, ...)`
-  → default `ThreadPoolExecutor`, max workers = `min(32, os.cpu_count()+4)`).
-  Under sustained 10/min checkout load (the route's rate limit) per
-  creator and N concurrent creators, the executor pool is the bottleneck
-  but won't saturate at the documented 100-creator scale. Acceptable; if
-  scale grows, a dedicated `_STRIPE_EXEC = ThreadPoolExecutor(max_workers=8)`
-  with `loop.run_in_executor(_STRIPE_EXEC, ...)` is the documented
-  follow-up.
-
-- routers/tasks.py:89 disconnect-poll cadence (12s detection ceiling)
-  acceptable given 3-slot cap + 600s lifetime ceiling. No change.
-
-- Module-level singletons (limiter, `_STRIPE` client at
-  `billing/stripe_client.py:20`, `progress._SYNC`/`_AIO` Redis clients)
-  verified — no per-request client construction.
-
-### Resource lifecycle (category 1)
-
-- DB sessions: every endpoint takes `session: AsyncSession =
-  Depends(get_session)` — FastAPI teardown closes on every path including
-  exception. Clean.
-
-- videos.py:184-244 — temp-file lifecycle correct: `delete=False` for the
-  initial NamedTemporaryFile, `tmp_path.unlink(missing_ok=True)` runs on
-  (a) HTTPException during size-limit abort, (b) HTTPException from
-  Issue-89 balance pre-check, (c) the duplicate-video 409 path, (d) the
-  R2 upload `finally`. No leak.
-
-- SSE generator slot release verified: `aacquire_slot` inside `try:`,
-  `arelease_slot` in `finally:` (tasks.py:113-114). `finally:` runs on
-  every exit path including the unvalidated-Last-Event-ID exception and
-  on async-generator GC at StreamingResponse cancel.
-
-- auth.py:207-211 — `httpx.AsyncClient(timeout=10)` constructed per
-  account-deletion call (max 5/hour per creator, only on right-to-erasure).
-  Acceptable.
-
-### Error handling & API surface (category 7)
-
-- Pydantic response_model coverage: every endpoint in the slice declares
-  a `*Out` model except `/tasks/{task_id}/events` (correctly exempt —
-  text/event-stream, not JSON) and `/billing/webhook` (correctly hidden
-  from schema; returns dict to Stripe). 19/19 conformant.
-
-- Wave-3 response-model contracts verified:
-  - `CheckoutOut.checkout_url: str` (required) — Fix C still returns this
-    on success; on Stripe failure raises 502 instead. Matches handler.
-  - `BriefQueuedOut.stream_url: str | None = None` (Optional) — now
-    correctly utilized by Fix B's Redis-blip fail-open path (returns
-    `stream_url=None` instead of 500). The Optional was already in place
-    pre-Wave-3 (debounce-collapse `row.job_id is None` window), so the
-    schema accommodates Fix B's new path without modification. Clean.
-
-- HTTP status codes verified across all endpoints
-  (200/201/202/204/400/401/402/404/409/413/422/502/503). Webhook returns
-  200 with `{"status": "ignored"|"already_fulfilled"|"ok"}` — correct
-  Stripe contract.
-
-- Error message safety: every `HTTPException(detail=...)` carries a short
-  generic string or the user-facing balance-check copy. No DB error /
-  stack trace / internal detail leaks. `auth.py:69` includes the upstream
-  Google `error` query param in the 400 detail — acceptable (fixed
-  vocabulary like `access_denied`, not stack data).
-
-### Code cleanliness & typing (category 6)
-
-- [cleanup — NEW] **Fix-B/D consistency: stamp posture differs across
-  endpoints.** Fix B and Fix D wrap `aset_owner` in try/except; the
-  Wave-2 stamps at creators.py:167 (sync_catalog), creators.py:195
-  (build_dna), clips.py:156 (render_clip), and videos.py:265 (upload)
-  do NOT. The Wave-3 product call (graceful Redis-degradation) should
-  apply uniformly. | fix: extract `progress.aset_owner_graceful(task_id,
-  creator_id, logger) -> bool` that returns `True` on success / `False`
-  on `redis.RedisError`, and have all six call sites use it. Callers
-  conditionalize `stream_url` on the return value. This also closes the
-  videos.py:262-266 SEV2 above when the call site additionally moves
-  `start_pipeline(...)` outside the success path.
-
-- [cleanup — CARRIED] **auth.py:131-137** — Fix D has a nested
-  `import logging as _logging` inside the `except` block, despite the
-  file already having `logger = logging.getLogger(__name__)` at :26.
-  The right call here is just `logger.warning(...)`. | fix: replace
-  `import logging as _logging; _logging.getLogger(__name__).warning(...)`
-  with `logger.warning(...)`. Identical issue to the videos.py:132-134
-  one (still open).
-
-- [cleanup — CARRIED] **auth.py:117** — `import redis as _redis_pkg`
-  inside the handler. Hoist to module top alongside `import httpx`.
-  `improvement.py:93` has the same pattern with the same fix.
-
-- [cleanup — CARRIED] clips.py:46 `_clip_response(clip: Clip) -> dict`
-  — hand-mapped field dict still maintained alongside `ClipOut`. | fix:
-  add `model_config = ConfigDict(from_attributes=True)` to `ClipOut` and
-  populate via `ClipOut.model_validate(clip)`. `principle`/`reasoning`
-  from `signals_jsonb` need a `@model_validator(mode='before')` or a
-  thin pre-adapter.
-
-- [cleanup — CARRIED] routers/tasks.py:83
-  `loop = asyncio.get_event_loop()` — deprecated when called from a
-  coroutine with a running loop in 3.12+. | fix: use
-  `asyncio.get_running_loop()`.
-
-- [cleanup — CARRIED] routers/videos.py:132-134
-  `import logging as _logging` inside an `except` handler — the file
-  has no top-level `import logging`. | fix: hoist
-  `import logging` + `logger = logging.getLogger(__name__)` to module
-  scope to match the rest of the slice.
-
-- [cleanup — CARRIED] routers/improvement.py:79 — `stream_url` literal
-  `f"/tasks/{row.job_id}/events"` duplicates the format string used at
-  :107 (here), :160 (clips.py), :176 (creators.py), :204 (creators.py),
-  and :283 (videos.py). | fix: extract a single
-  `progress.stream_url(task_or_entity_id: str) -> str` helper in
-  `worker/progress.py` so the URL shape is owned in one place; reduces
-  the blast radius of a future "move SSE under /api/v1/tasks/..." rename.
-
-- Inline `from worker.tasks import ...` / `from observability import ...`
-  inside handlers is intentional (import-cycle / cold-import avoidance).
-  Not flagged.
-
-- All function signatures typed (mypy gate enforces).
-
-### Config & paths (category 8)
-
-- All paths absolute (`tempfile.NamedTemporaryFile`, `Path(...)`).
-- SSE policy knobs (`MAX_CONCURRENT_SSE_PER_CREATOR=3`,
-  `KEEPALIVE_INTERVAL_S=12.0`, `MAX_STREAM_LIFETIME_S=600.0`) remain
-  module-level constants. Acceptable.
-- No new env vars introduced in Wave-3.
-
-### Anthropic SDK (category 5)
-
-- n/a — LLM streaming call lives in `worker/anthropic_stream.py` and
-  `dna/brief.py`. Routers only open/close the SSE pipe.
-
-### Clip-quality correctness (category 4)
-
-- n/a — not a clip-scoring module.
+- [cleanup] routers/videos.py:269, routers/improvement.py:93,
+  routers/auth.py:117, routers/clips.py:148 — `import redis as _redis_pkg`
+  inside the function body to avoid a top-level import is needlessly noisy
+  and re-runs the package-init cost on every request. `redis` is already a
+  hard dependency (via `worker.progress`) and importing it at module top is
+  free. | fix: hoist to top: `from redis import RedisError`.
 
 ## Rubric coverage
+
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok (temp-file cleanup, SSE slot release, threadpool offload all verified) |
-| 2 Concurrency & scale | 1 SEV2 CARRIED (unbounded list endpoints); Fix C threadpool offload verified canonical |
-| 3 Security & compliance | 2 SEV2 CARRIED (tasks.py 404/403 oracle; unvalidated Last-Event-ID; videos.py orphan-pending on Redis blip) |
-| 4 Clip-quality | n/a |
-| 5 Anthropic SDK | n/a |
-| 6 Cleanliness & typing | 6 cleanup (stamp-posture inconsistency NEW; nested-logging-import in auth.py NEW; clip_response dup; get_event_loop deprecation; videos.py inline-logging hoist; stream_url f-string duplication) |
-| 7 Error handling / API | ok (19/19 endpoints have *Out or are correctly exempted; Fix-B/C Optional/required Pydantic shapes match handler paths) |
-| 8 Config & paths | ok |
+| 1 Resource lifecycle | 1 cleanup (temp-file leak on non-HTTPException error path in `upload_video`). DB sessions OK (FastAPI dep injection + commit/rollback in `get_session`). |
+| 2 Concurrency & scale | 2 SEV2 (unbounded `/videos` + the same pattern in `/clips`); Stripe → `asyncio.to_thread` ✅; R2 PUT → `asyncio.to_thread` ✅; account-deletion delete-prefix → `asyncio.to_thread` ✅; ffprobe → `asyncio.to_thread` ✅. No remaining sync-in-async in this slice. |
+| 3 Security & compliance | 1 SEV2 (enumeration oracle on `/tasks/{id}/events`). Per-creator isolation verified on every query: `routers/videos.py:82`, `routers/clips.py:121`, `routers/upload_intel.py:38`, `routers/improvement.py:62-64`, `routers/improvement.py:74`, `routers/improvement.py:136`, `routers/creators.py` (all `creator.id`-scoped helpers), `routers/auth.py:203` (token row), `routers/billing.py:163` (`update(Creator).where(Creator.id == creator_id)`). Token handling via `decrypt()` at `routers/auth.py:206` ✅. YouTube ID validated against `^[A-Za-z0-9_-]{11}$` before storage-key interpolation ✅. No PII in log lines reviewed. |
+| 4 Clip-quality | n/a (routers do not score). Verified: `routers/clips.py` delegates ranking to `clip_engine.ranking.generate_and_rank_clips` and returns `principle` + `reasoning` from `signals_jsonb` directly — no virality language anywhere in this slice. |
+| 5 Anthropic SDK | n/a (routers do not call the LLM directly — `start_improvement_brief` and `build_dna` enqueue Celery tasks). |
+| 6 Cleanliness & typing | 5 cleanup findings: function-local import sprawl, fetch-then-validate query shape, duplicated `*QueuedOut` schemas, in-function `import redis`, dead `import logging as _logging` workarounds. Type hints present on every signature in the slice. |
+| 7 Error handling / API | 1 SEV1 (three unwrapped `aset_owner` calls → 500 on Redis blip), 1 SEV2 (`Last-Event-ID` → 500 on malformed), 1 SEV2 (`RenderQueuedOut.stream_url` schema cannot represent the fail-open None case), 2 SEV2 (over-broad `except Exception` in auth + billing). Pydantic models on every request & response ✅. Status codes 202/204/400/401/404/409/413/422/500/502/503 used correctly elsewhere. |
+| 8 Config & paths | All paths absolute (`tempfile.NamedTemporaryFile` → `Path(tmp.name)` ✅, R2 keys are creator-scoped + youtube-id-validated ✅). Settings referenced (`UPLOAD_MAX_MB`, `CLIPS_PER_VIDEO_DEFAULT`, `STRIPE_SECRET_KEY`, `FREE_TRIAL_MINUTES`, `JWT_EXPIRY_MINUTES`) all present in `.env.example` ✅. |
+
+## WAVE-4 delta verification (Fix 1)
+
+The Wave-4 delta says `routers/videos.py:262-279` (`upload_video`) now wraps
+`aset_owner` in `try/except redis.RedisError` and asks me to verify the
+fail-open invariant is uniform across all `aset_owner` call sites.
+
+Confirmed state per `grep -n "aset_owner" routers/`:
+- `routers/improvement.py:109` — WRAPPED ✅ (Wave-3 Fix B)
+- `routers/auth.py:129` — WRAPPED ✅ (Wave-3 Fix D, OAuth-redirect ignores stream_url)
+- `routers/videos.py:275` — WRAPPED ✅ (Wave-4 Fix 1, returns `stream_url=None`)
+- `routers/creators.py:167` (`sync_catalog`) — **NOT WRAPPED** ❌ (SEV1 above)
+- `routers/creators.py:195` (`build_dna`) — **NOT WRAPPED** ❌ (SEV1 above)
+- `routers/clips.py:156` (`render_clip`) — **NOT WRAPPED** ❌ (SEV1 above)
+
+The invariant is **not uniform**. Three call sites still 500 on Redis blip
+despite the Celery enqueue having already succeeded. See top finding for the
+concrete fix.
+
+## Carry-forward SEV2 status (re-checked)
+
+- `routers/tasks.py:131-138` — 404/403 enumeration oracle: **still open**
+- `routers/tasks.py:140` — unvalidated `Last-Event-ID` → 500 on malformed: **still open**
+- `routers/videos.py:63-97` + `routers/clips.py:106-125` — unbounded list
+  endpoints: **still open**
+- `routers/upload_intel.py:37-40` — bounded by 168-row composite PK,
+  demoted to cleanup
 
 ## Module verdict
-NEEDS-WORK — no BLOCKERs. Wave-3 closes both Wave-2 SEV1s (Fix B
-improvement.py orphan-pending and Fix C billing.py event-loop blocking)
-and the Wave-2 SEV2 in auth.py (Fix D catalog-sync ownership stamp). All
-three deltas verified applied correctly: Fix B's ordering puts the
-`row.job_id` commit BEFORE the `aset_owner` attempt and degrades gracefully
-on Redis failure; Fix C's `asyncio.to_thread` shape matches
-`create_checkout_session`'s positional signature and preserves the 502
-error path; Fix D binds `task` from `.delay()` (the load-bearing structural
-change) and wraps the stamp in `try/except redis.RedisError`. The
-`asyncio.to_thread` recipe is the canonical 2026 idiom for sync-only SDKs
-on async routes — confirmed against the Issue 84 Anthropic-SDK research.
-What Wave-3 did NOT close: (a) videos.py:262-266 still has the same orphan-
-pending Video + R2 blob risk on Redis blip (Fix B's pattern would close it
-if applied uniformly — flagged as cleanup-NEW under stamp-posture
-inconsistency); (b) the three carry-forward SEV2s (tasks.py 404/403 oracle,
-unvalidated Last-Event-ID, unbounded list endpoints) are untouched. None
-of the four open SEV2s block launch on their own, but the stamp-posture
-inconsistency across six endpoints should be unified before another
-feature lands on `aset_owner`.
+
+**NEEDS-WORK** — the Wave-4 fix landed for `upload_video` but the same
+pattern was never extended to `sync_catalog`, `build_dna`, or `render_clip`,
+so three SEV1-equivalent 500-on-Redis-blip paths remain; the three
+carry-forward SEV2s (`Last-Event-ID`, enumeration oracle, unbounded list
+endpoints) are unchanged from the prior wave.
