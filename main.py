@@ -21,6 +21,7 @@ from observability import (
     configure_logging,
     metrics_response,
 )
+from routers import api_keys as api_keys_router
 from routers import auth as auth_router
 from routers import billing as billing_router
 from routers import clips as clips_module
@@ -71,6 +72,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(auth_router.router)
+app.include_router(api_keys_router.router)
 app.include_router(billing_router.router)
 app.include_router(creators_router.router)
 app.include_router(videos_router.router)

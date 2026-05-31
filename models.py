@@ -112,6 +112,58 @@ class Creator(Base):
     dna_profiles: Mapped[list["CreatorDna"]] = relationship(
         "CreatorDna", back_populates="creator", cascade="all, delete-orphan"
     )
+    api_keys: Mapped[list["CreatorApiKey"]] = relationship(
+        "CreatorApiKey", back_populates="creator", cascade="all, delete-orphan"
+    )
+
+
+# ── API key auth (Issue 95 — OBS companion app + folder watcher) ───────────
+
+
+class CreatorApiKey(Base):
+    """API key for the OBS companion app and any future non-browser client.
+
+    The companion app authenticates uploads to /clips/ingest with
+    Authorization: Bearer <api_key>. We NEVER store the raw key — only a
+    SHA-256 hex hash. The raw key is shown to the user ONCE at creation
+    time. A short ``key_prefix`` is stored for display so the user can
+    identify a key in the management UI without copying it.
+
+    Revocation is soft (revoked_at set, row stays for audit). Lookups
+    filter ``revoked_at IS NULL`` so revoked keys deterministically fail
+    authentication.
+
+    Issue 95 / 2026-05-31 — see docs/DECISIONS.md for architecture context.
+    """
+
+    __tablename__ = "creator_api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    # SHA-256 hex = 64 chars. UNIQUE so two keys can never collide.
+    key_hash: Mapped[str] = mapped_column(sa.String(64), unique=True, nullable=False)
+    # First 8 chars of the raw key (post-prefix) for display in the
+    # management UI. Safe to store — it's not enough to authenticate.
+    key_prefix: Mapped[str] = mapped_column(sa.String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+    creator: Mapped["Creator"] = relationship("Creator", back_populates="api_keys")
 
 
 class YoutubeToken(Base):
