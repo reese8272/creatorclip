@@ -5,6 +5,150 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Wave 1 hotfix batch (2 SEV-1s from `/assess` + Issues 89/90/91/98)
+
+### What was decided
+
+Bundled six small, mechanical hardening fixes into a single Phase-1-checked
+branch. All target distinct surfaces (worker SSE cap, billing refund session,
+upload pre-check, video list filter, dashboard counter, DNA state machine)
+but share the same Layer-0 gate cycle and are too small to justify
+individual branches.
+
+1. **`worker/progress.py:214-232` aacquire_slot EXPIRE drift (SEV-1)**.
+   `client.expire()` moved out of the `if count == 1:` branch — refreshes
+   on EVERY INCR. Old code let the per-creator SSE concurrent-cap key TTL
+   elapse under active streams, then the next INCR reset to 1 → cap
+   silently bypassed.
+2. **`billing/refund.py:41` AdminSessionLocal (SEV-1)**. Refund is a system
+   action — no per-creator context to inject into `session.info["creator_id"]`.
+   Under prod RLS the app-role session would have the `MinuteDeduction`
+   SELECT silently return zero rows. Switched to `AdminSessionLocal()`
+   (BYPASSRLS), matching the rest of the worker surface.
+3. **Issue 89 — `check_balance_for_minutes`**. New helper raises 402 with
+   concrete gap copy. Wired into `/videos/upload` after `probe_duration_s`
+   so a low-balance creator gets an actionable 402 BEFORE the R2 PUT.
+4. **Issue 90 — `list_videos` excludes catalog-only rows**. `source_uri
+   IS NOT NULL` filter. `source_uri IS NULL` is now the canonical
+   discriminator for catalog-only rows (documented in `docs/SOT.md`).
+5. **Issue 91 — dashboard counter filters render_status=done**. Frontend
+   filter in `static/index.html`; card relabeled "Clips rendered".
+6. **Issue 98 — `create_draft` advances onboarding_state**. The canonical
+   arc is `connected → dna_pending → active`. `create_draft` was missing
+   the first transition, so `confirm_draft`'s `dna_pending → active`
+   branch never matched and the dashboard banner stayed visible.
+
+### Why
+
+- The two SEV-1s from `/assess` row 1-2 were each ≤5 LOC and the SEV-1
+  register has zero tolerance once production is live; bundling with the
+  Issue 88-spawned spinoffs amortizes the deploy cycle.
+- Hotfix B is a **prerequisite** for the still-pending RLS activation
+  workflow (CLAUDE.md flags this; `docs/DEPLOYMENT.md` runbook); landing
+  it now unblocks that manual step.
+- Issue 89 closed a credibility-corroding "silent failed upload" path —
+  same shape as Issue 88's display-vs-filter root cause (pre-check and
+  consumer must enforce the same predicate).
+- Issue 98 was a live-observed bug (Backboard Media stayed `connected`
+  after v2 confirm) — captured in Issue 88's session log.
+
+### Industry standard checked
+
+- **Redis sliding-window counters**: `INCR` + `EXPIRE on every increment`
+  is the canonical pattern (Redis docs "Pattern: Rate limiting" and
+  redis-py `INCR`+`EXPIRE` recipe). The earlier
+  "EXPIRE only on first INCR" shape is a known anti-pattern documented
+  in Redis Labs' bounded-counter guidance — the counter can outlive its
+  TTL while in use and silently reset.
+- **RLS session-role separation**: per Postgres docs Ch. 5.8 ("Row
+  Security Policies"), system-level operations should run as a
+  `BYPASSRLS` role; per-tenant operations run under app role with
+  `set_config()` injecting the tenant identifier. Our Issue 79 deploy
+  already separates the roles; refund had been missed.
+- **Pre-flight balance checks**: stripe-style "estimate cost before
+  charging" pattern — the 402 must surface the gap (`"needs N, you
+  have M"`) not the generic "Insufficient." See Stripe Connect quota
+  rejection copy as a 2024-2026 reference.
+- **State-machine completeness**: Robert C. Martin / state-pattern
+  guidance — every transition must have an explicit owner; missing
+  one transition silently breaks downstream consumers (here, the
+  dashboard's `state !== 'active'` conditional).
+
+### Alternatives ruled out
+
+- **Sorted-set per-stream concurrency limit** instead of INCR/DECR
+  counter (option in the `/assess` REPORT for Hotfix A): correct but
+  ~20 LOC and changes data shape. The 1-line EXPIRE fix is the smallest
+  correct change. The ZSET shape becomes the right call if a future
+  SEV2 (clamp-at-0 DECR) raises the bar.
+- **Setting `session.info["creator_id"] = deduction.creator_id`**
+  inside refund (Hotfix B option B): creates a chicken-and-egg — the
+  read that retrieves `creator_id` is itself RLS-gated. Switching to
+  AdminSession is structurally consistent with the rest of the worker
+  surface.
+- **Reusing `check_positive_balance` with a kwarg** (Issue 89): adds
+  branching to a hot path with no clarity win; two functions for two
+  semantics is clearer.
+- **Wiring `check_balance_for_minutes` into `/clips/render`** (Issue 89
+  AC): `_render_clip_async` does not deduct minutes (render is free).
+  Adding a per-clip pre-check would deny re-renders of already-paid
+  clips for no billing reason. **Deviation from AC** captured here.
+  Render endpoint keeps `check_positive_balance` (a "have any balance"
+  soft gate). If we ever add render-time deduction (compute cost), the
+  gate gets upgraded.
+- **Tagging catalog rows with a separate column** (Issue 90 option):
+  `source_uri IS NULL` already disambiguates correctly and is the
+  natural marker (set by `sync_channel_catalog`, unset for uploads/
+  links). A new column would be a write the catalog sync would have to
+  set explicitly with no value gained.
+- **`?render_status=done` query param on the backend** (Issue 91 AC
+  option a): adds an API contract surface. Frontend filter (option b)
+  is the smaller change.
+- **Making `confirm_draft` accept `connected` as source** (Issue 98
+  option): masks the missing `connected → dna_pending` transition for
+  every other consumer of that state. The right layer is `create_draft`.
+
+### Tradeoffs accepted
+
+- **Two balance helpers in `billing/ledger.py`**: `check_positive_balance`
+  (any balance > 0) and `check_balance_for_minutes` (balance >= N). The
+  duplication is intentional — different semantics. A "balance >= 0
+  with optional minimum" merge would be a meta-helper smell.
+- **Frontend filter is JS-side** (Issue 91): the counter math runs in
+  the browser per video row, multiplying N requests. Acceptable for
+  current dashboard sizes (~10s of videos); a future heavy-dashboard
+  pass might move this to a server-side aggregate.
+- **`create_draft` now reads the Creator row** (Issue 98): one extra
+  `session.get(Creator, ...)` per draft. DNA build is low-frequency so
+  the cost is invisible; we get state-machine correctness in exchange.
+
+### Files & tests
+
+- `worker/progress.py` (1 LOC moved + comment refresh) +
+  `tests/test_progress.py` (+2 regression tests).
+- `billing/refund.py` (1 LOC swap + docstring) +
+  `tests/test_billing_refund.py` (+2 invariant tests: source-inspect
+  and runtime-spy with full DB mock).
+- `billing/ledger.py` (+`check_balance_for_minutes`) +
+  `routers/videos.py` (post-probe wiring + tmp cleanup on raise) +
+  `tests/test_billing.py` (+4 unit tests) +
+  `tests/test_videos_upload_streaming.py` (+1 router-level test).
+- `routers/videos.py` (`list_videos` filter + docstring) +
+  `docs/SOT.md` (data-model note) +
+  `tests/test_static.py` (+1 SQL-introspect test).
+- `static/index.html` (filter + relabel + unwrap fix) +
+  `tests/test_static.py` (+1 static-page assertion test).
+- `dna/profile.py` (`create_draft` state bump) +
+  `tests/test_dna.py` (+3 unit tests for the arc) +
+  `tests/test_dna_idempotency_integration.py` (+4 integration tests
+  including the full `connected → dna_pending → active` arc).
+
+**Layer 0 gates**: ruff 0 / mypy 0 / freshness ok. **Tests**: 523
+passed / 1 skipped / 89 deselected (default lane). Integration lane runs
+the 4 new arc tests against a real Postgres.
+
+---
+
 ## 2026-05-30 — Issue 88: DNA filter parity + business-event observability + display-vs-filter audit
 
 ### What was decided

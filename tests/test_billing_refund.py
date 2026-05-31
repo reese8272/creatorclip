@@ -5,9 +5,12 @@ Predicate logic only; the end-to-end DB scenario lives in
 `tests/test_billing_refund_integration.py`.
 """
 
+import inspect
 import uuid
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import db
+from billing import refund as refund_mod
 from billing.refund import _refund_pack_id
 
 # ── pack_id construction ──────────────────────────────────────────────────────
@@ -93,5 +96,69 @@ def test_on_failure_swallows_refund_exception():
 # Note: the refund_for_video idempotency / no-op branches are covered
 # end-to-end against a real Postgres in
 # `tests/test_billing_refund_integration.py` — mock-based async unit tests for
-# those branches are fragile (the `async with db.AsyncSessionLocal()` context
+# those branches are fragile (the `async with db.AdminSessionLocal()` context
 # manager is awkward to fake) and offer no signal the integration tests don't.
+
+
+# ── RLS session-factory invariant (Wave 1 hotfix B) ──────────────────────────
+#
+# `refund_for_video` is a system action invoked by Celery's `on_failure`
+# callback with no creator context to inject into `session.info["creator_id"]`.
+# Under the prod RLS role split (Issue 79), an app-role session without that
+# key returns ZERO rows from the `MinuteDeduction` SELECT — silently no-opping
+# every refund. The fix is structural: use `AdminSessionLocal()` (BYPASSRLS)
+# to match every other worker-surface session. These tests pin that choice so
+# a future "factory consolidation" can't silently re-break it.
+
+
+def test_refund_uses_admin_session_factory_source_inspect():
+    """Source-text invariant: refund_for_video must reference AdminSessionLocal,
+    not AsyncSessionLocal. Cheap, robust, and survives an import refactor."""
+    src = inspect.getsource(refund_mod.refund_for_video)
+    assert "AdminSessionLocal" in src, (
+        "refund_for_video must use db.AdminSessionLocal (BYPASSRLS) — "
+        "see Wave 1 hotfix B / /assess REPORT row 2"
+    )
+    assert "AsyncSessionLocal" not in src, (
+        "refund_for_video must NOT use db.AsyncSessionLocal — under prod RLS "
+        "without session.info['creator_id'] the SELECT returns zero rows"
+    )
+
+
+async def test_refund_for_video_calls_admin_factory():
+    """Runtime invariant: even with the import unchanged, the factory actually
+    called is AdminSessionLocal. Guards against future aliasing higher up the
+    file (e.g. ``SessionLocal = db.AsyncSessionLocal``) that source-inspect
+    might miss. Fully mocked — no Postgres needed."""
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def scalar(self, *_a, **_kw):
+            # Returning None makes refund_for_video short-circuit at the
+            # "no deduction" branch — exactly what we want for observing
+            # which factory was opened.
+            return None
+
+        async def commit(self):
+            pass
+
+    # `db.AdminSessionLocal()` is invoked synchronously by the `async with`
+    # statement (it must return a context manager, not a coroutine), so the
+    # factory itself is a regular sync MagicMock, not AsyncMock.
+    admin_factory = MagicMock(return_value=_FakeSession())
+    app_factory = MagicMock(return_value=_FakeSession())
+
+    with (
+        patch.object(db, "AdminSessionLocal", admin_factory),
+        patch.object(db, "AsyncSessionLocal", app_factory),
+    ):
+        result = await refund_mod.refund_for_video(uuid.uuid4())
+
+    assert result == 0, "no-deduction branch must return 0"
+    assert admin_factory.call_count == 1, "refund must open exactly one AdminSessionLocal"
+    assert app_factory.call_count == 0, "refund must NEVER open an AsyncSessionLocal (RLS-gated)"

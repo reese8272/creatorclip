@@ -68,6 +68,21 @@ async def create_draft(
         status=DnaStatus.draft,
     )
     session.add(dna)
+
+    # Advance the onboarding state machine. The first draft a creator gets
+    # bumps connected → dna_pending; confirm_draft (below) bumps
+    # dna_pending → active. This completes the canonical arc that powers the
+    # dashboard's "Build your DNA" banner conditional (gated on `state !==
+    # 'active'`). Without this bump the state stayed `connected` forever,
+    # confirm_draft's `dna_pending → active` branch never matched, and the
+    # banner showed even after a creator confirmed their DNA. Idempotent —
+    # re-runs of create_draft for a creator already past `connected` are
+    # no-ops. Part of the caller's transaction (whether commit=True or not).
+    # (Issue 98)
+    creator = await session.get(Creator, creator_id)
+    if creator and creator.onboarding_state == OnboardingState.connected:
+        creator.onboarding_state = OnboardingState.dna_pending
+
     if commit:
         await session.commit()
         await session.refresh(dna)

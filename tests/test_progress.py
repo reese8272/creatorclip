@@ -189,6 +189,54 @@ async def test_arelease_slot_frees_capacity(creator_id: str, _cleanup_keys: None
     assert await progress.aacquire_slot(creator_id, max_concurrent=3) is True
 
 
+async def test_aacquire_slot_refreshes_ttl_on_every_incr(
+    creator_id: str, _cleanup_keys: None
+) -> None:
+    """Regression for the cap-bypass SEV1: EXPIRE must fire on EVERY INCR.
+
+    Before the fix, `aacquire_slot` set EXPIRE only on the count==1 transition.
+    A creator who steady-state-held N>=1 streams past _STREAM_TTL_SECONDS had
+    the counter expire under them; the next INCR reset to 1 and the cap-check
+    silently passed even though N live streams were still attributable to the
+    creator. We verify the fix by squeezing the TTL down between acquires —
+    the OLD code would leave the squeezed TTL in place; the NEW code refreshes
+    it back to ~_STREAM_TTL_SECONDS on every INCR.
+    """
+    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    key = f"sse:count:{creator_id}"
+
+    # First acquire — under fix, EXPIRE was applied.
+    assert await progress.aacquire_slot(creator_id, max_concurrent=3) is True
+    assert 3500 < client.ttl(key) <= 3600
+
+    # Simulate the steady-state drift the bug exploited: a long-lived stream
+    # whose counter-key TTL has crept down to a small value.
+    client.expire(key, 100)
+    assert client.ttl(key) <= 100
+
+    # Second acquire — the fix MUST slide the TTL back to ~_STREAM_TTL_SECONDS.
+    assert await progress.aacquire_slot(creator_id, max_concurrent=3) is True
+    refreshed = client.ttl(key)
+    assert refreshed > 3500, (
+        f"TTL must be refreshed on every INCR (cap-bypass SEV1 fix); got {refreshed}"
+    )
+
+
+async def test_aacquire_slot_caps_at_max_even_after_ttl_refresh(
+    creator_id: str, _cleanup_keys: None
+) -> None:
+    """The EXPIRE-on-every-INCR fix must not loosen the cap itself.
+
+    Acquire up to cap (with refresh on each); the cap+1 attempt still fails
+    and DECRs the over-incremented value so the counter stays at the cap.
+    """
+    for _ in range(3):
+        assert await progress.aacquire_slot(creator_id, max_concurrent=3) is True
+    assert await progress.aacquire_slot(creator_id, max_concurrent=3) is False
+    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    assert int(client.get(f"sse:count:{creator_id}") or 0) == 3
+
+
 # ── serialization invariants ─────────────────────────────────────────────────
 
 

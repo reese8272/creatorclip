@@ -105,7 +105,7 @@
         <div class="sub">in library</div>
       </div>
       <div class="card">
-        <div class="label">Clips ready</div>
+        <div class="label">Clips rendered</div>
         <div class="value" id="clips-ready">—</div>
         <div class="sub"><a href="/static/review.html" style="color:#6c63ff">Review queue →</a></div>
       </div>
@@ -199,10 +199,20 @@
         if (v.ingest_status === 'done') {
           const cr = await fetch(`/videos/${v.id}/clips`, { credentials: 'include' });
           if (cr.ok) {
-            const clips = await cr.json();
-            if (clips.length) {
-              clipsReadyCount += clips.length;
-              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary" style="font-size:0.78rem;padding:4px 10px">${clips.length} clips</a>`;
+            // Endpoint shape: {"clips": [...]} (ClipListOut). Defensively
+            // accept a bare array too in case the response model changes.
+            // (Issue 91 — counter previously read `.length` off the wrapped
+            // object so it incremented by NaN, AND it didn't filter on
+            // render_status — both bugs fixed in one pass.)
+            const body = await cr.json();
+            const allClips = Array.isArray(body) ? body : (body.clips || []);
+            const renderedClips = allClips.filter(c => c.render_status === 'done');
+            if (allClips.length) {
+              clipsReadyCount += renderedClips.length;
+              const label = renderedClips.length === allClips.length
+                ? `${allClips.length} clips`
+                : `${renderedClips.length}/${allClips.length} rendered`;
+              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary" style="font-size:0.78rem;padding:4px 10px">${label}</a>`;
             } else {
               clipsHtml = `<button class="btn btn-primary" style="font-size:0.78rem;padding:4px 10px" onclick="generateClips('${v.id}',this)">Generate clips</button>`;
             }

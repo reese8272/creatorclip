@@ -213,6 +213,10 @@ videos
   id, creator_id (FK), youtube_video_id, title, kind (long/short),
   published_at, duration_s, source_uri, captions_available,
   ingest_status (pending/running/done/failed), created_at
+  -- source_uri IS NULL is the canonical marker for CATALOG-ONLY rows
+  --   (created by sync_channel_catalog as DNA references; do NOT run
+  --   through the local clip pipeline). /videos list excludes them so
+  --   the dashboard never shows "pending forever" rows. (Issue 90)
 
 video_metrics
   video_id (FK), views, watch_time_s, avg_view_duration_s,

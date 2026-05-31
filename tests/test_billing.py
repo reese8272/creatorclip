@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from billing.ledger import (
+    check_balance_for_minutes,
     check_positive_balance,
     grant_minutes,
     video_minutes,
@@ -110,6 +111,64 @@ async def test_check_positive_balance_passes_when_nonzero(mock_session):
     mock_session.scalar = AsyncMock(return_value=50)
     # Should not raise
     await check_positive_balance(creator_id, mock_session)
+
+
+# ── Issue 89 — duration-aware balance pre-check ──────────────────────────────
+#
+# `check_positive_balance` only caught `balance <= 0`. A 1-minute creator
+# uploading a 60-minute video passed the pre-check, the upload completed, then
+# `_ingest_async`'s `deduct_for_video` silently 402'd inside the Celery task
+# with no actionable user-facing surface. `check_balance_for_minutes` mirrors
+# the predicate `deduct_for_video` enforces internally (`balance >= minutes`).
+
+
+@pytest.mark.asyncio
+async def test_check_balance_for_minutes_raises_402_when_insufficient(mock_session):
+    """The SEV-1 scenario: 1-minute balance, 60-minute video → 402."""
+    from fastapi import HTTPException
+
+    creator_id = uuid.uuid4()
+    mock_session.scalar = AsyncMock(return_value=1)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await check_balance_for_minutes(creator_id, 60, mock_session)
+    assert exc_info.value.status_code == 402
+    # The user-facing copy must include both numbers — generic "Insufficient
+    # balance" is exactly what this issue is here to fix.
+    assert "60" in exc_info.value.detail
+    assert "1" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_check_balance_for_minutes_passes_when_exactly_sufficient(mock_session):
+    """Boundary: balance == needed should pass (the underlying `deduct_for_video`
+    UPDATE uses `>=`, not `>`)."""
+    creator_id = uuid.uuid4()
+    mock_session.scalar = AsyncMock(return_value=60)
+    await check_balance_for_minutes(creator_id, 60, mock_session)
+
+
+@pytest.mark.asyncio
+async def test_check_balance_for_minutes_passes_when_over_sufficient(mock_session):
+    creator_id = uuid.uuid4()
+    mock_session.scalar = AsyncMock(return_value=1000)
+    await check_balance_for_minutes(creator_id, 60, mock_session)
+
+
+@pytest.mark.asyncio
+async def test_check_balance_for_minutes_zero_balance_explains_gap(mock_session):
+    """Zero balance + multi-minute video: the 402 detail must explain the gap,
+    not the generic 'no minutes remaining' copy from `check_positive_balance`.
+    """
+    from fastapi import HTTPException
+
+    creator_id = uuid.uuid4()
+    mock_session.scalar = AsyncMock(return_value=0)
+    with pytest.raises(HTTPException) as exc_info:
+        await check_balance_for_minutes(creator_id, 10, mock_session)
+    assert exc_info.value.status_code == 402
+    assert "10 minutes" in exc_info.value.detail
+    assert "you have 0" in exc_info.value.detail
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────────

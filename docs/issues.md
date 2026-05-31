@@ -1929,45 +1929,45 @@ build couldn't see a single eligible video.
 ---
 
 ## Issue 89: Balance pre-check vs deduction mismatch — silent failed uploads (SEV-1)
-**Status**: 🔲 Not started (surfaced by Issue 88's targeted assessment)
+**Status**: ✅ Done (2026-05-31 — Wave 1 hotfix batch)
 
 **What**: `billing/ledger.py:173 check_positive_balance` raises 402 only when `balance <= 0`. The actual `deduct_for_video` (`billing/ledger.py:144`) requires `balance >= video_minutes(duration_s)` (e.g. 60 minutes for a 60-min video). Called from `routers/videos.py:163` (`upload_video`) and `routers/clips.py:139` (`render_clip`). A creator with 1-minute balance uploading a 60-minute video passes the pre-check, the upload completes, then `_ingest_async`'s deduction silently 402s inside the Celery task; `RefundOnFailureTask` runs but has nothing to refund. The user sees "failed" with no actionable message.
 
 **Files**: `billing/ledger.py`, `routers/videos.py`, `routers/clips.py`, `tests/test_billing*.py`.
 
 **Acceptance criteria**:
-- [ ] New `check_balance_for_minutes(creator_id, minutes_needed, session)` helper that raises 402 with `"This video needs N minutes; you have M"`.
-- [ ] `/videos/upload` calls it AFTER probe_duration_s (line 205) with `video_minutes(duration_s)`.
-- [ ] `/clips/{id}/render` calls it with `video_minutes(clip duration)` before enqueuing.
-- [ ] Integration test: 1-minute creator, 60-min video → 402 BEFORE upload completes; no ledger row written.
-- [ ] User-facing copy on the 402 surfaces the gap (currently a generic "Insufficient balance").
+- [x] New `check_balance_for_minutes(creator_id, minutes_needed, session)` helper that raises 402 with `"This video needs N minutes; you have M"`.
+- [x] `/videos/upload` calls it AFTER probe_duration_s (line 205) with `video_minutes(duration_s)`.
+- [~] `/clips/{id}/render` calls it with `video_minutes(clip duration)` before enqueuing. **DEVIATED** — `_render_clip_async` does not deduct, so a per-clip pre-check would deny re-renders of already-paid clips for no billing reason. Render keeps `check_positive_balance` (any-balance gate). See `docs/DECISIONS.md` 2026-05-31 entry.
+- [x] Router-level test (`tests/test_videos_upload_streaming.py::test_upload_402s_after_probe_when_balance_under_video_minutes`): 1-minute creator, 60-min video → 402 BEFORE R2 PUT; no Video row added; tmp file cleaned.
+- [x] User-facing copy on the 402 surfaces the gap (e.g. "This video needs 60 minutes; you have 1.").
 
 ---
 
 ## Issue 90: Catalog-synced videos pollute /videos library list (SEV-2)
-**Status**: 🔲 Not started (surfaced by Issue 88's targeted assessment)
+**Status**: ✅ Done (2026-05-31 — Wave 1 hotfix batch)
 
 **What**: After Issue 87 catalog sync ships, a creator with 200+ uploads will see "200 videos, all pending" on the dashboard. `routers/videos.py:60 list_videos` returns every Video row regardless of `source_uri` / `ingest_status`. The dashboard's polling loop (`static/index.html:267-279`) keeps hitting `/status` for catalog-only rows that will NEVER transition (no `start_pipeline` was called — they're DNA-only references). Looks broken.
 
 **Files**: `routers/videos.py`, `static/index.html`, `tests/test_videos*.py`.
 
 **Acceptance criteria**:
-- [ ] Either (a) exclude `source_uri IS NULL` rows from `/videos` by default (treat as DNA-only); OR (b) tag them with a distinct "catalog" badge + suppress the polling loop + hide the "Generate clips" button.
-- [ ] Dashboard "Videos in library" count reflects the user's mental model (clippable videos), not the full catalog.
-- [ ] Documented in `docs/SOT.md` data-model section so the meaning of `source_uri IS NULL` is canonical.
+- [x] Option (a) chosen: `list_videos` excludes `source_uri IS NULL` rows. SQL-introspect test pins the filter.
+- [x] Dashboard "Videos in library" count reflects clippable videos (not the full catalog).
+- [x] Documented in `docs/SOT.md` data-model section — `source_uri IS NULL` is the canonical catalog-only discriminator.
 
 ---
 
 ## Issue 91: "Clips ready" dashboard counter ignores render_status (SEV-2)
-**Status**: 🔲 Not started (surfaced by Issue 88's targeted assessment)
+**Status**: ✅ Done (2026-05-31 — Wave 1 hotfix batch)
 
 **What**: Dashboard counter `clipsReadyCount += clips.length` (`static/index.html:196`) counts every clip regardless of render state. Reviewer (`static/review.html:154`) only plays clips with `render_uri`; un-rendered clips show "(not yet rendered)" with an empty player. Render must be triggered manually per-clip via `/clips/{id}/render` (`routers/clips.py:130`) — NOT auto-chained after `generate_clips` in `worker/tasks.py:136`. So most clips will be `RenderStatus.pending` immediately after generation.
 
 **Files**: `static/index.html`, `routers/clips.py`, `tests/test_clips*.py`.
 
 **Acceptance criteria**:
-- [ ] Either (a) add a `?render_status=done` query param to `GET /videos/{id}/clips` and have the dashboard use it for the counter; OR (b) have the dashboard JS filter `clips.filter(c => c.render_status === 'done').length`.
-- [ ] Counter label changed to "Clips rendered" (or similar) to match what it actually counts.
+- [x] Option (b) chosen: dashboard JS now filters by `render_status === 'done'`. Also fixed an unrelated unwrapping bug (`.length` was reading off the `{clips: [...]}` wrapper). Per-row display shows `M/N rendered` when partial. Static-page assertion test.
+- [x] Counter label changed to "Clips rendered".
 
 ---
 
@@ -2163,27 +2163,32 @@ vs the current one-time minute packs.
 ---
 
 ## Issue 98: "Build your DNA" banner still shows on dashboard after DNA is built
-**Status**: 🔲 Not started · **Severity**: SEV-2 bug
+**Status**: ✅ Done (2026-05-31 — Wave 1 hotfix batch) · **Severity**: SEV-2 bug
 
 **What**: User quote: "It says build your DNA on the top of the dashboard
 even though it's completely done. Can't have that when we already built it."
 
-**Where**: `static/index.html` — the build-DNA CTA isn't gated on the
-existence of an active `creator_dna` row. Should hide / replace with a
-"View your DNA" link to `profile.html` once `GET /creators/me/dna`
-returns a profile.
+**Where**: Root cause was NOT the frontend conditional (already correct —
+`state !== 'active'`). The state machine was missing the `connected →
+dna_pending` transition: `dna/profile.py::create_draft` never advanced
+`onboarding_state`, so `confirm_draft`'s `dna_pending → active` precondition
+never matched, and the state stayed `connected` forever — banner showed
+indefinitely. Fix: `create_draft` bumps `connected → dna_pending` so the
+canonical arc completes.
 
-**Fix is small** (frontend conditional render) but blocked on Issue 88
-verifying that `onboarding_state` flips from `connected` → `active` on
-DNA confirm — the live state showed `connected` even though v2 is
-`status=confirmed` (see Issue 88 session log). The state-machine bump
-might be the actual gating field, in which case the bug is twofold.
-
-**ACs (draft)**:
-- [ ] CTA hidden when active DNA exists
-- [ ] Replaced with "View / rebuild your DNA" link
-- [ ] `onboarding_state` correctly progresses to `active` on first confirm
-      (separately verify — may need fix in `dna/profile.py::confirm_draft`)
+**ACs**:
+- [x] CTA hidden when active DNA exists (frontend conditional already
+      correct; now actually triggers because state advances).
+- [~] "View / rebuild your DNA" link replacement — the existing
+      `dna_pending` branch already changes the CTA copy to "DNA ready —
+      confirm". For the post-`active` state the banner hides entirely;
+      a dedicated "View" link belongs in Issue 99/100's redesign and is
+      explicitly deferred there.
+- [x] `onboarding_state` correctly progresses to `active` on first
+      confirm. Full arc test (`connected → dna_pending → active`) lives
+      in `tests/test_dna_idempotency_integration.py`; unit-lane
+      equivalents in `tests/test_dna.py` (3 tests for idempotency +
+      no-regression-on-active).
 
 ---
 

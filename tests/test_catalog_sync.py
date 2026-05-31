@@ -217,6 +217,9 @@ def test_upload_video_resolves_short_from_probe(monkeypatch):
             patch("routers.videos.probe_duration_s", return_value=45.0),
             patch("routers.videos.upload_file", return_value="local://x"),
             patch("routers.videos.check_positive_balance", new=AsyncMock()),
+            # Issue 89: post-probe pre-check uses video_minutes(duration_s).
+            # This test isn't about billing — just the kind-resolution shape.
+            patch("routers.videos.check_balance_for_minutes", new=AsyncMock()),
             patch("routers.videos.start_pipeline"),
         ):
             client = TestClient(app, raise_server_exceptions=False)

@@ -6,23 +6,36 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 88 closed end-to-end (DNA built + confirmed live for Backboard Media: 21 videos analyzed, 6 longs + 15 shorts, brief generated, 63 pgvector embeddings, v2 = confirmed). User reviewed the result, then filed 9 next-priority issues via close-out.
-**Last completed**: Issue 88 — DNA filter parity + business-event observability (with a follow-up hotfix commit `b464a34` that bumped the YouTube Analytics httpx read timeout 15s→60s and caught `httpx.RequestError` in the retry loop — surfaced during the live first build attempt, which silently timed out on every video because Google's per-video Analytics endpoint takes ~13s and our 15s budget didn't include retry-on-timeout).
+**Active issue**: _(none in flight)_ — Wave 1 hotfix batch closed (6 fixes in one branch: 2 from `/assess` + Issues 89/90/91/98).
+**Last completed**: Wave 1 — 2 SEV-1 hotfixes from `/assess` (worker/progress.py EXPIRE drift, billing/refund.py AdminSessionLocal) + Issues 89/90/91/98 (4 hardening fixes spawned by Issue 88's audit + the live close-out).
 
 **Queued for next session (in priority order from the 2026-05-31 user close-out)**:
+- **Issue 84** — AI/LLM efficiency assessment (prerequisite for 93/94; Issue 86 already provides cache-hit data).
 - **Issue 92** — Universal progress visibility (extend the Issue-86 SSE primitive to every long-running op). SEV-1 UX.
-- **Issue 93** — Insights page rebuild ("what is it even showing?"). SEV-1 UX.
-- **Issue 94** — Clip-engine transparency (why this clip, why-not for skipped videos). SEV-1 UX.
-- **Issue 95** — Hotkey + OBS/streaming-software integration (instant-replay rolling-buffer clips). SEV-2 new feature.
-- **Issue 96** — Multi-step / chat-driven intake form (CFO-Agent pattern; supersedes Issue 83 "optional" decision).
-- **Issue 97** — Livestream recap video (subscription-tier candidate; recurring vs minute-pack pricing).
-- **Issue 98** — "Build your DNA" CTA still showing post-build (frontend gate + possibly `onboarding_state` advancement bug — the live state on Backboard Media was still `connected` despite v2 being `confirmed`).
+- **Issue 93** — Insights page rebuild ("what is it even showing?"). SEV-1 UX. Depends on 84+92.
+- **Issue 94** — Clip-engine transparency (why this clip, why-not for skipped videos). SEV-1 UX. Depends on 92.
 - **Issue 99** — UI redesign (supersedes Issue 85). Phase 1 must present 5–8 reference sites for the user to pick patterns from.
 - **Issue 100** — Onboarding tutorial + mandatory intake (related to Issues 96, 98, 99). Replaces today's silent "pending" status badges with self-explaining text.
+- **Issue 96** — Multi-step / chat-driven intake form (CFO-Agent pattern; supersedes Issue 83 "optional" decision).
+- **Issue 95** — Hotkey + OBS/streaming-software integration (instant-replay rolling-buffer clips). SEV-2 new feature.
+- **Issue 97** — Livestream recap video (subscription-tier candidate; recurring vs minute-pack pricing).
 
-Also still queued from prior sessions: Issue 84 (AI/LLM efficiency assessment) and Issues 89–91 (SEV-1/2 spinoffs from Issue 88's targeted audit — balance pre-check vs deduction, catalog-synced videos polluting /videos list, "Clips ready" counter ignoring render_status).
+**Prod-readiness gates still pending**:
+- **RLS activation** — Hotfix B unblocks the manual workflow. Run `Activate RLS (Issue 79)` workflow with `dry_run=true` then `false`.
+- **Issue 78f PgBouncer load test** — sole gate that moves the verdict from CONDITIONAL → YES.
 
 **Blocked**: _(none)_
+
+> **Closed Wave 1 — 6-hotfix batch** (2026-05-31): One branch, six commits, one CI cycle.
+>
+> - **Hotfix A — `worker/progress.py:214-232` aacquire_slot EXPIRE drift** (SEV-1 from `/assess`): Moved `client.expire()` out of the `count==1` branch so EXPIRE fires on every INCR. Bug: a creator holding ≥1 SSE streams continuously past `_STREAM_TTL_SECONDS=3600s` had the counter TTL elapse → next INCR reset to 1 → cap silently bypassed. Canonical Redis sliding-window pattern. 2 new regression tests pin the TTL refresh + cap behavior.
+> - **Hotfix B — `billing/refund.py:41` AsyncSessionLocal → AdminSessionLocal** (SEV-1 from `/assess`): Refund is a system action with no per-creator context; under prod RLS the app-role session without `session.info["creator_id"]` returns zero rows from the `MinuteDeduction` SELECT → every refund silently no-ops. Matches the rest of the worker surface. **Now unblocks the RLS activation workflow** (was blocking the prod role split). Source-inspect + runtime-mock invariants pin the factory choice.
+> - **Issue 89 — balance pre-check vs deduction mismatch**: New `check_balance_for_minutes(creator_id, minutes_needed, session)` helper raises 402 with concrete gap copy ("This video needs N minutes; you have M"). Wired into `/videos/upload` after `probe_duration_s` so a low-balance creator uploading a long video gets an actionable 402 BEFORE the R2 PUT, not a silent post-upload `failed` row. **Deviation from AC**: did NOT wire into `/clips/render` because `_render_clip_async` doesn't deduct — adding a per-clip pre-check there would deny re-renders of already-paid clips for no billing reason. Captured in `docs/DECISIONS.md`. 4 unit tests + 1 router-level integration test (mocks probe, asserts 402 + tmp cleanup + storage not called).
+> - **Issue 90 — catalog rows excluded from /videos list**: `source_uri IS NOT NULL` filter on `list_videos`. Documented `source_uri IS NULL` as the canonical catalog-only marker in `docs/SOT.md` data-model section. Test introspects the compiled SQL to pin the filter.
+> - **Issue 91 — "Clips ready" counter filters render_status=done**: Frontend filter in `static/index.html`; relabeled card "Clips rendered". Also fixed an unrelated unwrapping bug (`clips.length` was reading off the `{clips: [...]}` wrapper). Display now shows `M/N rendered` when partial. Static-page text assertion test.
+> - **Issue 98 — DNA banner sticky + missing state transition**: Root cause was in `dna/profile.py::create_draft` — it never advanced `onboarding_state`, so the existing `confirm_draft` precondition (`if state == dna_pending`) never matched and state stayed `connected` forever. Fix: `create_draft` bumps `connected → dna_pending` so the canonical arc completes. 3 unit tests for the arc (idempotent on rebuild, no-regression on active). Frontend conditional at `static/index.html:160` already correct and now hides properly after confirm.
+>
+> **Layer 0 gates**: ruff 0 / mypy 0 / freshness ok. **Tests**: 523 passed / 1 skipped / 89 deselected (default lane). Integration tests for Issue 98 added; verification runs on CI's integration lane.
 
 > **Closed Issue 88 — end-to-end verification** (2026-05-31): Initial Issue 88 deploy
 > (commit `e9a2c3f`) shipped the filter-parity fix + `log_event` observability +

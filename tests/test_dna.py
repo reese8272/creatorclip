@@ -298,3 +298,124 @@ async def test_confirm_draft_supersedes_previous_confirmed_profile():
     )
     # The draft must now be confirmed.
     assert new_draft.status == DnaStatus.confirmed, "Draft DNA row was not promoted to confirmed"
+
+
+# ── Issue 98: create_draft advances onboarding_state ─────────────────────────
+#
+# Real-DB coverage of the full state-machine arc lives in
+# `tests/test_dna_idempotency_integration.py`. These mock-based unit tests
+# pin the same logic so the default (non-integration) lane catches a
+# regression. Note: create_draft now issues a `session.get(Creator, ...)`
+# call to read+possibly-bump the state — any prior unit test that mocked
+# session without that `get` returning a creator (or returning None) is
+# already compatible because the bump is gated on `creator is not None`.
+
+
+def _make_creator_stub(state):
+    """Tiny stand-in for a Creator row with a writable `onboarding_state`."""
+    return SimpleNamespace(onboarding_state=state)
+
+
+@pytest.mark.asyncio
+async def test_create_draft_bumps_connected_to_dna_pending():
+    """connected → dna_pending — the missing transition Issue 98 fixes."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dna import profile
+    from models import OnboardingState
+
+    creator_id = uuid.uuid4()
+    stub = _make_creator_stub(OnboardingState.connected)
+
+    # session.execute returns max(version) = 0 → next draft is v1.
+    exec_result = MagicMock()
+    exec_result.scalar.return_value = 0
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=exec_result)
+    session.add = MagicMock()
+    session.get = AsyncMock(return_value=stub)
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+
+    await profile.create_draft(
+        session,
+        creator_id=creator_id,
+        patterns={},
+        top_video_ids=[],
+        bottom_video_ids=[],
+        brief_text="v1",
+    )
+
+    assert stub.onboarding_state == OnboardingState.dna_pending, (
+        "create_draft must bump connected → dna_pending (Issue 98)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_draft_idempotent_when_already_dna_pending():
+    """A second create_draft call (e.g. a rebuild) MUST NOT churn state."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dna import profile
+    from models import OnboardingState
+
+    stub = _make_creator_stub(OnboardingState.dna_pending)
+    exec_result = MagicMock()
+    exec_result.scalar.return_value = 1  # max_version=1 → next is v2
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=exec_result)
+    session.add = MagicMock()
+    session.get = AsyncMock(return_value=stub)
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+
+    await profile.create_draft(
+        session,
+        creator_id=uuid.uuid4(),
+        patterns={},
+        top_video_ids=[],
+        bottom_video_ids=[],
+        brief_text="v2",
+    )
+
+    assert stub.onboarding_state == OnboardingState.dna_pending
+
+
+@pytest.mark.asyncio
+async def test_create_draft_does_not_regress_active_state():
+    """Rebuild for an already-active creator must NOT downgrade to dna_pending —
+    otherwise the dashboard banner would flicker back on between draft creation
+    and confirmation during a v2 rebuild flow."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dna import profile
+    from models import OnboardingState
+
+    stub = _make_creator_stub(OnboardingState.active)
+    exec_result = MagicMock()
+    exec_result.scalar.return_value = 2  # max_version=2 → next is v3
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=exec_result)
+    session.add = MagicMock()
+    session.get = AsyncMock(return_value=stub)
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+
+    await profile.create_draft(
+        session,
+        creator_id=uuid.uuid4(),
+        patterns={},
+        top_video_ids=[],
+        bottom_video_ids=[],
+        brief_text="v3",
+    )
+
+    assert stub.onboarding_state == OnboardingState.active, (
+        "create_draft MUST NOT regress active → dna_pending on rebuild"
+    )

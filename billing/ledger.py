@@ -171,10 +171,40 @@ async def deduct_for_video(
 
 
 async def check_positive_balance(creator_id: uuid.UUID, session: AsyncSession) -> None:
-    """Pre-flight guard: raises 402 if the creator has no minutes remaining."""
+    """Pre-flight guard: raises 402 if the creator has no minutes remaining.
+
+    Used where the operation does not deduct minutes itself (e.g. /clips/render)
+    — the gate is a usage floor, not a per-call cost check. For deducting paths
+    (e.g. /videos/upload) use ``check_balance_for_minutes`` instead.
+    """
     balance = await get_balance(creator_id, session)
     if balance <= 0:
         raise HTTPException(
             status_code=402,
             detail=("No minutes remaining. Purchase a pack at /pricing to process videos."),
+        )
+
+
+async def check_balance_for_minutes(
+    creator_id: uuid.UUID, minutes_needed: int, session: AsyncSession
+) -> None:
+    """Pre-flight guard: raises 402 if the creator can't cover *minutes_needed*.
+
+    Mirrors the predicate ``deduct_for_video`` enforces internally
+    (``balance >= minutes``) — see ``billing/ledger.py:144``. Without this
+    pre-check the upload path silently 402s inside the Celery task, leaving the
+    user with a "failed" video and no actionable message. (Issue 89 — SEV-1
+    spawned by Issue 88's display-vs-filter audit.)
+
+    The user-facing 402 surfaces the concrete gap (needed vs. available) so the
+    response copy is actionable rather than generic "Insufficient balance".
+    """
+    balance = await get_balance(creator_id, session)
+    if balance < minutes_needed:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"This video needs {minutes_needed} minutes; you have {balance}. "
+                f"Purchase a pack at /pricing to continue."
+            ),
         )

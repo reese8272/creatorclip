@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
-from billing.ledger import check_positive_balance
+from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from config import settings
 from db import get_session
 from limiter import limiter
@@ -64,9 +64,20 @@ async def list_videos(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    """List all videos for the current creator, newest first."""
+    """List all videos for the current creator, newest first.
+
+    Excludes catalog-only rows (``source_uri IS NULL``) — those are DNA-only
+    references created by ``sync_channel_catalog`` and never enter the local
+    clip pipeline. Surfacing them would show "N pending forever" on the
+    dashboard and have the polling loop hammer ``/status`` for rows that will
+    never transition. ``source_uri IS NULL`` is the canonical discriminator
+    for catalog-only state (see ``docs/SOT.md`` data-model section).
+    (Issue 90 — surfaced by Issue 88's display-vs-filter audit.)
+    """
     result = await session.execute(
-        select(Video).where(Video.creator_id == creator.id).order_by(Video.created_at.desc())
+        select(Video)
+        .where(Video.creator_id == creator.id, Video.source_uri.isnot(None))
+        .order_by(Video.created_at.desc())
     )
     videos = list(result.scalars())
     return [
@@ -204,6 +215,22 @@ async def upload_video(
     # ffprobe is a header read (caps at 30s in youtube/ingest.py). (Issue 87)
     duration_s = await asyncio.to_thread(probe_duration_s, tmp_path)
     kind = classify_video_kind(duration_s) if duration_s is not None else VideoKind.long
+
+    # Issue 89 — duration-aware balance pre-check.
+    # The upfront `check_positive_balance` at line ~163 prevents the full
+    # streamed upload for 0-balance creators (saves disk I/O). Now that we
+    # know the actual duration, enforce the predicate `deduct_for_video`
+    # uses internally (balance >= minutes), so a low-balance creator
+    # uploading a long video gets an actionable 402 BEFORE the R2 PUT
+    # rather than a silent post-upload failed status. (Skipped when probe
+    # fails — unknown-duration uploads fall through to the legacy path
+    # and surface the same generic failure as before.)
+    if duration_s is not None:
+        try:
+            await check_balance_for_minutes(creator.id, video_minutes(duration_s), session)
+        except HTTPException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     try:
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"

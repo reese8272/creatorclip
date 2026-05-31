@@ -172,6 +172,86 @@ def test_upload_just_over_max_rejects_413_and_writes_nothing(monkeypatch):
     storage_mock.assert_not_called()
 
 
+# ── Issue 89: duration-aware balance pre-check fires after probe ─────────────
+
+
+def test_upload_402s_after_probe_when_balance_under_video_minutes(monkeypatch):
+    """1-minute balance, 60-minute video → 402 BEFORE R2 PUT, tmp cleaned, no Video row.
+
+    SEV-1 regression: before the fix, `check_positive_balance` only checked
+    balance>0; the upload completed, then `_ingest_async`'s deduct silently
+    402'd inside Celery, leaving the user with a "failed" video and no
+    actionable message.
+    """
+    from fastapi import HTTPException
+
+    monkeypatch.setattr("config.settings.UPLOAD_MAX_MB", _TEST_MAX_MB)
+
+    creator = _fake_creator()
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session()
+
+    storage_mock = MagicMock()
+    start_pipeline_mock = MagicMock()
+
+    # Track every NamedTemporaryFile created — must be cleaned even on 402.
+    created_paths: list[Path] = []
+    real_ntf = tempfile.NamedTemporaryFile
+
+    def _tracking_ntf(**kwargs):
+        ntf = real_ntf(**kwargs)
+        created_paths.append(Path(ntf.name))
+        return ntf
+
+    # Force the duration probe to return a known 60 minutes so the deduction-
+    # predicate check has well-defined inputs. probe_duration_s is sync and
+    # called inside asyncio.to_thread — patching the import at the router
+    # leaves asyncio.to_thread doing its real thing.
+    def _fake_probe(_tmp):
+        return 3600.0
+
+    # check_positive_balance passes (the fast gate); check_balance_for_minutes
+    # raises 402 (the SEV-1 fix). 402 detail must reference both numbers.
+    async def _fake_balance_check(creator_id, minutes_needed, _session):
+        assert minutes_needed == 60, (
+            f"upload must call check_balance_for_minutes with video_minutes(3600s)=60; "
+            f"got {minutes_needed}"
+        )
+        raise HTTPException(
+            status_code=402,
+            detail=f"This video needs {minutes_needed} minutes; you have 1.",
+        )
+
+    try:
+        with (
+            patch("routers.videos.check_positive_balance", new_callable=AsyncMock),
+            patch("routers.videos.check_balance_for_minutes", side_effect=_fake_balance_check),
+            patch("routers.videos.probe_duration_s", _fake_probe),
+            patch("routers.videos.upload_file", storage_mock),
+            patch("routers.videos.tempfile.NamedTemporaryFile", side_effect=_tracking_ntf),
+            patch("routers.videos.start_pipeline", start_pipeline_mock),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            tiny_payload = b"\x00" * 1024  # 1 KB — under any size limit
+            resp = c.post(
+                "/videos/upload",
+                data={"youtube_video_id": "issue89test"},
+                files={"file": ("video.mp4", io.BytesIO(tiny_payload), "video/mp4")},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 402, f"Expected 402, got {resp.status_code}: {resp.text}"
+    assert "60" in resp.json()["detail"]
+    assert "1" in resp.json()["detail"]
+    storage_mock.assert_not_called()
+    start_pipeline_mock.assert_not_called()
+    # Every temp file must be cleaned even on the 402 short-circuit.
+    for p in created_paths:
+        assert not p.exists(), f"Temp file not cleaned up on 402: {p}"
+
+
 @pytest.mark.skip(
     reason="TestClient runs in-process — the test-side 100 MB payload allocation "
     "dominates ru_maxrss and overwhelms whatever the server route allocates. "

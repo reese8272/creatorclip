@@ -153,3 +153,76 @@ def test_list_videos_response_has_required_keys(client):
     item = resp.json()[0]
     for key in ("id", "youtube_video_id", "title", "kind", "ingest_status", "created_at"):
         assert key in item
+
+
+# ── Issue 90: catalog-only rows excluded from /videos list ───────────────────
+#
+# `sync_channel_catalog` upserts every video on the creator's channel as a
+# Video row with `source_uri=None` so DNA build has the metric set without
+# triggering the local clip pipeline. Those rows must NOT appear in the
+# dashboard's `/videos` list — they have no ingest pipeline running, would
+# show "pending forever," and the dashboard's polling loop would hammer
+# `/status` for rows that can never transition.
+
+
+# ── Issue 91: clips-ready counter filters render_status=done ─────────────────
+
+
+def test_dashboard_clips_counter_filters_by_render_status():
+    """Static-page guard: the dashboard JS must filter clips by render_status,
+    not just count them all. Previously the counter showed total clips, but
+    only `render_status === 'done'` clips are actually playable in the reviewer
+    (`render_uri` is set only on done renders). Showing "12 ready" when none
+    are playable is exactly the credibility-corroding UX Issue 91 closes.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+    assert "render_status === 'done'" in src, (
+        "Dashboard clips counter must filter by render_status='done'. "
+        "Issue 91 — counter previously included pending/running clips that "
+        "the reviewer cannot play."
+    )
+    # The label switched to "rendered" so the counter name matches what it counts.
+    assert "Clips rendered" in src, (
+        "Card label should be 'Clips rendered' to match the counter semantics "
+        "(it now counts only done renders, not generated clip rows)."
+    )
+
+
+def test_list_videos_excludes_catalog_only_rows(client):
+    """The SELECT must filter `Video.source_uri IS NOT NULL`. Verified by
+    introspecting the SQLAlchemy statement passed to session.execute.
+    """
+    captured_statements: list = []
+    creator = _mock_creator()
+
+    def _capturing_session():
+        async def _session():
+            session = AsyncMock()
+            result = MagicMock()
+            result.scalars.return_value = []
+
+            async def _execute(stmt):
+                captured_statements.append(stmt)
+                return result
+
+            session.execute = _execute
+            yield session
+
+        return _session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _capturing_session()
+    try:
+        resp = client.get("/videos")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    assert len(captured_statements) == 1
+    compiled = str(captured_statements[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "source_uri IS NOT NULL" in compiled, (
+        "list_videos must filter Video.source_uri.isnot(None) so catalog-only "
+        "(DNA-reference) rows don't pollute the dashboard. (Issue 90)"
+    )

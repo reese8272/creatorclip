@@ -37,8 +37,15 @@ async def refund_for_video(video_id: uuid.UUID) -> int:
     Returns the number of minutes refunded. Returns 0 when:
       - no deduction exists for this video (failure happened pre-deduct), or
       - a refund row already exists (idempotent no-op on retry of on_failure).
+
+    Uses ``AdminSessionLocal`` (BYPASSRLS): refund is a system action — there
+    is no per-creator context on the Celery ``on_failure`` callback to set
+    ``session.info["creator_id"]``, so an app-role session would have RLS
+    silently drop the ``MinuteDeduction`` SELECT to zero rows once the prod
+    role split flips. This matches the rest of the worker surface
+    (``worker/tasks.py``).
     """
-    async with db.AsyncSessionLocal() as session:
+    async with db.AdminSessionLocal() as session:
         deduction = await session.scalar(
             select(MinuteDeduction).where(MinuteDeduction.video_id == video_id)
         )

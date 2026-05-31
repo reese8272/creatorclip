@@ -220,14 +220,18 @@ async def aacquire_slot(creator_id: str, max_concurrent: int) -> bool:
     complexity for the threat model.
     """
     client = _async_client()
-    count = await client.incr(_concurrent_key(creator_id))
-    if count == 1:
-        # Bound the key's lifetime in case a DECR is missed (worker kill,
-        # process crash, network drop mid-DECR). The counter resets to 0 when
-        # the TTL expires.
-        await client.expire(_concurrent_key(creator_id), _STREAM_TTL_SECONDS)
+    key = _concurrent_key(creator_id)
+    count = await client.incr(key)
+    # Refresh TTL on EVERY INCR (not just count==1) so the cap holds as long as
+    # streams are actively being acquired. The earlier "set TTL only on first
+    # INCR" shape silently bypassed the cap: a creator who steady-state-held
+    # N>=1 streams past _STREAM_TTL_SECONDS had the counter expire under them,
+    # the next INCR reset to 1, and the cap-check passed even though N live
+    # streams were still attributable. EXPIRE-on-every-INCR is the canonical
+    # Redis sliding-window counter pattern.
+    await client.expire(key, _STREAM_TTL_SECONDS)
     if count > max_concurrent:
-        await client.decr(_concurrent_key(creator_id))
+        await client.decr(key)
         return False
     return True
 

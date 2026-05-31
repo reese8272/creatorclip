@@ -128,6 +128,129 @@ async def test_build_dna_concurrent_redelivery_builds_once(db_session: AsyncSess
         await db_session.commit()
 
 
+async def _seed_creator_with_state(session: AsyncSession, state: OnboardingState) -> Creator:
+    creator = Creator(
+        google_sub=f"test_dna_state_{uuid.uuid4().hex[:8]}",
+        channel_id=f"UC_dna_st_{uuid.uuid4().hex[:6]}",
+        channel_title="State Test",
+        onboarding_state=state,
+    )
+    session.add(creator)
+    await session.commit()
+    return creator
+
+
+# ── Issue 98: onboarding state-machine arc (connected → dna_pending → active) ─
+
+
+@pytest.mark.asyncio
+async def test_create_draft_advances_connected_to_dna_pending(db_session: AsyncSession):
+    """Issue 98 root cause: create_draft used to leave onboarding_state alone.
+    A fresh creator (state=connected) created a draft, confirm_draft's
+    `if state == dna_pending` precondition never matched, state stayed
+    `connected` forever, and the dashboard's "Build your DNA" banner showed
+    even after the user confirmed. The fix: create_draft bumps connected →
+    dna_pending so the canonical arc completes."""
+    creator = await _seed_creator_with_state(db_session, OnboardingState.connected)
+    try:
+        await create_draft(
+            db_session,
+            creator_id=creator.id,
+            patterns={},
+            top_video_ids=[],
+            bottom_video_ids=[],
+            brief_text="v1",
+        )
+        await db_session.refresh(creator)
+        assert creator.onboarding_state == OnboardingState.dna_pending, (
+            "create_draft must bump connected → dna_pending so confirm_draft's "
+            "`dna_pending → active` branch is reachable. (Issue 98)"
+        )
+    finally:
+        await db_session.execute(delete(CreatorDna).where(CreatorDna.creator_id == creator.id))
+        await db_session.execute(delete(Creator).where(Creator.id == creator.id))
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_full_state_arc_connected_to_active(db_session: AsyncSession):
+    """Full Issue 98 arc: create_draft (connected → dna_pending), then
+    confirm_draft (dna_pending → active). End state is `active` — the
+    dashboard banner conditional `state !== 'active'` correctly hides."""
+    creator = await _seed_creator_with_state(db_session, OnboardingState.connected)
+    try:
+        await create_draft(
+            db_session,
+            creator_id=creator.id,
+            patterns={},
+            top_video_ids=[],
+            bottom_video_ids=[],
+            brief_text="v1",
+        )
+        await db_session.refresh(creator)
+        assert creator.onboarding_state == OnboardingState.dna_pending
+
+        await confirm_draft(db_session, creator.id)
+        await db_session.refresh(creator)
+        assert creator.onboarding_state == OnboardingState.active, (
+            "Full arc connected → dna_pending → active must end at `active`. (Issue 98)"
+        )
+    finally:
+        await db_session.execute(delete(CreatorDna).where(CreatorDna.creator_id == creator.id))
+        await db_session.execute(delete(Creator).where(Creator.id == creator.id))
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_create_draft_idempotent_on_state_already_dna_pending(
+    db_session: AsyncSession,
+):
+    """A creator already in `dna_pending` (e.g. a rebuild) stays in
+    `dna_pending` — create_draft does not downgrade or churn the state."""
+    creator = await _seed_creator_with_state(db_session, OnboardingState.dna_pending)
+    try:
+        await create_draft(
+            db_session,
+            creator_id=creator.id,
+            patterns={},
+            top_video_ids=[],
+            bottom_video_ids=[],
+            brief_text="v1",
+        )
+        await db_session.refresh(creator)
+        assert creator.onboarding_state == OnboardingState.dna_pending
+    finally:
+        await db_session.execute(delete(CreatorDna).where(CreatorDna.creator_id == creator.id))
+        await db_session.execute(delete(Creator).where(Creator.id == creator.id))
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_create_draft_does_not_regress_active_state(db_session: AsyncSession):
+    """A creator already `active` (rebuild scenario) MUST NOT regress to
+    `dna_pending` — a v2 build/confirm cycle should leave the dashboard's
+    `active` state intact between draft creation and confirmation."""
+    creator = await _seed_creator_with_state(db_session, OnboardingState.active)
+    try:
+        await create_draft(
+            db_session,
+            creator_id=creator.id,
+            patterns={},
+            top_video_ids=[],
+            bottom_video_ids=[],
+            brief_text="v2",
+        )
+        await db_session.refresh(creator)
+        assert creator.onboarding_state == OnboardingState.active, (
+            "create_draft MUST NOT downgrade an `active` creator back to "
+            "`dna_pending` during a rebuild."
+        )
+    finally:
+        await db_session.execute(delete(CreatorDna).where(CreatorDna.creator_id == creator.id))
+        await db_session.execute(delete(Creator).where(Creator.id == creator.id))
+        await db_session.commit()
+
+
 @pytest.mark.asyncio
 async def test_confirm_draft_keeps_single_confirmed(db_session: AsyncSession):
     creator = await _seed_creator(db_session)
