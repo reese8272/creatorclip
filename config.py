@@ -81,6 +81,18 @@ class Settings(BaseSettings):
     R2_SECRET_ACCESS_KEY: str = ""
     R2_BUCKET: str = ""
     SOURCE_MEDIA_RETENTION_HOURS: int = 72
+    # Wave-4 Fix 3 (Issue 75b) — YouTube API Services Developer Policies
+    # Sections III.E.4.b + III.D.2.3.b require API clients to verify
+    # authorization every 30 calendar days OR delete the stored API data.
+    # When a creator's analytics rows fail to refresh (token revoked, quota
+    # exhausted, etc.) `fetched_at` stops advancing; the daily Beat purge
+    # deletes rows past this cutoff. 30 days is the exact number in the
+    # policy, the example in Google's compliance guide, and what Google's
+    # compliance reviewers check during OAuth app verification. Lengthening
+    # past 30 days would be a documented ToS violation; shortening is safe
+    # but trades off freshness for no compliance benefit.
+    # Source: https://developers.google.com/youtube/terms/developer-policies
+    YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5

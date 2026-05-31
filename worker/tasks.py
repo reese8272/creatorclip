@@ -167,6 +167,21 @@ def purge_stale_source_media() -> None:
     run_async(_purge_stale_source_media_async())
 
 
+@celery.task(name="worker.tasks.purge_stale_youtube_analytics")
+def purge_stale_youtube_analytics() -> None:
+    """Wave-4 Fix 3 (Issue 75b) — Celery Beat task.
+
+    Delete YouTube analytics rows whose ``fetched_at`` exceeds
+    ``YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS`` (default 30) — the hard maximum
+    set by YouTube API Services Developer Policies §III.E.4.b + §III.D.2.3.b.
+    When a creator's daily refresh stops succeeding (OAuth revoked, quota
+    exhausted, etc.) ``fetched_at`` stops advancing; the partial-staleness
+    purge deletes rows past the cutoff. Required for OAuth app verification.
+    Source: https://developers.google.com/youtube/terms/developer-policies
+    """
+    run_async(_purge_stale_youtube_analytics_async())
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """
@@ -1044,6 +1059,96 @@ async def _purge_stale_source_media_async() -> None:
         await session.execute(update(Video).where(Video.id.in_(purged_ids)).values(source_uri=None))
         await session.commit()
         logger.info("Purged source media for %d video(s)", len(purged_ids))
+
+
+async def _purge_stale_youtube_analytics_async() -> None:
+    """Delete YouTube analytics rows past the ToS retention cutoff.
+
+    Per YouTube API Services Developer Policies §III.E.4.b: API clients must
+    re-verify authorization every 30 calendar days OR delete the stored
+    data. ``fetched_at`` is the natural proxy — if the daily Beat refresh
+    fails for any reason (token revoked, quota exhausted, transient outage
+    >30d) the row's fetched_at stops advancing and falls past the cutoff.
+
+    Purges in four tables in one short transaction:
+      - ``video_metrics`` (per-video metrics)
+      - ``retention_curves`` (per-video; written in lock-step with
+        VideoMetrics by ``youtube/analytics.py::sync_video_analytics``, so
+        we delete RetentionCurve rows for videos whose VideoMetrics is
+        being purged)
+      - ``audience_activity`` (per-creator, per day-of-week × hour)
+      - ``demographics`` (per-creator aggregate)
+
+    Cascades: ``retention_curves.video_id`` has ON DELETE CASCADE on
+    ``videos`` but we do NOT delete Video rows here (the Video record itself
+    is the creator's data, not YouTube API data). We explicitly delete
+    RetentionCurve rows for the affected video_ids.
+
+    Idempotent: runs to no-op when there are no stale rows. Safe to call
+    repeatedly; safe to call concurrently (DELETE WHERE fetched_at < cutoff
+    is the same query each time).
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import delete, select
+
+    from config import settings
+
+    cutoff = datetime.now(UTC) - timedelta(days=settings.YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS)
+
+    async with db.AdminSessionLocal() as session:
+        # VideoMetrics — collect video_ids first so we can cascade
+        # RetentionCurve deletion in the same transaction.
+        stale_video_ids = (
+            (
+                await session.execute(
+                    select(VideoMetrics.video_id).where(VideoMetrics.fetched_at < cutoff)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        deleted_metrics = 0
+        deleted_curves = 0
+        if stale_video_ids:
+            # RetentionCurve is written in lock-step with VideoMetrics so its
+            # staleness equals its parent VideoMetrics's staleness. The FK
+            # cascade only fires on Video deletion (which we do NOT do here).
+            r = await session.execute(
+                delete(RetentionCurve).where(RetentionCurve.video_id.in_(stale_video_ids))
+            )
+            deleted_curves = r.rowcount or 0
+            r = await session.execute(
+                delete(VideoMetrics).where(VideoMetrics.video_id.in_(stale_video_ids))
+            )
+            deleted_metrics = r.rowcount or 0
+
+        # AudienceActivity — per-creator, per (day_of_week, hour).
+        from models import AudienceActivity, Demographics
+
+        r = await session.execute(
+            delete(AudienceActivity).where(AudienceActivity.fetched_at < cutoff)
+        )
+        deleted_activity = r.rowcount or 0
+
+        # Demographics — per-creator aggregate.
+        r = await session.execute(delete(Demographics).where(Demographics.fetched_at < cutoff))
+        deleted_demographics = r.rowcount or 0
+
+        await session.commit()
+
+    total = deleted_metrics + deleted_curves + deleted_activity + deleted_demographics
+    if total:
+        logger.info(
+            "Purged stale YouTube analytics — metrics=%d curves=%d activity=%d demographics=%d "
+            "(cutoff: rows fetched before %s)",
+            deleted_metrics,
+            deleted_curves,
+            deleted_activity,
+            deleted_demographics,
+            cutoff.isoformat(),
+        )
 
 
 async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = None) -> None:

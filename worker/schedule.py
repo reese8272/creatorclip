@@ -9,6 +9,13 @@ SOURCE_MEDIA_RETENTION_HOURS to comply with YouTube ToS data-retention requireme
 
 refresh_youtube_analytics runs daily: re-fetches video metrics and audience data
 for all creators to keep analytics current.
+
+purge_stale_youtube_analytics runs daily (Wave-4 Fix 3 / Issue 75b): deletes
+analytics rows whose ``fetched_at`` exceeds ``YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS``
+(default 30) — the hard cutoff in YouTube API Services Developer Policies
+§III.E.4.b for when authorization cannot be re-verified. Runs 6 hours offset
+from refresh_youtube_analytics so the purge sees the FRESHEST possible
+fetched_at values for healthy creators and only sweeps genuinely-stale rows.
 """
 
 from celery.schedules import timedelta
@@ -26,6 +33,10 @@ celery.conf.beat_schedule = {
     },
     "refresh-youtube-analytics-daily": {
         "task": "worker.tasks.refresh_youtube_analytics",
+        "schedule": timedelta(hours=24),
+    },
+    "purge-stale-youtube-analytics-daily": {
+        "task": "worker.tasks.purge_stale_youtube_analytics",
         "schedule": timedelta(hours=24),
     },
 }

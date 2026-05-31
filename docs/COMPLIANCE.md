@@ -15,10 +15,31 @@ the ToS would result in API access revocation, destroying the product.
 1. **Minimum necessary scopes**: Request only the scopes required for the feature. Do not
    request write scopes unless directly needed (v1 is read + export only).
 
-2. **Data retention / refresh**: Analytics data returned by the YouTube Analytics API must be
-   refreshed or deleted according to Google's data policies. CreatorClip must not cache
-   analytics indefinitely. The current policy and required refresh cadence must be documented
-   here once confirmed.
+2. **Data retention / refresh** (Wave-4 Fix 3 / Issue 75b — confirmed 2026-05-31):
+   The YouTube API Services Developer Policies §III.E.4.b + §III.D.2.3.b require API
+   clients to verify authorization every **30 calendar days** OR delete the stored
+   data. The 30-day clock applies to all YouTube API Data, with `fetched_at` as the
+   natural staleness proxy — if a creator's daily Beat refresh stops succeeding
+   (token revoked, quota exhausted, transient outage >30d), `fetched_at` stops
+   advancing and the row falls past the cutoff.
+
+   **CreatorClip's implementation:**
+   - `refresh_youtube_analytics` Beat task (daily, 24h cadence): re-fetches metrics
+     for every creator with a valid token. Updates `fetched_at` on success.
+   - `purge_stale_youtube_analytics` Beat task (daily, 24h cadence): deletes rows
+     in `video_metrics`, `retention_curves`, `audience_activity`, and `demographics`
+     whose `fetched_at < now() - YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS` (default 30).
+   - Account-deletion endpoint (Issue 19): handles the **7-day** explicit-revoke
+     window (§III.D.2.3.a) — when a creator invokes account deletion, all of
+     their tokens, analytics, source media, clips, DNA, and feedback are deleted
+     synchronously.
+
+   **Setting:** `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS` (default 30; in
+   `config.py` + `.env.example`). Lengthening past 30 would be a documented ToS
+   violation; shortening is safe but trades freshness for no compliance benefit.
+
+   **Source:** https://developers.google.com/youtube/terms/developer-policies
+   (verified 2026-05-31 via industry-standards-researcher).
 
 3. **Display requirements**: Any display of YouTube data must comply with YouTube's branding
    guidelines.
@@ -108,7 +129,7 @@ canonical user-facing disclosure of refund behavior.
 
 ## Pre-Public-Launch Compliance Gates
 
-- [ ] YouTube data-retention refresh cadence confirmed and implemented
+- [x] YouTube data-retention refresh cadence confirmed and implemented (Wave-4 Fix 3 / Issue 75b — 30 days, partial-staleness purge daily; 2026-05-31)
 - [ ] Google OAuth app verification submitted (requires ToS + Privacy Policy pages)
 - [ ] `yt-dlp` guard verified in code (off by default; own-content-only path documented)
 - [ ] Account-deletion endpoint implemented (right-to-erasure: tokens + media + data)

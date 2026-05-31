@@ -252,6 +252,76 @@ def test_upload_402s_after_probe_when_balance_under_video_minutes(monkeypatch):
         assert not p.exists(), f"Temp file not cleaned up on 402: {p}"
 
 
+# ── Wave-4 Fix 1: upload aset_owner fail-open on Redis-down ─────────────────
+
+
+def test_upload_returns_stream_url_none_when_aset_owner_redis_down(monkeypatch):
+    """Wave-4 Fix 1 (SEV2): a Redis blip during aset_owner MUST NOT 500 the
+    upload or prevent the ingest pipeline from starting. The Video row is
+    already committed and the chain is enqueued; only the SSE link is lost.
+
+    Same fail-open posture as Wave-3 Fix B (improvement brief router) and
+    Wave-3 Fix D (OAuth callback). This test pins the third + final site
+    where the invariant must hold.
+    """
+    import redis
+
+    monkeypatch.setattr("config.settings.UPLOAD_MAX_MB", _TEST_MAX_MB)
+
+    creator = _fake_creator()
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session()
+
+    storage_mock = MagicMock(return_value="local://x")
+    start_pipeline_mock = MagicMock()
+    aset_owner_mock = AsyncMock(side_effect=redis.ConnectionError("Redis down"))
+
+    async def _fake_balance_check(*args, **kwargs):
+        return None
+
+    def _fake_probe(_tmp):
+        return 30.0
+
+    try:
+        with (
+            patch("routers.videos.check_positive_balance", new_callable=AsyncMock),
+            patch("routers.videos.check_balance_for_minutes", side_effect=_fake_balance_check),
+            patch("routers.videos.probe_duration_s", _fake_probe),
+            patch("routers.videos.upload_file", storage_mock),
+            patch("routers.videos.start_pipeline", start_pipeline_mock),
+            patch("worker.progress.aset_owner", aset_owner_mock),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            tiny_payload = b"\x00" * 1024
+            resp = c.post(
+                "/videos/upload",
+                data={"youtube_video_id": "issue1up402"},
+                files={"file": ("video.mp4", io.BytesIO(tiny_payload), "video/mp4")},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    # The upload must succeed even though Redis is down on aset_owner.
+    assert resp.status_code == 200, (
+        f"Wave-4 Fix 1: Redis-down on aset_owner MUST NOT fail the upload. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    # The Video was created (we got a real video_id).
+    assert body["video_id"]
+    # stream_url is None — the client falls back to /videos/{id}/status polling.
+    assert body["stream_url"] is None, (
+        "Wave-4 Fix 1: when aset_owner fails, stream_url MUST be None so the "
+        "client knows to poll instead of subscribing. Mirrors the Wave-3 "
+        "Fix B contract in routers/improvement.py."
+    )
+    # The actual work still runs — start_pipeline was called.
+    start_pipeline_mock.assert_called_once_with(body["video_id"])
+    # aset_owner was attempted (and raised).
+    aset_owner_mock.assert_awaited_once_with(body["video_id"], str(creator.id))
+
+
 @pytest.mark.skip(
     reason="TestClient runs in-process — the test-side 100 MB payload allocation "
     "dominates ru_maxrss and overwhelms whatever the server route allocates. "

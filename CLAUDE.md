@@ -264,7 +264,7 @@ docker compose logs --tail 100 app worker
 
 - Lock `ALLOWED_ORIGINS` to production domain; disable `/docs`
 - Per-creator rate limiting + usage quotas before each LLM/render job
-- YouTube data-retention/refresh fully compliant (`docs/COMPLIANCE.md`)
+- ✅ YouTube data-retention/refresh fully compliant — Wave-4 Fix 3 (Issue 75b): 30-day partial-staleness purge per ToS §III.E.4.b (`docs/COMPLIANCE.md`)
 - `TOKEN_ENCRYPTION_KEY` rotation runbook written
 - Terms of Service + Privacy Policy pages live
 - Google OAuth app verification completed

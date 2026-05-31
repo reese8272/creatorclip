@@ -5,6 +5,71 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Wave 4: compliance + scale prep (3-fix batch)
+
+### What was decided
+
+Three small fixes spanning router fail-open, an Alembic migration, and a compliance-driven Beat task. They share no surface area; bundled into one branch + one Layer-0 cycle. The big one is **YouTube data-retention compliance** — the single largest gap remaining before Google OAuth app verification, now closed.
+
+**Fix 1 (SEV2 — Wave-3-introduced)** — `routers/videos.py:262-279`: wrap the `aset_owner` call in `try/except redis.RedisError`. On failure: log warning + return `stream_url=None`. Mirrors Wave-3 Fix B (improvement brief) and Fix D (OAuth callback) exactly; the fail-open invariant is now uniform across **every** `aset_owner` call site.
+
+**Fix 2 (SEV2 — billing race carry-forward)** — new Alembic migration `0013_refund_pack_id_unique` creates `CREATE UNIQUE INDEX CONCURRENTLY uq_minute_packs_refund_pack_id ON minute_packs (pack_id) WHERE reason = 'refund'`. Removed the read-then-write SELECT guard from `billing/refund.py` and replaced with `try/except IntegrityError → return 0` (same shape as `deduct_for_video`'s UNIQUE race handling). The DB-level guarantee closes the only billing SEV2 a misbehaving Celery delivery could exploit for double-credit.
+
+**Fix 3 (SEV2 / Issue 75b — YouTube ToS compliance)** — added `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30` to `config.py` + `.env.example`. New `purge_stale_youtube_analytics` Celery Beat task (daily, 24h cadence) deletes rows in `video_metrics`, `retention_curves`, `audience_activity`, `demographics` whose `fetched_at < now() - max_staleness_days`. Wired into `worker/schedule.py`. Updated `docs/COMPLIANCE.md §2` with the concrete 30-day figure, the implementation summary, and the source URL. Ticked the `CLAUDE.md` pre-monetization item "YouTube data-retention/refresh fully compliant."
+
+### Why
+
+The Wave-3 /assess flagged each of these. The post-Wave-3 /assess (commit `84a7e9f`) showed SEV1 count = 0 for the first time in five cycles — Wave 4 keeps that momentum going by closing 3 more SEV2s. The retention purge specifically is the single load-bearing item between CONDITIONAL and OAuth verification readiness.
+
+### Industry standard checked (2026-05-31 via industry-standards-researcher)
+
+**Fix 3 (the only one with non-obvious external dependencies):**
+- **Hard rule: 30 calendar days.** YouTube API Services Developer Policies §III.E.4.b: API clients must verify authorization every 30 days OR delete the data. The exact number is in the policy text; this is what Google's compliance reviewers check during OAuth app verification.
+- **Deletion is mandatory once the clock elapses, NOT conditional on whether the stale data is served.** §III.D.2.3.b: "delete API Data associated with users whose authorization tokens cannot be refreshed... within 30 calendar days." Logging "refresh failed" and leaving the row indefinitely is a documented violation.
+- **`fetched_at` is the right proxy.** Daily refresh task updates `fetched_at` on success; when auth dies (revoked, quota out, etc.), `fetched_at` stops advancing; daily purge sweeps rows past the cutoff. Two-task shape mirrors the existing `_purge_stale_source_media_async` (Issue 43).
+- Two trigger windows: explicit revoke (7 days — already handled by account-deletion endpoint, Issue 19); "cannot be refreshed" (30 days — what this purge implements).
+- **Source:** https://developers.google.com/youtube/terms/developer-policies (verified 2026-05-31). Full research record in this session's transcript.
+- The May 4, 2026 ToS revision added derived-metrics restrictions for audited developers applying for quota extensions; does not affect the 30-day requirement for standard clients.
+
+**Fix 1:** No new research — same canonical fail-open pattern Wave 3 used twice.
+
+**Fix 2:** Partial UNIQUE indexes are the canonical Postgres pattern for "uniqueness within a subset" (PG 9.0+). `CREATE INDEX CONCURRENTLY` is the documented production pattern (avoids table locks); matches migrations 0006, 0010, 0011.
+
+### Alternatives ruled out
+
+- **Set staleness window to 90 days "for safety margin"** (Fix 3): would be a ToS violation. The policy says 30.
+- **Mark rows stale instead of deleting** (Fix 3): research explicit — deletion is mandatory once the 30-day clock elapses, regardless of whether the data is served.
+- **Track per-creator auth-failure status in a new schema column** (Fix 3): adds schema surface for the same time-based outcome. `fetched_at` proxy is the simpler shape and is explicitly endorsed by the research.
+- **Defer the purge to account-deletion only** (Fix 3): covers the explicit-revoke case (7 days, handled by Issue 19) but not the silent "token died, never recovered" case the policy targets (30 days, this purge).
+- **Compound UNIQUE on `(reason, pack_id)`** (Fix 2): works but the partial index is cheaper to maintain (only refund rows touch it) and reads cleaner.
+- **Move idempotency to application-layer asyncio.Lock** (Fix 2): process-local; doesn't survive crashes or multi-worker.
+- **Stamp `aset_owner` BEFORE `start_pipeline`** (Fix 1): would mean a Redis failure prevents the pipeline from starting at all — fail-closed and strictly worse for an upload flow.
+
+### Tradeoffs accepted
+
+- **`refresh_youtube_analytics` and `purge_stale_youtube_analytics` are both 24h cadence without explicit offset.** Could offset by 6-12h so the purge always sees the freshest possible `fetched_at` values, but in practice the daily refresh succeeds for healthy creators well within the 30-day window so the offset matters less than the implementation simplicity. Doc'd in `worker/schedule.py`.
+- **Per-video metric purge is video_id-batched, not creator-batched.** Slightly less efficient if many creators all have many stale rows, but the shape mirrors the existing source-media purge and the daily cadence keeps the working set small.
+- **Refund test (Fix 2) is `@pytest.mark.integration`-only.** The concurrent-race assertion requires real Postgres with the partial UNIQUE active; can't be unit-tested. The existing unit tests for `refund_for_video` still pass with the new pattern (verified — 8/8 in `test_billing_refund.py`).
+
+### Files & tests
+
+- `routers/videos.py` — Fix 1 (fail-open aset_owner)
+- `alembic/versions/0013_refund_pack_id_unique.py` — Fix 2 (NEW migration)
+- `billing/refund.py` — Fix 2 (drop read-then-write guard, catch IntegrityError)
+- `config.py` + `.env.example` — Fix 3 (new `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30`)
+- `worker/tasks.py` — Fix 3 (`_purge_stale_youtube_analytics_async` + Celery wrapper)
+- `worker/schedule.py` — Fix 3 (daily Beat schedule entry)
+- `docs/COMPLIANCE.md` — Fix 3 (§2 expanded with concrete policy citation + implementation)
+- `CLAUDE.md` — Fix 3 (pre-monetization checkbox flipped)
+- `tests/test_videos_upload_streaming.py` — Fix 1 (1 new test: upload Redis-down fail-open)
+- `tests/test_billing_refund_integration.py` — Fix 2 (1 new test: concurrent refund race)
+- `tests/test_youtube_analytics_retention_config.py` — Fix 3 (NEW file, 3 default-lane tests)
+- `tests/test_youtube_analytics_purge_integration.py` — Fix 3 (NEW file, 4 integration tests)
+
+**Tests:** 547 passed / 1 skipped / 94 deselected (default lane). Layer 0: ruff 0 / mypy 0 / format clean.
+
+---
+
 ## 2026-05-31 — Wave 3 hotfix batch — 3 SEV1s + 3 SEV2s from post-Wave-2 /assess
 
 ### What was decided

@@ -169,3 +169,66 @@ async def test_refund_for_video_noop_when_no_deduction(db_session: AsyncSession)
         assert balance == 100, "balance unchanged"
     finally:
         await _cleanup(db_session, creator.id)
+
+
+# ── Wave-4 Fix 2: concurrent refund race closed by partial UNIQUE ────────────
+
+
+@pytest.mark.asyncio
+async def test_refund_for_video_concurrent_race_no_double_credit(db_session: AsyncSession):
+    """Wave-4 Fix 2: two concurrent refund_for_video calls for the same video
+    MUST result in exactly one MinutePack refund row + net balance change = 0.
+
+    Before migration 0013's partial UNIQUE on (pack_id) WHERE reason='refund',
+    the read-then-write idempotency guard had a TOCTOU window: both calls
+    could SELECT no existing refund, both INSERT, both commit → double-credit.
+    Celery's task_acks_late=True + worker preemption made this reachable for
+    real (Issue 57's docstring acknowledged the race; this test pins it
+    closed at the DB level).
+    """
+    import asyncio
+
+    creator, video = await _seed(db_session, balance=100, duration_s=600.0)
+    try:
+        # Deduct: 600s → 10 minutes, leaving 90 balance.
+        await deduct_for_video(video.id, creator.id, 600.0, db_session)
+        await db_session.commit()
+
+        # Fire two concurrent refund attempts. With the partial UNIQUE in place,
+        # one wins and inserts the refund row; the other loses the UNIQUE race,
+        # catches IntegrityError, and returns 0.
+        results = await asyncio.gather(
+            refund_for_video(video.id),
+            refund_for_video(video.id),
+            return_exceptions=False,
+        )
+
+        # Exactly one call returned 10 (the winner); the other returned 0.
+        assert sorted(results) == [0, 10], (
+            f"Wave-4 Fix 2: exactly one of two concurrent refund calls must "
+            f"succeed (return 10); the other must lose the race (return 0). "
+            f"Got {results}."
+        )
+
+        # Re-read in a fresh session to verify the on-disk state.
+        engine = create_async_engine(settings.DATABASE_URL)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            refund_packs = await _refund_packs(s, video.id)
+            balance = await _balance(s, creator.id)
+        await engine.dispose()
+
+        # The load-bearing assertion: exactly ONE refund row, NOT two.
+        assert len(refund_packs) == 1, (
+            f"Wave-4 Fix 2: concurrent refund race must NOT create duplicate "
+            f"MinutePack rows. The partial UNIQUE index "
+            f"uq_minute_packs_refund_pack_id should catch the second INSERT. "
+            f"Got {len(refund_packs)} rows."
+        )
+        # And exactly one refund's worth of minutes credited (10), not two (20).
+        assert balance == 100, (
+            f"Net balance change must equal exactly one refund (back to 100). "
+            f"Got {balance} — would be 110 if both refunds succeeded."
+        )
+    finally:
+        await _cleanup(db_session, creator.id)

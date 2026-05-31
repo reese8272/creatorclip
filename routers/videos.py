@@ -255,14 +255,34 @@ async def upload_video(
     await session.commit()
     await session.refresh(video)
 
-    # Issue 92: stamp ownership for the upload chain's SSE stream BEFORE we
-    # enqueue the chain. The worker tasks (_ingest_async, _transcribe_async,
-    # _signals_async) all emit to task:{video.id}:events — using video_id as
-    # the stream key keeps the client lookup deterministic across the chain
-    # without piping the Celery chain id through every stage.
+    # Issue 92: stamp ownership for the upload chain's SSE stream. The worker
+    # tasks (_ingest_async, _transcribe_async, _signals_async,
+    # _generate_clips_async) all emit to task:{video.id}:events — using
+    # video_id as the stream key keeps the client lookup deterministic across
+    # the chain without piping the Celery chain id through every stage.
+    #
+    # Wave-4 Fix 1: same fail-open posture as Wave-3 Fix B (improvement brief)
+    # and Wave-3 Fix D (OAuth callback). A Redis blip on aset_owner returns
+    # stream_url=None instead of 500-ing — the Video row is already committed,
+    # start_pipeline() runs next so the actual ingest still happens. The user
+    # loses live progress; they don't lose the upload.
+    import redis as _redis_pkg
+
     from worker import progress
 
-    await progress.aset_owner(str(video.id), str(creator.id))
+    stream_url: str | None = f"/tasks/{video.id}/events"
+    try:
+        await progress.aset_owner(str(video.id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "upload aset_owner failed (Redis down?) video_id=%s err=%s",
+            video.id,
+            exc,
+        )
+        stream_url = None
+
     start_pipeline(str(video.id))
 
     from observability import log_event
@@ -280,7 +300,7 @@ async def upload_video(
     return {
         "video_id": str(video.id),
         "status": video.ingest_status.value,
-        "stream_url": f"/tasks/{video.id}/events",
+        "stream_url": stream_url,
     }
 
 
