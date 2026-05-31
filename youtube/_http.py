@@ -10,9 +10,14 @@ hanging a request/worker indefinitely.
 
 import httpx
 
-# connect=5s, read/write/pool=15s — Google APIs are normally sub-second; this caps
-# the tail without cutting off legitimately slow responses.
-_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+# connect=5s, read/write/pool=60s. Google's YouTube Analytics endpoint is
+# the slow tail — per-video reports routinely take 10-15s and OCCASIONALLY
+# spike past 30s. A 15s default tripped Issue 88 (sync_channel_catalog
+# phase 2 timed out on most videos with bare httpx.ReadTimeout — caught
+# nowhere because _fetch_report's retry loop only handled HTTP error
+# codes, not network timeouts). 60s is generous for the legit tail while
+# still capping a truly stuck endpoint.
+_TIMEOUT = httpx.Timeout(60.0, connect=5.0)
 _CLIENT: httpx.AsyncClient | None = None
 
 

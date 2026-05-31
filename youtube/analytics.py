@@ -11,6 +11,7 @@ import logging
 import random
 from datetime import UTC, datetime
 
+import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +44,25 @@ async def _fetch_report(access_token: str, params: dict) -> dict:
 
     for attempt in range(_MAX_RETRIES):
         # Shared timeout-bounded client, reused across calls/retries (Issue 72).
-        resp = await _http.client().get(_ANALYTICS_V2, headers=headers, params=params)
+        # Issue 88: Analytics endpoint occasionally exceeds the 60s read
+        # timeout under load. httpx raises ReadTimeout / ConnectError, which
+        # the original retry loop didn't catch (it only handled HTTP error
+        # codes). Catch httpx.RequestError as transient → backoff + retry,
+        # so a single slow report doesn't abort the whole catalog sync.
+        try:
+            resp = await _http.client().get(_ANALYTICS_V2, headers=headers, params=params)
+        except httpx.RequestError as exc:
+            if attempt < _MAX_RETRIES - 1:
+                jitter = random.uniform(0, delay * 0.3)
+                await asyncio.sleep(delay + jitter)
+                delay *= 2
+                continue
+            logger.warning(
+                "YouTube Analytics API request error after %d retries: %r",
+                _MAX_RETRIES,
+                exc,
+            )
+            raise
 
         if resp.status_code < 400:
             return resp.json()

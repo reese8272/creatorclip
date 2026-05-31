@@ -950,10 +950,14 @@ async def _sync_channel_catalog_async(creator_id: str) -> None:
                 # Surface immediately — token is dead.
                 raise
             except Exception as exc:
+                # repr() because some exceptions (httpx.ReadTimeout) have an
+                # empty str(); exc_info=True so the traceback is in the log
+                # rather than requiring an ssh + Python repro. (Issue 88 lesson)
                 logger.warning(
-                    "sync_channel_catalog: metrics fetch failed for video %s: %s",
+                    "sync_channel_catalog: metrics fetch failed for video %s: %r",
                     video.id,
                     exc,
+                    exc_info=True,
                 )
         await session.commit()
         logger.info(

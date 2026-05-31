@@ -87,7 +87,23 @@ async def _get_json(
 
     for attempt in range(_MAX_RETRIES):
         # Shared timeout-bounded client, reused across calls/retries (Issue 72).
-        resp = await _http.client().get(url, headers=headers, params=params)
+        # Issue 88: network-level errors (ReadTimeout, ConnectError) bypass
+        # the HTTP-status retry arm below. Catch them as transient → backoff.
+        try:
+            resp = await _http.client().get(url, headers=headers, params=params)
+        except httpx.RequestError as exc:
+            if attempt < _MAX_RETRIES - 1:
+                jitter = random.uniform(0, delay * 0.3)
+                await asyncio.sleep(delay + jitter)
+                delay *= 2
+                continue
+            logger.warning(
+                "YouTube Data API request error %s after %d retries: %r",
+                url,
+                _MAX_RETRIES,
+                exc,
+            )
+            raise
 
         if resp.status_code < 400:
             return resp.json()

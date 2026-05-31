@@ -18,7 +18,10 @@ async def test_client_is_a_singleton_recreated_after_close():
     a = _http.client()
     b = _http.client()
     assert a is b  # reused, not rebuilt per call
-    assert a.timeout.connect == 5.0 and a.timeout.read == 15.0
+    # Read timeout bumped 15→60 (Issue 88): the YouTube Analytics endpoint
+    # often takes 10–15s per video report; the 15s default tripped catalog
+    # sync phase 2 with bare httpx.ReadTimeout on most videos.
+    assert a.timeout.connect == 5.0 and a.timeout.read == 60.0
 
     await _http.aclose()
     c = _http.client()
