@@ -1,154 +1,115 @@
 # _root_infra — assessed 2026-05-31
 
 Slice: db.py, crypto.py, config.py, auth.py, limiter.py, models.py, main.py,
-observability.py, Dockerfile. (alembic/ owned by its own slice; migrations
-referenced where load-bearing for findings here.)
-
-WAVE-4 re-verification against baseline commit `67fddc9`. The only Wave-4
-delta inside the slice is `config.py:84-95` (+ mirrored stanza at
-`.env.example:62`) introducing
-`YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30`. Trace below confirms the
-value AND the inline policy citation are accurate. None of the three
-carry-forward SEV2s and none of the cleanup items were addressed by Wave 4;
-all re-traced line-by-line against HEAD and re-stated below.
+api_key.py, observability.py. `clients.py` was listed in the slice but DOES
+NOT exist in the repo (verified `ls /home/reese/workspace/Youtube-Video-AI-Editor/*.py`); no
+module-level client-singleton hub exists — external clients live with their
+modules (`youtube/_http.py`, `worker/progress.py`) and are correctly closed
+in main.py's lifespan. Re-assessment supersedes the prior Wave-4 report;
+new findings on api_key.py (Issue 95 OBS auth path) and limiter.py
+`verify_exp=False` are first time logged.
 
 ## Findings
 
-### Wave-4 delta — verified
+- [SEV2] limiter.py:19-27 — `jwt.decode(..., options={"verify_exp": False})`
+  PLUS bare `except Exception: pass` means an EXPIRED or FORGED-but-malformed
+  token still keys the rate limit to the token's `sub`. An attacker who
+  exfiltrates an expired session token can continue consuming a victim's
+  per-creator quota indefinitely; conversely a JWT_SECRET_KEY misconfig is
+  silently swallowed and every legit user collapses onto their NAT IP
+  bucket. (rubric cat 3) |
+  fix: verify exp with bounded leeway
+  (`options={"verify_exp": True}, leeway=300`); narrow the except to
+  `(jwt.InvalidTokenError, KeyError, ValueError)` and log decode failures at
+  WARNING through a rate-limited counter (e.g. once per minute per key
+  class) so misconfig is visible in Sentry/log search, never the token body.
 
-- config.py:95 — `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30`. Default
-  value matches the number cited in the inline comment block (config.py:84-94)
-  AND the .env.example stanza (`.env.example:62`). Comment correctly attributes
-  the 30-day window to YouTube API Services Developer Policies §III.E.4.b
-  (periodic re-verification or deletion of stored API data) with cross-reference
-  to §III.D.2.3.b. Policy citation is accurate — the YouTube Developer Policies
-  require API clients to either refresh authorization within 30 calendar days or
-  delete the affected stored API data. Comment also correctly states the
-  asymmetry: lengthening past 30 days is a documented ToS violation; shortening
-  is safe-but-fresher. No defect.
+- [SEV2] main.py:135-153 — `/health` opens a fresh `psycopg.AsyncConnection`
+  AND constructs a fresh `aioredis.from_url()` client per probe. Under
+  aggressive k8s readiness/liveness probing (every few seconds × N
+  replicas) this is sustained connect/disconnect churn against Postgres
+  OUTSIDE the SQLAlchemy pool, competing with app traffic for backend
+  connections and defeating the PgBouncer pool math in db.py. The redis
+  client spins up a fresh pool each call; an exception path that misses
+  `aclose()` leaks the pool. (rubric cat 1 + cat 2) |
+  fix: reuse the existing SQLAlchemy `engine` for the PG check
+  (`async with engine.connect() as c: await c.execute(text("SELECT 1"))`);
+  bind a module-level singleton `redis.asyncio.Redis.from_url(REDIS_URL)`
+  at import time, `aclose()` it in the lifespan shutdown alongside
+  `youtube._http` and `worker.progress`. Wrap both checks in
+  `asyncio.wait_for(..., timeout=2.0)` so a slow dep can't queue probes.
 
-### Verified-present hardening (traced, no defect)
+- [SEV2] api_key.py:113-114 — every API-key-authenticated request issues
+  `UPDATE creator_api_keys SET last_used_at = now()` and `await
+  session.commit()` inside the auth dependency, BEFORE the handler runs.
+  A single OBS app uploading every few seconds is fine, but the docstring
+  ("any future non-browser client") invites high-frequency callers; each
+  request synchronously fsyncs a hot row. (rubric cat 1 / scale-checklist
+  cat 2) |
+  fix: coarse-grain `last_used_at` — only UPDATE if
+  `last_used_at IS NULL OR last_used_at < now() - interval '60 seconds'`;
+  skip the commit when no row changed. Keeps the management-UI freshness
+  signal without per-request write amplification.
 
-- db.py:33 — `prepare_threshold=None` in `_CONNECT_ARGS`, applied to BOTH
-  app and admin engines via `connect_args` at db.py:51,61. The
-  PgBouncer/psycopg3 prepared-statement BLOCKER (Issue 58) remains fixed.
-- db.py:44-62 — `pool_pre_ping=True`, app pool `15 + 5`, admin pool
-  `5 + 10`. Per-pod ceiling 35 against the 25-conn PgBouncer sidecar —
-  see docs/DEPLOYMENT.md for the inequality (verify admin engine is in
-  the sidecar budget; deployment-slice concern, flagged not fixed here).
-- db.py:80-103 — `recreate_engine()` disposes BOTH pools with
-  `close=False` before rebinding fresh engines and session factories
-  (Issue 39 fork safety). Single-shot per fork from
-  `worker/celery_app.py` (`worker_process_init`) — no concurrent
-  rebind hazard. Workers reference `db.AsyncSessionLocal` /
-  `db.AdminSessionLocal` via attribute lookup, so rebind is visible to
-  every subsequent task.
-- db.py:106-109 — `dispose_engine()` awaits both engines on shutdown.
-- db.py:119-148 — RLS `set_config('app.creator_id', :cid, true)`
-  listener uses a parameterized function call (not `SET LOCAL` which
-  rejects bind params on the wire). Fires only when
-  `session.info["creator_id"]` is set, so the bootstrap auth lookup
-  against the RLS-exempt `creators` table runs cleanly. The structural
-  per-creator-isolation invariant (scale-checklist D) is enforced at
-  the DB layer — a missing `WHERE creator_id` no longer leaks; RLS
-  refuses the row.
-- db.py:154-156 — `get_session()` async generator inside
-  `async with AsyncSessionLocal()` — guaranteed close on every path.
-- crypto.py:13-24 — MultiFernet built primary-first with optional
-  previous-key fallback; rotation window honored.
-- crypto.py:32-43 — `decrypt()` maps `InvalidToken` →
-  `TokenDecryptError` with a message that carries no ciphertext or key
-  material. Safe for logs and error responses.
-- config.py:50-56 — Anthropic model + web_search tool versions live in
-  one place. Default tool is `web_search_20260209` (GA, dynamic
-  filtering — Issue 84). Comment block at 51-55 cites the rationale.
-  `.env.example:12` mirrors the default with the explanatory comment.
-- config.py:148-170 — `_require_prod_secrets` fail-fast on
-  `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` when `ENV=="production"`,
-  AND fail-SAFE on the `/metrics` scrape surface: if `METRICS_TOKEN` is
-  unset in prod the endpoint is automatically disabled with a warning
-  instead of crashing the app. The `ValidationError` handler
-  (173-184) prints field NAMES only → no value leakage on
-  missing-required config.
-- auth.py:31-55 — identity is JWT-derived (`sub` → UUID → DB lookup on
-  `Creator.id`); all failure modes → 401 with a safe `detail`.
-  `session.info["creator_id"]` is stamped AFTER the bootstrap lookup, so
-  the RLS GUC fires on every subsequent transaction in the request.
-- limiter.py:31-34 — slowapi Limiter keyed per-creator off the JWT
-  `sub` with Redis storage. `verify_exp=False` is intentional and
-  acceptable for a rate-limit key (an expired-but-valid token still
-  keys to its own creator).
-- main.py:54-67 — `/docs` disabled outside development; `redoc_url=None`
-  always; honesty constraint string is present in the OpenAPI
-  description ("does not promise virality").
-- main.py:93-99 — `ALLOWED_ORIGINS` parsed from config (no wildcard);
-  CORS `allow_credentials=True` paired with an explicit origin list —
-  correct pairing, no `*` + credentials misconfiguration.
-- main.py:38-51 — lifespan calls `await _http.aclose()` AND
-  `await progress.aclose()` (Issue 86) on shutdown.
-- main.py:73-82 — every router (including `tasks_router` for SSE
-  progress) is mounted exactly once.
-- main.py:110-123 — `/metrics` is gated behind
-  `secrets.compare_digest` bearer-token comparison when `METRICS_TOKEN`
-  is set. Combined with the config.py prod fail-safe, the prior
-  "unauthenticated /metrics scrape surface" stays closed for production.
-- observability.py:37,165-210 — RequestIDMiddleware is pure ASGI, bounds
-  id length/printability at `_valid_request_id` (157-161) against log
-  injection, echoes the header, labels golden-signal latency by route
-  TEMPLATE (203-208) to keep cardinality bounded. JsonLogFormatter
-  (86-102) never special-cases token/PII; emits the `request_id` field
-  on every line.
-- observability.py:105-132 — `log_event` (Issue 88) emits structured
-  business events through the dedicated `event` logger. Docstring at
-  120-125 reiterates the "never raw bodies, tokens, or PII" rule —
-  enforcement is by-convention at the call site, not structural.
-- Dockerfile:26 — `ENV PYTHONPATH=/app` correctly present after
-  `ENV PATH=` (commit c2a76d4). Load-bearing fix for the 2026-05-30 prod
-  incident where forked Celery pool workers had `sys.path[0]` pointing
-  at `/root/.local/bin` and could not import first-party packages
-  (`dna`, `worker`, …). Verified intact at HEAD.
-
-### Defects
-
-- [SEV2] observability.py:224-241 — Celery `_bind_request_id` /
-  `_record_task_and_clear` use the single module-level `request_id_ctx`
-  and `_task_start_ctx` ContextVars. Comment at line 43 documents this
-  is "safe because each worker process runs one task at a time" — true
-  ONLY under the prefork pool. If the worker is ever started with
+- [SEV2] observability.py:43-44, 224-241 — Celery `_bind_request_id` /
+  `_record_task_and_clear` use module-level ContextVars
+  (`request_id_ctx`, `_task_start_ctx`). Comment at line 43 documents
+  this is "safe because each worker process runs one task at a time" —
+  true ONLY under the prefork pool. If a future migration switches to
   `--pool=gevent/eventlet/threads`, concurrent tasks in one process
-  will overwrite each other's request id and start time → mislabelled
-  durations and broken log correlation. Carry-forward through Wave 4,
-  unchanged. (rubric cat 2) |
+  overwrite each other's correlation id and start time → mislabelled
+  durations and broken log correlation. (rubric cat 2) |
   fix: at worker startup (`worker/celery_app.py`), assert
-  `app.conf.worker_pool == "prefork"` and refuse to boot otherwise;
-  OR key task start off `task.request.id` via a per-task dict guarded
-  by `task_postrun` removal. Low blast radius today; pure footgun for
-  any future migration.
+  `app.conf.worker_pool == "prefork"` and refuse to boot otherwise; OR
+  key task start off `task.request.id` in a per-task dict guarded by
+  `task_postrun` removal.
 
-- [SEV2] Dockerfile:1-34 — image runs as root (no `USER` directive).
-  Combined with `COPY . .` at line 28, every process in the container
-  (uvicorn, celery, ffmpeg subprocesses) runs as UID 0 with write
-  access to the entire app tree. An RCE via a media-processing
-  dependency (ffmpeg, whisperx, ytdlp) would have full container
-  privilege. Industry standard is a non-root user even when k8s
-  `securityContext: runAsNonRoot` is set externally (defense in depth).
-  Carry-forward through Wave 4, unchanged. (rubric cat 3) |
-  fix: after `COPY . .`, add
-  `RUN useradd --create-home --uid 1000 app && chown -R app:app /app /root/.local`
-  then `USER app`. Verify Celery worker can still write its
-  state/temp dirs and that ffmpeg subprocesses run as `app`. Update
-  docs/DEPLOYMENT.md with the chosen UID/GID.
+- [SEV2] db.py:80-103 — `recreate_engine()` rebinds the module-global
+  engine and BOTH session factories. Documented for "after fork (Issue
+  39)" use only (single-shot in `worker_process_init`); but the function
+  is module-public and has no guard against being called with in-flight
+  sessions, which would leave outstanding `AsyncSession` instances
+  holding refs to the disposed pool. (rubric cat 1) |
+  fix: add an explicit `_already_called: bool` flag and raise on
+  re-entry, or prefix the function with `_` and assert the caller is
+  `worker_process_init` via stack inspection; document the precondition
+  in the docstring with the words "MUST NOT be called with in-flight
+  sessions".
 
-- [SEV2] Dockerfile:34 — default `CMD` ships `uvicorn … --reload`. The
-  line-32 comment ("override in docker-compose or production deploy")
-  relies on every deployer remembering to override. A forgotten
-  override in a prod manifest starts uvicorn in dev mode: filesystem
-  watcher running, single worker, no graceful shutdown guarantees.
-  Carry-forward through Wave 4, unchanged. (rubric cat 3 / cat 8) |
-  fix: make the default safe-for-prod
-  (`gunicorn -k uvicorn.workers.UvicornWorker -w 4 main:app
-  --bind 0.0.0.0:8000`) and move the `--reload` invocation into
-  `docker-compose.yml` where dev belongs.
+- [SEV2] auth.py:46-54 / api_key.py:96-117 — both auth dependencies issue
+  their bootstrap SELECT (Creator / CreatorApiKey lookup) on the session
+  BEFORE `session.info["creator_id"]` is set. SQLAlchemy autobegin
+  happens on first query, so the bootstrap transaction has no
+  `app.creator_id` GUC — this is intentional today because `creators`
+  and `creator_api_keys` are RLS-exempt (Issue 56 / 95), but it is a
+  by-convention invariant: a future migration that flips either table
+  under RLS would silently lose the bootstrap query's rows and break
+  ALL authentication with a 401-everywhere outage. (rubric cat 3) |
+  fix: add a CI test that enumerates RLS-exempt tables from the
+  `pg_policies` system catalog and asserts `creators` and
+  `creator_api_keys` are still exempt; OR refactor the bootstrap to use
+  `AdminSessionLocal` (BYPASSRLS) for the lookup ONLY, then hand the
+  Creator off to the rest of the request via the standard
+  `get_session` dependency.
+
+- [SEV2] config.py:174-184 — `print(..., file=sys.stderr)` on fatal
+  startup config failure. Correct in spirit (logger not configured at
+  import time of `config`) but CLAUDE.md production standard says
+  "`logging` module only — no `print()`" and the gap means container
+  log aggregators that parse JSON lines (the default `LOG_JSON=True`)
+  miss the fatal startup message entirely. (rubric cat 8) |
+  fix: call `logging.basicConfig(stream=sys.stderr, level=logging.ERROR,
+  format="[CreatorClip] %(message)s")` immediately inside the
+  `except ValidationError` block, then `logging.error(...)`. Same
+  user-visible output, single log path Sentry/Loki can ingest.
+
+- [cleanup] crypto.py:13-24 — `_fernet()` constructs a fresh
+  `MultiFernet` on EVERY encrypt/decrypt call. Cheap but non-zero
+  (HMAC + AES context init); a token-refresh-heavy endpoint pays
+  repeatedly. (rubric cat 6) |
+  fix: `@functools.lru_cache(maxsize=1)` keyed on
+  `(settings.TOKEN_ENCRYPTION_KEY, settings.TOKEN_ENCRYPTION_KEY_PREVIOUS)`
+  so rotation gets a fresh instance and steady state hits the cache.
 
 - [cleanup] main.py:43-50 — lifespan reaches into TWO modules' private
   internals (`youtube._http`, `worker.progress`) via function-local
@@ -156,61 +117,119 @@ all re-traced line-by-line against HEAD and re-stated below.
   (rubric cat 6) |
   fix: define a `shared_resources.register_aclose(coro_fn)` registry
   that modules call at import time; lifespan iterates the registry
-  and awaits each. Removes the coupling and makes shutdown order
-  inspectable.
+  and awaits each. Makes shutdown order inspectable and removes the
+  coupling.
 
-- [cleanup] auth.py:27 — `decode_session_token` returns bare `dict`.
-  Annotate `-> dict[str, Any]` — `payload["sub"]` is load-bearing for
-  callers. Carry-forward. (rubric cat 6) |
+- [cleanup] main.py:130-132 — `_pg_dsn()` is a one-line dialect munge
+  living in `main.py`; any future caller (script, healthcheck sidecar,
+  worker probe) will reinvent it. (rubric cat 6) |
+  fix: add `@property def psycopg_dsn(self)` to `Settings` returning the
+  `postgresql://`-form URL, then use `settings.psycopg_dsn` here.
+
+- [cleanup] auth.py:27 — `decode_session_token` returns bare `dict`;
+  `payload["sub"]` is load-bearing. (rubric cat 6) |
   fix: `def decode_session_token(token: str) -> dict[str, Any]:` and
-  import `Any` from `typing`.
+  `from typing import Any`.
 
 - [cleanup] limiter.py:15 — `_creator_key(request)` parameter is
-  untyped. Carry-forward. (rubric cat 6) |
-  fix: `def _creator_key(request: Request) -> str:` (import from
-  `starlette.requests` or `fastapi`).
+  untyped. (rubric cat 6) |
+  fix: `def _creator_key(request: Request) -> str:` (import `Request`
+  from `starlette.requests` or `fastapi`).
 
-- [cleanup] limiter.py:26 — bare `except Exception: pass` on JWT
-  decode. Behavior is intentional (fail-open to IP keying so an
-  unauthenticated / malformed-cookie request still gets a rate-limit
-  key) but the WHY is undocumented. Carry-forward. (rubric cat 6) |
-  fix: add a one-line comment per CLAUDE.md code-style — "any decode
-  failure (expired, malformed, bad signature) falls back to IP keying
-  so we never 500 the rate-limit middleware".
+- [cleanup] models.py:106,229,235-238,479 — mix of `Optional["X"]` and
+  `X | None` for forward-ref relationships. PEP 604 works with string
+  forward refs in SQLAlchemy 2.0 since 2.0.0; pick `| None` to match
+  the rest of the file. (rubric cat 6) |
+  fix: `s/Optional\["X"\]/"X" | None/g` in models.py and drop
+  `from typing import Optional`.
 
-- [cleanup] config.py:23 + .env.example — `DATABASE_MIGRATION_URL`
-  (Issue 79 RLS admin role) is declared in `Settings` with a
-  documented fallback to `DATABASE_URL`, but it is STILL NOT listed
-  in `.env.example` (re-verified at .env.example:15-17 — only
-  `DATABASE_URL` stanza is present; `grep -i DATABASE_MIGRATION
-  .env.example` returns NOT FOUND). Anyone copying `.env.example`
-  to `.env` for a production setup will silently end up with
-  `database_migration_url == DATABASE_URL` (single role; no
-  BYPASSRLS split). Carried forward through Wave 4. (rubric cat 8) |
-  fix: add a stanza to `.env.example` immediately under `DATABASE_URL`:
-  ```
-  DATABASE_MIGRATION_URL=                  # REQUIRED in production — BYPASSRLS role for Alembic + worker cross-tenant sweeps. Leave blank in dev (falls back to DATABASE_URL).
-  ```
+- [cleanup] config.py:23 + `.env.example` — `DATABASE_MIGRATION_URL`
+  (Issue 79 RLS admin role) is declared in `Settings` with a documented
+  fallback to `DATABASE_URL`, but it is NOT listed in `.env.example`.
+  Anyone copying `.env.example` to `.env` for a production setup silently
+  ends up with `database_migration_url == DATABASE_URL` (single role, no
+  BYPASSRLS split). Carry-forward from prior assessment. (rubric cat 8) |
+  fix: add to `.env.example` under the `DATABASE_URL` stanza:
+  `DATABASE_MIGRATION_URL=  # REQUIRED in production — BYPASSRLS role for Alembic + worker cross-tenant sweeps. Leave blank in dev.`
+
+## Verified-present hardening (traced, no defect)
+
+- db.py:33 — `prepare_threshold=None` applied to BOTH engines via
+  `connect_args` (db.py:51, 61). PgBouncer/psycopg3 prepared-statement
+  hazard remains fixed.
+- db.py:44-62 — `pool_pre_ping=True`, app `15+5`, admin `5+10`,
+  `pool_recycle=1800`. Documented against the 25-conn PgBouncer sidecar
+  in docs/DEPLOYMENT.md.
+- db.py:119-148 — RLS `set_config('app.creator_id', :cid, true)` is
+  parameterized (not raw `SET LOCAL`, which rejects bind params on the
+  wire). Fires per-transaction via the `after_begin` listener whenever
+  `session.info["creator_id"]` is set. **The per-creator-isolation
+  invariant (scale-checklist D) is structural at the DB layer** —
+  forgotten `WHERE creator_id` no longer leaks.
+- db.py:106-109, 154-156 — `dispose_engine()` awaits both engines on
+  shutdown; `get_session()` uses `async with` for guaranteed close.
+- crypto.py:13-43 — MultiFernet built primary-first with optional
+  previous-key fallback (zero-downtime rotation window honored).
+  `decrypt()` maps `InvalidToken → TokenDecryptError` with a message
+  carrying no ciphertext or key material — safe to log.
+- config.py:148-170 — `_require_prod_secrets` fail-fast on
+  `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` when `ENV=="production"`;
+  fail-SAFE on `/metrics` when `METRICS_TOKEN` unset in prod (auto-disable
+  with warning instead of crash-loop).
+- config.py:50-56 — Anthropic model + web_search tool versions live in
+  one place. Default tool `web_search_20260209` (GA, dynamic filtering).
+- auth.py:31-55 — identity is JWT-derived (`sub` → UUID → DB lookup);
+  every failure path → 401 with safe `detail`.
+- api_key.py:48-66, 92-104 — raw key generated via
+  `secrets.token_urlsafe`, hashed via SHA-256, lookup by indexed
+  `key_hash` column with `revoked_at IS NULL` filter. Revoked keys
+  deterministically fail authentication. Threat model documented at
+  api_key.py:13-16 (no salting needed: 192-bit entropy raw key already
+  defeats brute force).
+- main.py:54-69, 93-99 — `/docs` disabled outside development;
+  `redoc_url=None`; honesty constraint ("does not promise virality") in
+  OpenAPI description; CORS uses explicit origin list with
+  `allow_credentials=True` (no wildcard-with-credentials misconfig).
+- main.py:38-51 — lifespan awaits `_http.aclose()` AND
+  `progress.aclose()` (Issue 86) on shutdown.
+- main.py:114-127 — `/metrics` gated behind `secrets.compare_digest`
+  bearer-token comparison when token set; combined with config fail-safe,
+  the prior "unauthenticated /metrics scrape surface" stays closed in prod.
+- models.py — Fernet-encrypted token columns documented at the class
+  level (lines 6-7, 175-177); `MinuteDeduction.video_id UNIQUE` is the
+  Celery at-least-once idempotency key (line 587); `CreatorDna`
+  `uq_creator_dna_build_job_id` partial-unique index is the structural
+  backstop for the advisory-lock guard (lines 412-417); `ClipFeedback`
+  `creator_id` is indexed via migration `0006_vector_and_fk_indexes`
+  (verified).
+- observability.py:37, 165-210 — RequestIDMiddleware is pure ASGI,
+  bounds id length/printability against log injection
+  (`_valid_request_id`, 157-161), echoes the header, labels golden-signal
+  latency by route TEMPLATE (203-208) to bound cardinality.
+  JsonLogFormatter never special-cases token/PII; emits `request_id` on
+  every line.
 
 ## Rubric coverage
+
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — engine dispose/recreate correct; `get_session` async-context manager guarantees close; lifespan drains BOTH `youtube._http` and `worker.progress` Redis client |
-| 2 Concurrency & scale | ok — pool math correct, RLS via parameterized `set_config` (not SET LOCAL); no blocking call in async paths; 1 SEV2 (ContextVar correlation safe only under prefork) |
-| 3 Security & compliance | ok — `/metrics` SEV2 closed (prod fail-safe + bearer-token gate); tokens via decrypt()/MultiFernet, no PII in logs, CORS locked, fail-fast prod secrets verified; RLS makes per-creator isolation structural; YouTube 30-day retention cap (Wave-4) accurately cites Developer Policies §III.E.4.b; 2 SEV2 Docker hardening gaps remain (root user, --reload default) |
-| 4 Clip-quality | n/a — infra module |
-| 5 Anthropic SDK | n/a — no LLM call in slice (model + web_search tool versions declared in config.py:50-56 only; `web_search_20260209` default verified) |
-| 6 Cleanliness & typing | 4 cleanups (lifespan coupling, typing gaps in auth/limiter, silent except) |
-| 7 Error handling / API | ok — main.py is app wiring not a router; /health returns safe statuses, no stack traces; /metrics 401 detail is safe |
-| 8 Config & paths | ok — pydantic-settings fail-fast, `_STATIC` absolute via `Path(__file__).parent`, `PYTHONPATH=/app` present; Wave-4 `YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30` mirrored in `.env.example:62` with policy citation; 1 carry-forward cleanup (`DATABASE_MIGRATION_URL` still missing from `.env.example`) |
+| 1 Resource lifecycle | 3 findings (api_key write-amp, /health builds clients per call, recreate_engine guard); core pool/session/lifespan plumbing correct |
+| 2 Concurrency & scale | 2 findings (Celery ContextVar correlation safe only under prefork; /health connection churn vs. probe rate); db.py pool math + PgBouncer + parameterized RLS GUC all correct |
+| 3 Security & compliance | 3 findings (limiter verify_exp=False + silent swallow, bootstrap-query-before-GUC structural invariant); MultiFernet rotation correct, API-key threat model documented, parameterized SQL throughout, /metrics + /docs gated, CORS locked, no PII/token in any log line in slice |
+| 4 Clip-quality | n/a (infra) |
+| 5 Anthropic SDK | n/a (no LLM call in slice; model + tool config declared in config.py only) |
+| 6 Cleanliness & typing | 5 cleanups (MultiFernet not cached, lifespan coupling, _pg_dsn placement, typing gaps in auth/limiter, Optional/`\| None` mix in models) |
+| 7 Error handling / API | ok — main.py is app shell; /health returns safe statuses; /metrics 401 detail is safe; no stack traces leaked |
+| 8 Config & paths | 2 findings (print() in config startup fallback; DATABASE_MIGRATION_URL missing from .env.example); pydantic-settings fail-fast correct, `_STATIC` absolute via `Path(__file__).parent` |
 
 ## Module verdict
-NEEDS-WORK — no BLOCKER and no cross-tenant leak in this slice (RLS
-enforces creator isolation structurally at the DB layer). Wave-4 delta
-(`YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30`) is correct: value matches the
-inline ToS citation and the .env.example mirror. All three carry-forward
-SEV2s remain: Celery ContextVar correlation safe only under prefork;
-container runs as root; default CMD ships `uvicorn --reload`. The Cat-8
-cleanup (`DATABASE_MIGRATION_URL` declared in `Settings` but absent from
-`.env.example`) also remains unresolved — a footgun for any operator
-copying the example to bootstrap a production deploy.
+
+**NEEDS-WORK** — no BLOCKER and no cross-tenant leak in this slice (Postgres
+RLS makes per-creator isolation structural via the `set_config` GUC
+listener). The hot-list: limiter.py silently accepting expired tokens for
+per-creator rate-limit keying is a per-creator-quota leak vector; /health
+building fresh connections per probe is a self-inflicted scale ceiling
+trivial to fix; api_key.py writing `last_used_at` per request is
+write-amplification waiting for a high-frequency caller; the
+bootstrap-query-before-GUC pattern is correct today but a load-bearing
+by-convention invariant that needs a CI test to keep honest.
