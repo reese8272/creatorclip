@@ -9,76 +9,61 @@ on:
 
 jobs:
   deploy:
-    name: SSH deploy → autoclip.studio
-    runs-on: ubuntu-latest
+    name: Deploy → autoclip.studio
+    # Self-hosted runner on 147.182.136.107 — no GitHub-hosted minutes consumed.
+    # Install the runner once with scripts/setup-runner.sh.
+    # Falls back to manual deploy via scripts/deploy.sh when the runner is offline.
+    runs-on: self-hosted
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     environment: production
+    defaults:
+      run:
+        working-directory: /opt/autoclip
 
     steps:
       - name: Checkout (for docker-compose.prod.yml)
         uses: actions/checkout@v4
 
-      - name: Copy compose file to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          source: docker-compose.prod.yml
-          target: /opt/autoclip
+      - name: Copy compose file to deploy dir
+        run: cp ${{ github.workspace }}/docker-compose.prod.yml /opt/autoclip/docker-compose.prod.yml
 
-      - name: Deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          script: |
-            set -e
-            cd /opt/autoclip
+      - name: Sync secrets to .env
+        run: |
+          grep -q '^STRIPE_SECRET_KEY=' .env \
+            && sed -i "s|^STRIPE_SECRET_KEY=.*|STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}|" .env \
+            || echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env
 
-            # Sync secrets from GitHub → server .env
-            grep -q '^STRIPE_SECRET_KEY=' .env \
-              && sed -i "s|^STRIPE_SECRET_KEY=.*|STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}|" .env \
-              || echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env
+      - name: Authenticate with GHCR
+        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
 
-            # Authenticate with GHCR so we can pull the private image
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
+      - name: Pull latest image
+        run: docker compose -f docker-compose.prod.yml pull
 
-            # Pull latest images
-            docker compose -f docker-compose.prod.yml pull
+      - name: Preflight check
+        run: docker compose -f docker-compose.prod.yml run --rm app python scripts/doctor.py
 
-            # Preflight: fail the deploy BEFORE migrating or cutting over if any
-            # required secret is missing/invalid or Postgres/Redis is unreachable.
-            # Output is redacted (no secret values printed). See docs/SECRETS.md.
-            docker compose -f docker-compose.prod.yml run --rm app \
-              python scripts/doctor.py
+      - name: Run migrations
+        run: docker compose -f docker-compose.prod.yml run --rm app alembic upgrade head
 
-            # Run DB migrations before cutting over traffic
-            docker compose -f docker-compose.prod.yml run --rm app \
-              alembic upgrade head
+      - name: Roll out
+        run: docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Roll out — zero-downtime for stateless app + worker
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+      - name: Clean up old images
+        run: docker image prune -f
 
-            # Clean up old images to save disk space
-            docker image prune -f
-
-            # Smoke test — use Python urllib inside the app container to bypass
-            # Cloudflare (port 8000 not exposed to host; curl not in the image).
-            echo "Running smoke test..."
-            for i in 1 2 3 4 5; do
-              BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
-                python3 -c "import urllib.request,json; r=urllib.request.urlopen('http://localhost:8000/health',timeout=10); print(r.read().decode())" \
-                2>/dev/null || true)
-              echo "Attempt $i: $BODY"
-              STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
-              if [ "$STATUS" = "ok" ]; then
-                echo "Deploy healthy: $BODY"
-                break
-              fi
-              [ $i -lt 5 ] && sleep 10
-            done
-            [ "$STATUS" = "ok" ] || { echo "Smoke test failed after 5 attempts"; exit 1; }
+      - name: Smoke test
+        run: |
+          STATUS=""
+          for i in 1 2 3 4 5; do
+            BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
+              python3 -c "import urllib.request,json; r=urllib.request.urlopen('http://localhost:8000/health',timeout=10); print(r.read().decode())" \
+              2>/dev/null || true)
+            echo "Attempt $i: $BODY"
+            STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
+            if [ "$STATUS" = "ok" ]; then
+              echo "Deploy healthy: $BODY"
+              break
+            fi
+            [ $i -lt 5 ] && sleep 10
+          done
+          [ "$STATUS" = "ok" ] || { echo "Smoke test failed after 5 attempts"; exit 1; }

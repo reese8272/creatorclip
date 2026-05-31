@@ -301,8 +301,10 @@ def test_checkout_offloads_sync_stripe_to_thread(monkeypatch):
     import threading
 
     from auth import get_current_creator
+    from config import settings as _settings
     from main import app
 
+    monkeypatch.setattr(_settings, "STRIPE_SECRET_KEY", "sk_test_fake_key_for_test")
     fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
     main_thread_id = threading.get_ident()
     call_thread_ids: list[int] = []

@@ -5,6 +5,38 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — CI/CD: switch deploy job to self-hosted runner + add manual deploy script
+
+### What was decided
+
+**`deploy.yml` updated** — `runs-on: ubuntu-latest` → `runs-on: self-hosted`. The SSH and SCP third-party actions are removed; the job now runs directly on the production VM where Docker and docker-compose are already present. The deploy logic (pull → preflight → migrate → up → smoke test) is identical to the old workflow; only the execution environment changed.
+
+**`scripts/deploy.sh` added** — a manual SSH-based fallback that mirrors every deploy.yml step exactly. Use it when the self-hosted runner is offline or GH Actions orchestration is unavailable.
+
+**`scripts/setup-runner.sh` added** — one-time installation script to register the self-hosted runner as a systemd service on `147.182.136.107`.
+
+### Why
+
+GitHub Actions billing was suspended 2026-05-31, blocking the `workflow_run`-triggered Deploy workflow from running. The `docker-publish` workflow (push-triggered) continued to work because billing only gated the compute-side, not the event dispatch. Using a self-hosted runner on the VM that already hosts the app eliminates the GitHub-hosted minute consumption for the deploy step entirely — the deploy is a 30-second `docker pull + restart`, which consumes a full billed runner minute every release.
+
+The manual deploy script is the immediate mitigation (deploy Wave 5 today, June 1, before the billing issue is resolved or the runner is installed).
+
+### Industry standard checked
+
+Self-hosted GH Actions runners are the standard pattern for teams deploying to their own infra — GitHub's own documentation recommends it for "deployments to private infrastructure." The runner is a lightweight outbound-only process (~50MB RAM) — no inbound ports required. The `runs-on: self-hosted` label is the canonical way to target it.
+
+### Alternatives ruled out
+
+- GitLab CI mirror — adds external service + repo sync overhead.
+- `adnanh/webhook` server — requires maintaining a second HTTP server + HMAC validation on the VM.
+- Railway/Render/Fly.io — platform migration; breaks Docker Compose dev/prod parity.
+
+### Date
+
+2026-05-31
+
+---
+
 ## 2026-05-31 — Wave 5: SEV1 hotfix + cross-tab task persistence + frontend visibility
 
 ### What was decided
