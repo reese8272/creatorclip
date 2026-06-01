@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoClip — Analyze a Video</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css">
+  <script src="/static/auth.js"></script>
+  <script src="/static/progressStream.js"></script>
+  <script src="/static/activeTasks.js" defer></script>
+  <script src="/static/activityPanel.js" defer></script>
+  <style>
+    main { max-width: 720px; margin: 0 auto; padding: var(--space-8) var(--space-4); }
+
+    h1 {
+      font-size: var(--text-lg);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: var(--space-2);
+    }
+    .page-sub {
+      font-size: var(--text-sm);
+      color: var(--color-text-subtle);
+      margin-bottom: var(--space-8);
+    }
+
+    /* ── Input form ─────────────────────────────────────────── */
+    .analysis-form {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
+      margin-bottom: var(--space-6);
+    }
+    .form-field { margin-bottom: var(--space-4); }
+    .form-field label {
+      display: block;
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: var(--space-2);
+    }
+    .form-field input,
+    .form-field textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: var(--space-2) var(--space-3);
+      font-size: var(--text-sm);
+      background: var(--color-bg);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius);
+      color: var(--color-text);
+      font-family: var(--font-sans);
+      resize: vertical;
+    }
+    .form-field textarea { min-height: 72px; }
+    .form-field input:focus,
+    .form-field textarea:focus {
+      outline: none;
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 2px var(--color-accent-soft);
+    }
+    .query-hint {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-1);
+    }
+    .form-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+    #video-context {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+    #video-context .ctx-label { color: var(--color-text-muted); }
+
+    /* ── Response area ──────────────────────────────────────── */
+    .response-panel {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
+    }
+    .response-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-4);
+    }
+    .response-header h2 {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .status-chip {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      font-family: var(--font-mono);
+    }
+    .status-chip.streaming { color: var(--color-accent); }
+    .status-chip.done { color: var(--color-success); }
+    .status-chip.error { color: var(--color-danger); }
+
+    /* Narrative prose — not terminal-style */
+    #analysis-output {
+      font-size: var(--text-sm);
+      line-height: var(--leading-relaxed);
+      color: var(--color-text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 48px;
+    }
+    #analysis-output.empty {
+      color: var(--color-text-subtle);
+      font-style: italic;
+    }
+
+    /* Blinking cursor while streaming */
+    @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
+    .cursor::after {
+      content: '▊';
+      animation: blink 1s step-end infinite;
+      color: var(--color-accent);
+      margin-left: 1px;
+    }
+
+    /* Divider after the analysis, before the disclaimer */
+    .response-disclaimer {
+      margin-top: var(--space-4);
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--color-border);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <a class="nav-brand" href="/">AutoClip</a>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/static/review.html">Review</a>
+      <a href="/static/insights.html">Insights</a>
+      <a href="/static/profile.html">Profile</a>
+      <a href="/static/pricing.html">Pricing</a>
+    </div>
+    <span class="nav-spacer"></span>
+    <span class="user-name" id="nav-user" style="font-size:var(--text-xs);color:var(--color-text-subtle);font-family:var(--font-mono);margin-right:var(--space-3)"></span>
+    <span class="nav-balance" id="nav-balance"></span>
+    <a href="/static/walkthrough.html" class="nav-help" title="How it works">?</a>
+    <a href="#" onclick="logout()" style="font-size:var(--text-xs);color:var(--color-text-muted);cursor:pointer;">Logout</a>
+  </nav>
+
+  <div class="disclaimer">
+    AutoClip predicts fit with your style and audience — it does not promise virality.
+    Recommendations are estimates grounded in your own data, not guarantees.
+  </div>
+
+  <main>
+    <h1>Analyze a video</h1>
+    <p class="page-sub">Ask why a video performed the way it did. Analysis is grounded in your channel data and Creator DNA.</p>
+
+    <div class="analysis-form">
+      <div class="form-field">
+        <label for="url-input">YouTube URL or video ID</label>
+        <input
+          id="url-input"
+          type="text"
+          placeholder="https://youtu.be/dQw4w9WgXcQ  or  dQw4w9WgXcQ"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+      <div class="form-field">
+        <label for="query-input">Your question</label>
+        <textarea
+          id="query-input"
+          placeholder="Why did this video underperform? What made this Short take off? Why did retention drop so early?"
+          maxlength="500"
+        ></textarea>
+        <div class="query-hint">Ask something specific — the more focused your question, the sharper the answer.</div>
+      </div>
+      <div class="form-actions">
+        <div id="video-context"></div>
+        <button id="analyze-btn" class="btn btn-primary" onclick="startAnalysis()">Analyze →</button>
+      </div>
+    </div>
+
+    <div class="response-panel" id="response-panel" style="display:none">
+      <div class="response-header">
+        <h2>Analysis</h2>
+        <span class="status-chip" id="status-chip">waiting</span>
+      </div>
+      <div id="analysis-output" class="empty">Starting…</div>
+      <div class="response-disclaimer" id="response-disclaimer" style="display:none">
+        This analysis is grounded in your channel data.
+        AutoClip does not promise virality or specific growth outcomes.
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function logout() {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+      window.location = '/auth/login';
+    }
+
+    document.addEventListener('auth:ready', (e) => {
+      const me = e.detail;
+      document.getElementById('nav-user').textContent = me.channel_title || me.email || '';
+    });
+
+    let _stream = null;
+
+    async function startAnalysis() {
+      const urlRaw = document.getElementById('url-input').value.trim();
+      const query = document.getElementById('query-input').value.trim();
+      const btn = document.getElementById('analyze-btn');
+
+      if (!urlRaw) { alert('Enter a YouTube URL or video ID.'); return; }
+      if (!query) { alert('Enter a question about the video.'); return; }
+
+      // Cancel any prior stream
+      if (_stream) { _stream.close(); _stream = null; }
+
+      // Show the response panel and reset state
+      const panel = document.getElementById('response-panel');
+      const output = document.getElementById('analysis-output');
+      const chip = document.getElementById('status-chip');
+      const disclaimer = document.getElementById('response-disclaimer');
+      panel.style.display = 'block';
+      output.textContent = '';
+      output.className = 'cursor';
+      disclaimer.style.display = 'none';
+      chip.textContent = 'queuing…';
+      chip.className = 'status-chip streaming';
+      btn.disabled = true;
+      btn.textContent = 'Analyzing…';
+      document.getElementById('video-context').innerHTML = '';
+
+      let resp;
+      try {
+        resp = await fetch('/creators/me/video-analysis', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ youtube_url: urlRaw, query }),
+        });
+      } catch (err) {
+        _showError('Network error — please try again.', btn);
+        return;
+      }
+
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        _showError(body.detail || `Error ${resp.status}`, btn);
+        return;
+      }
+
+      const data = await resp.json();
+
+      // Surface video context (title + metrics availability)
+      if (data.video_title) {
+        const metricsNote = data.has_metrics ? 'metrics available' : 'no metrics yet';
+        document.getElementById('video-context').innerHTML =
+          `<span class="ctx-label">Video: </span>${_esc(data.video_title)} · <span style="font-family:var(--font-mono)">${metricsNote}</span>`;
+      }
+
+      if (!data.stream_url) {
+        // Redis down — fallback: analysis won't stream, inform the user
+        _showError('Could not connect to the live stream. Try again shortly.', btn);
+        return;
+      }
+
+      chip.textContent = 'streaming';
+      let analysisText = '';
+
+      _stream = subscribeToTaskStream(data.stream_url, {
+        onEvent(type, d) {
+          if (type === 'step') {
+            chip.textContent = d.label || 'working…';
+          }
+        },
+        onRender(buffer) {
+          // We only want the narrative prose, not step/cache lines.
+          // progressStream.js appends step/cache as lines; token events
+          // append inline. We reconstruct prose-only from token accumulation.
+        },
+        onEvent(type, d) {
+          if (type === 'token') {
+            analysisText += d.chunk || '';
+            output.textContent = analysisText;
+            output.className = 'cursor';
+          }
+          if (type === 'step') {
+            chip.textContent = d.label || 'working…';
+          }
+          if (type === 'cache') {
+            chip.textContent = 'streaming';
+          }
+        },
+        onDone() {
+          output.className = '';  // remove cursor
+          chip.textContent = 'done';
+          chip.className = 'status-chip done';
+          disclaimer.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = 'Analyze →';
+          if (data.task_id) {
+            window.activeTasks && window.activeTasks.removeTask(data.task_id);
+          }
+        },
+        onError(msg) {
+          _showError(msg, btn);
+        },
+        onConnectionError() {
+          chip.textContent = 'reconnecting…';
+          chip.className = 'status-chip streaming';
+        },
+      });
+
+      // Track in the activity panel
+      if (window.activeTasks) {
+        window.activeTasks.registerTask({
+          task_id: data.task_id,
+          kind: 'video_analysis',
+          label: `Analyzing ${data.video_title || urlRaw}`,
+          stream_url: data.stream_url,
+        });
+      }
+    }
+
+    function _showError(msg, btn) {
+      const output = document.getElementById('analysis-output');
+      const chip = document.getElementById('status-chip');
+      output.textContent = msg;
+      output.className = '';
+      chip.textContent = 'error';
+      chip.className = 'status-chip error';
+      if (btn) { btn.disabled = false; btn.textContent = 'Analyze →'; }
+    }
+
+    function _esc(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>

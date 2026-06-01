@@ -2774,6 +2774,38 @@ ffmpeg filter accordingly.
 
 ---
 
+---
+
+## Issue 121: Video Analysis page + dashboard de-emphasis of "Link a video"
+**Status**: ✅ Done (2026-06-01)
+
+**What**: Two-part change. (1) Dashboard: "Link a video" demoted to a collapsed `<details>`
+element (secondary CTA with `btn-secondary` styling); "Analyze a video" added as a primary
+accented CTA card that links to the new page. (2) New `static/analysis.html` page: URL + query
+form → `POST /creators/me/video-analysis` → Celery task → Claude streaming via existing SSE
+infrastructure. Analysis is grounded in the creator's DNA + any available metrics for the video.
+Videos outside the catalog get a metadata-only analysis. "Analyze" added to all page navs.
+
+**Files**: `analysis/__init__.py`, `analysis/brief.py`, `routers/analysis.py`,
+`worker/tasks.py` (`generate_video_analysis` + `_generate_video_analysis_async`),
+`static/analysis.html`, `static/index.html`, `static/review.html`, `static/insights.html`,
+`static/profile.html`, `static/pricing.html`, `main.py`, `tests/test_analysis.py`.
+
+**Acceptance criteria**:
+- [x] `POST /creators/me/video-analysis` accepts `{youtube_url, query}`, returns 202 + task_id + stream_url
+- [x] Invalid URL returns 422 with clear detail
+- [x] No channel connected returns 400
+- [x] Redis failure returns stream_url=None (fail-open, same posture as other endpoints)
+- [x] Claude prompt has two blocks: static (cached) + data; honesty disclaimer appended by Python
+- [x] DNA brief capped at 1000 chars in prompt
+- [x] URL extractor handles bare ID, youtu.be, youtube.com/watch, /shorts
+- [x] analysis.html renders streaming narrative (token-by-token, not terminal-style)
+- [x] "Analyze" nav link on all 5 authenticated templates
+- [x] "Link a video" collapsed by default on dashboard
+- [x] 16 unit tests green
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

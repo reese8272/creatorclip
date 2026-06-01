@@ -133,6 +133,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── upload_intel/
 │   └── timing.py               # Best upload window + optimal gap from analytics
 │
+├── analysis/
+│   └── brief.py                # Video performance analysis (Claude streaming, Issue 121)
+│
 ├── improvement/
 │   └── brief.py                # Content-improvement brief generation
 │
@@ -144,6 +147,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
 │   ├── improvement.py          # GET improvement brief
+│   ├── analysis.py             # POST video-analysis (Issue 121)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
 │
 ├── worker/
@@ -161,7 +165,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── insights.html           # Upload timing + improvement brief
 │   ├── progressStream.js       # Issue 86 — EventSource consumer that renders live task progress
 │   ├── activeTasks.js          # Wave 5 — localStorage + SSE resume across page navigation; window.activeTasks
-│   └── activityPanel.js        # Wave 5 — floating bottom-right widget; reacts to activeTasks.subscribe
+│   ├── activityPanel.js        # Wave 5 — floating bottom-right widget; reacts to activeTasks.subscribe
+│   └── analysis.html           # Video performance analysis page (Issue 121)
 │
 ├── tests/
 │   ├── conftest.py

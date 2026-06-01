@@ -27,6 +27,7 @@ from routers import auth as auth_router
 from routers import billing as billing_router
 from routers import clips as clips_module
 from routers import creators as creators_router
+from routers import analysis as analysis_router
 from routers import improvement as improvement_router
 from routers import insights as insights_router
 from routers import review as review_router
@@ -90,6 +91,7 @@ app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(auth_router.router)
 app.include_router(api_keys_router.router)
+app.include_router(analysis_router.router)
 app.include_router(billing_router.router)
 app.include_router(creators_router.router)
 app.include_router(videos_router.router)

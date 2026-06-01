@@ -1813,3 +1813,198 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
         # row.failed state. This outer guard exists so a Redis emit failure
         # at line entry does not silently swallow the original exception.
         raise
+
+
+# ── Video analysis (Issue 121) ────────────────────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="worker.tasks.generate_video_analysis",
+)
+def generate_video_analysis(
+    self,
+    creator_id: str,
+    youtube_video_id: str,
+    query: str,
+    video_id: str | None = None,
+) -> str:
+    """Analyze a YouTube video's performance off the request path (Issue 121).
+
+    Accepts a youtube_video_id (always) plus an optional video_id (our DB PK)
+    for videos already in the creator's catalog — richer context when present.
+    """
+    try:
+        run_async(
+            _generate_video_analysis_async(
+                self.request.id, creator_id, youtube_video_id, query, video_id
+            )
+        )
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _generate_video_analysis_async(
+    job_id: str,
+    creator_id: str,
+    youtube_video_id: str,
+    query: str,
+    video_id: str | None = None,
+) -> None:
+    """Fetch available data for the video + creator and call Claude (streaming).
+
+    Uses AdminSessionLocal (cross-tenant worker context) but enforces
+    per-creator isolation on every query via creator.id filters. The
+    analysis result is ephemeral — no row is persisted; the stream IS
+    the response.
+    """
+    from typing import Any, Sequence
+
+    from sqlalchemy import select
+
+    from analysis.brief import generate_video_analysis as build_analysis
+    from dna.profile import get_active
+    from models import RetentionCurve, Video, VideoMetrics
+    from worker.progress import aemit
+
+    try:
+        await aemit(job_id, "step", label="loading_data", stage="video_analysis")
+
+        cid = uuid.UUID(creator_id)
+        async with db.AdminSessionLocal() as session:
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                await aemit(
+                    job_id, "error", stage="video_analysis", message="Creator not found."
+                )
+                return
+
+            video_metrics: dict[str, Any] | None = None
+            retention_summary: dict[str, Any] | None = None
+            video_title: str | None = None
+
+            # Pull metrics + retention only when we have the video in our DB.
+            # Videos outside the catalog get a metadata-only analysis (still
+            # useful because DNA + channel averages provide comparison context).
+            if video_id is not None:
+                vid = await session.get(Video, uuid.UUID(video_id))
+                if vid is not None and vid.creator_id == cid:
+                    video_title = vid.title
+                    metrics = (
+                        await session.execute(
+                            select(VideoMetrics)
+                            .where(VideoMetrics.video_id == vid.id)
+                            .order_by(VideoMetrics.fetched_at.desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if metrics:
+                        video_metrics = {
+                            "views": metrics.views,
+                            "watch_time_s": metrics.watch_time_s,
+                            "avg_view_duration_s": metrics.avg_view_duration_s,
+                            "engagement_rate": metrics.engagement_rate,
+                        }
+
+                    if vid.duration_s:
+                        curves: Sequence[RetentionCurve] = list(
+                            (
+                                await session.execute(
+                                    select(RetentionCurve)
+                                    .where(RetentionCurve.video_id == vid.id)
+                                    .order_by(RetentionCurve.timestamp_s)
+                                )
+                            ).scalars()
+                        )
+                        if curves:
+                            total = vid.duration_s
+                            checkpoints: dict[str, float | None] = {
+                                "at_25pct": None,
+                                "at_50pct": None,
+                                "at_75pct": None,
+                                "at_end": None,
+                            }
+                            for c in curves:
+                                pct = c.timestamp_s / total
+                                if checkpoints["at_25pct"] is None and pct >= 0.25:
+                                    checkpoints["at_25pct"] = round(
+                                        c.audience_watch_ratio or 0, 3
+                                    )
+                                if checkpoints["at_50pct"] is None and pct >= 0.50:
+                                    checkpoints["at_50pct"] = round(
+                                        c.audience_watch_ratio or 0, 3
+                                    )
+                                if checkpoints["at_75pct"] is None and pct >= 0.75:
+                                    checkpoints["at_75pct"] = round(
+                                        c.audience_watch_ratio or 0, 3
+                                    )
+                                checkpoints["at_end"] = round(
+                                    c.audience_watch_ratio or 0, 3
+                                )
+                            retention_summary = checkpoints
+
+            # Channel averages for comparison — scoped to this creator.
+            def _avg(lst: Sequence[float]) -> float | None:
+                return round(sum(lst) / len(lst), 2) if lst else None
+
+            all_metrics = list(
+                (
+                    await session.execute(
+                        select(VideoMetrics)
+                        .join(Video, VideoMetrics.video_id == Video.id)
+                        .where(Video.creator_id == cid)
+                        .order_by(VideoMetrics.fetched_at.desc())
+                        .limit(50)
+                    )
+                ).scalars()
+            )
+            channel_avg: dict[str, Any] | None = None
+            if all_metrics:
+                views_list = [m.views for m in all_metrics if m.views]
+                eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
+                dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
+                channel_avg = {
+                    "avg_views": _avg(views_list),
+                    "avg_engagement_rate": _avg(eng_list),
+                    "avg_view_duration_s": _avg(dur_list),
+                    "sample_size": len(all_metrics),
+                }
+
+            dna_profile = await get_active(session, cid)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+
+            await aemit(job_id, "step", label="analyzing", stage="video_analysis")
+
+            await asyncio.to_thread(
+                build_analysis,
+                channel_title=creator.channel_title or "Unknown Channel",
+                youtube_video_id=youtube_video_id,
+                video_title=video_title,
+                query=query,
+                video_metrics=video_metrics,
+                retention_summary=retention_summary,
+                channel_avg=channel_avg,
+                dna_brief=dna_brief,
+                task_id=job_id,
+            )
+
+        await aemit(job_id, "done", stage="video_analysis", message="Analysis complete.")
+
+    except Exception as exc:
+        logger.error(
+            "_generate_video_analysis_async failed creator=%s video=%s: %s",
+            creator_id,
+            youtube_video_id,
+            exc,
+        )
+        await aemit(
+            job_id,
+            "error",
+            stage="video_analysis",
+            message="Analysis failed — please try again.",
+            exc_type=type(exc).__name__,
+        )
+        raise

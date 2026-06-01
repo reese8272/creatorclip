@@ -83,7 +83,43 @@
       color: var(--color-text-muted);
     }
 
-    /* ── Link a video form ─────────────────────────────────────── */
+    /* ── Analyze CTA ────────────────────────────────────────────── */
+    .analyze-cta {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-left: 2px solid var(--color-accent);
+      border-radius: var(--radius);
+      padding: var(--space-4) var(--space-5);
+      margin-bottom: var(--space-6);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+    }
+    .analyze-cta-text h3 {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text);
+      margin-bottom: var(--space-1);
+    }
+    .analyze-cta-text p {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+
+    /* ── Link a video (collapsed secondary) ─────────────────────── */
+    .link-video-details {
+      margin-bottom: var(--space-6);
+    }
+    .link-video-details summary {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      cursor: pointer;
+      user-select: none;
+      padding: var(--space-1) 0;
+    }
+    .link-video-details summary:hover { color: var(--color-text-muted); }
+    .link-video-details[open] summary { margin-bottom: var(--space-3); }
     .link-form { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
     .link-form input {
       flex: 1;
@@ -205,6 +241,7 @@
       <a href="/static/review.html">Review</a>
       <a href="/static/insights.html">Insights</a>
       <a href="/static/profile.html">Profile</a>
+      <a href="/static/analysis.html">Analyze</a>
       <a href="/static/pricing.html">Pricing</a>
     </div>
     <span class="nav-spacer"></span>
@@ -261,15 +298,24 @@
       </div>
     </div>
 
-    <!-- Link a video -->
-    <div class="section-header" style="margin-top:var(--space-8)">
-      <h2>Link a video</h2>
+    <!-- Analyze a video CTA -->
+    <div class="analyze-cta" style="margin-top:var(--space-8)">
+      <div class="analyze-cta-text">
+        <h3>Analyze a video</h3>
+        <p>Ask why any video performed the way it did — grounded in your channel data and Creator DNA.</p>
+      </div>
+      <a href="/static/analysis.html" class="btn btn-primary">Analyze →</a>
     </div>
-    <div class="link-form">
-      <input id="yt-id-input" type="text" placeholder="YouTube video ID or URL">
-      <button class="btn btn-primary" onclick="linkVideo()">Link video</button>
-    </div>
-    <p id="link-status"></p>
+
+    <!-- Link a video (secondary — for adding videos outside your catalog) -->
+    <details class="link-video-details">
+      <summary>+ Link a video outside your catalog</summary>
+      <div class="link-form">
+        <input id="yt-id-input" type="text" placeholder="YouTube video ID or URL">
+        <button class="btn btn-secondary" onclick="linkVideo()">Link video</button>
+      </div>
+      <p id="link-status"></p>
+    </details>
 
     <!-- Video list -->
     <div class="section-header" style="margin-top:var(--space-10)">
