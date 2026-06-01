@@ -1448,6 +1448,13 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                     .all()
                 )
 
+                # Re-fetch the access token before the Phase 2 loop. Phase 1 (catalog
+                # upsert) can take several minutes on large channels; if the token was
+                # close to expiry when first fetched it will have expired by the time
+                # Phase 2 starts. A fresh token here ensures the metrics loop has a
+                # full 60-minute window regardless of how long Phase 1 took.
+                access_token = await get_valid_access_token(creator.id, session)
+
                 total = len(unmeasured)
                 await _emit("step", label="sync_metrics_start", stage="catalog_sync", total=total)
 
