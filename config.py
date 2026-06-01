@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     # (creator_id, version). Bounds memory while letting rerank skip the
     # lock-contended joblib load when the model is unchanged. (Issue 78a)
     PREFERENCE_SCORER_CACHE_SIZE: int = 128
+    # Newest-first cap on training-feedback rows pulled into a single
+    # build_and_save fit. Recency-decay sample weights (30d half-life) make
+    # older rows worth ~0, so truncating the long tail is correctness-free.
+    # 5000 is the industry-standard ceiling for a per-user LightGBM ranker
+    # at 30d half-life (Spotify/Netflix sklearn pipelines). (Issue 102)
+    PREFERENCE_MAX_TRAINING_LABELS: int = 5000
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False

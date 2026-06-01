@@ -5,6 +5,80 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Issue 102: keep joblib NumpyUnpickler module-global swap; offload via `asyncio.to_thread` instead
+
+### What was decided
+The post-Wave-8 `/assess` REPORT.md recommended fixing the
+`PreferenceScorer.from_bytes` SEV1 with a two-part change: (a) wrap the
+call in `asyncio.to_thread`, AND (b) "replace the global-class-swap with
+a per-load `pickle.Unpickler` subclass operating on `io.BytesIO(data)`
+directly — joblib provides `joblib.numpy_pickle.NumpyUnpickler(filename,
+file_handle)` which can be subclassed and used without monkey-patching
+the module."
+
+**We implemented (a) only. We did NOT implement (b).** The
+module-global swap of `joblib.numpy_pickle.NumpyUnpickler` →
+`_RestrictedUnpickler` is preserved exactly as Issue 71 left it,
+including the `_UNPICKLER_LOCK` that gates the swap. The offload to
+`asyncio.to_thread` happens at the call site in
+`preference/train.py::load_latest`, not inside `from_bytes` — so the
+existing sync `PreferenceScorer.from_bytes(blob)` API (used by 3
+existing tests in `tests/test_preference.py` and
+`tests/test_preference_scorer_cache.py`) is unchanged.
+
+### Why (the trigger)
+Industry-standards research (2026-05-31) confirmed that joblib 1.x has
+no public per-load `NumpyUnpickler` injection slot:
+
+- The `NumpyUnpickler` class is not in `joblib.__all__`.
+- Its `__init__` signature (`filename`, `mmap_mode`, `buffers`) is
+  internal and not stable across joblib minor versions.
+- The internal call chain (`joblib.load` → `_unpickle` → constructs
+  `NumpyUnpickler(...)` → `.load()`) does not expose a hook to inject a
+  subclass per call.
+- joblib's own documentation for custom unpickling points to the
+  module-global swap as the documented extension point.
+
+The assessment's recommendation (b) would have required depending on
+private API that breaks across joblib minor versions — a worse defect
+than the one we're fixing.
+
+The offload to `asyncio.to_thread` ALONE solves the actual scale
+problem: the `_UNPICKLER_LOCK` now serializes threads (one at a time
+holding the patched global), not coroutines. Two creators hitting
+rerank on a cold cache no longer queue behind each other on the API
+event loop. The RCE allowlist from Issue 71 is preserved unchanged.
+
+### Source / evidence
+- Industry-standards-researcher pass (2026-05-31): "No public API
+  exists on `joblib.numpy_pickle` to instantiate a `NumpyUnpickler`
+  subclass directly and drive a full load without going through
+  `joblib.load`. … The module-global swap is the only supported
+  extension point joblib exposes for this. … **The correct fix for
+  your defect is not to eliminate the swap — it is to move the entire
+  swap + load into `asyncio.to_thread` so the lock stops blocking the
+  event loop.**"
+- joblib source: `joblib/numpy_pickle.py::_unpickle` constructs
+  `NumpyUnpickler` directly with three positional args; no factory hook.
+- Sebastian Ramírez (FastAPI maintainer) guidance: `asyncio.to_thread`
+  is the idiomatic 2025–2026 shape for CPU-bound work in an async
+  handler, identical at runtime to `loop.run_in_executor(None, ...)`.
+
+### Impact / scope
+- `preference/model.py::PreferenceScorer.from_bytes` — UNCHANGED. Still
+  the same swap+lock+`joblib.load` sequence Issue 71 hardened.
+- `preference/train.py::load_latest` — `from_bytes` call now wrapped in
+  `await asyncio.to_thread(PreferenceScorer.from_bytes, blob)`.
+- `preference/train.py::build_and_save` — `fit` call now wrapped in
+  `await asyncio.to_thread(fit, X, y, w)`. Same Sebastián-Ramírez
+  guidance applies — short CPU-bound work in `async def` belongs in
+  `to_thread`.
+
+### Date
+2026-05-31
+
+---
+
 ## 2026-05-31 — Issue 99 design direction: Linear-style base + monospace data register
 
 ### What was decided

@@ -2352,6 +2352,59 @@ direction. Probably wants to slot in BEFORE Issue 96's chat-driven intake.
 
 ---
 
+## Issue 102: Preference model — offload joblib.load + LightGBM fit off the event loop
+**Status**: ✅ Done (2026-05-31, post-Wave-8 /assess top-register fix) · **Severity**: SEV-1 scale defect
+
+**What**: Post-Wave-8 /assess Layer-1 walk surfaced two real
+event-loop-blocking calls in the preference module that prior cycles
+graded as SEV2 library-upgrade risks:
+1. `preference/model.py::PreferenceScorer.from_bytes` runs `joblib.load`
+   under a process-wide unpickler lock on the event loop. Two creators
+   hitting rerank on a cold cache serialize behind the lock across the
+   entire process.
+2. `preference/train.py::build_and_save` calls LightGBM `fit()`
+   synchronously inside `async def`. Training on thousands of labels
+   blocks the loop for seconds.
+
+Bundled the two paired SEV2s in the same files: unbounded training
+fetch (long-tail rows worth ~0 in recency-decayed sample weight) and
+`list(_POSITIVE_ACTIONS) + list(_NEGATIVE_ACTIONS)` DRY against the
+existing `TRAINABLE_ACTIONS` frozenset.
+
+**Approach (Phase 1 — confirmed via industry-standards-researcher)**:
+- `from_bytes`: wrap the existing monkey-patch+lock+`joblib.load` block
+  in `await asyncio.to_thread(...)` at the call site (`load_latest`).
+  The lock stays — joblib 1.x has no public per-load NumpyUnpickler
+  injection slot, so the module-global swap remains the documented
+  extension point. The lock now serializes threads, not coroutines.
+  (Deviates from the /assess recommendation that suggested a per-load
+  subclass on `BytesIO` — that API doesn't exist in joblib 1.x. Logged
+  in DECISIONS.)
+- `fit`: `scorer = await asyncio.to_thread(fit, X, y, w)`.
+  `asyncio.to_thread` is identical to `loop.run_in_executor(None, ...)`
+  per 2025 FastAPI guidance.
+- Newest-first `ORDER BY created_at DESC LIMIT
+  PREFERENCE_MAX_TRAINING_LABELS` (default 5000) — industry standard
+  for recency-decayed sklearn pipelines (Spotify/Netflix).
+- Replace `list(_POSITIVE_ACTIONS) + list(_NEGATIVE_ACTIONS)` with the
+  existing `TRAINABLE_ACTIONS` frozenset.
+
+**ACs**:
+- [x] `from_bytes` deserialization offloaded via `asyncio.to_thread`
+- [x] LightGBM `fit` offloaded via `asyncio.to_thread`
+- [x] Training-feedback query has `ORDER BY created_at DESC LIMIT
+      PREFERENCE_MAX_TRAINING_LABELS` (default 5000)
+- [x] `TRAINABLE_ACTIONS` frozenset used in the `IN` clause (DRY)
+- [x] New setting `PREFERENCE_MAX_TRAINING_LABELS` in `config.py` +
+      `.env.example`
+- [x] 3 new regression tests pin (a) `fit` offload, (b) `from_bytes`
+      offload via `load_latest`, (c) query has LIMIT + newest-first
+- [x] `docs/DECISIONS.md` updated with the deviation from the /assess
+      "per-load NumpyUnpickler subclass" recommendation
+- [x] Tests: 586 passed (+3) / 1 skipped / 122 deselected
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

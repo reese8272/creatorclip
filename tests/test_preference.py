@@ -323,3 +323,173 @@ async def test_build_and_save_filters_and_weights_feedback():
 
     # The model row was persisted via session.add
     session.add.assert_called_once()
+
+
+# ── Issue 102: SEV1 + SEV2 fixes (event-loop offload + LIMIT cap + frozenset) ─
+
+
+@pytest.mark.asyncio
+async def test_build_and_save_offloads_fit_to_thread(monkeypatch):
+    """LightGBM/LogisticRegression `fit` is CPU-bound; build_and_save must
+    invoke it via `asyncio.to_thread` so the surrounding async loop is not
+    blocked for seconds on a power creator. (Issue 102 SEV1)
+
+    Pins the call shape rather than measuring actual thread offload —
+    runtime offload is asyncio's responsibility once the API is used.
+    """
+    import asyncio
+    import uuid
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from models import Clip, ClipFeedback, FeedbackAction
+    from preference.train import build_and_save
+
+    creator_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    def _row():
+        clip = MagicMock(spec=Clip)
+        clip.signals_jsonb = {"features": {}}
+        clip.dna_match = None
+        fb = MagicMock(spec=ClipFeedback)
+        fb.action = FeedbackAction.upvote
+        fb.created_at = now
+        return (fb, clip, None)
+
+    db_rows = [_row(), _row(), _row()]
+    db_rows.append(
+        (
+            MagicMock(spec=ClipFeedback, action=FeedbackAction.downvote, created_at=now),
+            MagicMock(spec=Clip, signals_jsonb={"features": {}}, dna_match=None),
+            None,
+        )
+    )
+
+    execute_call_count = [0]
+
+    async def _execute(stmt, *args):
+        result = MagicMock()
+        if execute_call_count[0] == 0:
+            result.all.return_value = db_rows
+        else:
+            scalars_mock = MagicMock()
+            scalars_mock.first.return_value = None
+            result.scalars.return_value = scalars_mock
+        execute_call_count[0] += 1
+        return result
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    real_to_thread = asyncio.to_thread
+    with patch("preference.train.asyncio.to_thread", side_effect=real_to_thread) as spy:
+        scorer = await build_and_save(session, creator_id)
+
+    assert scorer is not None
+    # `fit` was invoked via asyncio.to_thread, not called directly
+    assert spy.called, "build_and_save must offload fit() via asyncio.to_thread"
+    # First positional arg of the first to_thread call is the `fit` function
+    first_call_args = spy.call_args_list[0].args
+    assert first_call_args[0].__name__ == "fit", (
+        f"first to_thread call should wrap fit(), got {first_call_args[0].__name__}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_and_save_caps_query_at_max_training_labels(monkeypatch):
+    """Feedback query must use ORDER BY created_at DESC + LIMIT
+    PREFERENCE_MAX_TRAINING_LABELS so a power creator with years of
+    feedback doesn't pull the entire set into memory + into LightGBM's
+    ndarray copy. (Issue 102 SEV2)
+    """
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock
+
+    from config import settings
+    from preference.train import build_and_save
+
+    captured_stmts: list = []
+
+    async def _execute(stmt, *args):
+        captured_stmts.append(stmt)
+        result = MagicMock()
+        result.all.return_value = []  # no rows → return None, but query was captured
+        scalars_mock = MagicMock()
+        scalars_mock.first.return_value = None
+        result.scalars.return_value = scalars_mock
+        return result
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_execute)
+
+    await build_and_save(session, uuid.uuid4())
+
+    assert len(captured_stmts) >= 1
+    compiled = str(captured_stmts[0].compile(compile_kwargs={"literal_binds": True}))
+    # LIMIT clause must reflect the config value
+    assert f"LIMIT {settings.PREFERENCE_MAX_TRAINING_LABELS}" in compiled, (
+        f"feedback query must LIMIT to PREFERENCE_MAX_TRAINING_LABELS; got: {compiled}"
+    )
+    # Newest-first ordering — recency decay makes older rows worth ~0
+    assert "ORDER BY clip_feedback.created_at DESC" in compiled, (
+        f"feedback query must order newest-first; got: {compiled}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_latest_offloads_from_bytes_to_thread(monkeypatch):
+    """PreferenceScorer.from_bytes runs joblib.load under a process-wide
+    unpickler lock (the RCE allowlist from Issue 71). Calling it directly
+    on the event loop serializes every rerank across the entire process.
+    load_latest must offload via asyncio.to_thread so the lock serializes
+    threads, not coroutines. (Issue 102 SEV1)
+    """
+    import asyncio
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from preference import _scorer_cache as scorer_cache
+    from preference.features import FEATURE_NAMES
+    from preference.model import PreferenceScorer
+    from preference.train import load_latest
+
+    creator_id = uuid.uuid4()
+    scorer_cache.clear()
+
+    call_count = [0]
+
+    async def _execute(stmt, *args):
+        result = MagicMock()
+        if call_count[0] == 0:
+            # First call: version + feature_schema lookup
+            result.first.return_value = (1, {"features": FEATURE_NAMES})
+        call_count[0] += 1
+        return result
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    session.scalar = AsyncMock(return_value=b"\x80\x05fake-blob-bytes")
+
+    real_to_thread = asyncio.to_thread
+    fake_scorer = MagicMock(spec=PreferenceScorer)
+    with (
+        patch.object(PreferenceScorer, "from_bytes", return_value=fake_scorer) as fb_spy,
+        patch("preference.train.asyncio.to_thread", side_effect=real_to_thread) as tt_spy,
+    ):
+        result = await load_latest(session, creator_id)
+
+    assert result is fake_scorer
+    assert tt_spy.called, "load_latest must offload from_bytes via asyncio.to_thread"
+    # The to_thread call passed the (patched) from_bytes + the blob — pinning
+    # that to_thread received both confirms the offload shape regardless of
+    # whether from_bytes is wrapped or replaced.
+    first_call = tt_spy.call_args_list[0]
+    assert first_call.args[0] is fb_spy, (
+        "to_thread should wrap PreferenceScorer.from_bytes (the spy here)"
+    )
+    assert first_call.args[1] == b"\x80\x05fake-blob-bytes"
+    fb_spy.assert_called_once_with(b"\x80\x05fake-blob-bytes")
+    scorer_cache.clear()

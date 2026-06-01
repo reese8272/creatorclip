@@ -1,11 +1,13 @@
 """
 Build and persist a preference model from a creator's clip feedback.
 
-Training data: all clip_feedback rows for the creator's clips, weighted by
-recency decay × outcome multiplier.  Positive label = upvote or trim (explicit
-keep); negative = downvote; skip is excluded.
+Training data: newest-first PREFERENCE_MAX_TRAINING_LABELS clip_feedback rows
+for the creator's clips, weighted by recency decay × outcome multiplier.
+Positive label = upvote or trim (explicit keep); negative = downvote; skip
+is excluded.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -14,6 +16,7 @@ import numpy as np
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from models import Clip, ClipFeedback, ClipOutcome, FeedbackAction, PreferenceModel
 from preference import _scorer_cache as scorer_cache
 from preference.decay import sample_weight
@@ -33,15 +36,21 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
     Load feedback, build training data, fit model, persist weights_blob to DB.
     Returns None if there are fewer than 2 training samples (one per class minimum).
     """
-    # Fetch feedback + clip signals + outcomes in one pass
+    # Fetch feedback + clip signals + outcomes in one pass. Newest-first +
+    # LIMIT so a power creator with years of feedback doesn't pull the entire
+    # set into memory and into LightGBM's ndarray copy on every retrain. The
+    # 30d-half-life recency decay (preference/decay.py) makes rows past the
+    # cap worth ~0 in the sample weight anyway. (Issue 102)
     result = await session.execute(
         select(ClipFeedback, Clip, ClipOutcome)
         .join(Clip, Clip.id == ClipFeedback.clip_id)
         .outerjoin(ClipOutcome, ClipOutcome.clip_id == ClipFeedback.clip_id)
         .where(
             ClipFeedback.creator_id == creator_id,
-            ClipFeedback.action.in_(list(_POSITIVE_ACTIONS) + list(_NEGATIVE_ACTIONS)),
+            ClipFeedback.action.in_(TRAINABLE_ACTIONS),
         )
+        .order_by(ClipFeedback.created_at.desc())
+        .limit(settings.PREFERENCE_MAX_TRAINING_LABELS)
     )
     rows = result.all()
 
@@ -80,7 +89,12 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
     y: np.ndarray = np.array(y_list, dtype=int)
     w: np.ndarray = np.array(w_list, dtype=float)
 
-    scorer = fit(X, y, w)
+    # LightGBM / LogisticRegression fit is CPU-bound; offload to a thread so
+    # the surrounding async context (Celery retrain task's private loop, or
+    # any future caller from the API loop) isn't blocked for seconds on a
+    # power creator. asyncio.to_thread == loop.run_in_executor(None, ...) per
+    # 2025 FastAPI guidance. (Issue 102)
+    scorer = await asyncio.to_thread(fit, X, y, w)
 
     # Serialize concurrent retrains for this creator so the version assignment
     # (max+1) cannot race into a UNIQUE(creator_id, version) violation. The xact
@@ -156,8 +170,15 @@ async def load_latest(session: AsyncSession, creator_id: uuid.UUID) -> Preferenc
     )
     if not blob:
         return None
+    # joblib.load runs sync + holds a process-wide unpickler lock (preserves
+    # the RCE allowlist from Issue 71). Offload via to_thread so the lock
+    # serializes threads, not coroutines — two creators hitting rerank on a
+    # cold cache no longer queue behind each other on the API event loop.
+    # joblib 1.x has no public per-load NumpyUnpickler injection slot, so
+    # the module-global swap stays as the documented extension point
+    # (DECISIONS 2026-05-31 — Issue 102). (Issue 102)
     try:
-        scorer = PreferenceScorer.from_bytes(blob)
+        scorer = await asyncio.to_thread(PreferenceScorer.from_bytes, blob)
     except Exception as exc:
         logger.warning("Failed to deserialize preference model: %s", exc)
         return None
