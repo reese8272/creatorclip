@@ -812,9 +812,16 @@ async def test_improvement_brief_router_returns_stream_url_on_happy_path(mocker)
     session_cookie = {SESSION_COOKIE: create_session_token(creator.id)}
 
     fake_session = AsyncMock()
-    # has_metrics check returns a value (existence check passes)
-    # row check (select ImprovementBrief) returns None on first call
+    # has_metrics check returns a value (existence check passes); fallback
+    # re-query of ImprovementBrief returns None (no row at all).
     fake_session.scalar = AsyncMock(side_effect=[uuid.uuid4(), None])
+    # Issue 110 Fix C: the new SELECT FOR UPDATE SKIP LOCKED uses
+    # session.execute(...).scalar() instead of session.scalar(...) for the
+    # debounce-row read. Mock it to return None (no row to lock) so the
+    # router falls into the fallback re-query branch.
+    no_row_result = MagicMock()
+    no_row_result.scalar = MagicMock(return_value=None)
+    fake_session.execute = AsyncMock(return_value=no_row_result)
     fake_session.add = MagicMock()
     fake_session.commit = AsyncMock()
 
@@ -873,6 +880,10 @@ async def test_improvement_brief_router_fails_open_on_redis_down(mocker):
 
     fake_session = AsyncMock()
     fake_session.scalar = AsyncMock(side_effect=[uuid.uuid4(), None])
+    # Issue 110 Fix C: SELECT FOR UPDATE SKIP LOCKED uses execute(...).scalar()
+    no_row_result = MagicMock()
+    no_row_result.scalar = MagicMock(return_value=None)
+    fake_session.execute = AsyncMock(return_value=no_row_result)
     fake_session.add = MagicMock()
     fake_session.commit = AsyncMock()
 

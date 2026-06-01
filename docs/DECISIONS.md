@@ -5,6 +5,81 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-01 — Issue 110: SELECT FOR UPDATE SKIP LOCKED for improvement-brief debounce; capture-then-delete-after-commit for _ingest_async orphan-mp4
+
+### What was decided
+Two implementation choices on the post-Wave-9 /assess top-register items.
+
+**(C) Improvement-brief debounce race**: use
+`SELECT ... FOR UPDATE SKIP LOCKED` on the existing-row read inside
+the transaction, with a no-lock fallback re-query that returns the
+existing task_id if another concurrent POST won the race. This
+overrides the alternative of `pg_advisory_xact_lock` (which Issue
+105 used elsewhere in the worker).
+
+**(D) `_ingest_async` orphan-mp4**: capture `prior_source_uri` at
+function entry, then after the final commit call
+`await adelete_file(prior_source_uri)` ONLY when the URI starts with
+`source/` AND ends in `.mp4`. R2 bucket lifecycle on the `source/`
+prefix is the documented user-side belt-and-suspenders.
+
+### Why
+**For (C)**: Advisory locks are the canonical shape when there is no
+row yet to lock (first-INSERT-ever races). The improvement-brief
+debounce is a check-then-UPDATE-existing-row race — the row already
+exists for the lock to attach to. Row-scoped `SELECT FOR UPDATE` is
+strictly preferable: no global hash collision risk, automatically
+released on commit/rollback with no cleanup code, survives connection
+pool recycling. `SKIP LOCKED` (vs plain `FOR UPDATE`) gives the second
+caller a fast no-wait null and lets the fallback re-query return the
+in-flight task_id immediately — the debounce semantic is "return 202
+immediately if already pending," not "block until the first request
+finishes."
+
+**For (D)**: AWS Well-Architected + Cloudflare R2 best-practices both
+treat lifecycle policies as a TTL backstop for objects that escape
+application-layer cleanup — not as the primary cleanup path. Using
+lifecycle alone would mean accepting unbounded lag between "orphan
+created" and "orphan deleted," which violates the 30-day YouTube
+ToS cap on any slow-ingest edge case. The prefix-guard
+(`startswith("source/") and endswith(".mp4")`) is the canonical
+retry-safe shape per AWS Lambda idempotent-retry doctrine — Celery
+redelivery after the commit would re-enter with `source_uri` already
+= audio key, and the prefix check ensures we never delete the audio
+key by mistake. The Issue-105 `.wav` short-circuit at function entry
+already prevents this path; the prefix check is belt-and-suspenders
+against future ingest paths that might skip the short-circuit.
+
+### Source / evidence
+- Industry-standards-researcher pass (2026-06-01): "`SELECT ... FOR
+  UPDATE SKIP LOCKED` is the canonical shape for this exact problem
+  in SQLAlchemy 2.x async + PostgreSQL... Using advisory locks for
+  the UPDATE path is a pattern mismatch — it's borrowing a DDL-level
+  primitive to solve a DML-level race."
+- SQLAlchemy 2.x docs, pessimistic locking section.
+- AWS S3 Well-Architected (lifecycle as backstop, not primary).
+- Cloudflare R2 lifecycle rules documentation.
+
+### Impact / scope
+- `routers/improvement.py::start_improvement_brief` now uses
+  `with_for_update(skip_locked=True)` + a fallback re-query branch +
+  a lock-acquired-but-pending branch. Three paths total; explicit
+  inline comments at each.
+- `worker/tasks.py::_ingest_async` now captures `prior_source_uri =
+  source_uri` before the `video.ingest_status = IngestStatus.running`
+  commit, and after the final commit calls `adelete_file` with the
+  prefix + suffix guard. Best-effort try/except around the delete
+  (a crash here leaks an orphan that the R2 lifecycle rule eventually
+  sweeps).
+- **User-side belt-and-suspenders TODO**: set a 7-day TTL on the R2
+  bucket's `source/` prefix via the R2 dashboard. Not code; not
+  tracked in this commit.
+
+### Date
+2026-06-01
+
+---
+
 ## 2026-05-31 — Issue 106: JWT verify leeway=60s; override /assess recommendation of 300s
 
 ### What was decided

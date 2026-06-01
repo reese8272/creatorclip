@@ -404,6 +404,20 @@ async def _ingest_async(video_id: str) -> None:
                 return
 
             source_uri = video.source_uri
+            # Capture the original blob key BEFORE we overwrite source_uri with
+            # the audio key on the final commit. After commit, the original mp4
+            # has no SQL row pointing at it — `_purge_stale_source_media_async`
+            # iterates `Video.source_uri` to find purgeables and would never
+            # see the orphan. Delete it explicitly post-commit. Guard with the
+            # `source/` prefix + `.mp4` suffix because the Issue-105 `.wav`
+            # short-circuit at function entry should already prevent a retry
+            # from re-entering with audio_uri here, but the prefix check is
+            # the canonical retry-safe shape (AWS Lambda idempotent-retry
+            # doctrine) in case a future ingest path skips the short-circuit.
+            # (Issue 110 — closes the Issue-105 misread on first-run orphan;
+            # R2 bucket lifecycle on `source/` is the documented
+            # belt-and-suspenders, see DECISIONS.)
+            prior_source_uri = source_uri
             video.ingest_status = IngestStatus.running
             await session.commit()
 
@@ -443,6 +457,26 @@ async def _ingest_async(video_id: str) -> None:
                     await aemit(video_id, "step", label="deduct_minutes", stage="ingest")
                     await deduct_for_video(video.id, video.creator_id, duration_s, session)
                 await session.commit()
+
+        # Post-commit orphan cleanup: the original mp4 is now unreferenced.
+        # Prefix guard makes this safe under Celery redelivery — only fires
+        # when prior_source_uri is the expected `source/...mp4` shape.
+        # adelete_file is idempotent (no-op on missing key), so a crash
+        # between commit and this call leaks an orphan that the R2
+        # `source/` lifecycle rule eventually sweeps (belt-and-suspenders).
+        # (Issue 110)
+        if prior_source_uri.startswith("source/") and prior_source_uri.endswith(".mp4"):
+            from worker.storage import adelete_file
+
+            try:
+                await adelete_file(prior_source_uri)
+            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+                logger.warning(
+                    "_ingest_async: prior-mp4 cleanup failed video=%s uri=%s err=%s",
+                    video_id,
+                    prior_source_uri,
+                    type(exc).__name__,
+                )
     except Exception as exc:
         # Safe message — exception args may carry internal detail. The
         # generic shape matches the data-gate emit policy in _build_dna_async.

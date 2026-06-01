@@ -9,6 +9,7 @@ import uuid
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import UUID4, BaseModel
+from slowapi.util import get_remote_address
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,11 +122,17 @@ async def checkout(
 
 
 @router.post("/webhook", include_in_schema=False)
+@limiter.limit("60/minute", key_func=get_remote_address)
 async def stripe_webhook(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Stripe sends checkout.session.completed here to fulfill pack purchases."""
+    """Stripe sends checkout.session.completed here to fulfill pack purchases.
+
+    Rate-limited per source IP at the Stripe-published webhook delivery rate.
+    Sits in front of the signature check so a flood of bad-signature payloads
+    can't burn worker threads on the validation path. (Issue 110)
+    """
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
     try:

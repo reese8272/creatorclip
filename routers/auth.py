@@ -128,9 +128,7 @@ async def callback(
         try:
             await progress.aset_owner(task.id, str(creator.id))
         except _redis_pkg.RedisError as exc:
-            import logging as _logging
-
-            _logging.getLogger(__name__).warning(
+            logger.warning(
                 "auth callback aset_owner failed (Redis down?) task=%s err=%s",
                 task.id,
                 exc,
@@ -160,7 +158,8 @@ async def callback(
 
 
 @router.post("/logout", response_model=LogoutOut)
-async def logout(response: Response) -> dict:
+@limiter.limit("30/minute", key_func=creator_key)
+async def logout(request: Request, response: Response) -> dict:
     response.delete_cookie(SESSION_COOKIE)
     return {"status": "logged out"}
 

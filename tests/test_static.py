@@ -845,22 +845,25 @@ def test_list_videos_excludes_catalog_only_rows(client):
 
 def test_all_router_limit_decorators_use_creator_key():
     """Static-grep guard: every @limiter.limit(...) decorator in routers/*.py
-    must include key_func=creator_key so per-creator bucketing is enforced
-    uniformly — including bearer-auth routes (e.g. /clips/ingest) that carry
-    no session cookie and therefore bypassed per-creator bucketing under the
-    old IP-based default.
+    must include either key_func=creator_key (per-creator bucketing — the
+    default for authenticated routes per Issue 104) OR
+    key_func=get_remote_address (per-IP bucketing — for routes that legitimately
+    have no session, e.g. /billing/webhook from Stripe per Issue 110).
+
+    A bare `@limiter.limit(...)` with no key_func silently regresses to the
+    slowapi default (also IP), which is correct for /webhook by accident but
+    wrong for any authenticated route — so we require the kwarg to be EXPLICIT.
 
     This prevents a future 'quick add an endpoint' PR from accidentally
-    omitting the kwarg and silently regressing to IP-based buckets. (Issue 104)
+    omitting the kwarg and silently regressing on authenticated routes.
+    (Issue 104, expanded by Issue 110)
     """
     import pathlib
     import re
 
     routers_dir = pathlib.Path(__file__).parent.parent / "routers"
-    # Pattern: @limiter.limit(...) — could span a single line or be followed
-    # by a multi-line call. We match the decorator line to keep the grep simple.
     limit_re = re.compile(r"@limiter\.limit\(")
-    keyfunc_re = re.compile(r"key_func\s*=\s*creator_key")
+    keyfunc_re = re.compile(r"key_func\s*=\s*(creator_key|get_remote_address)")
 
     violations: list[str] = []
     for py_file in sorted(routers_dir.glob("*.py")):
@@ -868,16 +871,15 @@ def test_all_router_limit_decorators_use_creator_key():
         lines = src.splitlines()
         for lineno, line in enumerate(lines, start=1):
             if limit_re.search(line):
-                # Check the same line (single-line decorator) or the next line
-                # (decorator split over two lines).
                 snippet = line
                 if lineno < len(lines):
-                    snippet += "\n" + lines[lineno]  # look one line ahead too
+                    snippet += "\n" + lines[lineno]
                 if not keyfunc_re.search(snippet):
                     violations.append(f"{py_file.name}:{lineno}: {line.strip()!r}")
 
     assert not violations, (
-        "The following @limiter.limit decorators are missing key_func=creator_key "
-        "(Issue 104 — per-creator rate-limit key sweep):\n"
+        "The following @limiter.limit decorators are missing an explicit "
+        "key_func= (must be creator_key for authenticated routes, or "
+        "get_remote_address for unauthenticated routes like /billing/webhook):\n"
         + "\n".join(f"  {v}" for v in violations)
     )

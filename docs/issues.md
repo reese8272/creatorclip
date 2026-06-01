@@ -2537,6 +2537,35 @@ Cleanup-severity items the Issue 108 sweep deferred because they need real desig
 
 ---
 
+## Issue 110: Post-Wave-9 /assess top-register cluster (5 fixes + 1 ops note)
+**Status**: ✅ Done (2026-06-01, post-Wave-9 /assess closures) · **Severity**: SEV-2 cluster (3 net-new from /assess + 1 Issue-105 misread + 1 Issue-108 sweep miss + 1 prod hotfix)
+
+**Closures**:
+
+1. **`routers/auth.py::/auth/logout` rate limit** — `@limiter.limit("30/minute", key_func=creator_key)`. CSRF-shaped surface previously had no decorator; an authenticated attacker could spam logout state-change calls unboundedly. Same per-creator-bucketed posture as `/auth/me`.
+2. **`routers/billing.py::/billing/webhook` rate limit** — `@limiter.limit("60/minute", key_func=get_remote_address)`. IP-keyed (Stripe-originated requests have no session cookie). Sits in front of the signature check so a flood of bad-signature payloads can't burn worker threads on validation. Updated the Issue-104 sweep static-grep test to allow `get_remote_address` alongside `creator_key`.
+3. **`routers/improvement.py::start_improvement_brief` debounce race** — `SELECT ... FOR UPDATE SKIP LOCKED` on the existing-row read + no-lock fallback re-query that returns the existing task_id if a concurrent POST won the race. Three branches: lock acquired & pending (debounce), lock not acquired (fallback re-query), no row at all (insert new). Closes the double-fire-Anthropic risk. DECISIONS entry documents why SKIP LOCKED over advisory lock for an existing-row race. Test fixtures in `tests/test_progress_emit_wiring.py` updated to mock `session.execute(...).scalar()`.
+4. **`worker/tasks.py::_ingest_async` orphan-mp4 cleanup** — capture `prior_source_uri = source_uri` at function entry; after the final commit, `await adelete_file(prior_source_uri)` ONLY when URI starts with `source/` AND ends in `.mp4`. Best-effort try/except around the delete; failures log a warning so the R2 lifecycle rule (user-side, 7-day TTL on `source/`) sweeps the leak. Closes the Issue-105 misread (`.wav` short-circuit only prevented retry-orphan; first-run mp4 was always permanently invisible to `_purge_stale_source_media_async`). ToS retention violation closed.
+5. **`routers/auth.py:131` `_logging` workaround removed** — the Issue 108 sweep missed this one site. Now uses the module-level `logger` (declared at auth.py:26).
+
+**Already landed earlier this turn (production hotfix)**:
+
+- **`config.py` `LOCAL_MEDIA_DIR` validator relaxed** to `STORAGE_BACKEND=="local"` only. Issue 105's validator was overreaching — prod uses `STORAGE_BACKEND=r2` so the path is dead config; rejecting the `./media` default at `ENV=production` crash-looped the deploy. Hotfix commit `1acee71` shipped before the rest of Issue 110.
+
+**ACs**:
+- [x] `/auth/logout` has `@limiter.limit` with `key_func=creator_key`
+- [x] `/billing/webhook` has `@limiter.limit` with `key_func=get_remote_address`; static-grep test updated
+- [x] `start_improvement_brief` uses `with_for_update(skip_locked=True)` + fallback re-query
+- [x] `_ingest_async` captures `prior_source_uri` + calls `adelete_file` post-commit with prefix+suffix guard
+- [x] `routers/auth.py` no longer references `_logging`
+- [x] DECISIONS entry for SKIP LOCKED + capture-then-delete-after-commit choices
+- [x] 6 new regression tests in `tests/test_issue_110.py`
+- [x] R2 bucket lifecycle rule on `source/` prefix (7-day TTL) — **USER-SIDE ACTION** (R2 dashboard); not code
+- [x] Tests: 627 passed (+6) / 2 skipped / 125 deselected
+- [x] Layer 0: ruff 0 / mypy 0 / coverage 75.97% / bandit 0/0 / pip-audit 0 / freshness ok
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

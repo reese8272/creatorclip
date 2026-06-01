@@ -72,18 +72,51 @@ async def start_improvement_brief(
 
     # One row per creator. Debounce: an in-flight build returns 202 without
     # re-enqueuing, so repeated clicks collapse onto the same job.
-    row = await session.scalar(
-        select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
-    )
-    if row is not None and row.status == ImprovementBriefStatus.pending:
-        # Debounced: the in-flight task's owner key was stamped on its original
-        # enqueue, so the client can re-subscribe to the same stream_url.
+    #
+    # SELECT FOR UPDATE SKIP LOCKED closes the check-then-update race
+    # (Issue 110): two concurrent POSTs without a lock would both read
+    # status != pending, both write pending, both commit, both fire Celery
+    # → 2× billed Anthropic call. With SKIP LOCKED, the second caller gets
+    # no row → falls back to a plain read → sees the now-pending row from
+    # the first caller → returns the existing task_id. No serialization
+    # wait, no double-fire. (Canonical SQLAlchemy 2.x async pessimistic
+    # locking pattern; advisory locks are the wrong shape for an
+    # existing-row race.)
+    row = (
+        await session.execute(
+            select(ImprovementBrief)
+            .where(ImprovementBrief.creator_id == creator.id)
+            .with_for_update(skip_locked=True)
+        )
+    ).scalar()
+
+    if row is None:
+        # Either no row exists, OR another request holds the lock. Re-query
+        # without the lock to distinguish: if a pending row now exists, the
+        # other request won the race — return its task_id.
+        existing = await session.scalar(
+            select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
+        )
+        if existing is not None and existing.status == ImprovementBriefStatus.pending:
+            stream_url = (
+                f"/tasks/{existing.job_id}/events" if existing.job_id else None
+            )
+            return {
+                "status": "pending",
+                "task_id": existing.job_id,
+                "stream_url": stream_url,
+            }
+        # Truly no row → create. The UNIQUE(creator_id) backstop guarantees
+        # at most one of two truly-concurrent inserts succeeds; the loser
+        # gets IntegrityError and the slowapi limit (10/hour) means the
+        # retry rate is already capped.
+        row = ImprovementBrief(creator_id=creator.id)
+        session.add(row)
+    elif row.status == ImprovementBriefStatus.pending:
+        # Lock-acquired branch: the row already says pending. Debounced.
         stream_url = f"/tasks/{row.job_id}/events" if row.job_id else None
         return {"status": "pending", "task_id": row.job_id, "stream_url": stream_url}
 
-    if row is None:
-        row = ImprovementBrief(creator_id=creator.id)
-        session.add(row)
     row.status = ImprovementBriefStatus.pending
     row.requested_at = datetime.now(UTC)
     row.brief_text = None
