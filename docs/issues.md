@@ -2405,6 +2405,67 @@ existing `TRAINABLE_ACTIONS` frozenset.
 
 ---
 
+## Issue 103: Wave-9 carry-forward sweep — 6 SEV2s open across 5–8 cycles
+**Status**: ✅ Done (2026-05-31 — parallel-build batch alongside 104/105/107) · **Severity**: SEV-2 cluster
+
+**Six fixes** from the post-Wave-8 /assess that had been carrying forward unfixed:
+1. `youtube/oauth.py:290` — `redis.RedisError` on lock acquisition now wrapped, falls back to lockless refresh (fail-open per AWS/Netflix/Shopify circuit-breaker doctrine for idempotent backend writes).
+2. `ingestion/transcribe.py:116-138` — Deepgram normalizer uses `.get()` + skip on missing timestamps (matches WhisperX + AssemblyAI shape; one malformed item doesn't burn a Celery retry).
+3. `ingestion/transcribe.py:43-60` — `_guard_audio_size` raises `FileNotFoundError` from OSError (was silent return → empty-pipeline AssemblyAI run + auto-refund for a detectable cause).
+4. `upload_intel/timing.py:54-55` — `optimal_gap_hours` filter+coerce guard mirrors Issue 75d's `best_upload_windows` fix; same router payload now agrees on row validity.
+5. `clip_engine/scoring.py` + `ranking.py:139` — Claude returns both `dna_score` (DNA-only fit) and `score` (composite); `Clip.dna_match` set to DNA-only on the DNA path, `None` on cold-start. Closes the collinearity where preference feature was fed its own label-generating signal.
+6. `clip_engine/candidates.py:113` — greedy IoU NMS at threshold 0.5 (SumMe/TVSum/object-detection canonical) drops overlapping windows; closes principle-#9 violation where two peaks 35s apart could yield clips with >80% IoU.
+
+Tests: +6 regression tests. Built in an isolated worktree, cherry-picked to main.
+
+---
+
+## Issue 104: Wave-8 new-surface fixes — rate-limit key, aggregate, temp-file, audit
+**Status**: ✅ Done (2026-05-31 — parallel-build batch) · **Severity**: SEV-2 cluster (4 fixes on Wave-8 endpoints)
+
+**Four fixes** on the new endpoint surfaces Wave 8 shipped:
+1. **Per-creator rate-limit key sweep.** `auth.py::get_current_creator` + `api_key.py::get_current_creator_via_api_key` now stash `request.state.creator_id`. New `limiter.py::creator_key` reads it (falls back to `get_remote_address` for unauth). Every `@limiter.limit(...)` across 11 routers now carries `key_func=creator_key`. The critical broken site was `/clips/ingest` — bearer-auth had no session cookie so slowapi silently fell back to IP, pooling all OBS app users into one bucket.
+2. **`routers/insights.py:147` aggregate fix.** `func.nullif(predicate, True)` returns NULL on every row → `count(NULL)=0` → insights totals (Issue 93) were silently zero. Replaced with `func.count().filter(...)` (ANSI SQL:2003 FILTER, fully supported in SQLAlchemy 2.x + Postgres) for all 5 aggregates.
+3. **Temp-file leak fix** on both `ingest_clip` AND `upload_video` — entire post-`NamedTemporaryFile` block now in `try/finally: tmp_path.unlink(missing_ok=True)`. Per-arm `unlink` removed.
+4. **API-key audit log.** `routers/api_keys.py` writes a durable `AuditLog` row (via `append_audit`) for create + revoke with `ip_address` + `user_agent` + `request_id` folded into JSONB (no schema migration). Per OWASP ASVS 4.0 §7.2 + SOC 2 + Stripe/GitHub/Cloudflare convention.
+
+Tests: +6 unit tests (Issue 104) + new `tests/_helpers.py::override_current_creator` helper to make per-creator rate-limit-key work under the `dependency_overrides[get_current_creator] = lambda: creator` test pattern (sweep-replaced 26 call sites across 11 test files). Built in an isolated worktree, cherry-picked to main.
+
+---
+
+## Issue 105: Worker idempotency + advisory locks
+**Status**: ✅ Done (2026-05-31 — parallel-build batch) · **Severity**: SEV-2 cluster (7 fixes)
+
+**Seven fixes** on the worker side:
+1. **`_transcribe_async` + `_signals_async` idempotency probes** — load existing row, short-circuit if past relevant stage; emit no-op `step` event. Mirrors render's existing pattern. Stops paid Deepgram/AssemblyAI re-call on at-least-once redelivery.
+2. **`_ingest_async` orphan-WAV short-circuit** — if `source_uri.endswith('.wav')`, return immediately (AWS Lambda idempotent-retry doctrine: persistent + detectable). Closes ToS retention violation + unbounded R2 storage cost.
+3. **`generate_clips` `base=RefundOnFailureTask`** — terminal failure now refunds. The one billable-pipeline task missing the base class.
+4. **6 advisory locks** — `pg_try_advisory_lock(hashtext(...))` at function entry on `_sync_channel_catalog_async`, `_retrain_preference_async`, `_poll_clip_outcomes_async`, `_refresh_youtube_analytics_async`, `_purge_stale_source_media_async`, `_purge_stale_youtube_analytics_async`. Non-blocking variant — stuck prior runs don't queue. Closes YouTube quota double-burn under Beat double-fires.
+5. **`SoftTimeLimitExceeded` retry-loop fix** — caught before broad `except Exception` in 3 sync wrappers; re-raises to `on_failure` for immediate refund. New `CELERY_SOFT_TIME_LIMIT_S` config (single source of truth) + validator asserting `TRANSCRIPTION_TIMEOUT_S < soft - 30s` (canonical cleanup-breathing-room).
+6. **Redis socket timeouts** — both `worker/progress.py` singletons (sync + async) constructed with `socket_timeout=2.0, socket_connect_timeout=2.0`.
+7. **`LOCAL_MEDIA_DIR` absolute-path guard** — `Path(...).expanduser().resolve()` in `_local_root()`; pydantic `@model_validator` rejects relative paths in `ENV=production`.
+
+Tests: +9 regression tests. Built directly on main during the parallel batch (file scope was wholly inside `worker/` so no conflict risk).
+
+---
+
+## Issue 107: pip-audit triage + Layer-0 re-baseline
+**Status**: ✅ Done (2026-05-31 — parallel-build batch) · **Severity**: SEV-2 ops
+
+The post-Wave-8 /assess Layer-0 ran pip-audit locally for the first time in 5 waves and surfaced 16 vulns against a baseline of 0. Triage outcome:
+
+- **Root cause**: venv was not synced to `requirements.txt`. Issue 75(a) had already pinned every fixable CVE; the packages just hadn't been installed. After syncing, 16 → 6 residuals.
+- **6 residuals documented** in a new `[tool.pip-audit]` stanza in `pyproject.toml` with mandatory per-entry reason comments:
+  - `GHSA-6w46-j5rx-g56g` pytest 8.3.3 (`/tmp` DoS — dev/CI only, blocked by pytest-asyncio<0.25 pinning pytest<9)
+  - `PYSEC-2026-161` starlette 0.49.1 (Host-header injection — fix only in 1.0.1, needs FastAPI 0.136.x; mitigated by Cloudflare + locked ALLOWED_ORIGINS)
+  - 4× pip 24.2 CVEs (build-time tool, not runtime; venv rebuild scheduled)
+- **Baseline policy**: stays at 0; ignore list carries the residuals (GitHub Actions / GitLab dependency scanning convention — forces every new vuln to be either fixed or explicitly justified).
+- **Coverage re-baseline** 69.54% → 75.20% (locks in the gain from Issue 95 frontend + Issue 102 + this wave).
+
+Tests: +3 (`tests/test_security_baselines.py` pinning sync between harness ignores and TOML stanza + presence of reason comments). Built in an isolated worktree, cherry-picked to main.
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
