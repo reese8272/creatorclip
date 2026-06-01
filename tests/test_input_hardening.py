@@ -71,6 +71,7 @@ def test_production_without_metrics_token_auto_disables_metrics():
         STRIPE_WEBHOOK_SECRET="whsec_x",
         METRICS_ENABLED=True,
         METRICS_TOKEN="",
+        LOCAL_MEDIA_DIR="/var/lib/creatorclip/media",  # Issue 105 Fix 7: must be absolute in prod
     )
     assert s.METRICS_ENABLED is False  # auto-disabled, so the endpoint isn't registered
 
@@ -84,6 +85,7 @@ def test_production_keeps_metrics_enabled_with_token():
         STRIPE_WEBHOOK_SECRET="whsec_x",
         METRICS_ENABLED=True,
         METRICS_TOKEN="scrape-secret",
+        LOCAL_MEDIA_DIR="/var/lib/creatorclip/media",  # Issue 105 Fix 7: must be absolute in prod
     )
     assert s.METRICS_ENABLED is True
     assert s.METRICS_TOKEN == "scrape-secret"

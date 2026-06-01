@@ -44,7 +44,12 @@ def _r2():
 
 
 def _local_root() -> Path:
-    d = Path(settings.LOCAL_MEDIA_DIR)
+    # expanduser().resolve() converts relative paths (e.g. "./media") to absolute
+    # paths before use. This prevents the path from shifting if the worker's cwd
+    # changes between calls, and makes the configured value deterministic across
+    # all callers. The production validator in config.py rejects relative values
+    # in ENV=production so this is defence-in-depth for dev.
+    d = Path(settings.LOCAL_MEDIA_DIR).expanduser().resolve()
     d.mkdir(parents=True, exist_ok=True)
     return d
 

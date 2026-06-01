@@ -360,10 +360,16 @@ async def test_refresh_analytics_deletes_token_row_on_auth_error():
         async def __aexit__(self, *args):
             return False
 
-        async def execute(self, stmt):
-            text = str(stmt).lower()
+        async def execute(self, stmt, params=None):
+            text_str = str(stmt).lower()
             result = MagicMock()
-            if "delete" in text:
+            # Issue 105 Fix 4: advisory lock/unlock — return True for lock, no-op for unlock.
+            if "pg_try_advisory_lock" in text_str:
+                result.scalar_one = MagicMock(return_value=True)
+                return result
+            if "pg_advisory_unlock" in text_str:
+                return result
+            if "delete" in text_str:
                 delete_called["n"] += 1
                 return result
             result.scalars = lambda: iter([creator])

@@ -65,7 +65,12 @@ async def test_sync_channel_catalog_calls_sync_video_catalog_and_commits():
     # Issue 88: phase 2 queries for unmetered videos. Empty result = no metrics fetched.
     empty_phase2 = MagicMock()
     empty_phase2.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-    fake_session.execute = AsyncMock(return_value=empty_phase2)
+    # Issue 105: the first execute() call is the advisory-lock probe, which must
+    # return scalar_one() == True so the body proceeds. Subsequent calls (phase 2
+    # metrics query, advisory unlock) use empty_phase2 / a no-op result.
+    advisory_lock_result = MagicMock()
+    advisory_lock_result.scalar_one = MagicMock(return_value=True)
+    fake_session.execute = AsyncMock(side_effect=[advisory_lock_result, empty_phase2, MagicMock()])
 
     # AdminSessionLocal() returns an async context manager
     fake_ctx = MagicMock()
@@ -99,6 +104,12 @@ async def test_sync_channel_catalog_no_token_is_a_clean_no_op():
     fake_session = MagicMock()
     fake_session.get = AsyncMock(return_value=fake_creator)
     fake_session.commit = AsyncMock()
+    # Issue 105: advisory-lock probe is the first execute call — must return True
+    # so the body proceeds (then the token lookup raises, which is what we test).
+    advisory_lock_result = MagicMock()
+    advisory_lock_result.scalar_one = MagicMock(return_value=True)
+    unlock_result = MagicMock()
+    fake_session.execute = AsyncMock(side_effect=[advisory_lock_result, unlock_result])
 
     fake_ctx = MagicMock()
     fake_ctx.__aenter__ = AsyncMock(return_value=fake_session)

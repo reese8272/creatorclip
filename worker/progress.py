@@ -93,7 +93,19 @@ _SYNC: redis.Redis | None = None
 def _sync_client() -> redis.Redis:
     global _SYNC
     if _SYNC is None:
-        _SYNC = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        # socket_timeout / socket_connect_timeout cap how long a single Redis
+        # command blocks. 2 s is ample for a local/LAN Redis instance and
+        # prevents a wedged Redis from stalling a paid worker task indefinitely.
+        # redis-py 5.x cluster note: these timeouts are silently ignored for
+        # cluster-internal hop redirects when using the standard Redis() client;
+        # for cluster deployments use RedisCluster() instead. Our single-instance
+        # setup is unaffected — socket_timeout is honored correctly here.
+        _SYNC = redis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+        )
     return _SYNC
 
 
@@ -140,7 +152,14 @@ def _async_client() -> aredis.Redis:
         # error. We can't bind to a loop that isn't running.
         current = None
     if _AIO is None or _AIO_LOOP is not current:
-        _AIO = aredis.from_url(settings.REDIS_URL, decode_responses=True)
+        # Mirror the sync client's 2 s socket timeouts. See the comment in
+        # _sync_client() for the redis-py 5.x cluster gotcha.
+        _AIO = aredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+        )
         _AIO_LOOP = current
     assert _AIO is not None  # narrow for mypy after the conditional rebuild
     return _AIO

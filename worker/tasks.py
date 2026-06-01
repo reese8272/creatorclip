@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 
 import db
 from models import (
@@ -98,6 +99,11 @@ class RefundOnFailureTask(Task):
 def ingest_video(self, video_id: str) -> str:
     try:
         run_async(_ingest_async(video_id))
+    except SoftTimeLimitExceeded:
+        # Soft limit means we've already burned ~50 min. Do NOT retry —
+        # the next delivery would time out again, wasting credits. Re-raise
+        # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
+        raise
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
@@ -114,6 +120,9 @@ def ingest_video(self, video_id: str) -> str:
 def transcribe_video(self, video_id: str) -> str:
     try:
         run_async(_transcribe_async(video_id))
+    except SoftTimeLimitExceeded:
+        # See ingest_video above — re-raise immediately to fire on_failure.
+        raise
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
@@ -130,6 +139,9 @@ def transcribe_video(self, video_id: str) -> str:
 def build_signals(self, video_id: str) -> str:
     try:
         run_async(_signals_async(video_id))
+    except SoftTimeLimitExceeded:
+        # See ingest_video above — re-raise immediately to fire on_failure.
+        raise
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
@@ -137,7 +149,13 @@ def build_signals(self, video_id: str) -> str:
     return video_id
 
 
-@celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.generate_clips")
+@celery.task(
+    base=RefundOnFailureTask,
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    name="worker.tasks.generate_clips",
+)
 def generate_clips(self, video_id: str) -> str:
     """Score and rank clip candidates for a fully-ingested video."""
     try:
@@ -264,47 +282,66 @@ def retrain_preference(self, creator_id: str) -> str:
 
 
 async def _retrain_preference_async(creator_id: str) -> None:
-    from sqlalchemy import func, select
+    from sqlalchemy import func, select, text
     from sqlalchemy.exc import IntegrityError
 
     from preference.train import TRAINABLE_ACTIONS, build_and_save
 
     cid = uuid.UUID(creator_id)
     async with db.AsyncSessionLocal() as session:
-        latest = (
-            (
-                await session.execute(
-                    select(PreferenceModel)
-                    .where(PreferenceModel.creator_id == cid)
-                    .order_by(PreferenceModel.version.desc())
-                )
+        # Advisory lock (Issue 105 — Fix 4): non-blocking variant so a concurrent
+        # or redelivered task returns immediately rather than queueing behind a
+        # stuck prior run. Template: _build_dna_async uses the xact variant;
+        # here we use the session-scoped non-transactional lock (pg_try_advisory_lock)
+        # with an explicit unlock in the finally clause.
+        lock_key = f"retrain:{cid}"
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
             )
-            .scalars()
-            .first()
-        )
-        if latest is not None:
-            # Self-debounce: only retrain if trainable feedback arrived since the
-            # last model was saved. Repeated clicks otherwise collapse to no-ops.
-            new_labels = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(ClipFeedback)
-                    .where(
-                        ClipFeedback.creator_id == cid,
-                        ClipFeedback.action.in_(TRAINABLE_ACTIONS),
-                        ClipFeedback.created_at > latest.updated_at,
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping retrain_preference for creator %s", cid)
+            return
+        try:
+            latest = (
+                (
+                    await session.execute(
+                        select(PreferenceModel)
+                        .where(PreferenceModel.creator_id == cid)
+                        .order_by(PreferenceModel.version.desc())
                     )
                 )
-            ).scalar_one()
-            if not new_labels:
-                logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
-                return
-        try:
-            await build_and_save(session, cid)
-        except IntegrityError:
-            # Concurrent retrain won the version race (hardened in Issue 71).
-            await session.rollback()
-            logger.info("retrain_preference: version race for creator %s, skip", cid)
+                .scalars()
+                .first()
+            )
+            if latest is not None:
+                # Self-debounce: only retrain if trainable feedback arrived since the
+                # last model was saved. Repeated clicks otherwise collapse to no-ops.
+                new_labels = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(ClipFeedback)
+                        .where(
+                            ClipFeedback.creator_id == cid,
+                            ClipFeedback.action.in_(TRAINABLE_ACTIONS),
+                            ClipFeedback.created_at > latest.updated_at,
+                        )
+                    )
+                ).scalar_one()
+                if not new_labels:
+                    logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
+                    return
+            try:
+                await build_and_save(session, cid)
+            except IntegrityError:
+                # Concurrent retrain won the version race (hardened in Issue 71).
+                await session.rollback()
+                logger.info("retrain_preference: version race for creator %s, skip", cid)
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
+            )
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:
@@ -337,6 +374,27 @@ async def _ingest_async(video_id: str) -> None:
                 raise ValueError(f"Video {video_id} not found")
             if not video.source_uri:
                 raise ValueError(f"Video {video_id} has no source_uri — upload the file first")
+
+            # Idempotency short-circuit (Issue 105 — Fix 2): if source_uri ends in
+            # ".wav" the prior run already completed the audio-extract + upload step
+            # and committed the WAV key. Returning here is safe because the final
+            # DB commit (source_uri = audio_uri) is the durable progress marker per
+            # AWS Lambda's idempotent-retry doctrine — make progress persistent and
+            # detectable, skip work that is already persisted.
+            if video.source_uri.endswith(".wav"):
+                logger.info(
+                    "Video %s source_uri already points to WAV — ingest already completed",
+                    video_id,
+                )
+                await aemit(
+                    video_id,
+                    "step",
+                    label="ingest_skipped",
+                    stage="ingest",
+                    reason="already_done",
+                )
+                return
+
             source_uri = video.source_uri
             video.ingest_status = IngestStatus.running
             await session.commit()
@@ -404,6 +462,31 @@ async def _transcribe_async(video_id: str) -> None:
             video = await session.get(Video, uuid.UUID(video_id))
             if not video or not video.source_uri:
                 raise ValueError(f"Video {video_id} not ready for transcription")
+
+            # Idempotency probe (Issue 105 — Fix 1): if a Transcript row already
+            # exists AND the video status is past the transcription stage, a
+            # redelivered task is a no-op. Mirrors the render_clip pattern
+            # (worker/tasks.py:562-570). Sidekiq + Celery + Stripe canonical pattern:
+            # status-column check-then-skip at task entry.
+            existing_transcript = await session.get(Transcript, uuid.UUID(video_id))
+            if existing_transcript is not None and video.ingest_status not in (
+                IngestStatus.pending,
+                IngestStatus.running,
+            ):
+                logger.info(
+                    "Transcript already exists for video %s (status=%s) — skipping",
+                    video_id,
+                    video.ingest_status,
+                )
+                await aemit(
+                    video_id,
+                    "step",
+                    label="transcribe_skipped",
+                    stage="transcribe",
+                    reason="already_done",
+                )
+                return
+
             source_uri = video.source_uri
 
         async with alocal_path(source_uri) as audio_path:
@@ -472,6 +555,25 @@ async def _signals_async(video_id: str) -> None:
             video = await session.get(Video, uuid.UUID(video_id))
             if not video or not video.source_uri:
                 raise ValueError(f"Video {video_id} not ready for signal extraction")
+
+            # Idempotency probe (Issue 105 — Fix 1): if a Signals row already exists
+            # AND the video is marked done, a redelivered task is a no-op. Mirrors
+            # the render_clip and _transcribe_async patterns.
+            existing_signals = await session.get(Signals, uuid.UUID(video_id))
+            if existing_signals is not None and video.ingest_status == IngestStatus.done:
+                logger.info(
+                    "Signals already exist for video %s (status=done) — skipping",
+                    video_id,
+                )
+                await aemit(
+                    video_id,
+                    "step",
+                    label="signals_skipped",
+                    stage="signals",
+                    reason="already_done",
+                )
+                return
+
             source_uri = video.source_uri
             retention_result = await session.execute(
                 select(RetentionCurve).where(RetentionCurve.video_id == video.id)
@@ -822,7 +924,7 @@ async def _poll_clip_outcomes_async() -> None:
     from collections import defaultdict
     from datetime import datetime, timedelta
 
-    from sqlalchemy import and_, or_, select
+    from sqlalchemy import and_, or_, select, text
 
     from youtube.data_api import get_video_stats
     from youtube.oauth import get_valid_access_token
@@ -837,76 +939,96 @@ async def _poll_clip_outcomes_async() -> None:
     cutoff_created = now - timedelta(days=10)
 
     async with db.AdminSessionLocal() as session:
-        result = await session.execute(
-            select(ClipOutcome, Clip)
-            .join(Clip, Clip.id == ClipOutcome.clip_id)
-            .where(
-                ClipOutcome.published_youtube_id.isnot(None),
-                ClipOutcome.final.is_(False),  # never re-poll a finalized outcome
-                Clip.created_at >= cutoff_created,
-                or_(
-                    and_(ClipOutcome.performed_well.is_(None), ClipOutcome.fetched_at < cutoff_48h),
-                    ClipOutcome.fetched_at < cutoff_7d,
-                ),
+        # Advisory lock (Issue 105 — Fix 4): global Beat task — only one instance
+        # should run at a time. Non-blocking so a slow prior run doesn't queue.
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
+                {"k": "poll_clip_outcomes"},
             )
-        )
-        rows = result.all()
-
-        if not rows:
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping poll_clip_outcomes")
             return
-
-        by_creator: dict = defaultdict(list)
-        for outcome, clip in rows:
-            by_creator[clip.creator_id].append(outcome)
-
-        for creator_id, outcomes in by_creator.items():
-            try:
-                access_token = await get_valid_access_token(creator_id, session)
-            except Exception as exc:
-                logger.warning("Cannot get token for creator %s: %s", creator_id, exc)
-                continue
-
-            views_result = await session.execute(
-                select(VideoMetrics.views)
-                .join(Video, Video.id == VideoMetrics.video_id)
-                .where(Video.creator_id == creator_id, VideoMetrics.views.isnot(None))
-            )
-            all_views = [r[0] for r in views_result.all()]
-            channel_median = statistics.median(all_views) if all_views else 0
-
-            for outcome in outcomes:
-                # Whether this row qualified via the 7d (terminal) checkpoint —
-                # captured BEFORE we overwrite fetched_at. (Issue 70)
-                is_terminal_poll = outcome.fetched_at < cutoff_7d
-                try:
-                    stats = await get_video_stats(access_token, outcome.published_youtube_id)
-                except Exception as exc:
-                    logger.warning(
-                        "Stats fetch failed for clip %s (yt=%s): %s",
-                        outcome.clip_id,
-                        outcome.published_youtube_id,
-                        exc,
-                    )
-                    continue
-                views = stats.get("views")
-                if views is not None:
-                    outcome.views = views
-                    outcome.performed_well = views >= channel_median
-                outcome.fetched_at = now
-                if is_terminal_poll:
-                    # 7d checkpoint recorded — never poll this outcome again.
-                    outcome.final = True
-                logger.info(
-                    "ClipOutcome clip=%s views=%s performed_well=%s final=%s",
-                    outcome.clip_id,
-                    views,
-                    outcome.performed_well,
-                    outcome.final,
+        try:
+            result = await session.execute(
+                select(ClipOutcome, Clip)
+                .join(Clip, Clip.id == ClipOutcome.clip_id)
+                .where(
+                    ClipOutcome.published_youtube_id.isnot(None),
+                    ClipOutcome.final.is_(False),  # never re-poll a finalized outcome
+                    Clip.created_at >= cutoff_created,
+                    or_(
+                        and_(
+                            ClipOutcome.performed_well.is_(None),
+                            ClipOutcome.fetched_at < cutoff_48h,
+                        ),
+                        ClipOutcome.fetched_at < cutoff_7d,
+                    ),
                 )
+            )
+            rows = result.all()
 
-            # Commit per creator so a slow YouTube call can't hold one transaction
-            # across the whole batch, and partial progress survives a mid-batch failure.
-            await session.commit()
+            if not rows:
+                return
+
+            by_creator: dict = defaultdict(list)
+            for outcome, clip in rows:
+                by_creator[clip.creator_id].append(outcome)
+
+            for creator_id, outcomes in by_creator.items():
+                try:
+                    access_token = await get_valid_access_token(creator_id, session)
+                except Exception as exc:
+                    logger.warning("Cannot get token for creator %s: %s", creator_id, exc)
+                    continue
+
+                views_result = await session.execute(
+                    select(VideoMetrics.views)
+                    .join(Video, Video.id == VideoMetrics.video_id)
+                    .where(Video.creator_id == creator_id, VideoMetrics.views.isnot(None))
+                )
+                all_views = [r[0] for r in views_result.all()]
+                channel_median = statistics.median(all_views) if all_views else 0
+
+                for outcome in outcomes:
+                    # Whether this row qualified via the 7d (terminal) checkpoint —
+                    # captured BEFORE we overwrite fetched_at. (Issue 70)
+                    is_terminal_poll = outcome.fetched_at < cutoff_7d
+                    try:
+                        stats = await get_video_stats(access_token, outcome.published_youtube_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "Stats fetch failed for clip %s (yt=%s): %s",
+                            outcome.clip_id,
+                            outcome.published_youtube_id,
+                            exc,
+                        )
+                        continue
+                    views = stats.get("views")
+                    if views is not None:
+                        outcome.views = views
+                        outcome.performed_well = views >= channel_median
+                    outcome.fetched_at = now
+                    if is_terminal_poll:
+                        # 7d checkpoint recorded — never poll this outcome again.
+                        outcome.final = True
+                    logger.info(
+                        "ClipOutcome clip=%s views=%s performed_well=%s final=%s",
+                        outcome.clip_id,
+                        views,
+                        outcome.performed_well,
+                        outcome.final,
+                    )
+
+                # Commit per creator so a slow YouTube call can't hold one transaction
+                # across the whole batch, and partial progress survives a mid-batch failure.
+                await session.commit()
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:k))"),
+                {"k": "poll_clip_outcomes"},
+            )
 
 
 async def _generate_clips_async(video_id: str) -> None:
@@ -1007,7 +1129,7 @@ async def _generate_clips_async(video_id: str) -> None:
 async def _purge_stale_source_media_async() -> None:
     from datetime import timedelta
 
-    from sqlalchemy import and_, select, update
+    from sqlalchemy import and_, select, text, update
 
     from config import settings
     from worker.storage import adelete_file
@@ -1023,21 +1145,37 @@ async def _purge_stale_source_media_async() -> None:
     # session was held across every delete_file call — N round-trips to R2
     # pinned a DB connection for the entire sweep.
     async with db.AdminSessionLocal() as session:
-        result = await session.execute(
-            select(Video.id, Video.source_uri).where(
-                and_(
-                    Video.source_uri.isnot(None),
-                    Video.ingest_done_at.is_not(None),
-                    Video.ingest_done_at < cutoff,
+        # Advisory lock (Issue 105 — Fix 4): global Beat task.
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
+                {"k": "purge_stale_source_media"},
+            )
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping purge_stale_source_media")
+            return
+        try:
+            result = await session.execute(
+                select(Video.id, Video.source_uri).where(
+                    and_(
+                        Video.source_uri.isnot(None),
+                        Video.ingest_done_at.is_not(None),
+                        Video.ingest_done_at < cutoff,
+                    )
                 )
             )
-        )
-        # `.all()` returns Sequence[Row[...]] which is Row-iterable and
-        # unpacks to (uuid, str|None) per row. Untyped because Row's
-        # bracketed type doesn't equal `tuple[...]` in the eyes of mypy.
-        # The WHERE clause filters `source_uri.isnot(None)`; the loop below
-        # still skips defensive None so type-narrowing stays trivial.
-        targets = result.all()
+            # `.all()` returns Sequence[Row[...]] which is Row-iterable and
+            # unpacks to (uuid, str|None) per row. Untyped because Row's
+            # bracketed type doesn't equal `tuple[...]` in the eyes of mypy.
+            # The WHERE clause filters `source_uri.isnot(None)`; the loop below
+            # still skips defensive None so type-narrowing stays trivial.
+            targets = result.all()
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:k))"),
+                {"k": "purge_stale_source_media"},
+            )
 
     if not targets:
         return
@@ -1090,53 +1228,71 @@ async def _purge_stale_youtube_analytics_async() -> None:
     """
     from datetime import timedelta
 
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete, select, text
 
     from config import settings
 
     cutoff = datetime.now(UTC) - timedelta(days=settings.YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS)
 
     async with db.AdminSessionLocal() as session:
-        # VideoMetrics — collect video_ids first so we can cascade
-        # RetentionCurve deletion in the same transaction.
-        stale_video_ids = (
-            (
-                await session.execute(
-                    select(VideoMetrics.video_id).where(VideoMetrics.fetched_at < cutoff)
+        # Advisory lock (Issue 105 — Fix 4): global Beat task.
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
+                {"k": "purge_stale_youtube_analytics"},
+            )
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping purge_stale_youtube_analytics")
+            return
+        try:
+            # VideoMetrics — collect video_ids first so we can cascade
+            # RetentionCurve deletion in the same transaction.
+            stale_video_ids = (
+                (
+                    await session.execute(
+                        select(VideoMetrics.video_id).where(VideoMetrics.fetched_at < cutoff)
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
 
-        deleted_metrics = 0
-        deleted_curves = 0
-        if stale_video_ids:
-            # RetentionCurve is written in lock-step with VideoMetrics so its
-            # staleness equals its parent VideoMetrics's staleness. The FK
-            # cascade only fires on Video deletion (which we do NOT do here).
+            deleted_metrics = 0
+            deleted_curves = 0
+            if stale_video_ids:
+                # RetentionCurve is written in lock-step with VideoMetrics so its
+                # staleness equals its parent VideoMetrics's staleness. The FK
+                # cascade only fires on Video deletion (which we do NOT do here).
+                r = await session.execute(
+                    delete(RetentionCurve).where(RetentionCurve.video_id.in_(stale_video_ids))
+                )
+                deleted_curves = r.rowcount or 0
+                r = await session.execute(
+                    delete(VideoMetrics).where(VideoMetrics.video_id.in_(stale_video_ids))
+                )
+                deleted_metrics = r.rowcount or 0
+
+            # AudienceActivity — per-creator, per (day_of_week, hour).
+            from models import AudienceActivity, Demographics
+
             r = await session.execute(
-                delete(RetentionCurve).where(RetentionCurve.video_id.in_(stale_video_ids))
+                delete(AudienceActivity).where(AudienceActivity.fetched_at < cutoff)
             )
-            deleted_curves = r.rowcount or 0
+            deleted_activity = r.rowcount or 0
+
+            # Demographics — per-creator aggregate.
             r = await session.execute(
-                delete(VideoMetrics).where(VideoMetrics.video_id.in_(stale_video_ids))
+                delete(Demographics).where(Demographics.fetched_at < cutoff)
             )
-            deleted_metrics = r.rowcount or 0
+            deleted_demographics = r.rowcount or 0
 
-        # AudienceActivity — per-creator, per (day_of_week, hour).
-        from models import AudienceActivity, Demographics
-
-        r = await session.execute(
-            delete(AudienceActivity).where(AudienceActivity.fetched_at < cutoff)
-        )
-        deleted_activity = r.rowcount or 0
-
-        # Demographics — per-creator aggregate.
-        r = await session.execute(delete(Demographics).where(Demographics.fetched_at < cutoff))
-        deleted_demographics = r.rowcount or 0
-
-        await session.commit()
+            await session.commit()
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:k))"),
+                {"k": "purge_stale_youtube_analytics"},
+            )
 
     total = deleted_metrics + deleted_curves + deleted_activity + deleted_demographics
     if total:
@@ -1167,6 +1323,10 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
       - Phase 2 filters to videos missing engagement_rate, so a re-run is a
         no-op once metrics are in place.
 
+    Advisory lock (Issue 105 — Fix 4): per-creator key so concurrent syncs for
+    different creators run in parallel; only double-deliveries for the SAME
+    creator are serialised. Non-blocking so a slow prior run does not queue.
+
     YouTubeAuthError mid-loop is surfaced (terminal — the refresh tick will
     delete the YoutubeToken row); other per-video errors are logged and
     skipped so one bad video can't strand the whole catalog. (Issues 87, 88)
@@ -1176,7 +1336,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
     metric progress. When None (Beat-task callers + tests), emits short-
     circuit silently — no observer.
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, text
 
     from worker.progress import aemit
     from youtube.analytics import sync_video_analytics, sync_video_catalog
@@ -1187,103 +1347,127 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
             await aemit(task_id, event_type, **fields)
 
     cid = uuid.UUID(creator_id)
+    lock_key = f"catalog-sync:{cid}"
     try:
         async with db.AdminSessionLocal() as session:
-            creator = await session.get(Creator, cid)
-            if creator is None:
-                logger.warning("sync_channel_catalog: creator %s not found, skip", cid)
-                await _emit("error", stage="catalog_sync", message="Creator not found.")
+            acquired = (
+                await session.execute(
+                    text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
+                )
+            ).scalar_one()
+            if not acquired:
+                logger.info(
+                    "advisory lock held — skipping sync_channel_catalog for creator %s", cid
+                )
+                await _emit(
+                    "step",
+                    label="catalog_sync_skipped",
+                    stage="catalog_sync",
+                    reason="lock_held",
+                )
                 return
             try:
-                access_token = await get_valid_access_token(creator.id, session)
-            except Exception as exc:
-                logger.warning("sync_channel_catalog: no valid token for %s: %s", cid, exc)
-                await _emit(
-                    "error",
-                    stage="catalog_sync",
-                    message="YouTube auth unavailable; reconnect.",
-                    exc_type=type(exc).__name__,
-                )
-                return
+                creator = await session.get(Creator, cid)
+                if creator is None:
+                    logger.warning("sync_channel_catalog: creator %s not found, skip", cid)
+                    await _emit("error", stage="catalog_sync", message="Creator not found.")
+                    return
+                try:
+                    access_token = await get_valid_access_token(creator.id, session)
+                except Exception as exc:
+                    logger.warning("sync_channel_catalog: no valid token for %s: %s", cid, exc)
+                    await _emit(
+                        "error",
+                        stage="catalog_sync",
+                        message="YouTube auth unavailable; reconnect.",
+                        exc_type=type(exc).__name__,
+                    )
+                    return
 
-            # Phase 1 — catalog upsert.
-            await _emit("step", label="fetch_uploads", stage="catalog_sync")
-            await sync_video_catalog(session, creator, access_token)
-            await session.commit()
+                # Phase 1 — catalog upsert.
+                await _emit("step", label="fetch_uploads", stage="catalog_sync")
+                await sync_video_catalog(session, creator, access_token)
+                await session.commit()
 
-            # Phase 2 — fetch metrics for any video that doesn't have them yet.
-            # Filtered query, not a global iterate-and-skip, so quota cost is bounded
-            # to truly-missing rows (re-runs are cheap).
-            unmeasured = (
-                (
-                    await session.execute(
-                        select(Video)
-                        .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
-                        .where(
-                            Video.creator_id == creator.id,
-                            (VideoMetrics.video_id.is_(None))
-                            | (VideoMetrics.engagement_rate.is_(None)),
+                # Phase 2 — fetch metrics for any video that doesn't have them yet.
+                # Filtered query, not a global iterate-and-skip, so quota cost is bounded
+                # to truly-missing rows (re-runs are cheap).
+                unmeasured = (
+                    (
+                        await session.execute(
+                            select(Video)
+                            .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
+                            .where(
+                                Video.creator_id == creator.id,
+                                (VideoMetrics.video_id.is_(None))
+                                | (VideoMetrics.engagement_rate.is_(None)),
+                            )
                         )
                     )
+                    .scalars()
+                    .all()
                 )
-                .scalars()
-                .all()
-            )
 
-            total = len(unmeasured)
-            await _emit("step", label="sync_metrics_start", stage="catalog_sync", total=total)
+                total = len(unmeasured)
+                await _emit(
+                    "step", label="sync_metrics_start", stage="catalog_sync", total=total
+                )
 
-            fetched = 0
-            for i, video in enumerate(unmeasured, 1):
-                try:
-                    await sync_video_analytics(session, video, creator, access_token)
-                    fetched += 1
-                    await _emit(
-                        "step",
-                        label="sync_metrics",
-                        stage="catalog_sync",
-                        i=i,
-                        total=total,
-                    )
-                except YouTubeAuthError:
-                    # Surface immediately — token is dead.
-                    raise
-                except Exception as exc:
-                    # repr() because some exceptions (httpx.ReadTimeout) have an
-                    # empty str(); exc_info=True so the traceback is in the log
-                    # rather than requiring an ssh + Python repro. (Issue 88 lesson)
-                    logger.warning(
-                        "sync_channel_catalog: metrics fetch failed for video %s: %r",
-                        video.id,
-                        exc,
-                        exc_info=True,
-                    )
-                    # Wave-3 Fix F: emit a step event for the skipped video so
-                    # the SSE consumer's `i/total` math stays contiguous. Class
-                    # name only — never the exception message — to keep the
-                    # progress wire-shape's no-PII / no-internal-detail
-                    # invariant the worker module's structural-trust SEV2s
-                    # depend on.
-                    await _emit(
-                        "step",
-                        label="sync_metrics_skipped",
-                        stage="catalog_sync",
-                        i=i,
-                        total=total,
-                        reason=type(exc).__name__,
-                    )
-            await session.commit()
-            logger.info(
-                "sync_channel_catalog: creator %s synced (metrics fetched for %d new video(s))",
-                cid,
-                fetched,
-            )
-            await _emit(
-                "done",
-                stage="catalog_sync",
-                message=f"Synced {fetched} new video(s).",
-                fetched=fetched,
-            )
+                fetched = 0
+                for i, video in enumerate(unmeasured, 1):
+                    try:
+                        await sync_video_analytics(session, video, creator, access_token)
+                        fetched += 1
+                        await _emit(
+                            "step",
+                            label="sync_metrics",
+                            stage="catalog_sync",
+                            i=i,
+                            total=total,
+                        )
+                    except YouTubeAuthError:
+                        # Surface immediately — token is dead.
+                        raise
+                    except Exception as exc:
+                        # repr() because some exceptions (httpx.ReadTimeout) have an
+                        # empty str(); exc_info=True so the traceback is in the log
+                        # rather than requiring an ssh + Python repro. (Issue 88 lesson)
+                        logger.warning(
+                            "sync_channel_catalog: metrics fetch failed for video %s: %r",
+                            video.id,
+                            exc,
+                            exc_info=True,
+                        )
+                        # Wave-3 Fix F: emit a step event for the skipped video so
+                        # the SSE consumer's `i/total` math stays contiguous. Class
+                        # name only — never the exception message — to keep the
+                        # progress wire-shape's no-PII / no-internal-detail
+                        # invariant the worker module's structural-trust SEV2s
+                        # depend on.
+                        await _emit(
+                            "step",
+                            label="sync_metrics_skipped",
+                            stage="catalog_sync",
+                            i=i,
+                            total=total,
+                            reason=type(exc).__name__,
+                        )
+                await session.commit()
+                logger.info(
+                    "sync_channel_catalog: creator %s synced (metrics fetched for %d new video(s))",
+                    cid,
+                    fetched,
+                )
+                await _emit(
+                    "done",
+                    stage="catalog_sync",
+                    message=f"Synced {fetched} new video(s).",
+                    fetched=fetched,
+                )
+            finally:
+                await session.execute(
+                    text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
+                )
     except YouTubeAuthError:
         await _emit("error", stage="catalog_sync", message="YouTube token revoked; reconnect.")
         raise
@@ -1298,82 +1482,103 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
 
 
 async def _refresh_youtube_analytics_async() -> None:
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete, select, text
 
     from youtube.analytics import sync_audience_data, sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
 
     async with db.AdminSessionLocal() as session:
-        # Issue 47: ORDER BY last_analytics_refreshed_at NULLS FIRST, id so
-        # creators that starved past quota in earlier runs go first next time.
-        # New creators (NULL) jump the queue, matching user expectation that a
-        # just-connected creator sees data fast.
-        result = await session.execute(
-            select(Creator).order_by(
-                Creator.last_analytics_refreshed_at.asc().nulls_first(),
-                Creator.id,
+        # Advisory lock (Issue 105 — Fix 4): global Beat task — only one instance
+        # should iterate all creators at a time.
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
+                {"k": "refresh_youtube_analytics"},
             )
-        )
-        creators = list(result.scalars())
-
-        quota_left = await remaining()
-        logger.info(
-            "Starting analytics refresh for %d creator(s); quota remaining: %d units",
-            len(creators),
-            quota_left,
-        )
-
-        for creator in creators:
-            try:
-                access_token = await get_valid_access_token(creator.id, session)
-            except Exception as exc:
-                logger.warning("Skipping analytics refresh for creator %s: %s", creator.id, exc)
-                continue
-
-            try:
-                # Pull any new uploads into the videos table BEFORE iterating
-                # per-video analytics — otherwise newly published videos stay
-                # invisible to the pipeline until the next deploy. (Issue 87)
-                await sync_video_catalog(session, creator, access_token)
-
-                videos_result = await session.execute(
-                    select(Video).where(Video.creator_id == creator.id)
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping refresh_youtube_analytics")
+            return
+        try:
+            # Issue 47: ORDER BY last_analytics_refreshed_at NULLS FIRST, id so
+            # creators that starved past quota in earlier runs go first next time.
+            # New creators (NULL) jump the queue, matching user expectation that a
+            # just-connected creator sees data fast.
+            result = await session.execute(
+                select(Creator).order_by(
+                    Creator.last_analytics_refreshed_at.asc().nulls_first(),
+                    Creator.id,
                 )
-                for video in list(videos_result.scalars()):
-                    await sync_video_analytics(session, video, creator, access_token)
+            )
+            creators = list(result.scalars())
 
-                await sync_audience_data(session, creator, access_token)
-                creator.last_analytics_refreshed_at = datetime.now(UTC)
-                await session.commit()
-                logger.info("Refreshed analytics for creator %s", creator.id)
-            except QuotaExhaustedError:
-                logger.warning(
-                    "YouTube quota exhausted during analytics refresh — stopping early. "
-                    "Remaining creators will be refreshed in tomorrow's run."
-                )
-                await session.rollback()
-                break
-            except YouTubeAuthError as exc:
-                # Grant is dead (revoked / suspended / forbidden). Drop the token row
-                # so subsequent beat ticks skip this creator via the existing
-                # get_valid_access_token "no tokens" path, instead of looping on 403s.
-                logger.warning(
-                    "YouTube auth error for creator %s (reason=%s, status=%s) — "
-                    "deleting YoutubeToken row",
-                    creator.id,
-                    exc.reason,
-                    exc.status_code,
-                )
-                await session.rollback()
-                from models import YoutubeToken
+            quota_left = await remaining()
+            logger.info(
+                "Starting analytics refresh for %d creator(s); quota remaining: %d units",
+                len(creators),
+                quota_left,
+            )
 
-                await session.execute(
-                    delete(YoutubeToken).where(YoutubeToken.creator_id == creator.id)
-                )
-                await session.commit()
-            except Exception as exc:
-                logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
-                await session.rollback()
+            for creator in creators:
+                try:
+                    access_token = await get_valid_access_token(creator.id, session)
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping analytics refresh for creator %s: %s", creator.id, exc
+                    )
+                    continue
+
+                try:
+                    # Pull any new uploads into the videos table BEFORE iterating
+                    # per-video analytics — otherwise newly published videos stay
+                    # invisible to the pipeline until the next deploy. (Issue 87)
+                    await sync_video_catalog(session, creator, access_token)
+
+                    videos_result = await session.execute(
+                        select(Video).where(Video.creator_id == creator.id)
+                    )
+                    for video in list(videos_result.scalars()):
+                        await sync_video_analytics(session, video, creator, access_token)
+
+                    await sync_audience_data(session, creator, access_token)
+                    creator.last_analytics_refreshed_at = datetime.now(UTC)
+                    await session.commit()
+                    logger.info("Refreshed analytics for creator %s", creator.id)
+                except QuotaExhaustedError:
+                    logger.warning(
+                        "YouTube quota exhausted during analytics refresh — stopping early. "
+                        "Remaining creators will be refreshed in tomorrow's run."
+                    )
+                    await session.rollback()
+                    break
+                except YouTubeAuthError as exc:
+                    # Grant is dead (revoked / suspended / forbidden). Drop the token row
+                    # so subsequent beat ticks skip this creator via the existing
+                    # get_valid_access_token "no tokens" path, instead of looping on 403s.
+                    logger.warning(
+                        "YouTube auth error for creator %s (reason=%s, status=%s) — "
+                        "deleting YoutubeToken row",
+                        creator.id,
+                        exc.reason,
+                        exc.status_code,
+                    )
+                    await session.rollback()
+                    from models import YoutubeToken
+
+                    await session.execute(
+                        delete(YoutubeToken).where(YoutubeToken.creator_id == creator.id)
+                    )
+                    await session.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "Analytics refresh failed for creator %s: %s", creator.id, exc
+                    )
+                    await session.rollback()
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:k))"),
+                {"k": "refresh_youtube_analytics"},
+            )
 
 
 @celery.task(

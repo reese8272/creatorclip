@@ -1,7 +1,8 @@
 import logging
 import sys
+from pathlib import Path
 
-from pydantic import ValidationError, model_validator
+from pydantic import ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -128,6 +129,13 @@ class Settings(BaseSettings):
     UPLOAD_MAX_MB: int = 500
     LOCAL_MEDIA_DIR: str = "./media"
 
+    # Celery soft-time-limit as a config value so the transcription-timeout
+    # validator below can assert the 30s cleanup-breathing-room invariant
+    # without importing celery_app (which would create a circular import).
+    # Must stay in sync with task_soft_time_limit in worker/celery_app.py.
+    # (Issue 105 — Fix 5)
+    CELERY_SOFT_TIME_LIMIT_S: int = 3000
+
     # ── Observability (Issue 75f) ───────────────────────────────────────────────
     # JSON structured logs (one object per line) for log aggregators. Defaults on;
     # set false for human-readable text in local dev.
@@ -152,6 +160,26 @@ class Settings(BaseSettings):
     FREE_TRIAL_MINUTES: int = 60
 
     @model_validator(mode="after")
+    def _validate_transcription_timeout(self) -> "Settings":
+        """Assert TRANSCRIPTION_TIMEOUT_S leaves a 30 s cleanup window before soft kill.
+
+        The invariant: TRANSCRIPTION_TIMEOUT_S < CELERY_SOFT_TIME_LIMIT_S - 30.
+        If the transcription asyncio.wait_for fires at or after the soft limit,
+        Celery's SIGPROF fires inside the still-blocked thread and the
+        SoftTimeLimitExceeded never reaches our handler cleanly. The 30 s buffer
+        is the industry-standard cleanup breathing room (Celery docs; Sidekiq sidekiq-cron).
+        (Issue 105 — Fix 5)
+        """
+        ceiling = self.CELERY_SOFT_TIME_LIMIT_S - 30
+        if self.TRANSCRIPTION_TIMEOUT_S >= ceiling:
+            raise ValueError(
+                f"TRANSCRIPTION_TIMEOUT_S ({self.TRANSCRIPTION_TIMEOUT_S}) must be less than "
+                f"CELERY_SOFT_TIME_LIMIT_S - 30 = {ceiling}. "
+                f"Increase CELERY_SOFT_TIME_LIMIT_S or decrease TRANSCRIPTION_TIMEOUT_S."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _require_prod_secrets(self) -> "Settings":
         # Fail fast in production if billing secrets are unset — otherwise the gap
         # surfaces only at first checkout/webhook (Issue 75). Dev/test (ENV defaults
@@ -173,6 +201,14 @@ class Settings(BaseSettings):
                     "Set METRICS_TOKEN to enable authenticated scraping."
                 )
                 self.METRICS_ENABLED = False
+            # LOCAL_MEDIA_DIR must be absolute in production: the worker's cwd is
+            # not guaranteed, so a relative path makes the media root non-deterministic
+            # across pipeline stages. Use an absolute path like /var/lib/creatorclip/media.
+            # (Issue 105 — Fix 7)
+            if not Path(self.LOCAL_MEDIA_DIR).expanduser().is_absolute():
+                raise ValueError(
+                    f"LOCAL_MEDIA_DIR must be absolute in production; got {self.LOCAL_MEDIA_DIR!r}"
+                )
         return self
 
 

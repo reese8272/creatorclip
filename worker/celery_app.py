@@ -42,8 +42,11 @@ celery.conf.update(
     # genuine crashes still redeliver via reject_on_worker_lost. Long-form sources
     # on CPU WhisperX may need a per-task override or the hosted backend — see
     # docs/DECISIONS.md.
-    task_soft_time_limit=3000,
-    task_time_limit=3300,
+    # CELERY_SOFT_TIME_LIMIT_S is the single source of truth for this value; the
+    # transcription-timeout config validator (config.py) asserts
+    # TRANSCRIPTION_TIMEOUT_S < soft_limit - 30 using this setting. Keep in sync.
+    task_soft_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S,
+    task_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S + 300,
     broker_transport_options={"visibility_timeout": 3600},
 )
 
