@@ -4088,3 +4088,58 @@ clean DRY solution.
 
 **Source**: redis-py docs "Connection Pools" section; PEP 8 on module naming conventions
 for package-internal helpers. 2026-05-28.
+
+---
+
+## 2026-05-31 — Issue 107: pip-audit triage + Layer-0 re-baseline
+
+### What changed
+
+Post-Wave-8 `/assess` ran `pip-audit` locally for the first time and surfaced **16
+vulnerabilities** against a baseline of 0. Root cause: the `.venv` was not synced to
+`requirements.txt`, which already contained fixes from Issue 75(a) (2026-05-29). After
+syncing the venv the count fell to **6 residuals** (2 already in `PIP_AUDIT_IGNORES` + 4
+new `pip` CVEs); after adding the 4 pip GHSA IDs to the ignore list the gate returned to 0.
+
+**Venv sync (no requirements.txt change needed)**:
+- `fastapi` 0.115.4 → 0.120.4 (pulled `starlette` 0.49.1 as a transitive dep)
+- `cryptography` 43.0.3 → 46.0.7, `lightgbm` 4.5.0 → 4.6.0, `PyJWT` 2.9.0 → 2.12.0,
+  `python-dotenv` 1.0.1 → 1.2.2, `python-multipart` 0.0.20 → 0.0.27
+
+All of these were already pinned at fixed versions in `requirements.txt` — the installs
+simply had not been run after 75(a) landed.
+
+**New accepted-risk ignores (pip CVEs, all dev/build-time only)**:
+- `GHSA-4xh5-x5gv-qwph` (CVE-2025-8869) — pip symlink check on tar extraction; fix in
+  pip≥25.3; pip is not a runtime dep. Re-evaluate when venv is rebuilt.
+- `GHSA-6vgw-5pg2-w6jp` (CVE-2026-1703) — pip wheel path traversal; fix in pip≥26.0.
+- `GHSA-58qw-9mgm-455v` (CVE-2026-3219) — pip tar+ZIP confusion; fix in pip≥26.1.
+- `GHSA-jp4c-xjxw-mgf9` (CVE-2026-6357) — pip post-install import; fix in pip≥26.1.
+
+`pip` is managed by the venv/CI toolchain, not by `requirements.txt`. All 4 vulnerabilities
+require installing a maliciously crafted package — a supply-chain attack, not a runtime
+exposure. The standard posture (same as the pytest GHSA-6w46-j5rx-g56g precedent set in
+Issue 75(a)) is to accept-risk + document + re-evaluate on the next toolchain bump.
+
+**Ignore-list machinery**: both `PIP_AUDIT_IGNORES` in `run_layer0.py` and
+`[tool.pip-audit].ignore-vulns` in `pyproject.toml` updated with all 6 IDs + inline
+comments. A new test file `tests/test_security_baselines.py` enforces that the two lists
+stay identical and that every ID carries a non-empty comment.
+
+**Coverage baseline re-raised**: `coverage_line_rate` in `docs/assessment/baselines.json`
+raised from **69.54 → 75.20** (Issues 95 backend + 100 + 93 + 94 pushed coverage to
+75.25%; 75.20 leaves 0.05pp wiggle room while preventing future regressions).
+
+### Why not bump pip in requirements.txt
+
+`pip` is a toolchain concern, not an application dependency. Pinning it in
+`requirements.txt` would be unusual (pip manages itself) and could conflict with the
+virtualenv's own pip bootstrap. The correct fix is to upgrade pip in the virtualenv when
+rebuilding it (`python -m pip install --upgrade pip`). The CVEs are accepted-risk in the
+meantime because they require a malicious wheel/archive to trigger — not a passive runtime
+exposure.
+
+### Source / evidence
+
+Live `pip-audit --format json` output (2026-05-31); PyPI metadata for fix versions; Issue
+75(a) decision as precedent for the accept-risk policy on dev-only tool CVEs.

@@ -166,9 +166,10 @@ def gate_bandit() -> dict:
 
 
 # Accepted-risk CVEs: advisories with no clean fix in our compatible range. Each
-# entry is justified in docs/DECISIONS.md (2026-05-29, "pip-audit CVE remediation")
-# and MUST stay in lockstep with that entry. Revisit on every dependency bump — an
-# ID drops off this list the moment a compatible fix ships.
+# entry is justified in docs/DECISIONS.md (Issue 107, "pip-audit CVE triage")
+# and MUST stay in lockstep with pyproject.toml [tool.pip-audit].ignore-vulns.
+# Revisit on every dependency bump — an ID drops off this list the moment a
+# compatible fix ships.
 PIP_AUDIT_IGNORES = {
     # Local /tmp predictable-name priv/DoS. Fixed only in pytest 9, but
     # pytest-asyncio<0.25 caps pytest<9 — a test-stack cascade, not a runtime
@@ -179,6 +180,15 @@ PIP_AUDIT_IGNORES = {
     # Routing is on the actual path and we sit behind Cloudflare + locked
     # ALLOWED_ORIGINS; tracked as a starlette-1.x migration follow-up.
     "PYSEC-2026-161",
+    # pip CVEs (dev/build-time only — pip is not a runtime dep; these require
+    # installing a maliciously crafted wheel/tar, a supply-chain vector, not a
+    # production runtime vulnerability). Fix versions require pip 25.3–26.1;
+    # pip itself is not in requirements.txt and is managed by the venv/CI toolchain.
+    # Re-evaluate when the venv is rebuilt or pip is explicitly pinned.
+    "GHSA-4xh5-x5gv-qwph",   # CVE-2025-8869  — symlink check on tar extraction
+    "GHSA-6vgw-5pg2-w6jp",   # CVE-2026-1703  — wheel path traversal
+    "GHSA-58qw-9mgm-455v",   # CVE-2026-3219  — tar+ZIP concatenation confusion
+    "GHSA-jp4c-xjxw-mgf9",   # CVE-2026-6357  — post-install self-update import
 }
 
 

@@ -50,3 +50,32 @@ skip_covered = false
 
 [tool.bandit]
 exclude_dirs = ["tests", "alembic", ".venv"]
+
+# --- pip-audit: accepted-risk ignore list (Issue 107, 2026-05-31) ---------------
+# Every entry MUST have a comment explaining the reason and re-evaluate date.
+# Keep this list in lockstep with PIP_AUDIT_IGNORES in
+# .claude/skills/production-assessment/scripts/run_layer0.py.
+[tool.pip-audit]
+ignore-vulns = [
+    # pytest GHSA-6w46-j5rx-g56g — local /tmp predictable-name priv/DoS.
+    # Fixed only in pytest 9; pytest-asyncio<0.25 caps pytest<9. Dev/CI only,
+    # not a runtime exposure. Re-evaluate when the test stack is bumped together.
+    "GHSA-6w46-j5rx-g56g",
+    # starlette PYSEC-2026-161 — Host-header path injection, fix in starlette
+    # 1.0.1 only (needs FastAPI 0.136.x). Routing matches on actual path; behind
+    # Cloudflare + locked ALLOWED_ORIGINS. Re-evaluate on starlette-1.x migration.
+    "PYSEC-2026-161",
+    # pip GHSA-4xh5-x5gv-qwph (CVE-2025-8869) — symlink check on tar extraction.
+    # pip is a dev/build-time tool, not a runtime dep. Requires installing a
+    # maliciously crafted archive. Re-evaluate when venv is rebuilt with pip>=25.3.
+    "GHSA-4xh5-x5gv-qwph",
+    # pip GHSA-6vgw-5pg2-w6jp (CVE-2026-1703) — wheel path traversal.
+    # Same rationale as above (dev/build-time only). Re-evaluate with pip>=26.0.
+    "GHSA-6vgw-5pg2-w6jp",
+    # pip GHSA-58qw-9mgm-455v (CVE-2026-3219) — tar+ZIP concatenation confusion.
+    # Same rationale (dev/build-time only). Re-evaluate with pip>=26.1.
+    "GHSA-58qw-9mgm-455v",
+    # pip GHSA-jp4c-xjxw-mgf9 (CVE-2026-6357) — post-install self-update import.
+    # Same rationale (dev/build-time only). Re-evaluate with pip>=26.1.
+    "GHSA-jp4c-xjxw-mgf9",
+]
