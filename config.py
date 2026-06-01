@@ -206,13 +206,19 @@ class Settings(BaseSettings):
                     "Set METRICS_TOKEN to enable authenticated scraping."
                 )
                 self.METRICS_ENABLED = False
-            # LOCAL_MEDIA_DIR must be absolute in production: the worker's cwd is
-            # not guaranteed, so a relative path makes the media root non-deterministic
-            # across pipeline stages. Use an absolute path like /var/lib/creatorclip/media.
-            # (Issue 105 — Fix 7)
-            if not Path(self.LOCAL_MEDIA_DIR).expanduser().is_absolute():
+            # LOCAL_MEDIA_DIR must be absolute in production WHEN it's actually
+            # used (i.e. STORAGE_BACKEND=local). With STORAGE_BACKEND=r2 the
+            # local-disk path is dead config, so we don't crash-loop prod over
+            # a stale ./media default in .env. Only check when the value is
+            # actually load-bearing. (Issue 105 — Fix 7; relaxed for prod-r2
+            # case after the initial deploy crash, Issue 110 hotfix)
+            if (
+                self.STORAGE_BACKEND == "local"
+                and not Path(self.LOCAL_MEDIA_DIR).expanduser().is_absolute()
+            ):
                 raise ValueError(
-                    f"LOCAL_MEDIA_DIR must be absolute in production; got {self.LOCAL_MEDIA_DIR!r}"
+                    f"LOCAL_MEDIA_DIR must be absolute in production when "
+                    f"STORAGE_BACKEND=local; got {self.LOCAL_MEDIA_DIR!r}"
                 )
         return self
 

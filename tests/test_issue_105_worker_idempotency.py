@@ -287,8 +287,11 @@ def test_redis_singletons_have_socket_timeouts() -> None:
 
 
 def test_config_validator_rejects_relative_local_media_dir_in_prod() -> None:
-    """Settings must raise ValueError when ENV=production and LOCAL_MEDIA_DIR
-    is a relative path like ./media."""
+    """Settings must raise ValueError when ENV=production AND
+    STORAGE_BACKEND=local AND LOCAL_MEDIA_DIR is relative. The check is
+    skipped when STORAGE_BACKEND=r2 since LOCAL_MEDIA_DIR is dead config
+    there — relaxed in the Issue 110 hotfix after the validator
+    crash-looped prod where STORAGE_BACKEND=r2."""
     import os
 
     from pydantic import ValidationError
@@ -301,12 +304,14 @@ def test_config_validator_rejects_relative_local_media_dir_in_prod() -> None:
     # Save originals
     orig_env = os.environ.get("ENV")
     orig_local = os.environ.get("LOCAL_MEDIA_DIR")
+    orig_storage = os.environ.get("STORAGE_BACKEND")
     orig_stripe_key = os.environ.get("STRIPE_SECRET_KEY")
     orig_stripe_webhook = os.environ.get("STRIPE_WEBHOOK_SECRET")
 
     try:
         os.environ["ENV"] = "production"
         os.environ["LOCAL_MEDIA_DIR"] = "./media"
+        os.environ["STORAGE_BACKEND"] = "local"  # make the path actually load-bearing
         # Supply required billing secrets so they don't mask the LOCAL_MEDIA_DIR error.
         os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake"
         os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
@@ -331,3 +336,48 @@ def test_config_validator_rejects_relative_local_media_dir_in_prod() -> None:
             os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
         else:
             os.environ["STRIPE_WEBHOOK_SECRET"] = orig_stripe_webhook
+        if orig_storage is None:
+            os.environ.pop("STORAGE_BACKEND", None)
+        else:
+            os.environ["STORAGE_BACKEND"] = orig_storage
+
+
+def test_config_validator_allows_relative_local_media_dir_in_prod_when_r2() -> None:
+    """Issue 110 hotfix: when STORAGE_BACKEND=r2, LOCAL_MEDIA_DIR is dead
+    config — the validator must NOT crash-loop prod just because the value
+    is left at the ./media default. This was the real production deploy
+    failure that prompted the hotfix."""
+    import os
+
+    from config import Settings
+
+    orig_env = os.environ.get("ENV")
+    orig_local = os.environ.get("LOCAL_MEDIA_DIR")
+    orig_storage = os.environ.get("STORAGE_BACKEND")
+    orig_stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+    orig_stripe_webhook = os.environ.get("STRIPE_WEBHOOK_SECRET")
+
+    try:
+        os.environ["ENV"] = "production"
+        os.environ["LOCAL_MEDIA_DIR"] = "./media"  # dead config when STORAGE_BACKEND=r2
+        os.environ["STORAGE_BACKEND"] = "r2"
+        os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake"
+        os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
+
+        # Must NOT raise — LOCAL_MEDIA_DIR is unused with STORAGE_BACKEND=r2.
+        s = Settings()
+        assert s.ENV == "production"
+        assert s.STORAGE_BACKEND == "r2"
+        assert s.LOCAL_MEDIA_DIR == "./media"
+    finally:
+        for k, v in (
+            ("ENV", orig_env),
+            ("LOCAL_MEDIA_DIR", orig_local),
+            ("STORAGE_BACKEND", orig_storage),
+            ("STRIPE_SECRET_KEY", orig_stripe_key),
+            ("STRIPE_WEBHOOK_SECRET", orig_stripe_webhook),
+        ):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
