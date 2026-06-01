@@ -56,7 +56,7 @@ class RenderStyleIn(BaseModel):
     (or the default on first render). This lets the UI send only changed fields.
     """
 
-    subtitle: str | None = None   # "white_large" | "yellow_impact" | "captions_sm" | null
+    subtitle: str | None = None  # "white_large" | "yellow_impact" | "captions_sm" | null
     background: str | None = None  # "blur" | "black" | null
     captions_enabled: bool | None = None
 
@@ -198,7 +198,6 @@ async def render_clip(
     try:
         await progress.aset_owner(str(clip_id), str(creator.id))
     except _redis_pkg.RedisError as exc:
-
         logger.warning(
             "render aset_owner failed (Redis down?) clip_id=%s err=%s",
             clip_id,

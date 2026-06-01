@@ -132,10 +132,7 @@ async def link_video(
             kind = metadata[0]["kind"]
             duration_s = metadata[0]["duration_s"]
     except Exception as exc:
-
-        logger.warning(
-            "link_video: could not resolve kind for %s: %s", youtube_video_id, exc
-        )
+        logger.warning("link_video: could not resolve kind for %s: %s", youtube_video_id, exc)
 
     video = Video(
         creator_id=creator.id,
@@ -271,7 +268,6 @@ async def upload_video(
     try:
         await progress.aset_owner(str(video.id), str(creator.id))
     except _redis_pkg.RedisError as exc:
-
         logger.warning(
             "upload aset_owner failed (Redis down?) video_id=%s err=%s",
             video.id,

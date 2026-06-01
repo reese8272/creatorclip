@@ -201,7 +201,12 @@ def test_balance_requires_auth(client):
 def test_checkout_requires_auth(client):
     response = client.post(
         "/billing/checkout",
-        json={"pack_id": "creator", "success_url": "http://x/ok", "cancel_url": "http://x/no", "intent_id": "11111111-1111-4111-8111-111111111111"},
+        json={
+            "pack_id": "creator",
+            "success_url": "http://x/ok",
+            "cancel_url": "http://x/no",
+            "intent_id": "11111111-1111-4111-8111-111111111111",
+        },
     )
     assert response.status_code == 401
 
@@ -215,7 +220,8 @@ def test_checkout_invalid_pack(client):
             json={
                 "pack_id": "nonexistent",
                 "success_url": "http://x/ok",
-                "cancel_url": "http://x/no", "intent_id": "11111111-1111-4111-8111-111111111111",
+                "cancel_url": "http://x/no",
+                "intent_id": "11111111-1111-4111-8111-111111111111",
             },
         )
     assert response.status_code in (400, 401)
@@ -272,7 +278,8 @@ def test_checkout_returns_503_when_stripe_key_empty(monkeypatch):
             json={
                 "pack_id": "creator",
                 "success_url": "http://example.com/ok",
-                "cancel_url": "http://example.com/no", "intent_id": "11111111-1111-4111-8111-111111111111",
+                "cancel_url": "http://example.com/no",
+                "intent_id": "11111111-1111-4111-8111-111111111111",
             },
         )
     finally:
@@ -327,7 +334,8 @@ def test_checkout_offloads_sync_stripe_to_thread(monkeypatch):
             json={
                 "pack_id": "creator",
                 "success_url": "http://example.com/ok",
-                "cancel_url": "http://example.com/no", "intent_id": "11111111-1111-4111-8111-111111111111",
+                "cancel_url": "http://example.com/no",
+                "intent_id": "11111111-1111-4111-8111-111111111111",
             },
         )
     finally:

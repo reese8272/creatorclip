@@ -70,7 +70,11 @@ async def test_signals_short_circuits_when_already_done() -> None:
 
     mock_session = AsyncMock()
     mock_session.get = AsyncMock(side_effect=[mock_video, mock_signals])
-    mock_session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
+    mock_session.execute = AsyncMock(
+        return_value=MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+    )
 
     mock_session_cm = AsyncMock()
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)

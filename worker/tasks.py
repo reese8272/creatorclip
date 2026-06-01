@@ -347,9 +347,7 @@ async def _retrain_preference_async(creator_id: str) -> None:
                 await session.rollback()
                 logger.info("retrain_preference: version race for creator %s, skip", cid)
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
-            )
+            await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:
@@ -1326,9 +1324,7 @@ async def _purge_stale_youtube_analytics_async() -> None:
             deleted_activity = r.rowcount or 0
 
             # Demographics — per-creator aggregate.
-            r = await session.execute(
-                delete(Demographics).where(Demographics.fetched_at < cutoff)
-            )
+            r = await session.execute(delete(Demographics).where(Demographics.fetched_at < cutoff))
             deleted_demographics = r.rowcount or 0
 
             await session.commit()
@@ -1453,9 +1449,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 )
 
                 total = len(unmeasured)
-                await _emit(
-                    "step", label="sync_metrics_start", stage="catalog_sync", total=total
-                )
+                await _emit("step", label="sync_metrics_start", stage="catalog_sync", total=total)
 
                 fetched = 0
                 for i, video in enumerate(unmeasured, 1):
@@ -1567,9 +1561,7 @@ async def _refresh_youtube_analytics_async() -> None:
                 try:
                     access_token = await get_valid_access_token(creator.id, session)
                 except Exception as exc:
-                    logger.warning(
-                        "Skipping analytics refresh for creator %s: %s", creator.id, exc
-                    )
+                    logger.warning("Skipping analytics refresh for creator %s: %s", creator.id, exc)
                     continue
 
                 try:
@@ -1614,9 +1606,7 @@ async def _refresh_youtube_analytics_async() -> None:
                     )
                     await session.commit()
                 except Exception as exc:
-                    logger.warning(
-                        "Analytics refresh failed for creator %s: %s", creator.id, exc
-                    )
+                    logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
                     await session.rollback()
         finally:
             await session.execute(

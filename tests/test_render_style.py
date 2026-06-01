@@ -104,12 +104,14 @@ def test_render_clip_file_passes_style_to_vf():
     def _mock_run(cmd, label, timeout_s=120.0):
         called_args["cmd"] = cmd
 
-    with patch("clip_engine.render._run", _mock_run), \
-         patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)), \
-         patch("clip_engine.render._extract_keyframe"), \
-         patch("clip_engine.render._detect_face_center_x", return_value=960), \
-         patch("tempfile.NamedTemporaryFile") as mock_tmp, \
-         patch("pathlib.Path.unlink"):
+    with (
+        patch("clip_engine.render._run", _mock_run),
+        patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)),
+        patch("clip_engine.render._extract_keyframe"),
+        patch("clip_engine.render._detect_face_center_x", return_value=960),
+        patch("tempfile.NamedTemporaryFile") as mock_tmp,
+        patch("pathlib.Path.unlink"),
+    ):
         mock_tmp.return_value.__enter__ = lambda s: s
         mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
         mock_tmp.return_value.name = "/tmp/kf.jpg"
@@ -140,12 +142,14 @@ def test_render_clip_file_no_style_unchanged():
     def _mock_run(cmd, label, timeout_s=120.0):
         called_args["cmd"] = cmd
 
-    with patch("clip_engine.render._run", _mock_run), \
-         patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)), \
-         patch("clip_engine.render._extract_keyframe"), \
-         patch("clip_engine.render._detect_face_center_x", return_value=960), \
-         patch("tempfile.NamedTemporaryFile") as mock_tmp, \
-         patch("pathlib.Path.unlink"):
+    with (
+        patch("clip_engine.render._run", _mock_run),
+        patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)),
+        patch("clip_engine.render._extract_keyframe"),
+        patch("clip_engine.render._detect_face_center_x", return_value=960),
+        patch("tempfile.NamedTemporaryFile") as mock_tmp,
+        patch("pathlib.Path.unlink"),
+    ):
         mock_tmp.return_value.__enter__ = lambda s: s
         mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
         mock_tmp.return_value.name = "/tmp/kf.jpg"

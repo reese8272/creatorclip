@@ -99,9 +99,7 @@ async def start_improvement_brief(
             select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
         )
         if existing is not None and existing.status == ImprovementBriefStatus.pending:
-            stream_url = (
-                f"/tasks/{existing.job_id}/events" if existing.job_id else None
-            )
+            stream_url = f"/tasks/{existing.job_id}/events" if existing.job_id else None
             return {
                 "status": "pending",
                 "task_id": existing.job_id,

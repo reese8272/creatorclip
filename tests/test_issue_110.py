@@ -54,8 +54,7 @@ def test_webhook_has_rate_limit_decorator():
         "/billing/webhook must carry an @limiter.limit decorator (Issue 110 Fix B)."
     )
     assert "key_func=get_remote_address" in snippet, (
-        "/billing/webhook must use IP-based keying (no session for Stripe). "
-        "(Issue 110 Fix B)"
+        "/billing/webhook must use IP-based keying (no session for Stripe). (Issue 110 Fix B)"
     )
 
 
@@ -72,9 +71,7 @@ def test_improvement_brief_uses_for_update_skip_locked():
     SELECT FOR UPDATE SKIP LOCKED + a no-row fallback re-query is the
     canonical SQLAlchemy 2.x async shape. (Issue 110 Fix C)
     """
-    src = (
-        pathlib.Path(__file__).parent.parent / "routers" / "improvement.py"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "routers" / "improvement.py").read_text()
     # Find start_improvement_brief body
     idx = src.find("def start_improvement_brief(")
     assert idx >= 0, "improvement.py must define start_improvement_brief"
@@ -141,8 +138,7 @@ def test_routers_auth_no_logging_workaround():
         "line 26), not the `_logging` re-import workaround. (Issue 110 Fix E)"
     )
     assert "_logging." not in src, (
-        "routers/auth.py must not reference _logging.* — use the module "
-        "logger. (Issue 110 Fix E)"
+        "routers/auth.py must not reference _logging.* — use the module logger. (Issue 110 Fix E)"
     )
 
 
@@ -157,9 +153,7 @@ def test_improvement_brief_debounce_query_has_skip_locked_then_fallback():
     concurrent POST would see `row is None` from SKIP LOCKED and try to
     INSERT, hitting UNIQUE(creator_id) → IntegrityError instead of
     returning the existing task_id."""
-    src = (
-        pathlib.Path(__file__).parent.parent / "routers" / "improvement.py"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "routers" / "improvement.py").read_text()
     idx = src.find("def start_improvement_brief(")
     body = src[idx : idx + 3500]
     # Locked branch:

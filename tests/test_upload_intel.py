@@ -81,7 +81,7 @@ def test_optimal_gap_hours_skips_malformed_rows():
     """Rows with out-of-bounds day_of_week/hour are silently filtered out.
     The gap must be computed from valid rows only. (Issue 103 fix #4)
     """
-    valid_a = _activity(0, 8, 0.9)   # Sunday 08:00 → slot 8
+    valid_a = _activity(0, 8, 0.9)  # Sunday 08:00 → slot 8
     valid_b = _activity(0, 12, 0.95)  # Sunday 12:00 → slot 12
     # Malformed row: day_of_week=7 is out of range (valid: 0–6).
     bad = _activity(7, 5, 1.0)

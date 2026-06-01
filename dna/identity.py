@@ -255,5 +255,3 @@ __all__ = [
     "validate_optional_text",
     "validate_text",
 ]
-
-

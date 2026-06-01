@@ -284,9 +284,7 @@ async def test_insights_totals_returns_correct_counts(client, _db_session_104: A
             f"Expected 3 shorts, got {totals['shorts']}. "
             "This was 0 with the old nullif bug — check the FILTER clause fix."
         )
-        assert totals["longs"] == 2, (
-            f"Expected 2 longs, got {totals['longs']}."
-        )
+        assert totals["longs"] == 2, f"Expected 2 longs, got {totals['longs']}."
         # 3 shorts done + 1 long done = 4 done
         assert totals["ingested_done"] == 4, (
             f"Expected 4 ingested_done, got {totals['ingested_done']}."
@@ -325,14 +323,18 @@ async def test_api_key_create_writes_audit_row(client, _db_session_104: AsyncSes
         await _db_session_104.commit()
 
         audit_rows = (
-            await _db_session_104.execute(
-                select(AuditLog).where(
-                    AuditLog.actor == str(creator.id),
-                    AuditLog.action == "api_key.created",
-                    AuditLog.entity_id == key_id,
+            (
+                await _db_session_104.execute(
+                    select(AuditLog).where(
+                        AuditLog.actor == str(creator.id),
+                        AuditLog.action == "api_key.created",
+                        AuditLog.entity_id == key_id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert len(audit_rows) >= 1, (
             "No audit row found for api_key.created — Fix 4 (OWASP ASVS §7.2)"
@@ -374,14 +376,18 @@ async def test_api_key_revoke_writes_audit_row(client, _db_session_104: AsyncSes
         await _db_session_104.commit()
 
         audit_rows = (
-            await _db_session_104.execute(
-                select(AuditLog).where(
-                    AuditLog.actor == str(creator.id),
-                    AuditLog.action == "api_key.revoked",
-                    AuditLog.entity_id == key_id,
+            (
+                await _db_session_104.execute(
+                    select(AuditLog).where(
+                        AuditLog.actor == str(creator.id),
+                        AuditLog.action == "api_key.revoked",
+                        AuditLog.entity_id == key_id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert len(audit_rows) >= 1, (
             "No audit row found for api_key.revoked — Fix 4 (OWASP ASVS §7.2)"

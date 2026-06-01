@@ -215,4 +215,6 @@ def render_clip_file(
         "render",
         timeout_s=render_timeout_s,
     )
-    logger.info("Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf)
+    logger.info(
+        "Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf
+    )

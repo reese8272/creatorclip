@@ -86,8 +86,8 @@ def test_improvement_post_handles_concurrent_insert_race(client, mocker):
     mock_session = AsyncMock()
     mock_session.scalar.side_effect = [
         _uuid.uuid4(),  # has_metrics — any non-None means metrics exist
-        None,           # re-query without lock — both racers find nothing
-        winning_row,    # post-rollback re-query — finds the winner's row
+        None,  # re-query without lock — both racers find nothing
+        winning_row,  # post-rollback re-query — finds the winner's row
     ]
     # SKIP LOCKED uses session.execute(...).scalar() — needs its own mock chain.
     execute_result = MagicMock()

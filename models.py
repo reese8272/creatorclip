@@ -161,12 +161,8 @@ class CreatorApiKey(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
+    last_used_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="api_keys")
 

@@ -182,9 +182,9 @@ async def get_insights(
                 func.count(Video.id).label("videos_analyzed"),
                 func.count().filter(Video.kind == VideoKind.short).label("shorts"),
                 func.count().filter(Video.kind == VideoKind.long).label("longs"),
-                func.count().filter(
-                    Video.ingest_status == IngestStatus.done
-                ).label("ingested_done"),
+                func.count()
+                .filter(Video.ingest_status == IngestStatus.done)
+                .label("ingested_done"),
                 func.coalesce(func.sum(Video.duration_s), 0.0).label("total_secs"),
             ).where(Video.creator_id == creator.id)
         )
@@ -202,15 +202,19 @@ async def get_insights(
 
     # ── DNA stats (active = latest confirmed, else latest draft) ───
     dna_row = (
-        await session.execute(
-            select(CreatorDna)
-            .where(
-                CreatorDna.creator_id == creator.id,
-                CreatorDna.status.in_([DnaStatus.confirmed, DnaStatus.draft]),
+        (
+            await session.execute(
+                select(CreatorDna)
+                .where(
+                    CreatorDna.creator_id == creator.id,
+                    CreatorDna.status.in_([DnaStatus.confirmed, DnaStatus.draft]),
+                )
+                .order_by(CreatorDna.version.desc())
             )
-            .order_by(CreatorDna.version.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     dna_stats: dict = {
         "version": dna_row.version if dna_row else None,
         "status": dna_row.status.value if dna_row else None,
@@ -330,34 +334,42 @@ async def analyze_performer(
         raise HTTPException(status_code=404, detail="Video not found")
 
     metrics_row = (
-        await session.execute(
-            select(VideoMetrics).where(VideoMetrics.video_id == video_id)
-        )
-    ).scalars().first()
+        (await session.execute(select(VideoMetrics).where(VideoMetrics.video_id == video_id)))
+        .scalars()
+        .first()
+    )
 
     dna_row = (
-        await session.execute(
-            select(CreatorDna)
-            .where(
-                CreatorDna.creator_id == creator.id,
-                CreatorDna.status.in_([DnaStatus.confirmed, DnaStatus.draft]),
+        (
+            await session.execute(
+                select(CreatorDna)
+                .where(
+                    CreatorDna.creator_id == creator.id,
+                    CreatorDna.status.in_([DnaStatus.confirmed, DnaStatus.draft]),
+                )
+                .order_by(CreatorDna.version.desc())
             )
-            .order_by(CreatorDna.version.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     dna_version = dna_row.version if dna_row else None
 
     # Cache check: return existing insight for this video + DNA version
     existing = (
-        await session.execute(
-            select(CreatorInsight).where(
-                CreatorInsight.creator_id == creator.id,
-                CreatorInsight.video_id == video_id,
-                CreatorInsight.insight_type == InsightType.performer_analysis,
-                CreatorInsight.dna_version == dna_version,
+        (
+            await session.execute(
+                select(CreatorInsight).where(
+                    CreatorInsight.creator_id == creator.id,
+                    CreatorInsight.video_id == video_id,
+                    CreatorInsight.insight_type == InsightType.performer_analysis,
+                    CreatorInsight.dna_version == dna_version,
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing:
         return _insight_to_dict(existing)
 
@@ -384,7 +396,9 @@ async def analyze_performer(
         content = msg.content[0].text if msg.content else "Analysis unavailable."
     except Exception as exc:
         logger.warning("performer analysis LLM failed video=%s err=%s", video_id, exc)
-        raise HTTPException(status_code=503, detail="Analysis service temporarily unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Analysis service temporarily unavailable"
+        ) from exc
 
     title = f"Why '{video.title or video.youtube_video_id}' {'excelled' if body.performer_kind == 'top' else 'underperformed'}"
     insight = CreatorInsight(
@@ -429,13 +443,17 @@ async def list_saved_insights(
 ) -> list[dict]:
     """Return all saved insights for the creator, newest first."""
     rows = (
-        await session.execute(
-            select(CreatorInsight)
-            .where(CreatorInsight.creator_id == creator.id, CreatorInsight.is_saved.is_(True))
-            .order_by(CreatorInsight.created_at.desc())
-            .limit(50)
+        (
+            await session.execute(
+                select(CreatorInsight)
+                .where(CreatorInsight.creator_id == creator.id, CreatorInsight.is_saved.is_(True))
+                .order_by(CreatorInsight.created_at.desc())
+                .limit(50)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_insight_to_dict(r) for r in rows]
 
 

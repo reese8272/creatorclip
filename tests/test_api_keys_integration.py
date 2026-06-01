@@ -362,8 +362,10 @@ async def test_bearer_dependency_rejects_revoked_key(client, db_session: AsyncSe
             headers={"Authorization": f"Bearer {raw_key}"},
         )
         assert resp.status_code == 401
-        assert "revoked" in resp.json().get("detail", "").lower() or \
-               "invalid" in resp.json().get("detail", "").lower()
+        assert (
+            "revoked" in resp.json().get("detail", "").lower()
+            or "invalid" in resp.json().get("detail", "").lower()
+        )
     finally:
         await _cleanup(db_session, creator.id)
 

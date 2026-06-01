@@ -177,7 +177,6 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     try:
         await progress.aset_owner(task.id, str(creator.id))
     except _redis_pkg.RedisError as exc:
-
         logger.warning(
             "sync_catalog aset_owner failed (Redis down?) task=%s err=%s",
             task.id,
@@ -219,7 +218,6 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     try:
         await progress.aset_owner(task.id, str(creator.id))
     except _redis_pkg.RedisError as exc:
-
         logger.warning(
             "build_dna aset_owner failed (Redis down?) task=%s err=%s",
             task.id,
@@ -337,7 +335,9 @@ async def get_identity(
 
 
 @router.post("/me/identity", status_code=201, response_model=IdentityOut)
-@limiter.limit("30/hour", key_func=creator_key)  # intake is rarely updated; keep abusive churn bounded
+@limiter.limit(
+    "30/hour", key_func=creator_key
+)  # intake is rarely updated; keep abusive churn bounded
 async def upsert_identity(
     request: Request,
     payload: IdentityIn,

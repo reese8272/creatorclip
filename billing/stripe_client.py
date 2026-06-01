@@ -101,9 +101,7 @@ def create_checkout_session(
         options={"idempotency_key": intent_id},
     )
     if session.url is None:
-        raise RuntimeError(
-            f"Stripe returned no checkout URL for session {session.id}"
-        )
+        raise RuntimeError(f"Stripe returned no checkout URL for session {session.id}")
     logger.info("billing checkout_session pack=%s creator=%s", pack_id, creator_id)
     return session.url
 

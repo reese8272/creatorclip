@@ -128,25 +128,35 @@ async def test_insights_empty_creator_returns_zeros(client, db_session: AsyncSes
 
 
 @pytest.mark.asyncio
-async def test_insights_totals_aggregate_by_kind_and_status(
-    client, db_session: AsyncSession
-):
+async def test_insights_totals_aggregate_by_kind_and_status(client, db_session: AsyncSession):
     """Pin the math: 2 longs + 3 shorts, 1 long ingested-done, total
     minutes_processed sums duration_s."""
     creator = await _seed_creator(db_session)
     try:
         await _seed_video(
-            db_session, creator.id, kind=VideoKind.long,
-            status=IngestStatus.done, duration_s=600.0, title="L1",
+            db_session,
+            creator.id,
+            kind=VideoKind.long,
+            status=IngestStatus.done,
+            duration_s=600.0,
+            title="L1",
         )
         await _seed_video(
-            db_session, creator.id, kind=VideoKind.long,
-            status=IngestStatus.pending, duration_s=900.0, title="L2",
+            db_session,
+            creator.id,
+            kind=VideoKind.long,
+            status=IngestStatus.pending,
+            duration_s=900.0,
+            title="L2",
         )
         for i in range(3):
             await _seed_video(
-                db_session, creator.id, kind=VideoKind.short,
-                status=IngestStatus.pending, duration_s=60.0, title=f"S{i}",
+                db_session,
+                creator.id,
+                kind=VideoKind.short,
+                status=IngestStatus.pending,
+                duration_s=60.0,
+                title=f"S{i}",
             )
 
         resp = client.get("/creators/me/insights", cookies=_auth_cookie(creator.id))
@@ -165,30 +175,40 @@ async def test_insights_totals_aggregate_by_kind_and_status(
 
 
 @pytest.mark.asyncio
-async def test_insights_dna_snapshot_uses_latest_confirmed(
-    client, db_session: AsyncSession
-):
+async def test_insights_dna_snapshot_uses_latest_confirmed(client, db_session: AsyncSession):
     """When v1 is confirmed and v2 is a draft (rebuild in progress),
     the snapshot should surface v2 — the latest by version, not
     necessarily the latest confirmed."""
     creator = await _seed_creator(db_session)
     try:
-        db_session.add(CreatorDna(
-            creator_id=creator.id, version=1,
-            status=DnaStatus.confirmed,
-            brief_text="v1", patterns_jsonb={},
-            top_video_ids_jsonb=[], bottom_video_ids_jsonb=[],
-            optimal_clip_len_s=12.0, best_source_region="first_third",
-            optimal_upload_gap_h=8.0,
-        ))
-        db_session.add(CreatorDna(
-            creator_id=creator.id, version=2,
-            status=DnaStatus.draft,
-            brief_text="v2", patterns_jsonb={},
-            top_video_ids_jsonb=[], bottom_video_ids_jsonb=[],
-            optimal_clip_len_s=14.5, best_source_region="middle",
-            optimal_upload_gap_h=10.0,
-        ))
+        db_session.add(
+            CreatorDna(
+                creator_id=creator.id,
+                version=1,
+                status=DnaStatus.confirmed,
+                brief_text="v1",
+                patterns_jsonb={},
+                top_video_ids_jsonb=[],
+                bottom_video_ids_jsonb=[],
+                optimal_clip_len_s=12.0,
+                best_source_region="first_third",
+                optimal_upload_gap_h=8.0,
+            )
+        )
+        db_session.add(
+            CreatorDna(
+                creator_id=creator.id,
+                version=2,
+                status=DnaStatus.draft,
+                brief_text="v2",
+                patterns_jsonb={},
+                top_video_ids_jsonb=[],
+                bottom_video_ids_jsonb=[],
+                optimal_clip_len_s=14.5,
+                best_source_region="middle",
+                optimal_upload_gap_h=10.0,
+            )
+        )
         await db_session.commit()
 
         resp = client.get("/creators/me/insights", cookies=_auth_cookie(creator.id))
@@ -206,32 +226,44 @@ async def test_insights_dna_snapshot_uses_latest_confirmed(
 
 
 @pytest.mark.asyncio
-async def test_insights_top_performers_resolve_to_video_payloads(
-    client, db_session: AsyncSession
-):
+async def test_insights_top_performers_resolve_to_video_payloads(client, db_session: AsyncSession):
     """DNA's top_video_ids_jsonb is a list of Video UUIDs. The endpoint
     resolves them to the full {title, kind, views, engagement_rate}
     shape, preserving input order."""
     creator = await _seed_creator(db_session)
     try:
         a = await _seed_video(
-            db_session, creator.id, kind=VideoKind.long,
-            status=IngestStatus.done, duration_s=600.0, title="A title",
-            views=10000, engagement_rate=0.12,
+            db_session,
+            creator.id,
+            kind=VideoKind.long,
+            status=IngestStatus.done,
+            duration_s=600.0,
+            title="A title",
+            views=10000,
+            engagement_rate=0.12,
         )
         b = await _seed_video(
-            db_session, creator.id, kind=VideoKind.short,
-            status=IngestStatus.done, duration_s=60.0, title="B title",
-            views=500, engagement_rate=0.04,
+            db_session,
+            creator.id,
+            kind=VideoKind.short,
+            status=IngestStatus.done,
+            duration_s=60.0,
+            title="B title",
+            views=500,
+            engagement_rate=0.04,
         )
 
-        db_session.add(CreatorDna(
-            creator_id=creator.id, version=1,
-            status=DnaStatus.confirmed,
-            brief_text="x", patterns_jsonb={},
-            top_video_ids_jsonb=[str(a.id), str(b.id)],
-            bottom_video_ids_jsonb=[],
-        ))
+        db_session.add(
+            CreatorDna(
+                creator_id=creator.id,
+                version=1,
+                status=DnaStatus.confirmed,
+                brief_text="x",
+                patterns_jsonb={},
+                top_video_ids_jsonb=[str(a.id), str(b.id)],
+                bottom_video_ids_jsonb=[],
+            )
+        )
         await db_session.commit()
 
         resp = client.get("/creators/me/insights", cookies=_auth_cookie(creator.id))
@@ -249,28 +281,34 @@ async def test_insights_top_performers_resolve_to_video_payloads(
 
 
 @pytest.mark.asyncio
-async def test_insights_drops_stale_video_ids_silently(
-    client, db_session: AsyncSession
-):
+async def test_insights_drops_stale_video_ids_silently(client, db_session: AsyncSession):
     """A DNA row with a top_video_ids reference to a video that's been
     deleted (or never belonged to this creator) drops that entry — does
     NOT 404 the whole endpoint."""
     creator = await _seed_creator(db_session)
     try:
         real = await _seed_video(
-            db_session, creator.id, kind=VideoKind.long,
-            status=IngestStatus.done, duration_s=600.0, title="real",
+            db_session,
+            creator.id,
+            kind=VideoKind.long,
+            status=IngestStatus.done,
+            duration_s=600.0,
+            title="real",
             engagement_rate=0.10,
         )
         ghost_id = uuid.uuid4()
 
-        db_session.add(CreatorDna(
-            creator_id=creator.id, version=1,
-            status=DnaStatus.confirmed,
-            brief_text="x", patterns_jsonb={},
-            top_video_ids_jsonb=[str(real.id), str(ghost_id)],
-            bottom_video_ids_jsonb=[],
-        ))
+        db_session.add(
+            CreatorDna(
+                creator_id=creator.id,
+                version=1,
+                status=DnaStatus.confirmed,
+                brief_text="x",
+                patterns_jsonb={},
+                top_video_ids_jsonb=[str(real.id), str(ghost_id)],
+                bottom_video_ids_jsonb=[],
+            )
+        )
         await db_session.commit()
 
         resp = client.get("/creators/me/insights", cookies=_auth_cookie(creator.id))
@@ -293,13 +331,21 @@ async def test_insights_per_creator_isolation(client, db_session: AsyncSession):
     creator_b = await _seed_creator(db_session)
     try:
         await _seed_video(
-            db_session, creator_a.id, kind=VideoKind.long,
-            status=IngestStatus.done, duration_s=600.0, title="A video",
+            db_session,
+            creator_a.id,
+            kind=VideoKind.long,
+            status=IngestStatus.done,
+            duration_s=600.0,
+            title="A video",
             views=100,
         )
         await _seed_video(
-            db_session, creator_b.id, kind=VideoKind.short,
-            status=IngestStatus.done, duration_s=60.0, title="B video",
+            db_session,
+            creator_b.id,
+            kind=VideoKind.short,
+            status=IngestStatus.done,
+            duration_s=60.0,
+            title="B video",
             views=999_999,
         )
 
@@ -324,9 +370,7 @@ async def test_insights_per_creator_isolation(client, db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_insights_does_not_resolve_other_creators_videos(
-    client, db_session: AsyncSession
-):
+async def test_insights_does_not_resolve_other_creators_videos(client, db_session: AsyncSession):
     """If creator A's DNA top_video_ids accidentally references a Video
     belonging to creator B (e.g., from a bug), the resolver must drop
     it. Defends against the Issue 33-shape cross-creator leak."""
@@ -334,18 +378,26 @@ async def test_insights_does_not_resolve_other_creators_videos(
     creator_b = await _seed_creator(db_session)
     try:
         b_video = await _seed_video(
-            db_session, creator_b.id, kind=VideoKind.long,
-            status=IngestStatus.done, duration_s=600.0, title="B confidential",
+            db_session,
+            creator_b.id,
+            kind=VideoKind.long,
+            status=IngestStatus.done,
+            duration_s=600.0,
+            title="B confidential",
             engagement_rate=0.99,
         )
         # Maliciously / accidentally point A's DNA at B's video
-        db_session.add(CreatorDna(
-            creator_id=creator_a.id, version=1,
-            status=DnaStatus.confirmed,
-            brief_text="x", patterns_jsonb={},
-            top_video_ids_jsonb=[str(b_video.id)],
-            bottom_video_ids_jsonb=[],
-        ))
+        db_session.add(
+            CreatorDna(
+                creator_id=creator_a.id,
+                version=1,
+                status=DnaStatus.confirmed,
+                brief_text="x",
+                patterns_jsonb={},
+                top_video_ids_jsonb=[str(b_video.id)],
+                bottom_video_ids_jsonb=[],
+            )
+        )
         await db_session.commit()
 
         resp = client.get("/creators/me/insights", cookies=_auth_cookie(creator_a.id))

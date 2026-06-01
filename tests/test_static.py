@@ -277,7 +277,7 @@ def test_link_video_input_accepts_full_urls():
     # /shorts/ links are common for Shorts (regex in source uses \/shorts\/)
     assert "shorts" in src, "extractYouTubeId must handle youtube.com/shorts/ID URLs"
     # linkVideo() must call the extractor, not use the raw input directly
-    extractor_call = re.search(r'extractYouTubeId\s*\(', src)
+    extractor_call = re.search(r"extractYouTubeId\s*\(", src)
     assert extractor_call, "linkVideo() must call extractYouTubeId() on the raw input"
 
 
@@ -314,16 +314,15 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     # The Linear-locked palette. These exact values were picked from the
     # researched menu and are locked in docs/DECISIONS.md.
     palette = {
-        "--color-bg":        "#0a0a0a",
-        "--color-surface":   "#111111",
-        "--color-border":    "#1f1f1f",
-        "--color-text":      "#ededed",
-        "--color-accent":    "#5e6ad2",  # Linear indigo
+        "--color-bg": "#0a0a0a",
+        "--color-surface": "#111111",
+        "--color-border": "#1f1f1f",
+        "--color-text": "#ededed",
+        "--color-accent": "#5e6ad2",  # Linear indigo
     }
     for var_name, expected_value in palette.items():
         assert f"{var_name}:" in src, (
-            f"_design-tokens.css must define {var_name} — locked in the "
-            f"Issue 99 design system."
+            f"_design-tokens.css must define {var_name} — locked in the Issue 99 design system."
         )
         assert expected_value in src, (
             f"_design-tokens.css must use {expected_value} for {var_name} — "
@@ -352,7 +351,7 @@ def test_review_page_exposes_why_this_clip_panel():
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "review.html").read_text()
 
-    assert 'id="why-clip"' in src and 'Why this clip?' in src, (
+    assert 'id="why-clip"' in src and "Why this clip?" in src, (
         "review.html must include a Why-this-clip details panel (Issue 94)."
     )
     # The four fields the panel surfaces must be populated by loadClip
@@ -415,19 +414,17 @@ def test_walkthrough_page_exists_with_five_panels():
         assert f'data-panel="{n}"' in src, (
             f"walkthrough.html must include panel {n} (Issue 100 5-panel structure)."
         )
-    assert 'const PANELS = 5;' in src, (
-        "Panel count constant must stay at 5 — drives the keyboard-nav "
-        "cap and the dots indicator."
+    assert "const PANELS = 5;" in src, (
+        "Panel count constant must stay at 5 — drives the keyboard-nav cap and the dots indicator."
     )
     # The required honesty disclaimer (CLAUDE.md North Star constraint).
     # Match on the substring that's invariant across line breaks.
     assert "promise virality" in src, (
-        "walkthrough.html must include the honesty disclaimer "
-        "(CLAUDE.md no-virality rule)."
+        "walkthrough.html must include the honesty disclaimer (CLAUDE.md no-virality rule)."
     )
     # The completion flag — auth.js reads this to skip the walkthrough
     # on subsequent visits.
-    assert 'creatorclip:walkthrough_seen' in src, (
+    assert "creatorclip:walkthrough_seen" in src, (
         "walkthrough.html must set the localStorage flag on completion "
         "so auth.js's first-run gate doesn't re-redirect."
     )
@@ -451,7 +448,7 @@ def test_auth_js_redirects_new_creators_to_walkthrough():
         "walkthrough again."
     )
     # The localStorage skip — walkthrough is one-time
-    assert 'creatorclip:walkthrough_seen' in src, (
+    assert "creatorclip:walkthrough_seen" in src, (
         "auth.js must check the localStorage flag set by walkthrough.html "
         "on completion so we don't loop the creator through it on every "
         "session refresh."
@@ -478,7 +475,7 @@ def test_onboarding_intake_is_mandatory():
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "onboarding.html").read_text()
 
-    assert 'skipIdentity' not in src, (
+    assert "skipIdentity" not in src, (
         "Issue 100 superseded Issue 83's optional intake — the "
         "'Skip for now' button + skipIdentity() function must be gone."
     )
@@ -488,14 +485,13 @@ def test_onboarding_intake_is_mandatory():
     # the snippet to be precise about it being the initial state.
     btn_idx = src.find('id="build-dna-btn"')
     btn_snippet = src[btn_idx : btn_idx + 200]
-    assert 'disabled' in btn_snippet, (
+    assert "disabled" in btn_snippet, (
         "Build DNA button must start disabled — Issue 100 gates step 4 "
         "on step 3 completion. _enableDnaBuild flips the lock after "
         "identity is saved (or already on file)."
     )
     # The gating helpers must exist
-    assert '_enableDnaBuild' in src and '_lockDnaBuild' in src and \
-           '_checkIdentityExists' in src, (
+    assert "_enableDnaBuild" in src and "_lockDnaBuild" in src and "_checkIdentityExists" in src, (
         "Issue 100 gating helpers (_checkIdentityExists, _enableDnaBuild, "
         "_lockDnaBuild) must be defined."
     )
@@ -752,8 +748,7 @@ def test_profile_page_exposes_api_keys_section():
         "profile.html JS must call GET/POST /creators/me/api-keys."
     )
     assert "method: 'POST'" in src and "method: 'DELETE'" in src, (
-        "profile.html JS must call POST (create) + DELETE (revoke) on "
-        "/creators/me/api-keys."
+        "profile.html JS must call POST (create) + DELETE (revoke) on /creators/me/api-keys."
     )
 
     # (c) one-time reveal modal + canonical security copy
@@ -777,8 +772,7 @@ def test_profile_page_exposes_api_keys_section():
         "creator can accidentally self-lock the OBS upload pipeline."
     )
     assert "This cannot be undone" in src, (
-        "Revoke modal must warn that the action cannot be undone "
-        "(GitHub canonical phrasing)."
+        "Revoke modal must warn that the action cannot be undone (GitHub canonical phrasing)."
     )
     assert "stop working immediately" in src, (
         "Revoke modal must make the immediacy explicit — applications "
@@ -899,10 +893,10 @@ def test_nav_balance_and_help_in_all_main_pages():
     for name in ("index.html", "profile.html", "review.html", "insights.html"):
         src = (static_dir / name).read_text()
         assert 'id="nav-balance"' in src, (
-            f"Issue 113: {name} must include id=\"nav-balance\" in the nav "
+            f'Issue 113: {name} must include id="nav-balance" in the nav '
             f"for the minutes-remaining display."
         )
-        assert '/static/walkthrough.html' in src and 'nav-help' in src, (
+        assert "/static/walkthrough.html" in src and "nav-help" in src, (
             f"Issue 113: {name} must include a .nav-help link to walkthrough.html."
         )
 
@@ -913,9 +907,7 @@ def test_auth_js_populates_nav_elements():
     import pathlib
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
-    assert "nav-balance" in src, (
-        "auth.js must populate the nav-balance element after auth."
-    )
+    assert "nav-balance" in src, "auth.js must populate the nav-balance element after auth."
     assert "/billing/balance" in src, (
         "auth.js must fetch /billing/balance to display remaining minutes."
     )
@@ -927,7 +919,7 @@ def test_profile_dna_section_is_collapsible():
     import pathlib
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "profile.html").read_text()
-    assert '<details' in src and 'id="dna-section"' in src, (
+    assert "<details" in src and 'id="dna-section"' in src, (
         "Issue 114: profile.html DNA section must use a <details> element."
     )
     assert 'id="sync-chip"' in src, (
@@ -981,15 +973,11 @@ def test_review_page_has_structured_feedback_panel():
     assert 'id="feedback-panel"' in src, (
         "Issue 118: review.html must include the structured feedback panel."
     )
-    assert "openFeedbackPanel" in src, (
-        "Issue 118: Keep/Drop buttons must open the feedback panel."
-    )
+    assert "openFeedbackPanel" in src, "Issue 118: Keep/Drop buttons must open the feedback panel."
     assert "submitTaggedFeedback" in src, (
         "Issue 118: feedback must be submitted with tags via submitTaggedFeedback()."
     )
-    assert "feedback_tags" in src, (
-        "Issue 118: feedback payload must include feedback_tags field."
-    )
+    assert "feedback_tags" in src, "Issue 118: feedback payload must include feedback_tags field."
 
 
 def test_review_page_has_style_picker():
@@ -1004,9 +992,7 @@ def test_review_page_has_style_picker():
     assert 'id="style-background"' in src, (
         "Issue 119: review.html must include background fill selector."
     )
-    assert "applyStyle" in src, (
-        "Issue 119: review.html must include applyStyle() function."
-    )
+    assert "applyStyle" in src, "Issue 119: review.html must include applyStyle() function."
 
 
 def test_insights_page_has_ai_analysis_and_saved_panels():
@@ -1021,9 +1007,5 @@ def test_insights_page_has_ai_analysis_and_saved_panels():
     assert "/creators/me/insights/analyze-performer" in src, (
         "Issue 117: must POST to /creators/me/insights/analyze-performer."
     )
-    assert 'id="saved-panel"' in src, (
-        "Issue 117: must include saved insights panel."
-    )
-    assert "saveInsight" in src, (
-        "Issue 117: must have saveInsight() for bookmarking analyses."
-    )
+    assert 'id="saved-panel"' in src, "Issue 117: must include saved insights panel."
+    assert "saveInsight" in src, "Issue 117: must have saveInsight() for bookmarking analyses."

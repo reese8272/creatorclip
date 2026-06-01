@@ -407,7 +407,12 @@ def test_analytics_refresh_iterates_creators():
         ):
             session = AsyncMock()
             session.execute = AsyncMock(
-                side_effect=[advisory_lock_result, creators_result, videos_result, advisory_unlock_result]
+                side_effect=[
+                    advisory_lock_result,
+                    creators_result,
+                    videos_result,
+                    advisory_unlock_result,
+                ]
             )
             session.commit = AsyncMock()
             session.rollback = AsyncMock()
@@ -539,7 +544,12 @@ def test_analytics_refresh_stamps_last_refreshed_on_success():
         ):
             session = AsyncMock()
             session.execute = AsyncMock(
-                side_effect=[advisory_lock_result, creators_result, videos_result, advisory_unlock_result]
+                side_effect=[
+                    advisory_lock_result,
+                    creators_result,
+                    videos_result,
+                    advisory_unlock_result,
+                ]
             )
             session.commit = AsyncMock()
             mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -590,7 +600,12 @@ def test_analytics_refresh_does_not_stamp_on_quota_exhaustion():
         ):
             session = AsyncMock()
             session.execute = AsyncMock(
-                side_effect=[advisory_lock_result, creators_result, videos_result, advisory_unlock_result]
+                side_effect=[
+                    advisory_lock_result,
+                    creators_result,
+                    videos_result,
+                    advisory_unlock_result,
+                ]
             )
             session.commit = AsyncMock()
             session.rollback = AsyncMock()

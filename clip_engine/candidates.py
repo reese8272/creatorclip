@@ -140,9 +140,6 @@ def extract_candidates(
             kept.append(cand)
 
     # Strip internal NMS metadata and sort chronologically for the caller.
-    candidates = [
-        {k: v for k, v in c.items() if k != "_prominence"}
-        for c in kept
-    ]
+    candidates = [{k: v for k, v in c.items() if k != "_prominence"} for c in kept]
     candidates.sort(key=lambda c: c["setup_start_s"])
     return candidates
