@@ -268,6 +268,20 @@
       } catch (_) {}
     }
 
+    // Per-page-load idempotency UUID for Stripe Checkout. Double-click on
+    // the same Buy button dedupes within Stripe's 24h window; page refresh
+    // generates a new UUID (correct semantics — user reconsidered). Stored
+    // in sessionStorage so a single page load = a single intent. (Issue 106)
+    function _getCheckoutIntentId() {
+      const key = "creatorclip_checkout_intent_id";
+      let id = sessionStorage.getItem(key);
+      if (!id) {
+        id = crypto.randomUUID();
+        sessionStorage.setItem(key, id);
+      }
+      return id;
+    }
+
     async function buyPack(packId) {
       const origin = window.location.origin;
       try {
@@ -279,6 +293,7 @@
             pack_id: packId,
             success_url: origin + "/static/pricing.html?success=1",
             cancel_url:  origin + "/static/pricing.html?cancelled=1",
+            intent_id: _getCheckoutIntentId(),
           }),
         });
         if (r.status === 401) { window.location.href = "/auth/login"; return; }

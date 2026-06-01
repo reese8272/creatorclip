@@ -158,6 +158,11 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = ""
     APP_BASE_URL: str = "http://localhost:8000"
     FREE_TRIAL_MINUTES: int = 60
+    # Per-request HTTP timeout for the Stripe SDK. Default SDK timeout is ~80s;
+    # one stuck call would pin an asyncio.to_thread executor slot for that long.
+    # Scale-checklist E (backpressure): every external call needs a bounded
+    # timeout. (Issue 106)
+    STRIPE_TIMEOUT_S: int = 10
 
     @model_validator(mode="after")
     def _validate_transcription_timeout(self) -> "Settings":

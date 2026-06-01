@@ -2466,6 +2466,34 @@ Tests: +3 (`tests/test_security_baselines.py` pinning sync between harness ignor
 
 ---
 
+## Issue 106: Security tightening — limiter JWT verify_exp + Stripe idempotency_key + timeout + None-check
+**Status**: ✅ Done (2026-05-31, post-Wave-9) · **Severity**: SEV-2 cluster (5 fixes)
+
+**Five fixes** on the security/billing surface from the post-Wave-8 /assess SEV2 register:
+
+1. **`limiter.py::_creator_key`** — `verify_exp: False → True` with `leeway=60` (security-relevant decoder; overrides /assess recommendation of 300s — DECISIONS entry). `except Exception: pass` narrowed to `except jwt.InvalidTokenError as exc: logger.warning(...class only)`. Closes the per-creator quota-leak vector where an expired or exfiltrated session token kept spending the legitimate creator's per-hour limit.
+
+2. **`billing/stripe_client.py::create_checkout_session`** — accepts `intent_id: str` (a client-supplied v4 UUID from sessionStorage); validates UUID shape via `uuid.UUID(intent_id, version=4)`; passes to Stripe via `options={"idempotency_key": intent_id}`. Closes the double-pay risk on double-click / router retry — Stripe dedupes within its 24h idempotency window. Pattern matches Stripe's primary documented recommendation.
+
+3. **`_STRIPE` client HTTP timeout** — `stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S)` (default 10s) replaces the SDK default ~80s. New setting `STRIPE_TIMEOUT_S` in `config.py` + `.env.example`. Closes scale-checklist E gap — one stuck Stripe call would pin an `asyncio.to_thread` executor slot for ~80s.
+
+4. **`session.url` None-check** — `if session.url is None: raise RuntimeError(...)`. Stripe SDK types `Session.url` as `Optional[str]`; our `-> str` was unsound. Router catches and surfaces a 502 with context instead of redirecting to the string `"None"`.
+
+5. **`routers/billing.py::CheckoutRequest`** — adds `intent_id: UUID4` field; Pydantic validates v4 shape before reaching Stripe. **`static/pricing.html`** — `_getCheckoutIntentId()` generates `crypto.randomUUID()` once per page load, stores in sessionStorage. Double-click on the same Buy button dedupes; page refresh creates a new intent (correct semantics — user reconsidered).
+
+**ACs**:
+- [x] `limiter._creator_key` verifies exp with 60s leeway, narrows except, logs class only
+- [x] `create_checkout_session` accepts and validates `intent_id`, passes Idempotency-Key to Stripe
+- [x] `_STRIPE` client carries explicit HTTPXClient timeout
+- [x] None-check on `session.url` raises RuntimeError
+- [x] `CheckoutRequest` includes `intent_id: UUID4`; pricing.html generates UUID per page load
+- [x] DECISIONS entry for the leeway=60 vs /assess-recommended 300 deviation
+- [x] 5 new regression tests + 4 existing /billing/checkout tests updated to include intent_id
+- [x] Tests: 620 passed (+5) / 1 skipped / 125 deselected
+- [x] Layer 0: ruff 0 / mypy 0 / coverage 76.02% / bandit 0/0 / pip-audit 0 / freshness ok
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

@@ -201,7 +201,7 @@ def test_balance_requires_auth(client):
 def test_checkout_requires_auth(client):
     response = client.post(
         "/billing/checkout",
-        json={"pack_id": "creator", "success_url": "http://x/ok", "cancel_url": "http://x/no"},
+        json={"pack_id": "creator", "success_url": "http://x/ok", "cancel_url": "http://x/no", "intent_id": "11111111-1111-4111-8111-111111111111"},
     )
     assert response.status_code == 401
 
@@ -215,7 +215,7 @@ def test_checkout_invalid_pack(client):
             json={
                 "pack_id": "nonexistent",
                 "success_url": "http://x/ok",
-                "cancel_url": "http://x/no",
+                "cancel_url": "http://x/no", "intent_id": "11111111-1111-4111-8111-111111111111",
             },
         )
     assert response.status_code in (400, 401)
@@ -272,7 +272,7 @@ def test_checkout_returns_503_when_stripe_key_empty(monkeypatch):
             json={
                 "pack_id": "creator",
                 "success_url": "http://example.com/ok",
-                "cancel_url": "http://example.com/no",
+                "cancel_url": "http://example.com/no", "intent_id": "11111111-1111-4111-8111-111111111111",
             },
         )
     finally:
@@ -327,7 +327,7 @@ def test_checkout_offloads_sync_stripe_to_thread(monkeypatch):
             json={
                 "pack_id": "creator",
                 "success_url": "http://example.com/ok",
-                "cancel_url": "http://example.com/no",
+                "cancel_url": "http://example.com/no", "intent_id": "11111111-1111-4111-8111-111111111111",
             },
         )
     finally:
@@ -345,3 +345,148 @@ def test_checkout_offloads_sync_stripe_to_thread(monkeypatch):
         "Detected call running in the same thread as the test — the offload "
         "regressed."
     )
+
+
+# ── Issue 106: limiter JWT verify_exp + Stripe idempotency_key + timeout + None-check ─
+
+
+def test_creator_key_rejects_expired_token(monkeypatch):
+    """Issue 106 SEV2: an expired session token must no longer key the
+    per-creator rate-limit bucket (was a quota-leak vector — exfiltrated
+    or stale token continued counting against the legitimate creator).
+    """
+    import time
+
+    import jwt as _jwt
+    from starlette.requests import Request
+
+    from config import settings
+    from limiter import SESSION_COOKIE, _creator_key
+
+    creator_id = uuid.uuid4()
+    # exp 10 minutes in the past — well outside the 60s leeway
+    payload = {"sub": str(creator_id), "exp": int(time.time()) - 600}
+    expired_token = _jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    scope = {
+        "type": "http",
+        "headers": [(b"cookie", f"{SESSION_COOKIE}={expired_token}".encode())],
+        "client": ("203.0.113.42", 1234),
+    }
+    request = Request(scope)
+    key = _creator_key(request)
+
+    assert key != str(creator_id), (
+        "Expired JWT must NOT key per-creator bucket — would let an exfiltrated "
+        "token continue spending the legitimate creator's per-hour limit. (Issue 106)"
+    )
+    assert key == "203.0.113.42", (
+        f"Expected fallback to remote address on expired token; got {key!r}"
+    )
+
+
+def test_creator_key_accepts_token_within_leeway(monkeypatch):
+    """A token whose exp is 30s in the past must still resolve to the creator
+    id — within the 60s leeway window for NTP drift. (Issue 106)"""
+    import time
+
+    import jwt as _jwt
+    from starlette.requests import Request
+
+    from config import settings
+    from limiter import SESSION_COOKIE, _creator_key
+
+    creator_id = uuid.uuid4()
+    # exp 30s in the past — inside the 60s leeway
+    payload = {"sub": str(creator_id), "exp": int(time.time()) - 30}
+    token = _jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    scope = {
+        "type": "http",
+        "headers": [(b"cookie", f"{SESSION_COOKIE}={token}".encode())],
+        "client": ("203.0.113.99", 1234),
+    }
+    request = Request(scope)
+    assert _creator_key(request) == str(creator_id)
+
+
+def test_create_checkout_session_passes_idempotency_key():
+    """Issue 106 SEV2: Stripe checkout.sessions.create must receive the
+    client-supplied intent_id as the Idempotency-Key option. Without this,
+    a user double-click / router retry would create two Checkout sessions;
+    if both complete the user pays twice and the ledger grants twice.
+    """
+    from billing.stripe_client import create_checkout_session
+
+    intent_id = "deadbeef-dead-4eef-bdea-dfeeddeadbee"
+
+    captured: dict = {}
+
+    fake_session = MagicMock()
+    fake_session.url = "https://checkout.stripe.com/c/pay/xyz"
+    fake_session.id = "cs_test_123"
+
+    def _capture(params, **kwargs):
+        captured["params"] = params
+        captured["kwargs"] = kwargs
+        return fake_session
+
+    with patch("billing.stripe_client._STRIPE") as stripe_mock:
+        stripe_mock.checkout.sessions.create.side_effect = _capture
+        url = create_checkout_session(
+            pack_id="creator",
+            creator_id=str(uuid.uuid4()),
+            stripe_customer_id=None,
+            success_url="http://x/ok",
+            cancel_url="http://x/no",
+            intent_id=intent_id,
+        )
+
+    assert url == "https://checkout.stripe.com/c/pay/xyz"
+    assert captured["kwargs"].get("options") == {"idempotency_key": intent_id}, (
+        f"Stripe must receive options={{'idempotency_key': {intent_id!r}}}; "
+        f"got {captured['kwargs']!r}"
+    )
+
+
+def test_create_checkout_session_rejects_malformed_intent_id():
+    """Server-side UUID-shape validation closes the vector where a client
+    sends a garbage string that happens to collide with another creator's
+    idempotency key. (Issue 106)
+    """
+    from billing.stripe_client import create_checkout_session
+
+    with pytest.raises(ValueError, match="intent_id must be a v4 UUID"):
+        create_checkout_session(
+            pack_id="creator",
+            creator_id=str(uuid.uuid4()),
+            stripe_customer_id=None,
+            success_url="http://x/ok",
+            cancel_url="http://x/no",
+            intent_id="not-a-uuid",
+        )
+
+
+def test_create_checkout_session_raises_when_session_url_is_none():
+    """Stripe SDK types Session.url as Optional[str]. Our -> str signature
+    is unsound when Stripe returns None — must raise explicitly so the
+    router can surface a 502 with context rather than redirecting the user
+    to the string 'None'. (Issue 106)
+    """
+    from billing.stripe_client import create_checkout_session
+
+    fake_session = MagicMock()
+    fake_session.url = None
+    fake_session.id = "cs_test_456"
+
+    with patch("billing.stripe_client._STRIPE") as stripe_mock:
+        stripe_mock.checkout.sessions.create.return_value = fake_session
+        with pytest.raises(RuntimeError, match="Stripe returned no checkout URL"):
+            create_checkout_session(
+                pack_id="creator",
+                creator_id=str(uuid.uuid4()),
+                stripe_customer_id=None,
+                success_url="http://x/ok",
+                cancel_url="http://x/no",
+                intent_id="11111111-1111-4111-8111-111111111111",
+            )

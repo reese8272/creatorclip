@@ -8,7 +8,7 @@ import uuid
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import UUID4, BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,13 @@ class CheckoutRequest(BaseModel):
     pack_id: str
     success_url: str
     cancel_url: str
+    # Client-supplied v4 UUID generated on /pricing page load and stored in
+    # sessionStorage; used as the Stripe Idempotency-Key. Double-click on the
+    # same page load dedupes to a single Checkout session within Stripe's 24h
+    # window. Page refresh produces a new UUID (correct semantics — user
+    # reconsidered, new attempt). Pydantic UUID4 validates v4 shape before
+    # the value reaches Stripe. (Issue 106)
+    intent_id: UUID4
 
 
 class CheckoutOut(BaseModel):
@@ -105,6 +112,7 @@ async def checkout(
             creator.stripe_customer_id,
             body.success_url,
             body.cancel_url,
+            str(body.intent_id),
         )
     except Exception as exc:
         logger.error("Stripe checkout creation failed: %s", exc)

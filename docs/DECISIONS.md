@@ -5,6 +5,52 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Issue 106: JWT verify leeway=60s; override /assess recommendation of 300s
+
+### What was decided
+The post-Wave-8 `/assess` REPORT.md recommended fixing `limiter.py`'s
+`_creator_key` with `options={"verify_exp": True}, leeway=300`. We
+shipped `leeway=60` instead.
+
+### Why
+RFC 7519 §4.1.4 ("a few minutes" — most implementations cite 1–2 min)
+and PyJWT docs both reserve longer-leeway windows for user-facing UX
+paths. The limiter key decoder is a security-relevant code path: a 300s
+window would silently accept tokens up to 5 minutes past expiry for
+per-creator rate-limit-key purposes, extending the window an exfiltrated
+token can continue spending the legitimate creator's per-hour quota.
+
+Our deploy is single-VM (one NTP-synced host), so cross-host clock skew
+is sub-second. 60s tolerates real NTP drift without giving an expired
+token any meaningful additional life. The JWTs themselves expire after
+60 minutes — 60s leeway is 1.7% of that window vs 300s which would be
+8.3%.
+
+### Source / evidence
+- Industry-standards-researcher pass (2026-05-31): "For a rate-limiting
+  key decoder where security matters, 60 seconds is more defensible and
+  still covers realistic NTP drift. 300 seconds is fine if your infra
+  has measurable clock skew (multi-region containers), but if you can
+  assume NTP-synced hosts, drop it to 60."
+- RFC 7519 §4.1.4 (recommended `nbf`/`exp` leeway scope).
+- PyJWT docs (https://pyjwt.readthedocs.io/en/latest/usage.html).
+
+### Impact / scope
+- `limiter.py::_creator_key` now `verify_exp=True, leeway=60` (constant
+  `_JWT_LEEWAY_S`).
+- `jwt.InvalidTokenError` is the narrowed exception umbrella (catches
+  `ExpiredSignatureError`, `DecodeError`, `InvalidSignatureError`,
+  `ImmatureSignatureError`). `InvalidKeyError` intentionally propagates
+  uncaught so a `JWT_SECRET_KEY` misconfig crashes the worker visibly.
+- `_creator_key` logs decode failures at WARNING via the exception
+  CLASS only (PyJWT messages can include claim values — never the
+  message string).
+
+### Date
+2026-05-31
+
+---
+
 ## 2026-05-31 — Issue 103: six Wave-9 carry-forward fixes
 
 ### What was decided

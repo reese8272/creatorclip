@@ -8,7 +8,15 @@ Issue 104: ``creator_key`` is the per-endpoint key_func that reads
 re-decoding the JWT in the key_func.  This covers bearer-authenticated routes
 (e.g. ``/clips/ingest``) which carry no session cookie and therefore bypassed
 per-creator bucketing entirely under the old approach.
+
+Issue 106: ``_creator_key`` now verifies ``exp`` with a 60s leeway and narrows
+the exception to ``jwt.InvalidTokenError``. Previously ``verify_exp: False`` +
+bare ``except Exception: pass`` meant an expired or exfiltrated session token
+still keyed the per-creator rate-limit bucket — a quota-leak vector — and a
+``JWT_SECRET_KEY`` misconfig was silently swallowed.
 """
+
+import logging
 
 import jwt
 from fastapi import Request
@@ -17,7 +25,16 @@ from slowapi.util import get_remote_address
 
 from config import settings
 
+logger = logging.getLogger(__name__)
+
 SESSION_COOKIE = "cc_session"
+
+# 60s tolerates real NTP drift between hosts but rejects tokens past the
+# 60-minute JWT_EXPIRY_MINUTES window. RFC 7519 §4.1.4 recommends "a few
+# minutes" — for a security-relevant key decoder, 60s is the defensible
+# choice over the longer windows you'd pick for a user-facing UX path.
+# (Issue 106 — overrides /assess recommendation of 300s; see DECISIONS.)
+_JWT_LEEWAY_S = 60
 
 
 def _creator_key(request) -> str:
@@ -28,11 +45,16 @@ def _creator_key(request) -> str:
                 token,
                 settings.JWT_SECRET_KEY,
                 algorithms=["HS256"],
-                options={"verify_exp": False},
+                options={"verify_exp": True},
+                leeway=_JWT_LEEWAY_S,
             )
             return str(payload["sub"])
-        except Exception:
-            pass
+        except jwt.InvalidTokenError as exc:
+            # Log the exception CLASS only — PyJWT error messages can
+            # include claim values (truncated subject, etc.) which should
+            # not appear in plain logs. The log aggregator dedupes by
+            # fingerprint, so per-line dedup isn't our concern.
+            logger.warning("jwt_decode_failed exc=%s", type(exc).__name__)
     return get_remote_address(request)
 
 
