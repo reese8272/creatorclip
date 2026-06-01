@@ -10,9 +10,7 @@ behaviour actually short-circuits — that confidence lives in integration tests
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -225,7 +223,6 @@ def test_soft_time_limit_exceeded_does_not_retry() -> None:
     ):
         # We call the underlying function directly to avoid Celery's task harness;
         # we want to confirm the exception propagates without retry being called.
-        task_instance = transcribe_video
         mock_self = MagicMock()
         mock_self.retry = MagicMock(side_effect=AssertionError("retry must not be called"))
 
@@ -245,7 +242,6 @@ def test_redis_singletons_have_socket_timeouts() -> None:
     We reset the module-level singletons so the factory functions re-run, then
     check the connection-pool kwargs that redis-py stores on the client.
     """
-    import importlib
 
     import worker.progress as progress_module
 
@@ -296,7 +292,6 @@ def test_config_validator_rejects_relative_local_media_dir_in_prod() -> None:
     import os
 
     from pydantic import ValidationError
-    from pydantic_settings import BaseSettings
 
     # We can't re-import Settings with different env vars because pydantic-settings
     # reads from the environment at construction time. Build a minimal subclass

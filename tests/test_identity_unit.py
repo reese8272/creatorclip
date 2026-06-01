@@ -18,6 +18,7 @@ from dna import conflict as conflict_module
 from dna import identity as identity_module
 from main import app
 from models import Creator, CreatorDna, CreatorIdentity
+from tests._helpers import override_current_creator
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -225,7 +226,7 @@ def _build_client_with_creator(creator):
         session = AsyncMock()
         yield session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
     return TestClient(app, raise_server_exceptions=True)
 

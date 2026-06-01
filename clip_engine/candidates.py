@@ -96,7 +96,7 @@ def extract_candidates(
     # when two windows overlap.
     pre_nms: list[dict] = []
 
-    for idx, prominence in zip(peak_indices_ordered, prominences_ordered):
+    for idx, prominence in zip(peak_indices_ordered, prominences_ordered, strict=True):
         peak_s = float(times[idx])
         setup_start_s = _find_setup_start(timeline, peak_s, window_s)
         start_s = max(0.0, peak_s - window_s)

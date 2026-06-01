@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from db import get_session
 from main import app
+from tests._helpers import override_current_creator
 from youtube.errors import YouTubeAuthError
 
 # ── Test helpers ──────────────────────────────────────────────────────────────
@@ -85,7 +86,7 @@ def test_delete_account_revokes_refresh_token(client):
     async def _session():
         yield session_mock
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _session
 
     captured: dict = {}
@@ -137,7 +138,7 @@ def test_delete_account_tolerates_400_invalid_token(client):
     async def _session():
         yield session_mock
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _session
 
     class FakeAsyncClient:

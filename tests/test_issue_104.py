@@ -11,10 +11,8 @@ Covers:
 from __future__ import annotations
 
 import pathlib
-import re
-import tempfile
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -77,7 +75,6 @@ def test_get_current_creator_stashes_creator_id_on_state():
         "headers": [],
         "query_string": b"",
     }
-    from starlette.datastructures import Headers
     from starlette.requests import Request as StarletteRequest
 
     scope["headers"] = [(b"cookie", f"cc_session={token}".encode())]
@@ -104,8 +101,7 @@ def test_get_current_creator_via_api_key_stashes_creator_id_on_state():
     creator_key() works correctly on bearer-auth routes like /clips/ingest."""
     import asyncio
 
-    from api_key import _PREFIX, generate_api_key, hash_api_key
-    from api_key import get_current_creator_via_api_key
+    from api_key import generate_api_key, get_current_creator_via_api_key, hash_api_key
 
     raw_key = generate_api_key()
     cid = uuid.uuid4()
@@ -161,7 +157,6 @@ def test_ingest_clip_cleans_temp_file_on_oserror():
     than mocking the full FastAPI + slowapi stack (which requires a live
     request and session — those paths are covered by the integration suite).
     """
-    import ast
 
     src = (pathlib.Path(__file__).parent.parent / "routers" / "clips.py").read_text()
 
@@ -248,14 +243,13 @@ async def test_insights_totals_returns_correct_counts(client, _db_session_104: A
 
     This is the regression test for the nullif-based aggregate that always
     returned 0 for shorts/longs/ingested_done."""
-    from datetime import UTC, datetime
 
     from models import IngestStatus, Video, VideoKind
 
     creator = await _seed_creator_104(_db_session_104, suffix="ins")
     try:
         # 3 shorts
-        for i in range(3):
+        for _ in range(3):
             yt_id = f"sh{uuid.uuid4().hex[:10]}"
             _db_session_104.add(
                 Video(
@@ -267,7 +261,7 @@ async def test_insights_totals_returns_correct_counts(client, _db_session_104: A
                 )
             )
         # 2 longs — 1 done, 1 pending
-        for i, status in enumerate([IngestStatus.done, IngestStatus.pending]):
+        for status in [IngestStatus.done, IngestStatus.pending]:
             yt_id = f"lg{uuid.uuid4().hex[:10]}"
             _db_session_104.add(
                 Video(

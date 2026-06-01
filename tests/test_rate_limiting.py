@@ -9,6 +9,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 # ── Limiter wired into app ────────────────────────────────────────────────────
+from tests._helpers import override_current_creator
 
 
 def test_limiter_attached_to_app():
@@ -151,7 +152,7 @@ def test_429_returned_on_limit_exceeded(client):
 
     from main import app
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
 
     try:

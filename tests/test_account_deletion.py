@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from db import get_session
 from main import app
+from tests._helpers import override_current_creator
 
 
 def _make_creator():
@@ -52,7 +53,7 @@ def _fake_session(creator_id=None, token_row=None):
 
 def test_delete_account_returns_204(client):
     creator = _make_creator()
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session()
 
     try:
@@ -72,7 +73,7 @@ def test_delete_account_returns_204(client):
 
 def test_delete_account_purges_source_and_clips_prefixes(client):
     creator = _make_creator()
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session()
 
     purged = []
@@ -96,7 +97,7 @@ def test_delete_account_purges_source_and_clips_prefixes(client):
 
 def test_delete_account_continues_if_storage_purge_fails(client):
     creator = _make_creator()
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session()
 
     try:
@@ -125,7 +126,7 @@ def test_delete_account_calls_session_delete(client):
     async def _session():
         yield session_mock
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _session
 
     try:
@@ -155,7 +156,7 @@ def test_delete_account_writes_audit_log(client):
     async def _session():
         yield session_mock
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _session
 
     try:
@@ -182,7 +183,7 @@ def test_delete_account_writes_audit_log(client):
 
 def test_delete_account_clears_session_cookie(client):
     creator = _make_creator()
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session()
 
     try:
@@ -217,7 +218,7 @@ def test_audit_log_written_even_when_storage_purge_raises(client):
     async def _session():
         yield session_mock
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _session
 
     try:

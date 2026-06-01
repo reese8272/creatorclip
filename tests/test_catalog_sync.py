@@ -26,6 +26,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import VideoKind
+from tests._helpers import override_current_creator
 from youtube.data_api import classify_video_kind
 
 # ── 180s Shorts boundary (load-bearing classification contract) ───────────────
@@ -149,7 +150,7 @@ def _override_auth_and_session():
     async def _gen():
         yield fake_session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _gen
     return creator, fake_session
 

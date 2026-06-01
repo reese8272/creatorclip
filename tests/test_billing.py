@@ -19,6 +19,7 @@ from billing.ledger import (
 from billing.packs import PACKS, PURCHASABLE_PACKS
 
 # ── Pack definitions ──────────────────────────────────────────────────────────
+from tests._helpers import override_current_creator
 
 
 def test_all_packs_present():
@@ -263,7 +264,7 @@ def test_checkout_returns_503_when_stripe_key_empty(monkeypatch):
     monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "")
 
     fake_creator = MagicMock(id=uuid.uuid4(), stripe_customer_id=None)
-    app.dependency_overrides[get_current_creator] = lambda: fake_creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(fake_creator)
     try:
         c = TestClient(app, raise_server_exceptions=False)
         response = c.post(
@@ -318,7 +319,7 @@ def test_checkout_offloads_sync_stripe_to_thread(monkeypatch):
         _fake_create_checkout_session,
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: fake_creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(fake_creator)
     try:
         c = TestClient(app, raise_server_exceptions=False)
         response = c.post(

@@ -18,6 +18,7 @@ import redis
 from auth import get_current_creator
 from config import settings
 from main import app
+from tests._helpers import override_current_creator
 from worker import progress
 
 
@@ -75,7 +76,7 @@ def _seed_event(task_id: str, event_type: str, **fields) -> None:
 
 
 def _override_auth(creator) -> None:
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
 
 
 def _clear_auth() -> None:

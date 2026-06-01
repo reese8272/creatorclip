@@ -2,7 +2,7 @@ import logging
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError, field_validator, model_validator
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -171,7 +171,7 @@ class Settings(BaseSettings):
         (Issue 105 — Fix 5)
         """
         ceiling = self.CELERY_SOFT_TIME_LIMIT_S - 30
-        if self.TRANSCRIPTION_TIMEOUT_S >= ceiling:
+        if ceiling <= self.TRANSCRIPTION_TIMEOUT_S:
             raise ValueError(
                 f"TRANSCRIPTION_TIMEOUT_S ({self.TRANSCRIPTION_TIMEOUT_S}) must be less than "
                 f"CELERY_SOFT_TIME_LIMIT_S - 30 = {ceiling}. "

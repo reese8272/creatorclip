@@ -50,8 +50,8 @@ def _guard_audio_size(audio_path: str | Path) -> None:
     """
     try:
         size_mb = Path(audio_path).stat().st_size / (1024 * 1024)
-    except OSError:
-        raise FileNotFoundError(f"audio not found: {audio_path}")
+    except OSError as exc:
+        raise FileNotFoundError(f"audio not found: {audio_path}") from exc
     if size_mb > settings.TRANSCRIPTION_MAX_MB:
         raise ValueError(
             f"Audio file {audio_path} is {size_mb:.0f} MB, over the "

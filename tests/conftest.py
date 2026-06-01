@@ -60,3 +60,6 @@ def pytest_configure(config: pytest.Config) -> None:
 def client() -> TestClient:
     with TestClient(app) as c:
         yield c
+
+
+# override_current_creator helper lives in tests/_helpers.py — importable from any test.

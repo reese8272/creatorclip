@@ -52,6 +52,7 @@ from models import (
     VideoMetrics,
     YoutubeToken,
 )
+from tests._helpers import override_current_creator
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -277,7 +278,7 @@ async def test_delete_account_cascades_all_dependent_tables(
     creator = await _seed_full_creator(db_session)
     cid = creator.id
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _make_override_session(db_session)
 
     try:
@@ -364,7 +365,7 @@ async def test_delete_account_purges_both_storage_prefixes(
         purged.append(prefix)
         return 0
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _make_override_session(db_session)
 
     try:
@@ -409,7 +410,7 @@ async def test_delete_account_succeeds_when_google_revoke_fails(
                 response=httpx.Response(500, request=req),
             )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _make_override_session(db_session)
 
     try:
@@ -446,7 +447,7 @@ async def test_delete_account_succeeds_when_storage_purge_fails(
     creator = await _seed_full_creator(db_session)
     cid = creator.id
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _make_override_session(db_session)
 
     try:

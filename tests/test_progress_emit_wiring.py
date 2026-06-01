@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._helpers import override_current_creator
+
 
 def _emit_labels(mock_emit: AsyncMock) -> list[str]:
     """Extract the `label` (or event type for terminal events) sequence
@@ -523,7 +525,7 @@ async def test_sync_catalog_router_fails_open_on_redis_down(mocker):
         side_effect=redis.ConnectionError("Redis down"),
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     try:
         from fastapi.testclient import TestClient
 
@@ -568,7 +570,7 @@ async def test_build_dna_router_fails_open_on_redis_down(mocker):
         side_effect=redis.ConnectionError("Redis down"),
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     try:
         from fastapi.testclient import TestClient
 
@@ -626,7 +628,7 @@ async def test_render_router_fails_open_on_redis_down(mocker):
         side_effect=redis.ConnectionError("Redis down"),
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session_gen
     try:
         from fastapi.testclient import TestClient
@@ -671,7 +673,7 @@ async def test_sync_catalog_router_stamps_owner_and_returns_stream_url(mocker):
         new_callable=AsyncMock,
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     try:
         from fastapi.testclient import TestClient
 
@@ -721,7 +723,7 @@ async def test_render_router_uses_clip_id_as_stream_key(mocker):
         new_callable=AsyncMock,
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session_gen
     try:
         from fastapi.testclient import TestClient
@@ -824,7 +826,7 @@ async def test_improvement_brief_router_returns_stream_url_on_happy_path(mocker)
     mocker.patch("worker.tasks.generate_improvement_brief.delay", return_value=fake_task)
     aset_owner_mock = mocker.patch("worker.progress.aset_owner", new_callable=AsyncMock)
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session_gen
     try:
         from fastapi.testclient import TestClient
@@ -889,7 +891,7 @@ async def test_improvement_brief_router_fails_open_on_redis_down(mocker):
         side_effect=redis.ConnectionError("Redis down"),
     )
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session_gen
     try:
         from fastapi.testclient import TestClient

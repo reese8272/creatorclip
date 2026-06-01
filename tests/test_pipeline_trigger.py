@@ -11,6 +11,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import IngestStatus, VideoKind
+from tests._helpers import override_current_creator
 
 # ── generate_clips task ───────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ def test_video_status_endpoint_returns_status(client):
         session.get = AsyncMock(return_value=video)
         yield session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
     try:
         resp = client.get(f"/videos/{video.id}/status")
@@ -92,7 +93,7 @@ def test_video_status_404_wrong_creator(client):
         session.get = AsyncMock(return_value=video)
         yield session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
     try:
         resp = client.get(f"/videos/{video.id}/status")

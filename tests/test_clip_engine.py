@@ -13,9 +13,9 @@ import pytest
 import yaml
 
 from clip_engine.candidates import (
+    _NMS_IOU_THRESHOLD,
     MIN_CLIP_S,
     WINDOW_S,
-    _NMS_IOU_THRESHOLD,
     _find_setup_start,
     extract_candidates,
 )

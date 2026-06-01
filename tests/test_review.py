@@ -15,6 +15,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import Clip, Creator, RenderStatus
+from tests._helpers import override_current_creator
 
 
 def _make_creator():
@@ -51,7 +52,7 @@ def _build_client(creator, clip):
         session.refresh = AsyncMock()
         yield session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
     client = TestClient(app, raise_server_exceptions=True)
     return client
@@ -128,7 +129,7 @@ def test_feedback_wrong_creator_returns_404():
         session.refresh = AsyncMock()
         yield session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
 
     client = TestClient(app, raise_server_exceptions=True)
@@ -144,7 +145,7 @@ def test_feedback_clip_not_found_returns_404():
         session.get = AsyncMock(return_value=None)
         yield session
 
-    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = fake_session
 
     client = TestClient(app, raise_server_exceptions=True)
