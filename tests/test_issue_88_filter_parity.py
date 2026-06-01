@@ -234,13 +234,21 @@ async def test_sync_channel_catalog_chains_metrics_for_unmetered_videos():
     fake_session.get = AsyncMock(return_value=fake_creator)
     fake_session.commit = AsyncMock()
 
-    # Two unmeasured videos returned by phase-2 query
+    # Two unmeasured videos returned by the longs phase-2 query (Issue 120: two
+    # queries now — longs and shorts — so shorts returns empty to keep count at 2).
     unmeasured_videos = [MagicMock(id=uuid.uuid4()), MagicMock(id=uuid.uuid4())]
-    phase2_result = MagicMock()
-    phase2_result.scalars = MagicMock(
+    longs_phase2 = MagicMock()
+    longs_phase2.scalars = MagicMock(
         return_value=MagicMock(all=MagicMock(return_value=unmeasured_videos))
     )
-    fake_session.execute = AsyncMock(return_value=phase2_result)
+    empty_phase2 = MagicMock()
+    empty_phase2.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    # execute call order: advisory lock, longs unmeasured, shorts unmeasured, advisory unlock
+    advisory_result = MagicMock()
+    advisory_result.scalar_one = MagicMock(return_value=True)
+    fake_session.execute = AsyncMock(
+        side_effect=[advisory_result, longs_phase2, empty_phase2, MagicMock()]
+    )
 
     fake_ctx = MagicMock()
     fake_ctx.__aenter__ = AsyncMock(return_value=fake_session)

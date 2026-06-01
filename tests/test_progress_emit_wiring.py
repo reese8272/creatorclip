@@ -335,10 +335,17 @@ async def test_sync_channel_catalog_emits_per_video_progress(mocker):
     scalars_obj = MagicMock()
     scalars_obj.all.return_value = [video_a, video_b]
     exec_result.scalars.return_value = scalars_obj
+    # Issue 120: Phase 2 now runs two queries (longs + shorts). Return the 2 videos
+    # for the longs query and empty for shorts so the total stays at 2.
+    empty_result = MagicMock()
+    empty_result.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
 
     fake_session = AsyncMock()
     fake_session.get = AsyncMock(return_value=creator_stub)
-    fake_session.execute = AsyncMock(return_value=exec_result)
+    # execute call order: advisory lock, longs unmeasured, shorts unmeasured, advisory unlock
+    fake_session.execute = AsyncMock(
+        side_effect=[exec_result, exec_result, empty_result, MagicMock()]
+    )
     fake_session.commit = AsyncMock()
     fake_session_cm = MagicMock()
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
@@ -407,10 +414,17 @@ async def test_sync_channel_catalog_emits_skip_step_on_per_video_failure(mocker)
     scalars_obj = MagicMock()
     scalars_obj.all.return_value = [video_a, video_b, video_c]
     exec_result.scalars.return_value = scalars_obj
+    # Issue 120: Phase 2 now runs two queries (longs + shorts). Return the 3 videos
+    # for the longs query and empty for shorts so the total stays at 3.
+    empty_result = MagicMock()
+    empty_result.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
 
     fake_session = AsyncMock()
     fake_session.get = AsyncMock(return_value=creator_stub)
-    fake_session.execute = AsyncMock(return_value=exec_result)
+    # execute call order: advisory lock, longs unmeasured, shorts unmeasured, advisory unlock
+    fake_session.execute = AsyncMock(
+        side_effect=[exec_result, exec_result, empty_result, MagicMock()]
+    )
     fake_session.commit = AsyncMock()
     fake_session_cm = MagicMock()
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)

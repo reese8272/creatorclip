@@ -102,10 +102,13 @@ class Settings(BaseSettings):
     # vertical video at or below this duration is treated as a Short.
     # Configurable so a future spec change is a one-line update. (Issue 87)
     SHORTS_MAX_DURATION_S: int = 180
-    # Cap the DNA candidate set so a power user with thousands of videos doesn't pull
-    # the whole catalog into worker memory. We take the most-recent N (recency-weighted
-    # scoring already favors recent content). (Issue B)
-    DNA_MAX_CANDIDATE_VIDEOS: int = 500
+    # Per-type caps on the DNA candidate set. Queried separately so a prolific Shorts
+    # creator can't drown out long-form signal in a single mixed pool. Both sorted
+    # by published_at DESC — DNA reflects current style, not historical average.
+    # Also bounds Phase 2 of catalog sync to ≤125 YouTube Analytics API calls per
+    # first-sync (~4 min), leaving the rest to the hourly Beat task. (Issue 120)
+    DNA_LONGS_CAP: int = 50
+    DNA_SHORTS_CAP: int = 75
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
     # Max weight the preference model gets in the rerank blend once mature. Below
     # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);

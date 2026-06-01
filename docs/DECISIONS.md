@@ -5,6 +5,47 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-01 — Issue 120: Per-type DNA candidate caps (longs: 50, shorts: 75)
+
+### What was decided
+
+Replaced the single mixed-pool cap (`DNA_MAX_CANDIDATE_VIDEOS=500`) with two
+separate per-type limits: `DNA_LONGS_CAP=50` and `DNA_SHORTS_CAP=75`. Applied
+to both `rank_videos()` (DNA builder) and Phase 2 of `_sync_channel_catalog_async`
+(catalog sync).
+
+### Why
+
+1. **A single mixed pool lets Shorts drown out long-form signal.** A creator with
+   200 Shorts and 20 longs would previously hit the cap on Shorts before the longs
+   were fully represented.
+2. **Phase 2 of the catalog sync had no limit**, causing first-syncs for large
+   channels to issue hundreds of YouTube Analytics API calls, taking 1-2+ hours and
+   hitting access-token expiry mid-loop (caught live in production logs).
+3. **The LLM only ever sees top 10 + bottom 10** videos regardless of pool size;
+   pulling 500 candidates added zero quality and burned significant API quota.
+
+### Why count-based vs time-based
+
+A time window (e.g. "last 6 months") penalises infrequent uploaders who may have
+only 5-10 videos in that window and would fail the minimum threshold. Count-based
+is robust to posting frequency.
+
+### Values chosen (50 longs, 75 shorts)
+
+- 50 longs ≈ 1 year for a creator posting weekly; sufficient for stable pattern detection.
+- 75 shorts — Shorts creators post more frequently; larger count needed for same signal density.
+- Both caps give ≤125 Phase 2 API calls per first-sync (~4 min), leaving excess videos
+  to the hourly Beat refresh task.
+
+**Source:** Statistical sampling theory for pattern detection; YouTube creator posting
+frequency benchmarks; production incident (YouTubeAuthError mid-sync on channel with
+20+ unmeasured videos).
+
+**Date:** 2026-06-01
+
+---
+
 ## 2026-06-01 — Issues 113–119: UX wave decisions
 
 ### Issue 117 — Haiku 4.5 for per-performer analysis; cache by (video_id, dna_version)

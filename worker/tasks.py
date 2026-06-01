@@ -35,6 +35,7 @@ from models import (
     Signals,
     Transcript,
     Video,
+    VideoKind,
     VideoMetrics,
 )
 from worker.celery_app import celery, run_async
@@ -1378,6 +1379,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
     """
     from sqlalchemy import select, text
 
+    from config import settings
     from worker.progress import aemit
     from youtube.analytics import sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
@@ -1430,23 +1432,44 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 await session.commit()
 
                 # Phase 2 — fetch metrics for any video that doesn't have them yet.
-                # Filtered query, not a global iterate-and-skip, so quota cost is bounded
-                # to truly-missing rows (re-runs are cheap).
-                unmeasured = (
+                # Capped to DNA_LONGS_CAP most-recent longs + DNA_SHORTS_CAP most-recent
+                # shorts (same caps as rank_videos). This bounds the first-sync to ≤125
+                # YouTube Analytics API calls (~4 min) regardless of catalog size. Older
+                # or excess videos are picked up gradually by the hourly Beat task
+                # (refresh_youtube_analytics). (Issue 120)
+                def _unmeasured_query(kind: VideoKind, cap: int):
+                    return (
+                        select(Video)
+                        .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
+                        .where(
+                            Video.creator_id == creator.id,
+                            Video.kind == kind,
+                            (VideoMetrics.video_id.is_(None))
+                            | (VideoMetrics.engagement_rate.is_(None)),
+                        )
+                        .order_by(Video.published_at.desc().nullslast())
+                        .limit(cap)
+                    )
+
+                longs_unmeasured = (
                     (
                         await session.execute(
-                            select(Video)
-                            .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
-                            .where(
-                                Video.creator_id == creator.id,
-                                (VideoMetrics.video_id.is_(None))
-                                | (VideoMetrics.engagement_rate.is_(None)),
-                            )
+                            _unmeasured_query(VideoKind.long, settings.DNA_LONGS_CAP)
                         )
                     )
                     .scalars()
                     .all()
                 )
+                shorts_unmeasured = (
+                    (
+                        await session.execute(
+                            _unmeasured_query(VideoKind.short, settings.DNA_SHORTS_CAP)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                unmeasured = longs_unmeasured + shorts_unmeasured
 
                 # Re-fetch the access token before the Phase 2 loop. Phase 1 (catalog
                 # upsert) can take several minutes on large channels; if the token was

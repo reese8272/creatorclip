@@ -126,12 +126,81 @@ async def test_build_patterns_batches_enrichment_queries(db_session: AsyncSessio
     assert all("hook_text" in v for v in patterns["top_videos"])
 
 
+async def _seed_mixed(session: AsyncSession, n_long: int, n_short: int) -> Creator:
+    """Seed a creator with both long-form and Shorts videos."""
+    creator = Creator(
+        google_sub=f"t_{uuid.uuid4().hex[:8]}",
+        channel_id=f"UC_{uuid.uuid4().hex[:6]}",
+        channel_title="Mixed Test",
+        onboarding_state=OnboardingState.dna_pending,
+    )
+    session.add(creator)
+    await session.flush()
+    now = datetime.now(UTC)
+    for i, (kind, prefix) in enumerate(
+        [(VideoKind.long, "L")] * n_long + [(VideoKind.short, "S")] * n_short
+    ):
+        v = Video(
+            creator_id=creator.id,
+            youtube_video_id=f"{prefix}{i:09d}"[:11],
+            title=f"{kind.value} {i}",
+            kind=kind,
+            duration_s=600.0 if kind == VideoKind.long else 45.0,
+            ingest_status=IngestStatus.done,
+            published_at=now - timedelta(days=i),
+        )
+        session.add(v)
+        await session.flush()
+        session.add(
+            VideoMetrics(
+                video_id=v.id,
+                views=1000 + i,
+                engagement_rate=0.05 + i * 0.001,
+                avg_view_duration_s=120.0 if kind == VideoKind.long else 30.0,
+                fetched_at=now,
+            )
+        )
+    await session.commit()
+    return creator
+
+
 @pytest.mark.asyncio
-async def test_rank_videos_respects_cap(db_session: AsyncSession, monkeypatch):
-    monkeypatch.setattr("config.settings.DNA_MAX_CANDIDATE_VIDEOS", 2)
-    creator = await _seed(db_session, n_long=4)
+async def test_rank_videos_per_type_caps(db_session: AsyncSession, monkeypatch):
+    """Issue 120: rank_videos caps longs and shorts independently.
+
+    Seeding 5 longs and 8 shorts with caps of 3 each: should return exactly
+    3 longs + 3 shorts = 6 total, sorted by weighted_score descending.
+    """
+    monkeypatch.setattr("config.settings.DNA_LONGS_CAP", 3)
+    monkeypatch.setattr("config.settings.DNA_SHORTS_CAP", 3)
+    creator = await _seed_mixed(db_session, n_long=5, n_short=8)
     try:
         ranked = await rank_videos(db_session, creator.id)
-        assert len(ranked) == 2  # capped to the 2 most-recent, not all 4
+        longs = [v for v in ranked if v["kind"] == VideoKind.long.value]
+        shorts = [v for v in ranked if v["kind"] == VideoKind.short.value]
+        assert len(longs) == 3, f"expected 3 longs, got {len(longs)}"
+        assert len(shorts) == 3, f"expected 3 shorts, got {len(shorts)}"
+        assert len(ranked) == 6
+        # Result must be sorted by weighted_score descending
+        scores = [v["weighted_score"] for v in ranked]
+        assert scores == sorted(scores, reverse=True)
+    finally:
+        await _cleanup(db_session, creator.id)
+
+
+@pytest.mark.asyncio
+async def test_rank_videos_shorts_cap_does_not_bleed_into_longs(
+    db_session: AsyncSession, monkeypatch
+):
+    """A creator with many Shorts doesn't crowd out their long-form signal."""
+    monkeypatch.setattr("config.settings.DNA_LONGS_CAP", 5)
+    monkeypatch.setattr("config.settings.DNA_SHORTS_CAP", 3)
+    creator = await _seed_mixed(db_session, n_long=5, n_short=20)
+    try:
+        ranked = await rank_videos(db_session, creator.id)
+        longs = [v for v in ranked if v["kind"] == VideoKind.long.value]
+        shorts = [v for v in ranked if v["kind"] == VideoKind.short.value]
+        assert len(longs) == 5  # all 5 longs included despite 20 shorts
+        assert len(shorts) == 3  # only 3 most-recent shorts
     finally:
         await _cleanup(db_session, creator.id)

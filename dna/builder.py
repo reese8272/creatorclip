@@ -100,32 +100,38 @@ def _optimal_upload_gap_h(activity_rows: list) -> float | None:
 
 
 async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict]:
-    """
-    Return all metered videos sorted descending by weighted_score
-    (engagement_rate × recency_weight).
+    """Return metered videos sorted descending by weighted_score (engagement_rate × recency_weight).
+
+    Longs and Shorts are fetched separately up to their respective caps
+    (DNA_LONGS_CAP / DNA_SHORTS_CAP) sorted by published_at DESC, so a
+    prolific Shorts creator can't drown out long-form signal in a single
+    mixed pool. The two pools are then merged and re-sorted by weighted_score
+    for the caller. (Issue 120)
 
     Readiness for DNA = a YouTube-side metrics row (views / engagement) exists.
-    `ingest_status` (the local clip-engine pipeline state — download, transcribe,
-    signals) is intentionally NOT a filter here: a catalog-synced video has
-    `ingest_status=pending` forever unless the creator actually clips it, but
-    its metrics are perfectly usable for DNA analysis. Requiring `ingest_status=done`
-    here was the cause of the Issue 88 bug — the data-gate showed videos and
-    the build said insufficient. (Issue 88)
+    `ingest_status` is intentionally NOT a filter — see Issue 88.
     """
-    result = await session.execute(
-        select(Video, VideoMetrics)
-        .join(VideoMetrics, VideoMetrics.video_id == Video.id)
-        .where(
-            Video.creator_id == creator_id,
-            VideoMetrics.engagement_rate.is_not(None),
+
+    def _base_query(kind: VideoKind, cap: int):
+        return (
+            select(Video, VideoMetrics)
+            .join(VideoMetrics, VideoMetrics.video_id == Video.id)
+            .where(
+                Video.creator_id == creator_id,
+                Video.kind == kind,
+                VideoMetrics.engagement_rate.is_not(None),
+            )
+            .order_by(Video.published_at.desc().nullslast())
+            .limit(cap)
         )
-        # Bound the fetch to the most-recent N so a huge catalog can't exhaust worker
-        # memory; recency-weighted ranking already favors recent content. (Issue B)
-        .order_by(Video.published_at.desc().nullslast())
-        .limit(settings.DNA_MAX_CANDIDATE_VIDEOS)
-    )
+
+    longs_rows = (await session.execute(_base_query(VideoKind.long, settings.DNA_LONGS_CAP))).all()
+    shorts_rows = (
+        await session.execute(_base_query(VideoKind.short, settings.DNA_SHORTS_CAP))
+    ).all()
+
     scored: list[dict] = []
-    for video, metrics in result.all():
+    for video, metrics in longs_rows + shorts_rows:
         weight = _recency_weight(video.published_at)
         scored.append(
             {

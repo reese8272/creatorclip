@@ -71,7 +71,10 @@ async def test_sync_channel_catalog_calls_sync_video_catalog_and_commits():
     # metrics query, advisory unlock) use empty_phase2 / a no-op result.
     advisory_lock_result = MagicMock()
     advisory_lock_result.scalar_one = MagicMock(return_value=True)
-    fake_session.execute = AsyncMock(side_effect=[advisory_lock_result, empty_phase2, MagicMock()])
+    # Issue 120: Phase 2 now runs two queries (longs + shorts) instead of one.
+    fake_session.execute = AsyncMock(
+        side_effect=[advisory_lock_result, empty_phase2, empty_phase2, MagicMock()]
+    )
 
     # AdminSessionLocal() returns an async context manager
     fake_ctx = MagicMock()
