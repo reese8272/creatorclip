@@ -3,12 +3,12 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-05-31 (Wave 8 closed — 4 issues shipped on top of Issue 99's design system; production current with `7714c7e`)
-**Branch:** `main` — HEAD `7714c7e`. Only `main` exists.
+**Last updated:** 2026-06-01 (Wave 9 + Issue 110 closed; in production)
+**Branch:** `main` — HEAD `458346f`. Only `main` exists.
 **Sync with `origin/main`:** **0 ahead / 0 behind** — fully in sync.
 **Working tree:** clean (3 untracked PNG screenshots — audit artifacts; intentionally not tracked).
-**Production:** ✅ **Current.** Deploy run `26724155993` (33s) finished successfully; `autoclip.studio` serves Wave 8.
-**Tests (local, default lane):** 582 passed / 1 skipped / 122 deselected (+8 unit, +22 integration vs start of session).
+**Production:** ✅ **Current.** Deploy run `26732033216` (35s) finished successfully; `autoclip.studio` serves Wave 9 + Issue 110.
+**Tests (local, default lane):** 627 passed / 2 skipped / 125 deselected (+7 from Issue 110; +44 total since Wave 8 open).
 
 ---
 
@@ -16,111 +16,94 @@
 
 ### No active issue — the deck is clear
 
-This session closed 4 issues on top of the Issue 99 design system rollout. Production is current. The deploy pipeline is end-to-end self-hosted (Issue 101) and the runner is live on `147.182.136.107`. **The right move next session is to pick from the queue below** — not to fix anything (nothing's broken).
+This session ran a full Wave 9 batch (Issues 102/103/104/105/106/107/108), produced a
+fresh post-Wave-9 `/assess`, shipped Issue 110 from that assess's top register, and
+pushed everything to production.
+
+The model has also been switched to **Sonnet 4.6** for future sessions.
 
 ### → NEXT ACTION — choose ONE
 
-1. **Issue 95 frontend** — backend is done; profile.html needs an API-key management card (list / create / revoke) using the new design system. ~1-2 hours. Smallest tractable next step that closes the last loop on a shipped feature.
-2. **Issue 96** — multi-turn chat-driven intake. Needs a Phase-1 brief covering chat-UX patterns, prompt design, and whether to do multi-turn SSE vs single-call extract-then-confirm. ~1 day.
-3. **Issue 97** — livestream recap mode. Needs a Phase-1 brief covering recap-length budget (3-10 min target), clip_engine extension, subscription-tier mechanics on Stripe. ~2 days.
-4. **OFF_COURSE Issue 101 candidate** — linked videos disappear from dashboard (the `source_uri IS NOT NULL` filter excludes user-linked rows by accident, not just catalog rows). Real bug; file as Issue 102 and fix. ~1 hour.
-5. **Companion app repo** — `creatorclip-obs-companion` (Go, fyne or wails). Out of this monorepo. Needs its own session.
-6. **`/assess`** — a full multi-agent production-readiness sweep with fresh context. The skill recommends running it after major batches like Wave 8; it dispatches subagents and writes per-module findings.
+1. **Issue 109** — 10 deferred design-work cleanups from the Issue 108 sweep. No production impact,
+   just code health. Each item needs its own Phase-1 brief before touching code. ~half day.
+2. **Issue 111 (Haiku 4.5 A/B for clip scoring)** — the `/assess` flagged the Haiku 4.5 cost
+   reduction (~67%) for clip-scoring was never filed as a tracked issue, not even in Issue 109.
+   File + brief + A/B eval against `tests/eval/scenarios/*.yaml`. ~1 day.
+3. **Locust load test (Issue 78f)** — the SOLE remaining structural gate between CONDITIONAL and YES
+   on the production-readiness verdict. Settles scale-checklist axes A (pool math) and E
+   (backpressure). File as Issue 112 if not already filed; provision the staging environment.
+4. **Issue 96** — multi-turn chat intake (CFO-Agent pattern). Needs Phase-1 brief. Large, ~1 day.
+5. **Issue 97** — livestream recap + subscription tier (Stripe recurring). Large, ~2 days.
+6. **Google OAuth app verification** — fully unblocked from our side (Limited Use in Privacy Policy,
+   TOS + Privacy linked from every template, 30-day analytics retention purge active, audit log on
+   security events with IP + UA + request_id). External Google process; user-side action.
+7. **R2 lifecycle rule** — set a 7-day TTL on the `source/` prefix in the Cloudflare R2 dashboard.
+   Belt-and-suspenders for the Issue 110 orphan-mp4 fix. ~5 minutes in the R2 dashboard.
 
-If the user says "just keep going" — start with #1 (Issue 95 frontend) since it has the smallest scope and closes a loop already in motion.
+If the user says "just keep going" — start with #3 (Locust) since it's the only gate to YES on
+the production-readiness assessment and has been open for 8 assessment cycles.
 
 ---
 
 ## WHAT WORKS NOW (do not re-investigate)
 
-- **Self-hosted runner deploy pipeline** — `docker-publish.yml` AND `deploy.yml` both `runs-on: self-hosted`. Zero GitHub-hosted minutes consumed by deploys. Runner = `autoclip-prod-vm` on `147.182.136.107`.
-- **CI / Quality Gates / Integration tests** intentionally STAY on `ubuntu-latest` — they fail loudly on the billing block (expected per Issue 101). They are informational; they do NOT gate deploys (`workflow_run` depends only on Docker publish).
-- **Linear-style design system** at `static/_design-tokens.css` — every static template links it and consumes `--color-*` semantic tokens.
-- **Monospace data register** applied to dashboard counts, pricing values, DNA stats, insights numbers, clip metadata, trim handles. Future data views inherit the convention via `.mono` / explicit `var(--font-mono)`.
-- **OBS companion-app backend** — `creator_api_keys` table, `api_key.py` module, `routers/api_keys.py` (GET/POST/DELETE), `POST /clips/ingest` with bearer auth. End-to-end isolated and tested. Companion app itself is OUT OF SCOPE for this repo.
-- **Walkthrough gate** — first-run creators (`onboarding_state='connected'` + no `walkthrough_seen` localStorage flag + not on a setup surface) get routed to `/static/walkthrough.html`. After: intake on `/static/onboarding.html` is mandatory — Skip removed, Build-DNA disabled until identity exists.
-- **Insights endpoint** — `GET /creators/me/insights` is the single-fetch aggregator. Cross-creator video resolution is defended at the SQL layer (`Video.creator_id == creator.id` filter).
-- **Clip transparency** — `Why this clip?` expander on `/static/review.html` surfaces `clip.reasoning` + `clip.principle` + score + timing for every clip. Auto-opens once.
-- **Backboard Media's DNA banner stuck-bug** — healed by migration `0014_backfill_onboarding_state` (Wave 6 Fix A).
-- **Pricing page** — fully wired + visible. CSS landed.
-- **All footers + TOS/Privacy linkage** — Google OAuth verification gate around legal reachability is satisfied (Wave 6 Fix B).
+### Wave 9 batch (this session)
+- **Issue 102** — preference `from_bytes` (joblib.load) + LightGBM `fit()` moved off the event
+  loop via `asyncio.to_thread`. Both Wave-8 SEV1s closed.
+- **Issue 103** — 6 carry-forward SEV2s swept: youtube oauth Redis fail-open, Deepgram normalizer
+  KeyError, `_guard_audio_size` OSError → FileNotFoundError, `optimal_gap_hours` bounds guard,
+  `dna_match` collinearity (scoring returns DNA-only + composite separately), IoU NMS on candidates.
+- **Issue 104** — Wave-8 new surfaces: insights `nullif` aggregate → FILTER clause, temp-file
+  leak fixed on both `ingest_clip` + `upload_video`, per-creator rate-limit key universally applied,
+  api_keys audit-log rows with IP + UA + request_id.
+- **Issue 105** — Worker idempotency + advisory locks: transcribe/signals idempotency probes,
+  `_ingest_async` `.wav` short-circuit (retry case), `generate_clips` `RefundOnFailureTask`,
+  6 advisory locks, `SoftTimeLimitExceeded` no-retry, redis socket_timeout, `LOCAL_MEDIA_DIR`
+  absolute-path validator (relaxed to `STORAGE_BACKEND=local` only by the Issue 110 hotfix).
+- **Issue 106** — Security: `limiter.py` JWT `verify_exp=True` + `leeway=60` (DECISIONS deviates
+  from /assess 300 recommendation), Stripe `idempotency_key` + HTTP timeout + None-check.
+- **Issue 107** — pip-audit 16 → 0 (6 documented in `pyproject.toml [tool.pip-audit].ignore-vulns`).
+  Coverage re-baselined 69.54% → 75.20%.
+- **Issue 108** — 38/48 cleanup-severity items swept (typing gaps, dead aliases, magic-number
+  naming, `Optional["X"]` → `"X | None"`, `*QueuedOut` schema dedup via `routers/_schemas.py`).
+  Issue 109 filed for the deferred 10.
+- **Issue 110** — post-Wave-9 /assess top register: `/auth/logout` + `/billing/webhook` rate
+  limits, improvement-brief `SELECT FOR UPDATE SKIP LOCKED`, `_ingest_async` orphan-mp4
+  capture-then-delete-after-commit, auth.py `_logging` workaround removed. LOCAL_MEDIA_DIR
+  hotfix shipped separately (`1acee71`).
 
----
-
-## WHAT'S NOT DONE YET (the real queue)
-
-### Carrying over from the backlog
-
-| Issue | Status | Size | Notes |
-|---|---|---|---|
-| 95 frontend | Backend done; UI missing | Small | Profile-page card for key management. Reuses `.chip`, `.card`, `.btn` from the design system. |
-| 96 | Not started | Large | Multi-turn chat intake. Needs Phase-1 design (chat patterns + Claude prompt + UI). |
-| 97 | Not started | Large | Livestream recap mode. Needs `clip_engine` recap extension + Stripe subscription tier. |
-| 99 Phase C | Opportunistic | Small (per-surface) | `.mono` register applied to surfaces as they're built. No dedicated sweep planned. |
-| 78f | Blocked on staging | Medium | PgBouncer load test under real Postgres + PgBouncer. Sole gate moving the `/assess` verdict from CONDITIONAL → YES. |
-| RLS activation | Manual op | Small | Run `Activate RLS (Issue 79)` workflow with `dry_run=true` then `false`. Hotfix B (Wave 1) already unblocked it. |
-
-### Off-course bugs already filed
-
-- **Linked videos disappear from dashboard** (`OFF_COURSE_BUGS.md` 2026-05-31 row). SEV1. Needs a discriminator column or behavior change in `list_videos`. Candidate Issue 102.
-
-### Pre-public-launch gates (CLAUDE.md "Pre-Public-Launch Requirements")
-
-- [ ] Lock `ALLOWED_ORIGINS` to production domain; disable `/docs` — verify
-- [ ] Per-creator rate limiting + usage quotas before each LLM/render job — partial; sweep audit
-- [x] YouTube data-retention/refresh fully compliant — Wave-4 Fix 3
-- [x] Terms of Service + Privacy Policy pages live AND linked — Wave-6 Fix B
-- [ ] `TOKEN_ENCRYPTION_KEY` rotation runbook written
-- [ ] Google OAuth app verification submitted (external; now unblocked from our side)
-- [ ] Account-deletion endpoint end-to-end tested on prod
-- [ ] Billing + plan-tier wired — minute packs live; subscription tier pending (Issue 97)
-- [ ] Eval harness hardened with adversarial/edge cases
-
----
-
-## WHAT ELSE COULD BE ADDED (ideation backlog — not committed)
-
-Pulled from `docs/issues.md` "Phase 3 Backlog" plus things that came up across this session. Pick from this when the queue above is exhausted; each needs its own Phase-1 brief before building.
-
-**Creator workflow**
-- **A/B test mode** — publish two cuts of the same clip, automatically poll outcomes, surface a "which one your audience preferred" view to feed the preference reranker.
-- **Email digests** — weekly "here's your clip queue + DNA evolution" summary. Re-engagement primitive.
-- **In-app caption editor** — burned-in subtitles with font + position + style picker on the review surface.
-- **In-app crop editor** — manual 9:16 reframe adjust when the active-speaker autoframe gets it wrong.
-- **"State of your channel" deep dive** — one-shot AI-authored report. Bigger than the improvement brief; closer to a YouTube-channel-audit deliverable. Maybe a subscription-tier perk like recap (Issue 97).
-- **Voice clone for B-roll narration** — out-of-domain but adjacent; deferred forever unless a creator explicitly asks.
-
-**Distribution**
-- **Auto-publish to YouTube Shorts** — new OAuth scope; needs creator consent flow. Closes the loop from "render" to "live."
-- **Multi-platform export** — TikTok / Reels / X. Format adapters share most of the render pipeline.
-- **Discord notifications** — "your clips are ready" webhook. Real-time alternative to email digest.
-
-**Live capture**
-- **Companion app v1** — Go binary watching OBS replay folder (Issue 95 Architecture B). Out of monorepo.
-- **WHIP ingest fallback** — for paying creators who want sub-2s clip latency (Issue 95 Architecture D, only at scale).
-- **Vision signals** — MediaPipe face-emotion detection for cam-on reaction detection. Phase 2 per SOT.
-
-**Monetization**
-- **Subscription tier** — recurring revenue alongside the one-time minute packs. Needed before livestream recap (Issue 97) since recap is positioned as a sub perk.
-- **Affiliate program for streamers** — referral codes wired to Stripe Connect. Funnel from the companion-app install flow.
-
-**Internal**
-- **Issue 84 follow-up** — Anthropic SDK 0.40 → 0.105.2 bump unlocks TTL-tier observability; drop unproductive cache markers on DNA + improvement-brief paths.
-- **Haiku 4.5 A/B for clip scoring** — per `docs/assessment/llm/clip_scoring.md`, ~67% cost reduction opportunity if quality holds.
-- **Eval harness expansion** — adversarial scenarios in `tests/eval/scenarios/*.yaml`.
-- **`/assess` re-run** — multi-agent production-readiness sweep after a few more issues land.
+### Longer-standing landmarks
+- **Design system** — `static/_design-tokens.css` Linear-style palette (`#0a0a0a` / `#5e6ad2` /
+  Inter + JetBrains Mono). All 9 templates retrofitted.
+- **Self-hosted runner deploy pipeline** — both `docker-publish.yml` + `deploy.yml` on
+  `self-hosted`. Zero GH-hosted minutes on deploys.
+- **OBS companion app surface** — `creator_api_keys` table, `api_key.py`, `routers/api_keys.py`,
+  `POST /clips/ingest` with bearer auth. Profile page has full key management UI (list/create/revoke
+  with one-time-reveal modal).
+- **Walkthrough gate** — first-run creators routed to `/static/walkthrough.html`; intake mandatory
+  after (Skip removed).
+- **Insights endpoint** — `GET /creators/me/insights` single-fetch (channel totals + DNA snapshot +
+  top/bottom performers).
+- **Clip transparency** — `Why this clip?` expander on review.html surfaces reasoning + principle +
+  score + timing. Auto-opens once.
+- **Stripe billing** — checkout with idempotency-key (client UUID via sessionStorage), HTTP timeout,
+  `session.url` None-check, `intent_id: UUID4` field on `CheckoutRequest`.
+- **4 of 11 modules fully clean** per `/assess` — youtube, upload_intel, billing, preference.
 
 ---
 
 ## THE ARC THAT LED HERE
 
-1. User-reported "things done but not on the website" → **Wave 6** four-fix audit batch.
-2. Deploy infrastructure billing-blocked → **Issue 101** moved docker-publish to self-hosted.
-3. Permission issue on first deploy → `setup-runner.sh` chown fix (commit `6980086`).
-4. User-reported pricing page rendering broken → **Wave 7** CSS hotfix + locked Issues 95/99 directions from researched menus.
-5. Issue 99 design system rollout → **Phase A** (`_design-tokens.css` + pricing proof) then **Phase B** (8 templates retrofitted in one commit).
-6. User said "work through all issues. issue-workflow the remaining issues we have with high volume of testing and assessment" → **Wave 8** four-issue batch (95 backend, 100, 93, 94). Issues 96 and 97 deferred to focused sessions per "quality over coverage" rule.
-7. Self-audit confirmed: 16 explicit creator-isolation sites in new code, zero raw-key logging, zero TODOs, every new function typed.
+1. Wave 8 (4-issue batch: Issues 95 backend + 100 + 93 + 94) closed on the Issue-99 design system.
+2. Session opened with Issue 95 frontend + `/assess` sweep.
+3. `/assess` surfaced 2 SEV1s (preference event-loop blocking) + pip-audit 16 + 51 SEV2s → Wave 9.
+4. Wave 9 (7-issue parallel batch: 102/103/104/105/106/107/108) — 4 issues in parallel worktrees,
+   3 directly on main. Mid-merge hotfix: Issue 104's `creator_key` required a 26-site test
+   `override_current_creator` sweep (`tests/_helpers.py`).
+5. Post-Wave-9 `/assess` — 0 SEV1, 4 clean modules, 32 SEV2, largest single-cycle drop.
+6. Issue 110 closed the top-register items from that assess.
+7. Two production deploys this session: first failed (LOCAL_MEDIA_DIR over-strict validator);
+   hotfix + re-deploy both succeeded.
 
 ---
 
@@ -131,46 +114,76 @@ Pulled from `docs/issues.md` "Phase 3 Backlog" plus things that came up across t
 | Public URL | `https://autoclip.studio` |
 | Production VM | `147.182.136.107` |
 | Container image | `ghcr.io/reese8272/creatorclip:latest` |
-| Repo | `github.com/reese8272/creatorclip` (NOT `Youtube-Video-AI-Editor` — that name 404s; runner registration token is repo-scoped) |
+| Repo | `github.com/reese8272/creatorclip` (NOT `Youtube-Video-AI-Editor` — old name 404s) |
 | Self-hosted runner | `autoclip-prod-vm` (`self-hosted,linux,x64,prod`) — systemd service `actions.runner.reese8272-creatorclip.autoclip-prod-vm` |
-| Last successful deploy | `26724155993` (Wave 8 close commit) |
-| Alembic head | `0015_creator_api_keys` (Issue 95 backend) |
-| `/assess` REPORT | `docs/assessment/REPORT.md` — STALE (post-Wave-4); re-run before publicly claiming readiness |
+| Last successful deploy | `26732033216` (Issue 110 commit `458346f`) |
+| Alembic head | `0015_creator_api_keys` (Issue 95 backend — no new migrations this session) |
+| Default model (next session) | Sonnet 4.6 (1M context) — user switched away from Opus 4.7 |
+| `/assess` REPORT | `docs/assessment/REPORT.md` + `history/2026-06-01-post-wave-9-REPORT.md` — **CURRENT** (post Issue 110 fixes applied) |
+| Assessment verdict | CONDITIONAL — 0 BLOCKER / 0 SEV1 / 32 SEV2 / ~30 cleanup; 4/11 modules clean |
 | Memory dir | `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |
 | Secret names (NEVER log values) | `STRIPE_SECRET_KEY`, `JWT_SECRET_KEY`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `GHCR_TOKEN`, `DEEPGRAM_API_KEY` |
+| pip-audit ignores | `pyproject.toml [tool.pip-audit].ignore-vulns` — 6 entries with mandatory reason comments |
 | API-key bearer header format | `Authorization: Bearer ack_<32 url-safe chars>` (companion-app upload to `/clips/ingest`) |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS (next session: read before acting)
 
-- **Pushing to `main` auto-deploys.** Self-hosted runner picks up Docker publish, then workflow_run triggers Deploy. No staging gate. Each push = a production cut.
-- **CI / Quality / Integration on hosted runners still fast-fail.** That's intentional (Issue 101) — they're informational, not deploy-gating. If you want them green, EITHER fix GitHub billing OR move them to self-hosted (be careful about VM CPU pressure).
-- **Runner is the single point of failure for deploys.** If the VM is down, deploys queue. Fallback: `./scripts/deploy.sh` with `GHCR_TOKEN` set. Documented in `scripts/deploy.sh`.
-- **`/docs` is exempted from RLS lookups via `creators` table exemption** — auth dependency resolves Creator before the GUC is set. Don't touch this.
-- **`AsyncMock(return_value=_FakeSession())` does NOT work for `AdminSessionLocal()` patching.** Use `MagicMock`. (Logged in `docs/OFF_COURSE_BUGS.md`.)
-- **slowapi TestClient rate-limit collision trap.** Per-creator UUID cookies sidestep it. (Pattern documented in `OFF_COURSE_BUGS.md` 2026-05-31 row.)
+- **Pushing to `main` auto-deploys.** Self-hosted runner picks up Docker publish, then
+  `workflow_run` triggers Deploy. No staging gate. Each push = a production cut.
+- **CI / Quality / Integration on hosted runners still fast-fail.** Intentional (Issue 101) —
+  informational only; don't gate deploys. The Quality Gates workflow DID pass on this session's
+  push; CI + Integration fail (billing block) as expected.
+- **LOCAL_MEDIA_DIR validator** was relaxed in the Issue 110 hotfix: only fails fast in
+  production when `STORAGE_BACKEND=local`. STORAGE_BACKEND=r2 (prod) skips the check because the
+  path is dead config. Do NOT revert this.
+- **`tests/_helpers.py::override_current_creator`** must be used instead of
+  `lambda: creator` in ALL test dependency overrides for `get_current_creator`. The lambda
+  bypasses `request.state.creator_id` stash → slowapi `creator_key` falls back to IP →
+  all tests share the "testclient" rate-limit bucket → 429s. See `tests/_helpers.py` for usage.
+- **`routers/_schemas.py::TaskQueuedOut`** is the base for `BuildQueuedOut`,
+  `CatalogSyncQueuedOut`, `RenderQueuedOut`. `BriefQueuedOut` stays standalone (`task_id:
+  str | None` is LSP-incompatible with the base's `str` — improvement-brief debounce can return no
+  task). Don't subclass it.
+- **Runner is the single point of failure for deploys.** Fallback: `./scripts/deploy.sh`
+  with `GHCR_TOKEN` set.
+- **`/docs` is exempted from RLS lookups** — auth dependency resolves Creator before the GUC
+  is set. Don't touch this.
 - **YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS=30** is a ToS upper bound. Do NOT increase.
-- **Pre-existing `Event loop is closed` warnings** in `tests/test_progress.py` are SEV2 carry-forward, not a regression.
-- **Repo was renamed** `Youtube-Video-AI-Editor → creatorclip` — old name returns 404 from `gh api`; runner registration tokens are repo-scoped.
-- **`docs/assessment/REPORT.md` is stale** (post-Wave-4). Anyone saying "we're production-ready" based on it is wrong by 5 issues + a design-system rollout. Re-run `/assess` before that claim.
+- **Pre-existing `Event loop is closed` warnings** in `tests/test_progress.py` are SEV2
+  carry-forward, not a regression.
+- **Repo was renamed** `Youtube-Video-AI-Editor → creatorclip` — old name returns 404 from
+  `gh api`; runner registration tokens are repo-scoped.
+- **R2 `source/` lifecycle rule** (7-day TTL) is a pending user-side action in the R2 dashboard —
+  not yet configured; tracked as an AC in Issue 110 docs.
+- **`docs/assessment/REPORT.md` is CURRENT** (post-Wave-9 + Issue 110 close). Anyone
+  claiming "production ready" based on it should note the CONDITIONAL verdict gates on Locust.
 - **OAuth tokens are Fernet-encrypted at rest.** Read via `decrypt()`; never log.
-- **Per-creator isolation on every query.** Missing `WHERE creator_id = ...` is a BLOCKER. Wave 8's new endpoints add 16 explicit filter sites; preserve them.
-- **Bearer-auth surface (`/clips/ingest`) and session-cookie surface are separate.** Don't conflate `get_current_creator` and `get_current_creator_via_api_key`. The session dependency reads cookies; the bearer dependency reads the Authorization header and stamps `last_used_at`.
+- **Per-creator isolation on every query.** Missing `WHERE creator_id = ...` is a BLOCKER.
+- **Bearer-auth surface (`/clips/ingest`) and session-cookie surface are separate.** Don't
+  conflate `get_current_creator` and `get_current_creator_via_api_key`. Both now stash
+  `request.state.creator_id` — this is required for `creator_key` to work on both surfaces.
+- **`_ingest_async` orphan-mp4 fix**: capture + delete is best-effort. If the worker crashes
+  between commit and `adelete_file`, the mp4 leaks until the R2 lifecycle rule sweeps it.
+  Do NOT add a retry loop around `adelete_file` — the task would then retry a delete that already
+  succeeded on the prior attempt (idempotent on key-not-found, but noisy).
 
 ---
 
 ## POINTERS
 
 - `docs/SOT.md` — current stack, file structure, schema
-- `docs/PROJECT_STATE.md` — every issue's status + session log (Wave 8 closed at the top)
-- `docs/issues.md` — issue backlog (Issues 96 + 97 are the next big ones)
-- `docs/DECISIONS.md` — deviation log (Issue 99 design direction, Issue 95 architecture, Issue 101 self-hosted runner — all 2026-05-31)
+- `docs/PROJECT_STATE.md` — every issue's status + session log (Wave 9 + Issue 110 at the top)
+- `docs/issues.md` — issue backlog (Issues 109/111/112 are the natural next items)
+- `docs/DECISIONS.md` — deviation log (Issue 102 joblib/to_thread, Issue 106 JWT leeway,
+  Issue 110 SKIP LOCKED + capture-then-delete-after-commit — all 2026-06-01)
 - `docs/COMPLIANCE.md` — YouTube ToS, retention, privacy posture
-- `docs/CLIPPING_PRINCIPLES.md` — named principles the engine cites
-- `docs/OFF_COURSE_BUGS.md` — incidental defects (linked-videos-disappear is current)
-- `docs/assessment/REPORT.md` — last `/assess` verdict (STALE)
-- `walkthrough.md` (repo root) — user-facing tutorial document explaining how AutoClip works
-- `static/walkthrough.html` — in-app first-run 5-panel explainer (Issue 100)
+- `docs/CLIPPING_PRINCIPLES.md` — named principles registry
+- `docs/OFF_COURSE_BUGS.md` — incidental defect log
+- `docs/assessment/REPORT.md` — current `/assess` verdict (post-Wave-9 + Issue 110, CURRENT)
+- `docs/assessment/history/2026-06-01-post-wave-9-REPORT.md` — immutable snapshot
+- `tests/_helpers.py` — `override_current_creator(creator)` — use this in all test dep overrides
+- `routers/_schemas.py` — `TaskQueuedOut` base for 3 of 4 `*QueuedOut` schemas
 - `CLAUDE.md` — project rules; the One Rule is non-negotiable
 - Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md`
