@@ -74,6 +74,31 @@ def test_optimal_gap_hours_none_on_empty():
     assert optimal_gap_hours([]) is None
 
 
+# ── Issue 103: optimal_gap_hours bounds guard ─────────────────────────────────
+
+
+def test_optimal_gap_hours_skips_malformed_rows():
+    """Rows with out-of-bounds day_of_week/hour are silently filtered out.
+    The gap must be computed from valid rows only. (Issue 103 fix #4)
+    """
+    valid_a = _activity(0, 8, 0.9)   # Sunday 08:00 → slot 8
+    valid_b = _activity(0, 12, 0.95)  # Sunday 12:00 → slot 12
+    # Malformed row: day_of_week=7 is out of range (valid: 0–6).
+    bad = _activity(7, 5, 1.0)
+
+    gap = optimal_gap_hours([valid_a, valid_b, bad])
+
+    # Two valid rows → top slots [8, 12] → single gap of 4 hours.
+    assert gap == pytest.approx(4.0)
+
+
+def test_optimal_gap_hours_returns_none_when_only_malformed():
+    """If all rows are malformed, return None rather than erroring."""
+    bad1 = _activity(7, 0, 0.9)
+    bad2 = _activity(0, 24, 0.8)  # hour=24 is out of range
+    assert optimal_gap_hours([bad1, bad2]) is None
+
+
 # ── generate_improvement_brief ─────────────────────────────────────────────────
 
 

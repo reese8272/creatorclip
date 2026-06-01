@@ -51,7 +51,7 @@ def _guard_audio_size(audio_path: str | Path) -> None:
     try:
         size_mb = Path(audio_path).stat().st_size / (1024 * 1024)
     except OSError:
-        return
+        raise FileNotFoundError(f"audio not found: {audio_path}")
     if size_mb > settings.TRANSCRIPTION_MAX_MB:
         raise ValueError(
             f"Audio file {audio_path} is {size_mb:.0f} MB, over the "
@@ -111,22 +111,31 @@ def _transcribe_deepgram(audio_path: str) -> dict:
 def _normalize_deepgram(raw: dict) -> dict:
     utterances = (raw.get("results") or {}).get("utterances") or []
     if utterances:
-        segments = [
-            {
-                "start": u["start"],
-                "end": u["end"],
-                "text": u["transcript"],
-                "words": [
-                    {
-                        "word": w.get("punctuated_word", w.get("word", "")),
-                        "start": w["start"],
-                        "end": w["end"],
-                    }
-                    for w in u.get("words", [])
-                ],
-            }
-            for u in utterances
-        ]
+        segments = []
+        for u in utterances:
+            # Skip utterances missing start/end — a partial Deepgram response must not
+            # KeyError the entire job. Matches WhisperX and AssemblyAI normalizer pattern.
+            u_start = u.get("start")
+            u_end = u.get("end")
+            if u_start is None or u_end is None:
+                continue
+            words = [
+                {
+                    "word": w.get("punctuated_word", w.get("word", "")),
+                    "start": w.get("start"),
+                    "end": w.get("end"),
+                }
+                for w in u.get("words", [])
+                if w.get("start") is not None and w.get("end") is not None
+            ]
+            segments.append(
+                {
+                    "start": u_start,
+                    "end": u_end,
+                    "text": u.get("transcript", ""),
+                    "words": words,
+                }
+            )
     else:
         channels = (raw.get("results") or {}).get("channels") or [{}]
         alts = channels[0].get("alternatives") or [{}]
@@ -134,10 +143,11 @@ def _normalize_deepgram(raw: dict) -> dict:
         words = [
             {
                 "word": w.get("punctuated_word", w.get("word", "")),
-                "start": w["start"],
-                "end": w["end"],
+                "start": w.get("start"),
+                "end": w.get("end"),
             }
             for w in alt.get("words") or []
+            if w.get("start") is not None and w.get("end") is not None
         ]
         segments = (
             [

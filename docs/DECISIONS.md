@@ -5,6 +5,33 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-05-31 — Issue 103: six Wave-9 carry-forward fixes
+
+### What was decided
+
+**Fix 1 (Redis fail-open):** `youtube/oauth.py::get_valid_access_token` now catches `redis.asyncio.RedisError` on lock acquisition and proceeds without the lock rather than 500-ing. `acquired = True` unconditionally after the `except`. The existing `_do_token_refresh` call and Lua release-lock `finally:` block run normally; since the lock was never acquired the Lua compare-and-delete returns 0 (no-op) harmlessly.
+
+**Fix 2 (Deepgram normalizer safe `.get()`):** `ingestion/transcribe.py::_normalize_deepgram` replaced hard-keyed `u["start"]`, `u["end"]`, `u["transcript"]` with `.get()` calls; utterances and words missing `start`/`end` are skipped rather than `KeyError`-ing. Matches the WhisperX and AssemblyAI normalizer pattern.
+
+**Fix 3 (`_guard_audio_size` OSError → FileNotFoundError):** Previously the `except OSError:` branch silently returned. Now raises `FileNotFoundError` with the path. The docstring comment "a missing/unreadable file is left for the backend to surface" is removed; the new behavior is that a missing file is surfaced immediately as a terminal error. Three pre-existing routing tests updated to pass a real `tmp_path` file.
+
+**Fix 4 (`optimal_gap_hours` bounds guard):** Mirrors the `best_upload_windows` fix from Issue 75d. Rows with `day_of_week` outside 0–6 or `hour` outside 0–23 are filtered before sorting and arithmetic. Returns `None` if fewer than 2 valid rows remain.
+
+**Fix 5 (`dna_match` collinearity fix):** `clip_engine/scoring.py` now asks Claude for a separate `dna_score` field (DNA-only fit) in addition to the composite `score`. The `dna_match` column is set to `dna_score` (not `score`) on the DNA path, and `None` on the cold-start path. `clip_engine/ranking.py` uses `c.get("dna_match")` instead of `c.get("score")`. This eliminates the collinearity where the preference feature vector's `dna_match` was seeded with the composite signal it was trying to predict.
+
+**Fix 6 (IoU NMS dedup in `clip_engine/candidates.py`):** A greedy NMS pass runs after candidate construction in prominence order. Any candidate with IoU > 0.5 against an already-kept candidate is suppressed. Threshold 0.5 is canonical (SumMe / TVSum / standard object-detection). The `_prominence` internal field is stripped before returning.
+
+### Why
+Six recurring SEV2s carried forward from assessments — all confirmed by industry-standard research in the Phase 1 brief.
+
+### Source / evidence
+Phase 1 brief (approved by user 2026-05-31). AWS/Netflix/Shopify circuit-breaker pattern for fix #1. SumMe / TVSum NMS threshold for fix #6.
+
+### Date
+2026-05-31
+
+---
+
 ## 2026-05-31 — Issue 102: keep joblib NumpyUnpickler module-global swap; offload via `asyncio.to_thread` instead
 
 ### What was decided

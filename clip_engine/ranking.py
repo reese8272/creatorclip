@@ -136,7 +136,10 @@ async def generate_and_rank_clips(
             end_s=c["end_s"],
             peak_s=c["peak_s"],
             score=c.get("score"),
-            dna_match=c.get("score"),  # seed; refined when preference model is trained
+            # dna_match is the raw DNA-only fit from Claude, NOT the composite score —
+            # seeding it with the composite would make it collinear with its own
+            # label-generating signal in the preference feature vector. (Issue 103 #5)
+            dna_match=c.get("dna_match"),
             signals_jsonb={
                 "features": c.get("features", {}),
                 "principle": c.get("principle", ""),

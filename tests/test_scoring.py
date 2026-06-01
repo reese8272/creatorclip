@@ -261,6 +261,52 @@ def test_rank_candidates_assigns_all_ranks():
 # ── Issue 55: score clamping for out-of-range Claude scores ───────────────────
 
 
+# ── Issue 103: dna_match ≠ composite score (collinearity fix) ────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_separates_dna_match_from_composite():
+    """DNA path: dna_match must equal the raw dna_score field from Claude, NOT the
+    composite score — seeding dna_match with the composite would make it collinear
+    with its own label-generating signal in the preference feature vector. (Issue 103 #5)
+    """
+    candidates = [_candidate(setup=10.0, peak=60.0, end=80.0)]
+    # Claude returns distinct dna_score and composite score.
+    claude_scores = [
+        {
+            "index": 0,
+            "dna_score": 0.72,
+            "score": 0.85,
+            "principle": "Hook in the first 3 seconds",
+            "reasoning": "Strong hook.",
+        }
+    ]
+    mock_resp = _mock_claude_response(claude_scores)
+
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        result = await score_candidates(candidates, _timeline(), dna_brief="DNA brief")
+
+    assert result[0]["dna_match"] == pytest.approx(0.72)
+    assert result[0]["score"] == pytest.approx(0.85)
+    # They must be different — if equal the fix did not apply.
+    assert result[0]["dna_match"] != result[0]["score"]
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_cold_start_dna_match_is_none():
+    """Cold-start path (no dna_brief): dna_match must be None so the preference
+    feature vector zero-defaults it rather than using the composite signal score
+    as a proxy. (Issue 103 #5)
+    """
+    candidates = [_candidate()]
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
+        result = await score_candidates(candidates, _timeline(), dna_brief=None)
+
+    mock_client.messages.create.assert_not_called()
+    assert result[0]["dna_match"] is None
+
+
 @pytest.mark.asyncio
 async def test_score_candidates_clamps_anthropic_scores_outside_unit_interval():
     """Scores returned by Claude outside [0, 1] must be clamped before returning."""

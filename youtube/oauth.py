@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
+import redis.asyncio as aioredis
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -287,7 +288,20 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
     # A unique value lets the Lua script confirm we still own the lock before deleting it.
     lock_token = str(uuid.uuid4())
 
-    acquired: bool = await redis_client.set(lock_key, lock_token, nx=True, ex=_LOCK_TTL_S)
+    try:
+        acquired: bool = await redis_client.set(lock_key, lock_token, nx=True, ex=_LOCK_TTL_S)
+    except aioredis.RedisError as exc:
+        # Redis is unreachable — fail open so a broker outage does not 500 the token-refresh
+        # path. Google's refresh endpoint is idempotent and the DB write is idempotent on
+        # creator_id, so a lockless refresh is safe. (AWS/Netflix/Shopify circuit-breaker
+        # convention for opportunistic locks guarding idempotent backends.)
+        logger.warning(
+            "Redis unavailable during refresh-lock acquisition for creator %s (%s) — "
+            "proceeding without lock",
+            creator_id,
+            exc,
+        )
+        acquired = True
 
     if acquired:
         try:

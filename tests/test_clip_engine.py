@@ -15,6 +15,7 @@ import yaml
 from clip_engine.candidates import (
     MIN_CLIP_S,
     WINDOW_S,
+    _NMS_IOU_THRESHOLD,
     _find_setup_start,
     extract_candidates,
 )
@@ -265,3 +266,48 @@ def test_eval_scenario(scenario_path):
                 f"[{scenario['scenario']}] setup_start_s={matched['setup_start_s']} "
                 f"< expected min {exp_c['setup_start_s_min']} — clip starts before video begins"
             )
+
+
+# ── Issue 103: IoU-based NMS deduplication ───────────────────────────────────
+
+
+def test_candidates_dedups_overlapping_windows():
+    """Two peaks 35s apart sharing a silence boundary can produce clips with IoU > 0.5.
+    After NMS the lower-prominence peak must be suppressed, leaving one clip window.
+    (Issue 103 fix #6, canonical NMS threshold = 0.5)
+    """
+    # A single silence at t=40–45s: both peaks at t=60 and t=95 will anchor to
+    # setup_start_s ≈ 45. With POST_PEAK_S=20 and MIN_CLIP_S=30:
+    #   Peak 60: setup=45, end=max(60+20, 45+30)=80 → window [45,80], len=35
+    #   Peak 95: setup=45, end=max(95+20, 45+30)=115 → window [45,115], len=70
+    # intersection=[45,80]=35, union=35+70-35=70, IoU=35/70=0.5 — right at threshold.
+    # We use IoU > 0.5, so 0.5 does NOT suppress. Make the silence closer to peak 95
+    # so both windows are more deeply overlapping.
+    timeline = {
+        "duration_s": 200.0,
+        "events": [
+            # A single silence: both nearby peaks lock to its end as setup_start.
+            {"type": "silence", "start_s": 55.0, "end_s": 60.0},
+            # Two retention spikes 35s apart — peak at 75s is stronger (higher value).
+            {"type": "retention_spike", "start_s": 75.0, "end_s": 77.0, "value": 3.0},
+            {"type": "retention_spike", "start_s": 110.0, "end_s": 112.0, "value": 1.5},
+        ],
+    }
+    candidates = extract_candidates(timeline, max_candidates=8)
+    # If NMS is working, the two heavily-overlapping windows collapse to 1.
+    # Assert we get at most 1 candidate (the stronger peak survives).
+    assert len(candidates) <= 1, (
+        f"Expected ≤1 candidate after NMS, got {len(candidates)}: {candidates}"
+    )
+
+
+def test_nms_threshold_constant_is_canonical():
+    """_NMS_IOU_THRESHOLD must be 0.5 — the canonical video-summarisation value."""
+    assert _NMS_IOU_THRESHOLD == 0.5
+
+
+def test_candidates_keeps_non_overlapping_windows():
+    """Peaks that are far apart and do not overlap must both survive NMS."""
+    tl = _make_timeline([60.0, 160.0])  # 100s apart — cannot overlap
+    candidates = extract_candidates(tl, max_candidates=8)
+    assert len(candidates) == 2

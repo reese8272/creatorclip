@@ -51,8 +51,20 @@ def optimal_gap_hours(activity_rows: list) -> float | None:
     """
     if len(activity_rows) < 2:
         return None
-    top = sorted(activity_rows, key=lambda r: r.activity_index, reverse=True)[:3]
-    times = sorted(r.day_of_week * 24 + r.hour for r in top)
+
+    # Validate and coerce before any arithmetic — mirrors the hardening applied to
+    # best_upload_windows in Issue 75d. A single malformed row must not raise
+    # AttributeError or produce a nonsense gap calculation.
+    valid = [
+        (int(r.day_of_week), int(r.hour), float(r.activity_index))
+        for r in activity_rows
+        if 0 <= int(r.day_of_week) <= 6 and 0 <= int(r.hour) <= 23
+    ]
+    if len(valid) < 2:
+        return None
+
+    top = sorted(valid, key=lambda t: t[2], reverse=True)[:3]
+    times = sorted(dow * 24 + hour for dow, hour, _ in top)
     if len(times) < 2:
         return None
     gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]

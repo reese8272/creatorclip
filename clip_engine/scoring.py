@@ -61,7 +61,7 @@ Candidates:
 {candidates_json}
 
 Return ONLY a valid JSON array — no prose, no markdown fences. Each element:
-{{"index": <int>, "score": <float 0-1>, "principle": "<exact principle name>", "reasoning": "<one sentence>"}}
+{{"index": <int>, "dna_score": <float 0-1 — DNA-only fit, before any signal blending>, "score": <float 0-1 — final composite>, "principle": "<exact principle name>", "reasoning": "<one sentence>"}}
 """
 
 
@@ -163,6 +163,10 @@ async def score_candidates(
     if not dna_brief:
         for c in candidates:
             c["score"] = _signal_score(c["features"])
+            # No DNA profile — dna_match stays None so the preference feature vector
+            # zero-defaults it (preference/features.py:24) rather than seeding it with
+            # a collinear composite signal. (Issue 103 fix #5)
+            c["dna_match"] = None
             c["principle"] = "Retention curve is ground truth"
             c["reasoning"] = "Scored on signal density — DNA profile not available yet."
         return candidates
@@ -230,11 +234,18 @@ async def score_candidates(
     for i, c in enumerate(candidates):
         hit = score_map.get(i)
         if hit:
+            # Persist the raw DNA-only fit separately from the composite score so the
+            # preference feature vector is not seeded with its own label-generating signal
+            # (collinearity fix — Issue 103 #5). Claude returns both fields; fall back to
+            # the composite score if the model omits dna_score (graceful degradation).
+            raw_dna = hit.get("dna_score", hit.get("score", 0.5))
+            c["dna_match"] = min(1.0, max(0.0, float(raw_dna)))
             c["score"] = min(1.0, max(0.0, float(hit.get("score", 0.5))))
             c["principle"] = hit.get("principle", "Audience-fit over generic virality")
             c["reasoning"] = hit.get("reasoning", "")
         else:
             c["score"] = _signal_score(c["features"])
+            c["dna_match"] = None
             c["principle"] = "Retention curve is ground truth"
             c["reasoning"] = "Fallback: signal-only score"
 

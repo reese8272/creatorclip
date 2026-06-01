@@ -114,28 +114,35 @@ def test_normalize_whisperx_empty():
 # ── transcribe_audio routing ──────────────────────────────────────────────────
 
 
-def test_transcribe_audio_routes_to_deepgram(monkeypatch):
+def test_transcribe_audio_routes_to_deepgram(tmp_path, monkeypatch):
+    # Use a real file so _guard_audio_size succeeds (Issue 103 fix #3 now raises on missing files).
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"RIFFxxxx")
     monkeypatch.setattr("config.settings.TRANSCRIPTION_BACKEND", "deepgram")
     with patch("ingestion.transcribe._transcribe_deepgram") as mock_dg:
         mock_dg.return_value = {"source": "deepgram", "segments": []}
-        result = transcribe_audio("/tmp/audio.wav")
-    mock_dg.assert_called_once_with("/tmp/audio.wav")
+        result = transcribe_audio(str(wav))
+    mock_dg.assert_called_once_with(str(wav))
     assert result["source"] == "deepgram"
 
 
-def test_transcribe_audio_routes_to_whisperx(monkeypatch):
+def test_transcribe_audio_routes_to_whisperx(tmp_path, monkeypatch):
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"RIFFxxxx")
     monkeypatch.setattr("config.settings.TRANSCRIPTION_BACKEND", "whisperx")
     with patch("ingestion.transcribe._transcribe_whisperx") as mock_wx:
         mock_wx.return_value = {"source": "whisperx", "segments": []}
-        transcribe_audio("/tmp/audio.wav")
+        transcribe_audio(str(wav))
     mock_wx.assert_called_once()
 
 
-def test_transcribe_audio_routes_to_assemblyai(monkeypatch):
+def test_transcribe_audio_routes_to_assemblyai(tmp_path, monkeypatch):
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"RIFFxxxx")
     monkeypatch.setattr("config.settings.TRANSCRIPTION_BACKEND", "assemblyai")
     with patch("ingestion.transcribe._transcribe_assemblyai") as mock_ai:
         mock_ai.return_value = {"source": "assemblyai", "segments": []}
-        transcribe_audio("/tmp/audio.wav")
+        transcribe_audio(str(wav))
     mock_ai.assert_called_once()
 
 
@@ -281,3 +288,80 @@ def test_extract_audio_wav_timeout_raises_runtimeerror():
         pytest.raises(RuntimeError, match="timed out"),
     ):
         extract_audio_wav("/tmp/in.mp4", "/tmp/out.wav")
+
+
+# ── Issue 103: _guard_audio_size OSError → FileNotFoundError ─────────────────
+
+
+def test_guard_audio_size_raises_filenotfound_on_missing(tmp_path):
+    """_guard_audio_size must raise FileNotFoundError for non-existent paths so the
+    caller's Celery retry/refund pathway sees a clear terminal error, not a silent
+    no-op that wastes the per-job budget. (Issue 103 fix #3)
+    """
+    from ingestion.transcribe import _guard_audio_size
+
+    non_existent = str(tmp_path / "does_not_exist.wav")
+    with pytest.raises(FileNotFoundError, match="audio not found"):
+        _guard_audio_size(non_existent)
+
+
+# ── Issue 103: Deepgram normalizer skips missing timestamps ──────────────────
+
+
+def test_deepgram_normalizer_skips_missing_timestamps():
+    """_normalize_deepgram must skip utterances missing start/end rather than KeyError.
+    One valid + one timestamp-missing utterance: only the valid one must survive.
+    (Issue 103 fix #2)
+    """
+    raw = {
+        "results": {
+            "utterances": [
+                {
+                    # Valid utterance — has all fields.
+                    "start": 0.0,
+                    "end": 2.0,
+                    "transcript": "Hello world",
+                    "words": [
+                        {"punctuated_word": "Hello", "start": 0.0, "end": 0.5},
+                        {"punctuated_word": "world", "start": 0.6, "end": 1.0},
+                    ],
+                },
+                {
+                    # Malformed utterance — missing start and end.
+                    "transcript": "broken utterance",
+                    "words": [{"punctuated_word": "broken", "start": 3.0, "end": 3.5}],
+                },
+            ]
+        }
+    }
+    result = _normalize_deepgram(raw)
+    # Only the valid utterance survives.
+    assert len(result["segments"]) == 1
+    assert result["segments"][0]["text"] == "Hello world"
+
+
+def test_deepgram_normalizer_skips_words_missing_timestamps():
+    """Words inside a valid utterance that are missing start/end are also skipped."""
+    raw = {
+        "results": {
+            "utterances": [
+                {
+                    "start": 0.0,
+                    "end": 3.0,
+                    "transcript": "Good and bad",
+                    "words": [
+                        {"punctuated_word": "Good", "start": 0.0, "end": 0.5},
+                        # missing timestamps on this word
+                        {"punctuated_word": "and"},
+                        {"punctuated_word": "bad", "start": 1.0, "end": 1.5},
+                    ],
+                }
+            ]
+        }
+    }
+    result = _normalize_deepgram(raw)
+    assert len(result["segments"]) == 1
+    # Only the two words with timestamps are present.
+    assert len(result["segments"][0]["words"]) == 2
+    assert result["segments"][0]["words"][0]["word"] == "Good"
+    assert result["segments"][0]["words"][1]["word"] == "bad"

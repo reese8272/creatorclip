@@ -345,3 +345,60 @@ def test_cross_creator_session_isolation(client, mocker):
         me = client.get("/auth/me", cookies={SESSION_COOKIE: token})
         assert me.status_code == 200
         assert me.json()["channel_id"] == channel  # only their own channel
+
+
+# ── Issue 103: Redis fail-open on refresh-lock acquisition ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_oauth_get_valid_access_token_fails_open_on_redis_error(monkeypatch):
+    """When Redis raises RedisError during lock acquisition, get_valid_access_token
+    must NOT propagate a 500 — it logs a warning and proceeds with the refresh as if
+    it acquired the lock (fail-open / circuit-breaker pattern for idempotent backends).
+    """
+    import uuid
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    import redis.asyncio as aioredis
+
+    from youtube.oauth import get_valid_access_token
+
+    creator_id = uuid.uuid4()
+
+    # Token row that is near-expiry so the refresh path is triggered.
+    mock_row = MagicMock()
+    mock_row.expires_at = datetime.now(UTC) + timedelta(minutes=1)  # < 5 min → refresh
+    mock_row.access_token_encrypted = b"encrypted"
+    mock_row.refresh_token_encrypted = b"encrypted_refresh"
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_row
+
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    # Redis.set raises ConnectionError (a subclass of RedisError).
+    # Redis.eval is the Lua compare-and-delete that runs in the finally block;
+    # it must also be an AsyncMock so the await does not TypeError.
+    mock_redis = MagicMock()
+    mock_redis.set = AsyncMock(side_effect=aioredis.ConnectionError("broker down"))
+    mock_redis.eval = AsyncMock(return_value=0)  # returns 0 when lock not owned (no-op)
+
+    # _do_token_refresh succeeds — returns a fresh access token.
+    new_token = "fresh_access_token"
+    monkeypatch.setattr(
+        "youtube.oauth.get_redis_client",
+        lambda: mock_redis,
+    )
+    monkeypatch.setattr(
+        "youtube.oauth._do_token_refresh",
+        AsyncMock(return_value=new_token),
+    )
+
+    result = await get_valid_access_token(creator_id, mock_session)
+
+    # Refresh must succeed despite the Redis outage.
+    assert result == new_token
+    # Redis.set was called — the error came from the attempt, not a short-circuit.
+    mock_redis.set.assert_called_once()
