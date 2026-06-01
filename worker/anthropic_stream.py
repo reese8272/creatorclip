@@ -40,8 +40,8 @@ def stream_and_emit(
     model: str,
     max_tokens: int,
     system: Any,
-    messages: list,
-    tools: list | None = None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Run a streamed Anthropic call, forwarding deltas as progress events.
 

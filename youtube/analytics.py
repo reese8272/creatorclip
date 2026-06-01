@@ -149,6 +149,15 @@ async def fetch_retention_curve(
     ]
 
 
+# YouTube's public Analytics API doesn't expose hour-of-day breakdowns —
+# only day-of-week views. Audience-activity rows therefore carry a fixed
+# sentinel hour (12, midday) so the schema stays consistent for downstream
+# `upload_intel` consumers; replace with real hourly data when YT exposes
+# it or when we layer in our own hour-level views via the Data API. Docs:
+# https://developers.google.com/youtube/analytics/dimsmets/dims (Issue 108)
+_HOUR_UNAVAILABLE_SENTINEL = 12
+
+
 async def fetch_audience_activity(access_token: str, channel_id: str) -> list[dict]:
     """Aggregate per-day-of-week activity index. Hour-level data not in public API."""
     params = {
@@ -175,7 +184,11 @@ async def fetch_audience_activity(access_token: str, channel_id: str) -> list[di
 
     max_views = max(day_totals.values()) or 1.0
     return [
-        {"day_of_week": dow, "hour": 12, "activity_index": views / max_views}
+        {
+            "day_of_week": dow,
+            "hour": _HOUR_UNAVAILABLE_SENTINEL,
+            "activity_index": views / max_views,
+        }
         for dow, views in day_totals.items()
     ]
 

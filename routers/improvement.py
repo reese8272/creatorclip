@@ -15,12 +15,14 @@ router = APIRouter(prefix="/creators", tags=["improvement"])
 logger = logging.getLogger(__name__)
 
 
+# NOTE: deliberately NOT subclassed from TaskQueuedOut. The debounce path
+# returns no task at all when a brief is already in flight, so `task_id`
+# must be ``str | None`` — incompatible with TaskQueuedOut's `str`. The
+# duplication is the lesser evil vs an LSP violation. (Issue 108)
 class BriefQueuedOut(BaseModel):
     status: str
     task_id: str | None
-    stream_url: str | None = (
-        None  # Issue 92: SSE endpoint for live progress (None on debounce-collapse)
-    )
+    stream_url: str | None = None  # Issue 92: SSE endpoint; None on debounce-collapse
 
 
 class ImprovementBriefOut(BaseModel):

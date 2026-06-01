@@ -22,6 +22,7 @@ Issue 106 hardening:
 
 import logging
 import uuid
+from typing import Any
 
 import stripe
 
@@ -66,7 +67,7 @@ def create_checkout_session(
         raise ValueError(f"intent_id must be a v4 UUID: {intent_id!r}") from exc
 
     per_min = pack.price_cents / pack.minutes
-    params: dict = {
+    params: dict[str, Any] = {
         "mode": "payment",
         "line_items": [
             {

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -8,6 +10,8 @@ from db import get_session
 from limiter import creator_key, limiter
 from models import AudienceActivity, Creator
 from upload_intel.timing import best_upload_windows, optimal_gap_hours
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/creators", tags=["upload-intel"])
 

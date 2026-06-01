@@ -16,6 +16,7 @@ from config import settings
 from db import get_session
 from limiter import creator_key, limiter
 from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcript, Video, VideoKind
+from routers._schemas import TaskQueuedOut
 from worker.storage import upload_file
 from youtube.data_api import classify_video_kind
 from youtube.ingest import probe_duration_s
@@ -44,12 +45,8 @@ class ClipListOut(BaseModel):
     clips: list[ClipOut]
 
 
-class RenderQueuedOut(BaseModel):
-    task_id: str
-    status: str
-    stream_url: str | None = (
-        None  # Issue 92: SSE endpoint for render progress. Wave-5 Fix 1 — Optional: None on Redis aset_owner failure.
-    )
+class RenderQueuedOut(TaskQueuedOut):
+    """202 Accepted response for POST /clips/{id}/render (Issue 92)."""
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -170,9 +167,8 @@ async def render_clip(
     try:
         await progress.aset_owner(str(clip_id), str(creator.id))
     except _redis_pkg.RedisError as exc:
-        import logging as _logging
 
-        _logging.getLogger(__name__).warning(
+        logger.warning(
             "render aset_owner failed (Redis down?) clip_id=%s err=%s",
             clip_id,
             exc,
@@ -206,6 +202,13 @@ def _obs_clip_youtube_id() -> str:
     A 16-char ``obs-<12-hex>`` synthetic ID is structurally distinguishable
     from a real YT ID (different length + prefix) and collision-free by
     construction. Fits inside the schema's ``String(32)``.
+
+    Entropy: 12 hex chars = 48 bits ≈ 2^48. Birthday-bound 50% collision
+    probability at ~16M rows; uniqueness is per-creator (schema constraint
+    UNIQUE(creator_id, youtube_video_id)) so the real ceiling is per-creator
+    upload count — astronomically safe at the PRD's 10k-clips-per-creator
+    target. If a future migration drops the per-creator scope, widen to 16
+    hex chars (still inside ``String(32)``). (Issue 108)
     """
     return f"obs-{uuid.uuid4().hex[:12]}"
 

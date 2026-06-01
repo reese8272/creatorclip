@@ -18,7 +18,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+_ANTHROPIC: Anthropic = Anthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(60.0, connect=10.0),
     max_retries=2,

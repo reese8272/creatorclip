@@ -37,7 +37,7 @@ SESSION_COOKIE = "cc_session"
 _JWT_LEEWAY_S = 60
 
 
-def _creator_key(request) -> str:
+def _creator_key(request: Request) -> str:
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         try:

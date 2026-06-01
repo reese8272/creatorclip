@@ -5,6 +5,7 @@ Store DNA pattern embeddings via Voyage AI → pgvector.
 import asyncio
 import logging
 import uuid
+from typing import Any
 
 import voyageai
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,11 +29,15 @@ def _voyage() -> voyageai.Client:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-def _embed(texts: list[str], model: str, input_type: str):
+def _embed(texts: list[str], model: str, input_type: str) -> Any:
+    # Voyage SDK returns a result object with `.embeddings: list[list[float]]`
+    # — typed loosely as Any here so a Voyage SDK rename surfaces at the
+    # call site (`.embeddings`) instead of forcing every wrapper to track
+    # the SDK's internal class name. (Issue 108)
     return _voyage().embed(texts, model=model, input_type=input_type)
 
 
-async def _aembed(texts: list[str], model: str, input_type: str):
+async def _aembed(texts: list[str], model: str, input_type: str) -> Any:
     """Async wrapper — Voyage's Python SDK is sync and tenacity sleeps between
     retries, so offload to a thread so neither blocks the worker's singleton
     event loop. (Issue 38 W1 + Issue 68)

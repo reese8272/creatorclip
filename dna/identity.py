@@ -15,7 +15,6 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-import sqlalchemy as sa
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -258,5 +257,3 @@ __all__ = [
 ]
 
 
-# Silence unused-import warnings for sa (kept for future column-level helpers).
-_ = sa

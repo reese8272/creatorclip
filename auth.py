@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, Request
@@ -24,7 +25,7 @@ def create_session_token(creator_id: uuid.UUID) -> str:
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=_ALGORITHM)
 
 
-def decode_session_token(token: str) -> dict:
+def decode_session_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[_ALGORITHM])
 
 

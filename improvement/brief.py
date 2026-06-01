@@ -13,6 +13,7 @@ The honesty disclaimer is always appended by Python — never left to the LLM.
 
 import json
 import logging
+from collections.abc import Mapping
 
 import httpx
 from anthropic import Anthropic
@@ -52,7 +53,18 @@ Synthesise both into 3–5 specific, actionable improvements. For each:
 Keep total length under 600 words. Phrase predictions as likelihood estimates, not guarantees."""
 
 
-def _build_request(channel_title: str, analytics: dict, dna_brief: str | None) -> tuple:
+# DNA brief is sliced to this many chars before being folded into the
+# Anthropic prompt so the system block stays under the prompt-token cap
+# (and would-be cacheable, if the prefix were long enough to engage — see
+# brief.py docstring on the Sonnet 4.6 1024-token floor). (Issue 108)
+_DNA_BRIEF_MAX_CHARS = 1000
+
+
+def _build_request(
+    channel_title: str,
+    analytics: Mapping[str, object],
+    dna_brief: str | None,
+) -> tuple:
     """Assemble (system, tools, messages) for both .create and .stream paths.
 
     Extracted (Issue 92) so the streaming wrapper reuses the exact same shape —
@@ -61,7 +73,7 @@ def _build_request(channel_title: str, analytics: dict, dna_brief: str | None) -
     """
     payload: dict[str, object] = {"channel": channel_title, "analytics": analytics}
     if dna_brief:
-        payload["dna_summary"] = dna_brief[:1000]  # cap so system block stays cacheable
+        payload["dna_summary"] = dna_brief[:_DNA_BRIEF_MAX_CHARS]
 
     analytics_json = json.dumps(payload, indent=2, default=str)
 
@@ -94,7 +106,7 @@ def _build_request(channel_title: str, analytics: dict, dna_brief: str | None) -
 
 def generate_improvement_brief(
     channel_title: str,
-    analytics: dict,
+    analytics: Mapping[str, object],
     dna_brief: str | None = None,
     task_id: str | None = None,
 ) -> str:

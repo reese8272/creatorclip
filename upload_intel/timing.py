@@ -3,11 +3,20 @@ Compute best upload windows from audience_activity rows.
 Pure deterministic logic — no LLM.
 """
 
+from collections.abc import Sequence
+from typing import Any
+
+# Duck-typed row contract — both ``AudienceActivity`` ORM rows and plain
+# dicts/objects work, as long as they expose ``day_of_week: int``,
+# ``hour: int``, ``activity_index: float``. Typed loosely as ``Sequence[Any]``
+# in the signatures below because SQLAlchemy ``Mapped[T]`` descriptors don't
+# satisfy a structural Protocol under mypy. (Issue 108)
+
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 
 def best_upload_windows(
-    activity_rows: list,
+    activity_rows: Sequence[Any],
     top_n: int = 3,
 ) -> list[dict]:
     """
@@ -44,7 +53,7 @@ def best_upload_windows(
     return results
 
 
-def optimal_gap_hours(activity_rows: list) -> float | None:
+def optimal_gap_hours(activity_rows: Sequence[Any]) -> float | None:
     """
     Estimate optimal hours between uploads from gap between top-3 activity peaks.
     Returns None if < 2 activity rows.

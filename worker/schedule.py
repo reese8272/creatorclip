@@ -18,7 +18,7 @@ from refresh_youtube_analytics so the purge sees the FRESHEST possible
 fetched_at values for healthy creators and only sweeps genuinely-stale rows.
 """
 
-from celery.schedules import timedelta
+from datetime import timedelta
 
 from worker.celery_app import celery  # noqa: F401
 

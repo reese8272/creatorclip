@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,8 +9,11 @@ from db import get_session
 from dna import identity as identity_module
 from limiter import creator_key, limiter
 from models import Creator
+from routers._schemas import TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/creators", tags=["creators"])
 
@@ -30,20 +35,15 @@ class DataGateOut(BaseModel):
     ready: bool
 
 
-class BuildQueuedOut(BaseModel):
-    task_id: str
-    status: str
-    stream_url: str | None = (
-        None  # Issue 86: SSE endpoint. Wave-5 Fix 1 — Optional: None when Redis aset_owner failed (client polls /me/dna instead).
-    )
+# Issue 108: BuildQueuedOut + CatalogSyncQueuedOut were near-identical
+# three-field shapes — both subclass TaskQueuedOut now. Identical wire
+# shape; only the type name differs at call sites (kept for docs/OpenAPI).
+class BuildQueuedOut(TaskQueuedOut):
+    """202 Accepted response for POST /creators/me/dna/build (Issue 86)."""
 
 
-class CatalogSyncQueuedOut(BaseModel):
-    task_id: str
-    status: str
-    stream_url: str | None = (
-        None  # Issue 92: SSE endpoint for per-video metric progress. Wave-5 Fix 1 — Optional: None on Redis aset_owner failure.
-    )
+class CatalogSyncQueuedOut(TaskQueuedOut):
+    """202 Accepted response for POST /creators/me/catalog/sync (Issue 92)."""
 
 
 class DnaProfileOut(BaseModel):
@@ -177,9 +177,8 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     try:
         await progress.aset_owner(task.id, str(creator.id))
     except _redis_pkg.RedisError as exc:
-        import logging as _logging
 
-        _logging.getLogger(__name__).warning(
+        logger.warning(
             "sync_catalog aset_owner failed (Redis down?) task=%s err=%s",
             task.id,
             exc,
@@ -220,9 +219,8 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     try:
         await progress.aset_owner(task.id, str(creator.id))
     except _redis_pkg.RedisError as exc:
-        import logging as _logging
 
-        _logging.getLogger(__name__).warning(
+        logger.warning(
             "build_dna aset_owner failed (Redis down?) task=%s err=%s",
             task.id,
             exc,

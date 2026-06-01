@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -62,7 +63,14 @@ class RefundOnFailureTask(Task):
     `pack_id=refund:<video_id>` so a duplicate on_failure invocation is safe.
     """
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
+    def on_failure(
+        self,
+        exc: BaseException,
+        task_id: str,
+        args: Sequence[Any],
+        kwargs: dict[str, Any],
+        einfo: Any,
+    ) -> None:
         from billing.refund import refund_for_video
 
         video_id_raw = args[0] if args else kwargs.get("video_id")
@@ -972,7 +980,7 @@ async def _poll_clip_outcomes_async() -> None:
             if not rows:
                 return
 
-            by_creator: dict = defaultdict(list)
+            by_creator: dict[uuid.UUID, list[ClipOutcome]] = defaultdict(list)
             for outcome, clip in rows:
                 by_creator[clip.creator_id].append(outcome)
 

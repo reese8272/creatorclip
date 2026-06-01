@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import tempfile
 import uuid
@@ -20,6 +21,8 @@ from worker.tasks import start_pipeline
 from youtube.data_api import classify_video_kind, get_videos_metadata
 from youtube.ingest import probe_duration_s
 from youtube.oauth import get_valid_access_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -129,9 +132,8 @@ async def link_video(
             kind = metadata[0]["kind"]
             duration_s = metadata[0]["duration_s"]
     except Exception as exc:
-        import logging as _logging
 
-        _logging.getLogger(__name__).warning(
+        logger.warning(
             "link_video: could not resolve kind for %s: %s", youtube_video_id, exc
         )
 
@@ -269,9 +271,8 @@ async def upload_video(
     try:
         await progress.aset_owner(str(video.id), str(creator.id))
     except _redis_pkg.RedisError as exc:
-        import logging as _logging
 
-        _logging.getLogger(__name__).warning(
+        logger.warning(
             "upload aset_owner failed (Redis down?) video_id=%s err=%s",
             video.id,
             exc,

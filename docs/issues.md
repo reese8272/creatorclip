@@ -2494,6 +2494,49 @@ Tests: +3 (`tests/test_security_baselines.py` pinning sync between harness ignor
 
 ---
 
+## Issue 108: Cleanup sweep — typing gaps, dead aliases, magic-number naming, schema dedup
+**Status**: ✅ Done (2026-05-31, post-Wave-9) · **Severity**: cleanup batch (~38 items)
+
+Mechanical sweep over the 48 cleanup-severity items from the post-Wave-8 /assess. 38 applied; 10 deferred to **Issue 109** (design-work cleanups: `_enrich_videos` split, lifespan registry, fetch-then-validate query rewrite, `_fernet()` lru_cache, etc. — each warrants its own brief).
+
+**What landed:**
+- **Module docstrings** added to empty `clip_engine/__init__.py` + `worker/__init__.py`.
+- **`.env.example`** — added `DATABASE_MIGRATION_URL` stanza (carry-forward `_root_infra` gap; BYPASSRLS role for Alembic + worker per Issue 79).
+- **`worker/schedule.py`** — `from datetime import timedelta` (was importing the re-export from `celery.schedules`).
+- **`routers/upload_intel.py`** — added module-level `logger = logging.getLogger(__name__)` for grep-uniformity with the rest of `routers/`.
+- **`dna/identity.py`** — removed dead `_ = sa` alias and the unused `import sqlalchemy as sa`.
+- **`_logging` workarounds** — `import logging as _logging` removed from `routers/clips.py`, `routers/videos.py`, `routers/creators.py`; sites now use the standard module-level `logger`. Added the missing `import logging` + `logger =` to `routers/videos.py` and `routers/creators.py`.
+- **Magic-number naming** — `improvement/brief.py` `1000` → `_DNA_BRIEF_MAX_CHARS`; `youtube/analytics.py` `hour=12` → `_HOUR_UNAVAILABLE_SENTINEL` with documentation; `routers/clips.py::_obs_clip_youtube_id` now carries the 48-bit-entropy collision math in its docstring.
+- **`Optional["X"]` → `"X | None"`** sweep in `models.py` (5 forward-ref relationship sites); dropped unused `from typing import Optional`. Forward refs use the whole-expression-as-string form to keep PEP 604 working at runtime.
+- **Typing gaps closed** — `auth.py::decode_session_token -> dict[str, Any]`, `limiter.py::_creator_key(request: Request)`, `billing/stripe_client.py::params: dict[str, Any]`, `worker/tasks.py::on_failure` full signature, `worker/tasks.py::by_creator: dict[uuid.UUID, list[ClipOutcome]]`, `worker/anthropic_stream.py::messages/tools` parameterized, `ingestion/transcribe.py::transcribe_audio -> dict[str, Any]` + `_deepgram_client`/`_normalize_assemblyai`/`_whisperx_model`/`_whisperx_align_model` returns, `dna/brief.py::_ANTHROPIC: Anthropic`, `dna/embeddings.py::_embed`/`_aembed -> Any`, `improvement/brief.py::analytics: Mapping[str, object]` (covariant to allow narrower dict types from callers).
+- **Duplicated `*QueuedOut` schemas** — extracted `TaskQueuedOut` base in `routers/_schemas.py`; `BuildQueuedOut`, `CatalogSyncQueuedOut`, `RenderQueuedOut` now subclass it. `BriefQueuedOut` intentionally stays standalone (`task_id: str | None` is incompatible with the base — debounce-collapse path returns no task).
+
+**ACs**:
+- [x] All 38 mechanical cleanups applied
+- [x] Tests still green (620 passed / 1 skipped / 125 deselected — no test changes, no new tests since cleanups don't change behavior)
+- [x] Layer 0 green: ruff 0 / mypy 0 / coverage 76.06% / bandit 0/0 / pip-audit 0 / freshness ok
+- [x] Issue 109 follow-up filed for the 10 deferred design-work items
+
+---
+
+## Issue 109: Deferred design-work cleanups (Wave-9 follow-up)
+**Status**: 🔲 Filed (Issue 108 follow-up, 2026-05-31) · **Severity**: cleanup / refactor cluster
+
+Cleanup-severity items the Issue 108 sweep deferred because they need real design thought, not mechanical edits. Each warrants its own brief.
+
+1. **`dna/builder.py::_enrich_videos` split** — currently one ~50-line function doing 4 jobs (transcript hooks, signals counts, retention map, region derivation). Split into 4 loaders + thin stitch loop. Touches `_video_summary` field map (DRY pair).
+2. **`crypto.py::_fernet()` lru_cache** — security-adjacent module; touching needs its own brief.
+3. **`main.py` lifespan shared-resource registry** — currently lifespan reaches into `youtube._http` + `worker.progress` private internals. A `shared_resources.register_aclose(coro_fn)` registry would make shutdown order inspectable and remove the coupling.
+4. **`main.py::_pg_dsn`** — promote to `Settings.psycopg_dsn` property so a future caller doesn't reinvent the dialect munge.
+5. **Fetch-then-validate `session.get(...)` → scoped `select` rewrite** (6 sites across `clips.py`, `review.py`, `videos.py`, `api_keys.py`). Touches query semantics; needs a single coherent pattern decision.
+6. **`clip_engine/scoring.py:166` cold-start principle misattribution** — needs a semantic decision: what's the *right* named principle from `CLIPPING_PRINCIPLES.md` for the cold-start path?
+7. **`clip_engine/scoring.py:70` `build_signal_array` rebuild-per-candidate** — real perf optimization; measure first.
+8. **`clip_engine/render.py:138` keyframe timeout** — touches render budget math.
+9. **`preference/decay.py:11` `_LAMBDA` config exposure** — only worth doing if tuning is actually anticipated.
+10. **`dna/conflict.py` keyword coverage** (also flagged as SEV2 in /assess; was a deeper-walk find that became Issue 103's #4 backbone but the keyword coverage gap itself is a separate concern).
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

@@ -15,6 +15,7 @@ All backends are normalized to the same internal schema:
 import functools
 import logging
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -60,7 +61,7 @@ def _guard_audio_size(audio_path: str | Path) -> None:
         )
 
 
-def transcribe_audio(audio_path: str | Path) -> dict:
+def transcribe_audio(audio_path: str | Path) -> dict[str, Any]:
     backend = settings.TRANSCRIPTION_BACKEND
     logger.info("Transcribing via %s", backend)
     _guard_audio_size(audio_path)
@@ -74,7 +75,7 @@ def transcribe_audio(audio_path: str | Path) -> dict:
 # ── Deepgram ──────────────────────────────────────────────────────────────────
 
 
-def _deepgram_client():
+def _deepgram_client() -> Any:
     """Lazy module-level DeepgramClient singleton (Issue 74)."""
     global _DEEPGRAM_CLIENT
     if _DEEPGRAM_CLIENT is None:
@@ -187,7 +188,7 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
     return _normalize_assemblyai(transcript)
 
 
-def _normalize_assemblyai(transcript) -> dict:
+def _normalize_assemblyai(transcript: Any) -> dict:
     words = [
         {"word": w.text, "start": w.start / 1000.0, "end": w.end / 1000.0}
         for w in (transcript.words or [])
@@ -211,7 +212,7 @@ def _normalize_assemblyai(transcript) -> dict:
 
 
 @functools.lru_cache(maxsize=2)
-def _whisperx_model(model_name: str, device: str, compute_type: str):
+def _whisperx_model(model_name: str, device: str, compute_type: str) -> Any:
     """Cache the loaded WhisperX model — it was reloaded from disk every call (Issue 74)."""
     import whisperx
 
@@ -219,7 +220,7 @@ def _whisperx_model(model_name: str, device: str, compute_type: str):
 
 
 @functools.lru_cache(maxsize=4)
-def _whisperx_align_model(language_code: str, device: str):
+def _whisperx_align_model(language_code: str, device: str) -> Any:
     import whisperx
 
     return whisperx.load_align_model(language_code=language_code, device=device)

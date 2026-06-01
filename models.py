@@ -12,7 +12,6 @@ on this table from application code — ever.
 import enum
 import uuid
 from datetime import UTC, datetime
-from typing import Optional
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
@@ -103,7 +102,7 @@ class Creator(Base):
         nullable=True,
     )
 
-    tokens: Mapped[Optional["YoutubeToken"]] = relationship(
+    tokens: Mapped["YoutubeToken | None"] = relationship(
         "YoutubeToken", back_populates="creator", uselist=False, cascade="all, delete-orphan"
     )
     videos: Mapped[list["Video"]] = relationship(
@@ -226,16 +225,16 @@ class Video(Base):
     )
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="videos")
-    metrics: Mapped[Optional["VideoMetrics"]] = relationship(
+    metrics: Mapped["VideoMetrics | None"] = relationship(
         "VideoMetrics", back_populates="video", uselist=False, cascade="all, delete-orphan"
     )
     retention_curves: Mapped[list["RetentionCurve"]] = relationship(
         "RetentionCurve", back_populates="video", cascade="all, delete-orphan"
     )
-    transcript: Mapped[Optional["Transcript"]] = relationship(
+    transcript: Mapped["Transcript | None"] = relationship(
         "Transcript", back_populates="video", uselist=False, cascade="all, delete-orphan"
     )
-    signals: Mapped[Optional["Signals"]] = relationship(
+    signals: Mapped["Signals | None"] = relationship(
         "Signals", back_populates="video", uselist=False, cascade="all, delete-orphan"
     )
     clips: Mapped[list["Clip"]] = relationship(
@@ -476,7 +475,7 @@ class Clip(Base):
     feedback: Mapped[list["ClipFeedback"]] = relationship(
         "ClipFeedback", back_populates="clip", cascade="all, delete-orphan"
     )
-    outcome: Mapped[Optional["ClipOutcome"]] = relationship(
+    outcome: Mapped["ClipOutcome | None"] = relationship(
         "ClipOutcome", back_populates="clip", uselist=False, cascade="all, delete-orphan"
     )
 
