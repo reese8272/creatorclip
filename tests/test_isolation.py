@@ -454,7 +454,7 @@ async def test_improvement_brief_scoped_to_creator(db_session: AsyncSession, cli
 
     captured: dict = {}
 
-    def _stub(*, channel_title, analytics, dna_brief):
+    def _stub(*, channel_title, analytics, dna_brief, task_id=None):
         captured["channel_title"] = channel_title
         captured["analytics"] = analytics
         return "stubbed brief"

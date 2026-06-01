@@ -94,7 +94,7 @@ async def test_improvement_brief_is_scoped_to_requesting_creator(
 
     captured: dict = {}
 
-    def _capture(*, channel_title, analytics, dna_brief):
+    def _capture(*, channel_title, analytics, dna_brief, task_id=None):
         captured["channel_title"] = channel_title
         captured["analytics"] = analytics
         return "stubbed brief text"

@@ -6,6 +6,7 @@ and the empty-state shape (no DNA, no videos).
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -77,6 +78,7 @@ async def _seed_video(
                 video_id=video.id,
                 views=views,
                 engagement_rate=engagement_rate,
+                fetched_at=datetime.now(UTC),
             )
         )
     await session.commit()
