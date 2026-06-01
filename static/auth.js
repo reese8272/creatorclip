@@ -35,6 +35,20 @@
     return;
   }
 
+  // Populate shared nav elements present on every authenticated page.
+  // Each page can still override these in its own auth:ready handler.
+  const navUser = document.getElementById('nav-user');
+  if (navUser && !navUser.textContent) {
+    navUser.textContent = user.channel_title || user.email || '';
+  }
+  const navBalance = document.getElementById('nav-balance');
+  if (navBalance) {
+    fetch('/billing/balance', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && navBalance) navBalance.textContent = `${d.minutes_balance} min`; })
+      .catch(() => {});
+  }
+
   document.dispatchEvent(new CustomEvent('auth:ready', { detail: user }));
 })();
 

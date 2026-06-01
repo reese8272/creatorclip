@@ -150,6 +150,94 @@
     .btn-trim { background: var(--color-accent); color: #fff; }
     .btn-trim:hover { background: var(--color-accent-hover); }
 
+    /* Issue 118 — structured feedback panel */
+    .feedback-panel {
+      display: none;
+      width: 100%;
+      max-width: 360px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+    }
+    .feedback-panel.visible { display: block; }
+    .feedback-panel h4 {
+      font-size: var(--text-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-3);
+    }
+    .tag-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+    .tag-btn {
+      font-size: var(--text-xs);
+      padding: var(--space-1) var(--space-3);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius);
+      background: var(--color-bg);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .tag-btn.selected {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+      background: var(--color-accent-soft);
+    }
+    .tag-btn:hover:not(.selected) { border-color: var(--color-text-muted); color: var(--color-text); }
+    .feedback-note-input {
+      width: 100%;
+      font-size: var(--text-xs);
+      padding: var(--space-2);
+      margin-top: var(--space-1);
+      display: none;
+    }
+    .feedback-note-input.visible { display: block; }
+    .feedback-submit-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: var(--space-2);
+      margin-top: var(--space-3);
+    }
+
+    /* Issue 119 — style picker */
+    .style-section {
+      width: 100%;
+      max-width: 360px;
+    }
+    .style-section details summary {
+      list-style: none;
+      cursor: pointer;
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: var(--space-2) 0;
+      user-select: none;
+    }
+    .style-section details summary::-webkit-details-marker { display: none; }
+    .style-section details summary::after { content: ' ▸'; font-size: 10px; }
+    .style-section details[open] summary::after { content: ' ▾'; }
+    .style-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-2) 0;
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+    }
+    .style-row select {
+      font-size: var(--text-xs);
+      padding: 2px var(--space-2);
+      border-color: var(--color-border-strong);
+    }
+    .btn-style { font-size: var(--text-xs); margin-top: var(--space-2); }
+
     .next-wrap { text-align: center; padding: var(--space-2) 0; }
     .btn-next {
       background: transparent;
@@ -179,6 +267,9 @@
       <a href="/static/pricing.html">Pricing</a>
     </div>
     <span class="nav-spacer"></span>
+    <span class="user-name" id="nav-user" style="font-size:var(--text-xs);font-family:var(--font-mono);color:var(--color-text-subtle);margin-right:var(--space-2)"></span>
+    <span class="nav-balance" id="nav-balance"></span>
+    <a href="/static/walkthrough.html" class="nav-help" title="How it works">?</a>
     <a href="#" style="font-size:var(--text-xs);color:var(--color-text-muted)" onclick="logout()">Logout</a>
   </nav>
 
@@ -223,10 +314,51 @@
     <div id="feedback-flash"></div>
 
     <div class="review-actions">
-      <button class="btn btn-up"   onclick="sendFeedback('upvote')">👍 Keep</button>
-      <button class="btn btn-down" onclick="sendFeedback('downvote')">👎 Drop</button>
+      <button class="btn btn-up"   onclick="openFeedbackPanel('upvote')">👍 Keep</button>
+      <button class="btn btn-down" onclick="openFeedbackPanel('downvote')">👎 Drop</button>
       <button class="btn btn-skip" onclick="sendFeedback('skip')">Skip</button>
       <button class="btn btn-trim" onclick="sendFeedback('trim')">✂ Trim</button>
+    </div>
+
+    <!-- Issue 118: structured feedback panel -->
+    <div class="feedback-panel" id="feedback-panel">
+      <h4 id="feedback-panel-title">Why are you keeping this?</h4>
+      <div class="tag-grid" id="tag-grid"></div>
+      <input class="feedback-note-input" id="feedback-note" type="text" placeholder="Tell us more…">
+      <div class="feedback-submit-row">
+        <button class="btn btn-secondary" onclick="closeFeedbackPanel()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitTaggedFeedback()">Submit</button>
+      </div>
+    </div>
+
+    <!-- Issue 119: style picker -->
+    <div class="style-section">
+      <details>
+        <summary>Clip style</summary>
+        <div class="style-row">
+          <span>Subtitle style</span>
+          <select id="style-subtitle">
+            <option value="">None</option>
+            <option value="white_large">White — large</option>
+            <option value="yellow_impact">Yellow — impact</option>
+            <option value="captions_sm">Captions — small</option>
+          </select>
+        </div>
+        <div class="style-row">
+          <span>Background fill</span>
+          <select id="style-background">
+            <option value="">Default (black)</option>
+            <option value="blur">Blur</option>
+            <option value="black">Black</option>
+          </select>
+        </div>
+        <div class="style-row">
+          <span>Captions on</span>
+          <input type="checkbox" id="style-captions">
+        </div>
+        <button class="btn btn-secondary btn-style" onclick="applyStyle()">Render with style</button>
+        <div id="style-status" style="font-size:var(--text-xs);color:var(--color-text-subtle);margin-top:var(--space-2)"></div>
+      </details>
     </div>
 
     <div class="next-wrap">
@@ -238,6 +370,21 @@
     let clips = [];
     let currentIndex = 0;
     let currentClip = null;
+    let _pendingAction = null;   // action waiting for tag selection
+    let _selectedTags = new Set();
+
+    const APPROVE_TAGS = [
+      { id: 'titles_fit_style',     label: 'Titles fit my style' },
+      { id: 'editing_matches_pace', label: 'Editing matches my pace' },
+      { id: 'good_hook',            label: 'Good hook' },
+      { id: 'right_length',         label: 'Right length' },
+    ];
+    const DENY_TAGS = [
+      { id: 'editing_mismatch', label: "Editing doesn't match" },
+      { id: 'off_brand_topic',  label: 'Off-brand topic' },
+      { id: 'bad_hook',         label: 'Bad hook' },
+      { id: 'wrong_length',     label: 'Wrong length' },
+    ];
 
     const player    = document.getElementById('clip-player');
     const metaEl    = document.getElementById('clip-meta');
@@ -320,13 +467,64 @@
       endVal.textContent = parseFloat(trimEnd.value).toFixed(1) + 's';
     });
 
-    async function sendFeedback(action) {
+    // Issue 118: structured feedback panel helpers
+    function openFeedbackPanel(action) {
+      _pendingAction = action;
+      _selectedTags.clear();
+      const panel = document.getElementById('feedback-panel');
+      const title = document.getElementById('feedback-panel-title');
+      const tagGrid = document.getElementById('tag-grid');
+      const noteInput = document.getElementById('feedback-note');
+      title.textContent = action === 'upvote' ? 'Why are you keeping this?' : 'Why are you dropping this?';
+      noteInput.value = '';
+      noteInput.classList.remove('visible');
+      const tags = action === 'upvote' ? APPROVE_TAGS : DENY_TAGS;
+      tagGrid.innerHTML = tags.map(t =>
+        `<button class="tag-btn" data-id="${t.id}" onclick="_toggleTag(this)">${t.label}</button>`
+      ).join('') + '<button class="tag-btn" data-id="__other__" onclick="_toggleOther(this)">Other…</button>';
+      panel.classList.add('visible');
+    }
+
+    function closeFeedbackPanel() {
+      document.getElementById('feedback-panel').classList.remove('visible');
+      _pendingAction = null;
+      _selectedTags.clear();
+    }
+
+    function _toggleTag(btn) {
+      const id = btn.dataset.id;
+      if (_selectedTags.has(id)) {
+        _selectedTags.delete(id);
+        btn.classList.remove('selected');
+      } else {
+        _selectedTags.add(id);
+        btn.classList.add('selected');
+      }
+    }
+
+    function _toggleOther(btn) {
+      _toggleTag(btn);
+      const noteInput = document.getElementById('feedback-note');
+      noteInput.classList.toggle('visible', _selectedTags.has('__other__'));
+    }
+
+    async function submitTaggedFeedback() {
+      if (!currentClip || !_pendingAction) return;
+      const tags = Array.from(_selectedTags).filter(t => t !== '__other__');
+      const note = document.getElementById('feedback-note').value.trim() || null;
+      closeFeedbackPanel();
+      await sendFeedback(_pendingAction, tags, note);
+    }
+
+    async function sendFeedback(action, feedbackTags, feedbackNote) {
       if (!currentClip) return;
       const body = { action };
       if (action === 'trim') {
         body.trim_start_s = parseFloat(trimStart.value);
         body.trim_end_s   = parseFloat(trimEnd.value);
       }
+      if (feedbackTags && feedbackTags.length) body.feedback_tags = feedbackTags;
+      if (feedbackNote) body.feedback_note = feedbackNote;
       try {
         const resp = await fetch(`/clips/${currentClip.id}/feedback`, {
           method: 'POST',
@@ -341,6 +539,28 @@
         }
       } catch (e) {
         flash.textContent = 'Error — try again';
+      }
+    }
+
+    // Issue 119: apply style and re-render
+    async function applyStyle() {
+      if (!currentClip) return;
+      const statusEl = document.getElementById('style-status');
+      const subtitle = document.getElementById('style-subtitle').value || null;
+      const background = document.getElementById('style-background').value || null;
+      const captions_enabled = document.getElementById('style-captions').checked;
+      statusEl.textContent = 'Queueing styled render…';
+      const resp = await fetch(`/clips/${currentClip.id}/render`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subtitle, background, captions_enabled }),
+      });
+      if (resp.ok) {
+        statusEl.textContent = 'Render queued — come back in ~30s.';
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        statusEl.textContent = err.detail || 'Render failed — try again.';
       }
     }
 

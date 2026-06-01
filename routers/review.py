@@ -29,6 +29,12 @@ class FeedbackRequest(BaseModel):
     trim_start_s: float | None = None
     trim_end_s: float | None = None
     chosen_format: str | None = None
+    # Issue 118: structured multi-select feedback tags.
+    # Approve tags: "titles_fit_style", "editing_matches_pace", "good_hook", "right_length"
+    # Deny tags:   "editing_mismatch", "off_brand_topic", "bad_hook", "wrong_length"
+    feedback_tags: list[str] | None = None
+    # Free-text "Other" note captured alongside tags.
+    feedback_note: str | None = None
 
     @field_validator("action", mode="before")
     @classmethod
@@ -57,6 +63,8 @@ async def submit_feedback(
         trim_start_s=body.trim_start_s,
         trim_end_s=body.trim_end_s,
         chosen_format=body.chosen_format,
+        feedback_tags=body.feedback_tags or None,
+        feedback_note=body.feedback_note or None,
     )
     session.add(feedback)
     await session.commit()

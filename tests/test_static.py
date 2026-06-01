@@ -883,3 +883,147 @@ def test_all_router_limit_decorators_use_creator_key():
         "get_remote_address for unauthenticated routes like /billing/webhook):\n"
         + "\n".join(f"  {v}" for v in violations)
     )
+
+
+# ── Issues 113–119: new UI surfaces ──────────────────────────────────────────
+
+
+def test_nav_balance_and_help_in_all_main_pages():
+    """Issue 113: every main authenticated page must expose:
+    - id="nav-balance" for the minutes-remaining chip
+    - a link to /static/walkthrough.html with class="nav-help" for the ? button
+    """
+    import pathlib
+
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    for name in ("index.html", "profile.html", "review.html", "insights.html"):
+        src = (static_dir / name).read_text()
+        assert 'id="nav-balance"' in src, (
+            f"Issue 113: {name} must include id=\"nav-balance\" in the nav "
+            f"for the minutes-remaining display."
+        )
+        assert '/static/walkthrough.html' in src and 'nav-help' in src, (
+            f"Issue 113: {name} must include a .nav-help link to walkthrough.html."
+        )
+
+
+def test_auth_js_populates_nav_elements():
+    """Issue 113: auth.js must populate nav-user and nav-balance elements
+    after successful auth — no per-page duplication needed."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
+    assert "nav-balance" in src, (
+        "auth.js must populate the nav-balance element after auth."
+    )
+    assert "/billing/balance" in src, (
+        "auth.js must fetch /billing/balance to display remaining minutes."
+    )
+
+
+def test_profile_dna_section_is_collapsible():
+    """Issue 114: the Creator DNA section must be wrapped in a <details> element
+    so it doesn't dominate the profile page by default."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "profile.html").read_text()
+    assert '<details' in src and 'id="dna-section"' in src, (
+        "Issue 114: profile.html DNA section must use a <details> element."
+    )
+    assert 'id="sync-chip"' in src, (
+        "Issue 114: profile.html must include the sync-chip for DNA sync status."
+    )
+    assert "Synced with DNA" in src or "Not synced with DNA" in src, (
+        "Issue 114: sync chip must show 'Synced with DNA' / 'Not synced with DNA' labels."
+    )
+
+
+def test_profile_rebuild_wires_streaming():
+    """Issue 116: profile.html must load progressStream.js and wire rebuildDna()
+    to subscribe to the SSE task stream from the build_dna endpoint."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "profile.html").read_text()
+    assert "/static/progressStream.js" in src, (
+        "Issue 116: profile.html must load progressStream.js."
+    )
+    assert "subscribeToTaskStream" in src, (
+        "Issue 116: rebuildDna() must call subscribeToTaskStream to show live progress."
+    )
+    assert 'id="rebuild-stream"' in src, (
+        "Issue 116: profile.html must include the rebuild stream output element."
+    )
+
+
+def test_dashboard_has_analytics_panel_with_period_select():
+    """Issue 115: the dashboard must show a YouTube Analytics panel with a
+    period dropdown (7d / 28d / 90d / all) fetching /creators/me/insights/analytics."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+    assert "/creators/me/insights/analytics" in src, (
+        "Issue 115: index.html must fetch /creators/me/insights/analytics."
+    )
+    assert 'id="period-select"' in src, (
+        "Issue 115: dashboard must include a period <select> for the analytics panel."
+    )
+    assert 'id="analytics-grid"' in src, (
+        "Issue 115: dashboard must include analytics-grid for the metrics display."
+    )
+
+
+def test_review_page_has_structured_feedback_panel():
+    """Issue 118: review.html must include the multi-select structured feedback
+    panel for approve and deny actions."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "review.html").read_text()
+    assert 'id="feedback-panel"' in src, (
+        "Issue 118: review.html must include the structured feedback panel."
+    )
+    assert "openFeedbackPanel" in src, (
+        "Issue 118: Keep/Drop buttons must open the feedback panel."
+    )
+    assert "submitTaggedFeedback" in src, (
+        "Issue 118: feedback must be submitted with tags via submitTaggedFeedback()."
+    )
+    assert "feedback_tags" in src, (
+        "Issue 118: feedback payload must include feedback_tags field."
+    )
+
+
+def test_review_page_has_style_picker():
+    """Issue 119: review.html must include the clip style picker with subtitle
+    and background controls, and an applyStyle() function."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "review.html").read_text()
+    assert 'id="style-subtitle"' in src, (
+        "Issue 119: review.html must include subtitle style selector."
+    )
+    assert 'id="style-background"' in src, (
+        "Issue 119: review.html must include background fill selector."
+    )
+    assert "applyStyle" in src, (
+        "Issue 119: review.html must include applyStyle() function."
+    )
+
+
+def test_insights_page_has_ai_analysis_and_saved_panels():
+    """Issue 117: insights.html must support per-performer AI analysis
+    (analyze button + /analyze-performer endpoint) and a saved insights panel."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "insights.html").read_text()
+    assert "analyzePerformer" in src, (
+        "Issue 117: insights.html must have analyzePerformer() function."
+    )
+    assert "/creators/me/insights/analyze-performer" in src, (
+        "Issue 117: must POST to /creators/me/insights/analyze-performer."
+    )
+    assert 'id="saved-panel"' in src, (
+        "Issue 117: must include saved insights panel."
+    )
+    assert "saveInsight" in src, (
+        "Issue 117: must have saveInsight() for bookmarking analyses."
+    )

@@ -74,6 +74,12 @@ class FeedbackAction(enum.Enum):
     format = "format"
 
 
+class InsightType(enum.Enum):
+    performer_analysis = "performer_analysis"
+    trend = "trend"
+    recommendation = "recommendation"
+
+
 # ── Core entities ─────────────────────────────────────────────────────────────
 
 
@@ -465,6 +471,10 @@ class Clip(Base):
         default=RenderStatus.pending,
     )
     rank: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # Render style chosen by the creator in the review UI (Issue 119).
+    # JSONB: {subtitle: "white_large"|"yellow_impact"|"captions_sm"|null,
+    #         background: "blur"|"black"|"brand"|null, captions_enabled: bool}
+    style_preset: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
@@ -496,6 +506,11 @@ class ClipFeedback(Base):
     trim_start_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     trim_end_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     chosen_format: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    # Structured feedback tags (Issue 118). JSONB list of tag strings e.g.
+    # ["titles_fit_style", "good_hook"] for approve or ["wrong_length"] for deny.
+    feedback_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Free-text "Other" field captured alongside tags (Issue 118).
+    feedback_note: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
@@ -704,4 +719,39 @@ class ImprovementBrief(Base):
         # that SELECT FOR UPDATE SKIP LOCKED cannot prevent (no row → no lock to acquire).
         # The router's IntegrityError catch re-queries and returns the winning row.
         sa.UniqueConstraint("creator_id", name="uq_improvement_briefs_creator_id"),
+    )
+
+
+# ── Creator insights (Issue 117) ──────────────────────────────────────────────
+
+
+class CreatorInsight(Base):
+    """AI-generated per-performer or channel-level insight.
+
+    Generated lazily on demand (creator clicks "Analyze") using Haiku 4.5.
+    Cached per (video_id, dna_version) so the same analysis is served until
+    the DNA changes. Creators can save/bookmark insights for later reference.
+    """
+
+    __tablename__ = "creator_insights"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    video_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("videos.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    insight_type: Mapped[InsightType] = mapped_column(
+        sa.Enum(InsightType, name="insight_type_enum"), nullable=False
+    )
+    title: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    content: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    dna_version: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    is_saved: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

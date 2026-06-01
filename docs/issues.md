@@ -2620,6 +2620,160 @@ instructions for recording results in the assessment REPORT.md.
 
 ---
 
+---
+
+## Issues 113–119 — UX Wave (2026-06-01)
+
+User-reported product gaps. All shipped in one session. Bulk-approved before build.
+
+---
+
+### Issue 113: Nav quick wins — minutes balance + "?" tutorial button
+**Status**: ✅ Done (2026-06-01)
+
+**What**: (1) Show remaining minutes in the nav on every authenticated page via a
+`nav-balance` chip (fetched from `/billing/balance` in `auth.js`). (2) Add a `?`
+circular nav button that routes to `/static/walkthrough.html` regardless of the
+`localStorage` walkthrough-seen flag.
+
+**Files**: `static/_design-tokens.css` (`.nav-balance`, `.nav-help` tokens),
+`static/auth.js`, `static/index.html`, `static/profile.html`, `static/review.html`,
+`static/insights.html`.
+
+**Acceptance criteria**:
+- [x] Every main authenticated page (index, profile, review, insights) has `id="nav-balance"` and a `.nav-help` link to walkthrough.html
+- [x] `auth.js` fetches `/billing/balance` and populates `nav-balance` after auth
+- [x] Static tests pin both elements on all 4 pages
+
+---
+
+### Issue 114: Profile DNA section — collapsible + sync status chip
+**Status**: ✅ Done (2026-06-01)
+
+**What**: The Creator DNA section on `profile.html` was full-height and dominated
+the page. Wrapped it in a `<details>` collapsible. Added a "Synced with DNA" /
+"Not synced with DNA" chip that compares `identity.created_at` vs `dna.created_at`
+— yes/no sync status, not a version number.
+
+**Files**: `static/profile.html`.
+
+**Acceptance criteria**:
+- [x] DNA section is a `<details id="dna-section">` element (open by default)
+- [x] `sync-chip` shows correct synced/not-synced state based on identity vs DNA timestamps
+- [x] Static test pins both elements
+
+---
+
+### Issue 115: Dashboard — real YouTube Analytics with time-period controls
+**Status**: ✅ Done (2026-06-01)
+
+**What**: New `GET /creators/me/insights/analytics?period=7d|28d|90d|all` endpoint
+aggregates `video_metrics` rows for the creator's videos published in the period.
+Returns total views, watch time, avg view duration, avg engagement rate. Dashboard
+now has an analytics panel with a period `<select>` dropdown — no extra LLM calls.
+
+**Files**: `routers/insights.py` (new endpoint + schema), `static/index.html`.
+
+**Acceptance criteria**:
+- [x] Endpoint returns `AnalyticsSummaryOut` with all five fields
+- [x] `period=all` has no date bound; `period=7d` filters by `published_at >= now-7d`
+- [x] Empty state returns zeros with `metrics_available=False` — no 404
+- [x] Invalid period rejected with 422
+- [x] Dashboard has `id="analytics-grid"` + `id="period-select"`
+- [x] 5 unit tests green
+
+---
+
+### Issue 116: DNA rebuild — live agent stream on profile page
+**Status**: ✅ Done (2026-06-01)
+
+**What**: `profile.html` showed "Come back in ~30 seconds" during a DNA rebuild.
+Wired `progressStream.js` (already existed from Issue 86) into `rebuildDna()` —
+subscribes to the build task's SSE stream, shows step events in a terminal-style
+`<pre>` block. Also registers the task with the global activity panel.
+
+**Files**: `static/profile.html`.
+
+**Acceptance criteria**:
+- [x] `profile.html` loads `progressStream.js`
+- [x] `rebuildDna()` calls `subscribeToTaskStream` with the returned `stream_url`
+- [x] `id="rebuild-stream"` element shows live step events
+- [x] Static test pins all three
+
+---
+
+### Issue 117: Insights — AI-oriented per-performer analysis + saveable insights
+**Status**: ✅ Done (2026-06-01)
+
+**What**: Added an "Analyze" button to each top/bottom performer card in insights.html.
+Clicking fires `POST /creators/me/insights/analyze-performer` which calls Haiku 4.5
+with the creator's DNA brief + video metrics. Cached per (video, dna_version). Creator
+can bookmark insights via `POST /creators/me/insights/save/{id}`. Saved insights surface
+in a dedicated panel. `GET /creators/me/insights/saved` returns up to 50 saved insights.
+
+**Token cost**: Lazy + cached. Only charged on first "Analyze" click; returns cached
+result until DNA changes.
+
+**Files**: `alembic/versions/0017_creator_insights.py`, `models.py` (CreatorInsight +
+InsightType), `routers/insights.py`, `static/insights.html`.
+
+**Acceptance criteria**:
+- [x] `creator_insights` table with migration 0017
+- [x] Analyze endpoint returns cached result if (video_id, dna_version) already exists
+- [x] Haiku 4.5 (`claude-haiku-4-5-20251001`) used for analysis
+- [x] `POST /save/{id}` toggles `is_saved` idempotently
+- [x] `GET /saved` returns bookmarked insights newest-first
+- [x] Static test pins `analyzePerformer`, `/analyze-performer`, saved panel
+
+---
+
+### Issue 118: Review — structured approve/deny feedback → DNA
+**Status**: ✅ Done (2026-06-01)
+
+**What**: Replaced binary Keep/Drop with multi-select tag panels. Approve tags:
+titles_fit_style / editing_matches_pace / good_hook / right_length / Other.
+Deny tags: editing_mismatch / off_brand_topic / bad_hook / wrong_length / Other.
+"Other" reveals a free-text input. Tags + note posted to `/clips/{id}/feedback`
+alongside the action. New `feedback_tags` (JSONB) and `feedback_note` (Text)
+columns added to `clip_feedback`.
+
+**Files**: `alembic/versions/0018_feedback_tags.py`, `models.py` (ClipFeedback),
+`routers/review.py` (FeedbackRequest), `static/review.html`.
+
+**Acceptance criteria**:
+- [x] Migration 0018 adds `feedback_tags` (JSONB) + `feedback_note` (Text) to `clip_feedback`
+- [x] Feedback endpoint accepts both with nullability (old clients still work)
+- [x] Empty tags list stored as null (not `[]`)
+- [x] Feedback panel renders correctly in review.html
+- [x] 3 unit tests green
+
+---
+
+### Issue 119: Review — editing surface enhancements (subtitle, background, captions)
+**Status**: ✅ Done (2026-06-01)
+
+**What**: Added a style picker to `review.html`: subtitle presets (white large,
+yellow impact, captions small), background fill (blur / black), captions toggle.
+Selecting a style and clicking "Render with style" posts `RenderStyleIn` to
+`POST /clips/{id}/render`. Style is persisted to `clips.style_preset` (JSONB) and
+read by the render task's `render_clip_file` call which builds the `drawtext`
+ffmpeg filter accordingly.
+
+**Files**: `alembic/versions/0019_clip_style_preset.py`, `models.py` (Clip.style_preset),
+`clip_engine/render.py` (style_preset param + `_SUBTITLE_FILTERS`), `routers/clips.py`
+(RenderStyleIn + updated render endpoint), `worker/tasks.py` (passes style to render),
+`static/review.html`.
+
+**Acceptance criteria**:
+- [x] Migration 0019 adds `style_preset` JSONB to `clips`
+- [x] `render_clip_file` with `style_preset={"subtitle":"white_large"}` builds `drawtext` in vf
+- [x] `render_clip_file` with `style_preset=None` produces vf without `drawtext`
+- [x] Render endpoint with no body still returns 202 (backward-compatible)
+- [x] Style picker UI in review.html
+- [x] 4 unit tests green
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
@@ -2627,4 +2781,3 @@ Items deferred until the product is live and stable:
 - Auto-publish to YouTube Shorts (additional OAuth scope)
 - Multi-platform export (TikTok / Reels)
 - Hot-key clipping during live recording / OBS integration
-- In-app subtitle, font, crop editor on the review surface

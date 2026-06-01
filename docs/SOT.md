@@ -288,6 +288,20 @@ usage
 
 audit_log
   id, at, actor, action, entity_type, entity_id, before_jsonb, after_jsonb
+
+-- Issues 113-119 additions --
+
+creator_insights                      -- AI per-performer + channel insights (Issue 117)
+  id, creator_id (FK), video_id (FK nullable), insight_type (performer_analysis|trend|recommendation),
+  title, content, dna_version, is_saved, created_at
+  -- Cached per (video_id, dna_version); creator can bookmark via is_saved
+
+-- clip_feedback additions (Issue 118) --
+  feedback_tags: JSONB | None         -- list of tag strings e.g. ["good_hook", "right_length"]
+  feedback_note: Text | None          -- free-text "Other" field
+
+-- clips additions (Issue 119) --
+  style_preset: JSONB | None          -- {subtitle, background, captions_enabled}
 ```
 
 ---

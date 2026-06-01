@@ -105,15 +105,44 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
         return frame_width // 2
 
 
+# Known subtitle/background presets (Issue 119).
+# These are the display labels → ffmpeg filter strings.
+_SUBTITLE_FILTERS: dict[str, str] = {
+    "white_large": (
+        "drawtext=text='':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:"
+        "boxborderw=5:x=(w-text_w)/2:y=h*0.85"
+    ),
+    "yellow_impact": (
+        "drawtext=text='':fontcolor=yellow:fontsize=56:fontfile=/usr/share/fonts/truetype/impact.ttf:"
+        "x=(w-text_w)/2:y=h*0.85"
+    ),
+    "captions_sm": (
+        "drawtext=text='':fontcolor=white:fontsize=32:box=1:boxcolor=black@0.6:"
+        "boxborderw=4:x=(w-text_w)/2:y=h*0.9"
+    ),
+}
+
+_BACKGROUND_STYLES: dict[str, str] = {
+    "blur": "split[v][blur];[blur]scale={ow}:{oh},boxblur=luma_radius=20:luma_power=2[blurred];[blurred][v]overlay=(W-w)/2:(H-h)/2",
+    "black": "",  # default — letterbox fills with black (ffmpeg default pad colour)
+}
+
+
 def render_clip_file(
     source_path: Path,
     start_s: float,
     end_s: float,
     out_path: Path,
+    style_preset: dict | None = None,
 ) -> None:
     """
     Cut [start_s, end_s] from source, crop to 9:16 centered on detected face,
     scale to OUTPUT_W×OUTPUT_H, write to out_path (mp4).
+
+    ``style_preset`` is a dict with optional keys:
+      - ``subtitle``: one of "white_large", "yellow_impact", "captions_sm", or None
+      - ``background``: "blur" | "black" | None  (None → default black letterbox)
+      - ``captions_enabled``: bool (placeholder — real caption burn-in needs a transcript)
     """
     duration = end_s - start_s
     if duration <= 0:
@@ -143,12 +172,19 @@ def render_clip_file(
     # Clamp crop x-offset
     x_offset = max(0, min(face_x - crop_w // 2, frame_w - crop_w))
 
-    # ffmpeg: cut segment → crop → scale.
+    # Build vf chain: crop → scale, with optional style additions.
     # `-ss` before `-i` is fast (seeks to the nearest keyframe first); `-accurate_seek`
     # then decodes to the exact start frame. With re-encoding (libx264) accurate_seek is
     # already the ffmpeg default, but we set it explicitly so the cut stays frame-accurate
     # even if anyone introduces `-c copy` later — the clip MUST start exactly at the setup.
-    vf = f"crop={crop_w}:{frame_h}:{x_offset}:0,scale={_OUTPUT_W}:{_OUTPUT_H}"
+    vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={_OUTPUT_W}:{_OUTPUT_H}"]
+
+    if style_preset:
+        subtitle_key = style_preset.get("subtitle")
+        if subtitle_key and subtitle_key in _SUBTITLE_FILTERS:
+            vf_parts.append(_SUBTITLE_FILTERS[subtitle_key])
+
+    vf = ",".join(vf_parts)
     _run(
         [
             "ffmpeg",
@@ -179,4 +215,4 @@ def render_clip_file(
         "render",
         timeout_s=render_timeout_s,
     )
-    logger.info("Rendered clip %s→%s (%s)", source_path.name, out_path.name, vf)
+    logger.info("Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf)

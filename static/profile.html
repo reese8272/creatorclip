@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/_design-tokens.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
+  <script src="/static/progressStream.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <style>
@@ -83,6 +84,72 @@
       margin-top: var(--space-3);
       color: var(--color-text-muted);
       min-height: 18px;
+    }
+
+    /* ── DNA collapsible (Issue 114) ────────────────────────────── */
+    .dna-section {
+      margin-bottom: var(--space-6);
+    }
+    .dna-section summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3) 0;
+      user-select: none;
+    }
+    .dna-section summary::-webkit-details-marker { display: none; }
+    .dna-section summary::after {
+      content: '▸';
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-left: auto;
+    }
+    .dna-section[open] summary::after { content: '▾'; }
+    .dna-summary-title {
+      font-size: var(--text-md);
+      font-weight: 600;
+      color: var(--color-text);
+    }
+    .dna-summary-meta {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
+    .sync-chip {
+      font-size: var(--text-xs);
+      padding: 1px var(--space-2);
+      border-radius: var(--radius);
+      border: 1px solid;
+    }
+    .sync-chip.synced {
+      color: var(--color-success);
+      border-color: rgba(46, 204, 113, 0.3);
+      background: rgba(46, 204, 113, 0.08);
+    }
+    .sync-chip.not-synced {
+      color: var(--color-warning);
+      border-color: rgba(243, 156, 18, 0.3);
+      background: rgba(243, 156, 18, 0.08);
+    }
+    .dna-inner { padding-top: var(--space-3); }
+
+    /* ── DNA rebuild stream (Issue 116) ─────────────────────────── */
+    .rebuild-stream {
+      display: none;
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-3);
+      margin-top: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     /* ── Identity section (Issue 83) ────────────────────────────── */
@@ -316,6 +383,9 @@
       <a href="/static/pricing.html">Pricing</a>
     </div>
     <span class="nav-spacer"></span>
+    <span class="user-name" id="nav-user" style="font-size:var(--text-xs);font-family:var(--font-mono);color:var(--color-text-subtle);margin-right:var(--space-2)"></span>
+    <span class="nav-balance" id="nav-balance"></span>
+    <a href="/static/walkthrough.html" class="nav-help" title="How it works">?</a>
     <a href="#" style="font-size:var(--text-xs);color:var(--color-text-muted)" onclick="logout()">Logout</a>
   </nav>
 
@@ -325,18 +395,23 @@
   </div>
 
   <div class="page-content">
-    <h1>Your Creator DNA</h1>
-    <div class="version-badge" id="version-badge">Loading…</div>
-
-    <div class="brief-box" id="brief-content">Loading your creator brief…</div>
-
-    <div class="stats" id="stats-row"></div>
-
-    <div class="top-actions">
-      <button class="btn btn-confirm" onclick="confirmDna()">✓ Confirm &amp; activate</button>
-      <button class="btn btn-rebuild" onclick="rebuildDna()">↺ Rebuild DNA</button>
-    </div>
-    <div id="confirm-status"></div>
+    <details class="dna-section" id="dna-section" open>
+      <summary>
+        <span class="dna-summary-title">Your Creator DNA</span>
+        <span class="dna-summary-meta" id="version-badge">Loading…</span>
+        <span class="sync-chip" id="sync-chip" style="display:none"></span>
+      </summary>
+      <div class="dna-inner">
+        <div class="brief-box" id="brief-content">Loading your creator brief…</div>
+        <div class="stats" id="stats-row"></div>
+        <div class="top-actions">
+          <button class="btn btn-confirm" onclick="confirmDna()">✓ Confirm &amp; activate</button>
+          <button class="btn btn-rebuild" onclick="rebuildDna()">↺ Rebuild DNA</button>
+        </div>
+        <pre class="rebuild-stream" id="rebuild-stream"></pre>
+        <div id="confirm-status"></div>
+      </div>
+    </details>
 
     <!-- Stated identity (Issue 83) -->
     <section class="identity-section">
@@ -443,6 +518,8 @@
       window.location = '/auth/login';
     }
 
+    let _dnaCreatedAt = null;   // tracks DNA build timestamp for sync check
+
     async function loadDna() {
       const resp = await fetch('/creators/me/dna', { credentials: 'include' });
       const data = await resp.json();
@@ -452,8 +529,9 @@
         return;
       }
       const p = data.profile;
+      _dnaCreatedAt = new Date(p.created_at);
       document.getElementById('version-badge').textContent =
-        `v${p.version} · ${p.status} · ${new Date(p.created_at).toLocaleDateString()}`;
+        `v${p.version} · ${p.status} · ${_dnaCreatedAt.toLocaleDateString()}`;
       document.getElementById('brief-content').textContent = p.brief_text || '(no brief text)';
 
       const stats = [];
@@ -464,6 +542,24 @@
       stats.forEach(s => {
         row.innerHTML += `<div class="stat"><div class="label">${s.label}</div><div class="value">${s.value}</div></div>`;
       });
+
+      _updateSyncChip();
+    }
+
+    async function _updateSyncChip() {
+      const chip = document.getElementById('sync-chip');
+      if (!chip || !_dnaCreatedAt) return;
+      try {
+        const resp = await fetch('/creators/me/identity', { credentials: 'include' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.identity) { chip.style.display = 'none'; return; }
+        const identityAt = new Date(data.identity.created_at);
+        const synced = _dnaCreatedAt >= identityAt;
+        chip.style.display = 'inline';
+        chip.textContent = synced ? 'Synced with DNA' : 'Not synced with DNA';
+        chip.className = 'sync-chip ' + (synced ? 'synced' : 'not-synced');
+      } catch (_) { chip.style.display = 'none'; }
     }
 
     async function confirmDna() {
@@ -481,13 +577,39 @@
       }
     }
 
+    let _rebuildSub = null;
     async function rebuildDna() {
       const status = document.getElementById('confirm-status');
+      const streamEl = document.getElementById('rebuild-stream');
+      if (_rebuildSub) { _rebuildSub.close(); _rebuildSub = null; }
+      streamEl.style.display = 'none';
+      streamEl.textContent = '';
+      status.textContent = 'Rebuild queued…';
       const resp = await fetch('/creators/me/dna/build', {
         method: 'POST', credentials: 'include'
       });
-      if (resp.ok) {
-        status.textContent = 'Rebuild queued. Come back in ~30 seconds.';
+      if (!resp.ok) {
+        status.textContent = 'Could not queue rebuild — try again.';
+        return;
+      }
+      const data = await resp.json();
+      status.textContent = 'Rebuilding DNA — watch the progress below.';
+      if (data.stream_url && typeof window.subscribeToTaskStream === 'function') {
+        streamEl.style.display = 'block';
+        _rebuildSub = window.subscribeToTaskStream(data.stream_url, {
+          onRender: (text) => {
+            streamEl.textContent = text;
+            streamEl.scrollTop = streamEl.scrollHeight;
+          },
+        });
+      }
+      if (window.activeTasks && data.stream_url && data.task_id) {
+        window.activeTasks.registerTask({
+          task_id: data.task_id,
+          kind: 'dna_build',
+          label: 'Rebuilding Creator DNA',
+          stream_url: data.stream_url,
+        });
       }
     }
 

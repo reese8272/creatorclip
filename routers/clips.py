@@ -49,6 +49,18 @@ class RenderQueuedOut(TaskQueuedOut):
     """202 Accepted response for POST /clips/{id}/render (Issue 92)."""
 
 
+class RenderStyleIn(BaseModel):
+    """Optional style parameters for Issue 119 styled renders.
+
+    All fields are optional. Omitting a field means "keep the existing value"
+    (or the default on first render). This lets the UI send only changed fields.
+    """
+
+    subtitle: str | None = None   # "white_large" | "yellow_impact" | "captions_sm" | null
+    background: str | None = None  # "blur" | "black" | null
+    captions_enabled: bool | None = None
+
+
 def _clip_response(clip: Clip) -> dict:
     sj = clip.signals_jsonb or {}
     return {
@@ -139,10 +151,16 @@ async def list_clips(
 async def render_clip(
     request: Request,
     clip_id: uuid.UUID,
+    body: RenderStyleIn | None = None,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Queue a render job for the clip. Returns task_id."""
+    """Queue a render job for the clip. Returns task_id.
+
+    Accepts an optional style body (Issue 119). When present, persists the
+    chosen style on the clip and passes it to the render task so the worker
+    can apply subtitle / background filters.
+    """
     await check_positive_balance(creator.id, session)
 
     clip = await session.get(Clip, clip_id)
@@ -150,6 +168,19 @@ async def render_clip(
         raise HTTPException(status_code=404, detail="Clip not found")
     if clip.render_status == RenderStatus.running:
         raise HTTPException(status_code=409, detail="Render already in progress")
+
+    # Persist style choice before enqueuing so the worker task reads it fresh.
+    if body is not None:
+        existing = clip.style_preset or {}
+        merged: dict = {**existing}
+        if body.subtitle is not None:
+            merged["subtitle"] = body.subtitle
+        if body.background is not None:
+            merged["background"] = body.background
+        if body.captions_enabled is not None:
+            merged["captions_enabled"] = body.captions_enabled
+        clip.style_preset = merged or None
+        await session.commit()
 
     import redis as _redis_pkg
 

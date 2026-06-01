@@ -5,6 +5,68 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-01 — Issues 113–119: UX wave decisions
+
+### Issue 117 — Haiku 4.5 for per-performer analysis; cache by (video_id, dna_version)
+
+**What**: Chose `claude-haiku-4-5-20251001` (Haiku 4.5) for on-demand per-performer
+analysis rather than Sonnet. Cache key is `(creator_id, video_id, dna_version)` —
+serves the cached result until the creator rebuilds their DNA.
+
+**Why**: Per-performer analysis is short (≤256 tokens output) and speed matters
+in the review UI. Haiku 4.5 is ~8× cheaper per output token than Sonnet. The DNA
+brief is ≤800 chars (well under the ~1024-token Haiku cache floor — caching is not
+cost-effective here at today's call frequency). Lazy + cached: a creator who never
+clicks Analyze pays zero tokens.
+
+**Source**: Anthropic pricing page (June 2026); Issue 84 LLM efficiency report
+(`docs/assessment/llm/REPORT.md`).
+
+**Date**: 2026-06-01
+
+---
+
+### Issue 118 — feedback_tags as JSONB list; empty list stored as null
+
+**What**: `feedback_tags` is a JSONB column (not a separate table) because tag
+taxonomy is small, stable, and consumed as a JSON list in every read path.
+An empty list posted from the UI is coerced to `None` (not `[]`) before storage.
+
+**Why**: A separate tags lookup table would add a join and complicate the preference
+model feature extraction. The tag set is product-controlled (8 options + "Other"),
+not user-extensible, so JSONB is appropriate. Storing `None` vs `[]` is a consistency
+choice — `None` is the canonical "no tags" value throughout our nullable pattern.
+
+**Source**: Industry standard for small, bounded tag sets in SaaS (GitHub labels use
+a similar jsonb approach at the API layer).
+
+**Date**: 2026-06-01
+
+---
+
+### Issue 119 — ffmpeg drawtext filter for subtitle presets; style_preset as JSONB
+
+**What**: Subtitle styles are implemented as named ffmpeg `drawtext` filter presets
+in `_SUBTITLE_FILTERS`. Background blur uses `boxblur`. `style_preset` stored as
+JSONB on `clips` so the render task reads it without needing a migration per new
+preset.
+
+**Why**: The product goal is "creator chooses a style → queued re-render applies it."
+The `drawtext` filter is the industry-standard approach for text overlays without a
+separate subtitle track. JSONB allows adding new presets (font, animation, etc.)
+without schema migrations.
+
+**Deviation**: True caption burn-in requires a transcript + timing alignment; this
+issue only adds the UI affordance and a `captions_enabled` boolean in `style_preset`.
+Real caption rendering is tracked as a future issue.
+
+**Source**: ffmpeg documentation (drawtext filter, boxblur); 2026 Shorts editing tool
+survey.
+
+**Date**: 2026-06-01
+
+---
+
 ## 2026-06-01 — Issue 110: SELECT FOR UPDATE SKIP LOCKED for improvement-brief debounce; capture-then-delete-after-commit for _ingest_async orphan-mp4
 
 ### What was decided

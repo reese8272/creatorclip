@@ -11,20 +11,24 @@ belonging to the requesting creator.
 
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from config import settings
 from db import get_session
 from limiter import creator_key, limiter
 from models import (
     Creator,
     CreatorDna,
+    CreatorInsight,
     DnaStatus,
     IngestStatus,
+    InsightType,
     Video,
     VideoKind,
     VideoMetrics,
@@ -67,6 +71,32 @@ class InsightsOut(BaseModel):
     dna: DnaStatsOut
     top_performers: list[PerformerOut]
     bottom_performers: list[PerformerOut]
+
+
+class AnalyticsSummaryOut(BaseModel):
+    period: str
+    videos_in_period: int
+    total_views: int
+    total_watch_time_h: float
+    avg_view_duration_s: float | None
+    avg_engagement_rate: float | None
+    metrics_available: bool
+
+
+class InsightOut(BaseModel):
+    id: str
+    video_id: str | None
+    insight_type: str
+    title: str | None
+    content: str
+    dna_version: int | None
+    is_saved: bool
+    created_at: str
+
+
+class AnalyzePerformerIn(BaseModel):
+    video_id: str
+    performer_kind: str  # "top" or "bottom"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -200,4 +230,223 @@ async def get_insights(
         "dna": dna_stats,
         "top_performers": top_performers,
         "bottom_performers": bottom_performers,
+    }
+
+
+_PERIOD_DAYS: dict[str, int | None] = {"7d": 7, "28d": 28, "90d": 90, "all": None}
+
+
+@router.get("/analytics", response_model=AnalyticsSummaryOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def get_analytics_summary(
+    request: Request,
+    period: str = Query(default="28d", pattern="^(7d|28d|90d|all)$"),
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Aggregate YouTube metrics for the creator's videos in the given period.
+
+    Period filters on ``video.published_at``; "all" has no date bound.
+    Returns zero-counts when no data is available rather than 404, so the
+    dashboard can show an empty state without a separate error path.
+    """
+    days = _PERIOD_DAYS[period]
+    cutoff = datetime.now(UTC) - timedelta(days=days) if days is not None else None
+
+    stmt = (
+        select(
+            func.count(Video.id).label("cnt"),
+            func.coalesce(func.sum(VideoMetrics.views), 0).label("total_views"),
+            func.coalesce(func.sum(VideoMetrics.watch_time_s), 0).label("total_watch_s"),
+            func.avg(VideoMetrics.avg_view_duration_s).label("avg_dur"),
+            func.avg(VideoMetrics.engagement_rate).label("avg_eng"),
+        )
+        .join(VideoMetrics, VideoMetrics.video_id == Video.id)
+        .where(Video.creator_id == creator.id)
+    )
+    if cutoff is not None:
+        stmt = stmt.where(Video.published_at >= cutoff)
+
+    row = (await session.execute(stmt)).one()
+    cnt, total_views, total_watch_s, avg_dur, avg_eng = row
+
+    return {
+        "period": period,
+        "videos_in_period": int(cnt or 0),
+        "total_views": int(total_views or 0),
+        "total_watch_time_h": round(float(total_watch_s or 0) / 3600, 1),
+        "avg_view_duration_s": round(float(avg_dur), 1) if avg_dur is not None else None,
+        "avg_engagement_rate": round(float(avg_eng), 4) if avg_eng is not None else None,
+        "metrics_available": int(cnt or 0) > 0,
+    }
+
+
+# ── AI per-performer analysis (Issue 117) ────────────────────────────────────
+
+_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _build_analysis_prompt(
+    video_title: str,
+    kind: str,
+    views: int | None,
+    engagement_rate: float | None,
+    performer_kind: str,
+    dna_brief: str | None,
+) -> str:
+    views_str = f"{views:,}" if views is not None else "unknown"
+    eng_str = f"{(engagement_rate * 100):.1f}%" if engagement_rate is not None else "unknown"
+    perf_label = "top performer" if performer_kind == "top" else "underperformer"
+    dna_context = f"\n\nCreator DNA summary:\n{dna_brief[:800]}" if dna_brief else ""
+    return (
+        f'Analyse why "{video_title}" ({kind}) is a {perf_label} for this creator. '
+        f"It has {views_str} views and {eng_str} engagement rate.{dna_context}\n\n"
+        "In 2-4 sentences: explain the specific factors that made it over- or under-perform "
+        "relative to this creator's audience and style. Be concrete and cite the numbers. "
+        "Do not promise virality or make guarantees. End with one actionable implication."
+    )
+
+
+@router.post("/analyze-performer", response_model=InsightOut)
+@limiter.limit("20/hour", key_func=creator_key)
+async def analyze_performer(
+    request: Request,
+    body: AnalyzePerformerIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Generate an AI analysis for a top or bottom performer video.
+
+    Uses Haiku 4.5 (fast, low cost). Cached: if an insight for this
+    (video, dna_version) already exists, returns it without a new LLM call.
+    """
+    try:
+        video_id = uuid.UUID(body.video_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid video_id") from exc
+
+    video = await session.get(Video, video_id)
+    if not video or video.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    metrics_row = (
+        await session.execute(
+            select(VideoMetrics).where(VideoMetrics.video_id == video_id)
+        )
+    ).scalars().first()
+
+    dna_row = (
+        await session.execute(
+            select(CreatorDna)
+            .where(
+                CreatorDna.creator_id == creator.id,
+                CreatorDna.status.in_([DnaStatus.confirmed, DnaStatus.draft]),
+            )
+            .order_by(CreatorDna.version.desc())
+        )
+    ).scalars().first()
+    dna_version = dna_row.version if dna_row else None
+
+    # Cache check: return existing insight for this video + DNA version
+    existing = (
+        await session.execute(
+            select(CreatorInsight).where(
+                CreatorInsight.creator_id == creator.id,
+                CreatorInsight.video_id == video_id,
+                CreatorInsight.insight_type == InsightType.performer_analysis,
+                CreatorInsight.dna_version == dna_version,
+            )
+        )
+    ).scalars().first()
+    if existing:
+        return _insight_to_dict(existing)
+
+    # Build and call Haiku
+    prompt = _build_analysis_prompt(
+        video_title=video.title or video.youtube_video_id,
+        kind=video.kind.value,
+        views=metrics_row.views if metrics_row else None,
+        engagement_rate=metrics_row.engagement_rate if metrics_row else None,
+        performer_kind=body.performer_kind,
+        dna_brief=dna_row.brief_text if dna_row else None,
+    )
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    try:
+        msg = await __import__("asyncio").to_thread(
+            client.messages.create,
+            model=_HAIKU_MODEL,
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = msg.content[0].text if msg.content else "Analysis unavailable."
+    except Exception as exc:
+        logger.warning("performer analysis LLM failed video=%s err=%s", video_id, exc)
+        raise HTTPException(status_code=503, detail="Analysis service temporarily unavailable") from exc
+
+    title = f"Why '{video.title or video.youtube_video_id}' {'excelled' if body.performer_kind == 'top' else 'underperformed'}"
+    insight = CreatorInsight(
+        creator_id=creator.id,
+        video_id=video_id,
+        insight_type=InsightType.performer_analysis,
+        title=title,
+        content=content,
+        dna_version=dna_version,
+        is_saved=False,
+    )
+    session.add(insight)
+    await session.commit()
+    await session.refresh(insight)
+    return _insight_to_dict(insight)
+
+
+@router.post("/save/{insight_id}", response_model=InsightOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def save_insight(
+    request: Request,
+    insight_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Toggle the saved state of an insight."""
+    insight = await session.get(CreatorInsight, insight_id)
+    if not insight or insight.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Insight not found")
+    insight.is_saved = not insight.is_saved
+    await session.commit()
+    await session.refresh(insight)
+    return _insight_to_dict(insight)
+
+
+@router.get("/saved", response_model=list[InsightOut])
+@limiter.limit("60/minute", key_func=creator_key)
+async def list_saved_insights(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    """Return all saved insights for the creator, newest first."""
+    rows = (
+        await session.execute(
+            select(CreatorInsight)
+            .where(CreatorInsight.creator_id == creator.id, CreatorInsight.is_saved.is_(True))
+            .order_by(CreatorInsight.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    return [_insight_to_dict(r) for r in rows]
+
+
+def _insight_to_dict(ins: CreatorInsight) -> dict:
+    return {
+        "id": str(ins.id),
+        "video_id": str(ins.video_id) if ins.video_id else None,
+        "insight_type": ins.insight_type.value,
+        "title": ins.title,
+        "content": ins.content,
+        "dna_version": ins.dna_version,
+        "is_saved": ins.is_saved,
+        "created_at": ins.created_at.isoformat(),
     }

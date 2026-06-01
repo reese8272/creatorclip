@@ -1,107 +1,42 @@
-# _root_infra — assessed 2026-05-31 (Wave 9 + Issue 112 re-verification)
+# _root_infra — assessed 2026-06-01
 
 ## Findings
 
-### Issue 112 Fix Verification — `/health` Connection Pooling
+- [SEV2] api_key.py:113-114 — `last_used_at` write on every API-key request causes write amplification. Every auth path commits a transaction just to update a timestamp. | fix: batch updates into a periodic job (e.g., Beat task every 5 min) or use an async fire-and-forget PATCH instead of synchronous session.commit().
 
-The Issue 112 refactor (db.py pool sizing + Postgres/Redis health probes) is **correct and complete**:
+- [SEV1] models.py:728-757 — `CreatorInsight` model missing `__table_args__` with composite index on `(creator_id, video_id)`. Docstring says "cached per (video_id, dna_version)" but queries will likely scan the full creator_insights table by creator_id. Without the index, cross-tenant list operations (e.g., GET /insights for a creator) will N+1 or full-table-scan. | fix: add `__table_args__ = (sa.Index("ix_creator_video_insight", "creator_id", "video_id"),)` after line 757.
 
-- **main.py:146-158** — `_check_postgres()` routes via `engine.connect()` instead of opening a fresh `psycopg.AsyncConnection`. Stays inside the pre-warmed SQLAlchemy pool (15+5 ceiling under the 25-conn PgBouncer sidecar). Wrapped in `asyncio.timeout(2.0)`.
-- **main.py:40-43, 161-172** — `_health_redis` module-level singleton initialized once in lifespan (line 50: `aioredis.from_url(...)`), reused on every `_check_redis()` call. No per-probe connection churn. Properly closed at shutdown (line 68).
-- **db.py:33** — `prepare_threshold=None` applied to BOTH engines via `_CONNECT_ARGS`. PgBouncer prepared-statement safety preserved.
-- **db.py:39-40** — Pool ceiling: `pool_size=15 + max_overflow=5 = 20` stays under the 25-conn PgBouncer sidecar (documented).
-- **tests/test_health.py:4-15** — Regression test asserts `psycopg` not imported at module scope (structural proof the fix holds).
-- **tests/test_health.py:18-26** — Regression test asserts `_health_redis` is initialized (no per-probe None-check crash).
+- [cleanup] config.py:231-236 — fatal startup errors use `print()` instead of `logger.error()`. Breaks JSON log aggregation and loses the request_id context. | fix: replace with `logging.getLogger(__name__).critical()` so logs stay structured and searchable.
 
-**Status: CLEAN — Issue 112 fix is production-ready.**
+- [SEV2] db.py:80-103 — `recreate_engine()` is public with no re-entry guard or validation. If called twice concurrently (race in Celery prefork handler), the second caller inherits a disposed pool while the first is mid-rebind. | fix: add `_engine_rebind_lock: asyncio.Lock` at module level and acquire it inside `recreate_engine()`, or guard with a boolean flag `_engine_recreated: bool`.
 
----
+- [SEV1] auth.py:47 + api_key.py:95-102 — both paths issue a SELECT on `creators` table BEFORE `session.info["creator_id"]` is set, so RLS policies cannot gate the query. The `creators` table is documented as exempt from RLS (Issue 56), but this is a non-obvious exception that must be enforced in tests. | fix: add an integration test that verifies SELECT on creators without creator_id GUC set returns rows (non-RLS), then confirm RLS gates on subsequent queries.
 
-## Remaining Findings from Wave-9 Assessment (Still Present)
+- [cleanup] observability.py:43-44 — `_task_start_ctx` ContextVar is safe only under Celery prefork (one task per process). If Celery switches to threaded/gevent pool in production, multiple tasks per process will collide on the same ContextVar, causing duration metrics to be incorrect. | fix: document the prefork-only assumption in a comment or add a startup check that asserts `CELERYD_POOL == "prefork"` in production.
 
-### [SEV2] db.py:80-103 — `recreate_engine()` Re-entry Guard
-
-Function is module-public with no guard against multiple calls with in-flight sessions. Documented as "after fork only" but nothing stops accidental re-entry.
-
-**Fix**: Add `_recreate_engine_called: bool = False` module-level flag; raise `RuntimeError("recreate_engine() already called — must not be called with in-flight sessions")` on re-entry. Document the precondition in the docstring.
-
----
-
-### [SEV2] auth.py:46-58 / api_key.py — Bootstrap Query Before GUC
-
-Bootstrap Creator/ApiKey lookup runs BEFORE `session.info["creator_id"]` is set, so no `app.creator_id` GUC is emitted on the bootstrap transaction. Intentional today (creators/creator_api_keys are RLS-exempt, Issue 56), but this is a by-convention invariant: a future migration flipping either table under RLS would silently lose those rows and break ALL authentication with 401-everywhere outage.
-
-**Fix**: Add a CI test enumerating RLS-exempt tables from `pg_policies` system catalog and asserting `creators` and `creator_api_keys` remain exempt. OR: refactor bootstrap to use `AdminSessionLocal` (BYPASSRLS) for the lookup only, then hand the Creator/ApiKey to the request.
-
----
-
-### [SEV2] config.py:228-237 — `print()` on Fatal Startup
-
-Fatal config error calls `print(..., file=sys.stderr)`. Correct in spirit (logger not yet configured at import time) but CLAUDE.md production standard mandates "logging module only — no print()". Container log aggregators parsing JSON lines (LOG_JSON=True) miss this fatal startup message entirely.
-
-**Fix**: Call `logging.basicConfig(stream=sys.stderr, level=logging.ERROR, format="[CreatorClip] %(message)s")` in the `except ValidationError` block, then emit `logging.error(...)`. Same user-visible output, single log path aggregators can ingest.
-
----
-
-### [SEV2] observability.py:43-44, 224-241 — Celery ContextVar Correlation (Pool-Specific)
-
-Module-level ContextVars (`request_id_ctx`, `_task_start_ctx`) documented as "safe because each worker runs one task at a time" — true ONLY under `--pool=prefork`. Any future migration to gevent/eventlet/threads would cause concurrent tasks in one process to overwrite each other's correlation id and start time → mislabelled durations and broken log correlation.
-
-**Fix**: Assert `app.conf.worker_pool == "prefork"` at worker startup and refuse to boot otherwise. OR: key task start off `task.request.id` in a per-task dict guarded by `task_postrun` cleanup.
-
----
-
-### [SEV2] api_key.py:113-114 — Write Amplification on `last_used_at`
-
-Every API-key-authenticated request (e.g., OBS companion app uploading every few seconds) issues `UPDATE creator_api_keys SET last_used_at = now()` inside the auth dependency BEFORE the handler runs. No rate-limiting on the update; high-frequency clients cause per-request writes and fsync thrashing on a hot row.
-
-**Fix**: Coarse-grain `last_used_at` — only UPDATE if `last_used_at IS NULL OR last_used_at < now() - interval '60 seconds'`. Skip the commit when no row changed. Keeps management-UI freshness signal without per-request write amplification.
-
----
-
-### [cleanup] db.py:120 — Missing Type Hints on `_set_app_creator_id`
-
-Event listener callback is missing type hints on parameters: `def _set_app_creator_id(session, transaction, connection):`
-
-**Fix**: Add type hints: `def _set_app_creator_id(session: Session, transaction, connection: Connection) -> None:`. (Note: `transaction` type is internal SQLAlchemy; could be left untyped if that's opaque, but `Session` and `Connection` must be explicit per CLAUDE.md rubric 6.)
-
----
-
-### [cleanup] crypto.py:13-24 — MultiFernet Not Cached
-
-`_fernet()` constructs a fresh `MultiFernet` on EVERY encrypt/decrypt call (cheap but non-zero HMAC+AES context init). Token-refresh-heavy endpoints pay repeatedly.
-
-**Fix**: Add `@functools.lru_cache(maxsize=1)` keyed on `(settings.TOKEN_ENCRYPTION_KEY, settings.TOKEN_ENCRYPTION_KEY_PREVIOUS)`. Cache busts on key rotation; steady state hits the cache.
-
----
-
-### [cleanup] main.py:43-52, 57-65 — Lifespan Coupling to Private Module Internals
-
-Lifespan reaches into TWO modules' private internals via function-local imports (`youtube._http`, `worker.progress`). Each new shared async resource adds another coupling block.
-
-**Fix**: Define a `shared_resources.register_aclose(coro_fn)` registry that modules call at import time; lifespan iterates the registry and awaits each. Decouples and makes shutdown order inspectable.
-
----
-
-### [cleanup] main.py:130-132 Removed (Issue 112)
-
-Prior assessment flagged a `_pg_dsn()` function here, but that function no longer exists (was removed during the Issue 112 refactor). The old SQLAlchemy.create_async_engine path is gone. **CLEAN.**
-
----
-
-## Rubric Coverage
+## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | SEV2 on `recreate_engine()` re-entry guard; core pool/session/lifespan plumbing + Issue 112 fix all correct |
-| 2 Concurrency & scale | SEV2 on observability ContextVar pool-specificity; `/health` connection churn FIXED (Issue 112); pool math + PgBouncer + RLS GUC all correct; scale-checklist A ✅ by inspection |
-| 3 Security & compliance | SEV2 on bootstrap-query-before-GUC by-convention invariant; parameterized RLS + quota-leak vector (Issue 106) + API-key threat model all correct; scale-checklist D ✅ structural, I ✅ by inspection |
-| 4 Clip-quality | n/a (infra) |
-| 5 Anthropic SDK | n/a (no LLM call in slice) |
-| 6 Cleanliness & typing | cleanup on `_set_app_creator_id` type hints, MultiFernet caching, lifespan coupling; Issue 108 typing sweep complete (no `Optional[` in slice) |
-| 7 Error handling / API | ok — safe error details, no stack traces |
-| 8 Config & paths | cleanup on config.py `print()` fallback; all required vars in .env.example |
+| 1 Resource lifecycle | **PASS** — sessions via context manager; engines module-level singletons; no leaks. SEV2: recreate_engine re-entry risk. |
+| 2 Concurrency & scale | **WARN** — api_key write-on-every-auth is bounded (per-creator rate limit caps writes), but SEV2 recreate_engine race + observability prefork assumption flagged. |
+| 3 Security & compliance | **PASS** — encrypted tokens via crypto.decrypt(), no PII in logs, RLS exemptions documented (creators table). SEV1: SELECT creators before RLS context set is spec'd but not tested. |
+| 4 Clip-quality correctness | n/a — no clip scoring logic in root infra. |
+| 5 Anthropic SDK usage | n/a — no LLM calls in these modules. |
+| 6 Code cleanliness & typing | **PASS** — no TODO/commented code, full typing. cleanup: config.py print() instead of logging. |
+| 7 Error handling & API surface | **PASS** — auth/api_key raise HTTP 401/403 with safe messages, no stack traces. |
+| 8 Config & paths | **PASS** — all config present in Settings, fail-fast on required vars. All media paths checked for absolute when STORAGE_BACKEND=local. |
 
-## Module Verdict
+## New code: Models (Issues 113-119)
 
-**NEEDS-WORK** — Issue 112 `/health` fix is production-ready. Remaining hot-list: (1) bootstrap-query-before-GUC by-convention invariant (needs CI test to prevent regress); (2) recreate_engine() re-entry guard (structural guard missing); (3) observability ContextVar pool-scoping (silent break risk under pool change); (4) config print() single log path; (5) api_key write-amplification on high-frequency clients. No BLOCKER; no cross-tenant leak (Postgres RLS is structural). Issue 112 closed the highest-impact SEV2 (axis E connection churn under load).
+- **InsightType enum** (models.py:77-80): well-defined, no issues.
+- **CreatorInsight model** (models.py:728-757): **MISSING composite index** on (creator_id, video_id). Creator insight lists will scan full table. Fix: add __table_args__ with (creator_id, video_id) index.
+- **ClipFeedback.feedback_tags** (models.py:511): JSONB column correctly typed as `list | None`. No constraint violations. ✓
+- **ClipFeedback.feedback_note** (models.py:513): Text column correctly typed. ✓
+- **Clip.style_preset** (models.py:477): JSONB column correctly typed as `dict | None`. Schema documented in comment. ✓
+
+## Module verdict
+
+NEEDS-WORK — New CreatorInsight model missing critical index for creator_id + video_id queries; recreate_engine lacks re-entry guard (SEV2 race); API-key last_used_at write amplification (SEV2); auth/api_key SELECT creators before RLS context requires integration test (SEV1); config.py prints on fatal startup instead of logging (cleanup).
+
+Five concrete fixes required; all are below-threshold for blocking but must land in a sweep before scale testing begins.

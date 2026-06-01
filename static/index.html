@@ -143,6 +143,45 @@
        status enum (pending / running / done / failed) maps to badge
        variants via the JS STATUS_BADGE table below. */
 
+    /* ── YouTube Analytics panel (Issue 115) ─────────────────────── */
+    .analytics-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-4);
+    }
+    .analytics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: var(--space-3);
+    }
+    .analytics-cell {
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-3) var(--space-4);
+    }
+    .analytics-cell .label {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .analytics-cell .value {
+      font-family: var(--font-mono);
+      font-feature-settings: 'tnum';
+      font-size: var(--text-lg);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-top: var(--space-1);
+    }
+    #period-select {
+      font-size: var(--text-xs);
+      padding: var(--space-1) var(--space-2);
+      color: var(--color-text-muted);
+      border-color: var(--color-border-strong);
+    }
+
     /* Logout link in nav-spacer position */
     .logout-link {
       font-size: var(--text-xs);
@@ -170,6 +209,8 @@
     </div>
     <span class="nav-spacer"></span>
     <span class="user-name" id="nav-user"></span>
+    <span class="nav-balance" id="nav-balance"></span>
+    <a href="/static/walkthrough.html" class="nav-help" title="How it works">?</a>
     <a href="#" class="logout-link" onclick="logout()">Logout</a>
   </nav>
 
@@ -201,6 +242,22 @@
         <div class="label">Clips rendered</div>
         <div class="value" id="clips-ready">—</div>
         <div class="sub"><a href="/static/review.html">Review queue →</a></div>
+      </div>
+    </div>
+
+    <!-- YouTube Analytics -->
+    <div class="summary-card" style="grid-column:1/-1;padding:var(--space-4) var(--space-5)">
+      <div class="analytics-header">
+        <div class="label">YouTube Analytics</div>
+        <select id="period-select" onchange="loadAnalytics(this.value)">
+          <option value="7d">Last 7 days</option>
+          <option value="28d" selected>Last 28 days</option>
+          <option value="90d">Last 90 days</option>
+          <option value="all">All time</option>
+        </select>
+      </div>
+      <div class="analytics-grid" id="analytics-grid">
+        <div class="analytics-cell"><div class="label">Loading…</div><div class="value">—</div></div>
       </div>
     </div>
 
@@ -275,6 +332,7 @@
       }
 
       await loadVideos();
+      loadAnalytics('28d');
     }
 
     async function loadVideos() {
@@ -413,6 +471,35 @@
       } else {
         btn.disabled = false; btn.textContent = 'Retry';
       }
+    }
+
+    function _fmtNum(n) {
+      if (n == null) return '—';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+      return String(n);
+    }
+
+    async function loadAnalytics(period) {
+      const grid = document.getElementById('analytics-grid');
+      grid.innerHTML = '<div class="analytics-cell"><div class="label">Loading…</div><div class="value">—</div></div>';
+      const resp = await fetch(`/creators/me/insights/analytics?period=${period}`, { credentials: 'include' });
+      if (!resp.ok) {
+        grid.innerHTML = '<div class="analytics-cell" style="color:var(--color-text-subtle);font-size:var(--text-sm)">Could not load analytics.</div>';
+        return;
+      }
+      const d = await resp.json();
+      if (!d.metrics_available) {
+        grid.innerHTML = '<div class="analytics-cell" style="color:var(--color-text-subtle);font-size:var(--text-sm)">No analytics data yet — connect your channel and sync.</div>';
+        return;
+      }
+      grid.innerHTML = `
+        <div class="analytics-cell"><div class="label">Views</div><div class="value">${_fmtNum(d.total_views)}</div></div>
+        <div class="analytics-cell"><div class="label">Watch time</div><div class="value">${d.total_watch_time_h.toFixed(1)}h</div></div>
+        <div class="analytics-cell"><div class="label">Avg view duration</div><div class="value">${d.avg_view_duration_s != null ? d.avg_view_duration_s.toFixed(0) + 's' : '—'}</div></div>
+        <div class="analytics-cell"><div class="label">Engagement rate</div><div class="value">${d.avg_engagement_rate != null ? (d.avg_engagement_rate * 100).toFixed(1) + '%' : '—'}</div></div>
+        <div class="analytics-cell"><div class="label">Videos tracked</div><div class="value">${d.videos_in_period}</div></div>
+      `;
     }
 
     document.addEventListener('auth:ready', (e) => init(e.detail));

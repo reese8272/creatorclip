@@ -181,6 +181,39 @@ input:focus, textarea:focus, select:focus {
 .nav-links a.active { color: var(--color-text); }
 .nav-spacer { margin-left: auto; }
 
+/* Minute balance chip (Issues 113) */
+.nav-balance {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+}
+
+/* Tutorial help icon (Issue 113) */
+.nav-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.nav-help:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
 /* Card ---------------------------------------------------------- */
 .card {
   background: var(--color-surface);

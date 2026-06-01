@@ -111,13 +111,14 @@
     /* ── Performer lists ───────────────────────────────────────── */
     .perf-row {
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: 1fr auto auto auto;
       gap: var(--space-3);
-      padding: var(--space-2) 0;
+      padding: var(--space-3) 0;
       border-bottom: 1px solid var(--color-border);
-      align-items: baseline;
+      align-items: start;
     }
     .perf-row:last-child { border-bottom: none; }
+    .perf-info { min-width: 0; }
     .perf-title {
       color: var(--color-text);
       font-size: var(--text-sm);
@@ -125,11 +126,18 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .perf-analysis {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      margin-top: var(--space-2);
+      line-height: var(--leading-relaxed);
+    }
     .perf-kind {
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       color: var(--color-text-subtle);
       text-transform: uppercase;
+      margin-top: var(--space-1);
     }
     .perf-stat {
       font-family: var(--font-mono);
@@ -138,6 +146,45 @@
       color: var(--color-accent);
       font-weight: 500;
       text-align: right;
+      margin-top: var(--space-1);
+    }
+    .btn-analyze {
+      font-size: var(--text-xs);
+      padding: 2px var(--space-2);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      color: var(--color-text-muted);
+      border-radius: var(--radius);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .btn-analyze:hover { border-color: var(--color-accent); color: var(--color-accent); }
+    .btn-analyze:disabled { opacity: 0.5; cursor: default; }
+
+    /* ── Saved insights ────────────────────────────────────────── */
+    .insight-card {
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      margin-bottom: var(--space-3);
+    }
+    .insight-card .ic-title {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text);
+      margin-bottom: var(--space-2);
+    }
+    .insight-card .ic-content {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      line-height: var(--leading-relaxed);
+    }
+    .insight-card .ic-meta {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-2);
     }
 
     /* ── Upload windows ───────────────────────────────────────── */
@@ -216,6 +263,9 @@
       <a href="/static/pricing.html">Pricing</a>
     </div>
     <span class="nav-spacer"></span>
+    <span class="user-name" id="nav-user" style="font-size:var(--text-xs);font-family:var(--font-mono);color:var(--color-text-subtle);margin-right:var(--space-2)"></span>
+    <span class="nav-balance" id="nav-balance"></span>
+    <a href="/static/walkthrough.html" class="nav-help" title="How it works">?</a>
     <a href="#" style="font-size:var(--text-xs);color:var(--color-text-muted)" onclick="logout()">Logout</a>
   </nav>
 
@@ -289,6 +339,15 @@
       <pre class="stream-output" id="brief-stream"></pre>
       <div id="brief-output"></div>
     </div>
+
+    <!-- Saved insights (Issue 117) -->
+    <div class="panel" id="saved-panel" style="display:none">
+      <div class="panel-header">
+        <h3>Saved insights</h3>
+        <span class="panel-sub">Bookmarked AI analyses</span>
+      </div>
+      <div id="saved-insights-list"></div>
+    </div>
   </main>
 
   <script>
@@ -338,21 +397,25 @@
         `<div class="dna-cell"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
       ).join('');
 
-      // Performers
-      const renderPerf = (rows) => {
+      // Performers with AI analyze button (Issue 117)
+      const renderPerf = (rows, kind) => {
         if (!rows || !rows.length) {
           return '<div class="panel-empty">Build your DNA to surface this list.</div>';
         }
         return rows.map(p => `
-          <div class="perf-row">
-            <span class="perf-title">${p.title || p.youtube_video_id}</span>
+          <div class="perf-row" id="perf-${p.video_id}">
+            <div class="perf-info">
+              <div class="perf-title">${p.title || p.youtube_video_id}</div>
+              <div class="perf-analysis" id="analysis-${p.video_id}" style="display:none"></div>
+            </div>
             <span class="perf-kind">${p.kind}</span>
             <span class="perf-stat">${formatRate(p.engagement_rate)}</span>
+            <button class="btn-analyze" onclick="analyzePerformer('${p.video_id}','${kind}',this)">Analyze</button>
           </div>
         `).join('');
       };
-      document.getElementById('top-performers').innerHTML = renderPerf(data.top_performers);
-      document.getElementById('bottom-performers').innerHTML = renderPerf(data.bottom_performers);
+      document.getElementById('top-performers').innerHTML = renderPerf(data.top_performers, 'top');
+      document.getElementById('bottom-performers').innerHTML = renderPerf(data.bottom_performers, 'bottom');
     }
 
     async function loadTiming() {
@@ -451,9 +514,67 @@
       setTimeout(poll, 3000);
     }
 
+    async function analyzePerformer(videoId, kind, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Analyzing…';
+      const analysisEl = document.getElementById('analysis-' + videoId);
+      try {
+        const resp = await fetch('/creators/me/insights/analyze-performer', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ video_id: videoId, performer_kind: kind }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          analysisEl.style.display = 'block';
+          analysisEl.style.color = 'var(--color-danger)';
+          analysisEl.textContent = err.detail || 'Analysis failed — try again.';
+          btn.disabled = false; btn.textContent = 'Retry';
+          return;
+        }
+        const data = await resp.json();
+        analysisEl.style.display = 'block';
+        analysisEl.style.color = '';
+        analysisEl.innerHTML = `${data.content} <button onclick="saveInsight('${data.id}',this)" style="font-size:var(--text-xs);color:var(--color-accent);background:none;border:none;cursor:pointer;margin-left:4px">&#9733; Save</button>`;
+        btn.textContent = 'Analyzed ✓';
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Retry';
+      }
+    }
+
+    async function saveInsight(insightId, btn) {
+      const resp = await fetch('/creators/me/insights/save/' + insightId, {
+        method: 'POST', credentials: 'include'
+      });
+      if (resp.ok) {
+        btn.textContent = '★ Saved';
+        btn.disabled = true;
+        loadSavedInsights();
+      }
+    }
+
+    async function loadSavedInsights() {
+      const resp = await fetch('/creators/me/insights/saved', { credentials: 'include' });
+      if (!resp.ok) return;
+      const items = await resp.json();
+      const panel = document.getElementById('saved-panel');
+      const list = document.getElementById('saved-insights-list');
+      if (!items.length) { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      list.innerHTML = items.map(ins => `
+        <div class="insight-card">
+          <div class="ic-title">${ins.title || 'Insight'}</div>
+          <div class="ic-content">${ins.content}</div>
+          <div class="ic-meta">DNA v${ins.dna_version || '?'} · ${new Date(ins.created_at).toLocaleDateString()}</div>
+        </div>
+      `).join('');
+    }
+
     document.addEventListener('auth:ready', () => {
       loadInsights();
       loadTiming();
+      loadSavedInsights();
     });
   </script>
 
