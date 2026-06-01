@@ -698,3 +698,10 @@ class ImprovementBrief(Base):
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        # One row per creator; the DB-level backstop for the concurrent-first-insert race
+        # that SELECT FOR UPDATE SKIP LOCKED cannot prevent (no row → no lock to acquire).
+        # The router's IntegrityError catch re-queries and returns the winning row.
+        sa.UniqueConstraint("creator_id", name="uq_improvement_briefs_creator_id"),
+    )

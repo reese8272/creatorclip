@@ -2566,6 +2566,60 @@ Cleanup-severity items the Issue 108 sweep deferred because they need real desig
 
 ---
 
+## Issue 112: Locust load-test gate — axes A + E (CONDITIONAL → YES)
+**Status**: ✅ Code complete (2026-06-01) — Locust run is user-side on the staging VM · **Severity**: structural gate (scale-checklist axes A + E)
+
+The sole remaining code-side gate between CONDITIONAL and YES on the production-readiness
+verdict. The locustfile scaffold (`tests/perf/locustfile.py`) existed since Issue 78f but
+the staging infrastructure was never built, and the `/health` endpoint had a per-probe
+connection-churn bug that would have corrupted the results.
+
+**Two deliverables:**
+
+**(A) `/health` connection-churn fix (code):**
+`main.py::_check_postgres` was calling `psycopg.AsyncConnection.connect()` — a fresh OS
+connection per k8s readiness/liveness probe × N replicas, entirely outside the SQLAlchemy
+pool. `_check_redis` was calling `aioredis.from_url()` on every probe — a new pool each
+call. Under a 300-user Locust run, `/health` has weight 1, so these probes fired
+continuously and would have produced false pool-exhaustion signals before the real
+endpoints could stress the pool (axis-E SEV2 from the post-Wave-9 /assess).
+
+Fix: `_check_postgres` now uses `engine.connect()` through the SQLAlchemy pool + `asyncio.timeout(2.0)`.
+`_check_redis` uses a module-level `_health_redis` singleton initialized in lifespan,
+mirroring the pattern in `worker/progress.py`. `psycopg` and `_pg_dsn()` removed from
+`main.py` (no longer needed). 2 regression tests in `tests/test_health.py` pin the fix.
+
+**(B) Staging infrastructure (user-side run):**
+`docker-compose.staging.yml` — isolated staging stack with `edoburu/pgbouncer:1.23.1-p3`
+in transaction-pooling mode (`POOL_MODE=transaction`, `DEFAULT_POOL_SIZE=25`) routing
+`app → PgBouncer → postgres_staging`. App exposed on port 8001; separate named volumes;
+Redis on DB index 1. Matches the K8s production architecture the pool math was sized for.
+
+`tests/perf/seed_staging.py` — self-contained psycopg script that upserts one creator +
+12 videos + VideoMetrics + 1 confirmed DNA + 1 CreatorIdentity row so read endpoints
+return realistic payloads (empty tables hide N+1 and serialization cost).
+
+`tests/perf/README.md` — updated with 7-step runbook: pull + up, alembic upgrade head,
+seed, verify /health, run Locust, read CSV, tear down. Includes pass criteria and
+instructions for recording results in the assessment REPORT.md.
+
+**Acceptance criteria:**
+- [x] `main.py::_check_postgres` uses `engine.connect()` + `asyncio.timeout(2.0)`, not `psycopg.AsyncConnection.connect()`
+- [x] `main.py::_check_redis` uses `_health_redis` singleton initialized in lifespan, not `aioredis.from_url()` per call
+- [x] `psycopg` import + `_pg_dsn()` removed from `main.py`
+- [x] `_health_redis` closed in lifespan shutdown
+- [x] 2 regression tests: `test_health_postgres_probe_uses_engine_not_raw_psycopg` + `test_health_redis_singleton_initialized`
+- [x] `docker-compose.staging.yml` with PgBouncer transaction-pooling (port 8001, isolated volumes)
+- [x] `tests/perf/seed_staging.py` — upsert-safe, prints env var export block
+- [x] `tests/perf/README.md` updated with 7-step runbook + pass criteria + result-recording instructions
+- [ ] **USER-SIDE:** Run `docker compose -f docker-compose.staging.yml up -d` on the prod VM
+- [ ] **USER-SIDE:** Run `alembic upgrade head` in the staging app container
+- [ ] **USER-SIDE:** Seed via `tests/perf/seed_staging.py`
+- [ ] **USER-SIDE:** Run Locust (300 users, 5 min, --csv docs/assessment/loadtest)
+- [ ] **USER-SIDE:** Record axis A + E numbers in `docs/assessment/REPORT.md`; flip ⚠️ → ✅ in scale-checklist
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

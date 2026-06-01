@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
@@ -106,12 +107,27 @@ async def start_improvement_brief(
                 "task_id": existing.job_id,
                 "stream_url": stream_url,
             }
-        # Truly no row → create. The UNIQUE(creator_id) backstop guarantees
-        # at most one of two truly-concurrent inserts succeeds; the loser
-        # gets IntegrityError and the slowapi limit (10/hour) means the
-        # retry rate is already capped.
+        # Truly no row → create. flush() triggers the INSERT immediately so
+        # the UNIQUE(creator_id) constraint fires here, not at commit. The
+        # loser of a concurrent first-insert race gets IntegrityError, rolls
+        # back, re-queries, and returns the winner's task_id.
         row = ImprovementBrief(creator_id=creator.id)
         session.add(row)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            concurrent = await session.scalar(
+                select(ImprovementBrief).where(ImprovementBrief.creator_id == creator.id)
+            )
+            if concurrent is None:
+                raise  # constraint fired but no row found — should never happen
+            stream_url = f"/tasks/{concurrent.job_id}/events" if concurrent.job_id else None
+            return {
+                "status": concurrent.status.value,
+                "task_id": concurrent.job_id,
+                "stream_url": stream_url,
+            }
     elif row.status == ImprovementBriefStatus.pending:
         # Lock-acquired branch: the row already says pending. Debounced.
         stream_url = f"/tasks/{row.job_id}/events" if row.job_id else None

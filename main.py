@@ -4,7 +4,6 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import psycopg
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import text
 
 from config import settings
+from db import engine
 from limiter import limiter
 from observability import (
     RequestIDMiddleware,
@@ -36,10 +37,22 @@ from routers import videos as videos_router
 configure_logging(json_logs=settings.LOG_JSON)
 logger = logging.getLogger(__name__)
 
+# Module-level singleton for /health Redis probes. Initialized in lifespan so
+# every probe reuses the same connection pool instead of calling from_url() and
+# opening a fresh pool on each k8s readiness/liveness tick (axis-E SEV2).
+_health_redis: aioredis.Redis | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _health_redis
     logger.info("CreatorClip starting (env=%s)", settings.ENV)
+    _health_redis = aioredis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True,
+        socket_timeout=2.0,
+        socket_connect_timeout=2.0,
+    )
     yield
     # Close the shared YouTube/Google HTTP client (Issue 72).
     from youtube import _http
@@ -50,6 +63,9 @@ async def lifespan(app: FastAPI):
     from worker import progress
 
     await progress.aclose()
+    # Close the health-check Redis singleton.
+    if _health_redis is not None:
+        await _health_redis.aclose()
     logger.info("CreatorClip shutdown")
 
 
@@ -127,15 +143,15 @@ if settings.METRICS_ENABLED:
         return Response(content=payload, media_type=content_type)
 
 
-def _pg_dsn() -> str:
-    # psycopg3 expects postgresql://, not the SQLAlchemy postgresql+psycopg:// form
-    return settings.DATABASE_URL.replace("postgresql+psycopg://", "postgresql://")
-
-
 async def _check_postgres() -> bool:
+    # Probe via the SQLAlchemy pool (engine.connect) so /health stays inside
+    # the pre-warmed connection pool. The old psycopg.AsyncConnection.connect
+    # path opened a fresh connection per k8s probe × N replicas — sustained
+    # churn outside the pool that defeats the PgBouncer sizing math (Issue 112).
     try:
-        async with await psycopg.AsyncConnection.connect(_pg_dsn()) as conn:
-            await conn.execute("SELECT 1")
+        async with asyncio.timeout(2.0):
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
         return True
     except Exception as exc:
         logger.warning("Postgres health check failed: %s", exc)
@@ -143,10 +159,13 @@ async def _check_postgres() -> bool:
 
 
 async def _check_redis() -> bool:
+    # Reuse the module-level singleton; from_url() on every probe creates a
+    # new pool each call — same axis-E churn as the old Postgres path.
+    if _health_redis is None:
+        return False
     try:
-        r = aioredis.from_url(settings.REDIS_URL)
-        await r.ping()
-        await r.aclose()
+        async with asyncio.timeout(2.0):
+            await _health_redis.ping()
         return True
     except Exception as exc:
         logger.warning("Redis health check failed: %s", exc)

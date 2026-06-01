@@ -1,0 +1,129 @@
+# Staging stack for Locust load testing (Issue 112).
+#
+# Runs an isolated copy of the app on port 8001 behind a real PgBouncer
+# (transaction-pooling mode) — the environment that production K8s will use.
+# This is the only way to verify axes A (pool math) and E (health churn) with
+# real concurrency evidence; reading the code cannot settle either.
+#
+# NEVER run this against the production database. It creates its own named
+# volumes (staging_postgres_data, staging_redis_data) so it cannot accidentally
+# touch prod data even when run on the same VM.
+#
+# Quickstart (on the prod VM):
+#   See tests/perf/README.md for the full step-by-step with env var instructions.
+#
+#   docker compose -f docker-compose.staging.yml up -d
+#   docker compose -f docker-compose.staging.yml exec app \
+#       alembic upgrade head
+#   python3 tests/perf/seed_staging.py  # prints CC_CREATOR_ID
+#   locust -f tests/perf/locustfile.py --host http://localhost:8001 \
+#       --users 300 --spawn-rate 20 --run-time 5m --headless \
+#       --csv docs/assessment/loadtest
+
+services:
+  # ── PgBouncer ──────────────────────────────────────────────────────────────
+  # Transaction-pooling mode: the production K8s design (docs/DEPLOYMENT.md).
+  # prepare_threshold=None in db.py disables server-side prepared statements so
+  # PgBouncer can reuse server connections across clients without hitting the
+  # "prepared statement does not exist" error that would appear in session mode.
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1-p3
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://creatorclip:${POSTGRES_PASSWORD}@postgres_staging:5432/creatorclip_staging"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 25
+      # DISCARD ALL resets prepared statements, temp tables, etc. on connection
+      # return — required for transaction-mode safety.
+      SERVER_RESET_QUERY: "DISCARD ALL"
+      AUTH_TYPE: md5
+    depends_on:
+      postgres_staging:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U creatorclip"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── App (exposed on 8001 so prod on 8000 is untouched) ───────────────────
+  app:
+    image: ghcr.io/reese8272/creatorclip:latest
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    env_file: .env
+    environment:
+      # Route through PgBouncer, not directly to Postgres.
+      DATABASE_URL: "postgresql+psycopg://creatorclip:${POSTGRES_PASSWORD}@pgbouncer:5432/creatorclip_staging"
+      DATABASE_MIGRATION_URL: "postgresql+psycopg://creatorclip:${POSTGRES_PASSWORD}@postgres_staging:5432/creatorclip_staging"
+      REDIS_URL: "redis://redis_staging:6379/1"
+      ENV: staging
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis_staging:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ── Celery worker (reduced concurrency — staging, not prod scale) ─────────
+  worker:
+    image: ghcr.io/reese8272/creatorclip:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgresql+psycopg://creatorclip:${POSTGRES_PASSWORD}@pgbouncer:5432/creatorclip_staging"
+      DATABASE_MIGRATION_URL: "postgresql+psycopg://creatorclip:${POSTGRES_PASSWORD}@postgres_staging:5432/creatorclip_staging"
+      REDIS_URL: "redis://redis_staging:6379/1"
+      ENV: staging
+    command: celery -A worker.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis_staging:
+        condition: service_healthy
+
+  # ── Postgres (isolated staging DB) ────────────────────────────────────────
+  postgres_staging:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: creatorclip_staging
+      POSTGRES_USER: creatorclip
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creatorclip -d creatorclip_staging"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Redis (DB index 1 to avoid colliding with prod on index 0) ────────────
+  redis_staging:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - staging_redis_data:/data
+    # No persistence for staging — speed over durability.
+    command: redis-server --save '' --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  staging_postgres_data:
+  staging_redis_data:

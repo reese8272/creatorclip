@@ -1,3 +1,31 @@
+import main as main_module
+
+
+def test_health_postgres_probe_uses_engine_not_raw_psycopg():
+    """Regression: _check_postgres must route through the SQLAlchemy pool.
+
+    The old implementation called psycopg.AsyncConnection.connect() directly,
+    opening a fresh OS connection per k8s readiness/liveness probe × N replicas.
+    Under load that churn defeats the PgBouncer sizing math (Issue 112, axis E).
+    Removing the direct psycopg import is the structural proof the fix holds.
+    """
+    assert not hasattr(main_module, "psycopg"), (
+        "main.py must not import psycopg at module scope — "
+        "use engine.connect() for health probes, not psycopg.AsyncConnection.connect()"
+    )
+
+
+def test_health_redis_singleton_initialized(client):
+    """The health-check Redis singleton is set once in lifespan startup.
+
+    TestClient runs through the full lifespan, so _health_redis must be
+    non-None by the time any /health call is served. A None here means the
+    lifespan initialization was dropped, which would make every Redis probe
+    return False regardless of Redis availability.
+    """
+    assert main_module._health_redis is not None
+
+
 def test_health_returns_200(client):
     response = client.get("/health")
     assert response.status_code == 200
