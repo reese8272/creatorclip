@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_key import display_prefix, generate_api_key, hash_api_key
 from auth import get_current_creator
 from db import get_session
-from limiter import limiter
-from models import Creator, CreatorApiKey
+from limiter import creator_key, limiter
+from models import Creator, CreatorApiKey, append_audit
 
 router = APIRouter(prefix="/creators/me/api-keys", tags=["api-keys"])
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def _to_out(row: CreatorApiKey) -> dict:
 
 
 @router.get("", response_model=ApiKeyListOut)
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", key_func=creator_key)
 async def list_api_keys(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -103,7 +103,7 @@ async def list_api_keys(
 
 
 @router.post("", response_model=ApiKeyCreatedOut, status_code=201)
-@limiter.limit("10/hour")
+@limiter.limit("10/hour", key_func=creator_key)
 async def create_api_key(
     request: Request,
     body: ApiKeyCreateIn,
@@ -116,6 +116,10 @@ async def create_api_key(
     the SHA-256 hash. The companion app must copy the key immediately
     to its OS keyring; if lost, the user creates a new one and revokes
     the old.
+
+    Writes a durable AuditLog row (OWASP ASVS 4.0 §7.2 / SOC 2 / GDPR).
+    IP, UA, and request_id are folded into the ``after_jsonb`` JSONB column
+    to avoid a schema migration in this issue — no new columns needed.
     """
     raw_key = generate_api_key()
     row = CreatorApiKey(
@@ -125,6 +129,27 @@ async def create_api_key(
         key_prefix=display_prefix(raw_key),
     )
     session.add(row)
+    await session.flush()  # populate row.id before the audit write
+
+    # Durable audit row — OWASP ASVS 4.0 §7.2, SOC 2 CC7.2, GDPR Art. 5(2).
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    request_id = getattr(request.state, "request_id", None)
+    await append_audit(
+        session,
+        action="api_key.created",
+        actor=str(creator.id),
+        entity_type="api_key",
+        entity_id=row.id,
+        before=None,
+        after={
+            "name": row.name,
+            "key_prefix": row.key_prefix,
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+            "request_id": request_id,
+        },
+    )
     await session.commit()
     await session.refresh(row)
 
@@ -147,7 +172,7 @@ async def create_api_key(
 
 
 @router.delete("/{key_id}", status_code=204, response_class=Response)
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", key_func=creator_key)
 async def revoke_api_key(
     request: Request,
     key_id: uuid.UUID,
@@ -159,10 +184,35 @@ async def revoke_api_key(
     Per-creator isolation: returns 404 if the key belongs to another
     creator or doesn't exist. Idempotent on already-revoked keys
     (treated as 404 to avoid leaking state).
+
+    Writes a durable AuditLog row (OWASP ASVS 4.0 §7.2 / SOC 2 / GDPR).
+    IP, UA, and request_id are folded into ``before_jsonb`` to avoid a
+    schema migration in this issue.
     """
     row = await session.get(CreatorApiKey, key_id)
     if row is None or row.creator_id != creator.id or row.revoked_at is not None:
         raise HTTPException(status_code=404, detail="API key not found")
+
+    # Capture pre-revoke state for the audit row BEFORE mutating.
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    request_id = getattr(request.state, "request_id", None)
+    await append_audit(
+        session,
+        action="api_key.revoked",
+        actor=str(creator.id),
+        entity_type="api_key",
+        entity_id=row.id,
+        before={
+            "name": row.name,
+            "key_prefix": row.key_prefix,
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+            "request_id": request_id,
+        },
+        after=None,
+    )
+
     row.revoked_at = datetime.now(UTC)
     await session.commit()
 

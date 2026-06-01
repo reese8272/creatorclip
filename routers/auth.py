@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from config import settings
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Creator, append_audit
 from youtube.oauth import (
     build_authorization_url,
@@ -166,7 +166,7 @@ async def logout(response: Response) -> dict:
 
 
 @router.get("/me", response_model=AuthMeOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Returns the authenticated creator's profile. No virality predictions made here."""
     return {
@@ -179,7 +179,7 @@ async def me(request: Request, creator: Creator = Depends(get_current_creator)) 
 
 
 @router.delete("/me", status_code=204)
-@limiter.limit("5/hour")
+@limiter.limit("5/hour", key_func=creator_key)
 async def delete_account(
     request: Request,
     response: Response,

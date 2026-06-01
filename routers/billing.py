@@ -18,7 +18,7 @@ from billing.packs import PURCHASABLE_PACKS
 from billing.stripe_client import construct_webhook_event, create_checkout_session
 from config import settings
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Creator, MinutePack
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -55,7 +55,7 @@ class CheckoutOut(BaseModel):
 
 
 @router.get("/balance", response_model=BalanceOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def balance(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -81,7 +81,7 @@ async def list_packs() -> list[PackOut]:
 
 
 @router.post("/checkout", response_model=CheckoutOut)
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", key_func=creator_key)
 async def checkout(
     request: Request,
     body: CheckoutRequest,

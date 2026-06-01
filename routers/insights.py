@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import (
     Creator,
     CreatorDna,
@@ -128,7 +128,7 @@ def _coerce_uuid_list(raw: object) -> list[uuid.UUID]:
 
 
 @router.get("", response_model=InsightsOut)
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", key_func=creator_key)
 async def get_insights(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -140,14 +140,22 @@ async def get_insights(
     Per-creator isolation enforced at every SELECT.
     """
     # ── Channel totals ──────────────────────────────────────────────
+    # Issue 104: the prior func.nullif(Video.kind != VideoKind.short, True)
+    # pattern always returned 0 because the Python != operator produced a
+    # boolean, not a SQL expression, so nullif received a literal True on
+    # both branches and count(NULL) = 0.  The ANSI SQL:2003 FILTER clause
+    # (COUNT(*) FILTER (WHERE <condition>)) is the idiomatic Postgres fix —
+    # fully supported via SQLAlchemy's func.count().filter().
     totals_row = (
         await session.execute(
             select(
-                func.count(Video.id),
-                func.count(func.nullif(Video.kind != VideoKind.short, True)),
-                func.count(func.nullif(Video.kind != VideoKind.long, True)),
-                func.count(func.nullif(Video.ingest_status != IngestStatus.done, True)),
-                func.coalesce(func.sum(Video.duration_s), 0.0),
+                func.count(Video.id).label("videos_analyzed"),
+                func.count().filter(Video.kind == VideoKind.short).label("shorts"),
+                func.count().filter(Video.kind == VideoKind.long).label("longs"),
+                func.count().filter(
+                    Video.ingest_status == IngestStatus.done
+                ).label("ingested_done"),
+                func.coalesce(func.sum(Video.duration_s), 0.0).label("total_secs"),
             ).where(Video.creator_id == creator.id)
         )
     ).one()

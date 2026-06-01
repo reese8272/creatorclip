@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Creator, ImprovementBrief, ImprovementBriefStatus, Video, VideoMetrics
 
 router = APIRouter(prefix="/creators", tags=["improvement"])
@@ -36,7 +36,7 @@ class ImprovementBriefOut(BaseModel):
     status_code=status.HTTP_202_ACCEPTED,
     response_model=BriefQueuedOut,
 )
-@limiter.limit("10/hour")
+@limiter.limit("10/hour", key_func=creator_key)
 async def start_improvement_brief(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -125,7 +125,7 @@ async def start_improvement_brief(
 
 
 @router.get("/me/improvement-brief", response_model=ImprovementBriefOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_improvement_brief(
     request: Request,
     creator: Creator = Depends(get_current_creator),

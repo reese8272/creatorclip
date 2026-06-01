@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from db import get_session
 from dna import identity as identity_module
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Creator
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
@@ -129,7 +129,7 @@ def _identity_to_dict(row) -> dict:
 
 
 @router.get("/me", response_model=CreatorMeOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     return {
         "id": str(creator.id),
@@ -142,7 +142,7 @@ async def get_me(request: Request, creator: Creator = Depends(get_current_creato
 
 
 @router.get("/me/data-gate", response_model=DataGateOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_data_gate(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -152,7 +152,7 @@ async def get_data_gate(
 
 
 @router.post("/me/catalog/sync", status_code=202, response_model=CatalogSyncQueuedOut)
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=creator_key)
 async def sync_catalog(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Pull the creator's YouTube uploads playlist into the videos table.
 
@@ -199,7 +199,7 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
 
 
 @router.post("/me/dna/build", status_code=202, response_model=BuildQueuedOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def build_dna(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
     """Queue a DNA build for the current creator. Returns a Celery task_id.
 
@@ -242,7 +242,7 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
 
 
 @router.get("/me/dna", response_model=DnaGetOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_dna(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -272,7 +272,7 @@ async def get_dna(
 
 
 @router.post("/me/dna/confirm", response_model=DnaConfirmOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def confirm_dna(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -301,7 +301,7 @@ async def confirm_dna(
 
 
 @router.get("/niches", response_model=NichesOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def list_niches(request: Request) -> dict:
     """Return the YouTube category multi-select options for the intake form.
 
@@ -312,7 +312,7 @@ async def list_niches(request: Request) -> dict:
 
 
 @router.get("/me/identity", response_model=IdentityGetOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_identity(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -339,7 +339,7 @@ async def get_identity(
 
 
 @router.post("/me/identity", status_code=201, response_model=IdentityOut)
-@limiter.limit("30/hour")  # intake is rarely updated; keep abusive churn bounded
+@limiter.limit("30/hour", key_func=creator_key)  # intake is rarely updated; keep abusive churn bounded
 async def upsert_identity(
     request: Request,
     payload: IdentityIn,
@@ -389,7 +389,7 @@ async def upsert_identity(
 
 
 @router.get("/me/identity/history", response_model=IdentityHistoryOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_identity_history(
     request: Request,
     creator: Creator = Depends(get_current_creator),

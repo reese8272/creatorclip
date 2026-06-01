@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import AudienceActivity, Creator
 from upload_intel.timing import best_upload_windows, optimal_gap_hours
 
@@ -27,7 +27,7 @@ class UploadIntelOut(BaseModel):
 
 
 @router.get("/me/upload-intel", response_model=UploadIntelOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_upload_intel(
     request: Request,
     creator: Creator = Depends(get_current_creator),

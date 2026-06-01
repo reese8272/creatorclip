@@ -838,3 +838,46 @@ def test_list_videos_excludes_catalog_only_rows(client):
         "list_videos must filter Video.source_uri.isnot(None) so catalog-only "
         "(DNA-reference) rows don't pollute the dashboard. (Issue 90)"
     )
+
+
+# ── Issue 104: every @limiter.limit in routers/*.py uses key_func=creator_key ─
+
+
+def test_all_router_limit_decorators_use_creator_key():
+    """Static-grep guard: every @limiter.limit(...) decorator in routers/*.py
+    must include key_func=creator_key so per-creator bucketing is enforced
+    uniformly — including bearer-auth routes (e.g. /clips/ingest) that carry
+    no session cookie and therefore bypassed per-creator bucketing under the
+    old IP-based default.
+
+    This prevents a future 'quick add an endpoint' PR from accidentally
+    omitting the kwarg and silently regressing to IP-based buckets. (Issue 104)
+    """
+    import pathlib
+    import re
+
+    routers_dir = pathlib.Path(__file__).parent.parent / "routers"
+    # Pattern: @limiter.limit(...) — could span a single line or be followed
+    # by a multi-line call. We match the decorator line to keep the grep simple.
+    limit_re = re.compile(r"@limiter\.limit\(")
+    keyfunc_re = re.compile(r"key_func\s*=\s*creator_key")
+
+    violations: list[str] = []
+    for py_file in sorted(routers_dir.glob("*.py")):
+        src = py_file.read_text()
+        lines = src.splitlines()
+        for lineno, line in enumerate(lines, start=1):
+            if limit_re.search(line):
+                # Check the same line (single-line decorator) or the next line
+                # (decorator split over two lines).
+                snippet = line
+                if lineno < len(lines):
+                    snippet += "\n" + lines[lineno]  # look one line ahead too
+                if not keyfunc_re.search(snippet):
+                    violations.append(f"{py_file.name}:{lineno}: {line.strip()!r}")
+
+    assert not violations, (
+        "The following @limiter.limit decorators are missing key_func=creator_key "
+        "(Issue 104 — per-creator rate-limit key sweep):\n"
+        + "\n".join(f"  {v}" for v in violations)
+    )

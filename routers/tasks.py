@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from auth import get_current_creator
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Creator
 from worker import progress
 
@@ -115,7 +115,7 @@ async def _event_stream(
 
 
 @router.get("/{task_id}/events", response_class=StreamingResponse)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def task_events(
     request: Request,
     task_id: str,

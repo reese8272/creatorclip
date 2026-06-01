@@ -114,4 +114,7 @@ async def get_current_creator_via_api_key(
     await session.commit()
 
     session.info["creator_id"] = creator.id
+    # Stash on request.state so creator_key() in limiter.py can read the
+    # already-resolved identity without re-decoding the bearer token. (Issue 104)
+    request.state.creator_id = creator.id
     return creator

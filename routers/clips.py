@@ -14,7 +14,7 @@ from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from config import settings
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcript, Video, VideoKind
 from worker.storage import upload_file
 from youtube.data_api import classify_video_kind
@@ -71,7 +71,7 @@ def _clip_response(clip: Clip) -> dict:
 
 
 @router.post("/{video_id}/clips/generate", response_model=ClipListOut)
-@limiter.limit("10/hour")
+@limiter.limit("10/hour", key_func=creator_key)
 async def generate_clips(
     request: Request,
     video_id: uuid.UUID,
@@ -113,7 +113,7 @@ async def generate_clips(
 
 
 @router.get("/{video_id}/clips", response_model=ClipListOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def list_clips(
     request: Request,
     video_id: uuid.UUID,
@@ -138,7 +138,7 @@ async def list_clips(
 
 
 @clips_router.post("/{clip_id}/render", status_code=202, response_model=RenderQueuedOut)
-@limiter.limit("20/hour")
+@limiter.limit("20/hour", key_func=creator_key)
 async def render_clip(
     request: Request,
     clip_id: uuid.UUID,
@@ -211,7 +211,7 @@ def _obs_clip_youtube_id() -> str:
 
 
 @clips_router.post("/ingest", status_code=202, response_model=ClipIngestedOut)
-@limiter.limit("20/hour")
+@limiter.limit("20/hour", key_func=creator_key)
 async def ingest_clip(
     request: Request,
     file: UploadFile = File(...),
@@ -243,6 +243,10 @@ async def ingest_clip(
         tmp_path = Path(tmp.name)
 
     bytes_received = 0
+    # Issue 104: wrap the entire post-NamedTemporaryFile block in a single
+    # try/finally so the temp file is always cleaned up — including on
+    # non-HTTPException paths (OSError on disk-full, CancelledError on client
+    # disconnect) that the original per-block unlinks couldn't cover.
     try:
         with tmp_path.open("wb") as fh:
             while True:
@@ -256,22 +260,14 @@ async def ingest_clip(
                         detail=f"File exceeds {settings.UPLOAD_MAX_MB} MB limit",
                     )
                 fh.write(chunk)
-    except HTTPException:
-        tmp_path.unlink(missing_ok=True)
-        raise
 
-    duration_s = await asyncio.to_thread(probe_duration_s, tmp_path)
-    kind = classify_video_kind(duration_s) if duration_s is not None else VideoKind.long
+        duration_s = await asyncio.to_thread(probe_duration_s, tmp_path)
+        kind = classify_video_kind(duration_s) if duration_s is not None else VideoKind.long
 
-    if duration_s is not None:
-        try:
+        if duration_s is not None:
             await check_balance_for_minutes(creator.id, video_minutes(duration_s), session)
-        except HTTPException:
-            tmp_path.unlink(missing_ok=True)
-            raise
 
-    youtube_video_id = _obs_clip_youtube_id()
-    try:
+        youtube_video_id = _obs_clip_youtube_id()
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"
         source_uri = await asyncio.to_thread(upload_file, tmp_path, key)
     finally:
@@ -330,7 +326,7 @@ async def ingest_clip(
 
 
 @clips_router.get("/{clip_id}", response_model=ClipOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_clip(
     request: Request,
     clip_id: uuid.UUID,

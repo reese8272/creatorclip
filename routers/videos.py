@@ -13,7 +13,7 @@ from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from config import settings
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Creator, IngestStatus, Video, VideoKind
 from worker.storage import upload_file
 from worker.tasks import start_pipeline
@@ -61,7 +61,7 @@ def _validate_youtube_id(youtube_video_id: str) -> None:
 
 
 @router.get("", response_model=list[VideoListItemOut])
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def list_videos(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -98,7 +98,7 @@ async def list_videos(
 
 
 @router.post("/link", response_model=VideoLinkedOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def link_video(
     request: Request,
     youtube_video_id: str = Form(...),
@@ -160,7 +160,7 @@ async def link_video(
 
 
 @router.post("/upload", response_model=VideoLinkedOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def upload_video(
     request: Request,
     youtube_video_id: str = Form(...),
@@ -185,6 +185,10 @@ async def upload_video(
         tmp_path = Path(tmp.name)
 
     bytes_received = 0
+    # Issue 104: single outer try/finally guarantees the temp file is cleaned
+    # up on ALL exit paths — including non-HTTPException paths such as OSError
+    # (disk full during R2 PUT) and CancelledError (client disconnect) that the
+    # original per-block unlinks could not cover.
     try:
         with tmp_path.open("wb") as fh:
             while True:
@@ -199,43 +203,34 @@ async def upload_video(
                         detail=f"File exceeds {settings.UPLOAD_MAX_MB} MB limit",
                     )
                 fh.write(chunk)
-    except HTTPException:
-        tmp_path.unlink(missing_ok=True)
-        raise
 
-    existing = await session.execute(
-        select(Video).where(
-            Video.creator_id == creator.id,
-            Video.youtube_video_id == youtube_video_id,
+        existing = await session.execute(
+            select(Video).where(
+                Video.creator_id == creator.id,
+                Video.youtube_video_id == youtube_video_id,
+            )
         )
-    )
-    if existing.scalar_one_or_none():
-        tmp_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=409, detail="Video already registered")
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Video already registered")
 
-    # Probe duration from the uploaded file BEFORE the R2 PUT so we never
-    # store an unknown-kind row even if upload fails partway through.
-    # ffprobe is a header read (caps at 30s in youtube/ingest.py). (Issue 87)
-    duration_s = await asyncio.to_thread(probe_duration_s, tmp_path)
-    kind = classify_video_kind(duration_s) if duration_s is not None else VideoKind.long
+        # Probe duration from the uploaded file BEFORE the R2 PUT so we never
+        # store an unknown-kind row even if upload fails partway through.
+        # ffprobe is a header read (caps at 30s in youtube/ingest.py). (Issue 87)
+        duration_s = await asyncio.to_thread(probe_duration_s, tmp_path)
+        kind = classify_video_kind(duration_s) if duration_s is not None else VideoKind.long
 
-    # Issue 89 — duration-aware balance pre-check.
-    # The upfront `check_positive_balance` at line ~163 prevents the full
-    # streamed upload for 0-balance creators (saves disk I/O). Now that we
-    # know the actual duration, enforce the predicate `deduct_for_video`
-    # uses internally (balance >= minutes), so a low-balance creator
-    # uploading a long video gets an actionable 402 BEFORE the R2 PUT
-    # rather than a silent post-upload failed status. (Skipped when probe
-    # fails — unknown-duration uploads fall through to the legacy path
-    # and surface the same generic failure as before.)
-    if duration_s is not None:
-        try:
+        # Issue 89 — duration-aware balance pre-check.
+        # The upfront `check_positive_balance` at line ~163 prevents the full
+        # streamed upload for 0-balance creators (saves disk I/O). Now that we
+        # know the actual duration, enforce the predicate `deduct_for_video`
+        # uses internally (balance >= minutes), so a low-balance creator
+        # uploading a long video gets an actionable 402 BEFORE the R2 PUT
+        # rather than a silent post-upload failed status. (Skipped when probe
+        # fails — unknown-duration uploads fall through to the legacy path
+        # and surface the same generic failure as before.)
+        if duration_s is not None:
             await check_balance_for_minutes(creator.id, video_minutes(duration_s), session)
-        except HTTPException:
-            tmp_path.unlink(missing_ok=True)
-            raise
 
-    try:
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"
         # Offload the (possibly multi-hundred-MB) R2 PUT / disk copy so it never
         # blocks the API event loop and stalls other requests. (Issue 67)
@@ -305,7 +300,7 @@ async def upload_video(
 
 
 @router.get("/{video_id}/status", response_model=VideoStatusOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_video_status(
     request: Request,
     video_id: uuid.UUID,

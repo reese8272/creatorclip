@@ -52,4 +52,7 @@ async def get_current_creator(
     # `SET LOCAL app.creator_id = :cid` on every subsequent transaction,
     # gating RLS policies on tenant-owned tables (Issue 79).
     session.info["creator_id"] = creator.id
+    # Stash on request.state so creator_key() in limiter.py can read the
+    # already-resolved identity without re-decoding the JWT. (Issue 104)
+    request.state.creator_id = creator.id
     return creator

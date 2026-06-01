@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
-from limiter import limiter
+from limiter import creator_key, limiter
 from models import Clip, ClipFeedback, Creator, FeedbackAction
 
 router = APIRouter(prefix="/clips", tags=["review"])
@@ -37,7 +37,7 @@ class FeedbackRequest(BaseModel):
 
 
 @router.post("/{clip_id}/feedback", status_code=201, response_model=FeedbackOut)
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=creator_key)
 async def submit_feedback(
     request: Request,
     clip_id: uuid.UUID,
