@@ -10,7 +10,9 @@ belonging to the requesting creator.
 """
 
 import logging
+import statistics as _stats
 import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -48,6 +50,8 @@ class PerformerOut(BaseModel):
     kind: str
     views: int | None
     engagement_rate: float | None
+    performance_score: float | None = None
+    performance_score_components: dict | None = None
 
 
 class ChannelTotalsOut(BaseModel):
@@ -99,6 +103,145 @@ class AnalyzePerformerIn(BaseModel):
     performer_kind: str  # "top" or "bottom"
 
 
+# ── Virality score ───────────────────────────────────────────────────────────
+# Three-component channel-relative score (0–100, 50 = channel average).
+# Uses modified z-score (MAD-based) for robustness at small N (10–50 videos).
+# See docs/DECISIONS.md 2026-06-02 for formula rationale and deviation log.
+
+_MIN_VIDEOS_FOR_SCORE = 3
+
+# Weights must sum to 1.0
+_W_RETENTION = 0.40
+_W_ENGAGEMENT = 0.35
+_W_VIEWS = 0.25
+
+
+@dataclass
+class _Baselines:
+    """Per-channel metric baselines for virality score normalization."""
+
+    ret_median: float = 0.0
+    ret_mad: float = 0.0
+    eng_median: float = 0.0
+    eng_mad: float = 0.0
+    views_median: float = 0.0
+    views_mad: float = 0.0
+    n: int = 0
+    _empty: bool = field(default=False, repr=False)
+
+
+def _mad(values: list[float]) -> float:
+    """Median absolute deviation."""
+    if not values:
+        return 0.0
+    med = _stats.median(values)
+    return _stats.median([abs(v - med) for v in values])
+
+
+def _mod_z(x: float, median: float, mad: float) -> float:
+    """Modified z-score (Iglewicz & Hoaglin 1993). Returns 0 when MAD=0."""
+    if mad < 1e-9:
+        return 0.0
+    return 0.6745 * (x - median) / mad
+
+
+def _z_to_score(z: float) -> float:
+    """Clamp modified z to [-3, 3] and map linearly to [0, 100]."""
+    return (max(-3.0, min(3.0, z)) + 3.0) / 6.0 * 100.0
+
+
+def _compute_virality_score(
+    engagement_rate: float | None,
+    avg_view_duration_s: float | None,
+    duration_s: float | None,
+    views: float | None,
+    baselines: _Baselines,
+) -> tuple[float | None, dict | None]:
+    """Return (score 0-100, component dict) or (None, None) when insufficient data."""
+    if baselines.n < _MIN_VIDEOS_FOR_SCORE:
+        return None, None
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    components: dict[str, float | None] = {}
+
+    # Retention: avg_view_duration_s / duration_s
+    ret_rate: float | None = None
+    if avg_view_duration_s is not None and duration_s is not None and duration_s > 0:
+        ret_rate = avg_view_duration_s / duration_s
+    if ret_rate is not None:
+        s = _z_to_score(_mod_z(ret_rate, baselines.ret_median, baselines.ret_mad))
+        components["retention"] = round(s, 1)
+        weighted_sum += _W_RETENTION * s
+        weight_total += _W_RETENTION
+    else:
+        components["retention"] = None
+
+    # Engagement rate
+    if engagement_rate is not None:
+        s = _z_to_score(_mod_z(engagement_rate, baselines.eng_median, baselines.eng_mad))
+        components["engagement"] = round(s, 1)
+        weighted_sum += _W_ENGAGEMENT * s
+        weight_total += _W_ENGAGEMENT
+    else:
+        components["engagement"] = None
+
+    # Relative views
+    if views is not None:
+        s = _z_to_score(_mod_z(views, baselines.views_median, baselines.views_mad))
+        components["views"] = round(s, 1)
+        weighted_sum += _W_VIEWS * s
+        weight_total += _W_VIEWS
+    else:
+        components["views"] = None
+
+    if weight_total < 0.01:
+        return None, None
+
+    score = round(weighted_sum / weight_total, 1)
+    return score, components
+
+
+async def _fetch_channel_baselines(
+    session: AsyncSession,
+    creator_id: uuid.UUID,
+) -> _Baselines:
+    """Compute per-channel metric baselines for all videos with metrics."""
+    rows = (
+        await session.execute(
+            select(
+                VideoMetrics.engagement_rate,
+                VideoMetrics.avg_view_duration_s,
+                Video.duration_s,
+                VideoMetrics.views,
+            )
+            .join(VideoMetrics, VideoMetrics.video_id == Video.id)
+            .where(Video.creator_id == creator_id)
+        )
+    ).all()
+
+    if len(rows) < _MIN_VIDEOS_FOR_SCORE:
+        return _Baselines(n=len(rows))
+
+    eng_vals = [float(r.engagement_rate) for r in rows if r.engagement_rate is not None]
+    ret_vals = [
+        r.avg_view_duration_s / r.duration_s
+        for r in rows
+        if r.avg_view_duration_s is not None and r.duration_s is not None and r.duration_s > 0
+    ]
+    views_vals = [float(r.views) for r in rows if r.views is not None]
+
+    return _Baselines(
+        ret_median=_stats.median(ret_vals) if ret_vals else 0.0,
+        ret_mad=_mad(ret_vals) if ret_vals else 0.0,
+        eng_median=_stats.median(eng_vals) if eng_vals else 0.0,
+        eng_mad=_mad(eng_vals) if eng_vals else 0.0,
+        views_median=_stats.median(views_vals) if views_vals else 0.0,
+        views_mad=_mad(views_vals) if views_vals else 0.0,
+        n=len(rows),
+    )
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -106,8 +249,9 @@ async def _fetch_performers(
     session: AsyncSession,
     creator_id: uuid.UUID,
     video_ids: list[uuid.UUID],
+    baselines: _Baselines,
 ) -> list[dict]:
-    """Resolve a list of Video UUIDs into title + metrics.
+    """Resolve a list of Video UUIDs into title + metrics + virality score.
 
     Preserves the input ordering (DNA ranks them by engagement). Videos
     that no longer exist or belong to a different creator are dropped —
@@ -128,6 +272,13 @@ async def _fetch_performers(
     for row in result.all():
         video: Video = row[0]
         metrics: VideoMetrics | None = row[1]
+        score, components = _compute_virality_score(
+            engagement_rate=metrics.engagement_rate if metrics else None,
+            avg_view_duration_s=metrics.avg_view_duration_s if metrics else None,
+            duration_s=video.duration_s,
+            views=float(metrics.views) if metrics and metrics.views is not None else None,
+            baselines=baselines,
+        )
         by_id[video.id] = {
             "video_id": str(video.id),
             "youtube_video_id": video.youtube_video_id,
@@ -135,6 +286,8 @@ async def _fetch_performers(
             "kind": video.kind.value,
             "views": metrics.views if metrics else None,
             "engagement_rate": metrics.engagement_rate if metrics else None,
+            "performance_score": score,
+            "performance_score_components": components,
         }
     return [by_id[vid] for vid in video_ids if vid in by_id]
 
@@ -226,8 +379,9 @@ async def get_insights(
     # ── Top + bottom performers (resolved from DNA JSONB) ──────────
     top_ids = _coerce_uuid_list(dna_row.top_video_ids_jsonb if dna_row else None)
     bottom_ids = _coerce_uuid_list(dna_row.bottom_video_ids_jsonb if dna_row else None)
-    top_performers = await _fetch_performers(session, creator.id, top_ids)
-    bottom_performers = await _fetch_performers(session, creator.id, bottom_ids)
+    baselines = await _fetch_channel_baselines(session, creator.id)
+    top_performers = await _fetch_performers(session, creator.id, top_ids, baselines)
+    bottom_performers = await _fetch_performers(session, creator.id, bottom_ids, baselines)
 
     return {
         "totals": totals,

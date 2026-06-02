@@ -278,6 +278,10 @@ async def test_insights_top_performers_resolve_to_video_payloads(client, db_sess
         assert top[0]["kind"] == "long"
         assert top[1]["title"] == "B title"
         assert top[1]["kind"] == "short"
+        # performance_score fields must be present in the payload (may be None
+        # with only 2 videos, which is below the 3-video minimum)
+        assert "performance_score" in top[0]
+        assert "performance_score_components" in top[0]
     finally:
         await _cleanup(db_session, creator.id)
 

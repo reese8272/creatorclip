@@ -10,6 +10,7 @@
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <script src="/static/activity.js" defer></script>
+  <script src="/static/tooltip.js" defer></script>
   <style>
     /* Issue 99 Phase B — index.html retrofit. Tokens + components come
        from _design-tokens.css; page-specific layout lives here. */
@@ -543,8 +544,14 @@
       grid.innerHTML = `
         <div class="analytics-cell"><div class="label">Views</div><div class="value">${_fmtNum(d.total_views)}</div></div>
         <div class="analytics-cell"><div class="label">Watch time</div><div class="value">${d.total_watch_time_h.toFixed(1)}h</div></div>
-        <div class="analytics-cell"><div class="label">Avg view duration</div><div class="value">${d.avg_view_duration_s != null ? d.avg_view_duration_s.toFixed(0) + 's' : '—'}</div></div>
-        <div class="analytics-cell"><div class="label">Engagement rate</div><div class="value">${d.avg_engagement_rate != null ? (d.avg_engagement_rate * 100).toFixed(1) + '%' : '—'}</div></div>
+        <div class="analytics-cell">
+          <div class="label">Avg view duration <span class="info-icon" tabindex="0" data-tooltip="Average time viewers spent watching your videos in this period. Higher = better retention.">?</span></div>
+          <div class="value">${d.avg_view_duration_s != null ? d.avg_view_duration_s.toFixed(0) + 's' : '—'}</div>
+        </div>
+        <div class="analytics-cell">
+          <div class="label">Engagement rate <span class="info-icon" tabindex="0" data-tooltip="(Likes + comments) ÷ views, averaged across your videos in this period. YouTube benchmark: ~3–5% is healthy for most channels.">?</span></div>
+          <div class="value">${d.avg_engagement_rate != null ? (d.avg_engagement_rate * 100).toFixed(1) + '%' : '—'}</div>
+        </div>
         <div class="analytics-cell"><div class="label">Videos tracked</div><div class="value">${d.videos_in_period}</div></div>
       `;
     }

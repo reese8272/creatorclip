@@ -10,6 +10,7 @@
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <script src="/static/activity.js" defer></script>
+  <script src="/static/tooltip.js" defer></script>
   <style>
     /* Issue 99 Phase B — review.html retrofit (clip player + trim). */
 
@@ -292,7 +293,8 @@
         <div class="principle-cite" id="why-principle"></div>
         <div id="why-reasoning"></div>
         <div class="score-row">
-          <span>Score</span><strong id="why-score">—</strong>
+          <span>Score <span class="info-icon" tabindex="0" data-tooltip="Estimated fit with your channel's content DNA and audience. 0–1 scale. Scores are estimates grounded in your own data, not a guarantee of performance.">?</span></span>
+          <strong id="why-score">—</strong>
         </div>
         <div class="score-row" style="margin-top:0;padding-top:0;border-top:none">
           <span>Setup → peak → end</span><strong id="why-timing">—</strong>

@@ -4367,3 +4367,45 @@ exposure.
 
 Live `pip-audit --format json` output (2026-05-31); PyPI metadata for fix versions; Issue
 75(a) decision as precedent for the accept-risk policy on dev-only tool CVEs.
+
+---
+
+## 2026-06-02 — Issue 124: Virality score formula + tooltip component
+
+### Score formula deviation from issues.md spec
+
+**What changed**: The weight spec in `issues.md` was view_velocity (40%), engagement (30%),
+retention (20%), CTR (10%). Phase 1 research revised this to three components with
+different weights: retention/AVD (40%), engagement rate (35%), relative views (25%).
+CTR and view_velocity were dropped entirely for this release.
+
+**Why**: Two reasons.
+
+(1) **Schema gap**: CTR (impressions-based) and view velocity (views in first 48h) are not
+stored in the current `video_metrics` table. CTR requires the `impressionsCtr` field from
+the YouTube Analytics Reporting API, which is not requested in the current
+`youtube/analytics.py` fetch. View velocity requires time-bucketed view data, not total
+views. Adding these would require a schema change and a re-sync of analytics data — out of
+scope for this issue.
+
+(2) **Weight correction**: Research (OutlierKit methodology, YouTube Analytics API docs,
+Iglewicz & Hoaglin 1993) confirmed that CTR and AVD/retention are YouTube's *primary*
+algorithmic signals, not engagement rate. The issues.md spec had them inverted. Engagement
+rate is the weakest component at 15% in the industry-standard composite; the spec had it at
+30%. The revised 3-component weights (retention 40%, engagement 35%, views 25%) reflect the
+actual signal hierarchy given available data. CTR and view velocity will be added when
+`video_metrics` is extended to capture impressions data.
+
+### Modified z-score over standard z-score
+
+**What changed**: Using Iglewicz & Hoaglin modified z-score (MAD-based, constant 0.6745)
+instead of standard z-score for normalization.
+
+**Why**: Standard z-score breaks at N < 30 because a single viral outlier video collapses
+the standard deviation, making all other videos score identically. Most creators in the
+beta cohort have 10–50 analyzed videos. Modified z-score substitutes median and MAD for
+mean and std — robust to outliers at small N. The constant 0.6745 makes it comparable in
+scale to a standard z-score at large N.
+
+**Source**: Iglewicz & Hoaglin (1993) "How to Detect and Handle Outliers"; PMC statistical
+methods reference (PMC2789971); Statology modified z-score guide. 2026-06-02.

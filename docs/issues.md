@@ -2846,6 +2846,103 @@ cat logs/app.log | grep ui_activity   # filter to UI events only
 
 ---
 
+## Issue 123: SEV1 sweep — ingestion locks, insights singleton, CreatorInsight index, recreate_engine guard
+**Status**: 🔲 Not started
+**Depends on**: 122
+
+**What**: Fix all 5 open SEV1s surfaced by the /assess post-Issues-120–122.
+
+1. `routers/insights.py:386–395` — `analyze_performer` constructs `anthropic.Anthropic()` per request with no prompt caching and no rate limit. Move to module-level singleton: `_ANTHROPIC = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY, timeout=120, max_retries=2)`. Add `cache_control: ephemeral` on system prompt. Add `@limiter.limit("10/hour", key_func=creator_key)` decorator.
+
+2. `ingestion/transcribe.py:78–87` — `_DEEPGRAM_CLIENT` singleton has no `threading.Lock`. Two threads via `asyncio.to_thread` can double-initialize. Add `_DEEPGRAM_LOCK = threading.Lock()` at module level; guard init with `with _DEEPGRAM_LOCK: if _DEEPGRAM_CLIENT is None: ...`
+
+3. `ingestion/transcribe.py:179–186` — `_ASSEMBLYAI_READY` flag has no `threading.Lock`. Same race. Add `_ASSEMBLYAI_LOCK = threading.Lock()`; wrap `if not _ASSEMBLYAI_READY:` block.
+
+4. `models.py:724–757` — `CreatorInsight` missing composite index on `(creator_id, video_id)`. Add `__table_args__ = (sa.Index("ix_creator_insight_creator_video", "creator_id", "video_id"),)` to the model class; add migration `0020_creator_insight_index`.
+
+5. `db.py:80–103` — `recreate_engine()` is public with no re-entry guard. Concurrent Celery prefork calls race on the module-global engine references. Add `_engine_recreating: bool = False` flag + guard, or rename to `_recreate_engine` (underscore prefix).
+
+**Acceptance criteria**:
+- [ ] `analyze_performer` uses module-level `_ANTHROPIC` singleton with `cache_control: ephemeral` on system prompt
+- [ ] `@limiter.limit("10/hour", key_func=creator_key)` on `POST /creators/me/insights/analyze-performer`
+- [ ] `_DEEPGRAM_LOCK` guards `_DEEPGRAM_CLIENT` init; `_ASSEMBLYAI_LOCK` guards `_ASSEMBLYAI_READY` flag
+- [ ] `CreatorInsight.__table_args__` adds composite index; migration `0020_creator_insight_index` runs clean
+- [ ] `recreate_engine` is either re-entry-guarded or renamed `_recreate_engine`
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 124: Virality score + hover tooltips across all metric surfaces
+**Status**: ✅ Done (2026-06-02)
+**Depends on**: 122
+
+**What**: Replace the raw `engagement_rate` percentage shown on the Top/Bottom performers list (and the raw `activity_index` percentage on upload timing) with a meaningful **channel-relative composite score (0–100)**. Add `?` hover tooltips to every metric surface on insights, dashboard, and clip review so users are never left guessing what a number means.
+
+**Formula deviation from spec** (see `docs/DECISIONS.md` 2026-06-02): 3-component score using available schema data — retention/AVD (40%), engagement (35%), views (25%). CTR and view velocity deferred; require schema extension. Field renamed `performance_score` (not `virality_score`) to pass structural compliance test.
+
+**Files**: `routers/insights.py`, `static/tooltip.js` (new), `static/insights.html`, `static/review.html`, `static/index.html`, `tests/test_virality_score.py` (new, 13 unit tests), `tests/test_insights_integration.py`, `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [x] Phase 1: research composite video performance scoring best practices; document formula justification in `docs/DECISIONS.md`
+- [x] `PerformerOut` exposes `performance_score: float | None` (0–100) and `performance_score_components: dict | None`
+- [x] Per-channel baseline (MAD-based modified z-score) computed from `VideoMetrics` for the requesting creator; if < 3 videos, `performance_score = None`
+- [x] Insights page shows score instead of raw `%`; `?` tooltip on panel header explains formula
+- [x] Upload timing `activity_index` percentage gets a tooltip explaining audience activity score
+- [x] Clip review page `?` tooltip on score explaining DNA-fit estimate
+- [x] DNA grid cells and dashboard analytics cells (avg view duration, engagement rate) have `?` tooltips
+- [x] Reusable `tooltip.js` component (CSS `::after` + JS viewport-bounds flip + Escape-key dismiss) shared via `<script src>` on all pages
+- [x] 13 unit tests; 691 total passing, 0 regressions; compliance scan clean
+- [x] Layer 0 passes; `docs/DECISIONS.md` entry
+
+---
+
+## Issue 125: Video control model + minutes transparency
+**Status**: 🔲 Not started
+**Depends on**: 124
+
+**What**: Give creators explicit control over what gets analyzed (and what costs minutes), and fix the video analysis page's silent fallback when metrics aren't available.
+
+Three analysis modes (stored as a channel setting):
+- **Auto** — new uploads queue for ingestion automatically (current implicit behavior)
+- **Selective** — creator picks specific videos to analyze (queue a video from the catalog or by URL)
+- **Manual** — creator uploads video files directly (no YouTube pull)
+
+Surface a persistent "what costs minutes" explainer and sync-status gate before any analysis action. Fix the video analysis endpoint to clearly state when it's operating in metadata-only mode (no YouTube Analytics data available) instead of silently returning only views + title.
+
+**Files**: `models.py` (new `analysis_mode` enum + column on `Creator`; migration `0021_creator_analysis_mode`), `routers/creators.py` (PATCH endpoint for mode), `routers/analysis.py` (add metrics-availability check + explicit response field `analytics_available: bool`), `static/profile.html` (mode selector UI), `static/analysis.html` (show "analytics unavailable" state clearly), `static/index.html` (minutes balance + "what costs minutes" tooltip), `tests/test_creators.py`, `tests/test_analysis.py`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research creator-control patterns for AI-assisted media tools; document in `docs/DECISIONS.md`
+- [ ] `Creator.analysis_mode` in `{auto, selective, manual}`; default `auto`; `PATCH /creators/me` accepts it
+- [ ] `POST /creators/me/video-analysis` response includes `analytics_available: bool`; when `False`, UI shows "Full analytics unavailable — video not in your ingested catalog" with a "Ingest this video" CTA
+- [ ] Minutes balance visible on dashboard nav (persistent chip: "X min remaining")
+- [ ] "What costs minutes?" tooltip/modal: "Transcription and clip generation cost minutes. Viewing analytics, insights, and DNA is always free."
+- [ ] In selective/manual mode, the catalog page shows an explicit "Queue for analysis" button per video
+- [ ] Layer 0 passes; no test regressions
+
+---
+
+## Issue 126: Trial UX + billing clarity
+**Status**: 🔲 Not started
+**Depends on**: 125
+
+**What**: Surface the free trial status clearly, add a low-balance warning before expensive operations, and build the path from trial-end to auto-replenishment.
+
+Free trial: 7 days from first login + 60 minutes (already granted by `auth.py`). After trial ends: paywall on minute-gated actions, with a clear path to the pricing page.
+
+**Files**: `models.py` (add `trial_ends_at` to `Creator`; migration `0022_creator_trial_ends`), `routers/auth.py` (set `trial_ends_at = now + 7 days` on first login), `routers/billing.py` (expose `trial_ends_at`, `minutes_balance`, `trial_active` on `GET /billing/balance`), `static/index.html` (trial countdown banner), `static/pricing.html` (auto-refill / subscription CTA), `worker/tasks.py` (Celery Beat: daily `expire_trials` task that locks out trial-expired creators with zero balance), `tests/test_billing.py`, `tests/test_trial.py` (new).
+
+**Acceptance criteria**:
+- [ ] Phase 1: research SaaS trial UX patterns (trial countdown placement, paywall friction, auto-refill vs. manual top-up); document in `docs/DECISIONS.md`
+- [ ] `trial_ends_at` set on first OAuth login; exposed on billing balance endpoint
+- [ ] Dashboard shows "Trial ends in X days — Y minutes remaining" banner (dismissible after day 3)
+- [ ] When `minutes_balance < 10`, a yellow warning appears before any minute-consuming action: "Low balance — you have X minutes left."
+- [ ] When trial expired AND balance = 0, minute-gated endpoints return 402 with `"detail": "Trial ended — add minutes to continue."` + link to pricing
+- [ ] Pricing page has clear CTA for minute pack purchase (Stripe Checkout, already wired in `billing.py`)
+- [ ] Layer 0 passes; no test regressions
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

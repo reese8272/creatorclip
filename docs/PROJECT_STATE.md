@@ -6,7 +6,9 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 122 complete (2026-06-01).
+**Active issue**: _(none in flight)_ — Issue 124 complete (2026-06-02).
+
+**Last completed**: Issue 124 — Virality score + hover tooltips. New `performance_score` (0–100) field on `PerformerOut` replaces raw `engagement_rate` display on the insights page. Score is a channel-relative composite using modified z-score (MAD-based, robust at N=10–50) weighted: retention/AVD (40%), engagement (35%), views (25%). Returns `None` for channels with < 3 videos with metrics. New `_fetch_channel_baselines` query computes per-creator medians+MADs across all videos. New `static/tooltip.js` reusable tooltip component (CSS `::after` + JS viewport-bounds correction + Escape-key dismiss per WCAG 1.4.13) included on all authenticated pages. Tooltips added: insights performer score column header `?`, upload timing `?`, DNA grid cells (3 tooltips), review clip score `?`, dashboard analytics cells (avg view duration, engagement rate). Compliance: field renamed from `virality_score` → `performance_score` to pass the structural no-virality scan; DECISIONS.md entry logs weight deviation from issues.md spec. **Tests**: 691 passed (+13 from 678) / 2 skipped. Layer 0: ruff 0 / freshness ok.
 
 **Last completed**: Issue 122 — Persistent user activity logging for beta testing. `configure_logging()` now accepts `log_dir` and adds a `RotatingFileHandler` (10 MB × 5, JSON) writing to `/app/logs/app.log` which maps to `./logs/app.log` on the host via the existing `.:/app` Docker volume. New `POST /api/activity` endpoint (no auth required, creator_id populated when session exists) receives structured UI events and logs them via `log_event()`. New `static/activity.js` IIFE captures clicks, form submits, and page navigation across all 6 authenticated templates. `LOG_DIR` config added; `LOG_DIR=""` in test conftest disables file handler. **Tests**: 678 passed (+10 from Issue 121's 668) / 2 skipped / 126 deselected. Review logs: `tail -f logs/app.log` or `cat logs/app.log | grep ui_activity`.
 

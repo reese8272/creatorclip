@@ -11,6 +11,7 @@
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
   <script src="/static/activity.js" defer></script>
+  <script src="/static/tooltip.js" defer></script>
   <style>
     /* Issue 93 — insights rebuild. Channel totals, DNA snapshot, top
        & bottom performers, upload windows, improvement brief. Mono
@@ -303,7 +304,11 @@
     <div class="panel">
       <div class="panel-header">
         <h3>Top performers</h3>
-        <span class="panel-sub">Drove your DNA. Lean into what worked.</span>
+        <span class="panel-sub">
+          Drove your DNA. Lean into what worked.
+          <span class="info-icon" tabindex="0"
+            data-tooltip="Performance score 0–100: how each video performed relative to your channel average. 50 = average. Weighted: retention (40%), engagement (35%), views (25%). Requires ≥3 videos with metrics.">?</span>
+        </span>
       </div>
       <div id="top-performers"><span class="loading">Loading…</span></div>
     </div>
@@ -312,7 +317,11 @@
     <div class="panel">
       <div class="panel-header">
         <h3>Underperformers</h3>
-        <span class="panel-sub">Useful contrast — patterns you've moved past.</span>
+        <span class="panel-sub">
+          Useful contrast — patterns you've moved past.
+          <span class="info-icon" tabindex="0"
+            data-tooltip="Performance score 0–100: how each video performed relative to your channel average. 50 = average. Weighted: retention (40%), engagement (35%), views (25%). Requires ≥3 videos with metrics.">?</span>
+        </span>
       </div>
       <div id="bottom-performers"><span class="loading">Loading…</span></div>
     </div>
@@ -320,7 +329,10 @@
     <!-- Upload timing -->
     <div class="panel">
       <div class="panel-header">
-        <h3>Best upload windows</h3>
+        <h3>Best upload windows
+          <span class="info-icon" tabindex="0"
+            data-tooltip="Relative audience activity score for each time window. 100 = your channel's peak activity window. Based on your YouTube audience data.">?</span>
+        </h3>
       </div>
       <div id="timing-content" class="loading">Loading…</div>
       <div class="gap-section" id="gap-section" style="display:none">
@@ -391,12 +403,27 @@
       document.getElementById('dna-version').textContent =
         d.version != null ? `v${d.version} · ${d.status}` : 'Not built yet';
       const dnaCells = [
-        { label: 'Optimal clip', value: d.optimal_clip_len_s != null ? `${d.optimal_clip_len_s.toFixed(0)}s` : '—' },
-        { label: 'Best region',  value: d.best_source_region ? d.best_source_region.replace('_', ' ') : '—' },
-        { label: 'Upload gap',   value: d.optimal_upload_gap_h != null ? `${d.optimal_upload_gap_h.toFixed(1)}h` : '—' },
+        {
+          label: 'Optimal clip',
+          value: d.optimal_clip_len_s != null ? `${d.optimal_clip_len_s.toFixed(0)}s` : '—',
+          tip: 'Target duration for Shorts clips based on your top-performing content.',
+        },
+        {
+          label: 'Best region',
+          value: d.best_source_region ? d.best_source_region.replace('_', ' ') : '—',
+          tip: 'Where in your long-form video your best clip setups typically come from.',
+        },
+        {
+          label: 'Upload gap',
+          value: d.optimal_upload_gap_h != null ? `${d.optimal_upload_gap_h.toFixed(1)}h` : '—',
+          tip: 'Recommended hours between posting a long-form video and its corresponding Short, based on your audience activity patterns.',
+        },
       ];
       document.getElementById('dna-grid').innerHTML = dnaCells.map(c =>
-        `<div class="dna-cell"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
+        `<div class="dna-cell">
+          <div class="label">${c.label}<span class="info-icon" tabindex="0" data-tooltip="${c.tip}">?</span></div>
+          <div class="value">${c.value}</div>
+        </div>`
       ).join('');
 
       // Performers with AI analyze button (Issue 117)
@@ -404,17 +431,20 @@
         if (!rows || !rows.length) {
           return '<div class="panel-empty">Build your DNA to surface this list.</div>';
         }
-        return rows.map(p => `
+        return rows.map(p => {
+          const score = p.performance_score != null ? p.performance_score.toFixed(0) : '—';
+          return `
           <div class="perf-row" id="perf-${p.video_id}">
             <div class="perf-info">
               <div class="perf-title">${p.title || p.youtube_video_id}</div>
               <div class="perf-analysis" id="analysis-${p.video_id}" style="display:none"></div>
             </div>
             <span class="perf-kind">${p.kind}</span>
-            <span class="perf-stat">${formatRate(p.engagement_rate)}</span>
+            <span class="perf-stat">${score}</span>
             <button class="btn-analyze" onclick="analyzePerformer('${p.video_id}','${kind}',this)">Analyze</button>
           </div>
-        `).join('');
+          `;
+        }).join('');
       };
       document.getElementById('top-performers').innerHTML = renderPerf(data.top_performers, 'top');
       document.getElementById('bottom-performers').innerHTML = renderPerf(data.bottom_performers, 'bottom');

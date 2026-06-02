@@ -7,13 +7,13 @@ events are low-sensitivity telemetry for beta testing; the creator_id field is
 populated when a valid session exists, "anonymous" otherwise.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
+from slowapi.util import get_remote_address
 
+from limiter import limiter
 from observability import log_event
 
 router = APIRouter(prefix="/api/activity", tags=["activity"])
@@ -24,18 +24,20 @@ _MAX_STR_LEN = 200
 
 class ActivityEvent(BaseModel):
     page: str = Field(max_length=100)
-    event_type: str = Field(max_length=50)   # "click" | "submit" | "navigate"
+    event_type: str = Field(max_length=50)  # "click" | "submit" | "navigate"
     target: str = Field(max_length=200)
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("", status_code=204, include_in_schema=False)
-async def record_activity(event: ActivityEvent, request: Request) -> None:
+@limiter.limit("200/minute", key_func=get_remote_address)
+async def record_activity(request: Request, event: ActivityEvent) -> None:
     # Resolve creator id from session JWT if present; fall back to anonymous so
     # pre-login pages (onboarding, pricing) are still captured.
     creator_id = "anonymous"
     try:
         from auth import get_current_creator
+
         creator = await get_current_creator(request)
         creator_id = str(creator.id)
     except Exception:
