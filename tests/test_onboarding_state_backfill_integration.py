@@ -211,12 +211,12 @@ async def test_backfill_targets_only_stuck_creators_in_mixed_population(
         await _seed_dna(db_session, already_active.id, DnaStatus.confirmed)
         # no_dna: no DNA rows at all
 
-        # Disable row security so the backfill subquery can see creator_dna rows
-        # from all tenants. The CI/test DB user is the table owner (POSTGRES_USER
-        # superuser), so SET LOCAL row_security = off is permitted.
-        await db_session.execute(text("SET LOCAL row_security = off"))
         await db_session.execute(_BACKFILL_SQL)
         await db_session.commit()
+
+        # expire_on_commit=False means the identity map retains stale pre-UPDATE
+        # states. Expunge so the verification SELECT re-reads fresh from the DB.
+        db_session.expunge_all()
 
         # Re-read every creator's state.
         states = {
