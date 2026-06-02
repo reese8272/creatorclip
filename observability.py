@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import time
 import uuid
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -132,8 +134,15 @@ def log_event(event: str, **fields: Any) -> None:
         _event_logger.info(" ".join(msg_parts), extra=extra)
 
 
-def configure_logging(*, json_logs: bool, level: int = logging.INFO) -> None:
+def configure_logging(
+    *, json_logs: bool, level: int = logging.INFO, log_dir: str = ""
+) -> None:
     """Install the request-id filter + (optionally) JSON formatting on the root logger.
+
+    When log_dir is non-empty, also writes a rotating JSON file at
+    <log_dir>/app.log (10 MB × 5 files) so logs survive container restarts.
+    The .:/app Docker volume makes <log_dir>/app.log readable on the host as
+    ./logs/app.log without any extra mount configuration.
 
     Idempotent: re-running replaces the root handler rather than stacking duplicates.
     """
@@ -142,15 +151,28 @@ def configure_logging(*, json_logs: bool, level: int = logging.INFO) -> None:
     for handler in list(root.handlers):
         root.removeHandler(handler)
 
-    handler = logging.StreamHandler()
-    handler.addFilter(RequestIDLogFilter())
-    if json_logs:
-        handler.setFormatter(JsonLogFormatter())
-    else:
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s")
+    fmt = JsonLogFormatter() if json_logs else logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
+    )
+    rid_filter = RequestIDLogFilter()
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.addFilter(rid_filter)
+    stream_handler.setFormatter(fmt)
+    root.addHandler(stream_handler)
+
+    if log_dir:
+        log_path = Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path / "app.log",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
         )
-    root.addHandler(handler)
+        file_handler.addFilter(rid_filter)
+        file_handler.setFormatter(JsonLogFormatter())
+        root.addHandler(file_handler)
 
 
 # ── Request-id helpers ───────────────────────────────────────────────────────

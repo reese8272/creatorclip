@@ -139,10 +139,14 @@ class Settings(BaseSettings):
     # (Issue 105 — Fix 5)
     CELERY_SOFT_TIME_LIMIT_S: int = 3000
 
-    # ── Observability (Issue 75f) ───────────────────────────────────────────────
+    # ── Observability (Issue 75f / Issue 122) ──────────────────────────────────
     # JSON structured logs (one object per line) for log aggregators. Defaults on;
     # set false for human-readable text in local dev.
     LOG_JSON: bool = True
+    # Directory for persistent log files. Defaults to /app/logs which maps to
+    # ./logs on the host via the .:/app Docker volume — readable after a session
+    # ends without any extra mount. Set to "" to disable file logging.
+    LOG_DIR: str = "/app/logs"
     # Inbound header carrying a correlation id from an upstream proxy/gateway. If
     # absent or malformed, the middleware mints a UUID4. Echoed back on the response.
     REQUEST_ID_HEADER: str = "X-Request-ID"

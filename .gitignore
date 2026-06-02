@@ -35,6 +35,9 @@ postgres_data/
 
 # Local media / clip output
 local_storage/
+
+# Persistent log files (Issue 122 — written by RotatingFileHandler, reviewed locally)
+logs/
 *.mp4
 *.webm
 *.m4a

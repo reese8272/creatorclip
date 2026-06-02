@@ -140,6 +140,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── brief.py                # Content-improvement brief generation
 │
 ├── routers/
+│   ├── activity.py             # POST /api/activity — browser UI event logging (Issue 122)
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
 │   ├── videos.py               # Link/upload video, ingestion status
@@ -166,6 +167,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── progressStream.js       # Issue 86 — EventSource consumer that renders live task progress
 │   ├── activeTasks.js          # Wave 5 — localStorage + SSE resume across page navigation; window.activeTasks
 │   ├── activityPanel.js        # Wave 5 — floating bottom-right widget; reacts to activeTasks.subscribe
+│   ├── activity.js             # Beta-testing UI event tracker: click/submit/navigate → POST /api/activity (Issue 122)
 │   └── analysis.html           # Video performance analysis page (Issue 121)
 │
 ├── tests/

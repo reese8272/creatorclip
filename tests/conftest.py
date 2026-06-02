@@ -20,6 +20,7 @@ os.environ.setdefault("OAUTH_REDIRECT_URI", "http://localhost:8000/auth/callback
 os.environ.setdefault("TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-32-bytes-minimum-!")
 os.environ.setdefault("ALLOWED_ORIGINS", "http://localhost:8000")
+os.environ.setdefault("LOG_DIR", "")  # disable file logging in tests (/app/logs is Docker-only)
 
 import pytest
 from fastapi.testclient import TestClient

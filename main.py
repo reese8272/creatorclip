@@ -22,12 +22,13 @@ from observability import (
     configure_logging,
     metrics_response,
 )
+from routers import activity as activity_router
+from routers import analysis as analysis_router
 from routers import api_keys as api_keys_router
 from routers import auth as auth_router
 from routers import billing as billing_router
 from routers import clips as clips_module
 from routers import creators as creators_router
-from routers import analysis as analysis_router
 from routers import improvement as improvement_router
 from routers import insights as insights_router
 from routers import review as review_router
@@ -35,7 +36,7 @@ from routers import tasks as tasks_router
 from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
-configure_logging(json_logs=settings.LOG_JSON)
+configure_logging(json_logs=settings.LOG_JSON, log_dir=settings.LOG_DIR)
 logger = logging.getLogger(__name__)
 
 # Module-level singleton for /health Redis probes. Initialized in lifespan so
@@ -89,6 +90,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
 app.add_middleware(SlowAPIMiddleware)
 
+app.include_router(activity_router.router)
 app.include_router(auth_router.router)
 app.include_router(api_keys_router.router)
 app.include_router(analysis_router.router)

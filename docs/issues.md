@@ -2806,6 +2806,46 @@ Videos outside the catalog get a metadata-only analysis. "Analyze" added to all 
 
 ---
 
+## Issue 122: Persistent user activity logging for beta testing
+**Status**: ✅ Done (2026-06-01)
+
+**What**: Two-layer persistent logging so tester sessions survive container restarts.
+(1) `observability.configure_logging()` now accepts a `log_dir` param and adds a
+`RotatingFileHandler` (10 MB × 5 files, JSON) alongside the existing `StreamHandler`.
+The `.:/app` Docker volume maps `/app/logs` → `./logs` on the host — no extra mount needed.
+(2) `POST /api/activity` accepts structured UI events (`page`, `event_type`, `target`,
+`extra`) from the browser and logs them via `log_event()` into the same file. Auth is
+optional: creator_id populated when a session exists, "anonymous" otherwise.
+(3) `static/activity.js` — 40-line IIFE captures clicks, form submits, and page
+navigation events and fires fire-and-forget POSTs to `/api/activity`.
+(4) `activity.js` added to all 6 authenticated HTML templates.
+
+**Files**: `observability.py`, `config.py`, `routers/activity.py`, `static/activity.js`,
+`static/index.html`, `static/analysis.html`, `static/review.html`, `static/profile.html`,
+`static/insights.html`, `static/onboarding.html`, `main.py`, `.env.example`, `.gitignore`,
+`tests/conftest.py`, `tests/test_activity.py`.
+
+**Acceptance criteria**:
+- [x] `POST /api/activity` returns 204 for valid click/navigate/submit events
+- [x] Missing required field returns 422
+- [x] Log line with `event=ui_activity` emitted on each call
+- [x] Extra keys capped at 10; long strings truncated safely
+- [x] `configure_logging(log_dir=...)` adds a `RotatingFileHandler` to root logger
+- [x] `configure_logging(log_dir="")` adds no file handler
+- [x] `LOG_DIR` in `.env.example` with description
+- [x] `logs/` added to `.gitignore`
+- [x] `LOG_DIR=""` set in test conftest (Docker path `/app/logs` not valid locally)
+- [x] `activity.js` loaded on all 6 authenticated pages
+- [x] 10 tests pass; full suite 678 passed, 0 regressions
+
+**How to review logs after a test session**:
+```bash
+tail -f logs/app.log          # live during session
+cat logs/app.log | grep ui_activity   # filter to UI events only
+```
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
