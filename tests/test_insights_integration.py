@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
+from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -429,7 +430,12 @@ async def test_insights_does_not_resolve_other_creators_videos(client, db_sessio
 # ── Auth ───────────────────────────────────────────────────────────────────
 
 
-def test_insights_requires_auth(client):
-    """No session cookie → 401."""
-    resp = client.get("/creators/me/insights")
+def test_insights_requires_auth():
+    """No session cookie → 401.
+
+    Uses a fresh TestClient to avoid the session-scoped client's cookie jar
+    retaining a cc_session from test_callback_creates_creator_and_session.
+    """
+    with TestClient(app) as c:
+        resp = c.get("/creators/me/insights")
     assert resp.status_code == 401

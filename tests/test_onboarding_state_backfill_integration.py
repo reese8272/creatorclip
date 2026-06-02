@@ -50,14 +50,7 @@ _BACKFILL_SQL = text(
 
 @pytest_asyncio.fixture
 async def db_session():
-    # row_security=off is required for the batch backfill SQL to see creator_dna
-    # rows across multiple tenants.  The CI user (POSTGRES_USER) is a superuser
-    # and owns the tables, so SET row_security = off is allowed.
-    engine = create_async_engine(
-        settings.DATABASE_URL,
-        pool_pre_ping=True,
-        connect_args={"options": "-c row_security=off"},
-    )
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as session:
         yield session
@@ -218,6 +211,10 @@ async def test_backfill_targets_only_stuck_creators_in_mixed_population(
         await _seed_dna(db_session, already_active.id, DnaStatus.confirmed)
         # no_dna: no DNA rows at all
 
+        # Disable row security so the backfill subquery can see creator_dna rows
+        # from all tenants. The CI/test DB user is the table owner (POSTGRES_USER
+        # superuser), so SET LOCAL row_security = off is permitted.
+        await db_session.execute(text("SET LOCAL row_security = off"))
         await db_session.execute(_BACKFILL_SQL)
         await db_session.commit()
 
