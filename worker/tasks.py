@@ -1861,7 +1861,8 @@ async def _generate_video_analysis_async(
     analysis result is ephemeral — no row is persisted; the stream IS
     the response.
     """
-    from typing import Any, Sequence
+    from collections.abc import Sequence
+    from typing import Any
 
     from sqlalchemy import select
 
@@ -1877,9 +1878,7 @@ async def _generate_video_analysis_async(
         async with db.AdminSessionLocal() as session:
             creator = await session.get(Creator, cid)
             if creator is None:
-                await aemit(
-                    job_id, "error", stage="video_analysis", message="Creator not found."
-                )
+                await aemit(job_id, "error", stage="video_analysis", message="Creator not found.")
                 return
 
             video_metrics: dict[str, Any] | None = None
@@ -1930,20 +1929,12 @@ async def _generate_video_analysis_async(
                             for c in curves:
                                 pct = c.timestamp_s / total
                                 if checkpoints["at_25pct"] is None and pct >= 0.25:
-                                    checkpoints["at_25pct"] = round(
-                                        c.audience_watch_ratio or 0, 3
-                                    )
+                                    checkpoints["at_25pct"] = round(c.audience_watch_ratio or 0, 3)
                                 if checkpoints["at_50pct"] is None and pct >= 0.50:
-                                    checkpoints["at_50pct"] = round(
-                                        c.audience_watch_ratio or 0, 3
-                                    )
+                                    checkpoints["at_50pct"] = round(c.audience_watch_ratio or 0, 3)
                                 if checkpoints["at_75pct"] is None and pct >= 0.75:
-                                    checkpoints["at_75pct"] = round(
-                                        c.audience_watch_ratio or 0, 3
-                                    )
-                                checkpoints["at_end"] = round(
-                                    c.audience_watch_ratio or 0, 3
-                                )
+                                    checkpoints["at_75pct"] = round(c.audience_watch_ratio or 0, 3)
+                                checkpoints["at_end"] = round(c.audience_watch_ratio or 0, 3)
                             retention_summary = checkpoints
 
             # Channel averages for comparison — scoped to this creator.

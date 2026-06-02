@@ -134,9 +134,7 @@ def log_event(event: str, **fields: Any) -> None:
         _event_logger.info(" ".join(msg_parts), extra=extra)
 
 
-def configure_logging(
-    *, json_logs: bool, level: int = logging.INFO, log_dir: str = ""
-) -> None:
+def configure_logging(*, json_logs: bool, level: int = logging.INFO, log_dir: str = "") -> None:
     """Install the request-id filter + (optionally) JSON formatting on the root logger.
 
     When log_dir is non-empty, also writes a rotating JSON file at
@@ -151,8 +149,10 @@ def configure_logging(
     for handler in list(root.handlers):
         root.removeHandler(handler)
 
-    fmt = JsonLogFormatter() if json_logs else logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
+    fmt = (
+        JsonLogFormatter()
+        if json_logs
+        else logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s")
     )
     rid_filter = RequestIDLogFilter()
 

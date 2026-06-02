@@ -100,9 +100,7 @@ async def start_video_analysis(
         video_title = video.title
         has_metrics = bool(
             await session.scalar(
-                select(VideoMetrics.video_id)
-                .where(VideoMetrics.video_id == video.id)
-                .limit(1)
+                select(VideoMetrics.video_id).where(VideoMetrics.video_id == video.id).limit(1)
             )
         )
 

@@ -70,6 +70,7 @@ async def _make_video(session: AsyncSession, creator: Creator) -> Video:
         kind=VideoKind.long,
         ingest_status=IngestStatus.done,
         duration_s=600.0,
+        source_uri="local://test-fixture",  # list_videos filters source_uri IS NOT NULL
     )
     session.add(video)
     await session.flush()

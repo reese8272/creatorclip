@@ -50,7 +50,14 @@ _BACKFILL_SQL = text(
 
 @pytest_asyncio.fixture
 async def db_session():
-    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    # row_security=off is required for the batch backfill SQL to see creator_dna
+    # rows across multiple tenants.  The CI user (POSTGRES_USER) is a superuser
+    # and owns the tables, so SET row_security = off is allowed.
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        pool_pre_ping=True,
+        connect_args={"options": "-c row_security=off"},
+    )
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as session:
         yield session

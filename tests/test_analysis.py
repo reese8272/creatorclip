@@ -8,12 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from analysis.brief import _build_request
 from auth import get_current_creator
 from db import get_session
 from main import app
 from models import Creator
+from routers.analysis import _extract_video_id
 from tests._helpers import override_current_creator
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -45,8 +46,6 @@ def cleanup():
 
 # ── Unit: URL extraction ───────────────────────────────────────────────────────
 
-from routers.analysis import _extract_video_id
-
 
 @pytest.mark.parametrize(
     "raw,expected",
@@ -66,8 +65,6 @@ def test_extract_video_id(raw: str, expected: str | None) -> None:
 
 
 # ── Unit: analysis brief prompt structure ─────────────────────────────────────
-
-from analysis.brief import _build_request
 
 
 def test_build_request_minimal() -> None:
@@ -177,16 +174,16 @@ def test_analysis_queues_task_returns_202() -> None:
     fake_task = MagicMock()
     fake_task.id = "task-abc-123"
 
-    with TestClient(app) as c:
-        with (
-            patch("worker.tasks.generate_video_analysis") as mock_task,
-            patch("worker.progress.aset_owner", new_callable=AsyncMock),
-        ):
-            mock_task.delay.return_value = fake_task
-            resp = c.post(
-                "/creators/me/video-analysis",
-                json={"youtube_url": "dQw4w9WgXcQ", "query": "Why did this perform well?"},
-            )
+    with (
+        TestClient(app) as c,
+        patch("worker.tasks.generate_video_analysis") as mock_task,
+        patch("worker.progress.aset_owner", new_callable=AsyncMock),
+    ):
+        mock_task.delay.return_value = fake_task
+        resp = c.post(
+            "/creators/me/video-analysis",
+            json={"youtube_url": "dQw4w9WgXcQ", "query": "Why did this perform well?"},
+        )
 
     assert resp.status_code == 202
     body = resp.json()
@@ -207,20 +204,20 @@ def test_analysis_stream_url_none_on_redis_failure() -> None:
     fake_task = MagicMock()
     fake_task.id = "task-xyz-999"
 
-    with TestClient(app) as c:
-        with (
-            patch("worker.tasks.generate_video_analysis") as mock_task,
-            patch(
-                "worker.progress.aset_owner",
-                new_callable=AsyncMock,
-                side_effect=redis_pkg.RedisError("down"),
-            ),
-        ):
-            mock_task.delay.return_value = fake_task
-            resp = c.post(
-                "/creators/me/video-analysis",
-                json={"youtube_url": "dQw4w9WgXcQ", "query": "What happened?"},
-            )
+    with (
+        TestClient(app) as c,
+        patch("worker.tasks.generate_video_analysis") as mock_task,
+        patch(
+            "worker.progress.aset_owner",
+            new_callable=AsyncMock,
+            side_effect=redis_pkg.RedisError("down"),
+        ),
+    ):
+        mock_task.delay.return_value = fake_task
+        resp = c.post(
+            "/creators/me/video-analysis",
+            json={"youtube_url": "dQw4w9WgXcQ", "query": "What happened?"},
+        )
 
     assert resp.status_code == 202
     assert resp.json()["stream_url"] is None

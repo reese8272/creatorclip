@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from auth import create_session_token
 from config import settings
+from main import app
 from models import (
     Creator,
     CreatorDna,
@@ -27,6 +28,14 @@ from models import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _clear_overrides():
+    """Guard: clear any dependency_overrides left by earlier test files."""
+    app.dependency_overrides.clear()
+    yield
+    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture
