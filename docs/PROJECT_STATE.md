@@ -70,17 +70,22 @@ Previous: Wave 3 hotfix batch (3 SEV1s + 3 SEV2s).
 
 > **Closed Issue 84 — AI/LLM efficiency assessment** (2026-05-31): Audited all 3 Anthropic call sites against current (May 2026) SDK + caching state, verified via industry-standards-researcher. Per-call-site reports written to `docs/assessment/llm/dna_brief.md`, `clip_scoring.md`, `improvement_brief.md` + consolidated `REPORT.md`. Key findings: (1) Sonnet 4.6 cacheable-prefix floor is 1024 tokens (not 2048 as our docstrings said) — cache markers on DNA brief + improvement brief silently don't engage today, 1.25× write premium for zero reads; (2) clip_scoring is the only call site where caching actually pays (1h TTL on DNA brief, correctly designed); (3) zero Opus-4.7-breaking parameters on our surface — clean migration path. Shipped Win A: `ANTHROPIC_WEB_SEARCH_TOOL` config default bumped `_20250305 → _20260209` (dynamic filtering: Claude pre-filters search results in code-exec before they hit the main context). 1-LOC config + 2 regression tests in `tests/test_brief_caching.py`. Follow-up issues flagged: Anthropic SDK 0.40 → 0.105.2 bump (unlocks TTL-tier observability), drop unproductive cache markers on DNA + improvement brief (post-SDK-bump so we can measure), per-call-site model settings + Haiku 4.5 A/B eval for clip scoring (~67% cost reduction opportunity).
 
-**Queued for next session (in dependency-ordered execution sequence, 2026-05-31)**:
-- **Issue 99** — UI redesign (Linear-style base + monospace data register). **Blocks everything below.** Phase 1 closed (direction picked); Phase 3 builds `static/_design-tokens.css` then retrofits 9 templates.
-- **Issue 95** — OBS hotkey integration (Architecture B: companion app + folder watcher). Phase 1 closed; Phase 3 builds backend (`creator_api_keys` + `POST /clips/ingest`) here, companion app in a separate repo. Depends on Issue 99 for the API-key management UI.
-- **Issue 93** — Insights page rebuild. SEV-1 UX. Inherits Issue 99 design.
-- **Issue 94** — Clip-engine transparency. SEV-1 UX. Inherits Issue 99 design.
-- **Issue 94** — Clip-engine transparency (why this clip, why-not for skipped videos). SEV-1 UX. Depends on 92.
-- **Issue 99** — UI redesign (supersedes Issue 85). Phase 1 must present 5–8 reference sites for the user to pick patterns from.
-- **Issue 100** — Onboarding tutorial + mandatory intake (related to Issues 96, 98, 99). Replaces today's silent "pending" status badges with self-explaining text.
-- **Issue 96** — Multi-step / chat-driven intake form (CFO-Agent pattern; supersedes Issue 83 "optional" decision).
-- **Issue 95** — Hotkey + OBS/streaming-software integration (instant-replay rolling-buffer clips). SEV-2 new feature.
-- **Issue 97** — Livestream recap video (subscription-tier candidate; recurring vs minute-pack pricing).
+**Queued — Creator Studio Expansion (ROI-ordered, 2026-06-06)**:
+- **Issue 127** — Sentence-boundary cut enforcement. Clips never cut mid-sentence. Zero new infra — improves every output immediately. Start here.
+- **Issue 128** — Title optimizer. 5 ranked title candidates per video, channel-voice-aware + web-search grounded. Daily-use feature; keeps creators in the app beyond the clip workflow.
+- **Issue 129** — Thumbnail concept generator. Channel-pattern analysis + 3–5 AI concepts per video ranked by predicted CTR. High creator obsession, uses existing analytics data.
+- **Issue 130** — Hook analyzer. First-30s retention drop detection grounded in creator's own retention curves + concrete rewrite suggestion. Highest-leverage editing insight.
+- **Issue 131** — Auto chapter markers. Transcript-based topic segmentation → ready-to-paste YouTube description block. Fast to build; immediate utility.
+- **Issue 132** — YouTube Live Chat spike detection. Chat replay density as a clipping signal. Makes CreatorClip genuinely stream-native — no competitor does this with full polish.
+- **Issue 133** — Animated caption styles. Bold Pop + Gradient Slide styles baked into render. Eliminates the Submagic step for creators.
+- **Issue 134** — Filler word and silence removal. One-click clean with strikethrough preview; reversible. Foundation for the text editor.
+- **Issue 135** — Text-based editor. Select transcript words → queue cuts → confirm re-render. Descript-style; eliminates export to CapCut/Premiere.
+- **Issue 136** — UI upgrade: dark editor mode + marketing hero. review.html gets full-dark CapCut-style layout; index.html gets paste-URL PLG hero.
+
+**Prod-readiness gates still pending**:
+- **RLS activation** — Hotfix B unblocks the manual workflow. Run `Activate RLS (Issue 79)` workflow with `dry_run=true` then `false`.
+- **Issue 78f PgBouncer load test** — sole gate that moves the verdict from CONDITIONAL → YES.
+- **Issue 123** — SEV1 sweep (Anthropic singleton, transcription locks, CreatorInsight index, recreate_engine guard). Not started.
 
 **Prod-readiness gates still pending**:
 - **RLS activation** — Hotfix B unblocks the manual workflow. Run `Activate RLS (Issue 79)` workflow with `dry_run=true` then `false`.
