@@ -57,6 +57,14 @@ NAMED SCORING PRINCIPLES (cite exactly one per clip):
 _USER_TEMPLATE = """\
 Score each clip candidate from 0.0 (poor fit) to 1.0 (excellent fit) for this creator.
 
+Each candidate includes a transcript_context with three labeled sections:
+  [BEFORE] — what happened before the clip (setup / lead-in)
+  [CLIP]   — the candidate window itself
+  [AFTER]  — what immediately followed (payoff / reaction)
+
+Use BEFORE to judge whether the clip captures a complete thought or starts mid-idea.
+Use AFTER to check if the real payoff lands just outside the window (score lower if so).
+
 Candidates:
 {candidates_json}
 
@@ -125,16 +133,43 @@ def _signal_score(features: dict) -> float:
     return min(1.0, 0.40 * density + 0.20 * hook + spike + laugh)
 
 
-def _transcript_excerpt(setup_s: float, end_s: float, segments: list | None) -> str:
-    """Extract transcript text for the candidate window."""
+_CONTEXT_BEFORE_S = 60.0   # seconds of lead-in context before the clip window
+_CONTEXT_AFTER_S = 30.0    # seconds of follow-on context after the clip window
+
+
+def _transcript_context(setup_s: float, end_s: float, segments: list | None) -> str:
+    """Three-section transcript context for the candidate window (Issue 127).
+
+    Returns [BEFORE] / [CLIP] / [AFTER] sections so Claude can judge whether the
+    clip captures a complete thought and whether the payoff lands inside the window.
+    """
     if not segments:
         return ""
-    parts = [
-        seg.get("text", "").strip()
-        for seg in segments
-        if seg.get("start", 0.0) >= setup_s and seg.get("end", 0.0) <= end_s
-    ]
-    return " ".join(parts)[:300]
+
+    before_start = max(0.0, setup_s - _CONTEXT_BEFORE_S)
+    after_end = end_s + _CONTEXT_AFTER_S
+
+    def _gather(start_min: float, end_max: float, cap: int) -> str:
+        parts = [
+            seg.get("text", "").strip()
+            for seg in segments
+            if seg.get("start", 0.0) >= start_min and seg.get("end", 0.0) <= end_max
+        ]
+        return " ".join(parts)[:cap]
+
+    before = _gather(before_start, setup_s, 200)
+    clip = _gather(setup_s, end_s, 250)
+    after = _gather(end_s, after_end, 150)
+
+    sections = []
+    if before:
+        sections.append(f"[BEFORE]: {before}")
+    if clip:
+        sections.append(f"[CLIP]: {clip}")
+    if after:
+        sections.append(f"[AFTER]: {after}")
+
+    return "\n".join(sections)
 
 
 async def score_candidates(
@@ -183,7 +218,7 @@ async def score_candidates(
             "has_laughter": c["features"]["has_laughter"],
             "hook_energy": round(c["features"]["hook_energy"], 3),
             "signal_density": round(c["features"]["signal_density"], 3),
-            "transcript_excerpt": _transcript_excerpt(
+            "transcript_context": _transcript_context(
                 c["setup_start_s"], c["end_s"], transcript_segments
             ),
         }

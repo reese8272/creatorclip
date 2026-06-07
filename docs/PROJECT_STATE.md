@@ -6,7 +6,9 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 124 complete (2026-06-02).
+**Active issue**: _(none in flight)_ — Issue 127 complete (2026-06-07).
+
+**Last completed**: Issue 127 — Sentence-boundary cut enforcement + context-aware scoring. Three load-bearing changes: (1) **`clip_engine/candidates.py`** — new `snap_to_sentence_boundary(timestamp_s, words, direction)` walks word-level timestamps for terminal-punctuation tokens (`.?!…`) with a silence-gap fallback and 3-second hard cap (`MAX_SNAP_S`); `extract_candidates` now accepts `words` and snaps both clip endpoints after NMS with setup/peak/end invariant preservation. (2) **`clip_engine/scoring.py`** — replaced 300-char in-window `_transcript_excerpt` with `_transcript_context` returning a three-section `[BEFORE 60s] / [CLIP] / [AFTER 30s]` window so Claude judges whether each clip opens and closes on a complete thought. Payload field renamed `transcript_context`. (3) **`ingestion/signals.py`** — `RetentionCurve.is_rewatch_spike` now fires a `retention_spike` event unconditionally (no longer gated behind `relative_retention_performance > 1.2`), making YouTube's "most replayed" graph a direct clipping signal. Config: `SENTENCE_BOUNDARY_MIN_PAUSE_MS=400`, `MAX_SNAP_S=3.0` added to `config.py` + `.env.example`. `docs/CLIPPING_PRINCIPLES.md` gained principle #12 (Clean Context Boundary). `docs/DECISIONS.md` entry logs three choices: punctuation-token walk over spaCy/NLTK, `is_rewatch_spike` as direct trigger, three-section context transcript. **Tests**: 704 passed (+13 from 691) / 2 skipped. Layer 0: ruff 0 / mypy 0 / freshness ok.
 
 **Last completed**: Issue 124 — Virality score + hover tooltips. New `performance_score` (0–100) field on `PerformerOut` replaces raw `engagement_rate` display on the insights page. Score is a channel-relative composite using modified z-score (MAD-based, robust at N=10–50) weighted: retention/AVD (40%), engagement (35%), views (25%). Returns `None` for channels with < 3 videos with metrics. New `_fetch_channel_baselines` query computes per-creator medians+MADs across all videos. New `static/tooltip.js` reusable tooltip component (CSS `::after` + JS viewport-bounds correction + Escape-key dismiss per WCAG 1.4.13) included on all authenticated pages. Tooltips added: insights performer score column header `?`, upload timing `?`, DNA grid cells (3 tooltips), review clip score `?`, dashboard analytics cells (avg view duration, engagement rate). Compliance: field renamed from `virality_score` → `performance_score` to pass the structural no-virality scan; DECISIONS.md entry logs weight deviation from issues.md spec. **Tests**: 691 passed (+13 from 678) / 2 skipped. Layer 0: ruff 0 / freshness ok.
 
@@ -70,17 +72,22 @@ Previous: Wave 3 hotfix batch (3 SEV1s + 3 SEV2s).
 
 > **Closed Issue 84 — AI/LLM efficiency assessment** (2026-05-31): Audited all 3 Anthropic call sites against current (May 2026) SDK + caching state, verified via industry-standards-researcher. Per-call-site reports written to `docs/assessment/llm/dna_brief.md`, `clip_scoring.md`, `improvement_brief.md` + consolidated `REPORT.md`. Key findings: (1) Sonnet 4.6 cacheable-prefix floor is 1024 tokens (not 2048 as our docstrings said) — cache markers on DNA brief + improvement brief silently don't engage today, 1.25× write premium for zero reads; (2) clip_scoring is the only call site where caching actually pays (1h TTL on DNA brief, correctly designed); (3) zero Opus-4.7-breaking parameters on our surface — clean migration path. Shipped Win A: `ANTHROPIC_WEB_SEARCH_TOOL` config default bumped `_20250305 → _20260209` (dynamic filtering: Claude pre-filters search results in code-exec before they hit the main context). 1-LOC config + 2 regression tests in `tests/test_brief_caching.py`. Follow-up issues flagged: Anthropic SDK 0.40 → 0.105.2 bump (unlocks TTL-tier observability), drop unproductive cache markers on DNA + improvement brief (post-SDK-bump so we can measure), per-call-site model settings + Haiku 4.5 A/B eval for clip scoring (~67% cost reduction opportunity).
 
-**Queued for next session (in dependency-ordered execution sequence, 2026-05-31)**:
-- **Issue 99** — UI redesign (Linear-style base + monospace data register). **Blocks everything below.** Phase 1 closed (direction picked); Phase 3 builds `static/_design-tokens.css` then retrofits 9 templates.
-- **Issue 95** — OBS hotkey integration (Architecture B: companion app + folder watcher). Phase 1 closed; Phase 3 builds backend (`creator_api_keys` + `POST /clips/ingest`) here, companion app in a separate repo. Depends on Issue 99 for the API-key management UI.
-- **Issue 93** — Insights page rebuild. SEV-1 UX. Inherits Issue 99 design.
-- **Issue 94** — Clip-engine transparency. SEV-1 UX. Inherits Issue 99 design.
-- **Issue 94** — Clip-engine transparency (why this clip, why-not for skipped videos). SEV-1 UX. Depends on 92.
-- **Issue 99** — UI redesign (supersedes Issue 85). Phase 1 must present 5–8 reference sites for the user to pick patterns from.
-- **Issue 100** — Onboarding tutorial + mandatory intake (related to Issues 96, 98, 99). Replaces today's silent "pending" status badges with self-explaining text.
-- **Issue 96** — Multi-step / chat-driven intake form (CFO-Agent pattern; supersedes Issue 83 "optional" decision).
-- **Issue 95** — Hotkey + OBS/streaming-software integration (instant-replay rolling-buffer clips). SEV-2 new feature.
-- **Issue 97** — Livestream recap video (subscription-tier candidate; recurring vs minute-pack pricing).
+**Queued — Creator Studio Expansion (ROI-ordered, 2026-06-06)**:
+- ~~**Issue 127** — Sentence-boundary cut enforcement.~~ ✅ Done (2026-06-07)
+- **Issue 128** — Title optimizer. 5 ranked title candidates per video, channel-voice-aware + web-search grounded. Daily-use feature; keeps creators in the app beyond the clip workflow.
+- **Issue 129** — Thumbnail concept generator. Channel-pattern analysis + 3–5 AI concepts per video ranked by predicted CTR. High creator obsession, uses existing analytics data.
+- **Issue 130** — Hook analyzer. First-30s retention drop detection grounded in creator's own retention curves + concrete rewrite suggestion. Highest-leverage editing insight.
+- **Issue 131** — Auto chapter markers. Transcript-based topic segmentation → ready-to-paste YouTube description block. Fast to build; immediate utility.
+- **Issue 132** — YouTube Live Chat spike detection. Chat replay density as a clipping signal. Makes CreatorClip genuinely stream-native — no competitor does this with full polish.
+- **Issue 133** — Animated caption styles. Bold Pop + Gradient Slide styles baked into render. Eliminates the Submagic step for creators.
+- **Issue 134** — Filler word and silence removal. One-click clean with strikethrough preview; reversible. Foundation for the text editor.
+- **Issue 135** — Text-based editor. Select transcript words → queue cuts → confirm re-render. Descript-style; eliminates export to CapCut/Premiere.
+- **Issue 136** — UI upgrade: dark editor mode + marketing hero. review.html gets full-dark CapCut-style layout; index.html gets paste-URL PLG hero.
+
+**Prod-readiness gates still pending**:
+- **RLS activation** — Hotfix B unblocks the manual workflow. Run `Activate RLS (Issue 79)` workflow with `dry_run=true` then `false`.
+- **Issue 78f PgBouncer load test** — sole gate that moves the verdict from CONDITIONAL → YES.
+- **Issue 123** — SEV1 sweep (Anthropic singleton, transcription locks, CreatorInsight index, recreate_engine guard). Not started.
 
 **Prod-readiness gates still pending**:
 - **RLS activation** — Hotfix B unblocks the manual workflow. Run `Activate RLS (Issue 79)` workflow with `dry_run=true` then `false`.

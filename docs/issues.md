@@ -2943,10 +2943,319 @@ Free trial: 7 days from first login + 60 minutes (already granted by `auth.py`).
 
 ---
 
+## Creator Studio Expansion (Issues 127–136)
+
+This phase expands CreatorClip from an AI clip generator into a full YouTube creator studio.
+Every feature is powered by the creator's channel DNA and analytics — the same data the clip
+engine already collects. ROI-ordered: highest-leverage functionality ships first.
+
+---
+
+## Issue 127: Sentence-boundary cut enforcement
+**Status**: ✅ Done (2026-06-07)
+**Depends on**: 124
+
+**What**: The clip engine finds candidate windows via signal peaks + backward setup-finding,
+but cut points land wherever the timing math falls — often mid-sentence. This is the #1
+complaint about every competitor (Opus, Vizard, Klap). Fix: after window detection, walk
+the word-level transcript forward/backward from `setup_start_s` and `end_s` to the nearest
+sentence boundary (terminal punctuation token or silence gap >= threshold). Never cut
+mid-sentence.
+
+**Why first**: Zero new infrastructure. Improves every single clip the engine produces.
+Direct, measurable quality lift. Fast to ship.
+
+**Files**: `clip_engine/candidates.py`, `clip_engine/window.py`,
+`tests/test_candidates.py`, `tests/eval/scenarios/*.yaml` (update expected windows),
+`docs/CLIPPING_PRINCIPLES.md` (new principle: Clean Context Boundary), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research sentence-boundary detection from word-level transcripts (silence gap vs. punctuation token approach); document in `docs/DECISIONS.md`
+- [ ] `snap_to_sentence_boundary(timestamp_s, words, direction)` pure helper: walks the word list forward (for `end_s`) or backward (for `setup_start_s`) to the nearest terminal-punctuation token or pause gap >= `SENTENCE_BOUNDARY_MIN_PAUSE_MS`
+- [ ] `SENTENCE_BOUNDARY_MIN_PAUSE_MS` config (default 400); added to `.env.example`
+- [ ] Candidates pipeline calls snap on both `setup_start_s` and `end_s` after window selection
+- [ ] Named principle `Clean Context Boundary` added to `docs/CLIPPING_PRINCIPLES.md`
+- [ ] Eval: existing labeled fixtures still pass setup-before-peak assertion; no regression on window quality
+- [ ] Unit tests: mid-sentence start snaps backward to prior sentence end; mid-sentence end snaps forward to next sentence end; silence gap respected; edge case (start/end of transcript) handled without crash
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 128: Title optimizer
+**Status**: 🔲 Not started
+**Depends on**: 127
+
+**What**: Given an ingested video, generate 5 ranked title candidates scored against (a) the
+creator's channel DNA and historical CTR patterns and (b) current YouTube search trends via
+Claude's web_search tool. Each title ships with a one-sentence rationale and a predicted CTR
+direction. Titles are channel-voice-aware — they match the creator's tone from their stated
+identity. This is a daily-use feature that keeps creators in the app beyond the clip workflow.
+
+**Files**: `routers/titles.py` (new), `knowledge/titles.py` (new),
+`static/analysis.html` (titles panel), `static/index.html` (per-video "Generate titles" action),
+`tests/test_titles.py` (new), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research title-optimization best practices (search-intent alignment, CTR-driving patterns, channel-voice matching); document in `docs/DECISIONS.md`
+- [ ] `POST /creators/me/videos/{video_id}/titles` → 202 + `task_id`; Celery task `generate_title_suggestions`
+- [ ] Claude call uses: DNA brief (cached prefix) + stated identity + video transcript summary + web_search for trending titles in this niche
+- [ ] Returns `TitleSuggestion[]`: `title`, `rationale`, `ctr_signal` (`up | neutral | down`), `search_grounded: bool`
+- [ ] 5 candidates per call; titles capped at YouTube's 100-char limit
+- [ ] Honesty constraint: rationale uses "likely" / "estimated", never "guaranteed"; no virality language
+- [ ] `@limiter.limit("20/hour", key_func=creator_key)` on the endpoint
+- [ ] Streaming SSE progress (same pattern as improvement brief)
+- [ ] Tokens logged after every call; prompt caching verified on DNA prefix
+- [ ] Unit tests: prompt structure, CTR signal logic, char-limit enforcement; integration test: per-creator isolation, auth required
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 129: Thumbnail concept generator
+**Status**: 🔲 Not started
+**Depends on**: 128
+
+**What**: Analyze the creator's historically best-performing video thumbnails (using YouTube
+Data API thumbnails + their CTR from analytics) to extract channel-specific visual patterns.
+Generate 3–5 thumbnail *concepts* per video — structured briefs describing composition, text
+overlay, color, and emotion — ranked by predicted CTR fit for this creator's audience.
+
+Concepts (not rendered images) ship now. Rendering requires an image-generation API
+(DALL-E / Stable Diffusion) — a separate infrastructure decision tracked in Phase 3.
+Concepts are immediately actionable: a creator or a designer can execute them directly,
+and they can be piped into any image tool.
+
+**Files**: `routers/thumbnails.py` (new), `knowledge/thumbnails.py` (new),
+`youtube/thumbnails.py` (new — fetch + analyze thumbnail metadata + CTR),
+`static/analysis.html` (thumbnail concepts panel), `tests/test_thumbnails.py` (new),
+`docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research YouTube thumbnail CTR patterns and channel-pattern extraction approaches; document in `docs/DECISIONS.md`; justify concept-brief approach over rendered image
+- [ ] `GET /creators/me/thumbnail-patterns` → analyzes top 10 CTR videos; returns extracted patterns (face visible, high contrast, text overlay style, dominant emotion)
+- [ ] `POST /creators/me/videos/{video_id}/thumbnail-concepts` → 202 + task; Celery task `generate_thumbnail_concepts`
+- [ ] Claude call uses: channel thumbnail patterns + video transcript hook sentence + DNA niche + web_search for current thumbnail trends in niche
+- [ ] Each concept: `composition`, `text_overlay: str | None`, `dominant_emotion`, `color_direction`, `predicted_ctr_rationale`, `based_on_pattern` (which of the creator's successful patterns this draws from)
+- [ ] Honesty constraint: "predicted" not "guaranteed"; all rationale hedged
+- [ ] `@limiter.limit("10/hour", key_func=creator_key)`
+- [ ] Unit tests: concept schema validation, pattern extraction logic; integration test: per-creator isolation
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 130: Hook analyzer
+**Status**: 🔲 Not started
+**Depends on**: 128
+
+**What**: Analyze the first 30 seconds of any ingested video against the creator's own
+retention curve data. The first 30 seconds determine 40–60% of viewer retention — it is
+the highest-leverage editing surface for any creator. Output: (a) exactly where retention
+drops below the creator's average first-30s baseline, (b) what's in the transcript at that
+moment, (c) a concrete rewrite suggestion for the hook. Grounded entirely in the creator's
+own data — not generic advice.
+
+The retention curve data is already in the DB (`retention_curves` table). This is largely
+a new Claude call over existing data.
+
+**Files**: `routers/analysis.py` (new endpoint `POST .../hook-analysis`),
+`knowledge/hooks.py` (new), `static/analysis.html` (hook panel),
+`tests/test_hooks.py` (new), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research YouTube hook best practices and retention-curve analysis patterns; document in `docs/DECISIONS.md`
+- [ ] `POST /creators/me/videos/{video_id}/hook-analysis` → 202 + `task_id`; Celery task `analyze_hook`
+- [ ] Task: fetches `RetentionCurve` for this video + computes creator's median first-30s retention across all videos; identifies the earliest timestamp where the video's curve drops >10pp below the creator's median
+- [ ] Claude call: transcript of first 60s + retention drop timestamp + creator DNA + web_search for hook patterns in this niche → `HookReport`
+- [ ] `HookReport`: `retention_drop_at_s: float | None`, `retention_at_drop: float | None`, `transcript_at_drop: str`, `diagnosis: str`, `rewrite_suggestion: str`, `honesty_disclaimer: str`
+- [ ] If no retention curve exists: `{"status": "no_data", "message": "Retention data not yet available for this video."}`
+- [ ] Honesty constraint: disclaimer present in every response; language uses "suggestion" not "fix"
+- [ ] `@limiter.limit("10/hour", key_func=creator_key)`; SSE streaming progress
+- [ ] Tokens logged; prompt caching on DNA prefix
+- [ ] Unit + integration tests; full suite green; Layer 0 passes
+
+---
+
+## Issue 131: Auto chapter markers
+**Status**: 🔲 Not started
+**Depends on**: 127
+
+**What**: From an ingested video's word-level transcript, detect topic shifts and generate
+YouTube chapter markers (timestamp + title). Output a ready-to-paste description block
+and a copy-to-clipboard button in the analysis UI. Uses the transcript already in the DB —
+minimal Claude tokens, fast to build, immediate daily utility.
+
+**Files**: `routers/analysis.py` (new endpoint `POST .../chapters`),
+`knowledge/chapters.py` (new), `static/analysis.html` (chapters panel),
+`tests/test_chapters.py` (new), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research topic-segmentation approaches for transcript-based chapter detection (silence gaps, sentence-embedding shift, keyword clustering); document chosen approach in `docs/DECISIONS.md`
+- [ ] `POST /creators/me/videos/{video_id}/chapters` → 202 + task; Celery task `generate_chapters`
+- [ ] Topic shift detection combines transcript text with signal timeline (silence gaps >= 2s, energy dips); minimum 4 chapters, maximum 1 per 3 minutes of video
+- [ ] Each chapter: `timestamp_s: float`, `timestamp_formatted: str` (e.g. `"0:00"`, `"4:23"`), `title: str` (max 40 chars, YouTube-compliant)
+- [ ] Claude generates chapter titles from each transcript segment; system prompt prompt-cached (DNA not required)
+- [ ] Response includes `description_block: str` — ready-to-paste YouTube format (`0:00 Intro\n4:23 Section title...`)
+- [ ] First chapter is always `0:00`
+- [ ] Copy-to-clipboard button on chapters panel in analysis.html
+- [ ] Unit tests: timestamp formatting, chapter count bounds, 0:00 invariant, max-chapter cap; integration test: per-creator isolation
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 132: YouTube Live Chat spike detection
+**Status**: 🔲 Not started
+**Depends on**: 127
+
+**What**: For YouTube VODs that had a live chat, fetch the live chat replay via YouTube
+Data API and compute per-minute message density + emoji/exclamation density as a named
+clipping signal. Inject into the clip engine's signal timeline alongside audio energy and
+retention spikes. This is the signal that gaming clippers (Eklipse/Powder) rely on but
+every general clipper ignores — it makes CreatorClip genuinely stream-native.
+
+**Files**: `youtube/chat.py` (new), `ingestion/signals.py` (add chat spike to timeline),
+`clip_engine/candidates.py` (weight chat_spike signal),
+`models.py` + migration `0023_chat_spike_signal` (`chat_spike_timeline` JSON on `Signals`),
+`tests/test_chat_signals.py` (new),
+`docs/CLIPPING_PRINCIPLES.md` (new principle: Audience Reaction Spike), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research YouTube Live Chat Replay API (availability on VODs vs. non-live uploads, quota cost per page, rate limits); document in `docs/DECISIONS.md`
+- [ ] `youtube/chat.py::fetch_chat_density(video_id, access_token)` → `list[ChatDensityPoint]` (`{timestamp_s, message_count, exclamation_density, emoji_density}`); returns `[]` gracefully if no live chat replay available
+- [ ] Chat spike signal normalized to [0, 1] per-video (not global); merged into signal timeline during `_signals_async`
+- [ ] Clip engine weights `chat_spike` alongside audio energy; named principle `Audience Reaction Spike` added to `docs/CLIPPING_PRINCIPLES.md`
+- [ ] `Signals.chat_spike_timeline` nullable JSON column + migration `0023`
+- [ ] No chat data → graceful fallback; existing signal scoring unaffected
+- [ ] Quota cost per fetch documented; fetch guarded by `youtube/quota.py`
+- [ ] Unit tests: density computation, normalization, empty-chat fallback, quota guard; integration test: signal stored correctly, per-creator isolation
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 133: Animated caption styles
+**Status**: 🔲 Not started
+**Depends on**: 127
+
+**What**: Extend the clip render pipeline with 3 named animated caption styles baked into
+the render (not a post-process overlay). Currently many creators clip here then go to
+Submagic for animated captions — this eliminates that step and keeps them in the app.
+
+Styles: **Bold Pop** (word-by-word highlight, white + black outline, one word at a time —
+the MrBeast/Hormozi style), **Gradient Slide** (word fades in left-to-right in brand color),
+**Minimal** (existing plain SRT, unchanged). Style is set per-clip at review time via the
+existing style picker (Issue 119) and persists on re-render.
+
+**Files**: `clip_engine/captions.py` (new — ASS/SSA subtitle generation from word-level
+transcript), `clip_engine/render.py` (new caption filter chains per style),
+`static/review.html` (extend existing style picker to show all 3 options with labels),
+`tests/test_captions.py` (new), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research ffmpeg ASS/SSA subtitle filter chains for animated word-level captions; document in `docs/DECISIONS.md`
+- [ ] `captions.py::build_ass_subtitles(words, style, clip_start_s)` generates an ASS subtitle file from the word-level transcript segment with per-word timing
+- [ ] **Bold Pop**: each word appears individually; white fill + 3px black stroke; active word scales to 120%
+- [ ] **Gradient Slide**: each word fades in; color uses `#5e6ad2` (brand indigo) transitioning to white
+- [ ] **Minimal**: existing plain SRT path unchanged
+- [ ] Word-level timing sourced from `Transcript.word_timestamps`; graceful fallback to line-level if word timestamps missing
+- [ ] Style picker in review.html shows all 3 with visual label (name + one-line description)
+- [ ] Re-render with new style overwrites previous render; `style_preset` persisted on `Clip`
+- [ ] Unit tests: ASS file structure, word timing alignment, style enum validation, fallback to line-level; integration test: render produces a playable file with the correct subtitle stream
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 134: Filler word and silence removal
+**Status**: 🔲 Not started
+**Depends on**: 133
+
+**What**: One-click removal of filler words ("um", "uh", "like", "you know", "basically") and
+long silences (>800ms) from a rendered clip. The removed segments are previewed as strikethrough
+in the transcript before the creator confirms — fully reversible until confirmed. Re-renders
+via ffmpeg trim+concat. Foundation for the text-based editor in Issue 135.
+
+**Files**: `clip_engine/filler.py` (new — filler detection + silence gap extraction),
+`clip_engine/render.py` (extend to accept `cut_segments: list[CutSegment]`),
+`routers/clips.py` (new `POST /clips/{id}/clean` and `GET /clips/{id}/clean-preview` endpoints),
+`static/review.html` (clean preview UI — strikethrough + confirm),
+`tests/test_filler.py` (new), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research filler-word detection and transcript-based cut generation for ffmpeg trim+concat; document in `docs/DECISIONS.md`
+- [ ] `filler.py::detect_cut_segments(words, silence_threshold_ms, filler_words)` → `list[CutSegment]` with `start_s`, `end_s`, `reason` (`filler | silence`)
+- [ ] `FILLER_WORDS` config (default list); `SILENCE_REMOVAL_THRESHOLD_MS` config (default 800); both in `.env.example`
+- [ ] `GET /clips/{id}/clean-preview` returns detected segments with transcript context; no re-render triggered
+- [ ] Strikethrough preview in review.html shows exactly which words/gaps would be removed
+- [ ] `POST /clips/{id}/clean` → 202 + task; Celery re-renders with cuts applied as ffmpeg trim+concat
+- [ ] Original `render_uri` preserved until `POST /clips/{id}/clean/confirm`; cleaned version stored at a separate R2 key
+- [ ] Warning in UI if clean preview removes >30% of clip duration: "This removes X% of your clip"
+- [ ] `@limiter.limit("20/hour", key_func=creator_key)` on clean endpoint
+- [ ] Unit tests: filler detection, silence detection, adjacent-cut merging, >30% warning threshold; integration test: re-render produces shorter clip, original preserved, per-creator isolation
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 135: Text-based editor
+**Status**: 🔲 Not started
+**Depends on**: 134
+
+**What**: A transcript-driven editing surface in review.html. The creator sees the full
+transcript of their clip as selectable text. Selecting and deleting a word span queues a
+video cut. Pending cuts are shown as strikethrough. On confirm, the clip re-renders with
+all cuts applied via ffmpeg trim+concat (same mechanism as Issue 134). This is the Descript
+feature — the #1 reason creators currently export to CapCut or Premiere after clipping.
+Highest-retention feature in the editor suite.
+
+**Files**: `static/review.html` (transcript editing surface),
+`static/editor.js` (new — selection management, cut queue, confirm flow),
+`routers/clips.py` (new `POST /clips/{id}/cuts` endpoint),
+`tests/test_editor.py` (new), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research text-based video editor UX patterns (Descript, Adobe Podcast) and transcript-to-cut timestamp mapping; document in `docs/DECISIONS.md`
+- [ ] Transcript panel in review.html renders word-level transcript; each word is a `<span data-start data-end>`
+- [ ] User selects a word range → selection highlights red → "Cut selection" button queues the segment
+- [ ] Cut queue lists all pending cuts with word context; individual cuts removable before confirm
+- [ ] `POST /clips/{id}/cuts` accepts `{segments: [{start_s, end_s}]}`; validates no overlaps, no out-of-bounds; queues Celery re-render
+- [ ] Cut queue persisted in `localStorage` keyed by clip ID; survives page refresh
+- [ ] Warning shown if total cut time > 40% of clip duration
+- [ ] Rendered result updates the player in review.html; original preserved for 24h (configurable via `EDITOR_ORIGINAL_RETENTION_HOURS`) before being overwritten
+- [ ] Unit tests: cut segment validation (no overlaps, bounds check, merge logic), localStorage key isolation; integration test: cuts applied correctly, original preserved, per-creator isolation
+- [ ] Full suite green; Layer 0 passes
+
+---
+
+## Issue 136: UI upgrade — dark editor mode + marketing hero
+**Status**: 🔲 Not started
+**Depends on**: 135
+
+**What**: Two-part visual upgrade. (A) **Dark editor mode**: review.html gets a full-dark
+layout with the player dominant, transcript panel alongside, and tool panels (captions,
+filler, editor) as collapsible side drawers — feels like CapCut/Premiere, not a web form.
+(B) **Marketing hero**: the pre-auth landing at index.html becomes a one-step paste-URL
+experience — primary CTA is a YouTube URL input, with a demo clip playing behind it
+showing the AI reasoning grid. This is the "instant gratification before signup" pattern
+that Opus Clip built its user base on.
+
+**Files**: `static/_design-tokens.css` (extend with editor-mode tokens),
+`static/review.html` (dark editor layout), `static/editor-layout.css` (new),
+`static/index.html` (pre-auth hero — detect logged-out state, show hero vs. dashboard),
+`static/hero.css` (new), `tests/test_static.py` (extend), `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research dark editor UI patterns (CapCut Web, Opus Clip editor, Descript) and PLG landing hero patterns (Opus, Captions/Mirage); document chosen approach in `docs/DECISIONS.md`
+- [ ] review.html dark mode: `#0a0a0a` base, `#141414` panels, `#5e6ad2` accent — all from design tokens, no hardcoded hex in HTML
+- [ ] Player takes ~60% of viewport width; transcript editor panel takes ~35%; tool panels (captions / filler / editor) collapse to an icon strip with CSS transitions (no JS animation library)
+- [ ] Pre-auth index.html: if no session cookie → hero layout with URL input CTA + autoplaying muted demo clip; if session exists → existing dashboard (no regression)
+- [ ] Hero URL input validates YouTube URL format client-side; on submit routes to `/auth/login?next=...` with URL as a query hint for post-auth flow
+- [ ] Static tests: dark-mode tokens present in review.html, pre-auth detection logic, hero input element, no regression on authenticated dashboard template
+- [ ] Full suite green; Layer 0 passes
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
+- Thumbnail rendering (DALL-E / Stable Diffusion integration — follows Issue 129 concepts)
 - Vision signals (MediaPipe / face-emotion) — Phase 2
 - Auto-publish to YouTube Shorts (additional OAuth scope)
 - Multi-platform export (TikTok / Reels)
 - Hot-key clipping during live recording / OBS integration
+- No-auth demo mode (full processing without signup — follows Issue 136 hero)

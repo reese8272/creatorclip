@@ -112,7 +112,13 @@ async def generate_and_rank_clips(
     # Candidate extraction is CPU-bound (numpy array build + scipy find_peaks over
     # duration/0.5 samples). Offload it so it can't stall the API event loop and the
     # other concurrent requests on this worker. (Issue C)
-    candidates = await asyncio.to_thread(extract_candidates, timeline, max_candidates)
+    #
+    # Flat word list extracted from transcript segments for sentence-boundary snapping
+    # (principle #12). Empty list → snapping skipped gracefully. (Issue 127)
+    words = [w for seg in (transcript_segments or []) for w in seg.get("words", [])]
+    candidates = await asyncio.to_thread(
+        lambda: extract_candidates(timeline, max_candidates, words=words or None)
+    )
     if not candidates:
         logger.info("No candidates found for video %s", video_id)
         return []
