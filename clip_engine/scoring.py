@@ -133,8 +133,8 @@ def _signal_score(features: dict) -> float:
     return min(1.0, 0.40 * density + 0.20 * hook + spike + laugh)
 
 
-_CONTEXT_BEFORE_S = 60.0   # seconds of lead-in context before the clip window
-_CONTEXT_AFTER_S = 30.0    # seconds of follow-on context after the clip window
+_CONTEXT_BEFORE_S = 60.0  # seconds of lead-in context before the clip window
+_CONTEXT_AFTER_S = 30.0  # seconds of follow-on context after the clip window
 
 
 def _transcript_context(setup_s: float, end_s: float, segments: list | None) -> str:

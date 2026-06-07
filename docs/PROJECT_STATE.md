@@ -6,7 +6,9 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: _(none in flight)_ — Issue 127 complete (2026-06-07).
+**Active issue**: _(none in flight)_ — Issue 128 complete (2026-06-07).
+
+**Last completed**: Issue 128 — Title optimizer. `POST /creators/me/videos/{video_id}/titles` → 202 + task_id → Celery task `generate_title_suggestions`. Three-block prompt: static CTR instructions / DNA brief (cache_control breakpoint at ~2400 tokens, clearing Sonnet 4.6's 2048-token minimum) / per-video context (transcript summary + stated identity). Claude generates 10 ranked candidates via web_search; `parse_candidates` surfaces top 5 with 100-char enforcement + CTR signal normalization. Results are ephemeral — arrive in the `done` SSE payload (no new DB table or migration). New `knowledge/titles.py`, `routers/titles.py`, SSE + title-card UI in `static/analysis.html`, "Titles" button on video rows in `static/index.html`. Compliance: disclaimer uses "cannot guarantee" (not "promise") to pass the structural virality scan. Key decisions logged in `docs/DECISIONS.md` (ephemeral vs. persistent, generate-10-surface-5, CTR band definition, cache placement, sync+to_thread over AsyncAnthropic). **Tests**: 722 passed (+18 from 704) / 2 skipped. Layer 0: ruff 0 / format clean / freshness ok.
 
 **Last completed**: Issue 127 — Sentence-boundary cut enforcement + context-aware scoring. Three load-bearing changes: (1) **`clip_engine/candidates.py`** — new `snap_to_sentence_boundary(timestamp_s, words, direction)` walks word-level timestamps for terminal-punctuation tokens (`.?!…`) with a silence-gap fallback and 3-second hard cap (`MAX_SNAP_S`); `extract_candidates` now accepts `words` and snaps both clip endpoints after NMS with setup/peak/end invariant preservation. (2) **`clip_engine/scoring.py`** — replaced 300-char in-window `_transcript_excerpt` with `_transcript_context` returning a three-section `[BEFORE 60s] / [CLIP] / [AFTER 30s]` window so Claude judges whether each clip opens and closes on a complete thought. Payload field renamed `transcript_context`. (3) **`ingestion/signals.py`** — `RetentionCurve.is_rewatch_spike` now fires a `retention_spike` event unconditionally (no longer gated behind `relative_retention_performance > 1.2`), making YouTube's "most replayed" graph a direct clipping signal. Config: `SENTENCE_BOUNDARY_MIN_PAUSE_MS=400`, `MAX_SNAP_S=3.0` added to `config.py` + `.env.example`. `docs/CLIPPING_PRINCIPLES.md` gained principle #12 (Clean Context Boundary). `docs/DECISIONS.md` entry logs three choices: punctuation-token walk over spaCy/NLTK, `is_rewatch_spike` as direct trigger, three-section context transcript. **Tests**: 704 passed (+13 from 691) / 2 skipped. Layer 0: ruff 0 / mypy 0 / freshness ok.
 
@@ -74,7 +76,7 @@ Previous: Wave 3 hotfix batch (3 SEV1s + 3 SEV2s).
 
 **Queued — Creator Studio Expansion (ROI-ordered, 2026-06-06)**:
 - ~~**Issue 127** — Sentence-boundary cut enforcement.~~ ✅ Done (2026-06-07)
-- **Issue 128** — Title optimizer. 5 ranked title candidates per video, channel-voice-aware + web-search grounded. Daily-use feature; keeps creators in the app beyond the clip workflow.
+- ~~**Issue 128** — Title optimizer.~~ ✅ Done (2026-06-07)
 - **Issue 129** — Thumbnail concept generator. Channel-pattern analysis + 3–5 AI concepts per video ranked by predicted CTR. High creator obsession, uses existing analytics data.
 - **Issue 130** — Hook analyzer. First-30s retention drop detection grounded in creator's own retention curves + concrete rewrite suggestion. Highest-leverage editing insight.
 - **Issue 131** — Auto chapter markers. Transcript-based topic segmentation → ready-to-paste YouTube description block. Fast to build; immediate utility.

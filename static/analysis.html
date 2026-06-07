@@ -139,6 +139,124 @@
       font-size: var(--text-xs);
       color: var(--color-text-subtle);
     }
+
+    /* ── Title optimizer panel ──────────────────────────────────── */
+    .titles-panel {
+      margin-top: var(--space-8);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-5);
+    }
+    .titles-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-4);
+    }
+    .titles-header h2 {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .titles-video-label {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      margin-bottom: var(--space-4);
+    }
+    .titles-video-label strong { color: var(--color-text); }
+    .titles-video-label .no-video {
+      font-style: italic;
+      color: var(--color-text-subtle);
+    }
+    .titles-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+    .titles-status { font-size: var(--text-xs); font-family: var(--font-mono); }
+    .titles-status.streaming { color: var(--color-accent); }
+    .titles-status.done { color: var(--color-success); }
+    .titles-status.error { color: var(--color-danger); }
+
+    /* Title candidate cards */
+    .title-cards { display: flex; flex-direction: column; gap: var(--space-3); }
+    .title-card {
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+    }
+    .title-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-3);
+      margin-bottom: var(--space-2);
+    }
+    .title-text {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text);
+      line-height: var(--leading-snug);
+      flex: 1;
+    }
+    .title-card-meta {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      flex-shrink: 0;
+    }
+    .ctr-badge {
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      padding: 2px 6px;
+      border-radius: 3px;
+      border: 1px solid;
+    }
+    .ctr-badge.up { color: var(--color-success); border-color: var(--color-success); }
+    .ctr-badge.neutral { color: var(--color-text-muted); border-color: var(--color-border-strong); }
+    .ctr-badge.down { color: var(--color-danger); border-color: var(--color-danger); }
+    .copy-btn {
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      color: var(--color-text-subtle);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 2px 4px;
+    }
+    .copy-btn:hover { color: var(--color-text); }
+    .title-rationale {
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+      line-height: var(--leading-relaxed);
+    }
+    .title-char-count {
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      color: var(--color-text-subtle);
+      margin-top: var(--space-1);
+    }
+    .search-grounded-badge {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--color-text-subtle);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      padding: 1px 4px;
+    }
+    .titles-disclaimer {
+      margin-top: var(--space-4);
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--color-border);
+      font-size: var(--text-xs);
+      color: var(--color-text-subtle);
+    }
   </style>
 </head>
 <body>
@@ -202,6 +320,25 @@
       <div class="response-disclaimer" id="response-disclaimer" style="display:none">
         This analysis is grounded in your channel data.
         AutoClip does not promise virality or specific growth outcomes.
+      </div>
+    </div>
+
+    <!-- Title Optimizer — only shown when a video_id query param is present -->
+    <div class="titles-panel" id="titles-panel" style="display:none">
+      <div class="titles-header">
+        <h2>Title Optimizer</h2>
+        <span class="titles-status" id="titles-status"></span>
+      </div>
+      <div class="titles-video-label" id="titles-video-label">
+        <span class="no-video">No video selected.</span>
+      </div>
+      <div class="titles-actions">
+        <button class="btn btn-primary" id="titles-btn" onclick="generateTitles()">Generate titles</button>
+      </div>
+      <div class="title-cards" id="title-cards"></div>
+      <div class="titles-disclaimer" id="titles-disclaimer" style="display:none">
+        These suggestions are estimates grounded in your channel data and current search trends.
+        AutoClip cannot guarantee specific CTR or view outcomes.
       </div>
     </div>
   </main>
@@ -353,6 +490,152 @@
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+    }
+
+    // ── Title Optimizer ─────────────────────────────────────────────────────
+
+    let _titlesStream = null;
+    const _titlesState = { videoId: null, videoTitle: null };
+
+    // On page load: check for ?video_id= and pre-populate the titles panel.
+    document.addEventListener('DOMContentLoaded', () => {
+      const params = new URLSearchParams(window.location.search);
+      const videoId = params.get('video_id');
+      const videoTitle = params.get('video_title');
+      if (videoId) {
+        _titlesState.videoId = videoId;
+        _titlesState.videoTitle = decodeURIComponent(videoTitle || '');
+        document.getElementById('titles-panel').style.display = 'block';
+        const label = document.getElementById('titles-video-label');
+        if (_titlesState.videoTitle) {
+          label.innerHTML = `Video: <strong>${_esc(_titlesState.videoTitle)}</strong>`;
+        } else {
+          label.innerHTML = `Video ID: <strong style="font-family:var(--font-mono)">${_esc(videoId)}</strong>`;
+        }
+      }
+    });
+
+    async function generateTitles() {
+      if (!_titlesState.videoId) return;
+
+      const btn = document.getElementById('titles-btn');
+      const statusEl = document.getElementById('titles-status');
+      const cardsEl = document.getElementById('title-cards');
+      const disclaimer = document.getElementById('titles-disclaimer');
+
+      if (_titlesStream) { _titlesStream.close(); _titlesStream = null; }
+
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      statusEl.textContent = 'queuing…';
+      statusEl.className = 'titles-status streaming';
+      cardsEl.innerHTML = '';
+      disclaimer.style.display = 'none';
+
+      let resp;
+      try {
+        resp = await fetch(`/creators/me/videos/${_titlesState.videoId}/titles`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+      } catch (err) {
+        _showTitlesError('Network error — please try again.', btn, statusEl);
+        return;
+      }
+
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        _showTitlesError(body.detail || `Error ${resp.status}`, btn, statusEl);
+        return;
+      }
+
+      const data = await resp.json();
+      if (!data.stream_url) {
+        _showTitlesError('Could not connect to the live stream. Try again shortly.', btn, statusEl);
+        return;
+      }
+
+      statusEl.textContent = 'searching…';
+
+      _titlesStream = subscribeToTaskStream(data.stream_url, {
+        onEvent(type, d) {
+          if (type === 'step') statusEl.textContent = (d.label || 'working…').replace(/_/g, ' ');
+          if (type === 'cache') statusEl.textContent = 'generating…';
+          if (type === 'token') statusEl.textContent = 'generating…';
+        },
+        onDone(d) {
+          statusEl.textContent = 'done';
+          statusEl.className = 'titles-status done';
+          btn.disabled = false;
+          btn.textContent = 'Regenerate';
+          if (Array.isArray(d.suggestions) && d.suggestions.length) {
+            _renderTitleCards(d.suggestions);
+            disclaimer.style.display = 'block';
+          } else {
+            cardsEl.innerHTML = '<p style="color:var(--color-text-subtle);font-size:var(--text-sm)">No suggestions returned — try again.</p>';
+          }
+          if (data.task_id && window.activeTasks) window.activeTasks.removeTask(data.task_id);
+        },
+        onError(msg) {
+          _showTitlesError(msg, btn, statusEl);
+        },
+        onConnectionError() {
+          statusEl.textContent = 'reconnecting…';
+          statusEl.className = 'titles-status streaming';
+        },
+      });
+
+      if (window.activeTasks) {
+        window.activeTasks.registerTask({
+          task_id: data.task_id,
+          kind: 'title_suggestions',
+          label: `Generating titles${_titlesState.videoTitle ? ' — ' + _titlesState.videoTitle : ''}`,
+          stream_url: data.stream_url,
+        });
+      }
+    }
+
+    function _renderTitleCards(suggestions) {
+      const cardsEl = document.getElementById('title-cards');
+      cardsEl.innerHTML = suggestions.map((s, i) => {
+        const charCount = s.title ? s.title.length : 0;
+        const charColor = charCount > 80 ? 'var(--color-danger)' : 'var(--color-text-subtle)';
+        const searchBadge = s.search_grounded
+          ? '<span class="search-grounded-badge">web-grounded</span>'
+          : '';
+        return `
+          <div class="title-card">
+            <div class="title-card-top">
+              <div class="title-text">${_esc(s.title || '')}</div>
+              <div class="title-card-meta">
+                ${searchBadge}
+                <span class="ctr-badge ${s.ctr_signal || 'neutral'}">${s.ctr_signal || 'neutral'}</span>
+                <button class="copy-btn" onclick="_copyTitle(this, ${i})" title="Copy title">copy</button>
+              </div>
+            </div>
+            <div class="title-rationale">${_esc(s.rationale || '')}</div>
+            <div class="title-char-count" style="color:${charColor}">${charCount}/100 chars</div>
+          </div>`;
+      }).join('');
+      // Store for copy-by-index
+      window._titleSuggestions = suggestions;
+    }
+
+    function _copyTitle(btn, idx) {
+      const title = (window._titleSuggestions || [])[idx]?.title || '';
+      navigator.clipboard.writeText(title).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'copied!';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      });
+    }
+
+    function _showTitlesError(msg, btn, statusEl) {
+      statusEl.textContent = 'error';
+      statusEl.className = 'titles-status error';
+      const cardsEl = document.getElementById('title-cards');
+      cardsEl.innerHTML = `<p style="color:var(--color-danger);font-size:var(--text-sm)">${_esc(msg)}</p>`;
+      if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
     }
   </script>
 </body>

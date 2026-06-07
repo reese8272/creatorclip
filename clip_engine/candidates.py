@@ -56,7 +56,8 @@ def snap_to_sentence_boundary(
     if direction == "backward":
         # Latest terminal-punct word whose END falls in [timestamp_s - max_snap_s, timestamp_s]
         punct_words = [
-            w for w in words
+            w
+            for w in words
             if _is_sentence_end(w.get("word", ""))
             and timestamp_s - max_snap_s <= w.get("end", 0.0) <= timestamp_s
         ]
@@ -68,13 +69,8 @@ def snap_to_sentence_boundary(
                 e.get("end_s", e.get("start_s", 0.0))
                 for e in timeline_events
                 if e.get("type") == "silence"
-                and (
-                    e.get("end_s", e.get("start_s", 0.0)) - e.get("start_s", 0.0)
-                    >= min_pause_s
-                )
-                and timestamp_s - max_snap_s
-                <= e.get("end_s", e.get("start_s", 0.0))
-                <= timestamp_s
+                and (e.get("end_s", e.get("start_s", 0.0)) - e.get("start_s", 0.0) >= min_pause_s)
+                and timestamp_s - max_snap_s <= e.get("end_s", e.get("start_s", 0.0)) <= timestamp_s
             ]
             if silence_ends:
                 return float(max(silence_ends))
@@ -82,7 +78,8 @@ def snap_to_sentence_boundary(
     else:  # forward
         # First terminal-punct word whose END falls in [timestamp_s, timestamp_s + max_snap_s]
         punct_words = [
-            w for w in words
+            w
+            for w in words
             if _is_sentence_end(w.get("word", ""))
             and timestamp_s <= w.get("end", 0.0) <= timestamp_s + max_snap_s
         ]
@@ -94,10 +91,7 @@ def snap_to_sentence_boundary(
                 e.get("start_s", 0.0)
                 for e in timeline_events
                 if e.get("type") == "silence"
-                and (
-                    e.get("end_s", e.get("start_s", 0.0)) - e.get("start_s", 0.0)
-                    >= min_pause_s
-                )
+                and (e.get("end_s", e.get("start_s", 0.0)) - e.get("start_s", 0.0) >= min_pause_s)
                 and timestamp_s <= e.get("start_s", 0.0) <= timestamp_s + max_snap_s
             ]
             if silence_starts:

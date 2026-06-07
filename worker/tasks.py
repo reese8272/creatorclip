@@ -1999,3 +1999,139 @@ async def _generate_video_analysis_async(
             exc_type=type(exc).__name__,
         )
         raise
+
+
+# ── Title suggestions (Issue 128) ─────────────────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="worker.tasks.generate_title_suggestions",
+)
+def generate_title_suggestions(self, creator_id: str, video_id: str) -> str:
+    """Generate title suggestions for a video off the request path (Issue 128)."""
+    try:
+        run_async(_generate_title_suggestions_async(self.request.id, creator_id, video_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _generate_title_suggestions_async(
+    job_id: str,
+    creator_id: str,
+    video_id: str,
+) -> None:
+    """Fetch transcript + DNA + identity; call Claude; emit result + done events.
+
+    Results are ephemeral — no DB row is persisted. The SSE consumer captures
+    the ``result`` event containing the top-5 TitleSuggestion objects.
+    Per-creator isolation enforced on every query via creator.id filters.
+    """
+    import json as _json
+
+    from sqlalchemy import select
+
+    from dna.identity import format_for_prompt
+    from dna.identity import get_current as get_identity
+    from dna.profile import get_active
+    from knowledge.titles import (
+        _extract_transcript_summary,
+        parse_candidates,
+    )
+    from knowledge.titles import (
+        generate_title_suggestions as build_suggestions,
+    )
+    from models import Transcript, Video
+    from worker.progress import aemit
+
+    try:
+        await aemit(job_id, "step", label="loading_data", stage="title_suggestions")
+
+        cid = uuid.UUID(creator_id)
+        vid = uuid.UUID(video_id)
+
+        async with db.AdminSessionLocal() as session:
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                await aemit(
+                    job_id, "error", stage="title_suggestions", message="Creator not found."
+                )
+                return
+
+            video = await session.get(Video, vid)
+            if video is None or video.creator_id != cid:
+                await aemit(job_id, "error", stage="title_suggestions", message="Video not found.")
+                return
+
+            transcript_row = await session.scalar(
+                select(Transcript).where(Transcript.video_id == vid)
+            )
+            transcript_summary = _extract_transcript_summary(
+                transcript_row.segments_jsonb if transcript_row else None
+            )
+
+            dna_profile = await get_active(session, cid)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+
+            identity = await get_identity(session, cid)
+            stated_identity = format_for_prompt(identity)
+
+        await aemit(job_id, "step", label="generating_titles", stage="title_suggestions")
+
+        raw_json = await asyncio.to_thread(
+            build_suggestions,
+            channel_title=creator.channel_title or "Unknown Channel",
+            dna_brief=dna_brief,
+            stated_identity=stated_identity,
+            video_title=video.title,
+            transcript_summary=transcript_summary,
+            task_id=job_id,
+        )
+
+        try:
+            suggestions = parse_candidates(raw_json)
+        except (ValueError, _json.JSONDecodeError) as exc:
+            logger.error(
+                "_generate_title_suggestions_async parse failed creator=%s video=%s: %s",
+                creator_id,
+                video_id,
+                exc,
+            )
+            await aemit(
+                job_id,
+                "error",
+                stage="title_suggestions",
+                message="Title parsing failed — please try again.",
+            )
+            raise
+
+        # Pass suggestions in the done payload so the SSE consumer's onDone
+        # callback receives them without a separate result event (done already
+        # fires handlers.onDone(data) in progressStream.js, and data is the
+        # full parsed JSON — no progressStream.js changes required).
+        await aemit(
+            job_id,
+            "done",
+            stage="title_suggestions",
+            message="Titles ready.",
+            suggestions=suggestions,
+        )
+
+    except Exception as exc:
+        logger.error(
+            "_generate_title_suggestions_async failed creator=%s video=%s: %s",
+            creator_id,
+            video_id,
+            exc,
+        )
+        await aemit(
+            job_id,
+            "error",
+            stage="title_suggestions",
+            message="Title generation failed — please try again.",
+            exc_type=type(exc).__name__,
+        )
+        raise

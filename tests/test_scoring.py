@@ -127,9 +127,9 @@ def test_signal_score_never_exceeds_one():
 
 def test_transcript_context_three_sections():
     segs = [
-        {"start": 0.0, "end": 5.0, "text": "lead in text"},    # before
+        {"start": 0.0, "end": 5.0, "text": "lead in text"},  # before
         {"start": 10.0, "end": 15.0, "text": "the clip here"},  # clip
-        {"start": 20.0, "end": 25.0, "text": "payoff after"},   # after
+        {"start": 20.0, "end": 25.0, "text": "payoff after"},  # after
     ]
     result = _transcript_context(10.0, 20.0, segs)
     assert "[BEFORE]" in result

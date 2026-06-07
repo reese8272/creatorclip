@@ -411,14 +411,16 @@
             const body = await cr.json();
             const allClips = Array.isArray(body) ? body : (body.clips || []);
             const renderedClips = allClips.filter(c => c.render_status === 'done');
+            const titleUrl = `/static/analysis.html?video_id=${v.id}&video_title=${encodeURIComponent(v.title || '')}`;
+            const titlesBtn = `<a href="${titleUrl}" class="btn btn-secondary" style="margin-left:var(--space-2)">Titles</a>`;
             if (allClips.length) {
               clipsReadyCount += renderedClips.length;
               const label = renderedClips.length === allClips.length
                 ? `${allClips.length} clips`
                 : `${renderedClips.length}/${allClips.length} rendered`;
-              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary">${label}</a>`;
+              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary">${label}</a>${titlesBtn}`;
             } else {
-              clipsHtml = `<button class="btn btn-primary" onclick="generateClips('${v.id}',this)">Generate clips</button>`;
+              clipsHtml = `<button class="btn btn-primary" onclick="generateClips('${v.id}',this)">Generate clips</button>${titlesBtn}`;
             }
           }
         }

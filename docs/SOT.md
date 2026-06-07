@@ -128,6 +128,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── knowledge/
 │   ├── rag.py                  # Evergreen RAG retrieval (pgvector)
 │   ├── research.py             # Live web search (Claude web-search tool)
+│   ├── titles.py               # Title suggestion generation (Issue 128)
 │   └── seed/                   # Evergreen corpus: hook psychology, pacing, retention theory
 │
 ├── upload_intel/
@@ -149,6 +150,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── upload_intel.py         # GET timing recommendation
 │   ├── improvement.py          # GET improvement brief
 │   ├── analysis.py             # POST video-analysis (Issue 121)
+│   ├── titles.py               # POST video title suggestions (Issue 128)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
 │
 ├── worker/

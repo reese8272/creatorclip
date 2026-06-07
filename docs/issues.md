@@ -2982,7 +2982,7 @@ Direct, measurable quality lift. Fast to ship.
 ---
 
 ## Issue 128: Title optimizer
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07)
 **Depends on**: 127
 
 **What**: Given an ingested video, generate 5 ranked title candidates scored against (a) the
@@ -2996,17 +2996,17 @@ identity. This is a daily-use feature that keeps creators in the app beyond the 
 `tests/test_titles.py` (new), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research title-optimization best practices (search-intent alignment, CTR-driving patterns, channel-voice matching); document in `docs/DECISIONS.md`
-- [ ] `POST /creators/me/videos/{video_id}/titles` → 202 + `task_id`; Celery task `generate_title_suggestions`
-- [ ] Claude call uses: DNA brief (cached prefix) + stated identity + video transcript summary + web_search for trending titles in this niche
-- [ ] Returns `TitleSuggestion[]`: `title`, `rationale`, `ctr_signal` (`up | neutral | down`), `search_grounded: bool`
-- [ ] 5 candidates per call; titles capped at YouTube's 100-char limit
-- [ ] Honesty constraint: rationale uses "likely" / "estimated", never "guaranteed"; no virality language
-- [ ] `@limiter.limit("20/hour", key_func=creator_key)` on the endpoint
-- [ ] Streaming SSE progress (same pattern as improvement brief)
-- [ ] Tokens logged after every call; prompt caching verified on DNA prefix
-- [ ] Unit tests: prompt structure, CTR signal logic, char-limit enforcement; integration test: per-creator isolation, auth required
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research title-optimization best practices (search-intent alignment, CTR-driving patterns, channel-voice matching); document in `docs/DECISIONS.md`
+- [x] `POST /creators/me/videos/{video_id}/titles` → 202 + `task_id`; Celery task `generate_title_suggestions`
+- [x] Claude call uses: DNA brief (cached prefix) + stated identity + video transcript summary + web_search for trending titles in this niche
+- [x] Returns `TitleSuggestion[]`: `title`, `rationale`, `ctr_signal` (`up | neutral | down`), `search_grounded: bool`
+- [x] 5 candidates per call (generate 10, surface top 5); titles capped at YouTube's 100-char limit
+- [x] Honesty constraint: rationale uses "likely" / "estimated", never "guaranteed"; no virality language (compliance scan green)
+- [x] `@limiter.limit("20/hour", key_func=creator_key)` on the endpoint
+- [x] Streaming SSE progress (same pattern as video analysis — ephemeral, results in `done` payload)
+- [x] Tokens logged after every call; prompt caching on DNA prefix (block 2 breakpoint)
+- [x] Unit tests: prompt structure, CTR signal logic, char-limit enforcement, transcript extraction; API tests: per-creator isolation, auth required, no-transcript 400
+- [x] Full suite green (722 passed); Layer 0 passes (ruff 0 / format clean)
 
 ---
 
