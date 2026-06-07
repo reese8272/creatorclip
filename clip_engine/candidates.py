@@ -4,6 +4,10 @@ Clip candidate detection: peak detection + backward setup-finding.
 Core principle: #2 "Clip the setup, not the aftermath" — on every signal peak,
 scan backwards up to WINDOW_S seconds for the most recent content boundary
 (silence end or energy spike start), and begin the clip there.
+
+Principle #12 "Clean Context Boundary" is enforced by snapping both cut points
+to the nearest sentence boundary (terminal punctuation or silence gap) so clips
+never start or end mid-sentence.
 """
 
 import numpy as np
@@ -15,6 +19,91 @@ WINDOW_S = 75.0  # max lookback from peak to find setup
 POST_PEAK_S = 20.0  # seconds to include after peak
 MIN_CLIP_S = 30.0  # clips shorter than this are discarded
 _NMS_IOU_THRESHOLD = 0.5  # IoU above which a lower-prominence candidate is suppressed
+
+_TERMINAL_PUNCT = frozenset({".", "?", "!", "...", "…", '."', '?"', '!"'})
+
+
+def _is_sentence_end(word_text: str) -> bool:
+    """True when the word token ends with terminal punctuation."""
+    text = word_text.strip()
+    return any(text.endswith(p) for p in _TERMINAL_PUNCT)
+
+
+def snap_to_sentence_boundary(
+    timestamp_s: float,
+    words: list[dict],
+    direction: str,
+    min_pause_ms: int = 400,
+    max_snap_s: float = 3.0,
+    timeline_events: list[dict] | None = None,
+) -> float:
+    """Snap timestamp_s to the nearest sentence boundary (principle #12).
+
+    direction="backward": used for setup_start_s — walks backward to find the
+    end of the previous sentence so the clip starts at the opening of a new
+    sentence, never mid-sentence.
+
+    direction="forward": used for end_s — walks forward to find the next
+    terminal-punctuation word so the clip closes at a sentence end.
+
+    Priority within max_snap_s:
+      1. Terminal-punctuation word token
+      2. Silence-gap boundary from timeline_events (>= min_pause_ms long)
+      3. Original timestamp_s (hard cap — never snap farther than max_snap_s)
+    """
+    min_pause_s = min_pause_ms / 1000.0
+
+    if direction == "backward":
+        # Latest terminal-punct word whose END falls in [timestamp_s - max_snap_s, timestamp_s]
+        punct_words = [
+            w for w in words
+            if _is_sentence_end(w.get("word", ""))
+            and timestamp_s - max_snap_s <= w.get("end", 0.0) <= timestamp_s
+        ]
+        if punct_words:
+            return float(max(punct_words, key=lambda w: w["end"])["end"])
+
+        if timeline_events:
+            silence_ends = [
+                e.get("end_s", e.get("start_s", 0.0))
+                for e in timeline_events
+                if e.get("type") == "silence"
+                and (
+                    e.get("end_s", e.get("start_s", 0.0)) - e.get("start_s", 0.0)
+                    >= min_pause_s
+                )
+                and timestamp_s - max_snap_s
+                <= e.get("end_s", e.get("start_s", 0.0))
+                <= timestamp_s
+            ]
+            if silence_ends:
+                return float(max(silence_ends))
+
+    else:  # forward
+        # First terminal-punct word whose END falls in [timestamp_s, timestamp_s + max_snap_s]
+        punct_words = [
+            w for w in words
+            if _is_sentence_end(w.get("word", ""))
+            and timestamp_s <= w.get("end", 0.0) <= timestamp_s + max_snap_s
+        ]
+        if punct_words:
+            return float(min(punct_words, key=lambda w: w["end"])["end"])
+
+        if timeline_events:
+            silence_starts = [
+                e.get("start_s", 0.0)
+                for e in timeline_events
+                if e.get("type") == "silence"
+                and (
+                    e.get("end_s", e.get("start_s", 0.0)) - e.get("start_s", 0.0)
+                    >= min_pause_s
+                )
+                and timestamp_s <= e.get("start_s", 0.0) <= timestamp_s + max_snap_s
+            ]
+            if silence_starts:
+                return float(min(silence_starts))
+
+    return timestamp_s
 
 
 def _find_setup_start(timeline: dict, peak_s: float, window_s: float = WINDOW_S) -> float:
@@ -56,6 +145,9 @@ def extract_candidates(
     timeline: dict,
     max_candidates: int = 8,
     window_s: float = WINDOW_S,
+    words: list[dict] | None = None,
+    min_pause_ms: int = 400,
+    max_snap_s: float = 3.0,
 ) -> list[dict]:
     """
     Return up to max_candidates clip windows, each with:
@@ -142,4 +234,28 @@ def extract_candidates(
     # Strip internal NMS metadata and sort chronologically for the caller.
     candidates = [{k: v for k, v in c.items() if k != "_prominence"} for c in kept]
     candidates.sort(key=lambda c: c["setup_start_s"])
+
+    # Principle #12 — Clean Context Boundary: snap both cut points to the nearest
+    # sentence boundary so clips never start or end mid-sentence. Only runs when
+    # word-level transcript is provided; falls back gracefully when absent.
+    if words:
+        events = timeline.get("events")
+        for c in candidates:
+            c["setup_start_s"] = round(
+                snap_to_sentence_boundary(
+                    c["setup_start_s"], words, "backward", min_pause_ms, max_snap_s, events
+                ),
+                2,
+            )
+            c["end_s"] = round(
+                snap_to_sentence_boundary(
+                    c["end_s"], words, "forward", min_pause_ms, max_snap_s, events
+                ),
+                2,
+            )
+            # Maintain invariants after snapping: setup < peak, clip >= MIN_CLIP_S
+            if c["end_s"] - c["setup_start_s"] < MIN_CLIP_S:
+                c["end_s"] = round(c["setup_start_s"] + MIN_CLIP_S, 2)
+            c["setup_start_s"] = min(c["setup_start_s"], c["peak_s"] - 0.1)
+
     return candidates

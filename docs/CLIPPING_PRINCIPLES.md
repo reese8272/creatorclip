@@ -31,6 +31,7 @@ starts the clip there. The clip ends after the payoff resolves — not at the re
 | 9 | **One idea per Short** | A single clear beat outperforms a montage. |
 | 10 | **Native length over generic length** | Match *this creator's* proven optimal Short length, not a fixed 60s. |
 | 11 | **Audience-fit over generic virality** | Every score is against this creator's DNA and audience, never a one-size signal. |
+| 12 | **Clean Context Boundary** | Clips must never start or end mid-sentence. Both cut points are snapped to the nearest terminal-punctuation token or silence gap so every clip opens and closes on a complete thought. This is the direct fix for the #1 user complaint about every competing tool. |
 
 ---
 

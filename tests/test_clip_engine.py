@@ -17,7 +17,9 @@ from clip_engine.candidates import (
     MIN_CLIP_S,
     WINDOW_S,
     _find_setup_start,
+    _is_sentence_end,
     extract_candidates,
+    snap_to_sentence_boundary,
 )
 from clip_engine.window import RESOLUTION_S, build_signal_array
 
@@ -266,6 +268,115 @@ def test_eval_scenario(scenario_path):
                 f"[{scenario['scenario']}] setup_start_s={matched['setup_start_s']} "
                 f"< expected min {exp_c['setup_start_s_min']} — clip starts before video begins"
             )
+
+
+# ── Issue 127: Sentence-boundary snapping ────────────────────────────────────
+
+
+def test_is_sentence_end_terminal_punct():
+    assert _is_sentence_end("right.")
+    assert _is_sentence_end("really?")
+    assert _is_sentence_end("amazing!")
+    assert _is_sentence_end("wait...")
+
+
+def test_is_sentence_end_non_terminal():
+    assert not _is_sentence_end("and")
+    assert not _is_sentence_end("the")
+    assert not _is_sentence_end("")
+
+
+def _words(*pairs: tuple[str, float, float]) -> list[dict]:
+    """Build a word list: (word, start, end)."""
+    return [{"word": w, "start": s, "end": e} for w, s, e in pairs]
+
+
+def test_snap_backward_finds_terminal_punct():
+    words = _words(("right.", 55.0, 57.2), ("So", 57.5, 57.8))
+    result = snap_to_sentence_boundary(60.0, words, "backward")
+    assert result == pytest.approx(57.2)
+
+
+def test_snap_forward_finds_terminal_punct():
+    words = _words(("wait", 60.5, 61.0), ("here?", 62.0, 62.8), ("Yeah", 63.0, 63.4))
+    result = snap_to_sentence_boundary(60.0, words, "forward")
+    assert result == pytest.approx(62.8)
+
+
+def test_snap_hard_cap_not_exceeded():
+    # Punct word is 5s away — beyond the default max_snap_s=3.0 — should not snap.
+    words = _words(("done.", 54.0, 55.0))
+    result = snap_to_sentence_boundary(60.0, words, "backward", max_snap_s=3.0)
+    assert result == pytest.approx(60.0)
+
+
+def test_snap_silence_fallback_backward():
+    words = _words(("and", 57.0, 57.5))  # no terminal punct in window
+    events = [{"type": "silence", "start_s": 57.8, "end_s": 58.5}]
+    result = snap_to_sentence_boundary(
+        60.0, words, "backward", min_pause_ms=400, max_snap_s=3.0, timeline_events=events
+    )
+    assert result == pytest.approx(58.5)
+
+
+def test_snap_silence_fallback_forward():
+    words = _words(("and", 60.5, 61.0))  # no terminal punct in window
+    events = [{"type": "silence", "start_s": 61.5, "end_s": 62.2}]
+    result = snap_to_sentence_boundary(
+        60.0, words, "forward", min_pause_ms=400, max_snap_s=3.0, timeline_events=events
+    )
+    assert result == pytest.approx(61.5)
+
+
+def test_snap_silence_too_short_ignored():
+    # Silence is only 100ms — below the 400ms floor — should not be used.
+    words = _words(("and", 57.0, 57.5))
+    events = [{"type": "silence", "start_s": 59.0, "end_s": 59.1}]
+    result = snap_to_sentence_boundary(
+        60.0, words, "backward", min_pause_ms=400, max_snap_s=3.0, timeline_events=events
+    )
+    assert result == pytest.approx(60.0)
+
+
+def test_snap_no_boundary_returns_original():
+    words = _words(("and", 57.0, 57.5), ("the", 57.8, 58.1))
+    result = snap_to_sentence_boundary(60.0, words, "backward")
+    assert result == pytest.approx(60.0)
+
+
+def test_extract_candidates_snaps_when_words_provided():
+    """With a word list containing terminal punct near cut points, boundaries move."""
+    tl = _make_timeline([90.0])
+    # Place a sentence-ending word just before setup_start_s and just after end_s
+    # so the snap has something to latch onto.
+    candidates_no_snap = extract_candidates(tl, max_candidates=1)
+    assert len(candidates_no_snap) == 1
+    setup_no_snap = candidates_no_snap[0]["setup_start_s"]
+    end_no_snap = candidates_no_snap[0]["end_s"]
+
+    # Put a terminal-punct word 1s before setup and 1s after end — within max_snap_s=3.0.
+    words = _words(
+        ("done.", setup_no_snap - 1.0, setup_no_snap - 0.2),
+        ("right?", end_no_snap + 0.3, end_no_snap + 1.0),
+    )
+    candidates_snap = extract_candidates(tl, max_candidates=1, words=words)
+    assert len(candidates_snap) == 1
+
+    # setup_start_s should have moved to the end of "done." (snapped backward)
+    assert candidates_snap[0]["setup_start_s"] == pytest.approx(setup_no_snap - 0.2)
+    # end_s should have moved to the end of "right?" (snapped forward)
+    assert candidates_snap[0]["end_s"] == pytest.approx(end_no_snap + 1.0)
+
+
+def test_extract_candidates_invariants_hold_after_snap():
+    """setup_start_s < peak_s and clip length >= MIN_CLIP_S must hold after snapping."""
+    tl = _make_timeline([90.0])
+    words = _words(("done.", 10.0, 10.5))  # far before setup — snap will hold original
+    candidates = extract_candidates(tl, max_candidates=1, words=words)
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c["setup_start_s"] < c["peak_s"]
+    assert c["end_s"] - c["setup_start_s"] >= MIN_CLIP_S
 
 
 # ── Issue 103: IoU-based NMS deduplication ───────────────────────────────────

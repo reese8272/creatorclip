@@ -12,7 +12,7 @@ import pytest
 from clip_engine.ranking import rank_candidates
 from clip_engine.scoring import (
     _signal_score,
-    _transcript_excerpt,
+    _transcript_context,
     compute_features,
     score_candidates,
 )
@@ -122,22 +122,48 @@ def test_signal_score_never_exceeds_one():
     assert _signal_score(feats) <= 1.0
 
 
-# ── _transcript_excerpt ───────────────────────────────────────────────────────
+# ── _transcript_context ────────────────────────────────────────────────────────
 
 
-def test_transcript_excerpt_clips_window():
+def test_transcript_context_three_sections():
     segs = [
-        {"start": 10.0, "end": 12.0, "text": "in window"},
-        {"start": 5.0, "end": 8.0, "text": "before window"},
+        {"start": 0.0, "end": 5.0, "text": "lead in text"},    # before
+        {"start": 10.0, "end": 15.0, "text": "the clip here"},  # clip
+        {"start": 20.0, "end": 25.0, "text": "payoff after"},   # after
     ]
-    result = _transcript_excerpt(10.0, 15.0, segs)
-    assert "in window" in result
-    assert "before window" not in result
+    result = _transcript_context(10.0, 20.0, segs)
+    assert "[BEFORE]" in result
+    assert "lead in text" in result
+    assert "[CLIP]" in result
+    assert "the clip here" in result
+    assert "[AFTER]" in result
+    assert "payoff after" in result
 
 
-def test_transcript_excerpt_empty_segments():
-    assert _transcript_excerpt(10.0, 20.0, []) == ""
-    assert _transcript_excerpt(10.0, 20.0, None) == ""
+def test_transcript_context_clip_window_only():
+    # Only segments inside the clip window; no before/after → only [CLIP] section
+    segs = [{"start": 10.0, "end": 15.0, "text": "only in clip"}]
+    result = _transcript_context(10.0, 20.0, segs)
+    assert "[CLIP]" in result
+    assert "only in clip" in result
+    assert "[BEFORE]" not in result
+    assert "[AFTER]" not in result
+
+
+def test_transcript_context_empty_segments():
+    assert _transcript_context(10.0, 20.0, []) == ""
+    assert _transcript_context(10.0, 20.0, None) == ""
+
+
+def test_transcript_context_before_excludes_clip_text():
+    segs = [
+        {"start": 5.0, "end": 8.0, "text": "before only"},
+        {"start": 12.0, "end": 18.0, "text": "clip only"},
+    ]
+    result = _transcript_context(10.0, 20.0, segs)
+    before_section = result.split("[CLIP]")[0] if "[CLIP]" in result else result
+    assert "before only" in before_section
+    assert "clip only" not in before_section
 
 
 # ── score_candidates cold-start ────────────────────────────────────────────────

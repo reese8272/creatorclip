@@ -4396,6 +4396,51 @@ rate is the weakest component at 15% in the industry-standard composite; the spe
 actual signal hierarchy given available data. CTR and view velocity will be added when
 `video_metrics` is extended to capture impressions data.
 
+---
+
+## 2026-06-07 — Issue 127: Sentence-boundary cuts + context-aware scoring
+
+### Punctuation-token walk over spaCy/NLTK sentence tokenization
+
+**What changed**: Sentence-boundary snapping implemented as a direct walk of the
+word-level timestamp list, checking each word token for terminal punctuation
+(`.?!...…`), with a silence-gap fallback from the signal timeline.
+
+**Why**: All three transcription backends (Deepgram with `smart_format=True`,
+AssemblyAI, WhisperX) emit punctuated word tokens in their output — the data is
+already there. spaCy/NLTK would add a heavyweight dependency for no accuracy gain
+on already-punctuated output. The walk is O(n) in word count and pure Python.
+
+**Hard cap**: `MAX_SNAP_S=3.0` — the engine never snaps more than 3 seconds from
+the original cut point. If nothing is found within that range the timestamp is
+unchanged. This prevents a sentence-detection failure from displacing a cut by an
+unexpected large amount.
+
+### `is_rewatch_spike` added as a direct retention_spike trigger
+
+**What changed**: `ingestion/signals.py` now emits a `retention_spike` event for
+any retention-curve point where `is_rewatch_spike=True`, regardless of whether
+`relative_retention_performance` exceeds the 1.2 threshold.
+
+**Why**: `is_rewatch_spike` is YouTube's own crowd-sourced "most replayed" flag —
+ground-truth viewer signal. A point can be flagged by YouTube even when its relative
+retention value is below the computed threshold (e.g., on a channel where the overall
+retention is unusually high). The YouTube "most replayed" graph is the same data;
+treating it as a first-class signal regardless of the computed threshold is correct.
+
+### Three-section context transcript over single-window excerpt
+
+**What changed**: `clip_engine/scoring.py::_transcript_context` replaces
+`_transcript_excerpt`. Claude now receives `[BEFORE]` (60s lead-in) + `[CLIP]`
+(window) + `[AFTER]` (30s follow-on) instead of 300 chars of in-window text only.
+
+**Why**: The previous excerpt gave Claude no way to judge whether a clip captures a
+complete thought or whether the real payoff lands just after the window ends. The
+three-section format lets Claude answer both questions directly, which is the
+difference between "rate these timestamps" and "understand why this moment matters."
+Character caps per section (200/250/150) keep the payload growth bounded.
+Source: TVSum/SumMe video summarisation benchmarks; Descript/Reap editorial pattern.
+
 ### Modified z-score over standard z-score
 
 **What changed**: Using Iglewicz & Hoaglin modified z-score (MAD-based, constant 0.6745)

@@ -94,6 +94,15 @@ class Settings(BaseSettings):
     # but trades off freshness for no compliance benefit.
     # Source: https://developers.google.com/youtube/terms/developer-policies
     YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS: int = 30
+    # ── Clip engine — sentence-boundary snapping (Issue 127) ─────────────────
+    # Minimum silence gap (ms) treated as a sentence boundary when no terminal
+    # punctuation token is found within max_snap_s of the cut point.
+    SENTENCE_BOUNDARY_MIN_PAUSE_MS: int = 400
+    # Hard cap on how far (seconds) the engine will walk from a cut point to find
+    # the nearest sentence boundary. If nothing is found within this range the
+    # original timestamp is kept unchanged — better to hold than to snap too far.
+    MAX_SNAP_S: float = 3.0
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5

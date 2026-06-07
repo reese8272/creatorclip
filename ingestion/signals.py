@@ -39,13 +39,20 @@ def build_signal_timeline(
 
     for pt in retention_points:
         rrp = getattr(pt, "relative_retention_performance", None)
-        if rrp is not None and rrp > _RETENTION_SPIKE_THRESHOLD:
+        # Emit a retention_spike for two cases:
+        # 1. relative_retention_performance exceeds the threshold (statistically high)
+        # 2. is_rewatch_spike=True (YouTube's own "most replayed" flag) — this is
+        #    ground-truth crowd signal and must fire even when rrp is unavailable or
+        #    below the computed threshold. (Issue 127)
+        is_rewatch = getattr(pt, "is_rewatch_spike", False)
+        if (rrp is not None and rrp > _RETENTION_SPIKE_THRESHOLD) or is_rewatch:
             events.append(
                 {
                     "type": "retention_spike",
                     "start_s": getattr(pt, "timestamp_s", 0.0),
                     "audience_watch_ratio": getattr(pt, "audience_watch_ratio", 0.0),
-                    "relative_retention": rrp,
+                    "relative_retention": rrp or 0.0,
+                    "is_rewatch_spike": is_rewatch,
                 }
             )
 
