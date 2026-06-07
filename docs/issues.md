@@ -2952,7 +2952,7 @@ engine already collects. ROI-ordered: highest-leverage functionality ships first
 ---
 
 ## Issue 127: Sentence-boundary cut enforcement
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07)
 **Depends on**: 124
 
 **What**: The clip engine finds candidate windows via signal peaks + backward setup-finding,
