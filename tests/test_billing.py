@@ -258,6 +258,42 @@ def test_webhook_ignores_unknown_event_type(client):
     assert response.json()["status"] == "ignored"
 
 
+def test_webhook_malformed_creator_id_returns_ignored(client):
+    """Webhook with non-UUID creator_id in metadata returns 200 status=ignored (Issue 123)."""
+    from db import get_session as _get_session
+    from main import app
+
+    fake_event = {
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_test_xxx",
+                "customer": None,
+                "metadata": {"creator_id": "not-a-uuid", "pack_id": "creator"},
+            }
+        },
+    }
+
+    async def _gen():
+        session = AsyncMock()
+        session.scalar = AsyncMock(return_value=None)  # no existing fulfillment
+        yield session
+
+    app.dependency_overrides[_get_session] = _gen
+    try:
+        with patch("routers.billing.construct_webhook_event", return_value=fake_event):
+            response = client.post(
+                "/billing/webhook",
+                content=json.dumps(fake_event).encode(),
+                headers={"stripe-signature": "sig"},
+            )
+    finally:
+        app.dependency_overrides.pop(_get_session, None)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
 # ── Issue 55: 503 when STRIPE_SECRET_KEY is empty ─────────────────────────────
 
 
