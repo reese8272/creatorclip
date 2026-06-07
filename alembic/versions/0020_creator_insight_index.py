@@ -14,13 +14,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # CREATE INDEX CONCURRENTLY must run outside a transaction.
-    op.execute("COMMIT")
-    op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_creator_insight_creator_video "
-        "ON creator_insights (creator_id, video_id)"
+    # Plain CREATE INDEX (not CONCURRENTLY) so this runs inside Alembic's
+    # transaction block and works with psycopg3. The creator_insights table is
+    # empty at first migration time, so no long lock. If applied to a live
+    # instance with existing rows, the brief table lock is acceptable.
+    op.create_index(
+        "ix_creator_insight_creator_video",
+        "creator_insights",
+        ["creator_id", "video_id"],
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_creator_insight_creator_video")
+    op.drop_index("ix_creator_insight_creator_video", table_name="creator_insights")
