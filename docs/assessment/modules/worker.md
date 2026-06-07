@@ -1,21 +1,33 @@
-# worker — assessed 2026-06-02
+# worker — assessed 2026-06-07
 
 ## Findings
-- SEV2 worker/tasks.py:1603-1606 — `_refresh_youtube_analytics_async` fetches ALL videos per creator without pagination or limit. On channels with 1000+ videos, this unbounded fetchall pins the connection and risks memory exhaustion. Fix: add `.limit(settings.DNA_LONGS_CAP)` or implement streaming per-video fetch with periodic commits.
-- SEV2 worker/progress.py:145-165 — `_async_client()` rebuilds the async Redis singleton on loop mismatch but never logs the rebuild. This silent reconstruction masks connection pool thrashing under test scenarios. Fix: add `logger.debug("async redis client rebuilt on loop mismatch")`.
-- cleanup worker/tasks.py:889-895 — `asyncio.to_thread(generate_brief, ...)` inside `_build_dna_async` dispatches to sync Anthropic context manager but passes `job_id` (always truthy in production) to control progress emission. Test-only callers must pass `job_id=None` explicitly. This coupling works but should be documented in a docstring parameter. Fix: update `_build_dna_async` docstring to note job_id=None disables progress events.
+
+- [SEV1] worker/tasks.py:2250 — Redis async client created per-task in `_generate_thumbnail_concepts_async` without connection pooling | fix: create a module-level redis.asyncio singleton (mirror progress.py's _async_client pattern) and reuse it; document that thumbnails caching is best-effort observable, never load-bearing.
+
+- [SEV1] worker/tasks.py:2208-2213 — async `session.scalar(select(...))` fetches transcript inside `AdminSessionLocal()` but transcript_hook call (line 2211) may await implicitly if dna_profile lazy-loads | fix: explicitly load `dna_profile.top_video_ids_jsonb` via `await session.refresh(...)` or eager select before exiting the session context, verify no lazy-load on dna_brief access.
+
+- [SEV2] worker/tasks.py:2221–2243 — loop over `top_ids[:10]` attempts UUID parsing without handling malformed IDs, and the bare `except Exception` catches UUID conversion errors silently | fix: explicitly catch `(ValueError, TypeError)` before general Exception, log malformed IDs so they can be debugged, do not suppress silently.
+
+- [SEV2] worker/tasks.py:2302 — `parse_concepts(raw_json)` parse failure is caught but no retry gate exists — a single malformed Claude response dooms the task to terminal failure despite max_retries=3 on the task decorator | fix: verify that parse_concepts raises on malformed input; if it does, the task's retry logic (via `raise self.retry(exc=exc) from exc` in the wrapper) should still fire — check that the exception propagates cleanly without being swallowed.
+
+- [cleanup] worker/tasks.py:354–359 — `_set_status` and `_set_clip_render_status` duplicate the pattern (get → mutate → commit) | fix: extract `_update_model_field(Model, id, field, value)` helper to DRY; both callsites then become one-liners.
+
+- [cleanup] worker/tasks.py:2247 — unused import `_json` shadowing built-in; line 2259 uses bare `_json.loads` | fix: use standard `import json` at module level (already imported at line 2033 in `_generate_title_suggestions_async`); remove the local `import json as _json` shadow.
 
 ## Rubric coverage
+
 | Category | Status |
 |---|---|
-| Resource lifecycle | PASS — all DB sessions via context manager; cleanup guaranteed in `finally` blocks; temp media (`.wav`, `.mp4`) removed via `.unlink(missing_ok=True)`. HTTP client aclose() wired in celery_app.py shutdown. |
-| Concurrency & scale | NEEDS-WORK — unbounded `select(Video).where(creator_id)` at line 1604 loads all videos for each creator in refresh loop. worker_prefetch_multiplier=1 + task_reject_on_worker_lost + advisory locks all correct. |
-| Security & compliance | PASS — per-creator UUID filters on every analytics/video query; all SQL parameterized via SQLAlchemy; no PII in logs (exception args stripped in error events); creator_id scoped strictly in AdminSessionLocal queries. |
-| Clip-quality | N/A — not a clip-scoring module. |
-| Anthropic SDK | PASS — prompt caching configured with `cache_control: ephemeral` breakpoints in dna/brief.py and improvement/brief.py; usage_dict (input, output, cache_read, cache_creation tokens) captured and emitted as cache/token progress events via stream_and_emit; SDK version managed in .env.example. |
-| Code cleanliness & typing | PASS — all functions fully typed; no print(), TODO, or commented code blocks; zero duplicate logic (idempotency patterns consistently applied). Module docstrings explain Issue references. anthropic_stream.py correctly uses `getattr(..., default=0)` for backward-compat with older SDK responses. |
-| Error handling | PASS — SoftTimeLimitExceeded re-raised immediately (no retry on terminal timeout); YouTubeAuthError terminal (no retry); ValueError (data gates) terminal; transient errors retry with jitter. RefundOnFailureTask.on_failure catches and logs refund errors (never re-raises). |
-| Config & paths | PASS — all file paths absolute (LOCAL_MEDIA_DIR configured as absolute in .env); SOURCE_MEDIA_RETENTION_HOURS, YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS, TRANSCRIPTION_TIMEOUT_S, CELERY_SOFT_TIME_LIMIT_S all in .env.example. |
+| 1 Resource lifecycle | 2 findings (SEV1: Redis client leak × 2; temp media cleanup OK, DB sessions OK) |
+| 2 Concurrency & scale | 2 findings (SEV1: lazy-load risk; SEV2: UUID parsing silenced) |
+| 3 Security & compliance | OK — per-creator isolation on every query (creator_id == cid check at 2203–2204; video check at 2065; transcript scoped to vid; DNA top_ids filtered by creator); no PII in logs. |
+| 4 Clip-quality | n/a (worker is pipeline, not clip scoring) |
+| 5 Anthropic SDK | OK — streaming path wired (task_id forwarded to build_concepts, line 2298); token usage logged by anthropic_stream.py integration. |
+| 6 Cleanliness & typing | 2 cleanup findings (duplicated _set_status; shadowed _json import). |
+| 7 Error handling / API | n/a (worker tasks, no HTTP routes) |
+| 8 Config & paths | OK — Redis URL via settings.REDIS_URL; all paths absolute. |
 
 ## Module verdict
-NEEDS-WORK — unbounded SQL fetch on per-creator video roster in refresh_youtube_analytics poses memory risk under scale; redis client rebuild logging gap masks pool issues during test; documentation gap on job_id parameter coupling to progress emission. All issues are bounded (SEV2) and fixable without refactoring.
+
+**NEEDS-WORK** — Thumbnail concepts task has a SEV1 Redis connection leak, a SEV1 lazy-load risk on dna_profile, and a SEV2 silent UUID parse failure; fix before shipping.
+

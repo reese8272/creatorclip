@@ -1,60 +1,27 @@
-# preference — assessed 2026-06-02
+# preference — assessed 2026-06-07
 
 ## Findings
 
-### Correctness & Recency Decay
-- **SEV1** preference/decay.py — recency_weight uses exponential decay correctly with 30-day half-life, tested thoroughly. No issue.
-- **SEV1** preference/model.py::preference_weight — ramp formula correctly bounds output to [0, PREFERENCE_WEIGHT_CAP]. At threshold (20 labels) weight is 0.0, reaches cap (0.5) at 2× threshold (40 labels). Matches design spec. No issue.
-
-### Concurrency & Async Safety
-- **ok** preference/train.py::build_and_save — offloads CPU-bound fit() to asyncio.to_thread, preserving event loop integrity. Serializes retrains with pg_advisory_xact_lock to prevent UNIQUE(creator_id, version) race. No blocking call in async context.
-- **ok** preference/train.py::load_latest — offloads joblib.load to asyncio.to_thread, respecting the _UNPICKLER_LOCK (module-global threading.Lock). Two deserializations of the same blob never race.
-- **ok** preference/_scorer_cache.py — LRU cache protected by threading.Lock, bounded to PREFERENCE_SCORER_CACHE_SIZE. Eviction is FIFO (LRU), stale entries after retrain are keys (creator_id, version) which can never collide with new versions (version monotonically increases). No stale-model serving.
-- **ok** preference/model.py::from_bytes — swaps joblib.numpy_pickle.NumpyUnpickler under _UNPICKLER_LOCK for the duration of load. Guarantees all joblib internal code paths use the restricted unpickler. Lock serializes threads; coroutines queued via to_thread do not block each other on the event loop.
-
-### Security & Isolation
-- **ok** preference/train.py::build_and_save — query filters .where(ClipFeedback.creator_id == creator_id). Per-creator isolation on feedback fetch. Single load_latest query per creator.
-- **ok** preference/train.py::load_latest — queries filter .where(PreferenceModel.creator_id == creator_id). Two queries (metadata, blob) both scoped to creator_id. No cross-creator leakage.
-- **ok** preference/model.py::_RestrictedUnpickler — allowlist of 12 (module, name) tuples, frozen at module load. Only sklearn LogisticRegression, LightGBM LGBMClassifier + Booster, joblib NumpyArrayWrapper, numpy arrays/dtypes, and collections allowed. Any other class → UnpicklingError before object instantiation. RCE surface closed.
-- **ok** preference/train.py::build_and_save — parameterized SQL: text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": str(creator_id)}. No string interpolation.
-- **ok** No PII in logs. Logs show creator_id (UUID), counts, version numbers. No clip signals, feedback text, or transcript content logged.
-
-### Resource Lifecycle
-- **ok** preference/train.py::build_and_save — session.add() + session.commit() issued. Session lifecycle managed by AsyncSession context manager (caller's responsibility, not this module's). No explicit session close needed; AsyncSession.__aexit__ releases the connection.
-- **ok** preference/train.py::load_latest — session.execute() and session.scalar() both bound to the session lifecycle. No resource leak on exception path (Exception caught in rerank_with_preference, falls back to DNA ranking).
-- **ok** preference/model.py::from_bytes — joblib.load(io.BytesIO(data)) wraps bytes in BytesIO (memory buffer, not file). No file handle. Lock released in finally block even on exception.
-
-### Clip-Quality Correctness
-- **ok** preference/train.py::build_and_save — label_count < 2 or fewer than 2 classes → returns None. Caller (rerank_with_preference) receives None and falls back to DNA. Below-threshold behavior is explicit and honest.
-- **ok** preference/train.py::load_latest — feature schema drift detection: stored_features != FEATURE_NAMES → logs warning, returns None (fallback to DNA). No silent misprediction on schema mismatch.
-- **ok** preference/train.py::build_and_save — training samples limited to PREFERENCE_MAX_TRAINING_LABELS (5000) to bound memory and training time. Power creators with years of feedback don't cause OOM.
-- **ok** preference/model.py::PreferenceScorer.predict_score — raises ValueError if feature count drift detected (x.shape[1] != n_features_in_). Caller catches this and falls back to DNA. Honest behavior.
-- **ok** preference/features.py::clip_features — 8-element fixed-length feature vector. Order stable. dna_match defaults to 0.0 if None. No undefined indices.
-- **ok** preference/decay.py — sample_weight multiplies recency_weight by outcome_multiplier (3.0) only if performed_well is explicitly True. Neutral clips and skips (performed_well=None) receive recency weight only. Correct weighting.
-
-### Code Cleanliness & Typing
-- **ok** All functions typed: model.py has type hints on all signatures. features.py has full type hints. decay.py has type hints. train.py has full type hints including AsyncSession, uuid.UUID, Optional returns.
-- **ok** No TODO/FIXME/XXX comments, no commented-out code blocks, no print() statements.
-- **ok** No duplicate logic. clip_features called once per location (train.py and ranking.py). recency_weight called only in decay.py. No repeated SQL patterns.
-- **ok** Imports well-organized. Lazy imports in model.py::fit (sklearn, lightgbm) for cold-start optimization. No unused imports.
-
-### Config & Paths
-- **ok** No hardcoded file paths. All config values (PERSONALIZATION_THRESHOLD_LABELS, PREFERENCE_WEIGHT_CAP, PREFERENCE_SCORER_CACHE_SIZE, PREFERENCE_MAX_TRAINING_LABELS) sourced from settings object.
-
-### Error Handling Context
-- **ok** Not a router (no status codes, no try/except/JsonResponse). Module is library code. Caller (clip_engine/ranking.py::rerank_with_preference) handles exceptions with try/except, logs, and falls back to DNA ranking. Proper error propagation.
+- [SEV1] train.py:97 — `asyncio.to_thread(fit, X, y, w)` offloads LightGBM/LogisticRegression training (CPU-bound sync code) but acquires an advisory lock AFTER the fit completes (line 103); if two concurrent retrains for the same creator run, both threads finish fit() and then both try to acquire the lock — race window on version assignment (max+1) before the lock is held | fix: move the `pg_advisory_xact_lock` call to BEFORE fitting (line 97), or wrap the entire fit+lock+persist inside the asyncio.to_thread call so the lock is held for the full operation; currently the lock only protects the version query/insert, not the fit itself.
+- [SEV2] model.py:78–82 — `_RestrictedUnpickler.find_class` allowlist enforcement is solid, but the module-global swap of `_jnp.NumpyUnpickler` is not atomic with respect to concurrent loads (line 127–132); if thread A is mid-unpickle while thread B calls from_bytes and restores the original unpickler, thread A's ongoing load could see the unrestricted unpickler at any point | fix: move the unpickler swap inside the thread-pool context (asyncio.to_thread in train.py:181) so both the swap and the load happen in the same thread; alternatively, use a per-load context manager that holds the lock for the entire joblib.load call.
+- [cleanup] train.py:79 — `if len(X_list) < 2 or len(set(y_list)) < 2:` — the error case returns None but no log level is set (line 80 uses .info) | fix: use logger.warning(...) for this insufficient-data case (a missing model is not an error but signals data scarcity that ops should know about); or raise an exception if the caller expects a model and gets None.
+- [cleanup] features.py — Feature vector function `clip_features` has no docstring and the return type is bare `list[float]` instead of a named type | fix: add a docstring explaining the feature order and add FEATURE_NAMES alignment check; consider using a NamedTuple or TypedDict (e.g., `type ClipFeatureVector = NewType('ClipFeatureVector', list[float])`) for type safety.
+- [cleanup] decay.py:19 — `feedback_age_days` function uses `datetime.now(UTC)` which can have a seconds skew relative to DB timestamps; no note in the module about clock-skew tolerance | fix: add a docstring note: "Assumes DB server and worker process clocks are synchronized within seconds; larger skew will produce incorrect weights."
 
 ## Rubric coverage
+
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — AsyncSession lifecycle managed by caller. joblib BytesIO + lock-protected. No resource leak on error. |
-| 2 Concurrency & scale | ok — CPU-bound fit() and joblib.load offloaded to asyncio.to_thread. No sync call in async def. Shared cache protected by lock. Queries indexed on creator_id. No unbounded fetchall. LIMIT 5000 on training data. |
-| 3 Security & compliance | ok — All queries filter by creator_id. Parameterized SQL only. _RestrictedUnpickler allowlist closes RCE. No PII in logs. |
-| 4 Clip-quality correctness | ok — Exponential recency decay (30d half-life). Below-threshold returns None, falls back to DNA. Feature schema drift detected. predict_score validates feature count. Outcome multiplier conditional on performed_well==True. |
-| 5 Anthropic SDK | N/A — module does not call LLM. |
-| 6 Code cleanliness & typing | ok — Full type coverage. No TODOs, print(), or duplicate logic. Lazy imports for sklearn/lightgbm. |
-| 7 Error handling | N/A — library code. Caller handles. |
-| 8 Config & paths | ok — No hardcoded paths. All settings via config.settings. |
+| 1 Resource lifecycle | SEV1 — the advisory lock (line 103) is acquired AFTER the fit thread completes but BEFORE the INSERT, creating a race window where version assignment can conflict; both concurrent threads hold the version query result before the lock is taken; session.commit() is called after adding model_row (line 123), properly closing the transaction; no other resource leaks |
+| 2 Concurrency & scale | SEV1 — concurrent retrains are partially serialized (the lock gates the DB write) but the fit itself is not locked, so version race is possible; the shared unpickler swap (model.py:127–132) is thread-safe only if swaps don't overlap — a hiccup in joblib.load on one thread while another calls from_bytes could observe an inconsistent unpickler state; bounded training: PREFERENCE_MAX_TRAINING_LABELS (default 5000) caps rows fetched; recency decay makes old rows cheap to ignore; scorer cache (preference/_scorer_cache.py) uses OrderedDict with threading.Lock for LRU eviction; cache size bounded by PREFERENCE_SCORER_CACHE_SIZE (128) |
+| 3 Security & compliance | ok — model weights blob is opaque (no secrets stored); unpickler allowlist prevents RCE on tampered blobs (model.py:46–65); no creator data logged beyond creator_id (UUID is safe); labels and features are internal (no PII); feature schema drift detected and model rejected on mismatch (train.py:153–157, honest fallback to DNA) |
+| 4 Clip-quality | ok — `preference_weight` (model.py:139–154) correctly implements the personalization threshold: 0 weight below threshold (PERSONALIZATION_THRESHOLD_LABELS, default 20), ramps to cap (PREFERENCE_WEIGHT_CAP, default 0.5) at 2× threshold (Issue 60); weight is used to blend preference model with DNA ranking; below threshold, ranking is DNA + signals only (honest) |
+| 5 Anthropic SDK | n/a — preference module has no LLM calls |
+| 6 Cleanliness & typing | 3 cleanup — clip_features has no docstring and return type is bare `list[float]`; decay.py has no clock-skew note; train.py:80 logs insufficient data at .info level instead of .warning; all main functions have signatures, but some return types are loose (list not list[...]) |
+| 7 Error handling / API | ok — fit() raises ValueError on feature-count mismatch (model.py:101–103) instead of returning a misleading prediction; load_latest falls back to None on deserialization error (train.py:182–184, logged as warning); from_bytes raises pickle.UnpicklingError on disallowed class (model.py:81) |
+| 8 Config & paths | ok — all required settings present (.env.example: PERSONALIZATION_THRESHOLD_LABELS, PREFERENCE_WEIGHT_CAP, PREFERENCE_SCORER_CACHE_SIZE, PREFERENCE_MAX_TRAINING_LABELS); no paths used |
 
 ## Module verdict
-**clean** — The preference module is production-ready. Concurrency is correct (asyncio.to_thread + locks). Security is tight (RCE allowlist, per-creator isolation, parameterized SQL). Correctness is honest (feature drift detected, below-threshold fallback, outcome-aware weighting). Testing is thorough (half-life verified, cache eviction, schema drift, RCE surface). No blockers.
+
+NEEDS-WORK — 1 SEV1 (race between fit completion and lock acquisition allowing version conflict on concurrent retrains) and 1 SEV2 (unpickler swap is not fully atomic with respect to concurrent loads). The allowlist pattern is sound; feature schema drift detection is correct; personalization threshold logic is solid. SEV1 must be fixed before concurrent training: move the lock before the fit or wrap the entire operation in the thread pool. Recommend adding a sequential trainer flag (PREFERENCE_TRAINER_CONCURRENCY=1 or similar) as an immediate mitigation while refactoring for true lock-before-fit semantics.
+

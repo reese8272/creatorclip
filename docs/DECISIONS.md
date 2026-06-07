@@ -5,6 +5,57 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issue 129: Thumbnail concept generator design decisions
+
+### No Reporting API — DNA top_video_ids_jsonb as high-performer proxy
+
+**Decision:** Per-video thumbnail CTR (`video_thumbnail_impressions_ctr`) requires the YouTube
+Reporting API (`channel_basic_a2` bulk export), which demands new OAuth scopes and generates
+reports with a 24–48 h delay (not queryable in real-time). Instead, `top_video_ids_jsonb` from
+the creator's confirmed DNA profile is used as the high-performer proxy.
+
+**Why:** The DNA builder already identifies top-performing videos from engagement + retention
+data. These are the same videos whose thumbnails drove high CTR. Integrating the Reporting API
+would add new OAuth scope requests (requiring re-verification), a new infrastructure for async
+bulk report polling, and a 24–48 h cold-start delay with no clear accuracy benefit for
+pattern extraction.
+
+**Source:** YouTube Reporting API docs (`developers.google.com/youtube/reporting/v1/reports/metrics`),
+confirmed `video_thumbnail_impressions_ctr` is Reporting API only (not Analytics query endpoint).
+
+### Claude multimodal instead of CV pipeline for pattern extraction
+
+**Decision:** Thumbnail visual pattern analysis (face presence, emotion, text overlay style,
+color palette, composition) uses Claude multimodal vision via URL-based image source rather
+than an OpenCV/face-detection CV pipeline.
+
+**Why:** MediaPipe and face detection are explicitly deferred to Phase 2 in `docs/SOT.md`.
+Adding these dependencies now would bloat the image and add fragility. Claude vision handles
+the same extraction more accurately for emotion and composition than heuristic CV, and
+thumbnail URLs are publicly accessible at `i.ytimg.com/vi/{id}/hqdefault.jpg` without OAuth.
+
+### 24-hour Redis cache for thumbnail patterns
+
+**Decision:** Pattern analysis results (the Claude multimodal call) are cached in Redis
+with a 24-hour TTL under `thumbnail_patterns:{creator_id}`. The `GET /creators/me/thumbnail-patterns`
+endpoint and the `generate_thumbnail_concepts` Celery task share the same cache key so
+the expensive multimodal call is paid at most once per day.
+
+**Why:** Channel thumbnail style rarely changes intra-day. Pattern analysis involves up to
+10 image tokens + a full Claude call; caching eliminates redundant cost for the common
+case where a creator generates concepts for multiple videos in a session.
+
+### Ephemeral concept results (no DB persistence)
+
+**Decision:** Thumbnail concepts are ephemeral — results arrive in the SSE `done` event payload
+(same pattern as Issues 121 and 128). No new DB table or Alembic migration.
+
+**Why:** Concepts are cheap to regenerate, and the pattern (ephemeral SSE result) is already
+established. Persistent storage would require a new table + new GET endpoint + debounce logic
+for marginal UX gain.
+
+---
+
 ## 2026-06-07 — Issue 128: Title optimizer design decisions
 
 ### Ephemeral result (no DB persistence)

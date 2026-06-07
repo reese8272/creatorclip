@@ -33,6 +33,7 @@ from routers import improvement as improvement_router
 from routers import insights as insights_router
 from routers import review as review_router
 from routers import tasks as tasks_router
+from routers import thumbnails as thumbnails_router
 from routers import titles as titles_router
 from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
@@ -104,6 +105,7 @@ app.include_router(review_router.router)
 app.include_router(upload_intel_router.router)
 app.include_router(improvement_router.router)
 app.include_router(insights_router.router)
+app.include_router(thumbnails_router.router)
 app.include_router(titles_router.router)
 app.include_router(tasks_router.router)
 

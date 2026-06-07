@@ -3011,7 +3011,7 @@ identity. This is a daily-use feature that keeps creators in the app beyond the 
 ---
 
 ## Issue 129: Thumbnail concept generator
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07)
 **Depends on**: 128
 
 **What**: Analyze the creator's historically best-performing video thumbnails (using YouTube
@@ -3025,20 +3025,19 @@ Concepts are immediately actionable: a creator or a designer can execute them di
 and they can be piped into any image tool.
 
 **Files**: `routers/thumbnails.py` (new), `knowledge/thumbnails.py` (new),
-`youtube/thumbnails.py` (new — fetch + analyze thumbnail metadata + CTR),
 `static/analysis.html` (thumbnail concepts panel), `tests/test_thumbnails.py` (new),
 `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research YouTube thumbnail CTR patterns and channel-pattern extraction approaches; document in `docs/DECISIONS.md`; justify concept-brief approach over rendered image
-- [ ] `GET /creators/me/thumbnail-patterns` → analyzes top 10 CTR videos; returns extracted patterns (face visible, high contrast, text overlay style, dominant emotion)
-- [ ] `POST /creators/me/videos/{video_id}/thumbnail-concepts` → 202 + task; Celery task `generate_thumbnail_concepts`
-- [ ] Claude call uses: channel thumbnail patterns + video transcript hook sentence + DNA niche + web_search for current thumbnail trends in niche
-- [ ] Each concept: `composition`, `text_overlay: str | None`, `dominant_emotion`, `color_direction`, `predicted_ctr_rationale`, `based_on_pattern` (which of the creator's successful patterns this draws from)
-- [ ] Honesty constraint: "predicted" not "guaranteed"; all rationale hedged
-- [ ] `@limiter.limit("10/hour", key_func=creator_key)`
-- [ ] Unit tests: concept schema validation, pattern extraction logic; integration test: per-creator isolation
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research YouTube thumbnail CTR patterns and channel-pattern extraction approaches; document in `docs/DECISIONS.md`; justify concept-brief approach over rendered image
+- [x] `GET /creators/me/thumbnail-patterns` → analyzes top 10 CTR videos; returns extracted patterns (face visible, high contrast, text overlay style, dominant emotion)
+- [x] `POST /creators/me/videos/{video_id}/thumbnail-concepts` → 202 + task; Celery task `generate_thumbnail_concepts`
+- [x] Claude call uses: channel thumbnail patterns + video transcript hook sentence + DNA niche + web_search for current thumbnail trends in niche
+- [x] Each concept: `composition`, `text_overlay: str | None`, `dominant_emotion`, `color_direction`, `predicted_ctr_rationale`, `based_on_pattern` (which of the creator's successful patterns this draws from)
+- [x] Honesty constraint: "predicted" not "guaranteed"; all rationale hedged
+- [x] `@limiter.limit("10/hour", key_func=creator_key)`
+- [x] Unit tests: concept schema validation, pattern extraction logic; integration test: per-creator isolation
+- [x] Full suite green; Layer 0 passes
 
 ---
 

@@ -78,4 +78,8 @@ ignore-vulns = [
     # pip GHSA-jp4c-xjxw-mgf9 (CVE-2026-6357) — post-install self-update import.
     # Same rationale (dev/build-time only). Re-evaluate with pip>=26.1.
     "GHSA-jp4c-xjxw-mgf9",
+    # pip PYSEC-2026-196 — supply-chain CVE, fix requires pip>=26.1.2.
+    # Same rationale as above (dev/build-time only, not a runtime dep).
+    # Re-evaluate when the CI toolchain updates pip past 26.1.2.
+    "PYSEC-2026-196",
 ]

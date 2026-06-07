@@ -182,13 +182,14 @@ PIP_AUDIT_IGNORES = {
     "PYSEC-2026-161",
     # pip CVEs (dev/build-time only — pip is not a runtime dep; these require
     # installing a maliciously crafted wheel/tar, a supply-chain vector, not a
-    # production runtime vulnerability). Fix versions require pip 25.3–26.1;
+    # production runtime vulnerability). Fix versions require pip 25.3–26.1.2;
     # pip itself is not in requirements.txt and is managed by the venv/CI toolchain.
     # Re-evaluate when the venv is rebuilt or pip is explicitly pinned.
     "GHSA-4xh5-x5gv-qwph",  # CVE-2025-8869  — symlink check on tar extraction
     "GHSA-6vgw-5pg2-w6jp",  # CVE-2026-1703  — wheel path traversal
     "GHSA-58qw-9mgm-455v",  # CVE-2026-3219  — tar+ZIP concatenation confusion
     "GHSA-jp4c-xjxw-mgf9",  # CVE-2026-6357  — post-install self-update import
+    "PYSEC-2026-196",  # pip supply-chain CVE (fix: pip>=26.1.2) — same dev/build-time rationale; not a runtime dep
 }
 
 

@@ -1,25 +1,27 @@
-# dna — assessed 2026-06-02
+# dna — assessed 2026-06-07
 
 ## Findings
 
-- [SEV2] dna/embeddings.py — Voyage API token usage not logged, unlike Anthropic SDK calls which log `input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `output_tokens`. Missing observability makes cost tracking incomplete for embeddings. | fix: Add token logging post-embed: `logger.info("dna_embeddings tokens: usage=%d", result.usage.tokens)` or equivalent after Voyage API call (if SDK provides usage).
-- [SEV2] dna/brief.py — type: ignore comments on line 156–157 suppress legitimate MessageParam validation. While harmless at runtime (system/messages are correct shape), suppressing type errors masks future breakage. | fix: Import `MessageParam` and `System` types from anthropic, cast `system` to `System` and `messages` to `list[MessageParam]` instead of ignoring.
-- [cleanup] dna/builder.py:204–221 `_video_summary()` duplicates field extraction logic from the video dict (v.get("field")) in a way that mirrors the dict structure exactly. With 15+ lines of get() calls, this is ripe for a TypedDict or dataclass to enforce schema at construction. | fix: Define `VideoSummary: TypedDict` with the full schema; construct it once in `rank_videos()` so no caller has to remember the field set.
-- [cleanup] dna/embeddings.py:32–37 `_embed()` is a thin pass-through that adds only error handling; the `_aembed()` wrapper (which does the real lifting: asyncio.to_thread) obscures that `_embed()` is sync-only. The two-layer indirection is confusing. | fix: Collapse into a single async function or rename `_embed` → `_voyage_embed_sync` to make the sync/async boundary explicit.
+- [cleanup] builder.py:58 — Parameter `retention_rows: list` lacks type annotation; should be `retention_rows: list[RetentionCurve]` for consistency with other typed parameters | fix: annotate as `list[RetentionCurve]`.
+- [cleanup] builder.py:87 — Parameter `activity_rows: list` lacks type annotation; should be `list[AudienceActivity]` | fix: annotate the parameter type.
+- [cleanup] builder.py:115 — Nested function `_base_query` lacks return type annotation | fix: add `-> Select[tuple[Video, VideoMetrics]]` return annotation (or equivalent SQLAlchemy Select type).
+- [cleanup] builder.py:298 — Nested function `_avg` parameter `vals: list` lacks element type; should be `vals: list[float | None]` | fix: annotate `vals` parameter.
+- [SEV2] brief.py:156–157 — Type ignore comments suppress TypedDict violations instead of fixing root cause | fix: properly type `system` and `messages` as `list[SystemBlockParam]` and `list[MessageParam]` (or cast at construction), removing the type: ignore directives; consider using Pydantic models or TypedDict for type safety.
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | OK — AsyncSession properly managed; external Anthropic/Voyage clients are module-level singletons as required; session passed through all functions; commit/rollback patterns correct |
-| 2 Concurrency & scale | OK — No blocking calls in async functions; batched IN-queries instead of N+1; all queries have creator_id WHERE clause; `FOR UPDATE` locks on identity/profile versioning to serialize concurrent writes; Voyage API calls offloaded to thread pool |
-| 3 Security & compliance | OK — Parameterized SQL throughout; creator_id isolation enforced on every query (Video, CreatorDna, CreatorIdentity, Transcript, Signals, RetentionCurve, AudienceActivity all filtered by creator_id); logging sanitized (tokens only, no brief text or identity content); no PII in logs; "never virality" disclaimer appended to briefs |
-| 4 Clip-quality correctness | OK — DNA patterns computed from retention curves, engagement rates, hook text, energy/laughter counts, source regions; builder explicitly ranks against creator's own engagement data (Issue 120 split longs/shorts by kind). System prompt instructs Claude to honor creator's stated identity and surface disagreement. No CLIPPING_PRINCIPLES citations in code, but system prompt emphasizes data-backed estimates and no virality promises. |
-| 5 Anthropic SDK | PARTIAL — prompt caching configured with cache_control: ephemeral breakpoint in brief.py (line 88); token usage logged for both streaming (line 145) and non-streaming (line 161) paths. However: (a) type: ignore comments suppress MessageParam validation (SEV2 below); (b) brief.py doc says "cache does not actually engage for this low-frequency call" (line 8) — caching overhead may exceed benefit for periodic builds. |
-| 6 Code cleanliness & typing | OK — No TODOs, commented code, print() statements, or debug artifacts. All functions fully typed with return annotations. Two functions >30 lines: `build_patterns()` (108 lines, justified: single entry point coordinating ranking → enrichment → aggregation) and `_build_request()` (39 lines, justified: assembles prompt structure once for both sync/streaming paths). Explanatory comments are concise and issue-referenced. |
-| 7 Error handling | OK — Builder raises ValueError on insufficient data with diagnostic logging (Issue 88); profile/identity handle IntegrityError on concurrent writes and retry/fallback correctly; brief raises RuntimeError if Claude returns no text block. All exception paths safe. |
-| 8 Config & paths | OK — All settings read from config module (DNA_LONGS_CAP, DNA_SHORTS_CAP, MIN_VIDEOS_FOR_DNA, MIN_SHORTS_FOR_DNA, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, VOYAGE_API_KEY, all via settings). No hardcoded paths. Missing: VOYAGE_API_KEY is optional (warning if not set) but not documented in .env.example assumption. |
+| 1 Resource lifecycle | ok — all async session operations use provided session; module is stateless on resources; Anthropic singleton cached at module level with explicit timeout |
+| 2 Concurrency & scale | ok — no sync/blocking calls in async functions; Voyage SDK wrapped in `asyncio.to_thread` (embeddings.py:45); bounded queries: `rank_videos` caps at `DNA_LONGS_CAP` (50) and `DNA_SHORTS_CAP` (75); `_enrich_videos` batches all lookups into 3 IN-queries regardless of video count; no N+1 |
+| 3 Security & compliance | ok — all queries include explicit `creator_id` filter (builder.py:120, profile.py:53/111/169/185, identity.py:31/44/81, embeddings.py:89/125); no PII in logs; no virality promise (brief.py:31 disclaimer appended); tokens never handled (module-level separation) |
+| 4 Clip-quality | n/a — dna module computes patterns and brief, not clip ranking; clipping principles cited in brief.py docstring as context but not applied here |
+| 5 Anthropic SDK | ok — token usage logged on every call (brief.py:160-166); cache_control set correctly (brief.py:88, marked ephemeral); max_tokens bounded (2000); streaming path (task_id parameter) delegates to worker.anthropic_stream |
+| 6 Cleanliness & typing | 1 SEV2, 4 cleanup — no print/TODO/debug; 4 nested functions lack type hints; brief.py uses type: ignore to suppress TypedDict issues; all main entry points fully typed |
+| 7 Error handling / API | n/a — dna module is internal (no HTTP router); proper exception handling in profile.py (IntegrityError recovery with retry logic) and identity.py (same pattern); ValueError raised with clear messages (builder.py:278, profile.py:125) |
+| 8 Config & paths | ok — all required settings present in config.py (ANTHROPIC_API_KEY, VOYAGE_API_KEY, ANTHROPIC_MODEL, MIN_VIDEOS_FOR_DNA, MIN_SHORTS_FOR_DNA, DNA_LONGS_CAP, DNA_SHORTS_CAP); no paths used in this module |
 
 ## Module verdict
 
-clean — DNA module is production-ready with robust creator isolation, proper concurrency control, comprehensive logging, and clean code structure. Two low-impact cleanup opportunities (type ignores, logging) and one observability gap (Voyage token usage). No blockers.
+NEEDS-WORK — 4 cleanup items (untyped nested function parameters) and 1 SEV2 (type: ignore misuse in brief.py should be resolved with proper TypedDict typing). The security and concurrency posture is sound; creator isolation is correctly enforced on every query. Recommend fixing typing before wider adoption of the typing test harness.
+

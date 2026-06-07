@@ -2135,3 +2135,206 @@ async def _generate_title_suggestions_async(
             exc_type=type(exc).__name__,
         )
         raise
+
+
+# ── Thumbnail concept generator (Issue 129) ───────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="worker.tasks.generate_thumbnail_concepts",
+)
+def generate_thumbnail_concepts(self, creator_id: str, video_id: str) -> str:
+    """Generate thumbnail concepts for a video off the request path (Issue 129)."""
+    try:
+        run_async(_generate_thumbnail_concepts_async(self.request.id, creator_id, video_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _generate_thumbnail_concepts_async(
+    job_id: str,
+    creator_id: str,
+    video_id: str,
+) -> None:
+    """Fetch patterns + transcript + DNA; call Claude; emit result + done events.
+
+    Results are ephemeral — no DB row persisted. The SSE done payload carries
+    the concept objects. Per-creator isolation enforced on every query.
+    """
+    import json as _json
+
+    from sqlalchemy import select
+
+    from config import settings
+    from dna.identity import format_for_prompt
+    from dna.identity import get_current as get_identity
+    from dna.profile import get_active
+    from knowledge.thumbnails import (
+        PATTERNS_CACHE_KEY_PREFIX,
+        PATTERNS_CACHE_TTL,
+        _extract_transcript_hook,
+        analyze_thumbnail_patterns,
+        parse_concepts,
+    )
+    from knowledge.thumbnails import (
+        generate_thumbnail_concepts as build_concepts,
+    )
+    from models import Transcript, Video
+    from worker.progress import aemit
+
+    try:
+        await aemit(job_id, "step", label="loading_data", stage="thumbnail_concepts")
+
+        cid = uuid.UUID(creator_id)
+        vid = uuid.UUID(video_id)
+
+        async with db.AdminSessionLocal() as session:
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                await aemit(
+                    job_id, "error", stage="thumbnail_concepts", message="Creator not found."
+                )
+                return
+
+            video = await session.get(Video, vid)
+            if video is None or video.creator_id != cid:
+                await aemit(job_id, "error", stage="thumbnail_concepts", message="Video not found.")
+                return
+
+            transcript_row = await session.scalar(
+                select(Transcript).where(Transcript.video_id == vid)
+            )
+            transcript_hook = _extract_transcript_hook(
+                transcript_row.segments_jsonb if transcript_row else None
+            )
+
+            dna_profile = await get_active(session, cid)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+
+            identity = await get_identity(session, cid)
+            stated_identity = format_for_prompt(identity)
+
+            top_ids: list[str] = (dna_profile.top_video_ids_jsonb or []) if dna_profile else []
+            youtube_ids: list[str] = []
+            if top_ids:
+                try:
+                    uuid_list = [uuid.UUID(vid_id) for vid_id in top_ids[:10]]
+                    rows = (
+                        (
+                            await session.execute(
+                                select(Video.youtube_video_id).where(
+                                    Video.id.in_(uuid_list),
+                                    Video.creator_id == cid,
+                                    Video.youtube_video_id.isnot(None),
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    youtube_ids = [r for r in rows if r]
+                except Exception as exc:
+                    logger.warning(
+                        "_thumbnail_concepts_async: failed to resolve video IDs: %s", exc
+                    )
+
+        # Check Redis cache for patterns (same key as GET endpoint — avoids
+        # a second Claude multimodal call if the creator already viewed patterns).
+        import redis.asyncio as _aredis
+
+        patterns: dict | None = None
+        _rc = _aredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+        )
+        try:
+            cached_raw = await _rc.get(f"{PATTERNS_CACHE_KEY_PREFIX}{creator_id}")
+            if cached_raw:
+                patterns = _json.loads(cached_raw)
+        except Exception as exc:
+            logger.warning("_thumbnail_concepts_async: Redis cache read failed: %s", exc)
+
+        if patterns is None and youtube_ids:
+            await aemit(job_id, "step", label="analyzing_patterns", stage="thumbnail_concepts")
+            patterns = await asyncio.to_thread(
+                analyze_thumbnail_patterns,
+                youtube_ids,
+                creator.channel_title or "Unknown Channel",
+            )
+            try:
+                await _rc.setex(
+                    f"{PATTERNS_CACHE_KEY_PREFIX}{creator_id}",
+                    PATTERNS_CACHE_TTL,
+                    _json.dumps(patterns),
+                )
+            except Exception as exc:
+                logger.warning("_thumbnail_concepts_async: Redis cache write failed: %s", exc)
+
+        if patterns is None:
+            patterns = {
+                "face_present": "unknown",
+                "dominant_emotions": [],
+                "text_overlay_style": "unknown",
+                "typical_colors": "unknown",
+                "composition_pattern": "unknown",
+                "channel_thumbnail_signature": "Insufficient data.",
+            }
+
+        await aemit(job_id, "step", label="generating_concepts", stage="thumbnail_concepts")
+
+        raw_json = await asyncio.to_thread(
+            build_concepts,
+            channel_title=creator.channel_title or "Unknown Channel",
+            dna_brief=dna_brief,
+            patterns=patterns,
+            transcript_hook=transcript_hook,
+            stated_identity=stated_identity,
+            task_id=job_id,
+        )
+
+        try:
+            concepts = parse_concepts(raw_json)
+        except (ValueError, _json.JSONDecodeError) as exc:
+            logger.error(
+                "_generate_thumbnail_concepts_async parse failed creator=%s video=%s: %s",
+                creator_id,
+                video_id,
+                exc,
+            )
+            await aemit(
+                job_id,
+                "error",
+                stage="thumbnail_concepts",
+                message="Concept parsing failed — please try again.",
+            )
+            raise
+
+        await aemit(
+            job_id,
+            "done",
+            stage="thumbnail_concepts",
+            message="Concepts ready.",
+            concepts=concepts,
+        )
+
+    except Exception as exc:
+        logger.error(
+            "_generate_thumbnail_concepts_async failed creator=%s video=%s: %s",
+            creator_id,
+            video_id,
+            exc,
+        )
+        await aemit(
+            job_id,
+            "error",
+            stage="thumbnail_concepts",
+            message="Thumbnail concept generation failed — please try again.",
+            exc_type=type(exc).__name__,
+        )
+        raise
