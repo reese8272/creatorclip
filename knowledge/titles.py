@@ -19,6 +19,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import extract_transcript_text as _extract_transcript_text
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +89,7 @@ _DNA_BRIEF_MAX_CHARS = 3000
 
 def _extract_transcript_summary(segments_jsonb: dict | None, max_chars: int = 1500) -> str:
     """Extract a plain-text summary from the transcript segments_jsonb blob."""
-    if not segments_jsonb:
-        return ""
-    segs = segments_jsonb.get("segments", [])
-    parts = [seg.get("text", "").strip() for seg in segs if seg.get("text", "").strip()]
-    return " ".join(parts)[:max_chars]
+    return _extract_transcript_text(segments_jsonb, max_chars)
 
 
 def _build_request(

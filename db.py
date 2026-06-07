@@ -77,30 +77,43 @@ AdminSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
 )
 
 
+_recreate_in_progress = False
+
+
 def recreate_engine() -> None:
     """Rebind the module-global engines + sessionmakers to fresh instances
     bound to the current process. Required after fork (Issue 39): each Celery
     worker child must own a pool tied to its own event loop, not the parent's.
     Inherited connections are abandoned (close=False) so we don't close FDs
     the parent still holds.
+
+    Re-entry guard (Issue 123): concurrent Celery prefork signals can call
+    this simultaneously. The second caller returns immediately rather than
+    tearing down the pool the first caller is rebuilding.
     """
-    global engine, AsyncSessionLocal, admin_engine, AdminSessionLocal
-    engine.sync_engine.dispose(close=False)
-    admin_engine.sync_engine.dispose(close=False)
-    engine = _make_engine()
-    admin_engine = _make_admin_engine()
-    AsyncSessionLocal = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    AdminSessionLocal = async_sessionmaker(
-        admin_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    # Listener is class-level (registered on Session) — no re-registration
-    # needed on engine rebind.
+    global engine, AsyncSessionLocal, admin_engine, AdminSessionLocal, _recreate_in_progress
+    if _recreate_in_progress:
+        return
+    _recreate_in_progress = True
+    try:
+        engine.sync_engine.dispose(close=False)
+        admin_engine.sync_engine.dispose(close=False)
+        engine = _make_engine()
+        admin_engine = _make_admin_engine()
+        AsyncSessionLocal = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        AdminSessionLocal = async_sessionmaker(
+            admin_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        # Listener is class-level (registered on Session) — no re-registration
+        # needed on engine rebind.
+    finally:
+        _recreate_in_progress = False
 
 
 async def dispose_engine() -> None:

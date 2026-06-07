@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import uuid
 from datetime import UTC, datetime
 
 import httpx
@@ -317,7 +318,7 @@ async def sync_audience_data(session: AsyncSession, creator: Creator, access_tok
         session.add(Demographics(creator_id=creator.id, payload_jsonb=demo_data, fetched_at=now))
 
 
-async def check_data_gate(session: AsyncSession, creator_id) -> dict:
+async def check_data_gate(session: AsyncSession, creator_id: uuid.UUID) -> dict:
     """Return per-kind counts of videos READY for DNA analysis.
 
     "Ready" = the video has a VideoMetrics row with a non-null engagement_rate.

@@ -3,132 +3,122 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-07 (Issue 129 — Thumbnail concept generator)
-**Branch:** `main` — working tree DIRTY (Issues 128 + 129 uncommitted)
-**CI (last push):** CI + Quality Gates failed on PR #17 merge; Deploy succeeded (production live)
+**Last updated:** 2026-06-07 (Issue 123 SEV1 sweep + all CI fixes)
+**Branch:** `main` — HEAD `56c6d34` (1 commit ahead of origin/main — NOT yet pushed)
+**Working tree:** DIRTY — Issue 123 fixes + worker/billing/insights changes uncommitted
+**CI (last push to origin):** Quality Gates ❌ (against `e3c83b2`) · Deploy ✅ · CI tests ✅
 
 ---
 
 ## CURRENT FOCUS
 
-### Issues 128 + 129 complete. Commit + push both.
+### Commit the Issue 123 SEV1 fixes, push both commits, verify Quality Gates go green.
 
-All code is written, tested, and ruff-clean — sitting in the working tree uncommitted.
-**747 passed / 2 skipped. ruff 0. ruff format 0. Layer 0 all-runnable gates pass.**
+`56c6d34` (Issue 129 + CI fixes + /assess) is locally committed but not pushed.  
+The working tree has additional uncommitted changes: Issue 123 SEV1 sweep.  
+Both need to land on origin/main before starting Issue 130.
 
 ### → NEXT ACTION
 
-**Step 1 — Commit and push Issues 128 + 129 + CI fixes:**
+**Step 1 — Commit Issue 123 + remaining fixes:**
 
 ```bash
-git add knowledge/__init__.py knowledge/titles.py knowledge/thumbnails.py \
-        routers/titles.py routers/thumbnails.py \
-        worker/tasks.py main.py \
-        static/analysis.html static/index.html \
-        tests/test_titles.py tests/test_thumbnails.py \
-        docs/DECISIONS.md docs/PROJECT_STATE.md docs/SOT.md docs/issues.md \
-        docs/assessment/REPORT.md docs/assessment/history/ docs/assessment/modules/ \
-        clip_engine/candidates.py clip_engine/scoring.py tests/test_scoring.py \
-        requirements.txt pyproject.toml \
-        .claude/skills/production-assessment/scripts/run_layer0.py \
-        LEFT_OFF.md
-git status   # verify only the above files staged
-git commit -m "feat(128+129): title optimizer + thumbnail concept generator + fix CI gates"
-git push     # auto-deploys to production — confirm deploy CI passes
+git add \
+  db.py models.py ingestion/transcribe.py \
+  routers/insights.py routers/billing.py \
+  worker/tasks.py knowledge/thumbnails.py knowledge/titles.py \
+  knowledge/util.py youtube/analytics.py \
+  alembic/versions/0020_creator_insight_index.py \
+  docs/PROJECT_STATE.md docs/issues.md \
+  LEFT_OFF.md
+
+git status   # confirm nothing unexpected
+git commit -m "fix(123): SEV1 sweep — insights singleton, ingestion locks, CreatorInsight index, recreate_engine guard, worker Redis singleton"
 ```
 
-**CI fixes included in this commit:**
-- `knowledge/__init__.py` (new) — fixes `mypy fail 1` (Source file found twice)
-- `knowledge/thumbnails.py:144` type:ignore — fixes second mypy error
-- `requirements.txt`: `aiohttp==3.14.1` pin — closes CVE-2026-34993 + CVE-2026-47265
-- `pyproject.toml` + `run_layer0.py`: `PYSEC-2026-196` added to pip-audit ignore list
-- `tests/test_thumbnails.py`: +31 tests covering Claude call paths — recovers coverage ≥ 75.20%
+**Step 2 — Push both commits to origin:**
 
-**Step 2 — Start Issue 130 via the issue workflow:**
+```bash
+git push     # pushes 56c6d34 and the new commit; auto-deploys to production
+```
+
+**Step 3 — Wait ~2 min, verify CI:**
+
+```bash
+gh run list --limit 5   # Quality Gates should now show ✅
+```
+
+Quality Gates were failing on `e3c83b2` due to three root causes — all fixed in `56c6d34`:
+- `knowledge/__init__.py` missing → mypy "source file found twice"
+- `PYSEC-2026-196` → pip-audit
+- coverage drop → 31 new tests added
+
+**Step 4 — Apply the new migration on production:**
+
+```bash
+# SSH to prod VM, then inside the app container:
+docker compose -f docker-compose.prod.yml exec app alembic upgrade head
+# Applies: 0020_creator_insight_index (CREATE INDEX CONCURRENTLY on creator_insights)
+```
+
+**Step 5 — Start Issue 130 via the issue workflow:**
 
 ```
 Issue 130 — Hook analyzer
 Approach: POST /creators/me/videos/{video_id}/hook-analysis → Celery task →
-retention-curve drop detection + Claude rewrite suggestion. Grounded in
-creator's own retention curve data (already in DB). Mirrors Issue 128/129 endpoint pattern.
-Industry standard checked: [research in Phase 1]
+first-30s retention drop detection grounded in creator's own retention curves
++ concrete rewrite suggestion. Mirrors Issues 128/129 endpoint pattern.
 Good to go?
 ```
 
-Use `/claude-api` skill before writing any Anthropic SDK code (mandatory per CLAUDE.md).
-
-> **CI note:** Quality Gates and CI have been failing on pushes to `main` since the last
-> PR merge. Before pushing, run `.venv/bin/ruff check .` and `.venv/bin/ruff format --check .`
-> locally — both must be clean. Integration tests always fail in CI (no live Postgres) — that
-> does NOT block the deploy.
+> `/claude-api` skill required before writing any Anthropic SDK code (CLAUDE.md).
 
 ---
 
 ## WHAT WORKS NOW (do not re-investigate)
 
-### This session (2026-06-07) — Issue 129
+### Issue 123: SEV1 sweep — written this session, uncommitted
 
-- **`GET /creators/me/thumbnail-patterns`** (auth required, synchronous):
-  - Loads DNA `top_video_ids_jsonb` → resolves `youtube_video_id` from `videos` table
-  - Passes thumbnail image URLs (`i.ytimg.com/vi/{id}/hqdefault.jpg`) directly to Claude multimodal
-  - Extracts: face_present, dominant_emotions, text_overlay_style, typical_colors,
-    composition_pattern, channel_thumbnail_signature
-  - Redis-cached 24h at `thumbnail_patterns:{creator_id}`
-  - Returns `ThumbnailPatternsOut` (includes `cached: bool`)
+1. **`routers/insights.py`** — `_ANTHROPIC` module-level singleton + `cache_control: ephemeral` on static system prompt + `asyncio.to_thread` + token usage logging. Was: `anthropic.Anthropic()` per-request, 3rd cycle carrying.
 
-- **`POST /creators/me/videos/{video_id}/thumbnail-concepts`** (10/hour, auth required):
-  - Returns 202 + `{task_id, stream_url}`
-  - Guards: video must exist and belong to the creator; video must have been transcribed
+2. **`ingestion/transcribe.py`** — `_DEEPGRAM_LOCK` + `_ASSEMBLYAI_LOCK` (both `threading.Lock()`); double-checked locking on both singleton init blocks. Was: unguarded init race under concurrent `asyncio.to_thread`.
 
-- **Celery task `generate_thumbnail_concepts`** in `worker/tasks.py`:
-  - Checks Redis cache for patterns first (skips Claude multimodal call if cached)
-  - If not cached: calls `analyze_thumbnail_patterns` via `asyncio.to_thread`; caches result
-  - Calls `generate_thumbnail_concepts` (streams tokens via SSE)
-  - Parses Claude's JSON → surfaces up to 5 concepts
-  - Results passed in the `done` event payload (`concepts` key) — no DB row persisted
+3. **`models.py`** — `CreatorInsight.__table_args__` adds `sa.Index('ix_creator_insight_creator_video', 'creator_id', 'video_id')`.
 
-- **`knowledge/thumbnails.py`** — three-block prompt:
-  - Block 1: static concept-generation instructions (no cache_control)
-  - Block 2: DNA brief — carries `cache_control: {type: ephemeral}` (clears 2048-token minimum)
-  - Block 3: patterns + video context (transcript hook + stated identity) — uncached
-  - `parse_concepts(raw_json)` validates concept schema, enforces CONCEPT_SURFACE_N=5
-  - `analyze_thumbnail_patterns(youtube_ids, channel_title)` — Claude multimodal, up to 10 images
-  - `_extract_transcript_hook(segments_jsonb)` — extracts first 500 chars of transcript
-  - `PATTERNS_CACHE_KEY_PREFIX`, `PATTERNS_CACHE_TTL` — shared constants for router + task
+4. **`alembic/versions/0020_creator_insight_index.py`** — `CREATE INDEX CONCURRENTLY IF NOT EXISTS` in autocommit block. Alembic head becomes `0020` after migration.
 
-- **`static/analysis.html`** — Thumbnail Concepts panel:
-  - Auto-shown when `?video_id=<uuid>` query param is present (same gate as Title Optimizer)
-  - "Generate concepts" button → SSE stream → renders concept cards with emotion badge,
-    composition, text overlay tag, color direction, rationale, and "based on pattern" note
+5. **`db.py::recreate_engine`** — `_recreate_in_progress` bool flag + `try/finally`; concurrent Celery prefork calls skip rather than race.
 
-- **Key decisions logged in `docs/DECISIONS.md`** (2026-06-07 entry):
-  - Reporting API bypass → DNA `top_video_ids_jsonb` as high-performer proxy
-  - Claude multimodal over CV pipeline (MediaPipe deferred to Phase 2)
-  - 24h Redis cache shared between GET and Celery task
-  - Ephemeral concept results (no DB table, same pattern as Issues 121/128)
+### Worker + other fixes — uncommitted
 
-- **25 new tests** in `tests/test_thumbnails.py`
+- **`worker/tasks.py`** — module-level `_thumb_redis()` singleton replaces per-task `_aredis.from_url()` (SEV1); UUID parse in thumbnail loop narrowed to `(ValueError, TypeError)` (SEV2); `import json as _json` shadow removed.
+- **`knowledge/util.py`** (new) — `extract_transcript_text(segments_jsonb, max_chars)` shared util; both `titles.py` and `thumbnails.py` delegate to it (DRY).
+- **`youtube/analytics.py`** — `check_data_gate` `creator_id: uuid.UUID` type annotation.
+- **`routers/billing.py`** — webhook UUID parse guarded (`try/except ValueError`, returns 200 on malformed).
 
-### Previous session (2026-06-07) — Issue 128
+### Commit `56c6d34` — locally committed, not pushed
 
-- **`POST /creators/me/videos/{video_id}/titles`** (20/hour, auth required):
-  - Returns 202 + `{task_id, stream_url, video_title}`
-  - Guards: video must exist and belong to the creator; video must have been transcribed
-  - Rate limit: `@limiter.limit("20/hour", key_func=creator_key)`
+Contains: Issue 129 (thumbnail concept generator) + CI fixes (`knowledge/__init__.py`, `aiohttp==3.14.1`, `PYSEC-2026-196` ignore) + full `/assess` output (REPORT.md, module findings, history snapshot).
 
-- **Celery task `generate_title_suggestions`** in `worker/tasks.py`
-- **`knowledge/titles.py`** — three-block prompt with cache_control at DNA brief block
-- **`static/analysis.html`** — Title Optimizer panel
-- **`static/index.html`** — "Titles" link button on every `ingest_status=done` video row
+### Issue 128 — deployed at `e3c83b2`
 
-### Longer-standing landmarks (verified, do not re-check)
+`POST /creators/me/videos/{video_id}/titles` (20/hour) → 202 + Celery → SSE → top-5 ranked title candidates. Live at `https://autoclip.studio`.
 
-- **Branch situation:** `claude/competitive-app-analysis-DtPQN` was merged to `main` via PRs #16 and #17
-- **Issue 127 (sentence-boundary cuts):** deployed
-- **Issue 124 (performance score + hover tooltips):** deployed
-- **Production live:** `https://autoclip.studio` healthy
-- **Alembic head:** `0019_clip_style_preset` — no new migrations in Issues 128/129
-- **RLS** on 12 tenant-owned tables; `creators` exempt
+### Assessment (latest)
+
+- **VERDICT: CONDITIONAL** — was 9 SEV1s; Issue 123 + worker fixes close 5; ~4 remain
+- Top remaining open: `preference/train.py` advisory lock, `routers/activity.py:39` bare except
+- Full register: `docs/assessment/REPORT.md`
+
+---
+
+## THE ARC THAT LED HERE
+
+1. Competitive intelligence → Issues 127–136 filed ROI-ordered
+2. Issue 127 (sentence-boundary cuts): deployed
+3. Issue 128 (title optimizer): deployed at `e3c83b2`
+4. Issue 129 (thumbnail concepts) + CI fixes + /assess: in commit `56c6d34` (not pushed)
+5. Issue 123 (SEV1 sweep) + worker/billing/insights fixes: in working tree (not committed)
 
 ---
 
@@ -140,30 +130,32 @@ Use `/claude-api` skill before writing any Anthropic SDK code (mandatory per CLA
 | Production VM | `147.182.136.107` |
 | Container image | `ghcr.io/reese8272/creatorclip:latest` |
 | Repo | `github.com/reese8272/creatorclip` |
+| Self-hosted runner | systemd `actions.runner.reese8272-creatorclip.autoclip-prod-vm` on prod VM |
 | Current branch | `main` |
-| Working tree | DIRTY — Issues 128 + 129 uncommitted |
-| Alembic head | `0019_clip_style_preset` |
-| Issue 128 | ✅ Written, tested, NOT committed yet |
-| Issue 129 | ✅ Written, tested, NOT committed yet |
-| Issue 130 | 🔲 Not started — Hook analyzer (next in queue) |
-| Test count | 747 passed / 2 skipped |
-| Default model | `claude-sonnet-4-6` (Sonnet 4.6) |
+| Local HEAD | `56c6d34` (1 ahead of origin/main — not pushed) |
+| origin/main | `e3c83b2` |
+| Working tree | DIRTY — Issue 123 fixes uncommitted |
+| Alembic head (prod) | `0019_clip_style_preset` (0020 migration not yet applied) |
+| Alembic head (local) | `0020_creator_insight_index` |
+| Issue 123 | ✅ Written, tested — NOT committed |
+| Issue 128 | ✅ Deployed |
+| Issue 129 | ✅ Committed (`56c6d34`) — NOT pushed |
+| Issue 130 | 🔲 Not started — Hook analyzer |
+| Test count | 753 passed / 2 skipped |
+| Default model | `claude-sonnet-4-6` |
+| Secret names (never log) | `STRIPE_SECRET_KEY`, `JWT_SECRET_KEY`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `GHCR_TOKEN`, `DEEPGRAM_API_KEY` |
 
 ---
 
-## CONSTRAINTS & GOTCHAS (next session: read before acting)
+## CONSTRAINTS & GOTCHAS
 
-- **Issues 128 + 129 are uncommitted on `main`.** Run the commit + push in Step 1 before anything else.
-- **CI Quality Gates have been failing since PR #17 merge.** Check `gh run list` after pushing.
-- **Integration tests always fail in CI** — need live Postgres. Does NOT block deploy.
-- **`ruff format --check` is a CI gate.** Always run before pushing.
-- **Title suggestion and thumbnail concept results are ephemeral** — no DB rows persisted.
-- **Thumbnail patterns are cached in Redis** at `thumbnail_patterns:{creator_id}` (24h TTL).
-  Cache is shared between the GET endpoint and the Celery task. Invalidated on TTL expiry only.
-- **`analyze_thumbnail_patterns` uses public YouTube thumbnail URLs** (`i.ytimg.com`). No OAuth
-  required. If a video has no public thumbnail, Claude receives a broken image URL and may
-  return `_empty_patterns()` — this is handled gracefully.
-- **Issue 123 (SEV1 sweep) still pending.** 5 open SEV1s. See `docs/assessment/REPORT.md`.
+- **`git push` auto-deploys to production** via self-hosted runner. Verify `git status` + test count before pushing.
+- **After push: run `alembic upgrade head` on production** for migration `0020`. Until then, `creator_insights` queries do full table scans.
+- **Two separate commits need to land:** `56c6d34` (Issue 129) and the new Issue 123 commit — `git push` will send both.
+- **Quality Gates was failing** on the last push (`e3c83b2`) — root causes are fixed in `56c6d34`. The Issue 123 commit adds no new gate risk.
+- **Rate-limit test pollution (local only):** if `test_improvement_post_handles_concurrent_insert_race` fails with 429, run `redis-cli del "LIMITS:LIMITER/testclient//creators/me/improvement-brief/10/1/hour"`. Not a code bug; only hits when local Redis has accumulated state.
+- **`/claude-api` skill is mandatory** before writing any Anthropic SDK code (CLAUDE.md One Rule).
+- **`ruff format --check` is a CI gate** — always run before pushing.
 
 ---
 
@@ -171,6 +163,8 @@ Use `/claude-api` skill before writing any Anthropic SDK code (mandatory per CLA
 
 - `docs/SOT.md` — current stack, file structure, data model
 - `docs/PROJECT_STATE.md` — every issue's status + session log
-- `docs/issues.md` — backlog (Issues 128–129 done; 130–136 queued)
+- `docs/issues.md` — backlog (123, 128, 129 ✅; 130–136 queued)
 - `docs/DECISIONS.md` — deviation log (2026-06-07 entries for Issues 128 + 129)
+- `docs/assessment/REPORT.md` — latest /assess verdict + ranked register
+- `docs/COMPLIANCE.md` — YouTube ToS, data retention, privacy posture
 - `CLAUDE.md` — project rules; the One Rule is non-negotiable

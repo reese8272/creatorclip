@@ -170,7 +170,11 @@ async def stripe_webhook(
     if existing:
         return {"status": "already_fulfilled"}
 
-    creator_id = uuid.UUID(creator_id_str)
+    try:
+        creator_id = uuid.UUID(creator_id_str)
+    except ValueError:
+        logger.error("Webhook malformed creator_id: %r", creator_id_str)
+        return {"status": "ignored"}
 
     if stripe_customer:
         await session.execute(

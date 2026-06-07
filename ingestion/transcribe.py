@@ -14,6 +14,7 @@ All backends are normalized to the same internal schema:
 
 import functools
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +26,13 @@ logger = logging.getLogger(__name__)
 
 # Module-level singletons (Issue 74): the SDK clients and the WhisperX model were
 # being reconstructed/reloaded on every call. A warm worker now reuses them.
+# threading.Lock guards (Issue 123): two concurrent asyncio.to_thread calls can
+# race through the `if None` check before either finishes init. The lock
+# serializes first-time construction without blocking subsequent fast-path reads.
 _DEEPGRAM_CLIENT = None
+_DEEPGRAM_LOCK = threading.Lock()
 _ASSEMBLYAI_READY = False
+_ASSEMBLYAI_LOCK = threading.Lock()
 
 
 def _http_timeout() -> httpx.Timeout:
@@ -76,14 +82,19 @@ def transcribe_audio(audio_path: str | Path) -> dict[str, Any]:
 
 
 def _deepgram_client() -> Any:
-    """Lazy module-level DeepgramClient singleton (Issue 74)."""
+    """Lazy module-level DeepgramClient singleton (Issue 74).
+
+    Lock guards double-init race under concurrent asyncio.to_thread calls (Issue 123).
+    """
     global _DEEPGRAM_CLIENT
     if _DEEPGRAM_CLIENT is None:
-        from deepgram import DeepgramClient
+        with _DEEPGRAM_LOCK:
+            if _DEEPGRAM_CLIENT is None:
+                from deepgram import DeepgramClient
 
-        if not settings.DEEPGRAM_API_KEY:
-            raise ValueError("DEEPGRAM_API_KEY is not set")
-        _DEEPGRAM_CLIENT = DeepgramClient(settings.DEEPGRAM_API_KEY)
+                if not settings.DEEPGRAM_API_KEY:
+                    raise ValueError("DEEPGRAM_API_KEY is not set")
+                _DEEPGRAM_CLIENT = DeepgramClient(settings.DEEPGRAM_API_KEY)
     return _DEEPGRAM_CLIENT
 
 
@@ -178,12 +189,14 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
 
     global _ASSEMBLYAI_READY
     if not _ASSEMBLYAI_READY:
-        # Set the global API key once, not on every call (Issue 74). Bound every HTTP
-        # request (upload + poll) with the SDK-native timeout so a hung socket returns
-        # the blocking thread the job-level wait_for cannot cancel (Issue 76).
-        aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
-        aai.settings.http_timeout = float(settings.TRANSCRIPTION_HTTP_TIMEOUT_S)
-        _ASSEMBLYAI_READY = True
+        with _ASSEMBLYAI_LOCK:
+            if not _ASSEMBLYAI_READY:
+                # Set the global API key once, not on every call (Issue 74). Bound every
+                # HTTP request with the SDK-native timeout (Issue 76). Lock guards
+                # double-init race under concurrent asyncio.to_thread calls (Issue 123).
+                aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
+                aai.settings.http_timeout = float(settings.TRANSCRIPTION_HTTP_TIMEOUT_S)
+                _ASSEMBLYAI_READY = True
     transcript = aai.Transcriber().transcribe(audio_path)
     return _normalize_assemblyai(transcript)
 

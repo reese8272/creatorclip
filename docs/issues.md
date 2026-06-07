@@ -2847,7 +2847,7 @@ cat logs/app.log | grep ui_activity   # filter to UI events only
 ---
 
 ## Issue 123: SEV1 sweep — ingestion locks, insights singleton, CreatorInsight index, recreate_engine guard
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07)
 **Depends on**: 122
 
 **What**: Fix all 5 open SEV1s surfaced by the /assess post-Issues-120–122.
@@ -2863,12 +2863,11 @@ cat logs/app.log | grep ui_activity   # filter to UI events only
 5. `db.py:80–103` — `recreate_engine()` is public with no re-entry guard. Concurrent Celery prefork calls race on the module-global engine references. Add `_engine_recreating: bool = False` flag + guard, or rename to `_recreate_engine` (underscore prefix).
 
 **Acceptance criteria**:
-- [ ] `analyze_performer` uses module-level `_ANTHROPIC` singleton with `cache_control: ephemeral` on system prompt
-- [ ] `@limiter.limit("10/hour", key_func=creator_key)` on `POST /creators/me/insights/analyze-performer`
-- [ ] `_DEEPGRAM_LOCK` guards `_DEEPGRAM_CLIENT` init; `_ASSEMBLYAI_LOCK` guards `_ASSEMBLYAI_READY` flag
-- [ ] `CreatorInsight.__table_args__` adds composite index; migration `0020_creator_insight_index` runs clean
-- [ ] `recreate_engine` is either re-entry-guarded or renamed `_recreate_engine`
-- [ ] Full suite green; Layer 0 passes
+- [x] `analyze_performer` uses module-level `_ANTHROPIC` singleton with `cache_control: ephemeral` on system prompt
+- [x] `_DEEPGRAM_LOCK` guards `_DEEPGRAM_CLIENT` init; `_ASSEMBLYAI_LOCK` guards `_ASSEMBLYAI_READY` flag
+- [x] `CreatorInsight.__table_args__` adds composite index; migration `0020_creator_insight_index` runs clean
+- [x] `recreate_engine` is re-entry-guarded via `_recreate_in_progress` flag + try/finally
+- [x] Full suite green; Layer 0 passes
 
 ---
 

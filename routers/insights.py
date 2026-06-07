@@ -15,6 +15,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+import anthropic as _anthropic
+import httpx as _httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -443,6 +445,14 @@ async def get_analytics_summary(
 
 _HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
+# Module-level Anthropic singleton (Issue 123 SEV1 fix: was constructed per-request).
+# Haiku is used here (low cost, fast) — caching on the stable static system prefix.
+_ANTHROPIC = _anthropic.Anthropic(
+    api_key=settings.ANTHROPIC_API_KEY,
+    timeout=_httpx.Timeout(120.0, connect=10.0),
+    max_retries=2,
+)
+
 
 def _build_analysis_prompt(
     video_title: str,
@@ -527,7 +537,7 @@ async def analyze_performer(
     if existing:
         return _insight_to_dict(existing)
 
-    # Build and call Haiku
+    # Build and call Haiku using the module-level singleton (Issue 123).
     prompt = _build_analysis_prompt(
         video_title=video.title or video.youtube_video_id,
         kind=video.kind.value,
@@ -537,17 +547,36 @@ async def analyze_performer(
         dna_brief=dna_row.brief_text if dna_row else None,
     )
 
-    import anthropic
+    import asyncio as _aio
 
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     try:
-        msg = await __import__("asyncio").to_thread(
-            client.messages.create,
+        _system: list[dict] = [
+            {
+                "type": "text",
+                "text": (
+                    "You are an analyst interpreting YouTube video performance data. "
+                    "Be concise, data-driven, and never promise virality outcomes."
+                ),
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        msg = await _aio.to_thread(
+            _ANTHROPIC.messages.create,  # type: ignore[arg-type]  # overloaded fn; callable at runtime
             model=_HAIKU_MODEL,
             max_tokens=256,
+            system=_system,
             messages=[{"role": "user", "content": prompt}],
         )
-        content = msg.content[0].text if msg.content else "Analysis unavailable."
+        logger.info(
+            "performer_analysis tokens: in=%d cached_read=%d out=%d",
+            msg.usage.input_tokens,
+            getattr(msg.usage, "cache_read_input_tokens", 0),
+            msg.usage.output_tokens,
+        )
+        raw_block = msg.content[0] if msg.content else None
+        content = (
+            raw_block.text if raw_block and hasattr(raw_block, "text") else "Analysis unavailable."
+        )
     except Exception as exc:
         logger.warning("performer analysis LLM failed video=%s err=%s", video_id, exc)
         raise HTTPException(

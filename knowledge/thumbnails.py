@@ -23,6 +23,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import extract_transcript_text as _extract_transcript_text
 
 logger = logging.getLogger(__name__)
 
@@ -160,11 +161,7 @@ def analyze_thumbnail_patterns(
 
 def _extract_transcript_hook(segments_jsonb: dict | None, max_chars: int = 500) -> str:
     """Extract the opening transcript text (the hook) from segments_jsonb."""
-    if not segments_jsonb:
-        return ""
-    segs = segments_jsonb.get("segments", [])
-    parts = [seg.get("text", "").strip() for seg in segs if seg.get("text", "").strip()]
-    return " ".join(parts)[:max_chars]
+    return _extract_transcript_text(segments_jsonb, max_chars)
 
 
 def _build_concepts_request(

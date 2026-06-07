@@ -730,6 +730,16 @@ class CreatorInsight(Base):
     """
 
     __tablename__ = "creator_insights"
+    __table_args__ = (
+        # Composite index for the cache-lookup query:
+        # WHERE creator_id = ? AND video_id = ? AND insight_type = ? AND dna_version = ?
+        # Without this, the query scans all insights for the creator. (Issue 123)
+        sa.Index(
+            "ix_creator_insight_creator_video",
+            "creator_id",
+            "video_id",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
     creator_id: Mapped[uuid.UUID] = mapped_column(

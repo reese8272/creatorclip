@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import redis.asyncio as aredis
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -43,6 +44,24 @@ from youtube.errors import YouTubeAuthError
 from youtube.quota import QuotaExhaustedError, remaining
 
 logger = logging.getLogger(__name__)
+
+# Module-level async Redis singleton for the thumbnail-patterns cache.
+# Mirrors the pattern in worker/progress.py::_async_client().
+_THUMB_REDIS: aredis.Redis | None = None
+
+
+def _thumb_redis() -> aredis.Redis:
+    global _THUMB_REDIS
+    if _THUMB_REDIS is None:
+        from config import settings as _s
+
+        _THUMB_REDIS = aredis.from_url(
+            _s.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+        )
+    return _THUMB_REDIS
 
 
 # ── Public entry points ───────────────────────────────────────────────────────
@@ -2165,11 +2184,10 @@ async def _generate_thumbnail_concepts_async(
     Results are ephemeral — no DB row persisted. The SSE done payload carries
     the concept objects. Per-creator isolation enforced on every query.
     """
-    import json as _json
+    import json
 
     from sqlalchemy import select
 
-    from config import settings
     from dna.identity import format_for_prompt
     from dna.identity import get_current as get_identity
     from dna.profile import get_active
@@ -2237,26 +2255,21 @@ async def _generate_thumbnail_concepts_async(
                         .all()
                     )
                     youtube_ids = [r for r in rows if r]
-                except Exception as exc:
+                except (ValueError, TypeError) as exc:
                     logger.warning(
                         "_thumbnail_concepts_async: failed to resolve video IDs: %s", exc
                     )
 
         # Check Redis cache for patterns (same key as GET endpoint — avoids
         # a second Claude multimodal call if the creator already viewed patterns).
-        import redis.asyncio as _aredis
-
+        # Uses the module-level singleton to avoid creating a new connection pool
+        # per-task invocation (SEV1 fix: was creating per-task via _aredis.from_url).
         patterns: dict | None = None
-        _rc = _aredis.from_url(
-            settings.REDIS_URL,
-            decode_responses=True,
-            socket_timeout=2.0,
-            socket_connect_timeout=2.0,
-        )
+        _rc = _thumb_redis()
         try:
             cached_raw = await _rc.get(f"{PATTERNS_CACHE_KEY_PREFIX}{creator_id}")
             if cached_raw:
-                patterns = _json.loads(cached_raw)
+                patterns = json.loads(cached_raw)
         except Exception as exc:
             logger.warning("_thumbnail_concepts_async: Redis cache read failed: %s", exc)
 
@@ -2271,7 +2284,7 @@ async def _generate_thumbnail_concepts_async(
                 await _rc.setex(
                     f"{PATTERNS_CACHE_KEY_PREFIX}{creator_id}",
                     PATTERNS_CACHE_TTL,
-                    _json.dumps(patterns),
+                    json.dumps(patterns),
                 )
             except Exception as exc:
                 logger.warning("_thumbnail_concepts_async: Redis cache write failed: %s", exc)
@@ -2300,7 +2313,7 @@ async def _generate_thumbnail_concepts_async(
 
         try:
             concepts = parse_concepts(raw_json)
-        except (ValueError, _json.JSONDecodeError) as exc:
+        except (ValueError, json.JSONDecodeError) as exc:
             logger.error(
                 "_generate_thumbnail_concepts_async parse failed creator=%s video=%s: %s",
                 creator_id,
