@@ -9,6 +9,13 @@ Animated captions (Issue 133): when ``style_preset["subtitle"]`` names a known
 caption style (``bold_pop`` / ``gradient_slide`` / ``minimal``), an ASS subtitle
 file is generated from the supplied transcript segments and burned in via
 libass. See ``clip_engine/captions.py``.
+
+Cleaned render (Issue 134): ``render_cleaned_clip_file`` excises ranges from an
+already-rendered clip via a single-pass ``filter_complex`` (``trim`` + ``atrim``
++ ``setpts`` + ``concat``) with a 5ms ``afade`` at every splice for click
+prevention. The graph is written to a temp file and passed via
+``-filter_complex_script`` to avoid shell-arg-length issues at scale. See
+``clip_engine/filler.py`` for the cut-list generator.
 """
 
 import logging
@@ -250,4 +257,103 @@ def render_clip_file(
             ass_path.unlink(missing_ok=True)
     logger.info(
         "Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf
+    )
+
+
+# Per-segment audio fade applied at every splice point in render_cleaned_clip_file.
+# 5ms is the documented production figure: well below the ~20ms human fade-
+# perception threshold (~220 samples at 44.1kHz) yet large enough to bring the
+# waveform to zero on both sides of every cut. See docs/DECISIONS.md.
+_CLEAN_AFADE_S = 0.005
+
+
+def render_cleaned_clip_file(
+    source_path: Path,
+    keep_ranges: list[tuple[float, float]],
+    out_path: Path,
+    timeout_s: float = 120.0,
+) -> None:
+    """Excise everything OUTSIDE ``keep_ranges`` from ``source_path`` and write
+    the concatenated result to ``out_path`` (Issue 134).
+
+    ``keep_ranges`` is a list of ``(start_s, end_s)`` pairs in
+    source-relative seconds — the inverse of the cut-list from
+    ``clip_engine.filler.detect_cut_segments`` (call
+    ``invert_to_keep_ranges`` after ``merge_adjacent_cuts``).
+
+    The filter graph is written to a sibling ``.filter`` file and passed via
+    ``-filter_complex_script``; both temp file and script are cleaned in a
+    ``finally`` block. Each kept segment carries a 5ms ``afade=in`` + 5ms
+    ``afade=out`` for click prevention at the splice points.
+
+    Raises ``ValueError`` when ``keep_ranges`` is empty or contains invalid
+    pairs; raises ``RuntimeError`` on ffmpeg failure.
+    """
+    if not keep_ranges:
+        raise ValueError("render_cleaned_clip_file: empty keep_ranges")
+    for s, e in keep_ranges:
+        if e <= s:
+            raise ValueError(f"render_cleaned_clip_file: invalid range ({s}, {e})")
+
+    script_lines: list[str] = []
+    concat_inputs: list[str] = []
+    for idx, (start, end) in enumerate(keep_ranges):
+        seg_dur = end - start
+        # afade=out start time is segment-relative because setpts/asetpts reset
+        # PTS to 0 at the start of each trimmed segment.
+        fade_out_st = max(0.0, seg_dur - _CLEAN_AFADE_S)
+        script_lines.append(
+            f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{idx}];"
+        )
+        script_lines.append(
+            f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:st=0:d={_CLEAN_AFADE_S},"
+            f"afade=t=out:st={fade_out_st:.3f}:d={_CLEAN_AFADE_S}[a{idx}];"
+        )
+        concat_inputs.append(f"[v{idx}][a{idx}]")
+    script_lines.append(f"{''.join(concat_inputs)}concat=n={len(keep_ranges)}:v=1:a=1[outv][outa]")
+    script_text = "\n".join(script_lines)
+
+    # Sibling temp script — same cleanup pattern as the ASS subtitle path.
+    script_path = out_path.with_suffix(".filter")
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(script_text)
+
+    try:
+        _run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source_path),
+                "-filter_complex_script",
+                str(script_path),
+                "-map",
+                "[outv]",
+                "-map",
+                "[outa]",
+                "-c:v",
+                "libx264",
+                "-crf",
+                "23",
+                "-preset",
+                "fast",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ],
+            "clean render",
+            timeout_s=timeout_s,
+        )
+    finally:
+        script_path.unlink(missing_ok=True)
+    logger.info(
+        "Cleaned clip %s→%s segments=%d",
+        source_path.name,
+        out_path.name,
+        len(keep_ranges),
     )

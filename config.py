@@ -103,6 +103,21 @@ class Settings(BaseSettings):
     # original timestamp is kept unchanged — better to hold than to snap too far.
     MAX_SNAP_S: float = 3.0
 
+    # ── Filler-word + silence removal (Issue 134) ──────────────────────────
+    # Inter-word gap (ms) above which a silence is removed by the cleaning pass.
+    # See docs/DECISIONS.md 2026-06-07 for the 800ms default rationale.
+    SILENCE_REMOVAL_THRESHOLD_MS: int = 800
+    # Breath left on each side of every silence cut (ms). Sounds natural AND
+    # lets the audio waveform taper toward zero so the splice doesn't click.
+    SILENCE_TAIL_MS: int = 150
+    # Tier-2 fillers ("like", "you know", …) are only excised when flanked by
+    # an inter-word gap >= this on at least one side — the published heuristic
+    # for separating filler "like" from the verb "like" without POS tagging.
+    FILLER_TIER2_FLANK_GAP_MS: int = 150
+    # Tier-2 fillers longer than this duration (ms) are presumed deliberate
+    # speech rather than disfluency and skipped.
+    FILLER_TIER2_MAX_DURATION_MS: int = 600
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5

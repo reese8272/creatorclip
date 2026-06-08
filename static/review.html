@@ -365,6 +365,28 @@
       </details>
     </div>
 
+    <!-- Issue 134: filler word + silence removal -->
+    <div class="style-section">
+      <details>
+        <summary>Clean filler words + long silences</summary>
+        <div class="style-row" style="flex-direction:column;align-items:stretch;gap:var(--space-2)">
+          <button class="btn btn-secondary" onclick="loadCleanPreview()">Preview what would be removed</button>
+          <div id="clean-warning" style="font-size:var(--text-sm);color:#c2410c;font-weight:600;display:none"></div>
+          <div id="clean-summary" style="font-size:var(--text-sm);color:var(--color-text-subtle)"></div>
+          <div id="clean-cuts" style="font-size:var(--text-xs);max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2);display:none"></div>
+          <button class="btn btn-secondary" id="clean-apply-btn" onclick="applyClean()" style="display:none">Apply — render cleaned version</button>
+          <div id="clean-cleaned" style="display:none">
+            <video id="cleaned-player" controls style="width:100%;border-radius:6px;margin-top:var(--space-2)"></video>
+            <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
+              <button class="btn btn-secondary" onclick="confirmClean()">Use cleaned version</button>
+              <button class="btn btn-secondary" onclick="discardClean()">Keep original</button>
+            </div>
+          </div>
+          <div id="clean-status" style="font-size:var(--text-xs);color:var(--color-text-subtle)"></div>
+        </div>
+      </details>
+    </div>
+
     <div class="next-wrap">
       <button class="btn btn-next" onclick="loadNext()">Next clip →</button>
     </div>
@@ -579,6 +601,111 @@
         flash.textContent = '';
         setTimeout(() => { window.location = '/'; }, 2000);
       }
+    }
+
+    // ── Issue 134 — filler + silence clean-pass UI ────────────────────────
+    let _lastCleanCuts = null;
+
+    async function loadCleanPreview() {
+      if (!currentClip) return;
+      const warnEl = document.getElementById('clean-warning');
+      const sumEl = document.getElementById('clean-summary');
+      const cutsEl = document.getElementById('clean-cuts');
+      const applyBtn = document.getElementById('clean-apply-btn');
+      const statusEl = document.getElementById('clean-status');
+      statusEl.textContent = 'Analyzing transcript…';
+      warnEl.style.display = 'none';
+      cutsEl.style.display = 'none';
+      applyBtn.style.display = 'none';
+      const resp = await fetch(`/clips/${currentClip.id}/clean-preview`, { credentials: 'include' });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        statusEl.textContent = err.detail || 'Preview failed — try again.';
+        return;
+      }
+      const data = await resp.json();
+      _lastCleanCuts = data;
+      statusEl.textContent = '';
+      if (!data.cuts.length) {
+        sumEl.textContent = 'No filler words or long silences detected — clip is already clean.';
+        return;
+      }
+      sumEl.textContent = `${data.cuts.length} segment(s) would be removed — ${data.percent_removed.toFixed(0)}% of the clip.`;
+      if (data.warning) {
+        warnEl.textContent = '⚠ ' + data.warning;
+        warnEl.style.display = 'block';
+      }
+      cutsEl.innerHTML = data.cuts.map(c => {
+        const dur = (c.end_s - c.start_s).toFixed(2);
+        const label = c.reason === 'filler' ? `filler: "${c.word}"` : 'silence';
+        return `<div style="text-decoration:line-through;color:var(--color-text-subtle)">${c.start_s.toFixed(2)}s–${c.end_s.toFixed(2)}s · ${dur}s · ${label}</div>`;
+      }).join('');
+      cutsEl.style.display = 'block';
+      applyBtn.style.display = 'block';
+    }
+
+    async function applyClean() {
+      if (!currentClip) return;
+      const statusEl = document.getElementById('clean-status');
+      statusEl.textContent = 'Queueing clean render — come back in ~20s.';
+      const resp = await fetch(`/clips/${currentClip.id}/clean`, {
+        method: 'POST', credentials: 'include',
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        statusEl.textContent = err.detail || 'Clean failed — try again.';
+        return;
+      }
+      const data = await resp.json();
+      if (data.stream_url && window.activeTasks) {
+        window.activeTasks.registerTask({
+          taskId: data.task_id, streamUrl: data.stream_url,
+          label: `Cleaning clip ${currentClip.id.slice(0, 8)}`,
+        });
+      }
+      // Poll for the cleaned URL.
+      const start = Date.now();
+      const poll = setInterval(async () => {
+        if (Date.now() - start > 120000) { clearInterval(poll); statusEl.textContent = 'Clean is taking longer than expected — refresh later.'; return; }
+        const r = await fetch(`/videos/${currentClip.video_id}/clips`, { credentials: 'include' });
+        if (!r.ok) return;
+        const d = await r.json();
+        const fresh = (d.clips || []).find(c => c.id === currentClip.id);
+        if (fresh && fresh.cleaned_render_uri) {
+          clearInterval(poll);
+          currentClip.cleaned_render_uri = fresh.cleaned_render_uri;
+          document.getElementById('cleaned-player').src = fresh.cleaned_render_uri;
+          document.getElementById('clean-cleaned').style.display = 'block';
+          statusEl.textContent = 'Cleaned version ready — preview below.';
+        }
+      }, 3000);
+    }
+
+    async function confirmClean() {
+      if (!currentClip) return;
+      const statusEl = document.getElementById('clean-status');
+      const resp = await fetch(`/clips/${currentClip.id}/clean/confirm`, {
+        method: 'POST', credentials: 'include',
+      });
+      if (!resp.ok) {
+        statusEl.textContent = 'Swap failed — try again.';
+        return;
+      }
+      const data = await resp.json();
+      currentClip.render_uri = data.render_uri;
+      currentClip.cleaned_render_uri = null;
+      player.src = data.render_uri;
+      player.load();
+      document.getElementById('clean-cleaned').style.display = 'none';
+      statusEl.textContent = data.status === 'swapped' ? 'Cleaned version is now the main render.' : 'No cleaned version to swap.';
+    }
+
+    function discardClean() {
+      // Local discard — the cleaned mp4 still exists on R2 but the UI hides
+      // it. Confirming on a future preview will overwrite it. (R2 lifecycle
+      // handles eventual cleanup of unconfirmed cleaned renders.)
+      document.getElementById('clean-cleaned').style.display = 'none';
+      document.getElementById('clean-status').textContent = 'Keeping original render.';
     }
   </script>
 

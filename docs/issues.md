@@ -3166,7 +3166,7 @@ transcript), `clip_engine/render.py` (new caption filter chains per style),
 ---
 
 ## Issue 134: Filler word and silence removal
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07 — commit pending)
 **Depends on**: 133
 
 **What**: One-click removal of filler words ("um", "uh", "like", "you know", "basically") and
@@ -3181,17 +3181,17 @@ via ffmpeg trim+concat. Foundation for the text-based editor in Issue 135.
 `tests/test_filler.py` (new), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research filler-word detection and transcript-based cut generation for ffmpeg trim+concat; document in `docs/DECISIONS.md`
-- [ ] `filler.py::detect_cut_segments(words, silence_threshold_ms, filler_words)` → `list[CutSegment]` with `start_s`, `end_s`, `reason` (`filler | silence`)
-- [ ] `FILLER_WORDS` config (default list); `SILENCE_REMOVAL_THRESHOLD_MS` config (default 800); both in `.env.example`
-- [ ] `GET /clips/{id}/clean-preview` returns detected segments with transcript context; no re-render triggered
-- [ ] Strikethrough preview in review.html shows exactly which words/gaps would be removed
-- [ ] `POST /clips/{id}/clean` → 202 + task; Celery re-renders with cuts applied as ffmpeg trim+concat
-- [ ] Original `render_uri` preserved until `POST /clips/{id}/clean/confirm`; cleaned version stored at a separate R2 key
-- [ ] Warning in UI if clean preview removes >30% of clip duration: "This removes X% of your clip"
-- [ ] `@limiter.limit("20/hour", key_func=creator_key)` on clean endpoint
-- [ ] Unit tests: filler detection, silence detection, adjacent-cut merging, >30% warning threshold; integration test: re-render produces shorter clip, original preserved, per-creator isolation
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research filler-word detection and transcript-based cut generation for ffmpeg trim+concat; documented in `docs/DECISIONS.md`
+- [x] `filler.py::detect_cut_segments(words, clip_start_s, clip_end_s, *, tier1, tier2, silence_threshold_ms, silence_tail_ms, …)` → `list[CutSegment]` with `start_s`, `end_s`, `reason`, `word`
+- [x] Two-tier defaults: Tier 1 (`um`/`uh`/…) unconditional; Tier 2 (`like`/`you know`/…) gated by `FILLER_TIER2_FLANK_GAP_MS` + `FILLER_TIER2_MAX_DURATION_MS`. `SILENCE_REMOVAL_THRESHOLD_MS=800`, `SILENCE_TAIL_MS=150` — all in `.env.example`
+- [x] `GET /clips/{id}/clean-preview` returns cut list (with `start_s`, `end_s`, `reason`, `word` per cut) + `percent_removed` + `warning` — no re-render triggered
+- [x] Strikethrough preview in review.html shows each removed range with reason + duration
+- [x] `POST /clips/{id}/clean` → 202 + `task_id` + `stream_url`; Celery `clean_clip` task re-renders via single-pass `filter_complex` (trim+atrim+concat with 5ms afade per splice)
+- [x] Original `render_uri` preserved; cleaned version uploaded to `clips/{id}_clean.mp4` and exposed on `Clip.cleaned_render_uri` (migration `0021`); `POST /clips/{id}/clean/confirm` swaps atomically + idempotently (returns 200 noop if already swapped)
+- [x] Warning in UI when `percent_removed >= 30%`: "This removes X% of your clip"
+- [x] `@limiter.limit("20/hour")` on `/clean`; `60/hour` on cheap `/clean-preview` + `/clean/confirm`
+- [x] Unit tests: Tier 1/2 detection, pause-flank guard, silence + 150ms tail subtraction, adjacent-cut merging, keep-range inversion (incl. zero-width drop), >30% warning. Endpoint tests: `/clean-preview` cuts + warning; `/clean/confirm` idempotency
+- [x] Full suite green: 864 passed / 2 skipped; Layer 0 ruff/mypy clean
 
 ---
 

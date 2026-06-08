@@ -39,6 +39,8 @@ class ClipOut(BaseModel):
     reasoning: str
     render_status: str
     render_uri: str | None
+    # Issue 134 — populated after POST /clean lands; cleared on confirm.
+    cleaned_render_uri: str | None = None
 
 
 class ClipListOut(BaseModel):
@@ -79,6 +81,7 @@ def _clip_response(clip: Clip) -> dict:
         "reasoning": sj.get("reasoning", ""),
         "render_status": clip.render_status.value,
         "render_uri": clip.render_uri,
+        "cleaned_render_uri": clip.cleaned_render_uri,
     }
 
 
@@ -212,6 +215,202 @@ async def render_clip(
         "task_id": task.id,
         "status": "queued",
         "stream_url": stream_url,
+    }
+
+
+# ── Issue 134: filler-word + silence removal (clean pass) ─────────────────
+
+
+class CleanPreviewCut(BaseModel):
+    """One cut range in the preview response. UI renders the corresponding
+    transcript words as strikethrough."""
+
+    start_s: float
+    end_s: float
+    reason: str  # "filler" | "silence"
+    word: str | None = None
+
+
+class CleanPreviewOut(BaseModel):
+    """Response shape for GET /clips/{id}/clean-preview (Issue 134)."""
+
+    clip_id: str
+    clip_duration_s: float
+    cuts: list[CleanPreviewCut]
+    percent_removed: float
+    warning: str | None = None
+
+
+class CleanQueuedOut(TaskQueuedOut):
+    """202 Accepted response for POST /clips/{id}/clean (Issue 134)."""
+
+
+class CleanConfirmOut(BaseModel):
+    """200 OK response for POST /clips/{id}/clean/confirm (Issue 134)."""
+
+    clip_id: str
+    render_uri: str | None
+    cleaned_render_uri: str | None  # always None after a successful swap
+    status: str  # "swapped" | "noop"
+
+
+def _clip_clean_cuts(
+    clip: Clip, transcript: Transcript | None
+) -> tuple[list[CleanPreviewCut], float, float]:
+    """Compute the cleaning cut list for ``clip`` from ``transcript``. Returns
+    ``(cuts, percent_removed, clip_duration_s)``. Pure function so the preview
+    endpoint and the test surface share one code path."""
+    from clip_engine.filler import (
+        detect_cut_segments,
+        merge_adjacent_cuts,
+        percent_removed,
+    )
+
+    clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_duration_s = clip.end_s - clip_origin_s
+    if not transcript or not isinstance(transcript.segments_jsonb, dict):
+        return [], 0.0, clip_duration_s
+    segments = transcript.segments_jsonb.get("segments") or []
+    words_clip_relative: list[dict] = []
+    for seg in segments:
+        for w in seg.get("words") or []:
+            w_start = float(w.get("start", 0.0))
+            w_end = float(w.get("end", 0.0))
+            if w_end <= clip_origin_s or w_start >= clip.end_s:
+                continue
+            words_clip_relative.append(
+                {
+                    "word": w.get("word", ""),
+                    "start": w_start - clip_origin_s,
+                    "end": w_end - clip_origin_s,
+                }
+            )
+    cuts = detect_cut_segments(
+        words_clip_relative,
+        clip_start_s=0.0,
+        clip_end_s=clip_duration_s,
+        silence_threshold_ms=settings.SILENCE_REMOVAL_THRESHOLD_MS,
+        silence_tail_ms=settings.SILENCE_TAIL_MS,
+        flank_gap_ms=settings.FILLER_TIER2_FLANK_GAP_MS,
+        tier2_max_duration_ms=settings.FILLER_TIER2_MAX_DURATION_MS,
+    )
+    pct = percent_removed(merge_adjacent_cuts(cuts), clip_duration_s)
+    preview = [
+        CleanPreviewCut(start_s=c.start_s, end_s=c.end_s, reason=c.reason, word=c.word)
+        for c in cuts
+    ]
+    return preview, pct, clip_duration_s
+
+
+@clips_router.get("/{clip_id}/clean-preview", response_model=CleanPreviewOut)
+@limiter.limit("60/hour", key_func=creator_key)
+async def clean_preview(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return the cut list that ``POST /clips/{id}/clean`` would produce.
+    No render is triggered — this is the cheap preview endpoint that drives
+    the transcript-strikethrough UI (Issue 134).
+    """
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    transcript = await session.get(Transcript, clip.video_id)
+    preview, pct, dur = _clip_clean_cuts(clip, transcript)
+    warning: str | None = None
+    if pct >= 30.0:
+        warning = f"This removes {pct:.0f}% of your clip."
+    return {
+        "clip_id": str(clip_id),
+        "clip_duration_s": dur,
+        "cuts": [c.model_dump() for c in preview],
+        "percent_removed": pct,
+        "warning": warning,
+    }
+
+
+@clips_router.post("/{clip_id}/clean", status_code=202, response_model=CleanQueuedOut)
+@limiter.limit("20/hour", key_func=creator_key)
+async def clean_clip(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Queue a clean pass — re-render the existing clip with filler words and
+    long silences removed. Returns 202 + ``task_id`` + ``stream_url``. The
+    original ``render_uri`` is preserved; the result lands in
+    ``cleaned_render_uri`` so the UI can offer both side-by-side until
+    ``POST /clean/confirm`` swaps them (Issue 134)."""
+    await check_positive_balance(creator.id, session)
+
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if not clip.render_uri:
+        raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
+
+    import redis as _redis_pkg
+
+    from worker import progress
+    from worker.tasks import clean_clip as clean_task
+
+    task = clean_task.delay(str(clip_id))
+    stream_url: str | None = f"/tasks/{clip_id}/events"
+    try:
+        await progress.aset_owner(str(clip_id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning(
+            "clean aset_owner failed (Redis down?) clip_id=%s err=%s",
+            clip_id,
+            exc,
+        )
+        stream_url = None
+
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "stream_url": stream_url,
+    }
+
+
+@clips_router.post(
+    "/{clip_id}/clean/confirm",
+    status_code=200,
+    response_model=CleanConfirmOut,
+)
+@limiter.limit("60/hour", key_func=creator_key)
+async def clean_confirm(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Atomically swap the cleaned render into ``render_uri`` and clear
+    ``cleaned_render_uri``. The original mp4 falls under the existing R2
+    lifecycle prefix (no new cleanup code needed). Idempotent: if the swap
+    has already happened (``cleaned_render_uri`` is null) the endpoint
+    returns 200 with ``status="noop"`` so router-retry is safe (Issue 134)."""
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if not clip.cleaned_render_uri:
+        return {
+            "clip_id": str(clip_id),
+            "render_uri": clip.render_uri,
+            "cleaned_render_uri": None,
+            "status": "noop",
+        }
+    clip.render_uri = clip.cleaned_render_uri
+    clip.cleaned_render_uri = None
+    await session.commit()
+    return {
+        "clip_id": str(clip_id),
+        "render_uri": clip.render_uri,
+        "cleaned_render_uri": None,
+        "status": "swapped",
     }
 
 

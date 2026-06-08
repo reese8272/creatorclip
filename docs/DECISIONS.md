@@ -5,6 +5,126 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issue 134: Filler-word + silence removal
+
+### Two-tier filler lexicon with pause-flank guard (no POS tagging, no ML)
+
+**Decision:** `clip_engine/filler.py` ships a hand-curated lexicon split into
+two tiers. **Tier 1** (`um`, `umm`, `uh`, `uhh`, `uhhh`, `er`, `ah`, `mhm`,
+`hmm`, `uhm`) is excised unconditionally — no legitimate non-filler usage in
+English creator content. **Tier 2** (`like`, `you know`, `basically`, `so`,
+`right`, `okay`, `you know what i mean`) is excised only when the matched
+phrase is (a) ≤600 ms in total duration AND (b) flanked by an inter-word gap
+≥150 ms on at least one side. No POS tagging, no ML disfluency classifier.
+
+**Why:**
+- Riverside ("focuses primarily on ums and uhs"), Submagic, OpusClip all
+  ship conservative Tier-1-style defaults with a configurable extras tier.
+  That's the short-form-tool consensus.
+- Descript and Adobe Podcast use full ML disfluency classifiers (trained on
+  Switchboard/Fisher) — but Adobe over-removes ~22% of intentional pauses
+  per published tests, and we lack a labelled corpus to train our own.
+- POS tagging via spaCy would add a 50 MB model dependency to disambiguate
+  "I like this" (verb) from "and, like, impossible" (filler). The
+  pause-flank guard (≥150 ms gap, ≤600 ms phrase) gives the same
+  disambiguation in the cases the Tier-2 lexicon ever matches — verified
+  by the test suite's `test_tier2_filler_kept_when_no_flanking_pause`.
+
+**Source/evidence:**
+- Riverside docs on filler removal scope (cotovan.com Riverside guide, 2025)
+- Descript changelog: filler removal token-matches against the Whisper
+  transcript, not a separate acoustic classifier
+- Adobe Podcast Enhance independent precision tests (2024)
+- Phase-1 research brief, 2026-06-07
+
+### Silence threshold 800 ms with 150 ms tail (Issue-spec default kept)
+
+**Decision:** Inter-word gaps > 800 ms are excised, with 150 ms of "breath"
+left on each side of the cut. The cut starts 150 ms into the silence and ends
+150 ms before the next word; if the silence is shorter than 300 ms after the
+tails, no cut is emitted.
+
+**Why:**
+- Short-form-tool consensus clusters at 500 ms; Issue spec specifies 800 ms.
+  We honour the spec (conservative-safe; lower false positive risk on
+  thoughtful creators who pause for emphasis). The threshold is in
+  `config.py` so creators can opt into shorter cuts later.
+- The 150 ms tail accomplishes two things at once: (1) the splice sounds
+  natural because the following consonant has a soft onset, and (2) the
+  waveform tapers toward zero at both cut edges — the foundation of the
+  audio-click fix below.
+
+**Source/evidence:** Recut, SilentCut Studio (silentcut.studio) published
+documentation; Phase-1 research brief.
+
+### ffmpeg single-pass `filter_complex` with `trim`+`atrim`+`concat`
+
+**Decision:** `clip_engine/render.py::render_cleaned_clip_file` builds one
+`-filter_complex_script` per render: each kept segment gets `trim` (video) +
+`atrim` (audio) + `setpts=PTS-STARTPTS` + `asetpts=PTS-STARTPTS`, terminated
+by a `concat=n=N:v=1:a=1` join. The script is written to a sibling `.filter`
+file, passed via `-filter_complex_script` (NOT inline `-filter_complex`), and
+cleaned in a `finally` block.
+
+**Why ruled out:**
+- **Demux-concat with `-c copy`** only produces clean cuts at keyframe
+  boundaries (~2 s in our H.264). A word at t=1.8 s is mid-GOP — produces
+  green-block artifacts and progressive audio desync.
+- **`select=between(t,…)` + `aselect`** decodes every frame even in cut
+  ranges (wasted work) and accumulates floating-point drift across many
+  small splices. Auto-editor abandoned this approach.
+- **Inline `-filter_complex`** instead of `-filter_complex_script`: filter
+  string scales linearly with cut count and risks the cmd.exe 32 KB limit
+  on Windows. Even on Linux/macOS where 2 MB is the arg ceiling, writing
+  to a file is the safer pattern recommended by ffmpeg-python issue #161.
+
+**Source/evidence:** sriramcu/ffmpeg_video_editing reference pattern;
+auto-editor render history; Phase-1 research brief.
+
+### 5 ms per-segment `afade` over `acrossfade` for click prevention
+
+**Decision:** Each kept segment carries `afade=t=in:st=0:d=0.005` +
+`afade=t=out:st=<seg_end-0.005>:d=0.005`. NOT `acrossfade` between segments.
+
+**Why:**
+- `acrossfade` requires two streams with overlap and is topologically
+  incompatible with a multi-segment `concat` graph — would force a chained
+  N-1 fan-in restructure for no audible benefit.
+- 5 ms is well below the ~20 ms human fade-perception threshold
+  (~220 samples at 44.1 kHz) yet large enough to bring the waveform to
+  zero on both sides of every splice. Inaudible AND click-free.
+- For silence cuts the 150 ms tail already places the cut in near-zero
+  waveform region, so the `afade` is belt-and-suspenders. For filler cuts
+  the fade is genuinely load-bearing — a mid-sentence "uh" excision lands
+  in active speech.
+
+### Side-by-side `cleaned_render_uri` with atomic confirm-swap
+
+**Decision:** Add `Clip.cleaned_render_uri` as a sibling nullable column
+(migration `0021`), NOT as a JSONB sub-key under `style_preset`. `POST /clean`
+populates it; `render_uri` is untouched. `POST /clean/confirm` swaps:
+`render_uri ← cleaned_render_uri`, then clears `cleaned_render_uri`. The
+orphaned original mp4 falls under the existing R2 lifecycle prefix.
+
+**Why:**
+- `render_uri` is read in 9 places across the codebase; mirroring the same
+  read shape for `cleaned_render_uri` keeps the read path uniform and
+  avoids two-level JSON juggling at template render time.
+- The confirm-swap pattern is idempotent (re-running when
+  `cleaned_render_uri` is null returns 200 + `status="noop"`) so router
+  retries are safe — no 400/409 paths needed.
+- `auto-editor` and Recut both pre-render the cleaned version side-by-side
+  rather than dry-running a preview mp4; strikethrough in the transcript
+  IS the preview before the creator commits to the re-render call.
+
+### Three-endpoint flow + 60/hour preview cap
+
+**Decision:** `GET /clean-preview` (60/hour) + `POST /clean` (20/hour) +
+`POST /clean/confirm` (60/hour). Preview is cheap (DB read + pure-Python
+detection) so the limit is the UI-thrash guard, not a render-cost guard.
+
+---
+
 ## 2026-06-07 — Issue 133: Animated caption styles
 
 ### Library + filter choice — pysubs2 + libass via ffmpeg `subtitles=` filter

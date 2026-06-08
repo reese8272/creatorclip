@@ -204,6 +204,16 @@ def render_clip(self, clip_id: str) -> str:
     return clip_id
 
 
+@celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.clean_clip")
+def clean_clip(self, clip_id: str) -> str:
+    """Re-render a clip with filler words + long silences removed (Issue 134)."""
+    try:
+        run_async(_clean_clip_async(clip_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return clip_id
+
+
 @celery.task(name="worker.tasks.purge_stale_source_media")
 def purge_stale_source_media() -> None:
     """
@@ -809,6 +819,147 @@ async def _render_clip_async(clip_id: str) -> None:
             "error",
             stage="render",
             message="Render failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
+        raise
+
+
+async def _clean_clip_async(clip_id: str) -> None:
+    """Re-render a clip with filler words + long silences excised (Issue 134).
+
+    Source is the existing ``render_uri`` (the burned-in, captioned clip), not
+    the original video — keeps animated captions intact and reuses the
+    already-paid encode of the speaker reframe. Output goes to a sibling R2
+    key (``clips/{id}_clean.mp4``); ``Clip.cleaned_render_uri`` is set so the
+    UI can offer the cleaned version side-by-side with the original until the
+    creator hits ``POST /clean/confirm``.
+
+    Idempotent under at-least-once delivery: a redelivery whose
+    ``cleaned_render_uri`` is already populated short-circuits without
+    re-encoding.
+    """
+    from clip_engine.filler import (
+        detect_cut_segments,
+        invert_to_keep_ranges,
+        merge_adjacent_cuts,
+    )
+    from clip_engine.render import render_cleaned_clip_file
+    from worker.progress import aemit
+    from worker.storage import alocal_path, aupload_file
+
+    try:
+        await aemit(clip_id, "step", label="clean_start", stage="clean")
+
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            if not clip:
+                raise ValueError(f"Clip {clip_id} not found")
+            if clip.cleaned_render_uri:
+                logger.info("Clip %s already cleaned — skipping", clip_id)
+                await aemit(clip_id, "done", stage="clean", message="Already cleaned.")
+                return
+            if not clip.render_uri:
+                raise ValueError(f"Clip {clip_id} has no render_uri — render before cleaning")
+            source_uri = clip.render_uri
+            video_id = clip.video_id
+            setup_start_s = clip.setup_start_s
+            start_s = clip.start_s
+            end_s = clip.end_s
+            clip_origin_s = setup_start_s if setup_start_s is not None else start_s
+            clip_duration_s = end_s - clip_origin_s
+
+        async with db.AdminSessionLocal() as session:
+            transcript = await session.get(Transcript, video_id)
+            if not transcript or not isinstance(transcript.segments_jsonb, dict):
+                raise ValueError(f"Clip {clip_id}: transcript missing")
+            segments = transcript.segments_jsonb.get("segments") or []
+
+        # Flatten segment-level words and shift to clip-relative timebase. The
+        # rendered clip starts at t=0 — but our transcript stores video-absolute
+        # word times, so we subtract clip_origin_s.
+        words_clip_relative: list[dict] = []
+        for seg in segments:
+            for w in seg.get("words") or []:
+                w_start = float(w.get("start", 0.0))
+                w_end = float(w.get("end", 0.0))
+                if w_end <= clip_origin_s or w_start >= end_s:
+                    continue
+                words_clip_relative.append(
+                    {
+                        "word": w.get("word", ""),
+                        "start": w_start - clip_origin_s,
+                        "end": w_end - clip_origin_s,
+                    }
+                )
+
+        from config import settings as _s
+
+        cuts = detect_cut_segments(
+            words_clip_relative,
+            clip_start_s=0.0,
+            clip_end_s=clip_duration_s,
+            silence_threshold_ms=_s.SILENCE_REMOVAL_THRESHOLD_MS,
+            silence_tail_ms=_s.SILENCE_TAIL_MS,
+            flank_gap_ms=_s.FILLER_TIER2_FLANK_GAP_MS,
+            tier2_max_duration_ms=_s.FILLER_TIER2_MAX_DURATION_MS,
+        )
+        merged = merge_adjacent_cuts(cuts)
+        keep_ranges = invert_to_keep_ranges(merged, 0.0, clip_duration_s)
+        if not keep_ranges or (len(keep_ranges) == 1 and keep_ranges[0] == (0.0, clip_duration_s)):
+            # Nothing to cut — surface as a no-op done event rather than failing.
+            logger.info("Clip %s: no cuts detected — skipping clean render", clip_id)
+            await aemit(
+                clip_id,
+                "done",
+                stage="clean",
+                message="No filler words or long silences detected.",
+            )
+            return
+
+        await aemit(
+            clip_id,
+            "step",
+            label="download_source",
+            stage="clean",
+        )
+        async with alocal_path(source_uri) as src:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                out_path = Path(tmp.name)
+            try:
+                await aemit(
+                    clip_id,
+                    "step",
+                    label="ffmpeg_clean",
+                    stage="clean",
+                    segments=len(keep_ranges),
+                )
+                await asyncio.to_thread(
+                    render_cleaned_clip_file,
+                    source_path=src,
+                    keep_ranges=keep_ranges,
+                    out_path=out_path,
+                )
+                await aemit(clip_id, "step", label="upload_r2", stage="clean")
+                cleaned_uri = await aupload_file(out_path, f"clips/{clip_id}_clean.mp4")
+            finally:
+                out_path.unlink(missing_ok=True)
+
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            if clip:
+                clip.cleaned_render_uri = cleaned_uri
+                await session.commit()
+
+        logger.info("Clip %s cleaned → %s", clip_id, cleaned_uri)
+        await aemit(clip_id, "done", stage="clean", message="Clean ready.")
+    except Exception as exc:
+        await aemit(
+            clip_id,
+            "error",
+            stage="clean",
+            message="Clean failed.",
             exc_type=type(exc).__name__,
         )
         raise

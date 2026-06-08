@@ -461,6 +461,11 @@ class Clip(Base):
         default=ClipFormat.short,
     )
     render_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Cleaned (filler+silence removed) render variant (Issue 134). When set,
+    # the UI offers a "use cleaned version" affordance; POST /clean/confirm
+    # swaps this into render_uri and clears the field. Independent of
+    # render_status, which still tracks the original render's progress.
+    cleaned_render_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     render_status: Mapped[RenderStatus] = mapped_column(
         sa.Enum(RenderStatus, name="render_status_enum"),
         nullable=False,
