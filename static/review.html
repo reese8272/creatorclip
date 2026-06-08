@@ -399,19 +399,24 @@
       <div id="ed-status" style="font-size:var(--text-xs);color:var(--color-text-subtle);margin-top:var(--space-2)"></div>
     </section>
 
-    <!-- RIGHT: icon strip — single button per tool drawer -->
+    <!-- RIGHT: labeled tool rail — one button per drawer panel. Icon over text label
+         so the tools are discoverable without hover (Issue 136 follow-up). -->
     <nav class="editor-tools" aria-label="Tool panels">
       <button data-tool-trigger="why" aria-pressed="false" aria-label="Why this clip" title="Why this clip">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span class="tool-label">Why this clip</span>
       </button>
       <button data-tool-trigger="style" aria-pressed="false" aria-label="Caption style" title="Caption style">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+        <span class="tool-label">Captions</span>
       </button>
       <button data-tool-trigger="clean" aria-pressed="false" aria-label="Clean filler + silence" title="Clean filler + silence">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+        <span class="tool-label">Clean pass</span>
       </button>
       <button data-tool-trigger="feedback" aria-pressed="false" aria-label="Tag feedback" title="Tag feedback">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        <span class="tool-label">Feedback</span>
       </button>
     </nav>
   </div>

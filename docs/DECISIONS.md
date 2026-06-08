@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-08 — Issue 136 follow-up: labeled tool rail + explicit hero Sign-in CTA
+
+**Decision:** Issue 136 shipped an icon-only vertical strip (Decisions D1 + D2) for
+the editor's tool drawers — Why / Captions / Clean / Feedback. User feedback on the
+live deploy was that the icons were not discoverable: tools "look gone" because
+they require hover or label-reading to identify. This entry widens the rail and
+adds always-visible text labels under each icon, and adds a prominent "Sign in"
+CTA in the hero nav so visitors who don't have a YouTube URL on hand still have
+an obvious path into the product.
+
+**Changes:**
+- `_design-tokens.css`: `--editor-strip-width 3.75rem → 8.5rem` to accommodate
+  icon + label.
+- `editor-layout.css`: `.editor-tools button` becomes a vertical stack
+  (icon over label) with `--text-xs` 500-weight type; accent glow on the
+  active button is preserved. Mobile (`≤900px`) breakpoint inverts the stack
+  to icon-beside-label and gives the bottom rail a horizontal scroll.
+- `review.html`: each tool button gains a `<span class="tool-label">…</span>`
+  child. The `closest('[data-tool-trigger]')` click handler still finds the
+  parent button when the label is clicked, so wiring is preserved.
+- `index.html` + `hero.css`: new `.nav-signin` pill button (accent fill,
+  `--glow-accent-soft`) visible only when `body.is-hero-mode`. Authenticated
+  users continue to see `#nav-user` + `.logout-link` instead.
+
+**Why the deviation:**
+The Issue-136 D1/D2 rationale (always-visible transcript + icon-strip drawer)
+was about reclaiming horizontal space for the player + transcript. That goal is
+preserved — the rail is still narrow (8.5rem) and the transcript pane width
+(35rem) and player flex (1fr) are untouched. We are only making the icons
+self-labeling, which solves the "tools look gone" reaction without losing the
+3-pane shell.
+
+**Evidence:**
+- Direct user report 2026-06-08: "I can't see it, it doesn't look easily
+  findable… tabs need to be clearly visible with a clear login screen."
+- Discoverability heuristic — Nielsen's "recognition rather than recall":
+  icon-only navigation requires recall of icon-to-action mappings; labels move
+  users into recognition mode. The W3C ARIA Authoring Practices Guide
+  recommends visible labels for tab-style navigation in all non-toolbar
+  contexts.
+- Tests (`tests/test_static.py::test_issue_136_*`) all green with the wider
+  strip — no test pinned the previous 3.75rem value.
+
+---
+
 ## 2026-06-07 — Issue 136 redirect: softer "futuristic" aesthetic on marketing + editor surfaces
 
 **Decision:** First Issue-136 ship followed the Linear-locked sharp 4px-radius

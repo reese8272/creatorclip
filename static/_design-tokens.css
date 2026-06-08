@@ -120,7 +120,7 @@
   --editor-border-strong:#2e3247;   /* tool-strip separators */
   --editor-icon-strip:   #0d0e16;   /* right-rail strip — slightly inset */
   --editor-drawer-width: 26rem;     /* slide-out tool drawer width */
-  --editor-strip-width:  3.75rem;   /* icon-strip column width */
+  --editor-strip-width:  8.5rem;    /* tool-rail column width — wide enough for icon + label */
   /* Editor panel radius — softer than the dashboard's 4px lock. */
   --editor-radius:       var(--radius-lg);
 }

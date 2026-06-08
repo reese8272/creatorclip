@@ -36,6 +36,30 @@ body.is-hero-mode .nav .logout-link { display: none; }
    so the hero owns the narrative. */
 body.is-hero-mode > .disclaimer { display: none; }
 
+/* Sign-in CTA — visible ONLY in hero mode (authenticated users see their
+   nav-user + logout instead). Keeps a clear path to login without forcing
+   the visitor through the YouTube-URL form first. */
+.nav-signin { display: none; }
+body.is-hero-mode .nav-signin {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 1.1rem;
+  margin-left: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: #0b0c12;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  text-decoration: none;
+  box-shadow: var(--glow-accent-soft);
+  transition: transform var(--duration) var(--ease),
+              box-shadow var(--duration) var(--ease);
+}
+body.is-hero-mode .nav-signin:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--glow-accent);
+}
+
 /* ── Hero shell with aurora backdrop ────────────────────────────────── */
 .hero {
   position: relative;
