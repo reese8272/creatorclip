@@ -5,6 +5,97 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issue 135: Text-based transcript editor
+
+### D1 — Reject the spec's 24h-then-overwrite original-preserve; reuse Issue 134's side-by-side `cleaned_render_uri` instead
+
+**Decision:** Drop the `EDITOR_ORIGINAL_RETENTION_HOURS` config knob and the
+Celery Beat purge task implied by the Issue spec. The text-based editor's
+result lands in the existing `Clip.cleaned_render_uri` column (shipped in
+Issue 134) and is swapped into `render_uri` by the existing
+`POST /clips/{id}/clean/confirm` endpoint. Original `render_uri` is never
+modified or scheduled for deletion.
+
+**Why:**
+- The production tools (Descript, Type.studio, Riverside Magic Editor) all
+  preserve the original forever — Descript stores the edit as an edit-list
+  and re-renders on demand; Riverside keeps both versions for the session.
+  The 24h-then-overwrite pattern in the spec is the worst of both worlds:
+  it loses the safety of permanent-preserve without delivering the
+  storage savings of edit-list-as-source-of-truth.
+- Reusing `cleaned_render_uri` collapses two features (filler removal +
+  text-based editor) into one mental model with one confirm endpoint —
+  a clip can only be in one "pending edit" state at a time, which is
+  fine for v1 and avoids schema sprawl.
+- Storage cost: a 90-second 1080×1920 H.264 mp4 ≈ 25–40 MB. R2 storage
+  ≈ $0.015/GB/month. At 1000 clips/creator/month and 10 % edit rate,
+  keeping both versions costs ≈ $0.04/creator/month — economically
+  irrelevant. The 24h time-bomb would silently break re-edits past the
+  window for no upside.
+
+**Source/evidence:** Phase-1 research brief, 2026-06-07; Type.studio
+open-source transcript editor (GitHub `type-studio/type`); Reduct.video
+engineering blog 2022 "Building a text-based video editor"; Descript
+2023 Scale-AI talk "Non-Destructive Video Editing at Scale."
+
+### D2 — Hard caps the spec doesn't mention: 5 s minimum kept, 85 % maximum removed
+
+**Decision:** `clip_engine/edits.py::validate_user_cuts` rejects any cut
+list that would (a) leave less than `MIN_KEPT_DURATION_S=5.0` of clip, or
+(b) remove more than `MAX_REMOVED_PCT=85.0` of clip duration. Both
+violations return HTTP 422 with a structured `{code, message}` body.
+
+**Why:**
+- Sub-5 s clips have no value (most short-form upload validators reject
+  them) and will trip the next workflow stage anyway.
+- A clip cut by >85 % is almost certainly user error — accidentally
+  drag-selected the whole transcript, etc. Hard-rejecting at the boundary
+  protects against wasting a Celery render slot and surfaces a clear
+  error in the UI rather than an unusable 3-second mp4.
+- The 40 % warning band from the Issue spec stays as a SOFT warning
+  (UI-only, not a reject), driving the orange band in the editor panel.
+
+### D3 — `MIN_KEEP_SEGMENT_S = 0.04 s` sub-frame floor (one frame at 25 fps)
+
+**Decision:** The validator drops any keep range shorter than 0.04 s
+during inversion. WhisperX sometimes produces words with sub-frame gaps
+between them; without this floor, a cut landing exactly on such a gap
+would emit a `trim=start=X:end=Y` where `Y - X < 0.001`, which crashes
+the ffmpeg filter graph at parse time.
+
+### D4 — `afade` guard for short kept segments (fixes Issue 134 latent bug)
+
+**Decision:** `clip_engine.render.render_cleaned_clip_file` now caps the
+per-splice `afade` duration at half the segment's duration:
+`afade_s = min(0.005, seg_dur / 2.0)`. Previously the 5 ms `afade` was
+constant; a kept segment shorter than 10 ms would request a fade longer
+than half the segment and ffmpeg errored. Triggered today only with the
+Issue 135 sub-frame floor working as intended (40 ms keep segment → 5 ms
+afade is fine), but the guard is the principled fix and unblocks any
+future tightening of `MIN_KEEP_SEGMENT_S`.
+
+### D5 — `getSelection()` + word-span DOM (no `<button>`, no `contenteditable`)
+
+**Decision:** Each word renders as `<span class="ed-word" data-start
+data-end data-index>` with a literal space text-node between spans.
+Selection uses native `window.getSelection()` snapped to the enclosing
+word on `mouseup`. Keyboard `Shift+Arrow` works for free; `<button>`-per-
+word breaks native text selection; `contenteditable` mutation events are
+unreliable for timestamp sync (industry tools moved off this in 2020).
+Container has `role="textbox" aria-multiline="true" aria-readonly="true"`
+per the WAI-ARIA "viewer with toolbar action" pattern.
+
+### D6 — Batch-on-confirm render (not live re-render)
+
+**Decision:** Confirm fires a single Celery render job; the UI polls for
+`cleaned_render_uri` to appear. Live re-render on every word deletion
+(Descript's pattern via cached-chunk splicing) would require ~20 s of
+ffmpeg per cut at our encode speed — unaffordable. The strikethrough
+preview IS the live preview; the rendered preview only appears after
+confirm.
+
+---
+
 ## 2026-06-07 — Issue 134: Filler-word + silence removal
 
 ### Two-tier filler lexicon with pause-flank guard (no POS tagging, no ML)

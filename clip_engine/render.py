@@ -301,14 +301,20 @@ def render_cleaned_clip_file(
         seg_dur = end - start
         # afade=out start time is segment-relative because setpts/asetpts reset
         # PTS to 0 at the start of each trimmed segment.
-        fade_out_st = max(0.0, seg_dur - _CLEAN_AFADE_S)
+        # Guard: a kept segment shorter than 2 × _CLEAN_AFADE_S would request
+        # a fade that exceeds half the segment's duration — ffmpeg errors.
+        # Halving the fade keeps the click-prevention character intact for
+        # any segment ≥ 0.04 s (one frame at 25 fps); ``edits.MIN_KEEP_SEGMENT_S``
+        # is the upstream floor. Found while building Issue 135.
+        afade_s = min(_CLEAN_AFADE_S, seg_dur / 2.0)
+        fade_out_st = max(0.0, seg_dur - afade_s)
         script_lines.append(
             f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{idx}];"
         )
         script_lines.append(
             f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,"
-            f"afade=t=in:st=0:d={_CLEAN_AFADE_S},"
-            f"afade=t=out:st={fade_out_st:.3f}:d={_CLEAN_AFADE_S}[a{idx}];"
+            f"afade=t=in:st=0:d={afade_s},"
+            f"afade=t=out:st={fade_out_st:.3f}:d={afade_s}[a{idx}];"
         )
         concat_inputs.append(f"[v{idx}][a{idx}]")
     script_lines.append(f"{''.join(concat_inputs)}concat=n={len(keep_ranges)}:v=1:a=1[outv][outa]")

@@ -414,6 +414,158 @@ async def clean_confirm(
     }
 
 
+# ── Issue 135: text-based transcript editor ─────────────────────────────
+
+
+class TranscriptWord(BaseModel):
+    """One word in the clip-windowed transcript pane."""
+
+    word: str
+    start_s: float
+    end_s: float
+    index: int
+
+
+class ClipTranscriptOut(BaseModel):
+    """Response for GET /clips/{id}/transcript (Issue 135)."""
+
+    clip_id: str
+    clip_duration_s: float
+    words: list[TranscriptWord]
+
+
+class CutSegmentIn(BaseModel):
+    """One user-selected cut range, clip-relative seconds."""
+
+    start_s: float
+    end_s: float
+
+
+class CutsIn(BaseModel):
+    """Request body for POST /clips/{id}/cuts."""
+
+    segments: list[CutSegmentIn]
+
+
+class CutsQueuedOut(TaskQueuedOut):
+    """202 Accepted response for POST /clips/{id}/cuts."""
+
+
+@clips_router.get(
+    "/{clip_id}/transcript",
+    response_model=ClipTranscriptOut,
+)
+@limiter.limit("60/hour", key_func=creator_key)
+async def clip_transcript(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return the clip-windowed transcript word array for the editor pane
+    (Issue 135). Word timestamps are normalised to clip-relative seconds so
+    the frontend doesn't need to know about the source-video timebase."""
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    transcript = await session.get(Transcript, clip.video_id)
+    clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_duration_s = clip.end_s - clip_origin_s
+    words: list[TranscriptWord] = []
+    if transcript and isinstance(transcript.segments_jsonb, dict):
+        idx = 0
+        for seg in transcript.segments_jsonb.get("segments") or []:
+            for w in seg.get("words") or []:
+                w_start = float(w.get("start", 0.0))
+                w_end = float(w.get("end", 0.0))
+                if w_end <= clip_origin_s or w_start >= clip.end_s:
+                    continue
+                words.append(
+                    TranscriptWord(
+                        word=str(w.get("word", "")),
+                        start_s=max(0.0, w_start - clip_origin_s),
+                        end_s=min(clip_duration_s, w_end - clip_origin_s),
+                        index=idx,
+                    )
+                )
+                idx += 1
+    return {
+        "clip_id": str(clip_id),
+        "clip_duration_s": clip_duration_s,
+        "words": [w.model_dump() for w in words],
+    }
+
+
+@clips_router.post(
+    "/{clip_id}/cuts",
+    status_code=202,
+    response_model=CutsQueuedOut,
+)
+@limiter.limit("20/hour", key_func=creator_key)
+async def submit_cuts(
+    request: Request,
+    clip_id: uuid.UUID,
+    body: CutsIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Accept a user-supplied list of cut segments from the text-based editor
+    and queue a re-render (Issue 135). The result lands in
+    ``Clip.cleaned_render_uri`` so the existing
+    ``POST /clips/{id}/clean/confirm`` swap path applies — same UX flow as
+    Issue 134's filler-removal pass.
+
+    Validation (HTTP 422 on any violation): bounds, no overlap, no NaN,
+    ≥5 s kept, ≤85 % removed. Sub-frame keep ranges are floored upstream by
+    the validator; the worker re-validates as a defensive belt-and-suspenders.
+    """
+    from clip_engine.edits import CutValidationError, validate_user_cuts
+
+    await check_positive_balance(creator.id, session)
+
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if not clip.render_uri:
+        raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
+    clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_duration_s = clip.end_s - clip_origin_s
+
+    try:
+        validate_user_cuts(
+            [(s.start_s, s.end_s) for s in body.segments],
+            clip_duration_s=clip_duration_s,
+        )
+    except CutValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+
+    import redis as _redis_pkg
+
+    from worker import progress
+    from worker.tasks import edit_clip as edit_task
+
+    payload = [[s.start_s, s.end_s] for s in body.segments]
+    task = edit_task.delay(str(clip_id), payload)
+    stream_url: str | None = f"/tasks/{clip_id}/events"
+    try:
+        await progress.aset_owner(str(clip_id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning(
+            "edit aset_owner failed (Redis down?) clip_id=%s err=%s",
+            clip_id,
+            exc,
+        )
+        stream_url = None
+
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "stream_url": stream_url,
+    }
+
+
 # ── Issue 95: OBS companion app ingest endpoint ───────────────────────────
 
 

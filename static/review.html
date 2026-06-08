@@ -11,6 +11,7 @@
   <script src="/static/activityPanel.js" defer></script>
   <script src="/static/activity.js" defer></script>
   <script src="/static/tooltip.js" defer></script>
+  <script src="/static/editor.js" defer></script>
   <style>
     /* Issue 99 Phase B — review.html retrofit (clip player + trim). */
 
@@ -240,6 +241,49 @@
     }
     .btn-style { font-size: var(--text-xs); margin-top: var(--space-2); }
 
+    /* Issue 135 — transcript editor panel */
+    #ed-words {
+      line-height: 1.9;
+      font-size: var(--text-sm);
+      user-select: text;
+      max-height: 180px;
+      overflow-y: auto;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      padding: var(--space-2) var(--space-3);
+      background: var(--color-surface);
+    }
+    .ed-word {
+      cursor: text;
+      padding: 0 1px;
+      border-radius: 2px;
+    }
+    .ed-word.ed-cut {
+      text-decoration: line-through;
+      opacity: 0.45;
+      background: rgba(194, 65, 12, 0.08);
+    }
+    .ed-cut-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: var(--space-1) 0;
+      border-bottom: 1px solid var(--color-border);
+      font-size: var(--text-xs);
+    }
+    .ed-cut-row:last-child { border-bottom: none; }
+    .ed-remove-btn {
+      background: transparent;
+      border: 1px solid var(--color-border-strong);
+      border-radius: 4px;
+      cursor: pointer;
+      width: 22px; height: 22px;
+      line-height: 1;
+      font-size: 14px;
+      color: var(--color-text-muted);
+    }
+    .ed-remove-btn:hover { color: #c2410c; border-color: #c2410c; }
+
     .next-wrap { text-align: center; padding: var(--space-2) 0; }
     .btn-next {
       background: transparent;
@@ -387,6 +431,35 @@
       </details>
     </div>
 
+    <!-- Issue 135: text-based editor (transcript-driven cuts) -->
+    <div class="style-section">
+      <details onclick="setTimeout(() => window.transcriptEditor && window.transcriptEditor.mount(currentClip), 0)">
+        <summary>Edit transcript — select words to remove</summary>
+        <div class="style-row" style="flex-direction:column;align-items:stretch;gap:var(--space-2)">
+          <div style="font-size:var(--text-xs);color:var(--color-text-subtle)">
+            Click and drag across words to mark them for removal. Pending cuts show with strikethrough. Click <strong>×</strong> on a queued cut to undo it. Click <strong>Apply</strong> to re-render.
+          </div>
+          <div id="ed-words" role="textbox" aria-multiline="true" aria-readonly="true" aria-label="Clip transcript"></div>
+          <div id="ed-summary" style="font-size:var(--text-sm);color:var(--color-text-subtle)"></div>
+          <div id="ed-warning" style="font-size:var(--text-sm);color:#c2410c;font-weight:600;display:none"></div>
+          <div id="ed-queue" style="font-size:var(--text-xs);max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2)"></div>
+          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="window.transcriptEditor.undo()">Undo</button>
+            <button class="btn btn-secondary" onclick="window.transcriptEditor.discardCuts()">Clear all</button>
+            <button class="btn btn-secondary" onclick="window.transcriptEditor.confirm()">Apply — render edited version</button>
+          </div>
+          <div id="ed-preview-container" style="display:none">
+            <video id="ed-preview" controls style="width:100%;border-radius:6px;margin-top:var(--space-2)"></video>
+            <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
+              <button class="btn btn-secondary" onclick="window.transcriptEditor.confirmFinal()">Use edited version</button>
+              <button class="btn btn-secondary" onclick="window.transcriptEditor.discardEdit()">Keep original</button>
+            </div>
+          </div>
+          <div id="ed-status" style="font-size:var(--text-xs);color:var(--color-text-subtle)"></div>
+        </div>
+      </details>
+    </div>
+
     <div class="next-wrap">
       <button class="btn btn-next" onclick="loadNext()">Next clip →</button>
     </div>
@@ -448,6 +521,9 @@
     });
 
     function loadClip(clip) {
+      // Issue 135 — drop the previous clip's transcript-editor state before
+      // loading the next one. The details onclick handler re-mounts on expand.
+      if (window.transcriptEditor) window.transcriptEditor.unmount();
       currentClip = clip;
       if (clip.render_uri) {
         player.src = clip.render_uri;

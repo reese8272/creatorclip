@@ -214,6 +214,23 @@ def clean_clip(self, clip_id: str) -> str:
     return clip_id
 
 
+@celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.edit_clip")
+def edit_clip(self, clip_id: str, cut_segments: list[list[float]]) -> str:
+    """Re-render a clip with user-supplied transcript-editor cuts (Issue 135).
+
+    ``cut_segments`` is a JSON-serialisable list of ``[start_s, end_s]`` pairs
+    in clip-relative seconds. The endpoint pre-validates via
+    ``clip_engine.edits.validate_user_cuts``; the worker re-validates as a
+    defensive belt-and-suspenders pass (a Celery redelivery from a buggy
+    older endpoint version cannot land an invalid graph on ffmpeg).
+    """
+    try:
+        run_async(_edit_clip_async(clip_id, cut_segments))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return clip_id
+
+
 @celery.task(name="worker.tasks.purge_stale_source_media")
 def purge_stale_source_media() -> None:
     """
@@ -960,6 +977,93 @@ async def _clean_clip_async(clip_id: str) -> None:
             "error",
             stage="clean",
             message="Clean failed.",
+            exc_type=type(exc).__name__,
+        )
+        raise
+
+
+async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> None:
+    """Re-render a clip with user-selected transcript cuts (Issue 135).
+
+    Mirrors ``_clean_clip_async`` but takes its cut list from the caller
+    instead of running filler detection. Reuses ``cleaned_render_uri`` so
+    the same ``POST /clips/{id}/clean/confirm`` swap path applies.
+    Idempotent: a redelivered task whose ``cleaned_render_uri`` is already
+    populated short-circuits without re-encoding.
+    """
+    from clip_engine.edits import validate_user_cuts
+    from clip_engine.render import render_cleaned_clip_file
+    from worker.progress import aemit
+    from worker.storage import alocal_path, aupload_file
+
+    try:
+        await aemit(clip_id, "step", label="edit_start", stage="edit")
+
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            if not clip:
+                raise ValueError(f"Clip {clip_id} not found")
+            if clip.cleaned_render_uri:
+                logger.info(
+                    "Clip %s already has a pending cleaned/edited render — skipping", clip_id
+                )
+                await aemit(clip_id, "done", stage="edit", message="Already edited.")
+                return
+            if not clip.render_uri:
+                raise ValueError(f"Clip {clip_id} has no render_uri — render before editing")
+            source_uri = clip.render_uri
+            setup_start_s = clip.setup_start_s
+            start_s = clip.start_s
+            end_s = clip.end_s
+            clip_origin_s = setup_start_s if setup_start_s is not None else start_s
+            clip_duration_s = end_s - clip_origin_s
+
+        # Defensive re-validation. The endpoint already validated; this guards
+        # against a redelivery from a buggy older endpoint version.
+        edit = validate_user_cuts(
+            [(float(s[0]), float(s[1])) for s in cut_segments],
+            clip_duration_s=clip_duration_s,
+        )
+
+        await aemit(clip_id, "step", label="download_source", stage="edit")
+        async with alocal_path(source_uri) as src:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                out_path = Path(tmp.name)
+            try:
+                await aemit(
+                    clip_id,
+                    "step",
+                    label="ffmpeg_edit",
+                    stage="edit",
+                    keep_segments=len(edit.keep_ranges),
+                )
+                await asyncio.to_thread(
+                    render_cleaned_clip_file,
+                    source_path=src,
+                    keep_ranges=edit.keep_ranges,
+                    out_path=out_path,
+                )
+                await aemit(clip_id, "step", label="upload_r2", stage="edit")
+                edited_uri = await aupload_file(out_path, f"clips/{clip_id}_edit.mp4")
+            finally:
+                out_path.unlink(missing_ok=True)
+
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            if clip:
+                clip.cleaned_render_uri = edited_uri
+                await session.commit()
+
+        logger.info("Clip %s edited → %s", clip_id, edited_uri)
+        await aemit(clip_id, "done", stage="edit", message="Edit ready.")
+    except Exception as exc:
+        await aemit(
+            clip_id,
+            "error",
+            stage="edit",
+            message="Edit failed.",
             exc_type=type(exc).__name__,
         )
         raise

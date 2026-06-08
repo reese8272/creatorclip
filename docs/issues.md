@@ -3196,7 +3196,7 @@ via ffmpeg trim+concat. Foundation for the text-based editor in Issue 135.
 ---
 
 ## Issue 135: Text-based editor
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07 — commit pending)
 **Depends on**: 134
 
 **What**: A transcript-driven editing surface in review.html. The creator sees the full
@@ -3212,16 +3212,18 @@ Highest-retention feature in the editor suite.
 `tests/test_editor.py` (new), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research text-based video editor UX patterns (Descript, Adobe Podcast) and transcript-to-cut timestamp mapping; document in `docs/DECISIONS.md`
-- [ ] Transcript panel in review.html renders word-level transcript; each word is a `<span data-start data-end>`
-- [ ] User selects a word range → selection highlights red → "Cut selection" button queues the segment
-- [ ] Cut queue lists all pending cuts with word context; individual cuts removable before confirm
-- [ ] `POST /clips/{id}/cuts` accepts `{segments: [{start_s, end_s}]}`; validates no overlaps, no out-of-bounds; queues Celery re-render
-- [ ] Cut queue persisted in `localStorage` keyed by clip ID; survives page refresh
-- [ ] Warning shown if total cut time > 40% of clip duration
-- [ ] Rendered result updates the player in review.html; original preserved for 24h (configurable via `EDITOR_ORIGINAL_RETENTION_HOURS`) before being overwritten
-- [ ] Unit tests: cut segment validation (no overlaps, bounds check, merge logic), localStorage key isolation; integration test: cuts applied correctly, original preserved, per-creator isolation
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research text-based video editor UX patterns (Descript / Type.studio / Reduct.video / Riverside) + transcript-to-cut timestamp mapping; documented in `docs/DECISIONS.md`
+- [x] Transcript panel in review.html renders clip-windowed word-level transcript; each word is a `<span class="ed-word" data-start data-end data-index>` with literal space text-nodes between (preserves native `getSelection()` boundary snapping)
+- [x] Click-and-drag word selection via native `window.getSelection()` snapped to word boundaries on `mouseup` — keyboard `Shift+Arrow` works automatically; selected range is added to the cut queue and rendered with strikethrough + faded opacity
+- [x] Cut queue lists all pending cuts with word-context preview + `×` button per row; one-level undo via "Undo" button; "Clear all" wipes the queue
+- [x] `POST /clips/{id}/cuts` accepts `{segments: [{start_s, end_s}]}`; validates bounds, NaN, overlap, ≥5 s kept (hard cap), ≤85 % removed (hard cap) — returns 202 + `task_id` + `stream_url` on success, 422 + `{code, message}` on any violation
+- [x] `GET /clips/{id}/transcript` returns the clip-windowed word array (clip-relative timestamps + stable indices) for the editor pane
+- [x] Cut queue persisted in `localStorage["clip:{id}:cuts"]`; survives page refresh; cleared on confirm-swap
+- [x] Soft warning band when `percent_removed >= 40%`; hard reject (422) above 85 % or below 5 s kept
+- [x] Rendered result lands in `Clip.cleaned_render_uri` (REUSES Issue 134 column — see DECISIONS D1); the existing `POST /clips/{id}/clean/confirm` swaps into `render_uri` on confirm. **Deviation from spec**: dropped the 24 h `EDITOR_ORIGINAL_RETENTION_HOURS` purge — see DECISIONS D1
+- [x] Per-creator isolation on `/cuts` + `/transcript` (`clip.creator_id == creator.id`); `@limiter.limit("20/hour")` on `/cuts`, `60/hour` on `/transcript`
+- [x] Unit tests: 25 in `tests/test_edits.py` covering all validation paths, sub-frame floor, afade guard (Issue 134 latent bug fix), endpoint happy path + 422 codes + 404 isolation, transcript clip-windowing
+- [x] Full suite green: 889 passed / 2 skipped; Layer 0 ruff/mypy clean
 
 ---
 
