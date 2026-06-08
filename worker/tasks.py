@@ -2351,3 +2351,296 @@ async def _generate_thumbnail_concepts_async(
             exc_type=type(exc).__name__,
         )
         raise
+
+
+# ── Hook analyzer (Issue 130) ─────────────────────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="worker.tasks.analyze_hook",
+)
+def analyze_hook(self, creator_id: str, video_id: str) -> str:
+    """Analyze the first-30s hook against the creator's retention curves (Issue 130)."""
+    try:
+        run_async(_analyze_hook_async(self.request.id, creator_id, video_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> None:
+    """Fetch retention curves + transcript + DNA; compute drop; call Claude; emit done.
+
+    Per-creator isolation enforced on every query.
+    """
+    import json as _json
+
+    from sqlalchemy import select
+
+    from dna.profile import get_active
+    from knowledge.hooks import analyze_hook as build_hook_report
+    from knowledge.hooks import compute_retention_drop, parse_hook_report
+    from knowledge.util import extract_transcript_excerpt
+    from models import RetentionCurve, Signals, Transcript, Video, VideoMetrics
+    from worker.progress import aemit
+
+    try:
+        await aemit(job_id, "step", label="loading_data", stage="hook_analysis")
+
+        cid = uuid.UUID(creator_id)
+        vid = uuid.UUID(video_id)
+
+        async with db.AdminSessionLocal() as session:
+            creator = await session.get(Creator, cid)
+            if creator is None:
+                await aemit(job_id, "error", stage="hook_analysis", message="Creator not found.")
+                return
+
+            video = await session.get(Video, vid)
+            if video is None or video.creator_id != cid:
+                await aemit(job_id, "error", stage="hook_analysis", message="Video not found.")
+                return
+
+            # Fetch the target video's retention curve
+            video_curve_rows = (
+                (
+                    await session.execute(
+                        select(RetentionCurve.timestamp_s, RetentionCurve.audience_watch_ratio)
+                        .where(RetentionCurve.video_id == vid)
+                        .order_by(RetentionCurve.timestamp_s)
+                    )
+                ).all()
+            )
+            video_curves: list[tuple[float, float]] = [(r[0], r[1]) for r in video_curve_rows]
+
+            # Fetch other creator videos' retention curves for the median baseline
+            other_video_ids = (
+                (
+                    await session.execute(
+                        select(Video.id).where(
+                            Video.creator_id == cid,
+                            Video.id != vid,
+                        )
+                    )
+                ).scalars().all()
+            )
+
+            creator_curves: list[list[tuple[float, float]]] = []
+            for other_vid in other_video_ids[:20]:  # cap to 20 for performance
+                rows = (
+                    await session.execute(
+                        select(RetentionCurve.timestamp_s, RetentionCurve.audience_watch_ratio)
+                        .where(RetentionCurve.video_id == other_vid)
+                        .order_by(RetentionCurve.timestamp_s)
+                    )
+                ).all()
+                if rows:
+                    creator_curves.append([(r[0], r[1]) for r in rows])
+
+            # Transcript for the first 60s
+            transcript_row = await session.scalar(
+                select(Transcript).where(Transcript.video_id == vid)
+            )
+            transcript_excerpt = extract_transcript_excerpt(
+                transcript_row.segments_jsonb if transcript_row else None,
+                max_s=60.0,
+            )
+
+            dna_profile = await get_active(session, cid)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+
+        await aemit(job_id, "step", label="analyzing_hook", stage="hook_analysis")
+
+        # Compute retention drop (pure Python)
+        drop_at_s, retention_at_drop = compute_retention_drop(video_curves, creator_curves)
+
+        # Compute creator median at the drop point for the prompt
+        creator_median_at_drop: float | None = None
+        if drop_at_s is not None and creator_curves:
+            import numpy as np
+
+            grid_point = np.array([drop_at_s])
+            medians = []
+            for c in creator_curves:
+                sorted_c = sorted(c)
+                ts = [p[0] for p in sorted_c]
+                rs = [p[1] for p in sorted_c]
+                if ts[0] > 0:
+                    ts, rs = [0.0] + ts, [1.0] + rs
+                medians.append(float(np.interp(grid_point, ts, rs)[0]))
+            creator_median_at_drop = float(np.median(medians)) if medians else None
+
+        raw_json = await asyncio.to_thread(
+            build_hook_report,
+            channel_title=creator.channel_title or "Unknown Channel",
+            dna_brief=dna_brief,
+            retention_drop_at_s=drop_at_s,
+            retention_at_drop=retention_at_drop,
+            creator_median_at_drop=creator_median_at_drop,
+            transcript_excerpt=transcript_excerpt,
+            task_id=job_id,
+        )
+
+        try:
+            report = parse_hook_report(raw_json)
+        except (ValueError, _json.JSONDecodeError) as exc:
+            logger.error(
+                "_analyze_hook_async parse failed creator=%s video=%s: %s",
+                creator_id,
+                video_id,
+                exc,
+            )
+            await aemit(
+                job_id,
+                "error",
+                stage="hook_analysis",
+                message="Hook report parsing failed — please try again.",
+            )
+            raise
+
+        await aemit(
+            job_id,
+            "done",
+            stage="hook_analysis",
+            message="Hook analysis ready.",
+            report=report,
+        )
+
+    except Exception as exc:
+        logger.error(
+            "_analyze_hook_async failed creator=%s video=%s: %s",
+            creator_id,
+            video_id,
+            exc,
+        )
+        await aemit(
+            job_id,
+            "error",
+            stage="hook_analysis",
+            message="Hook analysis failed — please try again.",
+            exc_type=type(exc).__name__,
+        )
+        raise
+
+
+# ── Auto chapter markers (Issue 131) ─────────────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="worker.tasks.generate_chapters",
+)
+def generate_chapters(self, creator_id: str, video_id: str) -> str:
+    """Generate YouTube chapter markers from transcript + signal timeline (Issue 131)."""
+    try:
+        run_async(_generate_chapters_async(self.request.id, creator_id, video_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) -> None:
+    """Fetch transcript + signals; detect boundaries; call Claude; emit done.
+
+    Per-creator isolation enforced on every query.
+    """
+    import json as _json
+
+    from sqlalchemy import select
+
+    from knowledge.chapters import find_chapter_boundaries, generate_chapters as build_chapters
+    from knowledge.chapters import parse_chapters
+    from knowledge.util import get_transcript_segments
+    from models import Signals, Transcript, Video
+    from worker.progress import aemit
+
+    try:
+        await aemit(job_id, "step", label="loading_data", stage="chapters")
+
+        cid = uuid.UUID(creator_id)
+        vid = uuid.UUID(video_id)
+
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, vid)
+            if video is None or video.creator_id != cid:
+                await aemit(job_id, "error", stage="chapters", message="Video not found.")
+                return
+
+            transcript_row = await session.scalar(
+                select(Transcript).where(Transcript.video_id == vid)
+            )
+            if transcript_row is None:
+                await aemit(
+                    job_id,
+                    "error",
+                    stage="chapters",
+                    message="Transcript not available — wait for ingestion to complete.",
+                )
+                return
+
+            signals_row = await session.scalar(
+                select(Signals).where(Signals.video_id == vid)
+            )
+
+        await aemit(job_id, "step", label="generating_chapters", stage="chapters")
+
+        video_duration_s = float(video.duration_s or 0)
+        segments = get_transcript_segments(transcript_row.segments_jsonb)
+        timeline = signals_row.timeline_jsonb if signals_row else None
+
+        boundaries = find_chapter_boundaries(timeline, video_duration_s)
+
+        raw_json = await asyncio.to_thread(
+            build_chapters,
+            boundaries=boundaries,
+            segments=segments,
+            video_duration_s=video_duration_s,
+            task_id=job_id,
+        )
+
+        try:
+            result = parse_chapters(raw_json)
+        except (ValueError, _json.JSONDecodeError) as exc:
+            logger.error(
+                "_generate_chapters_async parse failed creator=%s video=%s: %s",
+                creator_id,
+                video_id,
+                exc,
+            )
+            await aemit(
+                job_id,
+                "error",
+                stage="chapters",
+                message="Chapter parsing failed — please try again.",
+            )
+            raise
+
+        await aemit(
+            job_id,
+            "done",
+            stage="chapters",
+            message="Chapters ready.",
+            chapters=result["chapters"],
+            description_block=result["description_block"],
+        )
+
+    except Exception as exc:
+        logger.error(
+            "_generate_chapters_async failed creator=%s video=%s: %s",
+            creator_id,
+            video_id,
+            exc,
+        )
+        await aemit(
+            job_id,
+            "error",
+            stage="chapters",
+            message="Chapter generation failed — please try again.",
+            exc_type=type(exc).__name__,
+        )
+        raise

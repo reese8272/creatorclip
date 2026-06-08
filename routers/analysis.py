@@ -1,17 +1,19 @@
-"""Video performance analysis endpoint (Issue 121)."""
+"""Video performance analysis endpoints (Issues 121, 130, 131)."""
 
 import logging
 import re
+import uuid as _uuid_mod
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
 from limiter import creator_key, limiter
-from models import Creator, Video, VideoMetrics
+from models import Creator, RetentionCurve, Transcript, Video, VideoMetrics
 
 router = APIRouter(prefix="/creators", tags=["analysis"])
 logger = logging.getLogger(__name__)
@@ -137,3 +139,149 @@ async def start_video_analysis(
         "video_title": video_title,
         "has_metrics": has_metrics,
     }
+
+
+# ── Hook analyzer (Issue 130) ──────────────────────────────────────────────────
+
+
+class HookAnalysisQueuedOut(BaseModel):
+    task_id: str
+    stream_url: str | None = None
+
+
+@router.post(
+    "/me/videos/{video_id}/hook-analysis",
+    response_model=None,  # returns 200 or 202 depending on data availability
+)
+@limiter.limit("10/hour", key_func=creator_key)
+async def start_hook_analysis(
+    request: Request,
+    video_id: str,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> JSONResponse:
+    """Analyze the first-30s hook against the creator's own retention curves.
+
+    Returns 200 + {"status": "no_data"} when no retention curve exists for
+    this video. Returns 202 + task_id + stream_url when analysis is queued.
+    """
+    try:
+        vid_uuid = _uuid_mod.UUID(video_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid video_id format.") from exc
+
+    video = await session.scalar(
+        select(Video).where(Video.id == vid_uuid, Video.creator_id == creator.id)
+    )
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+
+    curve_count = await session.scalar(
+        select(func.count(RetentionCurve.id)).where(RetentionCurve.video_id == vid_uuid)
+    )
+    if not curve_count:
+        return JSONResponse(
+            {
+                "status": "no_data",
+                "message": (
+                    "Retention data not yet available for this video. "
+                    "YouTube Analytics data is typically available 48–72 hours after publication."
+                ),
+            },
+            status_code=200,
+        )
+
+    import redis as _redis_pkg
+
+    from worker import progress
+    from worker.tasks import analyze_hook as analyze_hook_task
+
+    task = analyze_hook_task.delay(str(creator.id), str(video.id))
+
+    stream_url: str | None = f"/tasks/{task.id}/events"
+    try:
+        await progress.aset_owner(task.id, str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning("hook_analysis aset_owner failed task=%s err=%s", task.id, exc)
+        stream_url = None
+
+    logger.info(
+        "Hook analysis queued creator=%s video=%s task=%s",
+        creator.id,
+        video.id,
+        task.id,
+    )
+    return JSONResponse(
+        {"task_id": task.id, "stream_url": stream_url},
+        status_code=202,
+    )
+
+
+# ── Auto chapter markers (Issue 131) ──────────────────────────────────────────
+
+
+class ChaptersQueuedOut(BaseModel):
+    task_id: str
+    stream_url: str | None = None
+
+
+@router.post(
+    "/me/videos/{video_id}/chapters",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ChaptersQueuedOut,
+)
+@limiter.limit("20/hour", key_func=creator_key)
+async def start_chapter_generation(
+    request: Request,
+    video_id: str,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Generate YouTube chapter markers from the transcript and signal timeline.
+
+    Returns 202 + task_id + stream_url. The done event payload contains
+    'chapters' (list) and 'description_block' (ready-to-paste string).
+    """
+    try:
+        vid_uuid = _uuid_mod.UUID(video_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid video_id format.") from exc
+
+    video = await session.scalar(
+        select(Video).where(Video.id == vid_uuid, Video.creator_id == creator.id)
+    )
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+
+    has_transcript = bool(
+        await session.scalar(
+            select(Transcript.video_id).where(Transcript.video_id == vid_uuid).limit(1)
+        )
+    )
+    if not has_transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="Video has not been transcribed yet — wait for ingestion to complete.",
+        )
+
+    import redis as _redis_pkg
+
+    from worker import progress
+    from worker.tasks import generate_chapters as generate_chapters_task
+
+    task = generate_chapters_task.delay(str(creator.id), str(video.id))
+
+    stream_url: str | None = f"/tasks/{task.id}/events"
+    try:
+        await progress.aset_owner(task.id, str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning("generate_chapters aset_owner failed task=%s err=%s", task.id, exc)
+        stream_url = None
+
+    logger.info(
+        "Chapter generation queued creator=%s video=%s task=%s",
+        creator.id,
+        video.id,
+        task.id,
+    )
+    return {"task_id": task.id, "stream_url": stream_url}
