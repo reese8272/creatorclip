@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Dashboard</title>
   <link rel="stylesheet" href="/static/_design-tokens.css">
+  <!-- Issue 137 — shared aurora + soft-card shell for authenticated pages -->
+  <link rel="stylesheet" href="/static/page-shell.css">
   <!-- Issue 136 — pre-auth marketing hero (toggled by auth.js when /auth/me 401s) -->
   <link rel="stylesheet" href="/static/hero.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
@@ -239,7 +241,7 @@
 </head>
 <!-- Issue 136 — `data-allow-anonymous` tells auth.js to toggle hero mode
      instead of redirecting to /auth/login when /auth/me returns 401. -->
-<body data-allow-anonymous>
+<body class="app-page" data-allow-anonymous>
   <nav class="nav">
     <a class="nav-brand" href="/">AutoClip</a>
     <div class="nav-links">
@@ -389,19 +391,24 @@
     <div class="section-header" style="margin-top:var(--space-10)">
       <h2>Your videos</h2>
     </div>
-    <table class="video-table">
-      <thead>
-        <tr>
-          <th>Title / ID</th>
-          <th>Kind</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="video-tbody">
-        <tr><td colspan="4" class="empty">Loading…</td></tr>
-      </tbody>
-    </table>
+    <!-- Issue 137: .table-wrap scopes horizontal scroll to the table itself
+         (only when columns can't compress further) so the page never scrolls
+         sideways. -->
+    <div class="table-wrap">
+      <table class="video-table">
+        <thead>
+          <tr>
+            <th>Title / ID</th>
+            <th>Kind</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="video-tbody">
+          <tr><td colspan="4" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </main>
 
   <script>
@@ -478,15 +485,17 @@
             const allClips = Array.isArray(body) ? body : (body.clips || []);
             const renderedClips = allClips.filter(c => c.render_status === 'done');
             const titleUrl = `/static/analysis.html?video_id=${v.id}&video_title=${encodeURIComponent(v.title || '')}`;
-            const titlesBtn = `<a href="${titleUrl}" class="btn btn-secondary" style="margin-left:var(--space-2)">Titles</a>`;
+            const titlesBtn = `<a href="${titleUrl}" class="btn btn-secondary">Titles</a>`;
+            // Issue 137: .action-row wraps buttons on narrow viewports so the
+            // table row never forces horizontal scroll on the page.
             if (allClips.length) {
               clipsReadyCount += renderedClips.length;
               const label = renderedClips.length === allClips.length
                 ? `${allClips.length} clips`
                 : `${renderedClips.length}/${allClips.length} rendered`;
-              clipsHtml = `<a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary">${label}</a>${titlesBtn}`;
+              clipsHtml = `<div class="action-row"><a href="/static/review.html?video_id=${v.id}" class="btn btn-secondary">${label}</a>${titlesBtn}</div>`;
             } else {
-              clipsHtml = `<button class="btn btn-primary" onclick="generateClips('${v.id}',this)">Generate clips</button>${titlesBtn}`;
+              clipsHtml = `<div class="action-row"><button class="btn btn-primary" onclick="generateClips('${v.id}',this)">Generate clips</button>${titlesBtn}</div>`;
             }
           }
         }

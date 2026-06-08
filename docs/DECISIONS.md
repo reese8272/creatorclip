@@ -5,6 +5,102 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-08 — Issue 137: Project-wide UI overhaul + horizontal-overflow fix
+
+**Decision:** Reverse the Issue-99 (2026-05-31) + Issue-136-redirect (2026-06-07)
+visual split that kept the "soft / aurora / futuristic" treatment only on the
+marketing hero + dark editor, and the "sharp 4px Linear-utility" treatment on
+every data-dense page (dashboard, insights, profile, onboarding, analysis,
+pricing, walkthrough). Issue 137 extends the hero/editor aesthetic across ALL
+authenticated surfaces while preserving readability on data-dense regions.
+Also fixes the horizontal-overflow bug the user reported on the live deploy.
+
+**Changes:**
+- New `static/page-shell.css` — shared cross-page chrome:
+  - `body.app-page` aurora backdrop (single static wash anchored at top;
+    not animated — animated gradients hurt scroll perf on data-heavy pages);
+  - Glassmorphism nav (`position: sticky`, `backdrop-filter: blur(14px)
+    saturate(140%)`, indigo-tinted border) — same primitive the editor
+    nav already uses;
+  - `.page-container` width cap at `min(1200px, 100% - 2 * --space-4)` so
+    no main container ever reaches the viewport edge;
+  - `body.app-page .card` upgrade (soft `--editor-surface` bg, 12px radius,
+    inset highlight + soft shadow) — applies automatically without
+    page-by-page edits;
+  - `.gradient-h1` utility class (clipped `--gradient-text`) for page openers;
+  - `body.app-page .btn-primary` upgrade to gradient pill + hover-lift +
+    accent glow — same primitive as `hero-form button`;
+  - `.table-wrap` (`overflow-x: auto` + soft outer chrome) to scope the
+    one place horizontal scroll is allowed (data tables);
+  - `.action-row` (`display: flex; flex-wrap: wrap; min-width: 0`) for
+    button rows in cells / card footers / form actions;
+  - `html, body { overflow-x: clip }` global guard (with `@supports`
+    fallback to `hidden`).
+- Eight authenticated templates now link `page-shell.css` AND carry
+  `class="app-page"` (review.html keeps `editor-page` alongside):
+  index, insights, profile, onboarding, analysis, pricing, walkthrough,
+  review.
+- index.html dashboard: video table wrapped in `.table-wrap`; action-cell
+  buttons rendered into a `.action-row` so "Generate clips + Titles" stacks
+  on narrow viewports instead of pushing the table wider than the column.
+- `tests/test_static.py` gains 5 new tests (page-shell tokens, every
+  authenticated page links + opts in, dashboard table wrapped, DECISIONS
+  entry present, cache-bust on page-shell.css) and one existing test
+  (Issue-136 review.html class check) loosened to accept the new
+  `editor-page app-page` class list.
+
+**Why the reversal:**
+- The user explicitly redirected on 2026-06-08: "we need to match the UI
+  of the sign in page, that sleek design and nice purple and super modern
+  look, but for the WHOLE project."
+- The Issue-99 split was a designer's call grounded in "Linear-utility
+  reads more clearly on data." It's defensible but contradicted by Linear's
+  OWN 2026 product refresh, which uses aurora + indigo washes on its
+  data-dense issue tables. The user's read of the live app matches the
+  industry-2026 reality.
+- The new design respects the WCAG/accessibility rule explicitly: glass and
+  gradient ONLY for chrome (nav, card outer surface, page hero, modals,
+  popovers, activity panel); flat surfaces with high-contrast text remain
+  the rule for tables, forms, transcripts, and list rows.
+
+**Why the horizontal-overflow approach:**
+- `overflow-x: clip` over `hidden` so `position: fixed` (activity panel)
+  and `position: sticky` (nav) continue to work — `hidden` creates a new
+  scroll container and breaks both. `@supports not (overflow-x: clip)`
+  falls back to `hidden` on engines without it (Safari < 16, ~3% global
+  share as of 2026-06).
+- `.table-wrap` over collapsing columns at narrow breakpoints —
+  collapsing loses data; a horizontal scroll *inside the table* keeps
+  every column visible AND keeps the page itself static.
+- `.action-row` flex-wrap over `white-space: nowrap` — the action cell
+  was the load-bearing source of overflow (two buttons + spacing
+  exceeded the column's natural width on tablet/mobile).
+- `max-width: min(1200px, calc(100% - 2 * --space-4))` over `100vw` —
+  using `100vw` includes the scrollbar width on systems with persistent
+  scrollbars (Windows/Linux), which is itself the most common cause of
+  the "page is just slightly wider than the viewport" bug; `100% - gutters`
+  avoids it entirely.
+
+**Evidence:**
+- Direct user report 2026-06-08: "we need a complete overhaul on the UI
+  […] match the UI of the sign in page […] for the WHOLE project.
+  Additionally, the size of the app is too large horizontally, I need to
+  scroll to see the whole thing sideways."
+- Linear's 2026 refresh — confirmed aurora + indigo extends to product
+  surfaces, not only marketing: `linear.app/now/how-we-redesigned-the-linear-ui`.
+- Glassmorphism accessibility rules (2026 industry guidance):
+  - Use for accent layers (modal, popover, nav, drawer); NOT for long
+    reading surfaces, forms, dense tables — fails WCAG 2.2 1.4.3
+    contrast.
+  - Sources: orizon.co, axesslab.com, invernessdesignstudio.com (June 2026).
+- Horizontal-overflow prevention canon: `overflow-x: clip` + table-wrapping
+  + `flex-wrap` + `max-width: 100% - gutters` over `100vw` — LogRocket
+  + Digital Thrive (current as of 2026-06).
+- All 51 existing static tests + 5 new tests green. Layer 0 unaffected
+  (CSS/HTML only).
+
+---
+
 ## 2026-06-08 — Issue 136 follow-up: labeled tool rail + explicit hero Sign-in CTA
 
 **Decision:** Issue 136 shipped an icon-only vertical strip (Decisions D1 + D2) for

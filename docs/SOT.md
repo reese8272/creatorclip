@@ -123,6 +123,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── edits.py                # User-supplied cut-list validator (Issue 135 — bounds, overlap, 5s/85% caps, sub-frame floor) for text-based editor
 │
 │   # static/editor-layout.css + static/hero.css added in Issue 136 (dark editor layout + pre-auth hero)
+│   # static/page-shell.css added in Issue 137 (project-wide aurora + soft-card shell + overflow-x: clip guard)
 │
 ├── preference/
 │   ├── model.py                # Learned reranker (online update)

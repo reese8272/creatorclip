@@ -1064,7 +1064,13 @@ def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "review.html").read_text()
     assert '<link rel="stylesheet" href="/static/editor-layout.css">' in src
-    assert 'class="editor-page"' in src or "class='editor-page'" in src, (
+    # Issue 137 added `app-page` alongside `editor-page` on <body> for the
+    # shared aurora/glass shell, so the class attribute is now a list. The
+    # load-bearing assertion is that `editor-page` is still in the class list.
+    assert 'class="editor-page"' in src \
+        or 'class="editor-page ' in src \
+        or 'class="editor-page\t' in src \
+        or "editor-page app-page" in src, (
         "review.html <body> must carry .editor-page to opt into dark mode."
     )
     assert 'class="editor-shell"' in src, "Three-pane shell wrapper must be present."
@@ -1232,4 +1238,125 @@ def test_static_cachebust_middleware_preserves_etag_on_css(client):
     # StaticFiles sets ETag on files; it must still be present after the middleware.
     assert "etag" in resp.headers, (
         "CSS ETag must be preserved — browser caching of CSS is desirable."
+    )
+
+
+# ── Issue 137 — project-wide UI overhaul + horizontal-overflow guard ─────
+
+
+_ISSUE_137_AUTHENTICATED_PAGES = (
+    "index.html",
+    "insights.html",
+    "profile.html",
+    "onboarding.html",
+    "analysis.html",
+    "pricing.html",
+    "walkthrough.html",
+    "review.html",
+)
+
+
+def test_issue_137_page_shell_css_exists_with_overflow_and_aurora_rules():
+    """Issue 137: the new shared page-shell.css owns the cross-page chrome —
+    aurora backdrop on body.app-page, glassmorphism nav, soft-card upgrade
+    of .card, .table-wrap to scope horizontal scroll to data, and the global
+    overflow-x: clip guard that prevents the page from ever scrolling
+    sideways. These four primitives are the load-bearing pieces; pin them so
+    a future 'let me simplify the CSS' PR can't silently regress the layout."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "page-shell.css").read_text()
+    assert "overflow-x: clip" in src, (
+        "page-shell.css must declare overflow-x: clip on html/body to prevent "
+        "horizontal scroll across the app (Issue 137 acceptance)."
+    )
+    assert "body.app-page" in src, (
+        "page-shell.css must scope its rules under body.app-page so pages that "
+        "do not opt in are unaffected."
+    )
+    assert "backdrop-filter" in src, (
+        "page-shell.css must use backdrop-filter for the glassmorphism nav — "
+        "Issue 137 D1 (Linear/Vercel/Stripe aurora pattern)."
+    )
+    assert ".table-wrap" in src, (
+        "page-shell.css must define .table-wrap so wide tables can scroll "
+        "horizontally within their own wrapper instead of the page."
+    )
+    assert "var(--gradient-aurora)" in src, (
+        "page-shell.css must consume the existing --gradient-aurora token "
+        "(no new color literals — extends the Issue 136 system)."
+    )
+
+
+def test_issue_137_authenticated_pages_link_page_shell_and_opt_in():
+    """Every authenticated template must link page-shell.css AND carry
+    `app-page` on <body>. Without both, the page won't pick up the unified
+    aurora + soft-card aesthetic the user asked for."""
+    import pathlib
+
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    for page in _ISSUE_137_AUTHENTICATED_PAGES:
+        src = (static_dir / page).read_text()
+        assert '/static/page-shell.css' in src, (
+            f"{page}: must <link> /static/page-shell.css for the shared shell."
+        )
+        # Body must carry `app-page` (review.html keeps editor-page too;
+        # the class list ordering is not pinned, just presence).
+        assert 'class="app-page"' in src or 'class="editor-page app-page"' in src, (
+            f"{page}: <body> must include the app-page class to opt into the "
+            f"page-shell rules."
+        )
+
+
+def test_issue_137_index_video_table_wrapped_for_overflow():
+    """Issue 137: the dashboard's video table was the load-bearing source of
+    horizontal scroll (4 columns + 2-button action cell). It must be wrapped
+    in .table-wrap so any table overflow lives inside the wrapper, never on
+    the page. The action cell must use .action-row so buttons flex-wrap on
+    narrow viewports."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+    assert 'class="table-wrap"' in src, (
+        "index.html: the .video-table must be wrapped in a .table-wrap so "
+        "horizontal scroll is scoped to the data, not the page."
+    )
+    # Action-row class must be present in the JS-rendered cell so multiple
+    # buttons (Generate + Titles / X clips + Titles) wrap on narrow viewports.
+    assert "action-row" in src, (
+        "index.html: action button rows must use .action-row so buttons "
+        "wrap on narrow viewports instead of forcing horizontal scroll."
+    )
+
+
+def test_issue_137_decisions_md_logs_issue99_reversal():
+    """Issue 137 explicitly reverses the Issue-99 'sharp-utility-only on
+    data pages' split (and the Issue-136 redirect's 'don't touch data
+    pages' note). Per CLAUDE.md, every deviation from a documented
+    decision must appear in docs/DECISIONS.md with what / why / source /
+    date — pin the entry so it can't drift out."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "docs" / "DECISIONS.md").read_text()
+    assert "Issue 137" in src, (
+        "docs/DECISIONS.md must carry an Issue 137 entry documenting the "
+        "reversal of the Issue-99 data-vs-marketing visual split."
+    )
+
+
+def test_issue_137_page_shell_loaded_via_html_route_and_cachebust_applied(client):
+    """The page-shell stylesheet must actually load on the rendered HTML —
+    not just exist on disk — and the cache-bust middleware must append a
+    ?v=<sha> to its <link>, the same way it does for the other shared
+    stylesheets. Regression-pins the rewriter against an unintentional
+    skip rule."""
+    body = client.get("/static/index.html").text
+    assert "/static/page-shell.css" in body, (
+        "page-shell.css must appear in the rendered index.html so the "
+        "shared shell actually loads in the browser."
+    )
+    # Cache-bust query string format from middleware: ?v=sha-<commit>
+    assert "/static/page-shell.css?v=" in body, (
+        "page-shell.css must carry a cache-bust ?v=<sha> query string so "
+        "deploys force a fresh fetch."
     )

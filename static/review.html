@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Review</title>
   <link rel="stylesheet" href="/static/_design-tokens.css">
+  <!-- Issue 137 — shared aurora + soft-card shell (also sets overflow-x: clip
+       on body so the page never scrolls horizontally) -->
+  <link rel="stylesheet" href="/static/page-shell.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/activeTasks.js" defer></script>
@@ -304,7 +307,7 @@
     }
   </style>
 </head>
-<body class="editor-page">
+<body class="editor-page app-page">
   <nav class="nav">
     <a class="nav-brand" href="/">AutoClip</a>
     <div class="nav-links">

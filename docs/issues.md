@@ -3256,6 +3256,51 @@ that Opus Clip built its user base on.
 
 ---
 
+## Issue 137: Project-wide UI overhaul — aurora + soft-card across the app + horizontal-overflow fix
+**Status**: ✅ Done (2026-06-08)
+**Depends on**: 136
+
+**What**: User feedback on the live deploy: "we need a complete overhaul on the UI […]
+match the UI of the sign in page, that sleek design and nice purple and super modern
+look, but for the WHOLE project. Additionally, the size of the app is too large
+horizontally, I need to scroll to see the whole thing sideways and that's not needed."
+Two concrete deliverables: (A) extend the hero/editor aurora + indigo + soft-card
+aesthetic to every authenticated page (dashboard, insights, profile, onboarding,
+analysis, pricing, walkthrough, review nav); (B) eliminate horizontal scroll on every
+page across the 320 → 1920px viewport range. Explicit reversal of Issue 99's
+"sharp-utility-on-data-pages" split — see `docs/DECISIONS.md` Issue 137 entry.
+
+**Files**: `static/page-shell.css` (new), `static/index.html`, `static/insights.html`,
+`static/profile.html`, `static/onboarding.html`, `static/analysis.html`,
+`static/pricing.html`, `static/walkthrough.html`, `static/review.html`,
+`tests/test_static.py`, `docs/SOT.md`, `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [x] Phase 1: research current 2026 industry standard (Linear / Vercel / Stripe
+      aurora patterns; glassmorphism-on-accent-only rule; overflow-x: clip vs
+      hidden); decisions logged in `docs/DECISIONS.md` Issue 137 entry
+- [x] New `static/page-shell.css` defines: aurora backdrop on `body.app-page`,
+      glassmorphism sticky nav, `.page-container` width cap, `body.app-page .card`
+      soft upgrade, `.page-hero` aurora band, `.gradient-h1` utility, gradient-pill
+      primary button on `body.app-page`, `.table-wrap` for scoped horizontal scroll,
+      `.action-row` flex-wrap for button groups, global `overflow-x: clip` on
+      html/body with `@supports` fallback to `hidden`
+- [x] Every authenticated template links `page-shell.css` AND opts in via
+      `class="app-page"` on `<body>` (review.html keeps `editor-page` alongside)
+- [x] index.html `.video-table` wrapped in `.table-wrap`; action-cell buttons
+      rendered into `.action-row` so they wrap on narrow viewports
+- [x] No `100vw` widths anywhere new; all containers use
+      `max-width: min(1200px, calc(100% - 2 * --space-N))`
+- [x] Tables / forms / transcripts / list rows remain flat with high-contrast
+      text (WCAG 2.2 1.4.3) — glass only on chrome layers
+- [x] Static tests: 5 new in `tests/test_static.py` pinning page-shell tokens
+      + per-page opt-in + dashboard table wrap + DECISIONS entry + cache-bust
+      on `/static/page-shell.css`; 1 existing Issue-136 test loosened for the
+      new `editor-page app-page` class list
+- [x] Full suite green; Layer 0 unaffected (CSS/HTML only)
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
