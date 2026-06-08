@@ -1,41 +1,51 @@
 /**
- * editor-layout.css — Three-pane dark editor for review.html (Issue 136).
+ * editor-layout.css — Three-pane dark editor for review.html
+ * (Issue 136 + 2026-06-07 redirect — softer, rounder, more "futuristic").
  *
- * Layout primitive: CSS Grid with three columns:
- *   .editor-player    | left, fluid           | the 9:16 video + meta + actions
- *   .editor-transcript| middle, fixed 35rem   | always-visible transcript pane
- *   .editor-tools     | right, --editor-strip-width | vertical icon strip
+ * Layout: CSS Grid with three columns:
+ *   .editor-player     | left, fluid           | the 9:16 video + meta + actions
+ *   .editor-transcript | middle, fixed 35rem   | always-visible transcript pane
+ *   .editor-tools      | right, --editor-strip-width | vertical icon strip
  *
- * The drawer (.editor-drawer) is a sibling positioned absolutely to the right
- * of the icon strip; visibility is driven by a single data-active-tool
- * attribute on .editor-shell. Each drawer panel declares data-tool="x".
+ * Soft direction:
+ *   - Panel radius is --editor-radius (12px), not the 4px data-page lock.
+ *   - Subtle indigo-tinted surfaces (#0b0c12 / #14161f / #1c1f2c).
+ *   - Drawer is a glassmorphism panel (backdrop-filter blur + accent glow).
+ *   - 220ms ease-out for the slide-in instead of the snappy 120ms.
  *
- * Mobile: at <=900px the three columns stack vertically and the drawer becomes
- * a bottom sheet instead of a side panel. No JS branch — pure media query.
+ * Visibility is driven by a single data-active-tool attribute on
+ * .editor-shell; each drawer panel declares data-tool="x".
  *
- * All tokens come from _design-tokens.css. No hardcoded hex; no animation
- * library dependency.
+ * Mobile: at <=900px the three columns stack vertically and the drawer
+ * becomes a bottom sheet. No JS branch — pure media query.
  */
 
 body.editor-page {
   background: var(--editor-bg);
   color: var(--color-text);
   min-height: 100vh;
+  /* A faint aurora on the editor surface, matching the hero feel. */
+  background-image: var(--gradient-aurora);
+  background-repeat: no-repeat;
+  background-position: 50% -200px;
+  background-size: 1400px 600px;
 }
 
-/* Tighten the shared nav for the editor surface so it doesn't compete with
-   the player for visual weight. */
+/* Soften the shared nav for the editor surface so it doesn't compete
+   with the player for visual weight. */
 body.editor-page .nav {
   border-bottom: 1px solid var(--editor-border);
-  background: var(--editor-bg);
+  background: rgba(11, 12, 18, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .editor-shell {
   display: grid;
   grid-template-columns: 1fr 35rem var(--editor-strip-width);
   grid-template-areas: "player transcript tools";
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
   position: relative;
   min-height: calc(100vh - 60px); /* leave room for nav */
 }
@@ -44,18 +54,20 @@ body.editor-page .nav {
   grid-area: player;
   background: var(--editor-surface);
   border: 1px solid var(--editor-border);
-  border-radius: var(--radius);
-  padding: var(--space-4);
+  border-radius: var(--editor-radius);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   min-width: 0;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset,
+              0 20px 60px -30px rgba(0, 0, 0, 0.5);
 }
 .editor-player video {
   width: 100%;
   max-height: 65vh;
   background: #000;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   display: block;
 }
 .editor-player #clip-meta,
@@ -69,29 +81,31 @@ body.editor-page .nav {
   grid-area: transcript;
   background: var(--editor-surface);
   border: 1px solid var(--editor-border);
-  border-radius: var(--radius);
-  padding: var(--space-4);
+  border-radius: var(--editor-radius);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
   overflow: hidden;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset,
+              0 20px 60px -30px rgba(0, 0, 0, 0.5);
 }
 .editor-transcript h2 {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   margin-bottom: var(--space-1);
 }
 
 /* The icon strip — a thin vertical rail with one button per tool.
-   Buttons are square; the active tool is highlighted with the accent. */
+   Squircle buttons with a subtle glow on active. */
 .editor-tools {
   grid-area: tools;
   background: var(--editor-icon-strip);
   border: 1px solid var(--editor-border);
-  border-radius: var(--radius);
+  border-radius: var(--editor-radius);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -104,13 +118,14 @@ body.editor-page .nav {
   color: var(--color-text-muted);
   width: calc(var(--editor-strip-width) - var(--space-3));
   height: calc(var(--editor-strip-width) - var(--space-3));
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background var(--duration-fast) var(--ease),
-              color var(--duration-fast) var(--ease);
+  transition: background var(--duration) var(--ease),
+              color var(--duration) var(--ease),
+              box-shadow var(--duration) var(--ease);
 }
 .editor-tools button:hover {
   background: var(--editor-surface-elev);
@@ -120,14 +135,15 @@ body.editor-page .nav {
   background: var(--color-accent-soft);
   border-color: var(--color-accent);
   color: var(--color-accent);
+  box-shadow: var(--glow-accent-soft);
 }
 .editor-tools button svg {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
-/* The drawer slides in from the right of the icon strip. Hidden by default;
-   the data-active-tool attribute on .editor-shell controls visibility. */
+/* Glassmorphism drawer. Slides in from the right of the icon strip.
+   Hidden by default; data-active-tool on .editor-shell controls visibility. */
 .editor-drawer {
   position: fixed;
   top: 60px;            /* below nav — kept in sync with nav height */
@@ -136,7 +152,7 @@ body.editor-page .nav {
   width: var(--editor-drawer-width);
   padding-right: var(--editor-strip-width);  /* leave the icon strip clickable */
   transform: translateX(100%);
-  transition: transform var(--duration) var(--ease);
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 20;
   pointer-events: none;
 }
@@ -147,27 +163,33 @@ body.editor-page .nav {
 
 .editor-drawer-inner {
   height: 100%;
-  background: var(--editor-surface);
+  background: rgba(20, 22, 31, 0.78);
   border-left: 1px solid var(--editor-border-strong);
-  padding: var(--space-4);
+  border-top-left-radius: var(--radius-xl);
+  border-bottom-left-radius: var(--radius-xl);
+  padding: var(--space-5);
   overflow-y: auto;
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: -20px 0 60px -20px rgba(0, 0, 0, 0.6);
 }
 .editor-drawer-close {
   position: absolute;
-  top: var(--space-2);
-  right: calc(var(--editor-strip-width) + var(--space-2));
-  background: transparent;
+  top: var(--space-3);
+  right: calc(var(--editor-strip-width) + var(--space-3));
+  background: rgba(28, 31, 44, 0.7);
   border: 1px solid var(--editor-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   color: var(--color-text-muted);
-  width: 24px;
-  height: 24px;
-  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
   cursor: pointer;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 21;
 }
 .editor-drawer-close:hover { color: var(--color-text); border-color: var(--editor-border-strong); }
 
@@ -191,7 +213,8 @@ body.editor-page .nav {
   .editor-tools {
     flex-direction: row;
     justify-content: center;
-    padding: var(--space-1) 0;
+    padding: var(--space-2) 0;
+    border-radius: var(--radius-pill);
   }
   .editor-drawer {
     top: auto;
@@ -206,7 +229,12 @@ body.editor-page .nav {
   .editor-shell[data-active-tool]:not([data-active-tool=""]) ~ .editor-drawer {
     transform: translateY(0);
   }
+  .editor-drawer-inner {
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border-left: none;
+    border-top: 1px solid var(--editor-border-strong);
+  }
   .editor-drawer-close {
-    right: var(--space-2);
+    right: var(--space-3);
   }
 }

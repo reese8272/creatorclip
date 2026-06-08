@@ -76,10 +76,29 @@
   /* Row height standard — Linear hits 32px on tables/lists. */
   --row-height: 32px;
 
-  /* ── Radii (sharp; max 4 anywhere) ───────────────────────────── */
+  /* ── Radii ────────────────────────────────────────────────────
+   * Sharp ladder (Linear-locked, Issue 99) for data-dense surfaces:
+   * dashboard tables, insights grid, profile cards. Soft ladder
+   * (Issue 136 redirect, 2026-06-07) for marketing + editor
+   * surfaces where "futuristic" beats "utility" — see DECISIONS. */
   --radius-none: 0;
   --radius-sm:   2px;
   --radius:      4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  24px;
+  --radius-pill: 9999px;
+
+  /* ── Glow + aurora (Issue 136 redirect) ──────────────────────── */
+  --glow-accent:        0 0 0 1px rgba(94, 106, 210, 0.4), 0 12px 48px -8px rgba(94, 106, 210, 0.45);
+  --glow-accent-soft:   0 0 0 1px rgba(94, 106, 210, 0.25);
+  --glow-focus-ring:    0 0 0 4px rgba(94, 106, 210, 0.22);
+  --gradient-aurora:    radial-gradient(60% 80% at 50% 0%,
+                            rgba(94, 106, 210, 0.18) 0%,
+                            rgba(94, 106, 210, 0.06) 35%,
+                            transparent 70%);
+  --gradient-text:      linear-gradient(180deg, #ffffff 0%, #b9bdde 100%);
 
   /* ── Motion (snappy; 80-120ms range) ──────────────────────────── */
   --duration-fast:   80ms;
@@ -94,14 +113,16 @@
    * Linear surface ladder used on every other page. Issue spec calls
    * out #0a0a0a / #141414 / #5e6ad2 explicitly — locked here.
    * ───────────────────────────────────────────────────────────────── */
-  --editor-bg:           #0a0a0a;   /* page (matches --color-bg) */
-  --editor-surface:      #141414;   /* player + transcript + drawer panels */
-  --editor-surface-elev: #1a1a1a;   /* hover, active drawer panel */
-  --editor-border:       #222222;   /* panel hairlines */
-  --editor-border-strong:#2e2e2e;   /* tool-strip separators */
-  --editor-icon-strip:   #0d0d0d;   /* right-rail strip — slightly inset */
-  --editor-drawer-width: 24rem;     /* slide-out tool drawer width */
-  --editor-strip-width:  3.5rem;    /* icon-strip column width */
+  --editor-bg:           #0b0c12;   /* page — subtle indigo tint, warmer than pure black */
+  --editor-surface:      #14161f;   /* player + transcript + drawer panels (warmer #141414) */
+  --editor-surface-elev: #1c1f2c;   /* hover, active drawer panel */
+  --editor-border:       #23263a;   /* panel hairlines — cool tone for "futuristic" feel */
+  --editor-border-strong:#2e3247;   /* tool-strip separators */
+  --editor-icon-strip:   #0d0e16;   /* right-rail strip — slightly inset */
+  --editor-drawer-width: 26rem;     /* slide-out tool drawer width */
+  --editor-strip-width:  3.75rem;   /* icon-strip column width */
+  /* Editor panel radius — softer than the dashboard's 4px lock. */
+  --editor-radius:       var(--radius-lg);
 }
 
 /* ─────────────────────────────────────────────────────────────────

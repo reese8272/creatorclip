@@ -279,12 +279,28 @@
     <div class="hero-disclaimer">
       AutoClip predicts fit with your style — it does not promise virality. All recommendations are estimates.
     </div>
+    <!-- CSS-only stylized preview replacing the demo MP4 placeholder.
+         When a real recorded loop is ready it can swap back in via a
+         <video> element with the same `.hero-demo` shell. -->
     <div class="hero-demo" aria-hidden="true">
-      <video id="hero-demo-video" autoplay muted loop playsinline preload="none"
-             poster="/static/demo-hero-poster.png">
-        <source src="/static/demo-hero.mp4" type="video/mp4">
-      </video>
-      <div class="hero-demo-overlay">Demo: scored clips with reasoning</div>
+      <div class="hero-demo-header">
+        <span class="hero-demo-dot r"></span>
+        <span class="hero-demo-dot y"></span>
+        <span class="hero-demo-dot g"></span>
+        <span class="hero-demo-url">autoclip.studio · review</span>
+      </div>
+      <div class="hero-demo-body">
+        <div class="hero-demo-clip">
+          <span class="badge">CLIP · 0.92</span>
+          <span class="title">"The first thing I learned was…"</span>
+          <span class="meta">setup → peak · 18s · clean hook</span>
+        </div>
+        <div class="hero-demo-clip">
+          <span class="badge">CLIP · 0.88</span>
+          <span class="title">"And here's what surprised me."</span>
+          <span class="meta">peak → end · 22s · matches your pace</span>
+        </div>
+      </div>
     </div>
   </section>
 

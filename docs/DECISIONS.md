@@ -5,6 +5,60 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issue 136 redirect: softer "futuristic" aesthetic on marketing + editor surfaces
+
+**Decision:** First Issue-136 ship followed the Linear-locked sharp 4px-radius
+direction from Issue 99 verbatim. User feedback on the live deploy was that the
+result "didn't look different" — too utility-feeling, not "futuristic" enough.
+This entry redirects the marketing + editor surfaces to a softer aesthetic
+WITHOUT touching the data-dense pages (dashboard tables, insights grid,
+profile, pricing) where Linear-locked utility is still correct.
+
+**Changes:**
+- `_design-tokens.css` gains a soft-radius ladder
+  (`--radius-md/-lg/-xl/-2xl/-pill` = 8/12/16/24/9999 px) **alongside** the
+  existing sharp `--radius-sm/--radius` (2/4 px).
+- Editor surface tokens warmed with a faint indigo tint:
+  `--editor-bg #0a0a0a → #0b0c12`, `--editor-surface #141414 → #14161f`,
+  `--editor-icon-strip #0d0d0d → #0d0e16`. The borders pick up a cool
+  `#23263a` for "futuristic" without going purple.
+- New glow + aurora tokens: `--glow-accent`, `--glow-accent-soft`,
+  `--glow-focus-ring`, `--gradient-aurora` (radial indigo top-of-page),
+  `--gradient-text` (white → soft indigo for hero H1).
+- `hero.css` rewritten: aurora backdrop, gradient-text H1, pill-shaped
+  glassmorphism URL form with focus glow, gradient CTA button with
+  hover-lift, larger 16-24 px radii throughout.
+- `editor-layout.css` rewritten: panel radius 4 px → 12 px
+  (`--editor-radius`), backdrop-blur glassmorphism drawer with accent
+  shadow, 220 ms ease-out slide (softer than the 120 ms snap), aurora
+  band painted across the editor page.
+- Demo MP4 + poster placeholders REMOVED from `index.html` — they were
+  404'ing on prod. Replaced inline with a CSS-only stylized "preview
+  card" (mock browser chrome + two scored clip thumbnails) that ships
+  immediately and doesn't depend on a missing asset.
+
+**Why over the alternatives:**
+- **Tearing down Issue 99 wholesale.** Would invalidate every other
+  page's existing token usage and require a project-wide retrofit.
+  Keeping the sharp ladder for data-dense surfaces is the lower-risk
+  call.
+- **A separate `marketing-tokens.css` file.** Would split the token
+  registry and complicate the test-static gate. Single file, two
+  ladders, semantic naming (`--editor-radius`, `--gradient-aurora`)
+  keeps the registry coherent.
+- **Animated SVG / Lottie demo.** Heavier than the CSS-only preview
+  card and still doesn't show real product output. The CSS card ships
+  today; a recorded MP4 can swap into the same `.hero-demo` shell
+  when ready.
+
+**Source/evidence:** User feedback on `https://autoclip.studio` deploy
+`f5aea4f` (2026-06-07): "softer tone with rounded edges and a more
+futuristic look." Industry precedent: Stripe, Arc Browser, OpenAI
+Playground, Vercel marketing all use this softer-rounded-glass dark
+direction over the sharp Linear-utility one for marketing surfaces.
+
+---
+
 ## 2026-06-07 — Issue 136: Dark editor mode + marketing hero
 
 ### D1 — Three-pane CSS Grid + icon-strip drawer (no JS animation library)

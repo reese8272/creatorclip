@@ -1021,13 +1021,28 @@ def test_issue_136_editor_layout_css_exists_with_editor_tokens():
     import pathlib
 
     tokens = (pathlib.Path(__file__).parent.parent / "static" / "_design-tokens.css").read_text()
+    # Issue-136 redirect (2026-06-07): editor surfaces now use slightly warmer,
+    # subtly-indigo-tinted values for a softer, more "futuristic" feel.
+    # Sharp #0a0a0a / #141414 / #0d0d0d are retained on data-dense pages via
+    # --color-bg / --color-surface / --color-elevated.
     for token, expected in {
-        "--editor-bg": "#0a0a0a",
-        "--editor-surface": "#141414",
-        "--editor-icon-strip": "#0d0d0d",
+        "--editor-bg": "#0b0c12",
+        "--editor-surface": "#14161f",
+        "--editor-icon-strip": "#0d0e16",
     }.items():
         assert f"{token}:" in tokens, f"_design-tokens.css must define {token}"
         assert expected in tokens, f"{token} must use the Issue-136-locked value {expected}"
+    # Soft-radius ladder + glow/aurora tokens must exist for the editor + hero
+    # to be wired against the same design-token surface.
+    for token in (
+        "--radius-lg",
+        "--radius-xl",
+        "--radius-2xl",
+        "--radius-pill",
+        "--glow-accent",
+        "--gradient-aurora",
+    ):
+        assert f"{token}:" in tokens, f"_design-tokens.css must define {token}"
 
     layout = (pathlib.Path(__file__).parent.parent / "static" / "editor-layout.css").read_text()
     # Three-pane CSS Grid is the load-bearing structure.
