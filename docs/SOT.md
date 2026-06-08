@@ -122,6 +122,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── filler.py               # Filler-word + silence cut-list generator (Issue 134 — Tier1 unconditional + Tier2 pause-flanked + 800ms silence w/150ms tail)
 │   └── edits.py                # User-supplied cut-list validator (Issue 135 — bounds, overlap, 5s/85% caps, sub-frame floor) for text-based editor
 │
+│   # static/editor-layout.css + static/hero.css added in Issue 136 (dark editor layout + pre-auth hero)
+│
 ├── preference/
 │   ├── model.py                # Learned reranker (online update)
 │   ├── features.py             # Feature vector per clip

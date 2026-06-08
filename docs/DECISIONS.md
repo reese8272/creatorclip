@@ -5,6 +5,103 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issue 136: Dark editor mode + marketing hero
+
+### D1 — Three-pane CSS Grid + icon-strip drawer (no JS animation library)
+
+**Decision:** review.html now uses a three-column CSS Grid shell —
+player | transcript | tools (fluid / 35rem / 3.5rem). The right column
+is a vertical icon strip; clicking an icon toggles the `data-active-tool`
+attribute on the shell, which drives a sibling `.editor-drawer` that
+slides in from the right via `transform: translateX(0)`. All animation
+is CSS `transition: transform var(--duration)`. Mobile breakpoint
+(`<=900px`) stacks the columns and converts the drawer to a bottom sheet.
+
+**Why over alternatives:**
+- **GSAP / Framer Motion** would deliver the same effect with a 50KB+
+  bundle for one slide. Pure CSS `transition` is fully supported across
+  every shipping browser and reads in the inspector exactly as written.
+- **CSS-only `:has(:checked)`** toggles work in evergreen browsers but
+  mobile Safari support is patchy enough to flag; 15 lines of vanilla
+  JS toggle is more predictable and matches the existing
+  `editor.js` / `auth.js` pattern.
+
+### D2 — Always-visible transcript pane (drawer for everything else)
+
+**Decision:** The transcript editor (Issue 135) lives in the middle
+column and mounts on every `loadClip()`. The other panels (Issue 119
+caption style, Issue 134 clean pass, Issue 94 why-this-clip, Issue 118
+tag feedback) become drawer-only, hidden behind icons.
+
+**Why:** Editing is the high-frequency action in the review flow — the
+transcript pane is the editor surface, not a tool. The other panels are
+configure-and-forget; hiding them in a drawer recovers vertical space
+and matches the CapCut/Opus-pro three-pane mental model.
+
+### D3 — Pre-auth hero gate via `data-allow-anonymous` on `<body>` + auth.js
+
+**Decision:** Pre-auth landing detection lives in `static/auth.js`. A
+page that wants to render to logged-out visitors marks its `<body>` with
+`data-allow-anonymous`; on a `/auth/me` 401, auth.js sets
+`body.classList.add('is-hero-mode')` instead of redirecting to
+`/auth/login`. `hero.css` then shows `.hero` and hides `.dashboard` +
+authenticated nav links via `body.is-hero-mode` selectors.
+
+**Why over alternatives:**
+- **A separate `landing.html` route + nginx routing** would require a
+  server-side change AND duplicate the nav, footer, and disclaimer.
+- **An inline `<script>` cookie check before content render** is what
+  the project's existing walkthrough redirect uses (Issue 100); reusing
+  the same `auth.js` entry point is consistent with that pattern.
+- **Server-rendered Jinja2** is precluded by the project's
+  static-first frontend (intentional design call documented in
+  `docs/SOT.md`).
+
+### D4 — `?yt=<url>` query-hint forwarding (no new backend route)
+
+**Decision:** When the hero CTA submits a valid YouTube URL, the page
+redirects to `/auth/login?next=/?yt=<encoded URL>`. After login, auth.js
+reads the `yt` query param and auto-fills the existing link-video form
+on the dashboard. **No backend route change** — the hint rides on the
+existing `next` redirect param and is consumed entirely client-side.
+
+**Why over alternatives:**
+- **A new backend endpoint** (`POST /onboard-with-url`) would be the
+  "right" long-term shape but requires routing + a Pydantic model + a
+  fresh integration test. The query-hint approach ships the same
+  end-to-end UX with zero server change.
+- **localStorage handoff** would lose the hint across browsers / private
+  windows; the URL param is robust to the OAuth redirect chain.
+
+### D5 — YouTube URL regex client-side (server still validates)
+
+**Decision:** The hero accepts `youtube.com/watch?v=…`, `youtu.be/…`,
+and `youtube.com/shorts/…` via regex
+`^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([\w-]{11})`.
+Invalid input shows an inline error; valid input forwards. The
+existing `/videos/link` endpoint validates again — client-side check
+is for immediate UX feedback only.
+
+### D6 — Demo MP4 placeholder via `poster` + `preload="none"`
+
+**Decision:** `<video src="/static/demo-hero.mp4" poster="/static/demo-hero-poster.png" preload="none">`.
+Until a real demo MP4 ships, the poster image carries the visual and
+`preload="none"` ensures the missing source file doesn't block first
+paint (the browser silently shows the poster and skips the video). A
+deferred follow-up should generate a 30s autoplaying muted loop from
+an actual rendered clip.
+
+### D7 — Existing IDs preserved across the review.html restructure
+
+**Decision:** Every `id="…"` referenced by `editor.js`, the inline
+review.html script, or any Issue 118/119/133/134/135 handler is
+preserved exactly in the new shell. A regression test in
+`tests/test_static.py::test_issue_136_review_html_uses_editor_shell_and_dark_tokens`
+pins this — adding a new panel without updating the test is the cheapest
+way to flag a missing ID after a future cleanup pass.
+
+---
+
 ## 2026-06-07 — Post-Issue-135 audit fixes (6 SEV1s + 1 cross-cutting SEV2)
 
 `docs/assessment/REPORT.md` flagged 6 SEV1s and one cross-cutting axis-B

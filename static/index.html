@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AutoClip — Dashboard</title>
   <link rel="stylesheet" href="/static/_design-tokens.css">
+  <!-- Issue 136 — pre-auth marketing hero (toggled by auth.js when /auth/me 401s) -->
+  <link rel="stylesheet" href="/static/hero.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/activeTasks.js" defer></script>
@@ -235,7 +237,9 @@
     }
   </style>
 </head>
-<body>
+<!-- Issue 136 — `data-allow-anonymous` tells auth.js to toggle hero mode
+     instead of redirecting to /auth/login when /auth/me returns 401. -->
+<body data-allow-anonymous>
   <nav class="nav">
     <a class="nav-brand" href="/">AutoClip</a>
     <div class="nav-links">
@@ -258,7 +262,52 @@
     Recommendations are estimates grounded in your own data, not guarantees.
   </div>
 
-  <main>
+  <!-- Issue 136 — pre-auth marketing hero. Visible only when body.is-hero-mode -->
+  <section class="hero" aria-label="Get started">
+    <h1>The only AI editor that knows your channel.</h1>
+    <p class="sub">
+      Paste a YouTube URL. AutoClip learns from your own analytics, scores clips
+      against your channel DNA, and shows the reasoning behind every pick.
+    </p>
+    <form class="hero-form" onsubmit="event.preventDefault(); heroSubmit()" autocomplete="off">
+      <input id="hero-url" name="yt" type="url" inputmode="url"
+             placeholder="https://www.youtube.com/watch?v=..."
+             aria-label="YouTube video URL" required>
+      <button type="submit">Get clips →</button>
+    </form>
+    <div class="hero-form-error" id="hero-error"></div>
+    <div class="hero-disclaimer">
+      AutoClip predicts fit with your style — it does not promise virality. All recommendations are estimates.
+    </div>
+    <div class="hero-demo" aria-hidden="true">
+      <video id="hero-demo-video" autoplay muted loop playsinline preload="none"
+             poster="/static/demo-hero-poster.png">
+        <source src="/static/demo-hero.mp4" type="video/mp4">
+      </video>
+      <div class="hero-demo-overlay">Demo: scored clips with reasoning</div>
+    </div>
+  </section>
+
+  <script>
+    // Issue 136 — minimal YouTube URL validation + ?yt= forwarding to login.
+    // Server validates again post-login; this is just an immediate-feedback gate.
+    function heroSubmit() {
+      const input = document.getElementById('hero-url');
+      const errEl = document.getElementById('hero-error');
+      const raw = (input.value || '').trim();
+      const ytRe = /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([\w-]{11})/;
+      if (!ytRe.test(raw)) {
+        errEl.textContent = 'That doesn\'t look like a YouTube video URL.';
+        input.focus();
+        return;
+      }
+      errEl.textContent = '';
+      const next = encodeURIComponent('/?yt=' + encodeURIComponent(raw));
+      window.location = '/auth/login?next=' + next;
+    }
+  </script>
+
+  <main class="dashboard">
     <!-- DNA CTA (hidden once onboarding_state = active) -->
     <div class="dna-cta" id="dna-cta" style="display:none">
       <p id="dna-cta-text">Build your Creator DNA to unlock personalised clip scoring.</p>

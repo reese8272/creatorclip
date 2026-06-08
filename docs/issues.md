@@ -3228,7 +3228,7 @@ Highest-retention feature in the editor suite.
 ---
 
 ## Issue 136: UI upgrade — dark editor mode + marketing hero
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07 — commit pending)
 **Depends on**: 135
 
 **What**: Two-part visual upgrade. (A) **Dark editor mode**: review.html gets a full-dark
@@ -3245,13 +3245,14 @@ that Opus Clip built its user base on.
 `static/hero.css` (new), `tests/test_static.py` (extend), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research dark editor UI patterns (CapCut Web, Opus Clip editor, Descript) and PLG landing hero patterns (Opus, Captions/Mirage); document chosen approach in `docs/DECISIONS.md`
-- [ ] review.html dark mode: `#0a0a0a` base, `#141414` panels, `#5e6ad2` accent — all from design tokens, no hardcoded hex in HTML
-- [ ] Player takes ~60% of viewport width; transcript editor panel takes ~35%; tool panels (captions / filler / editor) collapse to an icon strip with CSS transitions (no JS animation library)
-- [ ] Pre-auth index.html: if no session cookie → hero layout with URL input CTA + autoplaying muted demo clip; if session exists → existing dashboard (no regression)
-- [ ] Hero URL input validates YouTube URL format client-side; on submit routes to `/auth/login?next=...` with URL as a query hint for post-auth flow
-- [ ] Static tests: dark-mode tokens present in review.html, pre-auth detection logic, hero input element, no regression on authenticated dashboard template
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research dark editor UI patterns (CapCut Web / Opus Clip / Descript three-pane shells) and PLG landing hero patterns (Opus paste-URL hero); decisions logged in `docs/DECISIONS.md` (Issue-136 D1–D7)
+- [x] review.html dark mode: `#0a0a0a` base, `#141414` panels, `#5e6ad2` accent — all referenced via `--editor-*` tokens added to `_design-tokens.css`; no hardcoded hex in HTML markup
+- [x] Three-pane CSS Grid layout: player (fluid) | transcript editor (35rem) | icon-strip tools (3.5rem); tool panels collapse to an icon strip + slide-out drawer with pure CSS `transition: transform` (no JS animation library); mobile breakpoint at 900px stacks to single column + bottom-sheet drawer
+- [x] Always-visible transcript pane mounts on every `loadClip()`; other panels (captions / clean / why / feedback) live behind icon-strip drawer toggled by `data-active-tool`
+- [x] Pre-auth index.html: `<body data-allow-anonymous>` opts in; `auth.js` toggles `body.is-hero-mode` on `/auth/me` 401 instead of redirecting; existing dashboard surface is untouched when authenticated
+- [x] Hero URL input client-side regex validates `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/shorts/…`; valid input redirects to `/auth/login?next=/?yt=<encoded URL>`; post-login `auth.js` auto-fills the existing link-video form with the hint
+- [x] Static tests (5 new): editor-layout.css + editor tokens, review.html 3-pane shell + preserved IDs, index.html hero block + honesty disclaimer, auth.js `data-allow-anonymous` + `?yt=` hint, hero.css visibility-by-body-class
+- [x] Full suite green: 896 passed / 2 skipped; Layer 0 ruff 0 / mypy 0 / coverage ≥75.20% / bandit 0/0 / pip-audit 0 / freshness ok
 
 ---
 

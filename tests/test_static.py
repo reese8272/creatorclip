@@ -1009,3 +1009,122 @@ def test_insights_page_has_ai_analysis_and_saved_panels():
     )
     assert 'id="saved-panel"' in src, "Issue 117: must include saved insights panel."
     assert "saveInsight" in src, "Issue 117: must have saveInsight() for bookmarking analyses."
+
+
+# ── Issue 136 — dark editor mode + marketing hero ────────────────────────
+
+
+def test_issue_136_editor_layout_css_exists_with_editor_tokens():
+    """Issue 136: static/editor-layout.css owns the dark 3-pane review.html
+    layout. Tokens (--editor-bg / --editor-surface / --editor-strip-width)
+    are defined in _design-tokens.css."""
+    import pathlib
+
+    tokens = (pathlib.Path(__file__).parent.parent / "static" / "_design-tokens.css").read_text()
+    for token, expected in {
+        "--editor-bg": "#0a0a0a",
+        "--editor-surface": "#141414",
+        "--editor-icon-strip": "#0d0d0d",
+    }.items():
+        assert f"{token}:" in tokens, f"_design-tokens.css must define {token}"
+        assert expected in tokens, f"{token} must use the Issue-136-locked value {expected}"
+
+    layout = (pathlib.Path(__file__).parent.parent / "static" / "editor-layout.css").read_text()
+    # Three-pane CSS Grid is the load-bearing structure.
+    assert "display: grid" in layout
+    assert "grid-template-areas" in layout
+    assert '"player transcript tools"' in layout, (
+        "editor-layout.css must declare the player|transcript|tools 3-pane shell."
+    )
+    # Drawer is driven by data-active-tool on the shell.
+    assert "data-active-tool" in layout
+    # Pure-CSS transition for the slide-out, no JS animation library.
+    assert "transition: transform" in layout
+
+
+def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
+    """review.html opts into editor mode + uses ONLY --editor-* tokens —
+    no hardcoded hex in the new layout markup (Issue 136 acceptance)."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "review.html").read_text()
+    assert '<link rel="stylesheet" href="/static/editor-layout.css">' in src
+    assert 'class="editor-page"' in src or "class='editor-page'" in src, (
+        "review.html <body> must carry .editor-page to opt into dark mode."
+    )
+    assert 'class="editor-shell"' in src, "Three-pane shell wrapper must be present."
+    assert 'class="editor-transcript"' in src, "Always-visible transcript pane must be present."
+    assert 'class="editor-tools"' in src, "Icon-strip nav must be present."
+    # Tool drawer triggers — every Issue-119/133/134/135 panel must be a tool target.
+    for tool in ("style", "clean", "why", "feedback"):
+        assert f'data-tool-trigger="{tool}"' in src, (
+            f"review.html must expose a tool trigger for {tool}"
+        )
+        assert f'data-tool="{tool}"' in src, f"review.html must declare a drawer panel for {tool}"
+    # Existing IDs from prior issues survived the restructure.
+    for css_id in (
+        "clip-player",
+        "clip-meta",
+        "ed-words",
+        "ed-status",
+        "style-subtitle",
+        "style-background",
+        "clean-warning",
+    ):
+        assert f'id="{css_id}"' in src, (
+            f"Issue 136 restructure must preserve #{css_id} for existing handlers."
+        )
+
+
+def test_issue_136_index_html_pre_auth_hero_block():
+    """Issue 136: index.html carries a hero block + opts into anonymous
+    rendering so the pre-auth landing shows up for logged-out visitors."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+    assert '<link rel="stylesheet" href="/static/hero.css">' in src
+    assert "data-allow-anonymous" in src, (
+        "<body> must carry data-allow-anonymous to opt into hero gate."
+    )
+    assert 'class="hero"' in src, "Hero section must exist in the template."
+    assert 'id="hero-url"' in src, "Hero must include a YouTube URL input."
+    assert "heroSubmit" in src, "Hero must wire the URL form to a submit handler."
+    # Honesty constraint — CLAUDE.md requires the disclaimer to appear on every
+    # interface; in hero mode the existing nav-bar disclaimer is hidden, so a
+    # second hero-scoped copy must exist.
+    assert "predicts fit" in src and "not promise" in src.lower(), (
+        "Hero must surface the honesty disclaimer (no virality promise)."
+    )
+    # YouTube URL regex is client-side; server validates again.
+    assert "youtube.com" in src and "youtu.be" in src, (
+        "Hero validation must accept both youtube.com and youtu.be."
+    )
+    # Existing dashboard surface is still in the template (no regression
+    # when the user IS authenticated).
+    assert 'id="video-tbody"' in src, "Dashboard table must survive the hero addition."
+
+
+def test_issue_136_auth_js_gates_anonymous_landing():
+    """auth.js — on 401 with data-allow-anonymous set, toggle body.is-hero-mode
+    instead of redirecting. Also pick up the ?yt= hint after login."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
+    assert "data-allow-anonymous" in src, "auth.js must check data-allow-anonymous on 401."
+    assert "is-hero-mode" in src, "auth.js must toggle body.is-hero-mode on hero pages."
+    assert "yt" in src and "URLSearchParams" in src, (
+        "auth.js must read the ?yt= query hint after login."
+    )
+
+
+def test_issue_136_hero_css_drives_visibility_via_body_class():
+    """hero.css gates the hero/dashboard split via body.is-hero-mode — pure
+    CSS, no JS animation library."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "hero.css").read_text()
+    assert ".hero { display: none; }" in src or ".hero{display:none" in src.replace(" ", "")
+    assert "body.is-hero-mode .hero" in src, "Hero must become visible only in hero mode."
+    assert "body.is-hero-mode .dashboard" in src, (
+        "Dashboard must hide in hero mode (no regression for authenticated users)."
+    )

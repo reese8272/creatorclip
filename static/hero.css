@@ -1,0 +1,146 @@
+/**
+ * hero.css — Pre-auth landing hero for index.html (Issue 136).
+ *
+ * Visibility is driven by `body.is-hero-mode` (set by auth.js when /auth/me
+ * returns 401 on a page marked `data-allow-anonymous`). The hero block lives
+ * inside the same template as the dashboard; both surfaces share <body>.
+ *
+ *   body.is-hero-mode  → .hero shown, .dashboard hidden, nav links hidden
+ *   body (default)     → .hero hidden, dashboard shown (existing behaviour)
+ */
+
+.hero { display: none; }
+body.is-hero-mode .hero { display: block; }
+body.is-hero-mode .dashboard,
+body.is-hero-mode .dna-cta,
+body.is-hero-mode .summary-cards,
+body.is-hero-mode .analyze-cta,
+body.is-hero-mode .link-video-details,
+body.is-hero-mode .video-table,
+body.is-hero-mode .section-header,
+body.is-hero-mode #activity-panel-root { display: none !important; }
+/* In hero mode the nav links to authenticated surfaces should be hidden;
+   the brand mark + Pricing link are kept so the public landing still has
+   a way into pricing. */
+body.is-hero-mode .nav-links a:not([href="/static/pricing.html"]) { display: none; }
+body.is-hero-mode .nav-balance,
+body.is-hero-mode .nav-help,
+body.is-hero-mode #nav-user,
+body.is-hero-mode .nav .logout { display: none; }
+
+.hero {
+  text-align: center;
+  padding: var(--space-12) var(--space-4) var(--space-10);
+  max-width: 720px;
+  margin: 0 auto;
+}
+.hero h1 {
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-4);
+  font-weight: 700;
+}
+.hero .sub {
+  color: var(--color-text-muted);
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
+  margin-bottom: var(--space-8);
+  max-width: 540px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hero-form {
+  display: flex;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  max-width: 560px;
+  margin: 0 auto var(--space-3);
+  transition: border-color var(--duration-fast) var(--ease);
+}
+.hero-form:focus-within { border-color: var(--color-accent); }
+
+.hero-form input[type="url"],
+.hero-form input[type="text"] {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  padding: var(--space-2) var(--space-3);
+  outline: none;
+  min-width: 0;
+}
+.hero-form input::placeholder { color: var(--color-text-subtle); }
+
+.hero-form button {
+  background: var(--color-accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-5);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease);
+}
+.hero-form button:hover { background: var(--color-accent-hover); }
+
+.hero-form-error {
+  color: var(--color-danger);
+  font-size: var(--text-xs);
+  min-height: 18px;
+  margin-bottom: var(--space-4);
+}
+
+.hero-disclaimer {
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+  margin-bottom: var(--space-8);
+}
+
+/* Demo video — autoplaying muted loop showing the product output. The MP4
+   placeholder lives at /static/demo-hero.mp4; until that ships, the poster
+   image carries the visual. The element is intentionally lazy-loaded via
+   the `preload="none"` attribute so first paint isn't blocked. */
+.hero-demo {
+  position: relative;
+  margin: 0 auto;
+  max-width: 720px;
+  aspect-ratio: 16 / 9;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.hero-demo video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.hero-demo-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(10,10,10,0) 60%, rgba(10,10,10,0.6) 100%);
+  pointer-events: none;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  align-items: flex-end;
+  padding: var(--space-3);
+}
+
+@media (max-width: 600px) {
+  .hero { padding: var(--space-8) var(--space-3) var(--space-6); }
+  .hero-form { flex-direction: column; }
+  .hero-form button { width: 100%; }
+}

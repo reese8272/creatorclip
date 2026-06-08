@@ -85,6 +85,23 @@
   --duration-fast:   80ms;
   --duration:        120ms;
   --ease:            cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Editor-mode surfaces (Issue 136 dark editor) ──────────────────
+   * review.html is a focused editor surface, not a content page. It
+   * borrows the same indigo accent but uses dedicated surface tokens
+   * that read slightly elevated against the page background — matches
+   * the CapCut Web / Opus Pro three-pane feel without overriding the
+   * Linear surface ladder used on every other page. Issue spec calls
+   * out #0a0a0a / #141414 / #5e6ad2 explicitly — locked here.
+   * ───────────────────────────────────────────────────────────────── */
+  --editor-bg:           #0a0a0a;   /* page (matches --color-bg) */
+  --editor-surface:      #141414;   /* player + transcript + drawer panels */
+  --editor-surface-elev: #1a1a1a;   /* hover, active drawer panel */
+  --editor-border:       #222222;   /* panel hairlines */
+  --editor-border-strong:#2e2e2e;   /* tool-strip separators */
+  --editor-icon-strip:   #0d0d0d;   /* right-rail strip — slightly inset */
+  --editor-drawer-width: 24rem;     /* slide-out tool drawer width */
+  --editor-strip-width:  3.5rem;    /* icon-strip column width */
 }
 
 /* ─────────────────────────────────────────────────────────────────

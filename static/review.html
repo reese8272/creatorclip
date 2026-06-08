@@ -12,6 +12,8 @@
   <script src="/static/activity.js" defer></script>
   <script src="/static/tooltip.js" defer></script>
   <script src="/static/editor.js" defer></script>
+  <!-- Issue 136 — dark editor layout (3-pane Grid + icon-strip drawer) -->
+  <link rel="stylesheet" href="/static/editor-layout.css">
   <style>
     /* Issue 99 Phase B — review.html retrofit (clip player + trim). */
 
@@ -302,7 +304,7 @@
     }
   </style>
 </head>
-<body>
+<body class="editor-page">
   <nav class="nav">
     <a class="nav-brand" href="/">AutoClip</a>
     <div class="nav-links">
@@ -325,64 +327,121 @@
     All scores are estimates grounded in your own channel data.
   </div>
 
-  <div class="player-wrap">
-    <video id="clip-player" controls playsinline></video>
+  <!-- Issue 136 — three-pane dark editor: player | transcript | icon strip + drawer -->
+  <div class="editor-shell" id="editor-shell" data-active-tool="">
+    <!-- LEFT: video player + meta + review actions -->
+    <section class="editor-player player-wrap">
+      <video id="clip-player" controls playsinline></video>
 
-    <div class="clip-meta" id="clip-meta">Loading clip…</div>
-    <div class="clip-principle" id="clip-principle"></div>
+      <div class="clip-meta" id="clip-meta">Loading clip…</div>
+      <div class="clip-principle" id="clip-principle"></div>
 
-    <details class="why-clip" id="why-clip">
-      <summary>Why this clip?</summary>
-      <div class="body">
-        <div class="principle-cite" id="why-principle"></div>
-        <div id="why-reasoning"></div>
-        <div class="score-row">
-          <span>Score <span class="info-icon" tabindex="0" data-tooltip="Estimated fit with your channel's content DNA and audience. 0–1 scale. Scores are estimates grounded in your own data, not a guarantee of performance.">?</span></span>
-          <strong id="why-score">—</strong>
+      <div class="trim-section">
+        <label>Trim start</label>
+        <div class="trim-row">
+          <input type="range" id="trim-start" min="0" max="100" step="0.1" value="0">
+          <span class="trim-val" id="trim-start-val">0.0s</span>
         </div>
-        <div class="score-row" style="margin-top:0;padding-top:0;border-top:none">
-          <span>Setup → peak → end</span><strong id="why-timing">—</strong>
+        <label style="margin-top:var(--space-2)">Trim end</label>
+        <div class="trim-row">
+          <input type="range" id="trim-end" min="0" max="100" step="0.1" value="100">
+          <span class="trim-val" id="trim-end-val">—</span>
         </div>
       </div>
-    </details>
 
-    <div class="trim-section">
-      <label>Trim start</label>
-      <div class="trim-row">
-        <input type="range" id="trim-start" min="0" max="100" step="0.1" value="0">
-        <span class="trim-val" id="trim-start-val">0.0s</span>
+      <div id="feedback-flash"></div>
+
+      <div class="review-actions">
+        <button class="btn btn-up"   onclick="openFeedbackPanel('upvote')">👍 Keep</button>
+        <button class="btn btn-down" onclick="openFeedbackPanel('downvote')">👎 Drop</button>
+        <button class="btn btn-skip" onclick="sendFeedback('skip')">Skip</button>
+        <button class="btn btn-trim" onclick="sendFeedback('trim')">✂ Trim</button>
       </div>
-      <label style="margin-top:var(--space-2)">Trim end</label>
-      <div class="trim-row">
-        <input type="range" id="trim-end" min="0" max="100" step="0.1" value="100">
-        <span class="trim-val" id="trim-end-val">—</span>
+
+      <!-- Issue 118: structured feedback panel -->
+      <div class="feedback-panel" id="feedback-panel">
+        <h4 id="feedback-panel-title">Why are you keeping this?</h4>
+        <div class="tag-grid" id="tag-grid"></div>
+        <input class="feedback-note-input" id="feedback-note" type="text" placeholder="Tell us more…">
+        <div class="feedback-submit-row">
+          <button class="btn btn-secondary" onclick="closeFeedbackPanel()">Cancel</button>
+          <button class="btn btn-primary" onclick="submitTaggedFeedback()">Submit</button>
+        </div>
       </div>
-    </div>
 
-    <div id="feedback-flash"></div>
-
-    <div class="review-actions">
-      <button class="btn btn-up"   onclick="openFeedbackPanel('upvote')">👍 Keep</button>
-      <button class="btn btn-down" onclick="openFeedbackPanel('downvote')">👎 Drop</button>
-      <button class="btn btn-skip" onclick="sendFeedback('skip')">Skip</button>
-      <button class="btn btn-trim" onclick="sendFeedback('trim')">✂ Trim</button>
-    </div>
-
-    <!-- Issue 118: structured feedback panel -->
-    <div class="feedback-panel" id="feedback-panel">
-      <h4 id="feedback-panel-title">Why are you keeping this?</h4>
-      <div class="tag-grid" id="tag-grid"></div>
-      <input class="feedback-note-input" id="feedback-note" type="text" placeholder="Tell us more…">
-      <div class="feedback-submit-row">
-        <button class="btn btn-secondary" onclick="closeFeedbackPanel()">Cancel</button>
-        <button class="btn btn-primary" onclick="submitTaggedFeedback()">Submit</button>
+      <div class="next-wrap">
+        <button class="btn btn-next" onclick="loadNext()">Next clip →</button>
       </div>
-    </div>
+    </section>
 
-    <!-- Issue 119 style picker + Issue 133 animated caption styles -->
-    <div class="style-section">
-      <details>
-        <summary>Clip style</summary>
+    <!-- MIDDLE: always-visible transcript editor (Issue 135) -->
+    <section class="editor-transcript">
+      <h2>Transcript</h2>
+      <div style="font-size:var(--text-xs);color:var(--color-text-subtle);margin-bottom:var(--space-2)">
+        Drag across words to mark them for removal. Click <strong>×</strong> on a queued cut to undo it.
+      </div>
+      <div id="ed-words" role="textbox" aria-multiline="true" aria-readonly="true" aria-label="Clip transcript"></div>
+      <div id="ed-summary" style="font-size:var(--text-sm);color:var(--color-text-subtle);margin-top:var(--space-2)"></div>
+      <div id="ed-warning" style="font-size:var(--text-sm);color:#c2410c;font-weight:600;display:none"></div>
+      <div id="ed-queue" style="font-size:var(--text-xs);max-height:140px;overflow-y:auto;border:1px solid var(--editor-border);border-radius:var(--radius-sm);padding:var(--space-2)"></div>
+      <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-2)">
+        <button class="btn btn-secondary" onclick="window.transcriptEditor && window.transcriptEditor.undo()">Undo</button>
+        <button class="btn btn-secondary" onclick="window.transcriptEditor && window.transcriptEditor.discardCuts()">Clear all</button>
+        <button class="btn btn-primary" onclick="window.transcriptEditor && window.transcriptEditor.confirm()">Apply</button>
+      </div>
+      <div id="ed-preview-container" style="display:none;margin-top:var(--space-3)">
+        <video id="ed-preview" controls style="width:100%;border-radius:var(--radius-sm)"></video>
+        <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
+          <button class="btn btn-primary" onclick="window.transcriptEditor.confirmFinal()">Use edited version</button>
+          <button class="btn btn-secondary" onclick="window.transcriptEditor.discardEdit()">Keep original</button>
+        </div>
+      </div>
+      <div id="ed-status" style="font-size:var(--text-xs);color:var(--color-text-subtle);margin-top:var(--space-2)"></div>
+    </section>
+
+    <!-- RIGHT: icon strip — single button per tool drawer -->
+    <nav class="editor-tools" aria-label="Tool panels">
+      <button data-tool-trigger="why" aria-pressed="false" aria-label="Why this clip" title="Why this clip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </button>
+      <button data-tool-trigger="style" aria-pressed="false" aria-label="Caption style" title="Caption style">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+      </button>
+      <button data-tool-trigger="clean" aria-pressed="false" aria-label="Clean filler + silence" title="Clean filler + silence">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+      </button>
+      <button data-tool-trigger="feedback" aria-pressed="false" aria-label="Tag feedback" title="Tag feedback">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Slide-out drawer (sibling of .editor-shell so transform doesn't affect grid) -->
+  <aside class="editor-drawer" role="region" aria-label="Tool drawer">
+    <button class="editor-drawer-close" onclick="document.getElementById('editor-shell').dataset.activeTool=''; document.querySelectorAll('.editor-tools button').forEach(b=>b.setAttribute('aria-pressed','false'));" aria-label="Close">×</button>
+    <div class="editor-drawer-inner">
+      <!-- Why this clip — Issue 94 -->
+      <div class="editor-drawer-panel" data-tool="why">
+        <h3 style="font-size:var(--text-sm);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-3)">Why this clip?</h3>
+        <details class="why-clip" id="why-clip" open>
+          <summary>Reasoning</summary>
+          <div class="body">
+            <div class="principle-cite" id="why-principle"></div>
+            <div id="why-reasoning"></div>
+            <div class="score-row">
+              <span>Score <span class="info-icon" tabindex="0" data-tooltip="Estimated fit with your channel's content DNA and audience. 0–1 scale. Scores are estimates grounded in your own data, not a guarantee of performance.">?</span></span>
+              <strong id="why-score">—</strong>
+            </div>
+            <div class="score-row" style="margin-top:0;padding-top:0;border-top:none">
+              <span>Setup → peak → end</span><strong id="why-timing">—</strong>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Caption style picker — Issue 119 + Issue 133 -->
+      <div class="editor-drawer-panel" data-tool="style">
+        <h3 style="font-size:var(--text-sm);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-3)">Caption style</h3>
         <div class="style-row">
           <span>Caption style</span>
           <select id="style-subtitle" title="Animated captions are baked into the render. Bold Pop = one word at a time, scale-pops on appearance (MrBeast/Hormozi feel). Gradient Slide = words fade in left-to-right in brand indigo, transitioning to white. Minimal = plain phrase captions, no animation.">
@@ -406,64 +465,53 @@
         </div>
         <button class="btn btn-secondary btn-style" onclick="applyStyle()">Render with style</button>
         <div id="style-status" style="font-size:var(--text-xs);color:var(--color-text-subtle);margin-top:var(--space-2)"></div>
-      </details>
-    </div>
+      </div>
 
-    <!-- Issue 134: filler word + silence removal -->
-    <div class="style-section">
-      <details>
-        <summary>Clean filler words + long silences</summary>
+      <!-- Clean filler + silence — Issue 134 -->
+      <div class="editor-drawer-panel" data-tool="clean">
+        <h3 style="font-size:var(--text-sm);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-3)">Clean filler + silence</h3>
         <div class="style-row" style="flex-direction:column;align-items:stretch;gap:var(--space-2)">
           <button class="btn btn-secondary" onclick="loadCleanPreview()">Preview what would be removed</button>
           <div id="clean-warning" style="font-size:var(--text-sm);color:#c2410c;font-weight:600;display:none"></div>
           <div id="clean-summary" style="font-size:var(--text-sm);color:var(--color-text-subtle)"></div>
-          <div id="clean-cuts" style="font-size:var(--text-xs);max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2);display:none"></div>
+          <div id="clean-cuts" style="font-size:var(--text-xs);max-height:140px;overflow-y:auto;border:1px solid var(--editor-border);border-radius:var(--radius-sm);padding:var(--space-2);display:none"></div>
           <button class="btn btn-secondary" id="clean-apply-btn" onclick="applyClean()" style="display:none">Apply — render cleaned version</button>
           <div id="clean-cleaned" style="display:none">
-            <video id="cleaned-player" controls style="width:100%;border-radius:6px;margin-top:var(--space-2)"></video>
+            <video id="cleaned-player" controls style="width:100%;border-radius:var(--radius-sm);margin-top:var(--space-2)"></video>
             <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
-              <button class="btn btn-secondary" onclick="confirmClean()">Use cleaned version</button>
+              <button class="btn btn-primary" onclick="confirmClean()">Use cleaned version</button>
               <button class="btn btn-secondary" onclick="discardClean()">Keep original</button>
             </div>
           </div>
           <div id="clean-status" style="font-size:var(--text-xs);color:var(--color-text-subtle)"></div>
         </div>
-      </details>
-    </div>
+      </div>
 
-    <!-- Issue 135: text-based editor (transcript-driven cuts) -->
-    <div class="style-section">
-      <details onclick="setTimeout(() => window.transcriptEditor && window.transcriptEditor.mount(currentClip), 0)">
-        <summary>Edit transcript — select words to remove</summary>
-        <div class="style-row" style="flex-direction:column;align-items:stretch;gap:var(--space-2)">
-          <div style="font-size:var(--text-xs);color:var(--color-text-subtle)">
-            Click and drag across words to mark them for removal. Pending cuts show with strikethrough. Click <strong>×</strong> on a queued cut to undo it. Click <strong>Apply</strong> to re-render.
-          </div>
-          <div id="ed-words" role="textbox" aria-multiline="true" aria-readonly="true" aria-label="Clip transcript"></div>
-          <div id="ed-summary" style="font-size:var(--text-sm);color:var(--color-text-subtle)"></div>
-          <div id="ed-warning" style="font-size:var(--text-sm);color:#c2410c;font-weight:600;display:none"></div>
-          <div id="ed-queue" style="font-size:var(--text-xs);max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2)"></div>
-          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
-            <button class="btn btn-secondary" onclick="window.transcriptEditor.undo()">Undo</button>
-            <button class="btn btn-secondary" onclick="window.transcriptEditor.discardCuts()">Clear all</button>
-            <button class="btn btn-secondary" onclick="window.transcriptEditor.confirm()">Apply — render edited version</button>
-          </div>
-          <div id="ed-preview-container" style="display:none">
-            <video id="ed-preview" controls style="width:100%;border-radius:6px;margin-top:var(--space-2)"></video>
-            <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2)">
-              <button class="btn btn-secondary" onclick="window.transcriptEditor.confirmFinal()">Use edited version</button>
-              <button class="btn btn-secondary" onclick="window.transcriptEditor.discardEdit()">Keep original</button>
-            </div>
-          </div>
-          <div id="ed-status" style="font-size:var(--text-xs);color:var(--color-text-subtle)"></div>
-        </div>
-      </details>
+      <!-- Tag feedback — Issue 118 helper -->
+      <div class="editor-drawer-panel" data-tool="feedback">
+        <h3 style="font-size:var(--text-sm);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:var(--space-3)">Tag feedback</h3>
+        <p style="font-size:var(--text-sm);color:var(--color-text-subtle)">
+          Use the Keep / Drop / Skip / Trim buttons below the player. When you Keep or Drop, a tag picker
+          pops up so you can tell the engine why — those tags train your preference model.
+        </p>
+      </div>
     </div>
+  </aside>
 
-    <div class="next-wrap">
-      <button class="btn btn-next" onclick="loadNext()">Next clip →</button>
-    </div>
-  </div>
+  <!-- Tool-strip toggle script (~15 LOC, no animation library) -->
+  <script>
+    document.addEventListener('click', function (e) {
+      const trigger = e.target.closest('[data-tool-trigger]');
+      if (!trigger) return;
+      const shell = document.getElementById('editor-shell');
+      const next = trigger.dataset.toolTrigger;
+      const isOpen = shell.dataset.activeTool === next;
+      shell.dataset.activeTool = isOpen ? '' : next;
+      document.querySelectorAll('.editor-tools button').forEach(function (b) {
+        b.setAttribute('aria-pressed', b === trigger && !isOpen ? 'true' : 'false');
+      });
+    });
+  </script>
 
   <script>
     let clips = [];
@@ -522,7 +570,9 @@
 
     function loadClip(clip) {
       // Issue 135 — drop the previous clip's transcript-editor state before
-      // loading the next one. The details onclick handler re-mounts on expand.
+      // loading the next one. Issue 136 — the transcript pane is now always
+      // visible in the middle column, so re-mount immediately rather than
+      // waiting for a <details> expand handler.
       if (window.transcriptEditor) window.transcriptEditor.unmount();
       currentClip = clip;
       if (clip.render_uri) {
@@ -560,6 +610,13 @@
       trimEnd.min = 0;   trimEnd.max = clipDur;   trimEnd.value = clipDur;
       startVal.textContent = '0.0s';
       endVal.textContent   = clipDur.toFixed(1) + 's';
+
+      // Issue 136 — mount the always-visible transcript editor in the middle
+      // column. Defer one tick so editor.js (loaded with defer) has registered
+      // window.transcriptEditor before first call.
+      setTimeout(function () {
+        if (window.transcriptEditor) window.transcriptEditor.mount(clip);
+      }, 0);
     }
 
     trimStart.addEventListener('input', () => {

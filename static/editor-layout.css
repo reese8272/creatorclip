@@ -1,0 +1,212 @@
+/**
+ * editor-layout.css — Three-pane dark editor for review.html (Issue 136).
+ *
+ * Layout primitive: CSS Grid with three columns:
+ *   .editor-player    | left, fluid           | the 9:16 video + meta + actions
+ *   .editor-transcript| middle, fixed 35rem   | always-visible transcript pane
+ *   .editor-tools     | right, --editor-strip-width | vertical icon strip
+ *
+ * The drawer (.editor-drawer) is a sibling positioned absolutely to the right
+ * of the icon strip; visibility is driven by a single data-active-tool
+ * attribute on .editor-shell. Each drawer panel declares data-tool="x".
+ *
+ * Mobile: at <=900px the three columns stack vertically and the drawer becomes
+ * a bottom sheet instead of a side panel. No JS branch — pure media query.
+ *
+ * All tokens come from _design-tokens.css. No hardcoded hex; no animation
+ * library dependency.
+ */
+
+body.editor-page {
+  background: var(--editor-bg);
+  color: var(--color-text);
+  min-height: 100vh;
+}
+
+/* Tighten the shared nav for the editor surface so it doesn't compete with
+   the player for visual weight. */
+body.editor-page .nav {
+  border-bottom: 1px solid var(--editor-border);
+  background: var(--editor-bg);
+}
+
+.editor-shell {
+  display: grid;
+  grid-template-columns: 1fr 35rem var(--editor-strip-width);
+  grid-template-areas: "player transcript tools";
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  position: relative;
+  min-height: calc(100vh - 60px); /* leave room for nav */
+}
+
+.editor-player {
+  grid-area: player;
+  background: var(--editor-surface);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.editor-player video {
+  width: 100%;
+  max-height: 65vh;
+  background: #000;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+.editor-player #clip-meta,
+.editor-player #clip-principle,
+.editor-player #flash {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.editor-transcript {
+  grid-area: transcript;
+  background: var(--editor-surface);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+}
+.editor-transcript h2 {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--space-1);
+}
+
+/* The icon strip — a thin vertical rail with one button per tool.
+   Buttons are square; the active tool is highlighted with the accent. */
+.editor-tools {
+  grid-area: tools;
+  background: var(--editor-icon-strip);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-2) 0;
+  gap: var(--space-1);
+}
+.editor-tools button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  width: calc(var(--editor-strip-width) - var(--space-3));
+  height: calc(var(--editor-strip-width) - var(--space-3));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--duration-fast) var(--ease),
+              color var(--duration-fast) var(--ease);
+}
+.editor-tools button:hover {
+  background: var(--editor-surface-elev);
+  color: var(--color-text);
+}
+.editor-tools button[aria-pressed="true"] {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.editor-tools button svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The drawer slides in from the right of the icon strip. Hidden by default;
+   the data-active-tool attribute on .editor-shell controls visibility. */
+.editor-drawer {
+  position: fixed;
+  top: 60px;            /* below nav — kept in sync with nav height */
+  right: 0;
+  bottom: 0;
+  width: var(--editor-drawer-width);
+  padding-right: var(--editor-strip-width);  /* leave the icon strip clickable */
+  transform: translateX(100%);
+  transition: transform var(--duration) var(--ease);
+  z-index: 20;
+  pointer-events: none;
+}
+.editor-shell[data-active-tool]:not([data-active-tool=""]) ~ .editor-drawer {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.editor-drawer-inner {
+  height: 100%;
+  background: var(--editor-surface);
+  border-left: 1px solid var(--editor-border-strong);
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+.editor-drawer-close {
+  position: absolute;
+  top: var(--space-2);
+  right: calc(var(--editor-strip-width) + var(--space-2));
+  background: transparent;
+  border: 1px solid var(--editor-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.editor-drawer-close:hover { color: var(--color-text); border-color: var(--editor-border-strong); }
+
+.editor-drawer-panel { display: none; }
+.editor-shell[data-active-tool="style"]    ~ .editor-drawer .editor-drawer-panel[data-tool="style"]    { display: block; }
+.editor-shell[data-active-tool="clean"]    ~ .editor-drawer .editor-drawer-panel[data-tool="clean"]    { display: block; }
+.editor-shell[data-active-tool="why"]      ~ .editor-drawer .editor-drawer-panel[data-tool="why"]      { display: block; }
+.editor-shell[data-active-tool="feedback"] ~ .editor-drawer .editor-drawer-panel[data-tool="feedback"] { display: block; }
+
+/* ── Mobile: stack and turn the drawer into a bottom sheet ─────────────── */
+@media (max-width: 900px) {
+  .editor-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "player"
+      "transcript"
+      "tools";
+    gap: var(--space-2);
+    min-height: auto;
+  }
+  .editor-tools {
+    flex-direction: row;
+    justify-content: center;
+    padding: var(--space-1) 0;
+  }
+  .editor-drawer {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    padding-right: 0;
+    max-height: 60vh;
+    transform: translateY(100%);
+  }
+  .editor-shell[data-active-tool]:not([data-active-tool=""]) ~ .editor-drawer {
+    transform: translateY(0);
+  }
+  .editor-drawer-close {
+    right: var(--space-2);
+  }
+}

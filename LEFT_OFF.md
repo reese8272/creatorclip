@@ -3,16 +3,22 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-07 (post-Issue-135 audit fixes — 6 SEV1s + 1 axis-B sweep — code-complete; Issues 133/134/135 already deployed earlier this session)
-**Branch:** `main` — HEAD `7af18b2` (synced with origin/main) — **uncommitted audit-fix changes in working tree**
-**Working tree:** DIRTY — audit-fix files staged for next commit
-**CI (most recent green):** Quality Gates ✅ · Integration tests ✅ · CI ✅ · Docker publish ✅ · Deploy ✅ (for `7af18b2`)
+**Last updated:** 2026-06-07 (Issue 136 — dark editor + marketing hero — code-complete; audit fixes + Issues 133/134/135 already shipped earlier this session)
+**Branch:** `main` — HEAD `030f987` (synced with origin/main) — **uncommitted Issue 136 changes in working tree**
+**Working tree:** DIRTY — Issue 136 files staged for next commit
+**CI (most recent green):** Quality Gates ✅ · Integration tests ✅ · CI ✅ · Docker publish ✅ · Deploy ✅ (for `030f987`)
 
 ---
 
 ## CURRENT FOCUS
 
-### Post-Issue-135 audit fixes → code complete, awaiting push
+### Issue 136 — Dark editor + marketing hero → code complete, awaiting push
+
+- **review.html** restructured into a three-pane CSS Grid shell (player | transcript | icon-strip drawer). All animation is CSS `transition` — no JS animation library. Every Issue 118/119/133/134/135 ID survived the rebuild (pinned by test).
+- **index.html** gains a pre-auth hero: `<body data-allow-anonymous>` → on `/auth/me` 401 `auth.js` toggles `body.is-hero-mode` instead of redirecting. Hero CTA forwards a valid YouTube URL via `?yt=<url>` to login; post-login `auth.js` auto-fills the dashboard's link-video form. **No new backend route.**
+- **Demo MP4 placeholder**: `<video preload="none" poster="/static/demo-hero-poster.png">` — the missing source file silently falls back to the poster. Follow-up: record a 30s muted loop.
+
+### Post-Issue-135 audit fixes → DEPLOYED at `030f987`
 
 `/assess` flagged 6 SEV1s + 1 cross-cutting axis-B SEV2. All fixed:
 - **A1**: `/clean` and `/cuts` return 409 when `cleaned_render_uri` is set

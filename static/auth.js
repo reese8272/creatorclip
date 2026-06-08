@@ -8,14 +8,47 @@
 // visits skip it. The walkthrough is also skipped explicitly when the
 // user is already on walkthrough.html or onboarding.html (to avoid a
 // redirect loop from within those flows).
+//
+// Issue 136 — pre-auth hero gate: a page that opts in via
+// `<body data-allow-anonymous>` shows its hero block on 401 instead of
+// redirecting. The hero CTA forwards the YouTube URL via ?yt= query
+// hint; post-login this helper picks it up and auto-fills the link form.
 (async function () {
   const resp = await fetch('/auth/me', { credentials: 'include' });
   if (!resp.ok) {
+    if (document.body && document.body.hasAttribute('data-allow-anonymous')) {
+      // Issue 136 — show the hero rather than bouncing to login.
+      document.body.classList.add('is-hero-mode');
+      document.dispatchEvent(new CustomEvent('auth:anonymous'));
+      return;
+    }
     window.location = '/auth/login';
     return;
   }
   const user = await resp.json();
   window.__USER__ = user;
+  // Issue 136 — if the user landed here with a ?yt= hint from the hero,
+  // auto-fill the link-video input so the next click finishes the flow.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const ytHint = params.get('yt');
+    if (ytHint) {
+      const tryFill = () => {
+        const input = document.getElementById('yt-id-input');
+        if (input) {
+          input.value = ytHint;
+          const details = input.closest('details');
+          if (details) details.open = true;
+        }
+      };
+      // Run after DOMContentLoaded since auth.js is loaded in <head>.
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', tryFill, { once: true });
+      } else {
+        tryFill();
+      }
+    }
+  } catch (_) { /* harmless — yt hint is best-effort */ }
 
   // First-run gate (Issue 100). Only redirects when:
   //   - the creator's onboarding hasn't started (state = 'connected')
