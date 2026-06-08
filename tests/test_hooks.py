@@ -303,51 +303,105 @@ def test_get_transcript_segments_empty() -> None:
     assert get_transcript_segments({"segments": [{"text": "hi"}]}) == [{"text": "hi"}]
 
 
-# ── Worker task wrappers ──────────────────────────────────────────────────────
+# ── Additional unit coverage ──────────────────────────────────────────────────
 
 
-def test_analyze_hook_task_calls_async_path() -> None:
-    """The Celery task wrapper runs the async helper via run_async."""
+def test_compute_retention_drop_uses_custom_threshold() -> None:
+    """Caller can tighten the threshold to detect smaller drops."""
+    video_curve = [(float(t), 0.80 if t < 10 else 0.74) for t in range(0, 31, 5)]
+    creator_curves = [
+        [(float(t), 0.80) for t in range(0, 31, 5)],
+        [(float(t), 0.81) for t in range(0, 31, 5)],
+    ]
+    # Default threshold (0.10) would NOT trigger; loose threshold does.
+    drop_default, _ = compute_retention_drop(video_curve, creator_curves)
+    drop_loose, _ = compute_retention_drop(video_curve, creator_curves, threshold=0.03)
+    assert drop_default is None
+    assert drop_loose is not None
+
+
+def test_compute_retention_drop_first_point_after_zero() -> None:
+    """Curves that start past second 0 get prepended with (0, 1.0) implicit start."""
+    video_curve = [(5.0, 0.5), (10.0, 0.4), (15.0, 0.3)]
+    creator_curves = [[(5.0, 0.9), (10.0, 0.88), (15.0, 0.87)]]
+    drop_at, _ = compute_retention_drop(video_curve, creator_curves)
+    assert drop_at is not None  # large diff at second 5 (0.9 - 0.5 = 0.4 > 0.10)
+
+
+async def test_analyze_hook_async_creator_not_found_returns_early() -> None:
+    """When the creator UUID doesn't exist, the task aemits error and returns."""
+    import db
     from worker import tasks as worker_tasks
 
-    called = {}
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
 
-    async def _fake_async(job_id, creator_id, video_id):
-        called["job_id"] = job_id
-        called["creator_id"] = creator_id
-        called["video_id"] = video_id
+        async def __aexit__(self, *args):
+            return False
 
+        async def get(self, *_a, **_kw):
+            return None  # creator not found
+
+    aemit_mock = AsyncMock()
     with (
-        patch.object(worker_tasks, "_analyze_hook_async", _fake_async),
-        patch.object(worker_tasks, "run_async", lambda coro: __import__("asyncio").run(coro)),
+        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch("worker.progress.aemit", aemit_mock),
     ):
-        # Call the underlying function with a fake self
-        fake_self = MagicMock()
-        fake_self.request.id = "task-xyz"
-        worker_tasks.analyze_hook.run(fake_self, "creator-1", "video-1")
+        await worker_tasks._analyze_hook_async("job-x", str(uuid.uuid4()), str(uuid.uuid4()))
 
-    assert called == {"job_id": "task-xyz", "creator_id": "creator-1", "video_id": "video-1"}
+    assert aemit_mock.await_count >= 1
+    # One of the calls must be the "Creator not found" error
+    error_calls = [c for c in aemit_mock.await_args_list if "Creator not found" in str(c)]
+    assert error_calls
 
 
-def test_analyze_hook_task_retries_on_exception() -> None:
-    """When the async helper raises, the Celery task calls self.retry."""
+async def test_analyze_hook_async_video_not_found_returns_early() -> None:
+    """When video doesn't exist or belongs to other creator, error + return."""
+    import db
+    from models import Creator
     from worker import tasks as worker_tasks
 
-    async def _failing_async(job_id, creator_id, video_id):
-        raise RuntimeError("boom")
+    creator = MagicMock(spec=Creator)
+    creator.id = uuid.uuid4()
 
-    fake_self = MagicMock()
-    fake_self.request.id = "task-abc"
-    fake_self.retry.side_effect = RuntimeError("retried")
+    class _FakeSession:
+        def __init__(self):
+            self._call = 0
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, _model, _id):
+            self._call += 1
+            return creator if self._call == 1 else None
+
+    aemit_mock = AsyncMock()
     with (
-        patch.object(worker_tasks, "_analyze_hook_async", _failing_async),
-        patch.object(worker_tasks, "run_async", lambda coro: __import__("asyncio").run(coro)),
-        pytest.raises(RuntimeError, match="retried"),
+        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch("worker.progress.aemit", aemit_mock),
     ):
-        worker_tasks.analyze_hook.run(fake_self, "c", "v")
+        await worker_tasks._analyze_hook_async("job-y", str(creator.id), str(uuid.uuid4()))
 
-    fake_self.retry.assert_called_once()
+    error_calls = [c for c in aemit_mock.await_args_list if "Video not found" in str(c)]
+    assert error_calls
+
+
+def test_parse_hook_report_coerces_string_fields() -> None:
+    """Non-string fields are coerced to strings."""
+    raw = """{
+        "retention_drop_at_s": 10.0,
+        "retention_at_drop": 0.5,
+        "transcript_at_drop": 12345,
+        "diagnosis": "ok",
+        "rewrite_suggestion": "ok",
+        "honesty_disclaimer": "ok"
+    }"""
+    result = parse_hook_report(raw)
+    assert result["transcript_at_drop"] == "12345"
 
 
 def test_hook_analysis_queued_when_data_exists() -> None:

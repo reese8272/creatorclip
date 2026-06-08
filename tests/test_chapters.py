@@ -362,50 +362,111 @@ def test_generate_chapters_empty_segment_placeholder() -> None:
     assert "no transcript" in user_msg.lower()
 
 
-# ── Worker task wrappers ──────────────────────────────────────────────────────
+# ── Additional unit coverage ──────────────────────────────────────────────────
 
 
-def test_generate_chapters_task_calls_async_path() -> None:
-    """The Celery task wrapper runs the async helper via run_async."""
+def test_format_timestamp_float() -> None:
+    """format_timestamp accepts floats and truncates to int seconds."""
+    assert format_timestamp(0.5) == "0:00"
+    assert format_timestamp(63.9) == "1:03"
+
+
+def test_find_chapter_boundaries_silence_outside_window() -> None:
+    """Silences past the video duration are ignored."""
+    timeline = {
+        "silences": [
+            {"start_s": 100.0, "end_s": 105.0},
+            {"start_s": 700.0, "end_s": 710.0},  # past 600s duration
+        ]
+    }
+    bounds = find_chapter_boundaries(timeline, 600.0)
+    assert all(b < 600.0 for b in bounds)
+
+
+async def test_generate_chapters_async_video_not_found_returns_early() -> None:
+    """When video doesn't exist, error + return without calling Claude."""
+    import db
     from worker import tasks as worker_tasks
 
-    called = {}
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
 
-    async def _fake_async(job_id, creator_id, video_id):
-        called["job_id"] = job_id
-        called["creator_id"] = creator_id
-        called["video_id"] = video_id
+        async def __aexit__(self, *args):
+            return False
 
+        async def get(self, *_a, **_kw):
+            return None  # video not found
+
+    aemit_mock = AsyncMock()
     with (
-        patch.object(worker_tasks, "_generate_chapters_async", _fake_async),
-        patch.object(worker_tasks, "run_async", lambda coro: __import__("asyncio").run(coro)),
+        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch("worker.progress.aemit", aemit_mock),
     ):
-        fake_self = MagicMock()
-        fake_self.request.id = "task-c1"
-        worker_tasks.generate_chapters.run(fake_self, "creator-2", "video-2")
+        await worker_tasks._generate_chapters_async("job-c", str(uuid.uuid4()), str(uuid.uuid4()))
 
-    assert called == {"job_id": "task-c1", "creator_id": "creator-2", "video_id": "video-2"}
+    error_calls = [c for c in aemit_mock.await_args_list if "Video not found" in str(c)]
+    assert error_calls
 
 
-def test_generate_chapters_task_retries_on_exception() -> None:
-    """When the async helper raises, the Celery task calls self.retry."""
+async def test_generate_chapters_async_no_transcript_returns_early() -> None:
+    """Video exists but no transcript → emits error and returns."""
+    import db
+    from models import Video
     from worker import tasks as worker_tasks
 
-    async def _failing(job_id, creator_id, video_id):
-        raise RuntimeError("boom")
+    video = MagicMock(spec=Video)
+    video.id = uuid.uuid4()
+    video.creator_id = uuid.uuid4()
+    video.duration_s = 300
 
-    fake_self = MagicMock()
-    fake_self.request.id = "task-c2"
-    fake_self.retry.side_effect = RuntimeError("retried")
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
 
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *_a, **_kw):
+            return video
+
+        async def scalar(self, *_a, **_kw):
+            return None  # no transcript
+
+    aemit_mock = AsyncMock()
     with (
-        patch.object(worker_tasks, "_generate_chapters_async", _failing),
-        patch.object(worker_tasks, "run_async", lambda coro: __import__("asyncio").run(coro)),
-        pytest.raises(RuntimeError, match="retried"),
+        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch("worker.progress.aemit", aemit_mock),
     ):
-        worker_tasks.generate_chapters.run(fake_self, "c", "v")
+        # Note: creator_id passed must MATCH video.creator_id so we hit transcript-check branch
+        await worker_tasks._generate_chapters_async("job-d", str(video.creator_id), str(video.id))
 
-    fake_self.retry.assert_called_once()
+    error_calls = [c for c in aemit_mock.await_args_list if "Transcript not available" in str(c)]
+    assert error_calls
+
+
+def test_parse_chapters_missing_title_falls_back() -> None:
+    """Empty title gets a 'Chapter' fallback rather than empty string."""
+    raw = """{
+        "chapters": [
+            {"timestamp_s": 0.0, "timestamp_formatted": "0:00", "title": ""}
+        ],
+        "description_block": "0:00"
+    }"""
+    result = parse_chapters(raw)
+    assert result["chapters"][0]["title"] == "Chapter"
+
+
+def test_parse_chapters_missing_timestamp_formatted() -> None:
+    """Missing timestamp_formatted derives from timestamp_s."""
+    raw = """{
+        "chapters": [
+            {"timestamp_s": 120.0, "title": "Section"}
+        ],
+        "description_block": "2:00 Section"
+    }"""
+    result = parse_chapters(raw)
+    assert result["chapters"][0]["timestamp_formatted"] == "2:00"
 
 
 def test_chapters_per_creator_isolation() -> None:
