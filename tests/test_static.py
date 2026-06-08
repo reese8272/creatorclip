@@ -1143,3 +1143,53 @@ def test_issue_136_hero_css_drives_visibility_via_body_class():
     assert "body.is-hero-mode .dashboard" in src, (
         "Dashboard must hide in hero mode (no regression for authenticated users)."
     )
+
+
+# ── Cache-busting middleware (post-Issue-136 follow-up) ──────────────────
+
+
+def test_static_cachebust_middleware_appends_version_to_css(client):
+    """`StaticCacheBustMiddleware` rewrites text/html responses so every
+    /static/X.css and /static/X.js reference picks up ?v=<STATIC_VERSION>.
+    Each deploy bumps STATIC_VERSION (built from the git SHA) so Cloudflare
+    treats the asset URL as new and stops serving the old cached copy."""
+    from config import settings
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    expected_suffix = f"?v={settings.STATIC_VERSION}"
+    assert f"/static/_design-tokens.css{expected_suffix}" in body, (
+        "CSS link must carry the cache-busting query string."
+    )
+    assert f"/static/hero.css{expected_suffix}" in body
+    assert f"/static/auth.js{expected_suffix}" in body, (
+        "JS src must also get the cache-bust suffix — Cloudflare caches both."
+    )
+
+
+def test_static_cachebust_middleware_skips_non_html(client):
+    """The middleware must NOT rewrite CSS/JS bodies — only text/html
+    responses. The CSS content is the source of truth and tests + Layer 0
+    inspect it character-for-character."""
+    resp = client.get("/static/hero.css")
+    assert resp.status_code == 200
+    # CSS body should be the raw stylesheet content, not rewritten HTML.
+    assert "?v=" not in resp.text.split("\n", 1)[0], (
+        "First line of hero.css should not be touched by the HTML rewriter."
+    )
+
+
+def test_static_cachebust_middleware_is_idempotent_on_existing_query(client):
+    """If a future template hard-codes its own ?v=, the middleware must
+    leave it alone — the regex matches only paths with no query string."""
+    # Inject a request to a known HTML; we can't easily forge "existing ?v="
+    # from a real template, but we can assert the regex shape directly.
+    from main import _STATIC_CACHEBUST_RE, _rewrite_static
+
+    raw = b'<link href="/static/foo.css?v=manual"><link href="/static/bar.css">'
+    out = _rewrite_static(raw, "abc123")
+    assert b"/static/foo.css?v=manual" in out, "Existing ?v= must be preserved."
+    assert b"/static/bar.css?v=abc123" in out, "Bare path must pick up the new ?v=."
+    # Sanity: regex itself ignores ?-containing paths.
+    assert _STATIC_CACHEBUST_RE.search(b'href="/static/foo.css?v=manual"') is None

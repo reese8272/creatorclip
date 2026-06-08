@@ -153,6 +153,14 @@ class Settings(BaseSettings):
     YTDLP_ENABLED: bool = False
     YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
 
+    # Cache-busting query string appended to every `/static/*.css` and
+    # `/static/*.js` reference in served HTML. Set at image-build time from
+    # the short git SHA via the GIT_SHA build-arg → STATIC_VERSION env var
+    # (see Dockerfile + .github/workflows/docker-publish.yml). Defaults to
+    # "dev" locally so the middleware still runs and tests can assert on a
+    # deterministic value.
+    STATIC_VERSION: str = "dev"
+
     UPLOAD_MAX_MB: int = 500
     LOCAL_MEDIA_DIR: str = "./media"
 

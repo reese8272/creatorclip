@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re as _re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,8 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+from starlette.responses import Response as _StarletteResponse
 
 from config import settings
 from db import engine
@@ -116,6 +119,49 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html")
+
+
+# ── Cache-busting middleware (2026-06-07 follow-up to Issue 136) ───────
+#
+# Cloudflare aggressively caches `/static/*.css` for hours, so a CSS-only
+# UI deploy invisibly serves the old stylesheet long after the container
+# rolls. Append `?v=<STATIC_VERSION>` to every static reference in served
+# HTML so each deploy invalidates the CDN automatically (CSS path changes
+# → Cloudflare treats it as a new asset).
+#
+# Rewrites only `text/html` responses; existing `?v=` references are left
+# alone so a future build pipeline can opt out of the rewrite for a
+# specific asset by hard-coding its own version.
+_STATIC_CACHEBUST_RE = _re.compile(rb'((?:href|src)=")(/static/[^"?]+\.(?:css|js))(")')
+
+
+def _rewrite_static(body: bytes, version: str) -> bytes:
+    suffix = f"?v={version}".encode()
+    return _STATIC_CACHEBUST_RE.sub(lambda m: m.group(1) + m.group(2) + suffix + m.group(3), body)
+
+
+class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        ctype = response.headers.get("content-type", "")
+        if not ctype.startswith("text/html"):
+            return response
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+        body = b"".join(chunks)
+        body = _rewrite_static(body, settings.STATIC_VERSION)
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        return _StarletteResponse(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=ctype,
+        )
+
+
+app.add_middleware(StaticCacheBustMiddleware)
 
 
 app.add_middleware(

@@ -40,6 +40,12 @@ ENV PATH=/root/.local/bin:$PATH
 # PYTHONPATH guarantees /app is discoverable for every process in the image.
 ENV PYTHONPATH=/app
 
+# Cache-busting version stamp for `/static/*.css` and `/static/*.js`. Set by
+# the CI build step from the short git SHA — see .github/workflows/docker-publish.yml.
+# Defaults to "dev" so local `docker build` without --build-arg still works.
+ARG GIT_SHA=dev
+ENV STATIC_VERSION=$GIT_SHA
+
 COPY . .
 
 EXPOSE 8000

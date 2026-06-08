@@ -57,3 +57,10 @@ jobs:
           # The DigitalOcean droplet is x86_64. Building arm64 too doubled build
           # time for an architecture nothing runs — amd64 only.
           platforms: linux/amd64
+          # Cache-busting version for /static/*.css and /static/*.js. The
+          # main.py StaticCacheBustMiddleware appends ?v=$GIT_SHA to every
+          # static reference in served HTML, so each deploy invalidates the
+          # Cloudflare CDN automatically. Short SHA = stable across rebuilds
+          # of the same commit, fresh on every push.
+          build-args: |
+            GIT_SHA=sha-${{ github.sha }}
