@@ -1,9 +1,24 @@
 FROM python:3.12-slim AS base
 
+# fontconfig + the Anton TTF are required by libass for animated-caption rendering
+# (Issue 133). Without fontconfig + an `fc-cache -f`, libass silently falls back to a
+# default font and the rendered Bold Pop / Gradient Slide captions look nothing like
+# the intended style. Anton (Google Fonts, SIL OFL) is the canonical MrBeast-style
+# condensed sans for short-form captions.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     ffmpeg \
+    fontconfig \
+    fonts-open-sans \
+    fonts-dejavu-core \
+    wget \
+    ca-certificates \
+    && mkdir -p /usr/share/fonts/custom \
+    && wget -q -O /usr/share/fonts/custom/Anton-Regular.ttf \
+       https://raw.githubusercontent.com/google/fonts/main/ofl/anton/Anton-Regular.ttf \
+       || echo "Anton font fetch failed — libass falls back to fonts-open-sans" \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

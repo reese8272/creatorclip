@@ -4,6 +4,11 @@ crop to 9:16 centered on face, upload to storage.
 
 Face detection: OpenCV Haar frontal-face cascade on a single keyframe.
 Falls back to frame center if no face is found.
+
+Animated captions (Issue 133): when ``style_preset["subtitle"]`` names a known
+caption style (``bold_pop`` / ``gradient_slide`` / ``minimal``), an ASS subtitle
+file is generated from the supplied transcript segments and burned in via
+libass. See ``clip_engine/captions.py``.
 """
 
 import logging
@@ -11,7 +16,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from clip_engine import captions
+
 logger = logging.getLogger(__name__)
+
+# Directory libass searches for custom fonts (Dockerfile installs Anton here).
+_FONTS_DIR = "/usr/share/fonts/custom"
 
 # Output resolution for 9:16 Shorts
 _OUTPUT_W = 1080
@@ -105,22 +115,13 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
         return frame_width // 2
 
 
-# Known subtitle/background presets (Issue 119).
-# These are the display labels → ffmpeg filter strings.
-_SUBTITLE_FILTERS: dict[str, str] = {
-    "white_large": (
-        "drawtext=text='':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.5:"
-        "boxborderw=5:x=(w-text_w)/2:y=h*0.85"
-    ),
-    "yellow_impact": (
-        "drawtext=text='':fontcolor=yellow:fontsize=56:fontfile=/usr/share/fonts/truetype/impact.ttf:"
-        "x=(w-text_w)/2:y=h*0.85"
-    ),
-    "captions_sm": (
-        "drawtext=text='':fontcolor=white:fontsize=32:box=1:boxcolor=black@0.6:"
-        "boxborderw=4:x=(w-text_w)/2:y=h*0.9"
-    ),
-}
+# Animated caption styles (Issue 133). Style identifiers are validated against
+# the captions module's VALID_STYLES set; the actual filter string is built per
+# render from a generated ASS file (see render_clip_file below). The legacy
+# Issue-119 drawtext placeholders (white_large / yellow_impact / captions_sm)
+# only ever drew empty text and have been removed — clips that persisted those
+# values silently produce no captions, which matches their prior behaviour.
+_ANIMATED_CAPTION_STYLES = captions.VALID_STYLES
 
 _BACKGROUND_STYLES: dict[str, str] = {
     "blur": "split[v][blur];[blur]scale={ow}:{oh},boxblur=luma_radius=20:luma_power=2[blurred];[blurred][v]overlay=(W-w)/2:(H-h)/2",
@@ -134,15 +135,24 @@ def render_clip_file(
     end_s: float,
     out_path: Path,
     style_preset: dict | None = None,
+    transcript_segments: list[dict] | None = None,
 ) -> None:
     """
     Cut [start_s, end_s] from source, crop to 9:16 centered on detected face,
     scale to OUTPUT_W×OUTPUT_H, write to out_path (mp4).
 
     ``style_preset`` is a dict with optional keys:
-      - ``subtitle``: one of "white_large", "yellow_impact", "captions_sm", or None
+      - ``subtitle``: one of "bold_pop" | "gradient_slide" | "minimal" | None
       - ``background``: "blur" | "black" | None  (None → default black letterbox)
-      - ``captions_enabled``: bool (placeholder — real caption burn-in needs a transcript)
+      - ``captions_enabled``: bool (currently informational — the subtitle key
+        is the load-bearing switch)
+
+    ``transcript_segments`` is the full ``Transcript.segments_jsonb["segments"]``
+    list (WhisperX shape — see ``ingestion/transcribe.py``). When a known
+    caption style is selected the caller passes these; the renderer slices to
+    the clip window and generates an ASS subtitle file via
+    ``clip_engine.captions``. Missing transcript → caption style is silently
+    skipped (the render still succeeds without captions).
     """
     duration = end_s - start_s
     if duration <= 0:
@@ -179,42 +189,65 @@ def render_clip_file(
     # even if anyone introduces `-c copy` later — the clip MUST start exactly at the setup.
     vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={_OUTPUT_W}:{_OUTPUT_H}"]
 
+    ass_path: Path | None = None
     if style_preset:
         subtitle_key = style_preset.get("subtitle")
-        if subtitle_key and subtitle_key in _SUBTITLE_FILTERS:
-            vf_parts.append(_SUBTITLE_FILTERS[subtitle_key])
+        if subtitle_key in _ANIMATED_CAPTION_STYLES:
+            # Sibling temp file to out_path so we co-cleanup in the finally block.
+            # Suffix is required for the {clip_id}_{style}.ass naming hint Issue 133
+            # asked for — out_path is already clip-unique (the worker creates a
+            # NamedTemporaryFile per render call), so the suffix keeps concurrent
+            # re-renders from stomping each other.
+            ass_path = out_path.with_suffix(f".{subtitle_key}.ass")
+            captions.build_ass_subtitles(
+                segments=transcript_segments,
+                style=subtitle_key,
+                clip_start_s=start_s,
+                clip_duration_s=duration,
+                out_path=ass_path,
+            )
+            if ass_path.exists():
+                # The subtitles= filter uses `:` as arg separator; the ass path lives
+                # in /tmp/ so colons in the path are not a real concern here.
+                vf_parts.append(f"subtitles={ass_path}:fontsdir={_FONTS_DIR}")
+            else:
+                ass_path = None
 
     vf = ",".join(vf_parts)
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start_s),
-            "-accurate_seek",
-            "-i",
-            str(source_path),
-            "-t",
-            str(duration),
-            "-vf",
-            vf,
-            "-c:v",
-            "libx264",
-            "-crf",
-            "23",
-            "-preset",
-            "fast",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-            str(out_path),
-        ],
-        "render",
-        timeout_s=render_timeout_s,
-    )
+    try:
+        _run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(start_s),
+                "-accurate_seek",
+                "-i",
+                str(source_path),
+                "-t",
+                str(duration),
+                "-vf",
+                vf,
+                "-c:v",
+                "libx264",
+                "-crf",
+                "23",
+                "-preset",
+                "fast",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ],
+            "render",
+            timeout_s=render_timeout_s,
+        )
+    finally:
+        if ass_path is not None:
+            ass_path.unlink(missing_ok=True)
     logger.info(
         "Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf
     )

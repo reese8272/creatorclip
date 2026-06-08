@@ -5,6 +5,172 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issue 133: Animated caption styles
+
+### Library + filter choice — pysubs2 + libass via ffmpeg `subtitles=` filter
+
+**Decision:** Generate Advanced SubStation Alpha (`.ass`) subtitle files
+programmatically via **`pysubs2==1.7.3`** (MIT) and feed them to ffmpeg's
+`subtitles=…:fontsdir=/usr/share/fonts/custom` filter (libass backend). The
+filter is appended to the existing `crop → scale` chain in
+`clip_engine/render.py`. ASS files are emitted to a sibling of the output mp4
+(`{out}.{style}.ass`) and unlinked in a `finally` block after the encode.
+
+**Why:**
+- **libass is the production fingerprint** for Submagic / Opus.pro / CapCut
+  server-side caption render paths (job-posting + bundle-analysis evidence in
+  the Phase-1 research brief).
+- **Per-word `drawtext` chains do not scale.** A 300-word transcript at one
+  filter expression per word-appearance event blows past shell-arg limits and
+  destroys ffmpeg parse time. PNG pre-render loses subpixel hinting and adds
+  proportional disk I/O.
+- **`pysubs2` over hand-rolled ASS strings** removes a class of timestamp
+  bugs (ASS uses `H:MM:SS.cs` centisecond format that's easy to mis-encode
+  manually) and gives us the SSAStyle data class for the
+  `ScaleX/ScaleY=100` baseline invariant Bold Pop depends on.
+
+**Source/evidence:** AssemblyAI open-source caption examples (pysubs2 + libass),
+ffmpeg docs on the `subtitles=` filter and the `fontsdir` arg, libass `\t()`
+override-tag reference, plus the Phase-1 research brief.
+
+### Three style spec lock-in
+
+**Decision:**
+- **Bold Pop** — one `Dialogue:` event per word, `\an5` centered, override
+  `{\t(0,80,\fscx120\fscy120)\t(80,160,\fscx100\fscy100)}` for the
+  80-ms-up-80-ms-down scale pop. Anton font (SIL OFL), 95pt at PlayResY=1920,
+  `\bord4` outline.
+- **Gradient Slide** — accumulating per-phrase Dialogue events. Each new word
+  appears with `{\fad(150,0)\c&Hd26a5e&\t(0,300,\c&Hffffff&)}` (indigo →
+  white). Prior words in the phrase stay at the Style default (white). Each
+  Dialogue line ends at the next word's start so only one accumulates-on-screen
+  line is visible at any time — no `\pos()` arithmetic needed because libass
+  centers the single live line itself.
+- **Minimal** — one Dialogue per transcript segment, no override tags, 60pt
+  bottom-center with `marginv=290` for the lower-third safe zone. Also the
+  fallback path when a transcript has no word-level timestamps.
+
+**Why:**
+- The accumulating-phrase Dialogue pattern with `\c` mid-line override is the
+  ASS-idiomatic way to colour-animate only the newest word while keeping prior
+  words rendered. Per-word `\pos()` would require a font-metrics layout pass
+  and add a build dependency for no visible improvement.
+- `\fad(in,0)` per word (no fade-out) reads as a "buildup" rather than a
+  flicker. Symmetric fades would dim prior words mid-phrase.
+
+### Brand colour byte order — ASS `&HBBGGRR&` is reversed from HTML hex
+
+**Decision:** Brand indigo `#5e6ad2` is encoded as ASS `&Hd26a5e&`, NOT
+`&H5e6ad2&`. A dedicated regression test
+(`test_gradient_slide_emits_indigo_to_white_color_animation`) pins both:
+that `&Hd26a5e&` appears in the generated file AND that `&H5e6ad2&` does NOT —
+the easy-to-make mistake of writing the HTML byte order would otherwise ship
+a wrong-colour caption that looks "kind of right" in a thumbnail review.
+
+**Source/evidence:** ASS spec — `\c&HBBGGRR&` colour syntax;
+github.com/libass/libass `colors.h`.
+
+### Caption Y-position — lower-third at MarginV=290 (clears Shorts subscribe overlay)
+
+**Decision:** Minimal + Gradient Slide use `Alignment.BOTTOM_CENTER` with
+`MarginV=290` at PlayResY=1920 — captions sit at ~y=1630px, well above the
+YouTube Shorts subscribe-button overlay zone. Bold Pop uses
+`Alignment.MIDDLE_CENTER` (one-word-at-a-time reads better centered on the
+speaker's face, the canonical Hormozi/MrBeast placement).
+
+### Removed Issue-119 placeholder subtitle keys
+
+**Decision:** Dropped `white_large` / `yellow_impact` / `captions_sm` from
+`clip_engine/render.py::_SUBTITLE_FILTERS`. Those entries shipped `drawtext`
+filters with `text=''` — they never actually rendered text and were dead
+scaffolding for the picker UI. Any persisted `style_preset.subtitle` value
+matching one of those legacy keys now falls through the
+`subtitle_key in _ANIMATED_CAPTION_STYLES` check and produces no captions —
+identical to the prior behaviour where they drew empty text.
+
+**Why:** Carrying dead aliases would tempt future code to "fix" them with new
+semantics, and the new style picker only exposes the three real styles, so the
+keys cannot be reselected once the UI ships.
+
+### Dockerfile font installation — Anton from Google Fonts GitHub raw + fonts-open-sans fallback
+
+**Decision:** Pull `Anton-Regular.ttf` directly from
+`raw.githubusercontent.com/google/fonts/main/ofl/anton/Anton-Regular.ttf` at
+image-build time, install into `/usr/share/fonts/custom/`, run `fc-cache -f`.
+Also install `fonts-open-sans` + `fonts-dejavu-core` as guaranteed libass
+fallbacks. The wget command is `|| echo` guarded so a transient GitHub fetch
+failure does not break the image build — captions fall back to Open Sans and
+the render still succeeds (the choice has been logged so a future "captions
+look wrong" report has a one-line explanation).
+
+**Why ruled out:**
+- The `fonts.google.com/download?family=Anton` URL was the obvious first
+  choice but it serves a zip behind CDN gating that requires browser
+  headers — fragile in CI.
+- A pinned `fonts-*` Debian package for Anton does not exist on Debian
+  Bookworm — only Bebas Neue is packaged, and we picked Anton for the
+  heavier weight.
+
+**Source/evidence:** Google Fonts GitHub repo policy explicitly permits
+serving raw TTF files from `raw.githubusercontent.com/google/fonts`; SIL OFL
+allows redistribution.
+
+---
+
+## 2026-06-07 — Issue 132 (YouTube Live Chat spike detection): DEFERRED, blocked on API availability
+
+**Decision:** Issue 132 is moved out of the active queue and marked **blocked-on-API-availability**.
+The next active issue is **Issue 133** (Animated caption styles). Issue 132 stays in the backlog
+but should not be picked up again unless YouTube publishes an official chat-replay endpoint OR
+the project independently decides to redefine the feature without live-chat data (see Option B in
+the deferred-options note below).
+
+**Why (Phase-1 research surfaced a hard blocker):**
+
+1. **No official chat-replay endpoint exists.** `liveChatMessages.list` is documented to work
+   *only while a broadcast is active*. The Google docs state explicitly: "After the event ends,
+   live chat is no longer available for that event." There is no replay parameter, no separate
+   replay endpoint, and no `hasLiveChatReplay` flag on `videos.list`. A 2025 Google Developer
+   forum thread confirms this is a known gap, not an undiscovered parameter
+   (https://discuss.google.dev/t/youtube-live-chat-replay-api-access/287982).
+
+2. **OAuth scope gap (academic but worth recording):** Even if a replay endpoint existed,
+   `liveChatMessages.*` requires `youtube` or `youtube.force-ssl`. The project currently
+   requests only `youtube.readonly` + analytics scopes. Adding `youtube.force-ssl` would force
+   re-consent of every existing user and (very likely) trigger a fresh Google verification round.
+
+3. **Third-party libraries (`pytchat`, `chat-downloader`) work by scraping YouTube's internal
+   `youtubei/v1/live_chat` endpoint** — they require no OAuth precisely because they bypass
+   the official API. This is how Eklipse / Powder / Streamladder implement chat-density features.
+   **Not viable for CreatorClip.** YouTube API Services ToS §IV.A prohibits accessing YouTube
+   data through any means other than the official API; discovery during a Google OAuth
+   verification review or routine compliance pass would risk app revocation. Compliance posture
+   is a load-bearing pre-launch requirement (`docs/COMPLIANCE.md`, `CLAUDE.md` Pre-Public-Launch
+   Requirements).
+
+**Source / evidence:** Phase-1 research brief, 2026-06-07 session, cross-referenced against:
+- https://developers.google.com/youtube/v3/live/docs/liveChatMessages
+- https://developers.google.com/youtube/v3/live/docs/liveChatMessages/list
+- https://developers.google.com/youtube/v3/live/docs/liveChatMessages/insert (scope reference)
+- https://developers.google.com/youtube/v3/determine_quota_cost
+- https://developers.google.com/youtube/terms/api-services-terms-of-service §IV.A
+- https://discuss.google.dev/t/youtube-live-chat-replay-api-access/287982 (2025 forum confirmation)
+
+**Options considered, ruled out:**
+- **Option B — reshape Issue 132 into an "audience reaction" signal from sources we already
+  have** (comment-velocity bursts on the VOD, the existing `RetentionCurve.is_rewatch_spike`
+  signal from Issue 127). Buildable today and ToS-clean — but it is no longer the
+  "stream-native chat density" feature Issue 132 promised, and won't reach feature parity with
+  Eklipse/Powder. Parked as a possible Issue 132b if user later wants a watered-down version.
+- **Option C — ship using `chat-downloader` / `pytchat`.** Rejected: trades long-term
+  compliance posture for short-term feature parity. Not worth it at this stage.
+
+**Impact on backlog:** Issue 133 (Animated caption styles) becomes the next active issue.
+Issues 134–136 retain their original ordering; the `Depends on: 127` chain is unaffected
+since 132 was a parallel branch off 127.
+
+---
+
 ## 2026-06-07 — Issues 130 & 131: Hook analyzer + auto chapter markers
 
 ### Issue 130 — Linear interpolation against creator median for retention drop

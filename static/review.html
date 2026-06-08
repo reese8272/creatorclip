@@ -335,17 +335,17 @@
       </div>
     </div>
 
-    <!-- Issue 119: style picker -->
+    <!-- Issue 119 style picker + Issue 133 animated caption styles -->
     <div class="style-section">
       <details>
         <summary>Clip style</summary>
         <div class="style-row">
-          <span>Subtitle style</span>
-          <select id="style-subtitle">
-            <option value="">None</option>
-            <option value="white_large">White — large</option>
-            <option value="yellow_impact">Yellow — impact</option>
-            <option value="captions_sm">Captions — small</option>
+          <span>Caption style</span>
+          <select id="style-subtitle" title="Animated captions are baked into the render. Bold Pop = one word at a time, scale-pops on appearance (MrBeast/Hormozi feel). Gradient Slide = words fade in left-to-right in brand indigo, transitioning to white. Minimal = plain phrase captions, no animation.">
+            <option value="">None — no captions</option>
+            <option value="bold_pop">Bold Pop — one word, scale-pops</option>
+            <option value="gradient_slide">Gradient Slide — indigo→white fade-in</option>
+            <option value="minimal">Minimal — plain phrase captions</option>
           </select>
         </div>
         <div class="style-row">

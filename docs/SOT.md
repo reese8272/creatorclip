@@ -117,7 +117,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── candidates.py           # Peak detection + backward look for setup start
 │   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude + features)
 │   ├── ranking.py              # DNA-weighted + preference-model rerank
-│   └── render.py               # ffmpeg cut + 9:16 active-speaker reframe
+│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in
+│   └── captions.py             # Animated word-level ASS subtitles (Issue 133 — bold_pop / gradient_slide / minimal via pysubs2 + libass)
 │
 ├── preference/
 │   ├── model.py                # Learned reranker (online update)

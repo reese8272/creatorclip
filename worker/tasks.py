@@ -743,6 +743,19 @@ async def _render_clip_async(clip_id: str) -> None:
             clip_duration_s = end_s - (setup_start_s if setup_start_s is not None else start_s)
             clip.render_status = RenderStatus.running
             style_preset = clip.style_preset  # snapshot before session closes
+            # Transcript segments only needed when style_preset selects an
+            # animated caption style — skip the load otherwise (Issue 133).
+            transcript_segments: list[dict] | None = None
+            if style_preset and style_preset.get("subtitle") in {
+                "bold_pop",
+                "gradient_slide",
+                "minimal",
+            }:
+                transcript = await session.get(Transcript, video.id)
+                if transcript and isinstance(transcript.segments_jsonb, dict):
+                    segments = transcript.segments_jsonb.get("segments")
+                    if isinstance(segments, list):
+                        transcript_segments = segments
             await session.commit()
 
         await aemit(clip_id, "step", label="download_source", stage="render")
@@ -774,6 +787,7 @@ async def _render_clip_async(clip_id: str) -> None:
                     end_s=end_s,
                     out_path=out_path,
                     style_preset=style_preset,
+                    transcript_segments=transcript_segments,
                 )
                 await aemit(clip_id, "step", label="upload_r2", stage="render")
                 render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")

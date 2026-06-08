@@ -3100,8 +3100,13 @@ minimal Claude tokens, fast to build, immediate daily utility.
 ---
 
 ## Issue 132: YouTube Live Chat spike detection
-**Status**: 🔲 Not started
+**Status**: ⛔ Blocked on API availability (deferred 2026-06-07 — see `docs/DECISIONS.md`)
 **Depends on**: 127
+
+**Blocker summary**: YouTube Data API has no chat-replay endpoint; `liveChatMessages.list`
+serves live broadcasts only. Third-party libs (pytchat, chat-downloader) scrape internal
+endpoints — violates YouTube ToS §IV.A. Re-evaluate only if Google ships an official
+replay endpoint or the feature is redefined without chat data.
 
 **What**: For YouTube VODs that had a live chat, fetch the live chat replay via YouTube
 Data API and compute per-minute message density + emoji/exclamation density as a named
@@ -3129,7 +3134,7 @@ every general clipper ignores — it makes CreatorClip genuinely stream-native.
 ---
 
 ## Issue 133: Animated caption styles
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07 — commit pending)
 **Depends on**: 127
 
 **What**: Extend the clip render pipeline with 3 named animated caption styles baked into
@@ -3147,16 +3152,16 @@ transcript), `clip_engine/render.py` (new caption filter chains per style),
 `tests/test_captions.py` (new), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research ffmpeg ASS/SSA subtitle filter chains for animated word-level captions; document in `docs/DECISIONS.md`
-- [ ] `captions.py::build_ass_subtitles(words, style, clip_start_s)` generates an ASS subtitle file from the word-level transcript segment with per-word timing
-- [ ] **Bold Pop**: each word appears individually; white fill + 3px black stroke; active word scales to 120%
-- [ ] **Gradient Slide**: each word fades in; color uses `#5e6ad2` (brand indigo) transitioning to white
-- [ ] **Minimal**: existing plain SRT path unchanged
-- [ ] Word-level timing sourced from `Transcript.word_timestamps`; graceful fallback to line-level if word timestamps missing
-- [ ] Style picker in review.html shows all 3 with visual label (name + one-line description)
-- [ ] Re-render with new style overwrites previous render; `style_preset` persisted on `Clip`
-- [ ] Unit tests: ASS file structure, word timing alignment, style enum validation, fallback to line-level; integration test: render produces a playable file with the correct subtitle stream
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research ffmpeg ASS/SSA subtitle filter chains for animated word-level captions; document in `docs/DECISIONS.md`
+- [x] `captions.py::build_ass_subtitles(segments, style, clip_start_s, clip_duration_s, out_path)` generates an ASS subtitle file from the word-level transcript segment with per-word timing
+- [x] **Bold Pop**: each word appears individually; white fill + 4px black stroke (`\bord4`); active word scales to 120% via `\t(\fscx120\fscy120)`
+- [x] **Gradient Slide**: each word fades in; color uses `#5e6ad2` (brand indigo, ASS `&Hd26a5e&`) transitioning to white via `\t(0,300,\c&Hffffff&)`
+- [x] **Minimal**: plain phrase-level Dialogue per transcript segment, no animation tags
+- [x] Word-level timing sourced from `Transcript.segments_jsonb[segments][i][words]`; graceful fallback to segment-level Dialogue if word timestamps missing
+- [x] Style picker in review.html shows all 3 with visual label (name + one-line description in the `title` tooltip)
+- [x] Re-render with new style overwrites previous render; `style_preset` persisted on `Clip` (existing Issue 119 wiring); ASS path is per-render under `{out}.{style}.ass` so concurrent re-renders cannot stomp each other
+- [x] Unit tests: ASS file structure (PlayResX/Y, Style block, Default style ScaleX/Y=100 baseline), word timing alignment, style enum validation, fallback to line-level, brand-indigo byte order (`&Hd26a5e&` not `&H5e6ad2&`), render.py invocation wiring
+- [x] Full suite green: 840 passed / 2 skipped; Layer 0 ruff/mypy clean
 
 ---
 

@@ -50,13 +50,16 @@ class RenderQueuedOut(TaskQueuedOut):
 
 
 class RenderStyleIn(BaseModel):
-    """Optional style parameters for Issue 119 styled renders.
+    """Optional style parameters for styled renders (Issue 119 + Issue 133).
 
     All fields are optional. Omitting a field means "keep the existing value"
     (or the default on first render). This lets the UI send only changed fields.
     """
 
-    subtitle: str | None = None  # "white_large" | "yellow_impact" | "captions_sm" | null
+    # "bold_pop" | "gradient_slide" | "minimal" | null — see clip_engine/captions.py.
+    # (Issue-119 legacy keys white_large/yellow_impact/captions_sm were drawtext
+    # placeholders that drew empty text; removed in Issue 133.)
+    subtitle: str | None = None
     background: str | None = None  # "blur" | "black" | null
     captions_enabled: bool | None = None
 

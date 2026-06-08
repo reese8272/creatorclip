@@ -93,9 +93,9 @@ def test_render_endpoint_no_style_body_still_works(client):
     assert resp.status_code == 202
 
 
-def test_render_clip_file_passes_style_to_vf():
-    """render_clip_file builds a valid vf string even with an unknown style
-    (gracefully ignores unrecognised subtitle keys)."""
+def test_render_clip_file_passes_style_to_vf(tmp_path):
+    """render_clip_file with bold_pop + transcript appends a subtitles= filter
+    pointing at a generated ASS file (Issue 133)."""
     from pathlib import Path
     from unittest.mock import patch
 
@@ -104,36 +104,51 @@ def test_render_clip_file_passes_style_to_vf():
     def _mock_run(cmd, label, timeout_s=120.0):
         called_args["cmd"] = cmd
 
+    segments = [
+        {
+            "start": 10.0,
+            "end": 12.0,
+            "text": "hello world",
+            "words": [
+                {"word": "hello", "start": 10.0, "end": 10.5},
+                {"word": "world", "start": 10.6, "end": 11.2},
+            ],
+        }
+    ]
+    out_path = tmp_path / "out.mp4"
+
     with (
         patch("clip_engine.render._run", _mock_run),
         patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)),
         patch("clip_engine.render._extract_keyframe"),
         patch("clip_engine.render._detect_face_center_x", return_value=960),
         patch("tempfile.NamedTemporaryFile") as mock_tmp,
-        patch("pathlib.Path.unlink"),
     ):
         mock_tmp.return_value.__enter__ = lambda s: s
         mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
-        mock_tmp.return_value.name = "/tmp/kf.jpg"
+        mock_tmp.return_value.name = str(tmp_path / "kf.jpg")
 
         render_clip_file(
             source_path=Path("/fake/source.mp4"),
             start_s=10.0,
             end_s=40.0,
-            out_path=Path("/fake/out.mp4"),
-            style_preset={"subtitle": "white_large"},
+            out_path=out_path,
+            style_preset={"subtitle": "bold_pop"},
+            transcript_segments=segments,
         )
 
-    # vf must include the crop+scale and the drawtext filter
     vf_arg_index = called_args["cmd"].index("-vf")
     vf = called_args["cmd"][vf_arg_index + 1]
     assert "crop=" in vf
     assert "scale=" in vf
-    assert "drawtext" in vf
+    assert "subtitles=" in vf
+    assert ".bold_pop.ass" in vf
+    assert "fontsdir=/usr/share/fonts/custom" in vf
 
 
-def test_render_clip_file_no_style_unchanged():
-    """render_clip_file with style_preset=None produces vf without drawtext."""
+def test_render_clip_file_unknown_style_skips_subtitles_filter(tmp_path):
+    """A legacy/unknown subtitle key (e.g. the removed Issue-119 'white_large')
+    leaves the vf string with just crop+scale — no subtitles= filter."""
     from pathlib import Path
     from unittest.mock import patch
 
@@ -148,20 +163,55 @@ def test_render_clip_file_no_style_unchanged():
         patch("clip_engine.render._extract_keyframe"),
         patch("clip_engine.render._detect_face_center_x", return_value=960),
         patch("tempfile.NamedTemporaryFile") as mock_tmp,
-        patch("pathlib.Path.unlink"),
     ):
         mock_tmp.return_value.__enter__ = lambda s: s
         mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
-        mock_tmp.return_value.name = "/tmp/kf.jpg"
+        mock_tmp.return_value.name = str(tmp_path / "kf.jpg")
+
+        render_clip_file(
+            source_path=Path("/fake/source.mp4"),
+            start_s=10.0,
+            end_s=40.0,
+            out_path=tmp_path / "out.mp4",
+            style_preset={"subtitle": "white_large"},
+        )
+
+    vf_arg_index = called_args["cmd"].index("-vf")
+    vf = called_args["cmd"][vf_arg_index + 1]
+    assert "subtitles=" not in vf
+    assert "drawtext" not in vf
+
+
+def test_render_clip_file_no_style_unchanged(tmp_path):
+    """render_clip_file with style_preset=None produces vf without subtitles=."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    called_args = {}
+
+    def _mock_run(cmd, label, timeout_s=120.0):
+        called_args["cmd"] = cmd
+
+    with (
+        patch("clip_engine.render._run", _mock_run),
+        patch("clip_engine.render._frame_dimensions", return_value=(1920, 1080)),
+        patch("clip_engine.render._extract_keyframe"),
+        patch("clip_engine.render._detect_face_center_x", return_value=960),
+        patch("tempfile.NamedTemporaryFile") as mock_tmp,
+    ):
+        mock_tmp.return_value.__enter__ = lambda s: s
+        mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
+        mock_tmp.return_value.name = str(tmp_path / "kf.jpg")
 
         render_clip_file(
             source_path=Path("/fake/source.mp4"),
             start_s=0.0,
             end_s=30.0,
-            out_path=Path("/fake/out.mp4"),
+            out_path=tmp_path / "out.mp4",
             style_preset=None,
         )
 
     vf_arg_index = called_args["cmd"].index("-vf")
     vf = called_args["cmd"][vf_arg_index + 1]
+    assert "subtitles=" not in vf
     assert "drawtext" not in vf

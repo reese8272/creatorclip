@@ -46,6 +46,11 @@ pyloudnorm==0.1.1
 # ── Vision ───────────────────────────────────────────────────────────────────
 opencv-python==4.13.0.92
 
+# ── Subtitles / Animated captions (Issue 133) ────────────────────────────────
+# pysubs2 generates ASS files for ffmpeg's `subtitles=` filter (libass).
+# MIT-licensed, pure Python, no native deps. See clip_engine/captions.py.
+pysubs2==1.7.3
+
 # ── ML / Ranking ─────────────────────────────────────────────────────────────
 lightgbm==4.6.0
 scikit-learn==1.5.2
