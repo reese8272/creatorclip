@@ -20,7 +20,7 @@ Requires a running Postgres with Alembic schema applied (see docker-compose.yml)
 import asyncio
 import json
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -342,5 +342,82 @@ async def test_webhook_missing_metadata(db_session: AsyncSession):
                 select(func.count(MinutePack.id)).where(MinutePack.creator_id == creator.id)
             )
             assert row_count == 0, f"Expected 0 MinutePack rows, got {row_count}"
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+# ── Test 6: webhook fast-path idempotency uses RLS-correct session ──────────
+
+
+@pytest.mark.integration
+async def test_webhook_fast_path_short_circuits_before_grant(
+    db_session: AsyncSession,
+):
+    """The webhook idempotency fast-path (SELECT MinutePack WHERE stripe_session_id = ?)
+    must actually catch a duplicate delivery — the second call should NOT reach
+    grant_minutes(). The earlier test_webhook_idempotency_same_session_id only
+    asserts the END state (one pack, status=already_fulfilled), which is also
+    satisfied when grant_minutes() catches the UNIQUE-constraint IntegrityError.
+
+    Regression for 2026-06-08 SEV1: when the webhook ran on an app-role session
+    that hadn't stamped session.info["creator_id"], RLS evaluated to
+    `creator_id = NULL` → the SELECT returned 0 rows → fast-path never fired,
+    and grant_minutes was reached on every replay. Integrity held by accident.
+
+    This test spies on grant_minutes and asserts it's called exactly ONCE across
+    two identical webhook deliveries.
+    """
+    from db import AsyncSessionLocal
+    from main import app
+
+    creator = await _seed_creator(db_session, minutes_balance=0)
+    stripe_session_id = f"cs_test_{uuid.uuid4().hex}"
+    event = _make_webhook_event(
+        stripe_session_id=stripe_session_id,
+        creator_id=str(creator.id),
+        pack_id="starter",
+    )
+
+    # Wrap the real grant_minutes so behavior is unchanged on the first call,
+    # then count invocations across both deliveries.
+    from billing import ledger as ledger_mod
+
+    real_grant = ledger_mod.grant_minutes
+    spy = AsyncMock(side_effect=real_grant)
+
+    try:
+        with (
+            patch("routers.billing.construct_webhook_event", return_value=event),
+            patch("routers.billing.grant_minutes", spy),
+            TestClient(app) as client,
+        ):
+            r1 = client.post(
+                "/billing/webhook",
+                content=json.dumps(event).encode(),
+                headers={"stripe-signature": "mocked"},
+            )
+            r2 = client.post(
+                "/billing/webhook",
+                content=json.dumps(event).encode(),
+                headers={"stripe-signature": "mocked"},
+            )
+
+        assert r1.status_code == 200, r1.text
+        assert r1.json()["status"] == "ok"
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["status"] == "already_fulfilled"
+
+        # The load-bearing assertion: grant_minutes invoked exactly once.
+        # If the fast-path is dead under RLS, this count would be 2 even
+        # though the END-state assertion (one MinutePack row) still passes.
+        assert spy.await_count == 1, (
+            f"grant_minutes called {spy.await_count} times — the fast-path "
+            "short-circuit failed to fire on the duplicate webhook. The "
+            "RLS-context stamp on session.info['creator_id'] is missing."
+        )
+
+        async with AsyncSessionLocal() as verify:
+            count = await _minute_pack_count(verify, stripe_session_id)
+            assert count == 1
     finally:
         await _cleanup_creator(db_session, creator.id)

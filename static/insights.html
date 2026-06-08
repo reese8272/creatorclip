@@ -369,7 +369,7 @@
   <script>
     async function logout() {
       await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
-      window.location = '/auth/login';
+      window.location = '/static/login.html';
     }
 
     function formatNumber(n) {

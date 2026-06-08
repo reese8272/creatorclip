@@ -621,7 +621,7 @@
   <script>
     async function logout() {
       await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
-      window.location = '/auth/login';
+      window.location = '/static/login.html';
     }
 
     let _dnaCreatedAt = null;   // tracks DNA build timestamp for sync check

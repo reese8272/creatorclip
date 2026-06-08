@@ -299,7 +299,7 @@
             intent_id: _getCheckoutIntentId(),
           }),
         });
-        if (r.status === 401) { window.location.href = "/auth/login"; return; }
+        if (r.status === 401) { window.location.href = "/static/login.html"; return; }
         if (!r.ok) { showToast("Could not start checkout. Try again shortly."); return; }
         const { checkout_url } = await r.json();
         window.location.href = checkout_url;

@@ -22,7 +22,7 @@
       document.dispatchEvent(new CustomEvent('auth:anonymous'));
       return;
     }
-    window.location = '/auth/login';
+    window.location = '/static/login.html';
     return;
   }
   const user = await resp.json();
@@ -100,5 +100,5 @@
 
 function logout() {
   fetch('/auth/logout', { method: 'POST', credentials: 'include' })
-    .then(() => { window.location = '/auth/login'; });
+    .then(() => { window.location = '/static/login.html'; });
 }

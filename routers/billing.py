@@ -199,18 +199,27 @@ async def stripe_webhook(
         logger.error("Webhook unknown pack_id: %s", pack_id)
         return {"status": "ignored"}
 
+    try:
+        creator_id = uuid.UUID(creator_id_str)
+    except ValueError:
+        logger.error("Webhook malformed creator_id: %r", creator_id_str)
+        return {"status": "ignored"}
+
+    # Stamp creator_id BEFORE the idempotency query so the RLS policy
+    # (creator_id = current_setting('app.creator_id', true)::uuid) actually
+    # matches the row. Without this, RLS reads NULL → query returns 0 rows →
+    # the fast-path short-circuit never fires, and integrity rests entirely
+    # on grant_minutes() catching the UNIQUE constraint downstream. Same
+    # class of omission the worker async helpers fixed earlier this cycle.
+    # (Assessment 2026-06-08 SEV1 fix.)
+    session.info["creator_id"] = str(creator_id)
+
     # Idempotency: skip if this Stripe session was already fulfilled.
     existing = await session.scalar(
         select(MinutePack.id).where(MinutePack.stripe_session_id == stripe_session_id)
     )
     if existing:
         return {"status": "already_fulfilled"}
-
-    try:
-        creator_id = uuid.UUID(creator_id_str)
-    except ValueError:
-        logger.error("Webhook malformed creator_id: %r", creator_id_str)
-        return {"status": "ignored"}
 
     if stripe_customer:
         await session.execute(

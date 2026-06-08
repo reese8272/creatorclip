@@ -180,6 +180,84 @@
       text-align: center;
     }
 
+    /* Authenticated empty-state hero — surfaced when an authenticated user
+       has zero videos. Mirrors the pre-auth hero copy so the explainer
+       reaches the user who is most likely to be confused (first login,
+       empty dashboard). Assessment 2026-06-08 UX-A fix. */
+    .empty-hero {
+      display: none;
+      grid-column: 1 / -1;
+      padding: var(--space-8) var(--space-7);
+      margin: var(--space-6) 0;
+      background:
+        radial-gradient(900px 500px at 90% 0%, rgba(94,106,210,0.07), transparent 60%),
+        var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: 14px;
+    }
+    .empty-hero.is-active { display: block; }
+    .empty-hero h2 {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      margin: 0 0 var(--space-2);
+      color: var(--color-text);
+    }
+    .empty-hero p.lede {
+      color: var(--color-text-muted);
+      font-size: 14px;
+      line-height: 1.6;
+      margin: 0 0 var(--space-5);
+      max-width: 60ch;
+    }
+    .empty-hero .steps {
+      display: grid;
+      gap: var(--space-3);
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-bottom: var(--space-5);
+    }
+    .empty-hero .step {
+      padding: var(--space-4);
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+    }
+    .empty-hero .step-num {
+      display: inline-flex;
+      width: 22px;
+      height: 22px;
+      align-items: center;
+      justify-content: center;
+      background: var(--color-accent-soft);
+      color: var(--color-accent);
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      margin-bottom: var(--space-2);
+    }
+    .empty-hero .step-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: var(--space-1);
+    }
+    .empty-hero .step-sub {
+      font-size: 13px;
+      color: var(--color-text-muted);
+      line-height: 1.5;
+    }
+    .empty-hero .cta-row {
+      display: flex;
+      gap: var(--space-3);
+      flex-wrap: wrap;
+    }
+    .empty-hero .fine {
+      margin-top: var(--space-4);
+      font-size: 12px;
+      color: var(--color-text-subtle);
+    }
+
     /* ── Status badges (mapped from ingest_status enum) ────────── */
     /* `badge` base + state variants come from _design-tokens.css. The
        status enum (pending / running / done / failed) maps to badge
@@ -409,6 +487,47 @@
       <p id="link-status"></p>
     </details>
 
+    <!-- Authenticated empty-state hero.
+         Shown when the user has zero videos so the dashboard isn't an empty
+         shell. Mirrors the pre-auth hero copy and gives 3 concrete next steps
+         (link, OBS, walkthrough) instead of leaving them to figure it out.
+         Assessment 2026-06-08 UX fix for "barren / hard to know how to use". -->
+    <section class="empty-hero" id="empty-dashboard-hero" aria-label="Get started">
+      <h2>Let's get your first clip.</h2>
+      <p class="lede">
+        AutoClip needs one YouTube video to learn from before it can rank clips
+        against your channel's DNA. Pick whichever path fits your workflow —
+        all three land in the same review queue.
+      </p>
+      <div class="steps">
+        <div class="step">
+          <span class="step-num">1</span>
+          <div class="step-title">Paste a YouTube URL</div>
+          <div class="step-sub">Fastest path. We pull the video, transcribe it, and surface clips ranked by fit.</div>
+        </div>
+        <div class="step">
+          <span class="step-num">2</span>
+          <div class="step-title">Stream from OBS</div>
+          <div class="step-sub">Already recording? Generate an API key and your local recordings ingest automatically.</div>
+        </div>
+        <div class="step">
+          <span class="step-num">3</span>
+          <div class="step-title">Take the walkthrough</div>
+          <div class="step-sub">2-minute tour of how scoring works, what Creator DNA does, and where your data lives.</div>
+        </div>
+      </div>
+      <div class="cta-row">
+        <button class="btn btn-primary" id="empty-hero-link-cta" onclick="(function(){var d=document.querySelector('.link-video-details');if(d){d.open=true;d.scrollIntoView({behavior:'smooth',block:'center'});var i=document.getElementById('yt-id-input');if(i)i.focus();}})()">
+          Link a video →
+        </button>
+        <a class="btn btn-secondary" href="/static/profile.html#api-keys">Get your API key</a>
+        <a class="btn btn-secondary" href="/static/walkthrough.html">Open walkthrough</a>
+      </div>
+      <div class="fine">
+        AutoClip predicts fit with your style and audience — it does not promise virality. All recommendations are estimates grounded in your own data.
+      </div>
+    </section>
+
     <!-- Video list -->
     <div class="section-header" style="margin-top:var(--space-10)">
       <h2>Your videos</h2>
@@ -420,6 +539,12 @@
     <div id="low-balance-warning" class="low-balance-warning" role="status" style="display:none">
       <span>Low balance — <strong id="low-balance-amount">0 min</strong> left.
         <a href="/static/pricing.html">Add minutes</a> before queuing more clips.</span>
+    </div>
+    <!-- Surfaced when a video has been pending/running for >10 min — the
+         polling loop gives up rather than spinning forever. (Assessment
+         2026-06-08 BLOCKER fix.) -->
+    <div id="poll-stuck-warning" class="low-balance-warning" role="status" style="display:none">
+      <span>A video is taking longer than expected. <a href="#" onclick="loadVideos();document.getElementById('poll-stuck-warning').style.display='none';startPolling();return false;">Refresh status</a> or check back later.</span>
     </div>
     <!-- Issue 137: .table-wrap scopes horizontal scroll to the table itself
          (only when columns can't compress further) so the page never scrolls
@@ -453,7 +578,7 @@
 
     async function logout() {
       await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
-      window.location = '/auth/login';
+      window.location = '/static/login.html';
     }
 
     async function init(me) {
@@ -494,11 +619,14 @@
       document.getElementById('video-count').textContent = videos.length;
 
       const tbody = document.getElementById('video-tbody');
+      const emptyHero = document.getElementById('empty-dashboard-hero');
       if (!videos.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty">No videos yet — link one above.</td></tr>';
+        if (emptyHero) emptyHero.classList.add('is-active');
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No videos yet — pick a path above to get started.</td></tr>';
         document.getElementById('clips-ready').textContent = '0';
         return;
       }
+      if (emptyHero) emptyHero.classList.remove('is-active');
 
       // Issue 125 — surface "Queue for analysis" on pending rows so the user
       // never has to wonder why a linked video sits at pending. Always
@@ -755,24 +883,66 @@
       renderLowBalanceWarning(e.detail);
     });
 
-    // Poll status for in-progress videos every 5s
+    // Poll status for in-progress videos.
+    // Bounded loop: backs off after unchanged ticks, caps at 10 minutes total,
+    // and pauses while the tab is hidden so an idle dashboard isn't a
+    // persistent baseline load on the API. (Assessment 2026-06-08 BLOCKER fix.)
     let _pollTimer = null;
+    let _pollTicks = 0;
+    let _pollUnchangedStreak = 0;
+    const POLL_BASE_MS = 5000;
+    const POLL_MAX_MS = 30000;
+    const POLL_MAX_TICKS = 120; // ~10 min at base interval; longer with backoff
+    function _stopPolling() {
+      if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+      _pollTicks = 0;
+      _pollUnchangedStreak = 0;
+    }
+    async function _pollOnce() {
+      if (document.visibilityState === 'hidden') {
+        _pollTimer = setTimeout(_pollOnce, POLL_BASE_MS);
+        return;
+      }
+      const rows = document.querySelectorAll('[data-video-id][data-status]');
+      const inProgress = [...rows].filter(r =>
+        r.dataset.status === 'pending' || r.dataset.status === 'running'
+      );
+      if (!inProgress.length) { _stopPolling(); return; }
+      if (++_pollTicks > POLL_MAX_TICKS) {
+        const stuck = document.getElementById('poll-stuck-warning');
+        if (stuck) stuck.style.display = 'block';
+        _stopPolling();
+        return;
+      }
+      let anyChanged = false;
+      for (const row of inProgress) {
+        const resp = await fetch(`/videos/${row.dataset.videoId}/status`, { credentials: 'include' });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (data.ingest_status !== row.dataset.status) anyChanged = true;
+      }
+      if (anyChanged) {
+        _pollUnchangedStreak = 0;
+        await loadVideos();
+      } else {
+        _pollUnchangedStreak++;
+      }
+      const delay = Math.min(POLL_BASE_MS * Math.pow(2, Math.max(0, _pollUnchangedStreak - 2)), POLL_MAX_MS);
+      _pollTimer = setTimeout(_pollOnce, delay);
+    }
     function startPolling() {
       if (_pollTimer) return;
-      _pollTimer = setInterval(async () => {
-        const rows = document.querySelectorAll('[data-video-id][data-status]');
-        const inProgress = [...rows].filter(r =>
-          r.dataset.status === 'pending' || r.dataset.status === 'running'
-        );
-        if (!inProgress.length) { clearInterval(_pollTimer); _pollTimer = null; return; }
-        for (const row of inProgress) {
-          const resp = await fetch(`/videos/${row.dataset.videoId}/status`, { credentials: 'include' });
-          if (!resp.ok) continue;
-          const data = await resp.json();
-          if (data.ingest_status !== row.dataset.status) await loadVideos();
-        }
-      }, 5000);
+      _pollTicks = 0;
+      _pollUnchangedStreak = 0;
+      _pollTimer = setTimeout(_pollOnce, POLL_BASE_MS);
     }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') return;
+      // On re-show, if a poll was scheduled it will resume on its own; if it
+      // had stopped because nothing was in-progress, restart only when needed.
+      const inProgress = document.querySelectorAll('[data-video-id][data-status="pending"], [data-video-id][data-status="running"]');
+      if (inProgress.length && !_pollTimer) startPolling();
+    });
   </script>
 
   <footer class="footer">

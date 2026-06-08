@@ -108,7 +108,11 @@ def test_video_status_404_wrong_creator(client):
 
 def test_dashboard_includes_polling(client):
     content = client.get("/").text
-    assert "setInterval" in content
+    # The dashboard schedules an in-progress poll. The 2026-06-08 BLOCKER fix
+    # switched from `setInterval` (no cap, no backoff) to a `setTimeout`
+    # recursion so we can cap total ticks AND back off when nothing changes.
+    # Accept either to keep this test resilient to future scheduler swaps.
+    assert "setInterval" in content or "setTimeout" in content
     assert "ingest_status" in content or "data-status" in content
 
 

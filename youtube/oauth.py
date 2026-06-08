@@ -66,7 +66,12 @@ def build_authorization_url(state: str) -> str:
         "response_type": "code",
         "scope": " ".join(SCOPES),
         "access_type": "offline",
-        "prompt": "consent",  # always return refresh_token, even on reconnect
+        # `consent`        — always re-issue a refresh_token, even on reconnect.
+        # `select_account` — force Google's account picker so a user who just
+        #                    logged out actually sees a sign-in surface rather
+        #                    than being silently re-authenticated into the
+        #                    same Google session. (Assessment 2026-06-08 fix.)
+        "prompt": "consent select_account",
         "state": state,
     }
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)

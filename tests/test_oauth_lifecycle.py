@@ -772,8 +772,17 @@ def test_authorization_url_forces_consent_for_refresh_token():
         f"Expected access_type=offline, got {qs.get('access_type')}"
     )
 
-    # prompt=consent forces re-issuance of the refresh_token even on reconnect.
-    assert qs.get("prompt") == ["consent"], f"Expected prompt=consent, got {qs.get('prompt')}"
+    # `consent` keeps refresh_token re-issuance on every reconnect.
+    # `select_account` forces Google's account picker so a user who just
+    # logged out actually sees a sign-in surface rather than being silently
+    # re-authenticated into the same Google session. Both values are space-
+    # separated in a single `prompt` parameter per Google OAuth 2.0 spec.
+    # (Assessment 2026-06-08 logout-UX fix.)
+    prompts = (qs.get("prompt") or [""])[0].split()
+    assert "consent" in prompts, f"Expected `consent` in prompt, got {qs.get('prompt')}"
+    assert "select_account" in prompts, (
+        f"Expected `select_account` in prompt, got {qs.get('prompt')}"
+    )
 
     # state must round-trip through the URL unchanged.
     assert qs.get("state") == ["test-state"], f"Expected state=test-state, got {qs.get('state')}"

@@ -3,148 +3,139 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-08 (Issue 125 + 126 code-complete locally; awaiting commit + push)
-**Branch:** `main` — HEAD `b554981` (Issue 137 — UI overhaul, last pushed commit; `0` ahead / `0` behind `origin/main`)
-**Working tree:** **DIRTY** — two issues' worth of changes are uncommitted (Issue 125 + Issue 126; see "CURRENT FOCUS")
-**CI (most recent push `b554981`):** Quality Gates ✅ · Docker publish ✅ · Deploy ✅ — but **CI ❌** and **Integration tests ❌** (same pre-existing flake noted previously, not blocking deploy)
+**Last updated:** 2026-06-08 (post-`/assess` + top-of-register fix sweep — uncommitted)
+**Branch:** `main` — HEAD `d398cff` (Issue 137 video-intake + trial-expiration), `0` ahead / `0` behind `origin/main`
+**Working tree:** **DIRTY** — 23 modified + 3 untracked files from this session's assessment refresh + 4 register fixes. Nothing committed yet.
+**CI / Prod (latest push `d398cff`):** Deploy to production ✅ · scheduled production health checks running
 
 ---
 
 ## CURRENT FOCUS
 
-**Issues 125 + 126 are code-complete, all tests green locally — they need to be committed and pushed in one batch so production picks up the new analysis-mode setting + trial-UX surface.**
+**The 2026-06-08 UX-focus production assessment ran end-to-end and I shipped the four highest-leverage fixes from the resulting top-10 register. Everything is local + green; ready to commit + push, then begin the deferred UX issues.**
 
 ### → NEXT ACTION
 
-1. **Inspect the dirty tree** (22 modified files + 4 new files). All belong to either Issue 125 (`analysis_mode` + minutes transparency) or Issue 126 (trial UX + billing clarity):
+1. **Inspect the dirty tree** and confirm everything is intended:
    ```bash
    git status --short
+   git diff --stat
    ```
-   Expect: changes to `models.py`, `config.py`, `routers/{auth,billing,creators,videos,analysis}.py`, `billing/ledger.py`, `worker/{tasks,schedule}.py`, `static/{index,analysis,profile}.html`, `static/auth.js`, `static/page-shell.css`, `.env.example`, plus all 4 docs in `docs/`. New: `alembic/versions/0022_creator_analysis_mode.py`, `alembic/versions/0023_creator_trial_ends_at.py`, `tests/test_issue_125.py`, `tests/test_issue_126.py`. Touched existing tests: `tests/test_billing.py` (mock contract update for the new second `scalar()` call), `tests/test_rate_limiting.py` (stub for new `analysis_mode` field on `CreatorMeOut`).
-
-2. **Run the full suite one more time before commit** — should be **940 passed / 2 skipped / 0 failures**:
+   You should see two clusters — assessment artifacts (`docs/assessment/**`) and the 4 fix patches (`static/`, `routers/billing.py`, `youtube/oauth.py`, `tests/`).
+2. **Run the gates one more time before committing** (they're already green; this is the muscle memory):
    ```bash
-   .venv/bin/python -m pytest -q --no-header
-   .venv/bin/python -m ruff check . && .venv/bin/python -m mypy .
+   PATH=".venv/bin:$PATH" python3 .claude/skills/production-assessment/scripts/run_layer0.py
+   PATH=".venv/bin:$PATH" python3 -m pytest -q
    ```
-
-3. **Commit + push as ONE commit covering both issues.** They're tightly related (125 lays the `analysis_mode` + `analytics_available` foundation; 126 layers `trial_ends_at` + low-balance surface on top). Suggested message:
-   ```
-   feat(125+126): video control modes + trial UX + billing clarity
-
-   Issue 125: analysis_mode enum (auto/selective/manual) + PATCH endpoint,
-   analytics_available on /me/video-analysis, "what costs minutes" tooltip,
-   per-video /queue endpoint + dashboard CTA.
-
-   Issue 126: trial_ends_at column + first-login wiring, /billing/balance
-   extends with trial_active + days_remaining + low_balance, differentiated
-   402 copy, daily expire_trials Beat watchdog, dashboard trial banner +
-   low-balance pre-action warning, .nav-balance.is-low chip state.
-   ```
-   Note that **pushing to `main` auto-deploys to production** (self-hosted runner pipeline: `docker-publish → workflow_run → deploy`). Confirm the deploy lands with `gh run list --limit 3`.
-
-4. **After deploy: run alembic migration on prod** — both 0022 and 0023 must apply before the new endpoints work:
-   ```bash
-   # On the prod VM
-   docker compose -f docker-compose.prod.yml exec app alembic upgrade head
-   ```
-   Both migrations are `op.add_column` only (analysis_mode has a `server_default='auto'` backfill; trial_ends_at is NULL-able with no backfill — legacy creators stay NULL).
-
-5. **Smoke-check on autoclip.studio after deploy:**
-   - Sign in → dashboard nav minute chip carries `?` tooltip explaining what's billable.
-   - Profile page → new "Video intake" radio (Auto / Selective / Manual); save persists across reloads.
-   - A linked-but-pending video shows a "Queue for analysis" button on the dashboard.
-   - Trial banner renders at top of dashboard with a countdown (only for creators who sign up AFTER the migration — `trial_ends_at` is NULL for everyone created before, which is correct).
+   Expect: ruff 0 / mypy 0 / coverage 75.38% / bandit 0 / pip-audit 0 · 940 passed / 2 skipped.
+3. **Commit + push in two logical commits** so the assessment snapshot can be reverted independently of the code fixes if needed:
+   - Commit A: `docs/assessment/**` only (the new REPORT.md + module re-assessments + the 2026-06-08-ux-focus history snapshot).
+   - Commit B: the 4 fixes (`static/index.html`, `static/auth.js`, `static/login.html`, `routers/billing.py`, `youtube/oauth.py`, 7 other static pages with the `/auth/login` → `/static/login.html` redirect rename, plus 3 test files).
+   Verify after push: `gh run list --limit 3` should show CI green within ~5 min.
+4. **Verify the four fixes in the browser** (the user explicitly asked to be shown the new look before extending the pattern):
+   - Logout from the dashboard → should land on the new `/static/login.html` branded page, NOT a Google redirect.
+   - Click "Sign in with Google" → Google account picker should appear (because `prompt=consent select_account` now).
+   - Sign in with a fresh creator account → dashboard should show the new `#empty-dashboard-hero` ("Let's get your first clip") with the 3 numbered next-step cards.
+   - Open a video that's stuck in pending → after ~10 min the polling cap should kick in and the "video appears stuck" banner should appear.
+5. **Open follow-up issues** for the six items the user asked about that need Phase-1 CHECK briefs before code (see DEFERRED FOLLOW-UPS below). Each is a separate issue, not a single sweep.
+6. **Begin the highest-leverage deferred work** when the user gives direction: most likely the empty-state response wrappers on `/videos`, `/clips`, `/insights/saved` (touches Pydantic + every consumer). That's the natural follow-up to the dashboard empty-hero already shipped this session.
 
 ---
 
-## WHAT WORKS NOW
+## WHAT WORKS NOW (do not re-investigate)
 
-1. **Cache-busting (`?v=<sha>`)** — Static CSS/JS URLs carry `?v=sha-<commit>` on every deploy; HTML has `Cache-Control: no-store`; ETag stripped from HTML. **You should never need to manually purge Cloudflare again.** Verify with `curl -s https://autoclip.studio/ | grep -o '/static/[^"]*\.css[^"]*' | head -1`.
-
-2. **Issue 137 (project-wide UI overhaul) shipped to prod (`b554981`).** Every authenticated page (`index`, `insights`, `profile`, `onboarding`, `analysis`, `pricing`, `walkthrough`, `review`) carries `<body class="app-page">` and the shared `page-shell.css` shell: aurora backdrop + glassmorphism nav + soft 12px-radius cards + gradient-pill primary CTAs + `.table-wrap` overflow guard + global `overflow-x: clip`. **No horizontal scroll at any viewport width.** Glassmorphism is scoped to chrome only — tables/forms/transcripts stay flat per WCAG 2.2.
-
-3. **Issue 136 follow-up shipped (`b554981` includes it).** Editor tool rail now shows icon + text label ("Why this clip" / "Captions" / "Clean pass" / "Feedback") instead of icon-only. Pre-auth hero has a prominent "Sign in" pill button in the nav for visitors without a YouTube URL handy.
-
-4. **Issue 125 (locally complete; 17 new tests green):**
-   - `AnalysisMode` enum + `Creator.analysis_mode` column + migration 0022 (server_default backfills existing creators to `'auto'`)
-   - `PATCH /creators/me/analysis-mode` (60/min rate-limited, Pydantic enum validation, 422 on bogus value)
-   - `GET /creators/me` exposes `analysis_mode` so the dashboard reads `window.__USER__.analysis_mode`
-   - `POST /videos/{id}/queue` (idempotent — `queued: false` when status ≠ pending; 404 on cross-creator access)
-   - `analytics_available: bool` on `AnalysisQueuedOut` (alongside back-compat `has_metrics`, populated identically so they can't drift)
-   - `profile.html` has the radio form + `saveAnalysisMode()`
-   - `analysis.html` shows explicit "Full analytics unavailable — this video isn't in your ingested catalog yet" panel + "Ingest this video" CTA when `analytics_available === false`
-   - `index.html` balance chip carries the "What costs minutes" tooltip; pending video rows show "Queue for analysis" buttons (primary-styled when mode is selective/manual, secondary in auto mode)
-
-5. **Issue 126 (locally complete; 16 new tests green):**
-   - `Creator.trial_ends_at` nullable TIMESTAMPTZ column + migration 0023
-   - First OAuth login stamps `trial_ends_at = now + TRIAL_DURATION_DAYS` in the same transaction as `grant_minutes(60)`
-   - `GET /billing/balance` returns `trial_ends_at` + `trial_active` + `trial_days_remaining` + `low_balance`
-   - Differentiated 402 copy in `billing/ledger.py` via `_trial_expired()` + `_trial_ended_402_detail()`: "Your free trial has ended. Add minutes at /pricing to continue." (NULL legacy creators fall back to generic copy)
-   - Daily `expire_trials` Beat watchdog — logs only, no state mutation; `billing/ledger.py` is the single source of truth
-   - Dashboard `#trial-banner` with per-day-bucket dismissibility + final-day override + pricing-page CTA (Userpilot 2026 — banners must link to checkout not settings)
-   - `.nav-balance.is-low` amber chip + pre-action `.low-balance-warning` above Generate/Queue (dashboard) and Analyze (analysis page)
-   - `auth.js` caches `window.__BALANCE__` + emits `billing:ready` custom event
-
-6. **Full test suite: 940 passed / 2 skipped / 0 failures locally.** Ruff 0, mypy 0. (CI's "Integration tests" lane on `b554981` is red — pre-existing flake at `tests/test_worker_pipeline.py::test_poll_clip_outcomes_uses_per_creator_median`, `RuntimeError: Event loop is closed` / `assert None is False`. Not caused by this session's work; not blocking deploy because `workflow_run` chains on `Docker publish` not `Integration tests`.)
+- **Layer 0 gates all green** (ruff 0 · mypy 0 · coverage 75.38% above baseline 75.20% · bandit 0 · pip-audit 0 · freshness ok). Baseline file: `docs/assessment/baselines.json`.
+- **940 unit tests pass · 2 skipped · 127 integration deselected by default** (need Postgres; CI runs them). The new regression test `test_webhook_fast_path_short_circuits_before_grant` is registered in the integration marker group.
+- **`/assess` skill ran end-to-end this session** — Layer 0 + 14 parallel Layer-1 subagents + Layer-2 verdict synthesis. The full register is at `docs/assessment/REPORT.md` and snapshotted at `docs/assessment/history/2026-06-08-ux-focus-REPORT.md`.
+- **All 6 SEV1s from the 2026-06-07 assessment are FIXED** (verified by re-running module subagents this cycle): worker clean/edit shared-idempotency, worker RLS-blind helpers ×2, knowledge cache_control inert markers ×2, youtube `_do_token_refresh` caller-session.
+- **Routers axis-B (`task.delay` inside `async def`) cross-cutting SEV2 is RESOLVED** — all 8 sites wrap in `await asyncio.to_thread(...)`.
+- **The 4 fixes shipped this session are wired and tested:**
+  - `static/index.html:759-815` — `_pollTimer` capped at 120 ticks (~10 min base), exponential backoff 5s → 30s ceiling, pauses while tab hidden, "video appears stuck" banner.
+  - `routers/billing.py:202-211` — `session.info["creator_id"]` stamped BEFORE the idempotency query so RLS matches; new regression test spies on `grant_minutes` and asserts the fast path actually fires (the prior test passed via `IntegrityError` catch — masked the bug).
+  - New `static/login.html` — branded sign-in landing page. All 401 redirects across 8 static pages now land here. `youtube/oauth.py` adds `select_account` to the prompt so Google's account picker appears after logout. Test `test_authorization_url_forces_consent_for_refresh_token` updated to accept both values.
+  - `static/index.html` — `#empty-dashboard-hero` lights up when the authenticated user has 0 videos; 3 numbered step cards + primary "Link a video →" CTA that auto-expands the link form and focuses the input.
+- **CI deploy workflow auto-applies `alembic upgrade head` before container rollout** (verified live 2026-06-07). No manual migration step needed on prod.
+- **Honesty-constraint scanner** (`tests/test_compliance_no_virality.py`) uses exact-substring whitelisting — disclaimers MUST keep the canonical phrases on a single line ("does not promise virality", "Audience-fit over generic virality"). Whitespace runs inside those phrases break the test.
 
 ---
 
 ## THE ARC THAT LED HERE
 
-1. **User report on the live deploy:** the marketing hero looked sleek, but the dashboard/editor felt utility-grade, and there was a horizontal scrollbar on every page. Tabs inside the editor weren't discoverable (icon-only strip).
-2. **Issue 136 follow-up (labeled tool rail + hero Sign-in CTA)** — small fix in the same session.
-3. **Issue 137 (Project-wide UI overhaul + horizontal-overflow fix)** — built and shipped (`b554981`). New `static/page-shell.css` extends the hero aurora aesthetic across all authenticated pages; `overflow-x: clip` + `.table-wrap` + `.action-row` eliminate horizontal scroll. Explicit reversal of Issue 99's "Linear-utility-for-data-pages" split per industry research (Linear's own 2026 refresh extends aurora into product surfaces).
-4. **Pre-launch checklist context** — `CLAUDE.md` flags "Billing + plan-tier wired" as required before public launch. User asked "what's next" — recommendation was Issue 125 → Issue 126 (the two-step transparency arc that unblocks paid signups).
-5. **Issue 125 (Video control model + minutes transparency)** — built locally this session. `analysis_mode` enum, PATCH endpoint, explicit "What costs minutes" tooltip, per-video Queue button, explicit analytics-unavailable panel.
-6. **Issue 126 (Trial UX + billing clarity)** — built locally this session. `trial_ends_at` on Creator, balance endpoint extension, differentiated 402, daily Beat watchdog, dashboard trial banner, low-balance pre-action warnings.
-7. **Awaiting commit + push** — see CURRENT FOCUS.
+1. **2026-06-08 morning** — User ran `/assess` with explicit UI/UX emphasis ("the app feels barren or not easy to know how to use") instead of naming a single module to slice on.
+2. Layer 0 ran clean. Fourteen Layer-1 subagents dispatched in parallel (added a new `static_frontend` module slice given the UX focus); 11 wrote module findings files directly, 4 ran under read-only Explore and returned 3-line summaries that the orchestrator merged into the existing module files (billing required a SEV1 escalation from a new finding).
+3. Layer-2 verdict synthesized: **CONDITIONAL** — all 6 prior SEV1s fixed + axis-B sweep resolved; 1 new BLOCKER (`_pollTimer` runaway) + 1 new SEV1 (billing webhook RLS-blind idempotency, masked by `grant_minutes` IntegrityError catch) + a 12-item UX SEV2 cluster directly mapping to the "barren" complaint.
+4. **User said "can we fix these diffs then?"** plus raised six new UX/product concerns: logout auto-relogs, dashboard/insights "still old style", editor "bland", tutorial walkthrough needed, "show how to connect the API key", and "have it BE the OBS editor" or far easier OBS connect.
+5. Sorted the work: 4 unambiguous defect fixes this session vs. 6 deferred items requiring Phase-1 CHECK briefs (per CLAUDE.md One Rule).
+6. **Shipped the 4 fixes** (BLOCKER, SEV1, logout flow, authenticated empty hero) + regression tests + Layer-0 re-run. All green. Working tree is the assessment artifacts + the fixes.
 
 ---
 
 ## KEY COORDINATES & FACTS
 
-| What | Value |
+| Thing | Value |
 |---|---|
-| Repository | `/home/reese/workspace/Youtube-Video-AI-Editor` |
-| Branch | `main` |
-| Last pushed HEAD | `b554981` (Issue 137 — UI overhaul) |
-| Production URL | `https://autoclip.studio` (via Cloudflare Tunnel; no open inbound ports on prod VM) |
-| Deploy pipeline | GitHub Actions: `docker-publish` → `workflow_run: ["Docker publish"]` → `deploy` — both run on `self-hosted` runner on the prod VM (Issue 101) |
-| Python virtual env | `.venv/bin/python` (project-local; system Python 3.12 has an unrelated `pydantic-core` mismatch — **always use the project venv**) |
-| Test command | `.venv/bin/python -m pytest -q --no-header` |
-| Layer 0 gates | `.venv/bin/python -m ruff check .` + `.venv/bin/python -m mypy .` |
-| Latest migration | `0023_creator_trial_ends_at.py` (Issue 126); previous `0022_creator_analysis_mode.py` (Issue 125). Apply with `alembic upgrade head` on prod after deploy. |
-| New config | `TRIAL_DURATION_DAYS=7`, `LOW_BALANCE_THRESHOLD_MINUTES=10` (both in `.env.example`; defaults match spec — no prod env-var change needed) |
-| Secrets (NAMES only, never values) | `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID` + `_SECRET`, `TOKEN_ENCRYPTION_KEY` (+ optional `_PREVIOUS` for rotation), `JWT_SECRET_KEY`, `STRIPE_SECRET_KEY` + `_WEBHOOK_SECRET`, `R2_*`. Registry in `docs/SECRETS.md`; rotation runbook in `docs/RUNBOOKS.md`. |
-| Last completed issue | 137 (UI overhaul). Locally complete: 125 + 126. Backlog candidates: Issue 96 (chat-driven intake — SEV-2 UX), Issue 97 (livestream recap — SEV-3 feature, subscription tier), Issue 109 (deferred design-work cleanups), pre-launch checklist items in `CLAUDE.md` (`TOKEN_ENCRYPTION_KEY` rotation runbook, account-deletion endpoint, Google OAuth app verification). |
+| Repo | `/home/reese/workspace/Youtube-Video-AI-Editor` |
+| Branch | `main` (work directly on main per project convention) |
+| HEAD | `d398cff` — "feat: Implement video intake modes and trial expiration handling" |
+| Trunk distance | `0` ahead / `0` behind `origin/main` |
+| Test command | `PATH=".venv/bin:$PATH" python3 -m pytest -q` |
+| Layer-0 command | `PATH=".venv/bin:$PATH" python3 .claude/skills/production-assessment/scripts/run_layer0.py` |
+| Latest assessment report | `docs/assessment/REPORT.md` |
+| Latest snapshot | `docs/assessment/history/2026-06-08-ux-focus-REPORT.md` |
+| Issue log | `docs/issues.md` |
+| Project state | `docs/PROJECT_STATE.md` |
+| Decision log | `docs/DECISIONS.md` |
+| Off-course bugs log | `docs/OFF_COURSE_BUGS.md` |
+| Deploy workflow | `Deploy to production` (auto-runs `alembic upgrade head` pre-rollout) |
+| Local Python | `python3.12` via `.venv/bin/` (no Docker available locally) |
+| Postgres for integration tests | **not available locally** — CI runs them |
+| OAuth scopes / Google prompt | `youtube/oauth.py::build_authorization_url` — now `prompt=consent select_account` |
+| Secrets/keys | by NAME only — see `docs/SECRETS.md` for the canonical list (`TOKEN_ENCRYPTION_KEY`, `GOOGLE_OAUTH_CLIENT_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `JWT_SECRET`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`) — never write values here |
+
+---
+
+## DEFERRED FOLLOW-UPS (open as issues before starting)
+
+Each needs a Phase-1 CHECK brief per CLAUDE.md before any code. Ordered by my read of leverage; user can reorder:
+
+1. **Empty-state response wrappers** — wrap `[]` returns from `/videos`, `/clips`, `/insights/saved` in `{items, state, message}` (the existing `DnaGetOut` pattern). Frontend updates everywhere those endpoints are consumed. Direct fix for the "barren" complaint at the API layer.
+2. **Onboarding state aggregation** — add `setup_step`, `setup_step_label`, `next_action_type` to `CreatorMeOut`. Replaces frontend polling of 5 endpoints to infer the next step.
+3. **4xx `action_type` / `action_url` middleware** — structured error shape so the frontend can render generic guidance instead of hardcoding redirect URLs per status.
+4. **"Old-style UI" diagnostic** — user reported dashboard/insights "still feel old style" despite the Issue 137 + Issue 99 design-token rollouts. NEEDS a per-page audit before any redesign decisions. I have not done this audit yet.
+5. **Editor visual polish (review/editor "bland")** — design call. Research current shorts editor industry standard (Opus Clip, Descript, Submagic) before touching `static/editor.js` + `review.html`.
+6. **"SHOW how to connect the API key" walkthrough** — visual guide for OBS / folder-watcher API-key setup. Screenshots? Animated GIF? Inline copy-paste? Brief covers content + platform coverage.
+7. **OBS direction (product pivot question)** — own the recording surface (custom OBS plugin/dock) vs. far easier API-key pairing UX. Multi-week direction either way. NEEDS written direction from the user before code.
+8. **Tutorial walkthrough (interactive product tour)** — user said "eventually". Library choice (Shepherd.js / Driver.js / custom) + state-machine for step persistence + anchor selectors that survive UI changes.
+9. **Other open register items** — Stripe Idempotency-Key tenant scoping (`billing/stripe_client.py:101`), `_root_infra/crypto.py:13` MultiFernet caching, YouTube quota per-retry accounting (`youtube/quota.py:64`), DNA week-wrap (`dna/builder.py:88`). Each is SEV2; can batch.
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Pushing to `main` auto-deploys to production.** The user-facing app reloads as soon as the deploy run completes (typically <2 min after push). Confirm before pushing.
-- **Migrations don't auto-run on deploy.** After `gh run` shows Deploy ✅, you still need `alembic upgrade head` on the prod container or the new endpoints will 500 (or worse — silently skip new columns on inserts). Both migrations this session are pure `add_column`, fast + reversible.
-- **Issue 125 + 126 are tightly coupled — ship them in one commit (or two contiguous commits).** Skipping 125 and shipping just 126 means the `analytics_available` field is missing — `analysis.html` falls back via the `?? has_metrics` nullish-coalesce (intentional backward-compat hedge), but the Profile mode-selector + dashboard Queue button would dangle without their backend endpoints.
-- **CI's "Integration tests" lane has a pre-existing flake** (`test_poll_clip_outcomes_uses_per_creator_median` → `Event loop is closed`). Not caused by this session's work; deploy proceeds because `workflow_run` chains on `Docker publish` (which is green), not on Integration. If you debug it, it's its own session.
-- **Don't backfill `trial_ends_at`.** The migration is intentionally NULL-able; backfilling existing creators to `created_at + 7 days` would retroactively put many in a "trial expired" state with confusing 402 copy. NULL = "no trial," which is the correct legacy semantic.
-- **`window.__USER__.analysis_mode` and `window.__BALANCE__` are populated by `auth.js`** after `/auth/me` and `/billing/balance` return. Pages that conditionally render based on either must listen for `auth:ready` and `billing:ready` respectively — both are dispatched as `CustomEvent` on `document`.
-- **`TOKEN_ENCRYPTION_KEY` is write-only/unreadable in prod** — never log it, never echo it, never paste it. Rotation runbook in `docs/RUNBOOKS.md`.
-- **System Python 3.12 is poisoned** — `pydantic-core 2.27.2` conflicts with `pydantic 2.46.4` system-wide. Tests fail to import with a `SystemError` if you use system `python3` or `python3.12`. The project's `.venv` has the matched versions; **always** invoke as `.venv/bin/python -m pytest` etc.
+- **Working tree is dirty.** Commit before any context switch — the assessment artifacts and the fix patches are entangled in one tree but represent two logical units.
+- **Postgres isn't running locally** (per existing memory `local_dev_test_env.md`). Integration tests (including the new billing webhook RLS regression) only run in CI. Do not assume an integration assertion is verified just because the unit suite passed.
+- **Honesty-constraint scanner is strict-substring.** Any new user-visible copy that mentions "viral" or "promise" must use the exact whitelist phrases on a single line — multi-line HTML with whitespace inside `does not promise virality` will fail `tests/test_compliance_no_virality.py`. Two existing disclaimers in `index.html` and `login.html` were re-flowed to single lines this session for this reason.
+- **The new `static/login.html` does NOT include `static/auth.js`.** That's intentional — auth.js would call `/auth/me` → 401 → redirect to `/static/login.html` → infinite bounce. Keep login.html script-free except for the `?yt=` forwarder.
+- **The 8-page redirect rename** (`/auth/login` → `/static/login.html` on 401) was a `sed`-driven sweep; explicit "Sign in" / "Connect YouTube" CTA buttons that are USER-initiated still link to `/auth/login` (the OAuth initiator) intentionally. Don't unify them without thinking.
+- **The new `_pollTimer` uses `setTimeout` recursion, not `setInterval`.** This was the BLOCKER fix. The test (`test_dashboard_includes_polling`) was updated to accept either — be careful if someone "simplifies" back to `setInterval`.
+- **CLAUDE.md One Rule is in force for every non-trivial decision** (architecture, library, model, scoring math, security boundary, UX pattern). The 6 deferred follow-ups above each need a Phase-1 CHECK brief with industry-standard research before code, captured in `docs/DECISIONS.md` if anything deviates from the standard.
+- **Off-course bugs:** when something unrelated surfaces, log it in `docs/OFF_COURSE_BUGS.md` and keep going; don't chase it inline.
 
 ---
 
 ## POINTERS
 
-| Doc | What it is |
-|---|---|
-| `docs/SOT.md` | Architecture, stack, file structure, schema. **Updated this session** for `Creator.analysis_mode` + `trial_ends_at` + `page-shell.css`. |
-| `docs/PROJECT_STATE.md` | Per-issue session log. **Updated this session** with Issue 125 + 126 close-out entries. |
-| `docs/DECISIONS.md` | Design-decision log. **Updated this session** with Issue 125 (auto-default, dual `has_metrics`/`analytics_available`, separate `/queue` endpoint) and Issue 126 (NULL-for-legacy, watchdog-not-state-machine, differentiated-text-not-error-code, per-day-bucket dismissal). |
-| `docs/issues.md` | Issue backlog. ACs checked off for 125 + 126 + 137. Open: 96 / 97 / 109. |
-| `docs/COMPLIANCE.md` | YouTube ToS posture + data retention. Unchanged this session. |
-| `docs/CLIPPING_PRINCIPLES.md` | Named principles the scoring engine cites. Unchanged this session. |
-| `docs/RUNBOOKS.md` | Encryption-key rotation procedure. |
-| `docs/SECRETS.md` | Canonical secrets/config registry (names + where to obtain — never values). |
-| `CLAUDE.md` | Project rules: the One Rule (research industry standard before non-trivial decisions), file structure, pre-launch checklist, issue workflow (Check → Approve → Build → Review & Assess). |
-| Memory directory | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` |
+- Architecture / stack / structure: `docs/SOT.md`
+- Issue queue: `docs/issues.md`
+- Project state (what's done, in-progress, blocked): `docs/PROJECT_STATE.md`
+- Decision log (deviations from PRD or industry standard): `docs/DECISIONS.md`
+- YouTube ToS / data retention / privacy posture: `docs/COMPLIANCE.md`
+- Named clip-engine principles: `docs/CLIPPING_PRINCIPLES.md`
+- Pre-launch / Kubernetes deployment plan: `docs/DEPLOYMENT.md`
+- Beta-launch runbook: `docs/BETA_LAUNCH_RUNBOOK.md`
+- Latest assessment report: `docs/assessment/REPORT.md`
+- All historical assessment snapshots: `docs/assessment/history/`
+- Per-module assessment findings: `docs/assessment/modules/`
+- Off-course bug log: `docs/OFF_COURSE_BUGS.md`
+- Production assessment skill: `.claude/skills/production-assessment/SKILL.md`
+- Memory index: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md`
