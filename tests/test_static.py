@@ -1193,3 +1193,43 @@ def test_static_cachebust_middleware_is_idempotent_on_existing_query(client):
     assert b"/static/bar.css?v=abc123" in out, "Bare path must pick up the new ?v=."
     # Sanity: regex itself ignores ?-containing paths.
     assert _STATIC_CACHEBUST_RE.search(b'href="/static/foo.css?v=manual"') is None
+
+
+def test_static_cachebust_middleware_sets_no_store_on_html(client):
+    """HTML responses must carry Cache-Control: no-store so browsers never
+    cache them via ETag/Last-Modified.  Stale browser-cached HTML retains old
+    ?v= strings that point at CDN-cached old CSS — the only safe fix is to
+    prevent browser caching of HTML entirely."""
+    for path in ("/", "/static/index.html", "/static/insights.html"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        cc = resp.headers.get("cache-control", "")
+        assert "no-store" in cc, (
+            f"{path}: Cache-Control must include no-store but got {cc!r}"
+        )
+
+
+def test_static_cachebust_middleware_strips_etag_from_html(client):
+    """ETag and Last-Modified must be absent from rewritten HTML responses.
+    Keeping them allows browsers to send If-None-Match and receive a 304 that
+    bypasses the middleware, leaving the browser stuck on stale HTML."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "etag" not in resp.headers, (
+        "ETag must be stripped from HTML responses to prevent conditional-GET bypass."
+    )
+    assert "last-modified" not in resp.headers, (
+        "Last-Modified must be stripped from HTML responses."
+    )
+
+
+def test_static_cachebust_middleware_preserves_etag_on_css(client):
+    """ETag/Last-Modified must be kept on CSS/JS responses — the middleware
+    must not touch non-HTML assets."""
+    resp = client.get("/static/_design-tokens.css")
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type", "").startswith("text/css")
+    # StaticFiles sets ETag on files; it must still be present after the middleware.
+    assert "etag" in resp.headers, (
+        "CSS ETag must be preserved — browser caching of CSS is desirable."
+    )
