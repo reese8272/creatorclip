@@ -226,7 +226,16 @@ async def _do_token_refresh(
 
     Called only by the worker that holds the per-creator Redis advisory lock.
     Returns the new plaintext access token.
+
+    Audit fix (Issue-135 audit, scale-checklist D): writes happen on an
+    INTERNAL ``AdminSessionLocal`` scoped to this function, NOT the
+    caller-owned ``session``. Previously, calling ``session.commit()`` here
+    flushed every pending write in the caller's transaction (request handler
+    or Celery task) — silently committing unrelated work. The caller-owned
+    ``session`` is now read-only from this function's perspective.
     """
+    from db import AdminSessionLocal
+
     stored_refresh = decrypt(row.refresh_token_encrypted)
     try:
         new_tokens = await refresh_access_token(stored_refresh)
@@ -239,23 +248,30 @@ async def _do_token_refresh(
                 "Refresh token invalid_grant for creator %s — deleting YoutubeToken row",
                 creator_id,
             )
-            await session.execute(delete(YoutubeToken).where(YoutubeToken.creator_id == creator_id))
-            await session.commit()
+            async with AdminSessionLocal() as internal:
+                await internal.execute(
+                    delete(YoutubeToken).where(YoutubeToken.creator_id == creator_id)
+                )
+                await internal.commit()
         else:
             logger.warning("Token refresh failed for creator %s: %s", creator_id, exc)
         raise HTTPException(
             401, "OAuth token refresh failed — please reconnect your YouTube account"
         ) from exc
 
-    await store_or_update_tokens(
-        session,
-        creator_id,
-        access_token=new_tokens["access_token"],
-        refresh_token=new_tokens.get("refresh_token"),
-        scope=new_tokens.get("scope", row.scope),
-        expires_in=new_tokens.get("expires_in", 3600),
-    )
-    await session.commit()
+    async with AdminSessionLocal() as internal:
+        await store_or_update_tokens(
+            internal,
+            creator_id,
+            access_token=new_tokens["access_token"],
+            refresh_token=new_tokens.get("refresh_token"),
+            scope=new_tokens.get("scope", row.scope),
+            expires_in=new_tokens.get("expires_in", 3600),
+        )
+        await internal.commit()
+    # Refresh the caller's view of the row so subsequent reads in the same
+    # transaction see the new token without re-querying.
+    await session.refresh(row)
     return new_tokens["access_token"]
 
 

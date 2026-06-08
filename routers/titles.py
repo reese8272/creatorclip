@@ -1,5 +1,6 @@
 """Title suggestion endpoint (Issue 128)."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -73,7 +74,9 @@ async def start_title_suggestions(
     from worker import progress
     from worker.tasks import generate_title_suggestions as generate_title_suggestions_task
 
-    task = generate_title_suggestions_task.delay(str(creator.id), str(video.id))
+    task = await asyncio.to_thread(
+        generate_title_suggestions_task.delay, str(creator.id), str(video.id)
+    )
 
     stream_url: str | None = f"/tasks/{task.id}/events"
     try:

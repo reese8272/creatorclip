@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, datetime
 
@@ -144,7 +145,7 @@ async def start_improvement_brief(
     from worker import progress
     from worker.tasks import generate_improvement_brief as generate_improvement_brief_task
 
-    task = generate_improvement_brief_task.delay(str(creator.id))
+    task = await asyncio.to_thread(generate_improvement_brief_task.delay, str(creator.id))
     row.job_id = task.id
     await session.commit()
 

@@ -232,7 +232,10 @@ def test_analyze_hook_builds_prompt_with_drop() -> None:
     call_kwargs = fake_stream.call_args.kwargs
     system_blocks = call_kwargs["system"]
     assert len(system_blocks) == 3
-    assert system_blocks[1]["cache_control"] == {"type": "ephemeral"}
+    # No cache_control on the DNA block — Issue-135 audit fix: instructions +
+    # DNA brief ≈ 900 tokens, below Haiku 4.5's 4096-token cache floor; the
+    # marker was inert. See docs/DECISIONS.md.
+    assert "cache_control" not in system_blocks[1]
     assert "12.5s" in system_blocks[2]["text"]
     assert "55.0%" in system_blocks[2]["text"]
 

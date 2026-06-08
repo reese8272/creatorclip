@@ -378,3 +378,38 @@ def test_get_transcript_returns_clip_relative_words(client):
     # Indices are stable for the JS editor.
     assert words[0]["index"] == 0
     assert words[1]["index"] == 1
+
+
+def test_post_cuts_rejects_when_cleaned_render_uri_already_set(client):
+    """Issue-135 audit fix: /cuts mirrors /clean and returns 409 when a
+    cleaned/edited artifact is already pending — both flows share
+    Clip.cleaned_render_uri as the destination slot, and a silent second
+    write would drop the first user's work."""
+    from auth import get_current_creator
+    from billing.ledger import check_positive_balance
+    from db import get_session
+    from main import app
+
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id, duration_s=10.0)
+    clip.cleaned_render_uri = "clips/x_clean.mp4"  # already pending
+
+    async def _session():
+        s = AsyncMock()
+        s.get = AsyncMock(return_value=clip)
+        yield s
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[check_positive_balance] = AsyncMock(return_value=None)
+    try:
+        with patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)):
+            resp = client.post(
+                f"/clips/{clip.id}/cuts",
+                json={"segments": [{"start_s": 2.0, "end_s": 3.0}]},
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "pending_clean_or_edit"

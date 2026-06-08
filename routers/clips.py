@@ -193,7 +193,9 @@ async def render_clip(
     from worker import progress
     from worker.tasks import render_clip as render_task
 
-    task = render_task.delay(str(clip_id))
+    # Audit fix (scale-checklist B): `.delay()` is sync Redis I/O; offload from
+    # the request loop so a slow Redis doesn't stall every concurrent handler.
+    task = await asyncio.to_thread(render_task.delay, str(clip_id))
     # Issue 92: use clip_id (not task.id) as the SSE stream key — the worker
     # task emits to task:{clip_id}:events for the same deterministic-lookup
     # reason as the upload chain (the frontend already has clip_id in URL).
@@ -351,13 +353,26 @@ async def clean_clip(
         raise HTTPException(status_code=404, detail="Clip not found")
     if not clip.render_uri:
         raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
+    # Issue-135 audit fix: clean and edit share cleaned_render_uri; running one
+    # while the other is pending would silently no-op in the worker (the
+    # idempotency probe at tasks.py:874 / :1006 short-circuits) — drop the
+    # user's work without an error. Surface the conflict here so the UI can
+    # prompt to confirm or discard the pending artifact first.
+    if clip.cleaned_render_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pending_clean_or_edit",
+                "message": "Confirm or discard the pending cleaned/edited version first.",
+            },
+        )
 
     import redis as _redis_pkg
 
     from worker import progress
     from worker.tasks import clean_clip as clean_task
 
-    task = clean_task.delay(str(clip_id))
+    task = await asyncio.to_thread(clean_task.delay, str(clip_id))
     stream_url: str | None = f"/tasks/{clip_id}/events"
     try:
         await progress.aset_owner(str(clip_id), str(creator.id))
@@ -528,6 +543,17 @@ async def submit_cuts(
         raise HTTPException(status_code=404, detail="Clip not found")
     if not clip.render_uri:
         raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
+    # Issue-135 audit fix — mirror /clean: refuse if a pending cleaned/edited
+    # artifact already exists, else the worker idempotency probe at
+    # tasks.py:1006 silently drops this edit.
+    if clip.cleaned_render_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pending_clean_or_edit",
+                "message": "Confirm or discard the pending cleaned/edited version first.",
+            },
+        )
     clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
     clip_duration_s = clip.end_s - clip_origin_s
 
@@ -547,7 +573,7 @@ async def submit_cuts(
     from worker.tasks import edit_clip as edit_task
 
     payload = [[s.start_s, s.end_s] for s in body.segments]
-    task = edit_task.delay(str(clip_id), payload)
+    task = await asyncio.to_thread(edit_task.delay, str(clip_id), payload)
     stream_url: str | None = f"/tasks/{clip_id}/events"
     try:
         await progress.aset_owner(str(clip_id), str(creator.id))
@@ -690,7 +716,9 @@ async def ingest_clip(
         )
         stream_url = None
 
-    start_pipeline(str(video.id))
+    # Audit fix (scale-checklist B): start_pipeline calls apply_async() inline —
+    # sync Redis I/O on the request loop. Offload.
+    await asyncio.to_thread(start_pipeline, str(video.id))
 
     from observability import log_event
 

@@ -41,6 +41,29 @@ class _FakeResponse:
             raise httpx.HTTPStatusError(f"{self.status_code}", request=self.request, response=self)
 
 
+def _admin_session_mock() -> MagicMock:
+    """Return a sentinel context-manager mock for ``db.AdminSessionLocal``.
+
+    Audit fix (Issue-135 audit): ``_do_token_refresh`` writes via an
+    INTERNAL session opened from ``AdminSessionLocal`` instead of committing
+    the caller-owned session. Tests patch the factory with this mock so the
+    internal write path doesn't try to open a real Postgres connection.
+    Exposes ``.execute``/``.commit``/``.rollback`` on the inner session for
+    assertions.
+    """
+    inner = AsyncMock()
+    inner.execute = AsyncMock(return_value=MagicMock())
+    inner.commit = AsyncMock()
+    inner.rollback = AsyncMock()
+    factory = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=inner)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    factory.return_value = cm
+    factory.inner = inner  # exposed for tests that want to assert on the writes
+    return factory
+
+
 def _make_creator():
     c = MagicMock()
     c.id = uuid.uuid4()
@@ -186,12 +209,15 @@ async def test_get_valid_access_token_deletes_row_on_invalid_grant():
     session_mock = AsyncMock()
     session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: row))
     session_mock.commit = AsyncMock()
+    session_mock.refresh = AsyncMock()
 
     async def fake_refresh(_):
         resp = _FakeResponse(400, {"error": "invalid_grant"})
         raise httpx.HTTPStatusError("400", request=resp.request, response=resp)
 
+    admin = _admin_session_mock()
     with (
+        patch("db.AdminSessionLocal", admin),
         patch("youtube.oauth.get_redis_client", return_value=_make_lock_redis()),
         patch("youtube.oauth.refresh_access_token", side_effect=fake_refresh),
         pytest.raises(HTTPException) as exc_info,
@@ -199,9 +225,10 @@ async def test_get_valid_access_token_deletes_row_on_invalid_grant():
         await get_valid_access_token(creator_id, session_mock)
 
     assert exc_info.value.status_code == 401
-    # The session.execute was called twice: once for select, once for delete
-    assert session_mock.execute.await_count >= 2
-    session_mock.commit.assert_awaited()
+    # The DELETE now runs on the internal AdminSessionLocal session (audit fix),
+    # not the caller's session_mock. Assert on the inner session instead.
+    admin.inner.execute.assert_awaited()
+    admin.inner.commit.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -480,9 +507,14 @@ async def test_concurrent_refresh_only_calls_google_once():
             "scope": "scope",
         }
 
+    session_a.refresh = AsyncMock()
+    session_b.refresh = AsyncMock()
+    admin = _admin_session_mock()
     with (
+        patch("db.AdminSessionLocal", admin),
         patch("youtube.oauth.get_redis_client", return_value=fake_redis),
         patch("youtube.oauth.refresh_access_token", side_effect=_slow_refresh),
+        patch("youtube.oauth.store_or_update_tokens", new=AsyncMock()),
         patch("youtube.oauth.asyncio.sleep", new=AsyncMock()),  # fast-forward B's poll sleep
     ):
         token_a, token_b = await asyncio.gather(
@@ -512,6 +544,7 @@ async def test_lock_releases_after_success():
     session_mock = AsyncMock()
     session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: row))
     session_mock.commit = AsyncMock()
+    session_mock.refresh = AsyncMock()
 
     # Track eval (Lua release) calls.
     eval_calls: list[tuple] = []
@@ -527,9 +560,12 @@ async def test_lock_releases_after_success():
     async def _fake_refresh(_refresh_token: str) -> dict:
         return {"access_token": "new-token", "expires_in": 3600, "scope": "scope"}
 
+    admin = _admin_session_mock()
     with (
+        patch("db.AdminSessionLocal", admin),
         patch("youtube.oauth.get_redis_client", return_value=fake_redis),
         patch("youtube.oauth.refresh_access_token", side_effect=_fake_refresh),
+        patch("youtube.oauth.store_or_update_tokens", new=AsyncMock()),
     ):
         token = await get_valid_access_token(creator_id, session_mock)
 
@@ -560,10 +596,12 @@ async def test_refresh_path_success():
     row.scope = "openid https://www.googleapis.com/auth/youtube.readonly"
 
     session_mock = AsyncMock()
-    # First execute: SELECT for get_valid_access_token
-    # Second execute: SELECT inside store_or_update_tokens (upsert path)
+    # First execute: SELECT for get_valid_access_token. (After the audit fix
+    # the token write happens on the internal AdminSessionLocal, not on this
+    # caller-owned session.)
     session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: row))
     session_mock.commit = AsyncMock()
+    session_mock.refresh = AsyncMock()
 
     new_payload = {
         "access_token": "brand-new-access-token",
@@ -573,10 +611,14 @@ async def test_refresh_path_success():
     }
 
     refresh_mock = AsyncMock(return_value=new_payload)
+    admin = _admin_session_mock()
+    store_mock = AsyncMock()
 
     with (
+        patch("db.AdminSessionLocal", admin),
         patch("youtube.oauth.get_redis_client", return_value=_make_lock_redis()),
         patch("youtube.oauth.refresh_access_token", refresh_mock),
+        patch("youtube.oauth.store_or_update_tokens", store_mock),
     ):
         result = await get_valid_access_token(creator_id, session_mock)
 
@@ -586,14 +628,16 @@ async def test_refresh_path_success():
     # The returned value is the new plaintext access token.
     assert result == "brand-new-access-token"
 
-    # session.commit was called (tokens persisted).
-    session_mock.commit.assert_awaited()
-
-    # The DB row's access_token_encrypted was updated with the new value.
-    assert row.access_token_encrypted != encrypt("old-access-token"), (
-        "access_token_encrypted should have been updated on the row"
-    )
-    assert decrypt(row.access_token_encrypted) == "brand-new-access-token"
+    # Audit fix: the internal AdminSessionLocal session committed (not the
+    # caller's). store_or_update_tokens was called against the inner session.
+    admin.inner.commit.assert_awaited()
+    store_mock.assert_awaited_once()
+    # Caller's session should NOT have been committed by _do_token_refresh.
+    session_mock.commit.assert_not_called()
+    # The row was refreshed so subsequent reads in the caller's transaction
+    # see the new token (the caller still holds its existing transaction).
+    session_mock.refresh.assert_awaited_with(row)
+    assert decrypt(row.refresh_token_encrypted) == "stored-refresh-token"
 
 
 # ── Test 2: callback logs no token plaintext ──────────────────────────────────

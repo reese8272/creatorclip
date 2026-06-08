@@ -1,5 +1,6 @@
 """Thumbnail pattern analysis + concept generator endpoints (Issue 129)."""
 
+import asyncio
 import json
 import logging
 import uuid as _uuid_mod
@@ -192,7 +193,9 @@ async def start_thumbnail_concepts(
     from worker import progress
     from worker.tasks import generate_thumbnail_concepts as generate_thumbnail_concepts_task
 
-    task = generate_thumbnail_concepts_task.delay(str(creator.id), str(video.id))
+    task = await asyncio.to_thread(
+        generate_thumbnail_concepts_task.delay, str(creator.id), str(video.id)
+    )
 
     stream_url: str | None = f"/tasks/{task.id}/events"
     try:

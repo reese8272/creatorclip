@@ -343,7 +343,12 @@ async def _retrain_preference_async(creator_id: str) -> None:
     from preference.train import TRAINABLE_ACTIONS, build_and_save
 
     cid = uuid.UUID(creator_id)
-    async with db.AsyncSessionLocal() as session:
+    # Audit fix (Issue-135 audit, scale-checklist D): the retrain reads
+    # ClipFeedback rows for a single creator. Use AdminSessionLocal so the
+    # RLS `after_begin` listener (which sets `app.creator_id` from
+    # session.info) doesn't NULL the predicate and silently fit an empty
+    # model. Worker-internal task — admin role is correct here.
+    async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): non-blocking variant so a concurrent
         # or redelivered task returns immediately rather than queueing behind a
         # stuck prior run. Template: _build_dna_async uses the xact variant;
@@ -1976,6 +1981,12 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
 
         cid = uuid.UUID(creator_id)
         async with db.AsyncSessionLocal() as session:
+            # Audit fix (Issue-135 audit, scale-checklist D): stamp creator_id so
+            # the RLS `after_begin` listener sets `app.creator_id` before any
+            # query. Without this the brief query + the VideoMetrics join return
+            # empty under the production role split, and the brief silently
+            # writes a `ready` row with no analytics.
+            session.info["creator_id"] = str(cid)
             row = (
                 await session.execute(
                     select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)

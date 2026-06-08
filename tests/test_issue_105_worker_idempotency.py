@@ -194,7 +194,10 @@ async def test_retrain_preference_acquires_advisory_lock() -> None:
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm):
+    # Issue-135 audit fix: _retrain_preference_async now opens an
+    # AdminSessionLocal (worker-internal pass, bypasses RLS) instead of
+    # AsyncSessionLocal — patch the correct factory.
+    with patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm):
         from worker.tasks import _retrain_preference_async
 
         await _retrain_preference_async(creator_id)

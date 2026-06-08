@@ -393,3 +393,43 @@ def test_clean_confirm_idempotent_when_no_cleaned_uri(client):
         app.dependency_overrides.clear()
     assert resp.status_code == 200
     assert resp.json()["status"] == "noop"
+
+
+def test_clean_rejects_when_cleaned_render_uri_already_set(client):
+    """Issue-135 audit fix: /clean returns 409 when a cleaned/edited
+    artifact is already pending. Otherwise the worker's idempotency probe
+    silently no-ops and the user's request is lost without an error."""
+    import uuid as _uuid
+    from unittest.mock import AsyncMock
+
+    from auth import get_current_creator
+    from billing.ledger import check_positive_balance
+    from db import get_session
+    from main import app
+    from models import Clip, RenderStatus
+
+    creator = _mock_creator()
+    clip_id = _uuid.uuid4()
+    clip = MagicMock(spec=Clip)
+    clip.id = clip_id
+    clip.creator_id = creator.id
+    clip.render_status = RenderStatus.done
+    clip.render_uri = "clips/x.mp4"
+    clip.cleaned_render_uri = "clips/x_clean.mp4"  # already pending
+
+    async def _session():
+        s = AsyncMock()
+        s.get = AsyncMock(return_value=clip)
+        yield s
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[check_positive_balance] = AsyncMock(return_value=None)
+    try:
+        with patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)):
+            resp = client.post(f"/clips/{clip_id}/clean")
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "pending_clean_or_edit"

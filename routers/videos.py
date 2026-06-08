@@ -275,7 +275,8 @@ async def upload_video(
         )
         stream_url = None
 
-    start_pipeline(str(video.id))
+    # Audit fix (scale-checklist B): start_pipeline runs apply_async() inline.
+    await asyncio.to_thread(start_pipeline, str(video.id))
 
     from observability import log_event
 

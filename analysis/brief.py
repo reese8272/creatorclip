@@ -87,12 +87,13 @@ def _build_request(
 
     context_json = json.dumps(context, indent=2, default=str)
 
+    # Audit fix (Issue-135 audit): cache_control breakpoint removed. Static
+    # instructions ≈ 175 tokens vs Sonnet 4.6's 1024-token minimum cacheable
+    # prefix — marker was inert and the token log silently reported
+    # `cache_read=0`. One brief per video; the missed cache is low-frequency
+    # and uncached is the correct posture. Precedent: improvement/brief.py.
     system: list[dict] = [
-        {
-            "type": "text",
-            "text": _SYSTEM_INSTRUCTIONS,
-            "cache_control": {"type": "ephemeral"},
-        },
+        {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         {"type": "text", "text": f"CREATOR AND VIDEO DATA:\n{context_json}"},
     ]
     messages = [{"role": "user", "content": query}]

@@ -179,11 +179,14 @@ def generate_chapters(
         ts = format_timestamp(b)
         segment_lines.append(f"[{ts}] {text or '(no transcript in this segment)'}")
 
+    # Audit fix (Issue-135 audit): cache_control breakpoint removed. System
+    # prompt ≈ 175 tokens, far below Haiku 4.5's 4096-token cacheable-prefix
+    # floor. Marker was inert; token log silently reported `cache_read=0`.
+    # See docs/DECISIONS.md for the precedent (improvement/brief.py).
     system: list[dict] = [
         {
             "type": "text",
             "text": _SYSTEM_INSTRUCTIONS,
-            "cache_control": {"type": "ephemeral"},
         }
     ]
     messages = [

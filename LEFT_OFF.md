@@ -3,16 +3,29 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-07 (Issue 135 code-complete; Issues 133 + 134 deployed earlier this session)
-**Branch:** `main` — HEAD `63be6a1` (synced with origin/main) — **uncommitted Issue 135 changes in working tree**
-**Working tree:** DIRTY — Issue 135 files staged for next commit
-**CI (most recent green):** Quality Gates ✅ · Integration tests ✅ · CI ✅ · Docker publish ✅ · Deploy ✅ (for `63be6a1`)
+**Last updated:** 2026-06-07 (post-Issue-135 audit fixes — 6 SEV1s + 1 axis-B sweep — code-complete; Issues 133/134/135 already deployed earlier this session)
+**Branch:** `main` — HEAD `7af18b2` (synced with origin/main) — **uncommitted audit-fix changes in working tree**
+**Working tree:** DIRTY — audit-fix files staged for next commit
+**CI (most recent green):** Quality Gates ✅ · Integration tests ✅ · CI ✅ · Docker publish ✅ · Deploy ✅ (for `7af18b2`)
 
 ---
 
 ## CURRENT FOCUS
 
-### Issue 135 — Text-based transcript editor → code complete, awaiting push
+### Post-Issue-135 audit fixes → code complete, awaiting push
+
+`/assess` flagged 6 SEV1s + 1 cross-cutting axis-B SEV2. All fixed:
+- **A1**: `/clean` and `/cuts` return 409 when `cleaned_render_uri` is set
+  (was silent worker no-op).
+- **A2**: `_retrain_preference_async` → `AdminSessionLocal` (RLS-correct).
+- **A3**: `_generate_improvement_brief_async` stamps `creator_id`.
+- **A4**: Dropped inert `cache_control` on hooks/chapters/analysis briefs.
+- **A5**: `_do_token_refresh` writes via internal session (no caller flush).
+- **A6**: Wrapped ~16 `task.delay()` sites in `asyncio.to_thread` (axis B).
+
+Next `/assess` should drop CONDITIONAL → YES once Locust closes axes A+E.
+
+### Issue 135 — Text-based transcript editor → DEPLOYED at `7af18b2`
 
 Descript-style word-selection editor in `static/review.html`. Selected
 word ranges queue as cuts; confirm batch-renders via the same

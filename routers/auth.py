@@ -119,7 +119,7 @@ async def callback(
         from worker import progress
         from worker.tasks import sync_channel_catalog
 
-        task = sync_channel_catalog.delay(str(creator.id))
+        task = await asyncio.to_thread(sync_channel_catalog.delay, str(creator.id))
         # Wave-3 Fix D: stamp ownership so the catalog-sync SSE stream
         # (added in Issue 92) is reachable when Issue 100's onboarding
         # tutorial wires the post-OAuth UI. Same fail-open posture as the

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -167,7 +168,7 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     from worker import progress
     from worker.tasks import sync_channel_catalog
 
-    task = sync_channel_catalog.delay(str(creator.id))
+    task = await asyncio.to_thread(sync_channel_catalog.delay, str(creator.id))
     # Wave-5 Fix 1: stamp ownership for SSE auth. Same fail-open posture as
     # Wave-3 Fix B (improvement brief), Wave-3 Fix D (OAuth callback), and
     # Wave-4 Fix 1 (upload). A Redis blip returns stream_url=None — the
@@ -212,7 +213,7 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     from worker import progress
     from worker.tasks import build_dna as build_dna_task
 
-    task = build_dna_task.delay(str(creator.id))
+    task = await asyncio.to_thread(build_dna_task.delay, str(creator.id))
     # Wave-5 Fix 1: same fail-open posture as the other aset_owner sites.
     stream_url: str | None = f"/tasks/{task.id}/events"
     try:

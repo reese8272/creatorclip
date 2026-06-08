@@ -5,6 +5,86 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Post-Issue-135 audit fixes (6 SEV1s + 1 cross-cutting SEV2)
+
+`docs/assessment/REPORT.md` flagged 6 SEV1s and one cross-cutting axis-B
+violation post-Issue-135. All fixed in a single sweep. Highlights:
+
+### A1 — `/clean` and `/cuts` now return 409 when `cleaned_render_uri` is set
+
+**Decision:** Both endpoints (`routers/clips.py::clean_clip` and
+`routers/clips.py::submit_cuts`) now check `clip.cleaned_render_uri` and
+return HTTP 409 `{code: "pending_clean_or_edit"}` when a cleaned/edited
+artifact is already pending. Previously the worker's idempotency probe at
+`worker/tasks.py:874` / `:1006` would silently no-op the second task and
+drop the user's work. Surface the conflict — the UI can prompt
+"confirm or discard the pending version first."
+
+**Why over the alternative** (separate column per flow): both flows produce
+the same artifact shape (an mp4 sibling of the original) and confirmation
+goes through the same `POST /clean/confirm` swap. A second column would
+just double the schema for two features that can't be in-flight at the
+same time anyway.
+
+### A2 — Worker `_retrain_preference_async` switched to `AdminSessionLocal`
+
+**Decision:** The retrain task is worker-internal — it reads one creator's
+feedback rows and writes one new `PreferenceModel` row. Under the production
+RLS role split (Issue 79), `AsyncSessionLocal` is the app-role engine whose
+`after_begin` listener sets `app.creator_id` from `session.info`. The
+retrain never stamped that → `current_setting('app.creator_id', true)`
+returned NULL → RLS predicate matched no rows → model fit on empty data,
+silent broken state. `AdminSessionLocal` bypasses RLS, which is correct
+here because the task is internal trusted code.
+
+### A3 — Worker `_generate_improvement_brief_async` stamps `creator_id`
+
+**Decision:** Stays on `AsyncSessionLocal` (the brief query already
+`WHERE creator_id == cid`, so RLS is belt-and-suspenders) but now stamps
+`session.info["creator_id"] = str(cid)` before the first query so the
+`after_begin` listener sets `app.creator_id`. Without it, the brief
+silently wrote an empty `ready` row under the role split.
+
+### A4 — Knowledge + analysis: drop inert `cache_control` breakpoints
+
+**Decision:** Removed `cache_control: {"type": "ephemeral"}` from
+`knowledge/hooks.py:179`, `knowledge/chapters.py:186`, `analysis/brief.py:94`.
+
+**Why:** All three sit below the relevant model's minimum cacheable-prefix
+size:
+- Haiku 4.5 (`hooks.py`, `chapters.py`): 4096-token floor. The static
+  prefix in each is ~175–900 tokens.
+- Sonnet 4.6 (`analysis/brief.py`): 1024-token floor. Static prefix is
+  ~175 tokens.
+
+The markers were inert — every call paid full input-token cost while the
+token log silently reported `cache_read=0`. Same precedent as
+`improvement/brief.py` (documented earlier). All three are low-frequency
+one-shot-per-video calls; the missed cache is acceptable and the explicit
+"no cache marker" is the correct documented posture.
+
+### A5 — `youtube/oauth.py::_do_token_refresh` uses internal session
+
+**Decision:** Token writes now go to an internal `AdminSessionLocal()`
+session scoped to the function, NOT the caller-owned session. Previously
+`await session.commit()` flushed every pending write in the caller's
+transaction (a Celery task or request handler) — silently committing
+unrelated work. After the write the function calls
+`await session.refresh(row)` so subsequent reads in the caller's
+transaction see the new token.
+
+### A6 — Routers: wrap `task.delay()` in `asyncio.to_thread` (cross-cutting)
+
+**Decision:** ~16 sites across `routers/clips.py`, `videos.py`,
+`creators.py`, `auth.py`, `improvement.py`, `analysis.py`, `thumbnails.py`,
+`titles.py`, `review.py` now wrap every `task.delay(...)` and
+`start_pipeline(...)` call in `await asyncio.to_thread(...)`. Each
+`.delay()` is a sync Redis round-trip; at 100s of concurrent users this
+was the next p99 cliff (scale-checklist axis B). Cost: one extra threadpool
+hop per enqueue — negligible vs the Redis round-trip itself.
+
+---
+
 ## 2026-06-07 — Issue 135: Text-based transcript editor
 
 ### D1 — Reject the spec's 24h-then-overwrite original-preserve; reuse Issue 134's side-by-side `cleaned_render_uri` instead

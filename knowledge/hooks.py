@@ -171,12 +171,17 @@ def analyze_hook(
     else:
         drop_info = "No significant retention drop detected in the first 30 seconds."
 
+    # Audit fix (Issue-135 audit): cache_control breakpoint removed. The
+    # static instructions + DNA brief ≈ 900 tokens, which is below Haiku
+    # 4.5's 4096-token minimum cacheable-prefix size. The marker was inert
+    # and the token log silently reported `cache_read=0`. Same precedent as
+    # improvement/brief.py (see docs/DECISIONS.md). One-shot per video, so
+    # the missed cache is also low-frequency — leaving uncached is correct.
     system: list[dict] = [
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
         {
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral"},
         },
         {
             "type": "text",

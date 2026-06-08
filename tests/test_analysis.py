@@ -78,9 +78,11 @@ def test_build_request_minimal() -> None:
         channel_avg=None,
         dna_brief=None,
     )
-    # Two system blocks: static instruction (cached) + data block (uncached)
+    # Two system blocks: static instructions + per-video data block.
+    # No cache_control breakpoint — see DECISIONS (Issue-135 audit fix):
+    # static prefix is below Sonnet 4.6's 1024-token cache floor.
     assert len(system) == 2
-    assert system[0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in system[0]
     assert "CREATOR AND VIDEO DATA:" in system[1]["text"]
     assert "dQw4w9WgXcQ" in system[1]["text"]
     assert messages[0]["role"] == "user"

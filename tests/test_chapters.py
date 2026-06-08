@@ -306,7 +306,9 @@ def test_generate_chapters_builds_request() -> None:
     call_kwargs = fake_stream.call_args.kwargs
     system_blocks = call_kwargs["system"]
     assert len(system_blocks) == 1
-    assert system_blocks[0]["cache_control"] == {"type": "ephemeral"}
+    # No cache_control — Issue-135 audit fix: ~175-token system prompt is
+    # below Haiku 4.5's 4096-token cache-prefix floor; marker was inert.
+    assert "cache_control" not in system_blocks[0]
     user_msg = call_kwargs["messages"][0]["content"]
     assert "intro" in user_msg
     assert "second section" in user_msg

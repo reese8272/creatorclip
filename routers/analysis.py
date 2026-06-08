@@ -1,5 +1,6 @@
 """Video performance analysis endpoints (Issues 121, 130, 131)."""
 
+import asyncio
 import logging
 import re
 import uuid as _uuid_mod
@@ -111,8 +112,12 @@ async def start_video_analysis(
     from worker import progress
     from worker.tasks import generate_video_analysis as generate_video_analysis_task
 
-    task = generate_video_analysis_task.delay(
-        str(creator.id), youtube_video_id, body.query, video_id_str
+    task = await asyncio.to_thread(
+        generate_video_analysis_task.delay,
+        str(creator.id),
+        youtube_video_id,
+        body.query,
+        video_id_str,
     )
 
     stream_url: str | None = f"/tasks/{task.id}/events"
@@ -204,7 +209,7 @@ async def start_hook_analysis(
     from worker import progress
     from worker.tasks import analyze_hook as analyze_hook_task
 
-    task = analyze_hook_task.delay(str(creator.id), str(video.id))
+    task = await asyncio.to_thread(analyze_hook_task.delay, str(creator.id), str(video.id))
 
     stream_url: str | None = f"/tasks/{task.id}/events"
     try:
@@ -277,7 +282,7 @@ async def start_chapter_generation(
     from worker import progress
     from worker.tasks import generate_chapters as generate_chapters_task
 
-    task = generate_chapters_task.delay(str(creator.id), str(video.id))
+    task = await asyncio.to_thread(generate_chapters_task.delay, str(creator.id), str(video.id))
 
     stream_url: str | None = f"/tasks/{task.id}/events"
     try:

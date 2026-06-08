@@ -3,6 +3,7 @@ Feedback capture: upvote / downvote / skip / trim / format.
 Each action persists to clip_feedback and is used by the preference model.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -84,6 +85,6 @@ async def submit_feedback(
     # on every feedback write is cheap. (Issue 60)
     from worker.tasks import retrain_preference
 
-    retrain_preference.delay(str(creator.id))
+    await asyncio.to_thread(retrain_preference.delay, str(creator.id))
 
     return {"id": str(feedback.id), "action": feedback.action.value}
