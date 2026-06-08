@@ -142,6 +142,9 @@ def test_429_returned_on_limit_exceeded(client):
     creator.channel_title = "Test"
     creator.email = "t@t.com"
     creator.onboarding_state = MagicMock(value="active")
+    # Issue 125 — CreatorMeOut now carries analysis_mode; without this stub
+    # the response validates against MagicMock and 500s.
+    creator.analysis_mode = MagicMock(value="auto")
     creator.created_at = MagicMock(isoformat=lambda: "2025-01-01T00:00:00")
 
     from unittest.mock import AsyncMock

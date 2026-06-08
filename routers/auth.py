@@ -88,6 +88,8 @@ async def callback(
     await session.flush()
 
     if is_new:
+        from datetime import UTC, datetime, timedelta
+
         from billing.ledger import grant_minutes
 
         await grant_minutes(
@@ -97,7 +99,19 @@ async def callback(
             session,
             pack_id="trial",
         )
-        logger.info("trial granted creator=%s minutes=%d", creator.id, settings.FREE_TRIAL_MINUTES)
+        # Issue 126 — stamp trial_ends_at in the same transaction that grants
+        # the trial minutes so the two states can never disagree. NULL means
+        # "no trial active" for legacy creators that predate this column.
+        creator.trial_ends_at = datetime.now(UTC) + timedelta(
+            days=settings.TRIAL_DURATION_DAYS
+        )
+        session.add(creator)
+        logger.info(
+            "trial granted creator=%s minutes=%d trial_ends_at=%s",
+            creator.id,
+            settings.FREE_TRIAL_MINUTES,
+            creator.trial_ends_at.isoformat(),
+        )
 
     await store_or_update_tokens(
         session,

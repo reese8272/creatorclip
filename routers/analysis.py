@@ -54,6 +54,10 @@ class AnalysisQueuedOut(BaseModel):
     stream_url: str | None = None
     video_title: str | None = None
     has_metrics: bool
+    # Issue 125 — user-facing alias for `has_metrics`, populated to the same
+    # value. The UI prefers this name; `has_metrics` stays for backward
+    # compatibility with the Issue-121 consumer.
+    analytics_available: bool
 
 
 @router.post(
@@ -143,6 +147,7 @@ async def start_video_analysis(
         "stream_url": stream_url,
         "video_title": video_title,
         "has_metrics": has_metrics,
+        "analytics_available": has_metrics,
     }
 
 

@@ -39,4 +39,13 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.purge_stale_youtube_analytics",
         "schedule": timedelta(hours=24),
     },
+    # Issue 126 — daily observability sweep for trial expirations. Watchdog
+    # only: logs creators whose trial just ended with zero balance so we can
+    # see funnel drop-off. State enforcement (402 paywall) lives in
+    # billing/ledger.py and reads trial_ends_at live — there is no flag this
+    # task flips.
+    "expire-trials-daily": {
+        "task": "worker.tasks.expire_trials",
+        "schedule": timedelta(hours=24),
+    },
 }

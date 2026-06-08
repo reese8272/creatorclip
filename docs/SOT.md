@@ -225,6 +225,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 creators
   id, google_sub (unique), channel_id, channel_title, email,
   onboarding_state (connected/awaiting_data/dna_pending/active),
+  analysis_mode (auto/selective/manual; default auto — Issue 125),
+  trial_ends_at (TIMESTAMPTZ NULL — set on first OAuth login, Issue 126),
   plan_tier, subscription_status, created_at
 
 youtube_tokens

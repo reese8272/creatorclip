@@ -197,6 +197,12 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = ""
     APP_BASE_URL: str = "http://localhost:8000"
     FREE_TRIAL_MINUTES: int = 60
+    # Issue 126 — trial window (calendar days). Set on first OAuth login; the
+    # 402 paywall reads it live + the dashboard banner counts down against it.
+    TRIAL_DURATION_DAYS: int = 7
+    # Threshold below which the dashboard nav chip lights up amber + pre-action
+    # warnings render before Generate / Queue. Tuneable without a deploy.
+    LOW_BALANCE_THRESHOLD_MINUTES: int = 10
     # Per-request HTTP timeout for the Stripe SDK. Default SDK timeout is ~80s;
     # one stuck call would pin an asyncio.to_thread executor slot for that long.
     # Scale-checklist E (backpressure): every external call needs a bounded

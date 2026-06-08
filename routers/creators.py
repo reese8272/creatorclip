@@ -9,7 +9,7 @@ from auth import get_current_creator
 from db import get_session
 from dna import identity as identity_module
 from limiter import creator_key, limiter
-from models import Creator
+from models import AnalysisMode, Creator
 from routers._schemas import TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
@@ -25,7 +25,22 @@ class CreatorMeOut(BaseModel):
     channel_title: str | None
     email: str | None
     onboarding_state: str
+    # Issue 125 — surfaced so the dashboard knows which intake CTA to render
+    # (auto = silent ingest on link; selective / manual = explicit Queue button).
+    analysis_mode: str
     created_at: str
+
+
+class AnalysisModeIn(BaseModel):
+    """Body for PATCH /creators/me/analysis-mode (Issue 125)."""
+
+    analysis_mode: AnalysisMode = Field(
+        ..., description="Video intake mode: auto, selective, or manual."
+    )
+
+
+class AnalysisModeOut(BaseModel):
+    analysis_mode: str
 
 
 class DataGateOut(BaseModel):
@@ -138,8 +153,32 @@ async def get_me(request: Request, creator: Creator = Depends(get_current_creato
         "channel_title": creator.channel_title,
         "email": creator.email,
         "onboarding_state": creator.onboarding_state.value,
+        "analysis_mode": creator.analysis_mode.value,
         "created_at": creator.created_at.isoformat(),
     }
+
+
+@router.patch("/me/analysis-mode", response_model=AnalysisModeOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def patch_analysis_mode(
+    request: Request,
+    body: AnalysisModeIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Set the creator's video-intake control mode (Issue 125).
+
+    - auto: linked videos ingest immediately (current implicit default)
+    - selective: linked videos sit in the catalog until explicitly queued
+    - manual: only creator-uploaded files are processed
+
+    Per-creator isolation is implicit — the dep-injected `creator` IS the row
+    we mutate; we never read another creator's id from the body.
+    """
+    creator.analysis_mode = body.analysis_mode
+    session.add(creator)
+    await session.commit()
+    return {"analysis_mode": creator.analysis_mode.value}
 
 
 @router.get("/me/data-gate", response_model=DataGateOut)

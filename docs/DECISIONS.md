@@ -5,6 +5,139 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-08 — Issue 126: Trial UX + billing clarity
+
+**Decision:** Four design choices the Issue 126 spec left open:
+
+1. **`trial_ends_at` is NULL-able**, not backfilled. Existing creators predate
+   the column and the migration leaves them at NULL; the trial-active predicate
+   treats NULL as "no trial" so legacy creators with purchased balance work
+   unchanged. The alternative — backfill every existing row to
+   `created_at + 7 days` — would retroactively put many already-expired
+   creators into a "trial expired" state with confusing 402 copy.
+2. **`expire_trials` Beat task is a watchdog, not a state machine** — it
+   READS Creator + balance, LOGS creators whose trial just expired with zero
+   balance, and does NOT mutate anything. The 402 paywall in
+   `billing/ledger.py` reads `trial_ends_at` live, so any flag the Beat
+   could set would be a second source of truth that can disagree. This also
+   sidesteps the Beat-vs-API race that would otherwise need a lock.
+3. **Differentiated 402 detail copy** via `_trial_ended_402_detail()`, not a
+   new error code or a structured `{code: "trial_ended"}` body. The client
+   already renders the `detail` string as-is for 402; adding a code field
+   would mean every consumer must learn the codes. Differentiating just the
+   user-facing text gives the same UX win at zero schema churn.
+4. **Dismiss is per-day-bucket, not persistent**. When `days_remaining`
+   decreases (e.g. 5 → 4), the banner re-asserts itself even after dismissal
+   — a new threshold is new information. The final-day override
+   (`days <= 1`) overrides any dismissal at all. Matches Encharge / Userpilot
+   2026 guidance on dismissibility.
+
+**Why for this project:**
+- The CLAUDE.md pre-launch checklist requires billing + plan-tier wired
+  before public launch; Issue 125 closed transparency, Issue 126 closes
+  trial-end + low-balance. Together they unblock paid signups.
+- The CLAUDE.md honesty constraint requires the user always knows what's
+  costing them minutes AND when their trial ends. A generic "Insufficient
+  balance" 402 fails this — the new differentiated copy makes the next
+  action ("buy a pack") unambiguous regardless of why balance hit zero.
+
+**Industry standard checked (2026):**
+- Credit-based + threshold-alert is now table-stakes — 79 of the
+  PricingSaaS-500 use credit models (+126% YoY), and proactive alerts on
+  approaching usage caps are explicitly called out as "essential engineering
+  requirements, not optional UX features" (Fungies 2026, Schematic HQ).
+- Trial banner UX rules (Userpilot 2026, Encharge 2026):
+  - MUST be dismissible (non-dismissible banners hurt trust).
+  - CTA MUST link to checkout / pricing — NOT settings.
+  - Countdown reduces ambiguity; re-show when threshold crosses.
+- "Customers who feel in control of their bill churn less than customers
+  who feel surprised by it" — Fungies 2026 implementation guide.
+
+**Sources:**
+- Userpilot — 18+ Announcement Banner Examples (banner UX guidance)
+- Userpilot — 15 B2B SaaS Free Trial Best Practices
+- Encharge — 28 SaaS Free Trial Best Practices 2026
+- Fungies — Usage-Based Pricing for SaaS 2026
+- Schematic HQ — Why Usage-Based Billing Is Taking Over SaaS
+
+**Files touched:**
+- `models.py` — `Creator.trial_ends_at: Mapped[datetime | None]`
+- `alembic/versions/0023_creator_trial_ends_at.py` — migration (nullable, no backfill)
+- `config.py` + `.env.example` — `TRIAL_DURATION_DAYS=7`, `LOW_BALANCE_THRESHOLD_MINUTES=10`
+- `routers/auth.py` — set `trial_ends_at = now + timedelta(days=TRIAL_DURATION_DAYS)` in the existing `is_new` branch (same transaction as `grant_minutes`)
+- `routers/billing.py` — `BalanceOut` gains `trial_ends_at` / `trial_active` / `trial_days_remaining` / `low_balance`; balance handler derives them
+- `billing/ledger.py` — `_trial_expired()` + `_trial_ended_402_detail()` helpers; both `check_positive_balance` and `check_balance_for_minutes` branch on them
+- `worker/schedule.py` — daily `expire-trials-daily` Beat entry
+- `worker/tasks.py` — `expire_trials` task + `_expire_trials_async` (logs-only watchdog)
+- `static/auth.js` — caches balance on `window.__BALANCE__`, emits `billing:ready`, toggles `.is-low` on the nav chip
+- `static/index.html` — trial banner element + JS handlers (renderTrialBanner / dismissTrialBanner) + low-balance warning above the videos table
+- `static/analysis.html` — low-balance warning above the Analyze button
+- `static/page-shell.css` — `.nav-balance.is-low` amber state, `.trial-banner` + `.is-final-day`, `.low-balance-warning` utility
+- `tests/test_issue_126.py` — 16 tests covering all the above
+
+---
+
+## 2026-06-08 — Issue 125: Video control model + minutes transparency
+
+**Decision:** Three concrete design choices the issue spec left open:
+
+1. **Default `analysis_mode = 'auto'`** for every existing creator, backfilled
+   via the migration's `server_default`. The alternative (default `selective`)
+   would silently break every existing creator's expectation that linked
+   videos eventually get analyzed.
+2. **Dual `has_metrics` + `analytics_available` on the analysis response,
+   populated to the same value**, instead of a breaking rename. `has_metrics`
+   has UI consumers and test pins from Issue 121; switching costs would
+   bleed across files for zero user benefit. `analytics_available` is the
+   new canonical name (clearer, matches the on-screen copy).
+3. **New `POST /videos/{id}/queue` endpoint** as the user-facing "Queue for
+   analysis" CTA — separate from the existing `/videos/{id}/clips/generate`
+   path which assumes ingest has already run. The new endpoint is the only
+   explicit pipeline-trigger for the Selective/Manual modes; idempotent
+   when the video isn't `pending` so a double-click doesn't double-charge.
+
+**Why for this project:**
+The CLAUDE.md honesty constraint requires the user always knows what costs
+minutes; the existing UI showed `metrics available / no metrics yet` inline
+in mono font next to the title, which is technically truthful but invisible
+in practice. The new explicit "Full analytics unavailable" panel + Ingest
+CTA closes the honesty gap. The mode setting makes the meter-start moment
+fully under user control — directly counters the OpusClip-style opacity the
+research surfaced (multiple Trustpilot reviews flag OpusClip for credits
+disappearing after subscriptions lapse, even when paid credits remain).
+
+**Industry standard checked (2026):**
+- Per-minute-of-source-video is the dominant 2026 metering model for AI
+  video tools (OpusClip = 1 credit/min, Vizard, Klap match) — our
+  `minute_deductions` ledger keyed by `video.id` with idempotent retry
+  (Issue 34) is the canonical implementation.
+- Hybrid pricing (seats + usage meter) with an always-visible balance chip
+  + a 1-screen "what counts" explainer is the default UX in ~65% of 2026
+  AI SaaS (PYMNTS June 2026, Solvimon billing platform survey).
+- The 3-mode "automation level" radio (Auto/Selective/Manual) doesn't
+  have a single canonical citation; closest analogue is Descript's
+  per-project "auto-transcribe on upload" toggle. Modeling it as a Creator
+  setting (one row, one PATCH) is the minimum viable shape.
+
+**Sources:**
+- OpusClip vs Descript 2026 (aitoolsforcontentcreators.com)
+- BIGVU OpusClip review — names the credit-opacity failure mode
+- Solvimon "AI billing platforms built for credits" (June 2026)
+- PYMNTS "CFOs Scramble as AI Pricing Breaks Traditional SaaS Billing"
+
+**Files touched:**
+- `models.py` (AnalysisMode enum + Creator.analysis_mode column)
+- `alembic/versions/0022_creator_analysis_mode.py` (migration)
+- `routers/creators.py` (PATCH /creators/me/analysis-mode + GET /me exposes the field)
+- `routers/analysis.py` (analytics_available alongside has_metrics)
+- `routers/videos.py` (POST /videos/{id}/queue)
+- `static/profile.html` (intake-mode radio form + saveAnalysisMode())
+- `static/analysis.html` (explicit analytics-unavailable surface + Ingest CTA)
+- `static/index.html` (balance tooltip + Queue CTA on pending rows)
+- `tests/test_issue_125.py` (17 tests covering all the above)
+
+---
+
 ## 2026-06-08 — Issue 137: Project-wide UI overhaul + horizontal-overflow fix
 
 **Decision:** Reverse the Issue-99 (2026-05-31) + Issue-136-redirect (2026-06-07)

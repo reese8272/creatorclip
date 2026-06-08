@@ -170,19 +170,44 @@ async def deduct_for_video(
     return minutes
 
 
+async def _trial_expired(creator_id: uuid.UUID, session: AsyncSession) -> bool:
+    """Issue 126 — true iff the creator has a `trial_ends_at` that's already
+    in the past. NULL `trial_ends_at` (legacy creators) is treated as "no
+    trial" — they were never on one, so the 402 falls back to the generic
+    "purchase a pack" copy."""
+    row = await session.scalar(
+        select(Creator.trial_ends_at).where(Creator.id == creator_id)
+    )
+    if row is None:
+        return False
+    if row.tzinfo is None:
+        row = row.replace(tzinfo=UTC)
+    return row < datetime.now(UTC)
+
+
+def _trial_ended_402_detail() -> str:
+    """Standalone so the structural test in test_issue_126.py can pin the copy
+    without importing the route handlers."""
+    return "Your free trial has ended. Add minutes at /pricing to continue."
+
+
 async def check_positive_balance(creator_id: uuid.UUID, session: AsyncSession) -> None:
     """Pre-flight guard: raises 402 if the creator has no minutes remaining.
 
     Used where the operation does not deduct minutes itself (e.g. /clips/render)
     — the gate is a usage floor, not a per-call cost check. For deducting paths
     (e.g. /videos/upload) use ``check_balance_for_minutes`` instead.
+
+    Issue 126: differentiated copy when the trial expired AND balance hit zero,
+    so the next action ("buy a pack") is unambiguous instead of generic.
     """
     balance = await get_balance(creator_id, session)
     if balance <= 0:
-        raise HTTPException(
-            status_code=402,
-            detail=("No minutes remaining. Purchase a pack at /pricing to process videos."),
-        )
+        if await _trial_expired(creator_id, session):
+            detail = _trial_ended_402_detail()
+        else:
+            detail = "No minutes remaining. Purchase a pack at /pricing to process videos."
+        raise HTTPException(status_code=402, detail=detail)
 
 
 async def check_balance_for_minutes(
@@ -198,13 +223,17 @@ async def check_balance_for_minutes(
 
     The user-facing 402 surfaces the concrete gap (needed vs. available) so the
     response copy is actionable rather than generic "Insufficient balance".
+    Issue 126: when balance has hit zero AND the trial has expired, override
+    with the trial-ended copy so the user knows trial is the reason, not
+    mid-use exhaustion.
     """
     balance = await get_balance(creator_id, session)
     if balance < minutes_needed:
-        raise HTTPException(
-            status_code=402,
-            detail=(
+        if balance <= 0 and await _trial_expired(creator_id, session):
+            detail = _trial_ended_402_detail()
+        else:
+            detail = (
                 f"This video needs {minutes_needed} minutes; you have {balance}. "
                 f"Purchase a pack at /pricing to continue."
-            ),
-        )
+            )
+        raise HTTPException(status_code=402, detail=detail)

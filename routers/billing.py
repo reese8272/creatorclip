@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 class BalanceOut(BaseModel):
     minutes_balance: int
+    # Issue 126 — trial transparency. trial_ends_at is the absolute UTC datetime
+    # the trial expires; trial_active = now < trial_ends_at; trial_days_remaining
+    # is the ceiling (so "ends in 1 day" includes anything under 24h). low_balance
+    # fires below LOW_BALANCE_THRESHOLD_MINUTES so the UI can light up the chip
+    # and render pre-action warnings without a second round-trip.
+    trial_ends_at: str | None = None
+    trial_active: bool = False
+    trial_days_remaining: int | None = None
+    low_balance: bool = False
 
 
 class PackOut(BaseModel):
@@ -69,8 +78,35 @@ async def balance(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> BalanceOut:
+    from datetime import UTC, datetime
+    from math import ceil
+
     bal = await get_balance(creator.id, session)
-    return BalanceOut(minutes_balance=bal)
+    # Issue 126 — derived trial-status fields. NULL trial_ends_at => no trial.
+    trial_ends_at = creator.trial_ends_at
+    trial_active = False
+    trial_days_remaining: int | None = None
+    if trial_ends_at is not None:
+        now = datetime.now(UTC)
+        # SQLAlchemy may hand back a naive datetime depending on the column's
+        # `timezone=True` round-trip; normalize defensively before comparing.
+        if trial_ends_at.tzinfo is None:
+            trial_ends_at = trial_ends_at.replace(tzinfo=UTC)
+        delta = trial_ends_at - now
+        trial_active = delta.total_seconds() > 0
+        if trial_active:
+            # ceil so "ends in 18 hours" renders as "1 day" — matches user
+            # expectations for countdown banners (Userpilot guidance).
+            trial_days_remaining = max(1, ceil(delta.total_seconds() / 86400))
+        else:
+            trial_days_remaining = 0
+    return BalanceOut(
+        minutes_balance=bal,
+        trial_ends_at=trial_ends_at.isoformat() if trial_ends_at else None,
+        trial_active=trial_active,
+        trial_days_remaining=trial_days_remaining,
+        low_balance=bal < settings.LOW_BALANCE_THRESHOLD_MINUTES,
+    )
 
 
 @router.get("/packs", response_model=list[PackOut])

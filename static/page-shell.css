@@ -256,6 +256,92 @@ body.app-page select:focus {
   box-shadow: var(--glow-focus-ring);
 }
 
+/* ── Low-balance nav chip + trial banner (Issue 126) ──────────────────
+ * The nav balance chip lights up amber (warning border + soft glow) when
+ * the creator dips below LOW_BALANCE_THRESHOLD_MINUTES. The banner is a
+ * separate page-top element rendered conditionally on the dashboard. */
+.nav-balance.is-low {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  box-shadow: 0 0 0 1px rgba(243, 156, 18, 0.25);
+}
+
+.trial-banner {
+  display: none;  /* default hidden; JS sets .is-active when trial is on */
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  margin: var(--space-4) auto var(--space-3);
+  max-width: min(1200px, calc(100% - 2 * var(--space-4)));
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(94, 106, 210, 0.14), rgba(94, 106, 210, 0.03) 60%),
+    var(--editor-surface);
+  border: 1px solid var(--editor-border-strong);
+  box-shadow: var(--glow-accent-soft);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+.trial-banner.is-active { display: flex; }
+.trial-banner.is-final-day {
+  border-color: var(--color-warning);
+  background:
+    linear-gradient(135deg, rgba(243, 156, 18, 0.16), rgba(243, 156, 18, 0.04) 60%),
+    var(--editor-surface);
+}
+.trial-banner .trial-text { min-width: 0; flex: 1; }
+.trial-banner .trial-text strong { color: var(--color-text); font-weight: 600; }
+.trial-banner .trial-text .sub {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+.trial-banner .trial-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.trial-banner .trial-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  line-height: 1;
+}
+.trial-banner .trial-dismiss:hover { color: var(--color-text); background: var(--editor-surface-elev); }
+.trial-banner.is-final-day .trial-dismiss { display: none; }
+
+@media (max-width: 600px) {
+  .trial-banner { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .trial-banner .trial-actions { justify-content: flex-end; }
+}
+
+/* Inline pre-action low-balance warning (rendered next to Generate/Queue
+ * buttons + above the analysis submit). Compact, amber, non-blocking. */
+.low-balance-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgba(243, 156, 18, 0.08);
+  border: 1px solid rgba(243, 156, 18, 0.35);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+}
+.low-balance-warning a {
+  color: var(--color-warning);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ── Mobile breakpoint — tighten gutters ─────────────────────────────── */
 @media (max-width: 600px) {
   body.app-page > main,

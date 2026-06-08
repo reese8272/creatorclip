@@ -2896,7 +2896,7 @@ cat logs/app.log | grep ui_activity   # filter to UI events only
 ---
 
 ## Issue 125: Video control model + minutes transparency
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-08)
 **Depends on**: 124
 
 **What**: Give creators explicit control over what gets analyzed (and what costs minutes), and fix the video analysis page's silent fallback when metrics aren't available.
@@ -2911,18 +2911,18 @@ Surface a persistent "what costs minutes" explainer and sync-status gate before 
 **Files**: `models.py` (new `analysis_mode` enum + column on `Creator`; migration `0021_creator_analysis_mode`), `routers/creators.py` (PATCH endpoint for mode), `routers/analysis.py` (add metrics-availability check + explicit response field `analytics_available: bool`), `static/profile.html` (mode selector UI), `static/analysis.html` (show "analytics unavailable" state clearly), `static/index.html` (minutes balance + "what costs minutes" tooltip), `tests/test_creators.py`, `tests/test_analysis.py`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research creator-control patterns for AI-assisted media tools; document in `docs/DECISIONS.md`
-- [ ] `Creator.analysis_mode` in `{auto, selective, manual}`; default `auto`; `PATCH /creators/me` accepts it
-- [ ] `POST /creators/me/video-analysis` response includes `analytics_available: bool`; when `False`, UI shows "Full analytics unavailable — video not in your ingested catalog" with a "Ingest this video" CTA
-- [ ] Minutes balance visible on dashboard nav (persistent chip: "X min remaining")
-- [ ] "What costs minutes?" tooltip/modal: "Transcription and clip generation cost minutes. Viewing analytics, insights, and DNA is always free."
-- [ ] In selective/manual mode, the catalog page shows an explicit "Queue for analysis" button per video
-- [ ] Layer 0 passes; no test regressions
+- [x] Phase 1: research creator-control patterns for AI-assisted media tools; documented in `docs/DECISIONS.md` 2026-06-08 entry
+- [x] `Creator.analysis_mode` in `{auto, selective, manual}`; default `auto`; `PATCH /creators/me/analysis-mode` accepts it; surfaced on `GET /creators/me`
+- [x] `POST /creators/me/video-analysis` response includes `analytics_available: bool` alongside the back-compat `has_metrics`; when `False`, `static/analysis.html` shows "Full analytics unavailable — video not in your ingested catalog" with an "Ingest this video" CTA
+- [x] Minutes balance visible on dashboard nav (persistent chip: existing from Issue 113, preserved through Issue 137 retrofit)
+- [x] "What costs minutes?" tooltip wired on the nav balance chip: "Transcription and clip generation cost minutes. Viewing analytics, insights, DNA, and the transcript editor are always free."
+- [x] In selective/manual mode (and auto mode as a recovery affordance), pending video rows show an explicit "Queue for analysis" button hitting the new `POST /videos/{id}/queue` endpoint
+- [x] Layer 0 passes; 17 new tests in `tests/test_issue_125.py`; no regressions
 
 ---
 
 ## Issue 126: Trial UX + billing clarity
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-08)
 **Depends on**: 125
 
 **What**: Surface the free trial status clearly, add a low-balance warning before expensive operations, and build the path from trial-end to auto-replenishment.
@@ -2932,13 +2932,15 @@ Free trial: 7 days from first login + 60 minutes (already granted by `auth.py`).
 **Files**: `models.py` (add `trial_ends_at` to `Creator`; migration `0022_creator_trial_ends`), `routers/auth.py` (set `trial_ends_at = now + 7 days` on first login), `routers/billing.py` (expose `trial_ends_at`, `minutes_balance`, `trial_active` on `GET /billing/balance`), `static/index.html` (trial countdown banner), `static/pricing.html` (auto-refill / subscription CTA), `worker/tasks.py` (Celery Beat: daily `expire_trials` task that locks out trial-expired creators with zero balance), `tests/test_billing.py`, `tests/test_trial.py` (new).
 
 **Acceptance criteria**:
-- [ ] Phase 1: research SaaS trial UX patterns (trial countdown placement, paywall friction, auto-refill vs. manual top-up); document in `docs/DECISIONS.md`
-- [ ] `trial_ends_at` set on first OAuth login; exposed on billing balance endpoint
-- [ ] Dashboard shows "Trial ends in X days — Y minutes remaining" banner (dismissible after day 3)
-- [ ] When `minutes_balance < 10`, a yellow warning appears before any minute-consuming action: "Low balance — you have X minutes left."
-- [ ] When trial expired AND balance = 0, minute-gated endpoints return 402 with `"detail": "Trial ended — add minutes to continue."` + link to pricing
-- [ ] Pricing page has clear CTA for minute pack purchase (Stripe Checkout, already wired in `billing.py`)
-- [ ] Layer 0 passes; no test regressions
+- [x] Phase 1: research SaaS trial UX patterns (Userpilot + Encharge + Fungies + Schematic HQ 2026); decisions logged in `docs/DECISIONS.md` 2026-06-08 entry
+- [x] `trial_ends_at` set on first OAuth login (same transaction as `grant_minutes`); `GET /billing/balance` exposes `trial_ends_at`, `trial_active`, `trial_days_remaining`, `low_balance`
+- [x] Dashboard shows "Trial ends in X days — Y minutes remaining" banner; dismissible (per-day-bucket localStorage); auto-shows when `days_remaining <= 1` (final-day override per Encharge 2026); CTA links to `/static/pricing.html` (Userpilot 2026 — CTA must point at checkout not settings)
+- [x] When `minutes_balance < LOW_BALANCE_THRESHOLD_MINUTES` (default 10), `.is-low` lights up the nav chip amber AND a pre-action `.low-balance-warning` panel renders above the dashboard videos table and above the `analysis.html` Analyze button
+- [x] When trial expired AND balance = 0, `check_positive_balance` + `check_balance_for_minutes` return 402 with the differentiated detail "Your free trial has ended. Add minutes at /pricing to continue." (legacy NULL trial_ends_at falls back to the generic copy)
+- [x] Pricing page has minute-pack CTA (existing from Issue 21); banner + warnings both link to it
+- [x] Daily `expire_trials` Celery Beat task wired; watchdog only (logs creators-with-expired-trial-and-zero-balance) — state enforcement lives in `billing/ledger.py` (single source of truth)
+- [x] Tests: 16 new in `tests/test_issue_126.py` (structural + behavioral + UI pin); full suite green
+- [x] Layer 0 passes: ruff 0 / mypy 0; no test regressions
 
 ---
 

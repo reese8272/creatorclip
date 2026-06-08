@@ -255,6 +255,19 @@ def purge_stale_youtube_analytics() -> None:
     run_async(_purge_stale_youtube_analytics_async())
 
 
+@celery.task(name="worker.tasks.expire_trials")
+def expire_trials() -> None:
+    """Issue 126 — daily observability sweep for trial expirations.
+
+    Watchdog only: logs creators whose `trial_ends_at` just crossed into the
+    past AND whose minutes_balance is zero, so funnel drop-off is visible in
+    structured logs without a new dashboard. Does NOT mutate any state — the
+    402 paywall in billing/ledger.py reads `trial_ends_at` live, so a flag
+    here would be a second source of truth that could disagree.
+    """
+    run_async(_expire_trials_async())
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """
@@ -1639,6 +1652,39 @@ async def _purge_stale_youtube_analytics_async() -> None:
             deleted_demographics,
             cutoff.isoformat(),
         )
+
+
+async def _expire_trials_async() -> None:
+    """Issue 126 — log creators whose trial just expired with zero balance.
+
+    Reads only; does not mutate. The recent-window narrows to creators whose
+    `trial_ends_at` fell into the past in the last 25 hours, so a daily Beat
+    cadence (24h) reliably catches every expiration once without re-logging
+    the same row forever after.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from models import Creator
+
+    async with db.AdminSessionLocal() as session:
+        now = datetime.now(UTC)
+        window_start = now - timedelta(hours=25)
+        rows = await session.execute(
+            select(Creator.id, Creator.email, Creator.trial_ends_at, Creator.minutes_balance)
+            .where(Creator.trial_ends_at.is_not(None))
+            .where(Creator.trial_ends_at > window_start)
+            .where(Creator.trial_ends_at <= now)
+        )
+        for cid, email, trial_ends_at, balance in rows.all():
+            if balance <= 0:
+                logger.info(
+                    "trial_expired_zero_balance creator=%s email=%s trial_ends_at=%s",
+                    cid,
+                    email,
+                    trial_ends_at.isoformat() if trial_ends_at else None,
+                )
 
 
 async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = None) -> None:

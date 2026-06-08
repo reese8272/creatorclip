@@ -99,7 +99,10 @@ async def test_check_positive_balance_raises_402_when_empty(mock_session):
     from fastapi import HTTPException
 
     creator_id = uuid.uuid4()
-    mock_session.scalar = AsyncMock(return_value=0)
+    # Issue 126: scalar() is now called twice — first for balance, then for
+    # trial_ends_at. side_effect with None on the trial query keeps this test
+    # exercising the legacy/no-trial 402 path.
+    mock_session.scalar = AsyncMock(side_effect=[0, None])
 
     with pytest.raises(HTTPException) as exc_info:
         await check_positive_balance(creator_id, mock_session)
@@ -160,11 +163,15 @@ async def test_check_balance_for_minutes_passes_when_over_sufficient(mock_sessio
 async def test_check_balance_for_minutes_zero_balance_explains_gap(mock_session):
     """Zero balance + multi-minute video: the 402 detail must explain the gap,
     not the generic 'no minutes remaining' copy from `check_positive_balance`.
+
+    Issue 126: scalar() is now called twice (balance, trial_ends_at). The
+    trial_ends_at=None path keeps this test on the legacy/gap-explanation
+    branch — the trial-ended branch has its own pin in test_issue_126.py.
     """
     from fastapi import HTTPException
 
     creator_id = uuid.uuid4()
-    mock_session.scalar = AsyncMock(return_value=0)
+    mock_session.scalar = AsyncMock(side_effect=[0, None])
     with pytest.raises(HTTPException) as exc_info:
         await check_balance_for_minutes(creator_id, 10, mock_session)
     assert exc_info.value.status_code == 402

@@ -525,7 +525,35 @@
         <div id="video-context"></div>
         <button id="analyze-btn" class="btn btn-primary" onclick="startAnalysis()">Analyze →</button>
       </div>
+      <!-- Issue 126 — pre-action low-balance warning. Surfaced ABOVE the
+           Analyze button (the minute-consuming action) when balance dips
+           below the threshold. Populated from window.__BALANCE__ on
+           billing:ready; hidden when low_balance is false. -->
+      <div id="low-balance-warning" class="low-balance-warning" role="status" style="display:none; margin-top: var(--space-3);">
+        <span>Low balance — <strong id="low-balance-amount">0 min</strong> left.
+          <a href="/static/pricing.html">Add minutes</a> before running another analysis.</span>
+      </div>
     </div>
+
+    <script>
+      // Issue 126 — analysis page low-balance surface. Mirrors the dashboard
+      // wiring; both pages read window.__BALANCE__ from auth.js's fetch.
+      document.addEventListener('billing:ready', (e) => {
+        const d = e.detail;
+        const warn = document.getElementById('low-balance-warning');
+        if (!warn) return;
+        if (!d || !d.low_balance) { warn.style.display = 'none'; return; }
+        const amt = document.getElementById('low-balance-amount');
+        if (amt) amt.textContent = `${d.minutes_balance} min`;
+        warn.style.display = 'inline-flex';
+      });
+    </script>
+
+    <!-- Issue 125 — explicit "analytics unavailable" surface, populated by
+         startAnalysis() when the chosen video isn't in the ingested catalog.
+         Hidden by default; the JS shows/hides based on analytics_available. -->
+    <div id="analytics-unavailable" class="disclaimer" role="status"
+         style="display:none; margin-top: var(--space-3); border-left-color: var(--color-warning); padding: var(--space-3) var(--space-4); line-height: var(--leading-relaxed); font-size: var(--text-sm);"></div>
 
     <div class="response-panel" id="response-panel" style="display:none">
       <div class="response-header">
@@ -659,11 +687,33 @@
 
       const data = await resp.json();
 
-      // Surface video context (title + metrics availability)
+      // Surface video context (title + analytics availability — Issue 125).
+      // When analytics aren't available (video not in the creator's ingested
+      // catalog) we surface this EXPLICITLY instead of the old quiet "no
+      // metrics yet" inline note — and offer an Ingest CTA so the creator
+      // can promote the video into the catalog. analytics_available is the
+      // Issue-125 field name; has_metrics is the back-compat alias.
+      const analyticsAvailable = !!(data.analytics_available ?? data.has_metrics);
       if (data.video_title) {
-        const metricsNote = data.has_metrics ? 'metrics available' : 'no metrics yet';
+        const status = analyticsAvailable
+          ? '<span class="badge badge-success">analytics available</span>'
+          : '<span class="badge badge-warning">analytics unavailable</span>';
         document.getElementById('video-context').innerHTML =
-          `<span class="ctx-label">Video: </span>${_esc(data.video_title)} · <span style="font-family:var(--font-mono)">${metricsNote}</span>`;
+          `<span class="ctx-label">Video: </span>${_esc(data.video_title)} · ${status}`;
+      }
+      const unavailEl = document.getElementById('analytics-unavailable');
+      if (unavailEl) {
+        if (!analyticsAvailable) {
+          const ingestUrl = '/?yt=' + encodeURIComponent(
+            'https://www.youtube.com/watch?v=' + (document.getElementById('youtube_url').value.trim())
+          );
+          unavailEl.innerHTML =
+            '<strong>Full analytics unavailable</strong> — this video isn\'t in your ingested catalog yet, so the analysis runs in metadata-only mode (title + description + transcript). ' +
+            '<a class="btn btn-secondary" href="' + _esc(ingestUrl) + '">Ingest this video</a> to unlock retention, audience activity, and engagement signals on the next run.';
+          unavailEl.style.display = 'block';
+        } else {
+          unavailEl.style.display = 'none';
+        }
       }
 
       if (!data.stream_url) {

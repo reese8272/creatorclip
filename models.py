@@ -30,6 +30,17 @@ class OnboardingState(enum.Enum):
     active = "active"
 
 
+class AnalysisMode(enum.Enum):
+    # Auto: new linked videos ingest immediately (current implicit behavior).
+    # Selective: linked videos sit in the catalog until the creator explicitly
+    #   queues each one. Manual: only creator-uploaded files are processed;
+    #   the YouTube-link path remains available but mirrors Selective semantics.
+    # See docs/DECISIONS.md Issue 125.
+    auto = "auto"
+    selective = "selective"
+    manual = "manual"
+
+
 class VideoKind(enum.Enum):
     long = "long"
     short = "short"
@@ -98,12 +109,26 @@ class Creator(Base):
     )
     stripe_customer_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     minutes_balance: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    analysis_mode: Mapped[AnalysisMode] = mapped_column(
+        sa.Enum(AnalysisMode, name="analysis_mode_enum"),
+        nullable=False,
+        default=AnalysisMode.auto,
+        server_default=AnalysisMode.auto.value,
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
     last_analytics_refreshed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    # Issue 126 — set on first OAuth login (auth.py), to `now + TRIAL_DURATION_DAYS`.
+    # NULL on legacy rows that predate the migration; the trial-active predicate
+    # treats NULL as "no trial" so legacy creators with a purchased balance keep
+    # working unchanged. The 402 paywall in billing/ledger.py reads this live.
+    trial_ends_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=True,
     )

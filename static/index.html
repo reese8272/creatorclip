@@ -254,7 +254,14 @@
     </div>
     <span class="nav-spacer"></span>
     <span class="user-name" id="nav-user"></span>
-    <span class="nav-balance" id="nav-balance"></span>
+    <span class="nav-balance-wrap" style="display:inline-flex;align-items:center;gap:4px">
+      <span class="nav-balance" id="nav-balance"></span>
+      <!-- Issue 125 — "what costs minutes" explainer wired via tooltip.js
+           (Issue 124). Always visible next to the balance chip so the user
+           never has to guess what a deduction came from. -->
+      <span class="info-icon" tabindex="0"
+            data-tooltip="Transcription and clip generation cost minutes. Viewing analytics, insights, DNA, and the transcript editor are always free.">?</span>
+    </span>
     <a href="/static/walkthrough.html" class="nav-help" title="How it works">?</a>
     <a href="/auth/login" class="nav-signin">Sign in</a>
     <a href="#" class="logout-link" onclick="logout()">Logout</a>
@@ -327,6 +334,21 @@
   </script>
 
   <main class="dashboard">
+    <!-- Issue 126 — trial countdown banner. Hidden by default; renderTrialBanner()
+         on `billing:ready` flips .is-active and (when ≤1 day remain) .is-final-day.
+         CTA links to /pricing per industry guidance (Userpilot 2026); dismiss
+         persists in localStorage but the final-day override re-shows it. -->
+    <div id="trial-banner" class="trial-banner" role="status" aria-live="polite">
+      <div class="trial-text">
+        <strong id="trial-banner-headline">Trial ends in — days</strong>
+        <span class="sub" id="trial-banner-sub"></span>
+      </div>
+      <div class="trial-actions">
+        <a class="btn btn-primary" href="/static/pricing.html">Add minutes</a>
+        <button class="trial-dismiss" type="button" onclick="dismissTrialBanner()" aria-label="Dismiss">×</button>
+      </div>
+    </div>
+
     <!-- DNA CTA (hidden once onboarding_state = active) -->
     <div class="dna-cta" id="dna-cta" style="display:none">
       <p id="dna-cta-text">Build your Creator DNA to unlock personalised clip scoring.</p>
@@ -390,6 +412,14 @@
     <!-- Video list -->
     <div class="section-header" style="margin-top:var(--space-10)">
       <h2>Your videos</h2>
+    </div>
+    <!-- Issue 126 — pre-action low-balance warning. Surfaced ABOVE the videos
+         table (where Generate / Queue buttons live) when balance < threshold,
+         so the user sees the warning before clicking the action. Hidden by
+         default; renderLowBalanceWarning() flips display from billing:ready. -->
+    <div id="low-balance-warning" class="low-balance-warning" role="status" style="display:none">
+      <span>Low balance — <strong id="low-balance-amount">0 min</strong> left.
+        <a href="/static/pricing.html">Add minutes</a> before queuing more clips.</span>
     </div>
     <!-- Issue 137: .table-wrap scopes horizontal scroll to the table itself
          (only when columns can't compress further) so the page never scrolls
@@ -470,10 +500,20 @@
         return;
       }
 
+      // Issue 125 — surface "Queue for analysis" on pending rows so the user
+      // never has to wonder why a linked video sits at pending. Always
+      // available; the copy + emphasis depend on the creator's analysis_mode.
+      const mode = (window.__USER__ && window.__USER__.analysis_mode) || 'auto';
       let clipsReadyCount = 0;
       const rows = await Promise.all(videos.map(async v => {
         let clipsHtml = '';
-        if (v.ingest_status === 'done') {
+        if (v.ingest_status === 'pending') {
+          // Stronger primary CTA when the creator opted into manual control;
+          // secondary affordance in auto mode (where the pipeline is normally
+          // expected to start on its own via upload / OBS / catalog flow).
+          const variant = mode === 'auto' ? 'btn-secondary' : 'btn-primary';
+          clipsHtml = `<div class="action-row"><button class="btn ${variant}" onclick="queueVideo('${v.id}',this)">Queue for analysis</button></div>`;
+        } else if (v.ingest_status === 'done') {
           const cr = await fetch(`/videos/${v.id}/clips`, { credentials: 'include' });
           if (cr.ok) {
             // Endpoint shape: {"clips": [...]} (ClipListOut). Defensively
@@ -585,6 +625,22 @@
       }
     }
 
+    // Issue 125 — explicit per-video pipeline trigger. Lands on the new
+    // /videos/{id}/queue endpoint which calls start_pipeline(). Idempotent
+    // server-side — a double-click won't double-queue.
+    async function queueVideo(videoId, btn) {
+      btn.disabled = true; btn.textContent = 'Queuing…';
+      const resp = await fetch(`/videos/${videoId}/queue`, {
+        method: 'POST', credentials: 'include'
+      });
+      if (resp.ok) {
+        btn.textContent = 'Queued ✓';
+        setTimeout(loadVideos, 3000);
+      } else {
+        btn.disabled = false; btn.textContent = 'Retry';
+      }
+    }
+
     async function generateClips(videoId, btn) {
       btn.disabled = true; btn.textContent = 'Generating…';
       const resp = await fetch(`/videos/${videoId}/clips/generate`, {
@@ -634,6 +690,70 @@
     }
 
     document.addEventListener('auth:ready', (e) => init(e.detail));
+
+    // Issue 126 — trial banner + low-balance pre-action surface.
+    // `billing:ready` fires from auth.js after /billing/balance returns; we
+    // listen here instead of fetching again so there's one source of truth.
+    const _TRIAL_BANNER_DISMISS_KEY = 'creatorclip:trial_banner_dismissed_day';
+
+    function renderTrialBanner(d) {
+      const banner = document.getElementById('trial-banner');
+      if (!banner) return;
+      const headline = document.getElementById('trial-banner-headline');
+      const sub = document.getElementById('trial-banner-sub');
+      if (!d || !d.trial_active) {
+        banner.classList.remove('is-active', 'is-final-day');
+        return;
+      }
+      const days = d.trial_days_remaining ?? 0;
+      const minutes = d.minutes_balance ?? 0;
+      // The final-day override re-shows the banner even after dismissal —
+      // user has hours, not days, to act (Encharge 2026 guidance).
+      const finalDay = days <= 1;
+      let dismissed = null;
+      try { dismissed = localStorage.getItem(_TRIAL_BANNER_DISMISS_KEY); } catch (_) {}
+      // Persist dismiss-per-day-bucket so the banner re-asserts itself when
+      // days_remaining decreases (passing a new threshold = new state worth
+      // surfacing). User dismissed at "5 days left" still sees it at "4".
+      if (dismissed !== null && Number(dismissed) === days && !finalDay) {
+        banner.classList.remove('is-active', 'is-final-day');
+        return;
+      }
+      const dayWord = days === 1 ? 'day' : 'days';
+      headline.textContent = finalDay
+        ? `Trial ends today — ${minutes} min remaining`
+        : `Trial ends in ${days} ${dayWord} — ${minutes} min remaining`;
+      sub.textContent = finalDay
+        ? 'Add minutes now to keep transcription and clip generation running.'
+        : 'Trials are limited to ' + (d.trial_days_remaining + ' more days')
+          + '. Add minutes anytime — they never expire.';
+      banner.classList.add('is-active');
+      banner.classList.toggle('is-final-day', finalDay);
+    }
+
+    function dismissTrialBanner() {
+      const days = (window.__BALANCE__ && window.__BALANCE__.trial_days_remaining) ?? 0;
+      try { localStorage.setItem(_TRIAL_BANNER_DISMISS_KEY, String(days)); } catch (_) {}
+      const banner = document.getElementById('trial-banner');
+      if (banner) banner.classList.remove('is-active');
+    }
+
+    function renderLowBalanceWarning(d) {
+      const warn = document.getElementById('low-balance-warning');
+      if (!warn) return;
+      if (!d || !d.low_balance) {
+        warn.style.display = 'none';
+        return;
+      }
+      const amt = document.getElementById('low-balance-amount');
+      if (amt) amt.textContent = `${d.minutes_balance} min`;
+      warn.style.display = 'inline-flex';
+    }
+
+    document.addEventListener('billing:ready', (e) => {
+      renderTrialBanner(e.detail);
+      renderLowBalanceWarning(e.detail);
+    });
 
     // Poll status for in-progress videos every 5s
     let _pollTimer = null;

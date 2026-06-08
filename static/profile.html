@@ -246,6 +246,75 @@
       letter-spacing: 0.06em;
     }
 
+    /* ── Video intake mode (Issue 125) ──────────────────────────── */
+    .intake-mode-section { margin-top: var(--space-10); }
+    .intake-mode-section h2 {
+      font-size: var(--text-lg);
+      font-weight: 600;
+      margin-bottom: var(--space-2);
+    }
+    .intake-mode-section .sub {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-4);
+      line-height: var(--leading-relaxed);
+    }
+    .intake-mode-form {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+    .intake-mode-option {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-areas:
+        "radio label"
+        "radio help";
+      column-gap: var(--space-3);
+      row-gap: var(--space-1);
+      padding: var(--space-3) var(--space-4);
+      border: 1px solid var(--editor-border);
+      border-radius: var(--radius-md);
+      background: var(--editor-surface);
+      cursor: pointer;
+      transition: border-color var(--duration) var(--ease),
+                  background var(--duration) var(--ease);
+    }
+    .intake-mode-option:hover {
+      border-color: var(--color-accent);
+      background: var(--editor-surface-elev);
+    }
+    .intake-mode-option input[type="radio"] {
+      grid-area: radio;
+      align-self: center;
+      accent-color: var(--color-accent);
+    }
+    .intake-mode-option:has(input:checked) {
+      border-color: var(--color-accent);
+      box-shadow: var(--glow-accent-soft);
+    }
+    .intake-mode-label {
+      grid-area: label;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+    .intake-mode-help {
+      grid-area: help;
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      line-height: var(--leading-relaxed);
+    }
+    .intake-mode-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-top: var(--space-2);
+    }
+    .intake-mode-status {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+    }
+
     /* ── API keys section (Issue 95) ───────────────────────────── */
     .api-keys-section { margin-top: var(--space-10); }
     .api-keys-section h2 {
@@ -466,6 +535,39 @@
           <button type="submit" class="btn btn-primary">Save identity</button>
         </div>
         <div id="identity-status"></div>
+      </form>
+    </section>
+
+    <!-- Video intake mode (Issue 125) — three explicit control modes the
+         creator can pick between. Default `auto` preserves today's silent
+         ingest-on-link behavior. -->
+    <section class="intake-mode-section">
+      <h2>Video intake</h2>
+      <p class="sub">
+        How should AutoClip handle new videos linked or uploaded from your
+        channel? Transcription and clip generation cost minutes — these modes
+        let you decide when that meter starts running.
+      </p>
+      <form id="intake-mode-form" class="intake-mode-form" onsubmit="event.preventDefault(); saveAnalysisMode();">
+        <label class="intake-mode-option">
+          <input type="radio" name="analysis_mode" value="auto" required>
+          <span class="intake-mode-label">Auto</span>
+          <span class="intake-mode-help">New uploads from your channel ingest automatically (current default).</span>
+        </label>
+        <label class="intake-mode-option">
+          <input type="radio" name="analysis_mode" value="selective" required>
+          <span class="intake-mode-label">Selective</span>
+          <span class="intake-mode-help">You pick which catalog videos to analyze — one click per video, minutes only spent on demand.</span>
+        </label>
+        <label class="intake-mode-option">
+          <input type="radio" name="analysis_mode" value="manual" required>
+          <span class="intake-mode-label">Manual</span>
+          <span class="intake-mode-help">Only files you upload directly are processed. Linked YouTube videos sit in the catalog until you queue them.</span>
+        </label>
+        <div class="intake-mode-actions">
+          <button type="submit" class="btn btn-primary">Save mode</button>
+          <span id="intake-mode-status" class="intake-mode-status"></span>
+        </div>
       </form>
     </section>
 
@@ -879,11 +981,48 @@
       await loadApiKeys();
     }
 
+    // Issue 125 — Video intake mode (auto / selective / manual).
+    async function loadAnalysisMode() {
+      const mode = (window.__USER__ && window.__USER__.analysis_mode) || 'auto';
+      const radio = document.querySelector(
+        '#intake-mode-form input[name="analysis_mode"][value="' + mode + '"]'
+      );
+      if (radio) radio.checked = true;
+    }
+
+    async function saveAnalysisMode() {
+      const status = document.getElementById('intake-mode-status');
+      const picked = document.querySelector('#intake-mode-form input[name="analysis_mode"]:checked');
+      if (!picked) {
+        status.textContent = 'Pick a mode first.';
+        status.style.color = 'var(--color-warning)';
+        return;
+      }
+      status.textContent = 'Saving…';
+      status.style.color = 'var(--color-text-muted)';
+      const resp = await fetch('/creators/me/analysis-mode', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ analysis_mode: picked.value }),
+      });
+      if (!resp.ok) {
+        status.textContent = 'Could not save — try again.';
+        status.style.color = 'var(--color-danger)';
+        return;
+      }
+      const data = await resp.json();
+      if (window.__USER__) window.__USER__.analysis_mode = data.analysis_mode;
+      status.textContent = 'Saved.';
+      status.style.color = 'var(--color-success)';
+    }
+
     document.addEventListener('auth:ready', async () => {
       await loadDna();
       await loadNiches();
       await loadIdentity();
       await loadApiKeys();
+      await loadAnalysisMode();
     });
   </script>
 

@@ -74,13 +74,26 @@
   if (navUser && !navUser.textContent) {
     navUser.textContent = user.channel_title || user.email || '';
   }
+  // Issue 126 — balance fetch now ALSO carries trial + low-balance state.
+  // Cache the full payload on window.__BALANCE__ so every page can read it
+  // (dashboard banner, analysis pre-action warning, profile billing card)
+  // without re-fetching. Dispatch `billing:ready` so listeners can render
+  // without a polling loop.
   const navBalance = document.getElementById('nav-balance');
-  if (navBalance) {
-    fetch('/billing/balance', { credentials: 'include' })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d && navBalance) navBalance.textContent = `${d.minutes_balance} min`; })
-      .catch(() => {});
-  }
+  fetch('/billing/balance', { credentials: 'include' })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (!d) return;
+      window.__BALANCE__ = d;
+      if (navBalance) {
+        navBalance.textContent = `${d.minutes_balance} min`;
+        // Light up the chip when the creator is below the threshold so the
+        // amber state is visible on every authenticated page (Issue 126).
+        navBalance.classList.toggle('is-low', !!d.low_balance);
+      }
+      document.dispatchEvent(new CustomEvent('billing:ready', { detail: d }));
+    })
+    .catch(() => {});
 
   document.dispatchEvent(new CustomEvent('auth:ready', { detail: user }));
 })();

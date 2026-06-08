@@ -297,6 +297,34 @@ async def upload_video(
     }
 
 
+@router.post("/{video_id}/queue", status_code=202)
+@limiter.limit("60/hour", key_func=creator_key)
+async def queue_video_for_analysis(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Issue 125 — explicit per-video pipeline trigger.
+
+    In selective/manual mode the dashboard surfaces this as a "Queue for
+    analysis" CTA on every catalog video sitting at ingest_status=pending.
+    In auto mode it's also useful as a manual retry path when something
+    stalled. Idempotent: if the pipeline is already running or done, returns
+    the current status without re-queuing.
+    """
+    video = await session.get(Video, video_id)
+    if not video or video.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.ingest_status != IngestStatus.pending:
+        # Already in flight or terminal — nothing to do; return current state
+        # so the caller can refresh its row without seeing a 4xx.
+        return {"video_id": str(video.id), "status": video.ingest_status.value, "queued": False}
+
+    await asyncio.to_thread(start_pipeline, str(video.id))
+    return {"video_id": str(video.id), "status": video.ingest_status.value, "queued": True}
+
+
 @router.get("/{video_id}/status", response_model=VideoStatusOut)
 @limiter.limit("120/minute", key_func=creator_key)
 async def get_video_status(
