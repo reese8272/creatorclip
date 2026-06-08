@@ -144,7 +144,8 @@ class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         ctype = response.headers.get("content-type", "")
-        if not ctype.startswith("text/html"):
+        # Only rewrite full HTML responses; skip 304s (empty body) and non-HTML.
+        if not ctype.startswith("text/html") or response.status_code == 304:
             return response
         chunks: list[bytes] = []
         async for chunk in response.body_iterator:
@@ -153,6 +154,14 @@ class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
         body = _rewrite_static(body, settings.STATIC_VERSION)
         headers = dict(response.headers)
         headers.pop("content-length", None)
+        # Strip ETag/Last-Modified so browsers cannot use conditional GETs to
+        # bypass the middleware with a 304 that serves stale HTML (and therefore
+        # stale ?v= version strings pointing at CDN-cached old CSS/JS).
+        # Cache-Control: no-store prevents the browser from caching HTML at all,
+        # so every navigation fetches a fresh copy and the rewrite always runs.
+        headers.pop("etag", None)
+        headers.pop("last-modified", None)
+        headers["cache-control"] = "no-store"
         return _StarletteResponse(
             content=body,
             status_code=response.status_code,
