@@ -130,6 +130,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── research.py             # Live web search (Claude web-search tool)
 │   ├── thumbnails.py           # Thumbnail pattern analysis + concept generation (Issue 129)
 │   ├── titles.py               # Title suggestion generation (Issue 128)
+│   ├── hooks.py                # First-30s hook analysis vs retention curves (Issue 130)
+│   ├── chapters.py             # Auto chapter marker generation from transcript (Issue 131)
+│   ├── util.py                 # Shared transcript extraction helpers
 │   └── seed/                   # Evergreen corpus: hook psychology, pacing, retention theory
 │
 ├── upload_intel/
@@ -150,7 +153,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
 │   ├── improvement.py          # GET improvement brief
-│   ├── analysis.py             # POST video-analysis (Issue 121)
+│   ├── analysis.py             # POST video-analysis (Issue 121) + hook-analysis (Issue 130) + chapters (Issue 131)
 │   ├── thumbnails.py           # GET thumbnail-patterns + POST thumbnail-concepts (Issue 129)
 │   ├── titles.py               # POST video title suggestions (Issue 128)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
