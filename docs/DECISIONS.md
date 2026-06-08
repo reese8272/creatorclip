@@ -5,6 +5,91 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-07 — Issues 130 & 131: Hook analyzer + auto chapter markers
+
+### Issue 130 — Linear interpolation against creator median for retention drop
+
+**Decision:** Compute first-30s hook drop using `numpy.interp` to lerp both the target video's
+and other videos' sparse `RetentionCurve` rows onto a 1-second grid, then take per-second
+median across the creator's other videos as baseline. Earliest second where video falls
+>10pp below median = `retention_drop_at_s`.
+
+**Why:** YouTube Analytics API returns sparse, non-uniform retention points. Interpolation
+to a fixed grid is required for any cross-video comparison. The 10pp threshold matches
+YouTube Creator Academy guidance on "significant" drops. Median over mean is robust to
+viral outliers (one runaway hit shouldn't define the baseline). Cap at 20 other videos
+for performance.
+
+**Alternatives considered:**
+- Embedding-based comparison — overkill for numeric ratios; no semantic information
+- Per-video z-score — measures relative to the video's own average, misses creator-baseline signal
+- Mean baseline — sensitive to one viral video skewing the channel average
+
+**Source:** Phase 1 brief; YouTube Creator Academy documentation; `numpy.interp` is the
+canonical industry pattern for sparse time-series resampling (`/best-practices` confirmed).
+
+### Issue 130 — `web_search_20260209` tool with Haiku 4.5 for hook research
+
+**Decision:** Use `claude-haiku-4-5-20251001` (fast, low-cost) with `web_search` tool to ground
+hook rewrite suggestions in current niche trends. 1–2 searches max per call. Same three-block
+prompt structure as Issues 128/129: static instructions / cached DNA brief / per-video data.
+
+**Why:** Hook analysis is judgment over numbers + transcript — Haiku is sufficient. Web
+search keeps suggestions current; the 1–2 search cap controls latency. The cache breakpoint
+on the DNA block matches the Issue 128 pattern (creator may run multiple hook analyses
+during a session — DNA reads from cache).
+
+### Issue 130 — Synchronous 200 `no_data` vs 202 queued
+
+**Decision:** Endpoint returns 200 with `{"status": "no_data", "message": "..."}` synchronously
+when no `RetentionCurve` rows exist; returns 202 + `task_id` + `stream_url` when data exists
+and a Celery task is queued. Response model is a union (`HookAnalysisOut`) with all fields
+optional.
+
+**Why:** Spawning a Celery task to immediately emit "no data" wastes broker traffic and
+adds task lifecycle overhead. The data-availability check is cheap (single `COUNT(*)` query).
+Pydantic union shape keeps the OpenAPI schema honest about both possible responses.
+
+### Issue 131 — Silence-gap segmentation, not embedding-shift
+
+**Decision:** Detect chapter boundaries from `Signals.timeline_jsonb["silences"]` entries
+with `end_s - start_s >= 2.0` seconds. Enforce minimum 4 chapters (fill with evenly-spaced
+boundaries for short videos) and one-per-3-minutes maximum density. First chapter always 0:00.
+
+**Why:** Silence gaps are already computed and persisted by `ingestion/audio.py` — no new
+compute. Silence is the dominant industry approach (Descript, Otter.ai, Google Podcasts
+auto-chapters); embedding-shift segmentation (sentence transformers + cosine distance) is
+~3–10× more expensive for marginal quality improvement on a "good enough" feature. The
+2-second threshold matches typical podcast/talk transitions; the 3-minute density cap
+mirrors YouTube's own chapter UX recommendations (chapters shorter than ~30s look noisy).
+
+**Alternatives considered:**
+- Embedding-shift via Voyage — accurate but expensive; one Voyage call per segment
+- BERTopic / LDA topic modeling — heavyweight ML, overkill for short chapter titles
+- Keyword clustering — too noisy for spoken-word content; misses topic shifts that don't change vocabulary
+
+### Issue 131 — Single cached system prompt, no DNA in prompt
+
+**Decision:** Chapter titling uses a single cached system block with formatting rules; no
+DNA brief. User message contains the segmented transcript with pre-computed timestamps.
+Model: `claude-haiku-4-5-20251001`.
+
+**Why:** Chapter titles describe segment content, not the creator's brand voice — DNA would
+just bloat the prompt. Caching the static system block (the rules + JSON schema) ensures
+cache hits across repeated chapter generations. `max_tokens=512` is sufficient for ≤20
+chapters at ≤40 chars each.
+
+### Both — Re-used `worker/anthropic_stream.py` for SSE forwarding
+
+**Decision:** Both `knowledge/hooks.py::analyze_hook` and `knowledge/chapters.py::generate_chapters`
+delegate to the existing `stream_and_emit` helper rather than rolling their own streaming.
+
+**Why:** Issues 128/129 already proved this path. Cache-hit metrics, token usage logging,
+and progress event forwarding all come for free. Keeping the Anthropic SDK call site in
+one helper means a future SDK bump only touches one file.
+
+---
+
 ## 2026-06-07 — Issue 129: Thumbnail concept generator design decisions
 
 ### No Reporting API — DNA top_video_ids_jsonb as high-performer proxy

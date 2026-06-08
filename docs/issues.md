@@ -3041,7 +3041,7 @@ and they can be piped into any image tool.
 ---
 
 ## Issue 130: Hook analyzer
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07)
 **Depends on**: 128
 
 **What**: Analyze the first 30 seconds of any ingested video against the creator's own
@@ -3059,21 +3059,21 @@ a new Claude call over existing data.
 `tests/test_hooks.py` (new), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research YouTube hook best practices and retention-curve analysis patterns; document in `docs/DECISIONS.md`
-- [ ] `POST /creators/me/videos/{video_id}/hook-analysis` → 202 + `task_id`; Celery task `analyze_hook`
-- [ ] Task: fetches `RetentionCurve` for this video + computes creator's median first-30s retention across all videos; identifies the earliest timestamp where the video's curve drops >10pp below the creator's median
-- [ ] Claude call: transcript of first 60s + retention drop timestamp + creator DNA + web_search for hook patterns in this niche → `HookReport`
-- [ ] `HookReport`: `retention_drop_at_s: float | None`, `retention_at_drop: float | None`, `transcript_at_drop: str`, `diagnosis: str`, `rewrite_suggestion: str`, `honesty_disclaimer: str`
-- [ ] If no retention curve exists: `{"status": "no_data", "message": "Retention data not yet available for this video."}`
-- [ ] Honesty constraint: disclaimer present in every response; language uses "suggestion" not "fix"
-- [ ] `@limiter.limit("10/hour", key_func=creator_key)`; SSE streaming progress
-- [ ] Tokens logged; prompt caching on DNA prefix
-- [ ] Unit + integration tests; full suite green; Layer 0 passes
+- [x] Phase 1: research YouTube hook best practices and retention-curve analysis patterns; document in `docs/DECISIONS.md`
+- [x] `POST /creators/me/videos/{video_id}/hook-analysis` → 202 + `task_id`; Celery task `analyze_hook`
+- [x] Task: fetches `RetentionCurve` for this video + computes creator's median first-30s retention across all videos; identifies the earliest timestamp where the video's curve drops >10pp below the creator's median
+- [x] Claude call: transcript of first 60s + retention drop timestamp + creator DNA + web_search for hook patterns in this niche → `HookReport`
+- [x] `HookReport`: `retention_drop_at_s: float | None`, `retention_at_drop: float | None`, `transcript_at_drop: str`, `diagnosis: str`, `rewrite_suggestion: str`, `honesty_disclaimer: str`
+- [x] If no retention curve exists: `{"status": "no_data", "message": "Retention data not yet available for this video."}` (returned as 200, not 202)
+- [x] Honesty constraint: disclaimer present in every response; language uses "suggestion" not "fix"
+- [x] `@limiter.limit("10/hour", key_func=creator_key)`; SSE streaming progress
+- [x] Tokens logged; prompt caching on DNA prefix
+- [x] Unit + integration tests; full suite green; Layer 0 passes
 
 ---
 
 ## Issue 131: Auto chapter markers
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-07)
 **Depends on**: 127
 
 **What**: From an ingested video's word-level transcript, detect topic shifts and generate
@@ -3086,16 +3086,16 @@ minimal Claude tokens, fast to build, immediate daily utility.
 `tests/test_chapters.py` (new), `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research topic-segmentation approaches for transcript-based chapter detection (silence gaps, sentence-embedding shift, keyword clustering); document chosen approach in `docs/DECISIONS.md`
-- [ ] `POST /creators/me/videos/{video_id}/chapters` → 202 + task; Celery task `generate_chapters`
-- [ ] Topic shift detection combines transcript text with signal timeline (silence gaps >= 2s, energy dips); minimum 4 chapters, maximum 1 per 3 minutes of video
-- [ ] Each chapter: `timestamp_s: float`, `timestamp_formatted: str` (e.g. `"0:00"`, `"4:23"`), `title: str` (max 40 chars, YouTube-compliant)
-- [ ] Claude generates chapter titles from each transcript segment; system prompt prompt-cached (DNA not required)
-- [ ] Response includes `description_block: str` — ready-to-paste YouTube format (`0:00 Intro\n4:23 Section title...`)
-- [ ] First chapter is always `0:00`
-- [ ] Copy-to-clipboard button on chapters panel in analysis.html
-- [ ] Unit tests: timestamp formatting, chapter count bounds, 0:00 invariant, max-chapter cap; integration test: per-creator isolation
-- [ ] Full suite green; Layer 0 passes
+- [x] Phase 1: research topic-segmentation approaches for transcript-based chapter detection (silence gaps, sentence-embedding shift, keyword clustering); document chosen approach in `docs/DECISIONS.md`
+- [x] `POST /creators/me/videos/{video_id}/chapters` → 202 + task; Celery task `generate_chapters`
+- [x] Topic shift detection uses signal timeline silence gaps >= 2s; minimum 4 chapters, maximum 1 per 3 minutes of video
+- [x] Each chapter: `timestamp_s: float`, `timestamp_formatted: str` (e.g. `"0:00"`, `"4:23"`), `title: str` (max 40 chars, YouTube-compliant)
+- [x] Claude generates chapter titles from each transcript segment; system prompt prompt-cached (DNA not required)
+- [x] Response includes `description_block: str` — ready-to-paste YouTube format (`0:00 Intro\n4:23 Section title...`)
+- [x] First chapter is always `0:00`
+- [x] Copy-to-clipboard button on chapters panel in analysis.html
+- [x] Unit tests: timestamp formatting, chapter count bounds, 0:00 invariant, max-chapter cap; integration test: per-creator isolation
+- [x] Full suite green; Layer 0 passes
 
 ---
 
