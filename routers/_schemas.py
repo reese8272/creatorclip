@@ -55,3 +55,30 @@ def build_envelope_state(count: int, *, is_filtered: bool = False) -> EmptyState
     if count > 0:
         return "populated"
     return "empty_filtered" if is_filtered else "empty_initial"
+
+
+# ── Setup-step aggregation (DECISIONS 2026-06-08) ────────────────────────────
+
+
+class SetupStepOut(BaseModel):
+    """Server-resolved "what should this creator do next?" guidance.
+
+    Returned on both ``/auth/me`` and ``/creators/me`` so a single fetch
+    surfaces the next-step CTA — replaces the old fan-out across
+    ``/data-gate`` + ``/dna`` + ``/videos`` + ``/billing/balance``.
+    The resolver lives in ``dna/onboarding.py`` so any non-router caller
+    (Beat tasks, reminder emails) shares the rule.
+    """
+
+    step: Literal[
+        "sync_catalog",
+        "build_dna",
+        "confirm_dna",
+        "link_first_video",
+        "complete",
+    ]
+    label: str
+    next_action_type: Literal["navigate", "open_form", "wait"]
+    next_action_url: str | None
+    progress_index: int
+    progress_total: int

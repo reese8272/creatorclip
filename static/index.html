@@ -584,15 +584,19 @@
     async function init(me) {
       document.getElementById('nav-user').textContent = me.channel_title || me.email || '';
 
-      // DNA status — banner shows until state advances past pending.
-      const state = me.onboarding_state;
-      if (state !== 'active') {
-        document.getElementById('dna-cta').style.display = 'flex';
-        if (state === 'dna_pending') {
-          document.getElementById('dna-cta-text').textContent =
-            'Your DNA is ready — confirm your Creator Brief to activate personalised scoring.';
-          document.querySelector('#dna-cta a').href = '/static/profile.html';
-        }
+      // 2026-06-08 — Server-resolved next-step CTA (DECISIONS).
+      // The setup block is computed once on /auth/me; we render the
+      // banner directly from it instead of re-inferring across endpoints.
+      // ``link_first_video`` is handled by the empty-hero block below;
+      // ``complete`` keeps the banner hidden.
+      const setup = me.setup;
+      if (setup && setup.step !== 'complete' && setup.step !== 'link_first_video') {
+        const cta = document.getElementById('dna-cta');
+        const label = document.getElementById('dna-cta-text');
+        const link = cta.querySelector('a');
+        label.textContent = setup.label;
+        if (setup.next_action_url) link.href = setup.next_action_url;
+        cta.style.display = 'flex';
       }
 
       const dnaResp = await fetch('/creators/me/dna', { credentials: 'include' });

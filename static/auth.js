@@ -27,6 +27,14 @@
   }
   const user = await resp.json();
   window.__USER__ = user;
+  // 2026-06-08 — server-resolved next-step CTA so every page can render
+  // guidance without re-deriving it from /data-gate + /dna + /videos.
+  // Pages listen for `setup:ready` (or read window.__SETUP__ inside
+  // auth:ready) and decide whether to show a step hint.
+  if (user.setup) {
+    window.__SETUP__ = user.setup;
+    document.dispatchEvent(new CustomEvent('setup:ready', { detail: user.setup }));
+  }
   // Issue 136 — if the user landed here with a ?yt= hint from the hero,
   // auto-fill the link-video input so the next click finishes the flow.
   try {

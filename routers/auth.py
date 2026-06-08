@@ -12,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from config import settings
 from db import get_session
+from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
 from models import Creator, append_audit
+from routers._schemas import SetupStepOut
 from youtube.oauth import (
     build_authorization_url,
     exchange_code,
@@ -39,6 +41,10 @@ class AuthMeOut(BaseModel):
     channel_title: str | None
     email: str | None
     onboarding_state: str
+    # 2026-06-08 — nested aggregate so auth.js can stash window.__SETUP__
+    # on every page load. Replaces the old polling of /data-gate + /dna
+    # + /videos to infer the next-step CTA.
+    setup: SetupStepOut
 
 
 @router.get("/login")
@@ -180,14 +186,20 @@ async def logout(request: Request, response: Response) -> dict:
 
 @router.get("/me", response_model=AuthMeOut)
 @limiter.limit("120/minute", key_func=creator_key)
-async def me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
+async def me(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     """Returns the authenticated creator's profile. No virality predictions made here."""
+    setup = await resolve_setup_step(creator, session)
     return {
         "id": str(creator.id),
         "channel_id": creator.channel_id,
         "channel_title": creator.channel_title,
         "email": creator.email,
         "onboarding_state": creator.onboarding_state.value,
+        "setup": setup,
     }
 
 

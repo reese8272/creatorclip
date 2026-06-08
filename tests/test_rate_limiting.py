@@ -135,13 +135,15 @@ def test_429_returned_on_limit_exceeded(client):
 
     from auth import get_current_creator
     from db import get_session
+    from models import OnboardingState
 
     creator = MagicMock()
     creator.id = uuid.uuid4()
     creator.channel_id = "UC123"
     creator.channel_title = "Test"
     creator.email = "t@t.com"
-    creator.onboarding_state = MagicMock(value="active")
+    # 2026-06-08 — setup_step resolver dispatches on the real enum.
+    creator.onboarding_state = OnboardingState.active
     # Issue 125 — CreatorMeOut now carries analysis_mode; without this stub
     # the response validates against MagicMock and 500s.
     creator.analysis_mode = MagicMock(value="auto")
@@ -151,6 +153,10 @@ def test_429_returned_on_limit_exceeded(client):
 
     async def fake_session():
         session = AsyncMock()
+        # Resolver in the active branch issues one COUNT(*) on videos.
+        result = MagicMock()
+        result.scalar_one.return_value = 1
+        session.execute = AsyncMock(return_value=result)
         yield session
 
     from main import app

@@ -87,21 +87,32 @@ def test_issue_125_get_me_returns_analysis_mode(client):
     intake CTA to show; without it on /creators/me the UI defaults to auto
     forever even after a PATCH."""
     from auth import get_current_creator
+    from db import get_session
     from main import app
-    from models import AnalysisMode
+    from models import AnalysisMode, OnboardingState
 
     fake_creator = MagicMock()
     fake_creator.id = _uuid.uuid4()
     fake_creator.channel_id = "UC_test"
     fake_creator.channel_title = "Test"
     fake_creator.email = "t@t.co"
-    fake_creator.onboarding_state = MagicMock(value="active")
+    # Real enum required: the 2026-06-08 setup_step resolver dispatches on
+    # OnboardingState identity, not the .value string.
+    fake_creator.onboarding_state = OnboardingState.active
     fake_creator.analysis_mode = AnalysisMode.selective
     fake_creator.created_at = MagicMock()
     fake_creator.created_at.isoformat = lambda: "2026-06-08T00:00:00+00:00"
 
+    async def _fake_session():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one.return_value = 1  # at least one clip-track video
+        session.execute = AsyncMock(return_value=result)
+        yield session
+
     original = app.dependency_overrides.copy()
     app.dependency_overrides[get_current_creator] = _override_creator(fake_creator)
+    app.dependency_overrides[get_session] = _fake_session
     try:
         resp = client.get("/creators/me")
         assert resp.status_code == 200, resp.text

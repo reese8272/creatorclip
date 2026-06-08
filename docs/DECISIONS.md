@@ -5,6 +5,49 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-08 — Onboarding state aggregation on `/auth/me` + `/creators/me`
+
+**Decision:** Both `/auth/me` and `/creators/me` now return a nested `setup: SetupStepOut`
+object — `{ step, label, next_action_type, next_action_url, progress_index, progress_total }` —
+resolved server-side by `dna/onboarding.py::resolve_setup_step`. Replaces the old
+fan-out where the frontend polled `/data-gate` + `/dna` + `/videos` + `/billing/balance`
+to infer the next step. Single source of truth for "what should this creator do next?".
+
+Implementation:
+- The resolver lives in `dna/` (not in the router) so future non-HTTP callers (Beat
+  tasks, reminder emails, an interactive walkthrough state machine) share the same rule.
+- `Creator.onboarding_state` enum is the fast path; the resolver issues at most one
+  follow-up query — `check_data_gate` for `connected`/`awaiting_data`, or a `COUNT(*)`
+  on clip-track videos for `active`. `dna_pending` needs no DB at all.
+- Shared `SetupStepOut` model lives in `routers/_schemas.py` so both routers reuse it
+  without a cross-router import. Mirrors the `TaskQueuedOut` precedent from Issue 108.
+
+**Why for this project:**
+- Direct fix for the "barren / hard to know how to use" complaint from the 2026-06-08
+  UX-focused `/assess` — the dashboard's old logic showed a DNA CTA based purely on
+  `onboarding_state`, missing the "active but no videos" → "link a video" transition.
+- Matches the BFF posture we established with the empty-state envelopes (same DECISIONS
+  date): server owns the rule, client renders it.
+
+**Industry standard checked + alignment:**
+- **Stripe** — `Account.capabilities.requirements.currently_due[]` is the server-computed
+  "what's blocking this account right now" list; same shape, different domain.
+- **Linear** — `User.onboardingState` with computed `nextStep` enum + per-step `completed`
+  array. Our `step` + `progress_index` is the same idea.
+- **Vercel Onboarding API** — `GET /v1/onboarding` returns `{currentStep, totalSteps,
+  nextAction: {type, href}}`. Almost identical to our shape.
+- **Clerk / Auth0** — `User.publicMetadata.onboardingComplete` + routed `next_step`.
+
+We chose nesting (`setup: { ... }`) over flat fields (the issue's literal phrasing
+of `setup_step` / `setup_step_label` / `next_action_type`) so future fields
+(blocked_by, eta, percent_complete) can land without bloating the top-level model
+and so the shape matches the `NextActionOut` precedent set the same day.
+
+**Source/evidence:** Stripe Account Requirements API; Linear GraphQL `User.onboardingState`;
+Vercel onboarding API; 2026-06-08 `/assess` REPORT.md UX SEV2 cluster.
+
+---
+
 ## 2026-06-08 — Empty-state response envelopes on list endpoints (BFF posture)
 
 **Decision:** `/videos`, `/creators/me/insights/saved`, and `/videos/{id}/clips` return a

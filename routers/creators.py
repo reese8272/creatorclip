@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from db import get_session
 from dna import identity as identity_module
+from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
 from models import AnalysisMode, Creator
-from routers._schemas import TaskQueuedOut
+from routers._schemas import SetupStepOut, TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
 
@@ -29,6 +30,9 @@ class CreatorMeOut(BaseModel):
     # (auto = silent ingest on link; selective / manual = explicit Queue button).
     analysis_mode: str
     created_at: str
+    # 2026-06-08 — nested aggregate so the frontend renders next-step
+    # guidance from one fetch instead of inferring across 5 endpoints.
+    setup: SetupStepOut
 
 
 class AnalysisModeIn(BaseModel):
@@ -146,7 +150,12 @@ def _identity_to_dict(row) -> dict:
 
 @router.get("/me", response_model=CreatorMeOut)
 @limiter.limit("120/minute", key_func=creator_key)
-async def get_me(request: Request, creator: Creator = Depends(get_current_creator)) -> dict:
+async def get_me(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    setup = await resolve_setup_step(creator, session)
     return {
         "id": str(creator.id),
         "channel_id": creator.channel_id,
@@ -155,6 +164,7 @@ async def get_me(request: Request, creator: Creator = Depends(get_current_creato
         "onboarding_state": creator.onboarding_state.value,
         "analysis_mode": creator.analysis_mode.value,
         "created_at": creator.created_at.isoformat(),
+        "setup": setup,
     }
 
 
