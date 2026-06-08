@@ -591,7 +591,10 @@
     async function loadSavedInsights() {
       const resp = await fetch('/creators/me/insights/saved', { credentials: 'include' });
       if (!resp.ok) return;
-      const items = await resp.json();
+      const body = await resp.json();
+      // SavedInsightsOut envelope (DECISIONS 2026-06-08). Bare-array fallback
+      // mirrors the dashboard's defensive pattern.
+      const items = Array.isArray(body) ? body : (body.insights || []);
       const panel = document.getElementById('saved-panel');
       const list = document.getElementById('saved-insights-list');
       if (!items.length) { panel.style.display = 'none'; return; }

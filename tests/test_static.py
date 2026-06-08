@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import IngestStatus, VideoKind
+from models import IngestStatus, OnboardingState, VideoKind
 
 # ── Root and static routes ────────────────────────────────────────────────────
 
@@ -80,9 +80,10 @@ def test_list_videos_requires_auth(client):
     assert resp.status_code == 401
 
 
-def _mock_creator():
+def _mock_creator(onboarding_state=OnboardingState.active):
     c = MagicMock()
     c.id = uuid.uuid4()
+    c.onboarding_state = onboarding_state
     return c
 
 
@@ -110,7 +111,13 @@ def _fake_session(videos):
     return _session
 
 
-def test_list_videos_returns_list(client):
+def test_list_videos_returns_envelope_with_videos(client):
+    """``/videos`` returns the ``VideoListOut`` envelope (DECISIONS 2026-06-08).
+
+    Populated case: ``state == "populated"``, no empty-state copy, and the
+    items themselves carry the same per-row fields as before so downstream
+    consumers only have to learn ``body.videos`` instead of ``body``.
+    """
     creator = _mock_creator()
     video = _mock_video(creator.id)
     app.dependency_overrides[get_current_creator] = lambda: creator
@@ -121,14 +128,20 @@ def test_list_videos_returns_list(client):
         app.dependency_overrides.clear()
 
     assert resp.status_code == 200
-    data = resp.json()
-    assert isinstance(data, list)
-    assert data[0]["youtube_video_id"] == "abc123"
-    assert data[0]["ingest_status"] == "done"
+    body = resp.json()
+    assert body["state"] == "populated"
+    assert body["message"] is None
+    assert body["next_action"] is None
+    assert body["videos"][0]["youtube_video_id"] == "abc123"
+    assert body["videos"][0]["ingest_status"] == "done"
 
 
-def test_list_videos_empty_returns_empty_list(client):
-    creator = _mock_creator()
+def test_list_videos_empty_returns_envelope_with_guidance(client):
+    """Empty + onboarding_state=active → ``empty_initial`` envelope with a
+    "Link your first video" next step. The frontend renders the server
+    message verbatim so the dashboard is never silently blank.
+    """
+    creator = _mock_creator(onboarding_state=OnboardingState.active)
     app.dependency_overrides[get_current_creator] = lambda: creator
     app.dependency_overrides[get_session] = _fake_session([])
     try:
@@ -137,7 +150,33 @@ def test_list_videos_empty_returns_empty_list(client):
         app.dependency_overrides.clear()
 
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    assert body["videos"] == []
+    assert body["state"] == "empty_initial"
+    # State==active still falls through to the same "link a video" copy because
+    # the only onboarding_state that gates the message is `connected` (no DNA yet);
+    # any later state means the creator is past the "connect" step.
+    assert body["message"] is not None
+
+
+def test_list_videos_empty_connected_state_suggests_link_video(client):
+    """Brand-new creator (just connected, no DNA, no videos) gets a
+    link-a-video next action with ``action_type="open_form"`` — the
+    frontend uses that to expand the link form inline instead of
+    navigating away.
+    """
+    creator = _mock_creator(onboarding_state=OnboardingState.connected)
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session([])
+    try:
+        resp = client.get("/videos")
+    finally:
+        app.dependency_overrides.clear()
+
+    body = resp.json()
+    assert body["state"] == "empty_initial"
+    assert body["next_action"]["action_type"] == "open_form"
+    assert "/static/index.html" in body["next_action"]["url"]
 
 
 def test_list_videos_response_has_required_keys(client):
@@ -150,7 +189,7 @@ def test_list_videos_response_has_required_keys(client):
     finally:
         app.dependency_overrides.clear()
 
-    item = resp.json()[0]
+    item = resp.json()["videos"][0]
     for key in ("id", "youtube_video_id", "title", "kind", "ingest_status", "created_at"):
         assert key in item
 

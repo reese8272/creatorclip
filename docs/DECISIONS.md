@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-08 — Empty-state response envelopes on list endpoints (BFF posture)
+
+**Decision:** `/videos`, `/creators/me/insights/saved`, and `/videos/{id}/clips` return a
+typed envelope per resource — `{ <resource>: list[...], state: "empty_initial" |
+"empty_filtered" | "populated", message: str | None, next_action: {label, action_type,
+url} | None }` — instead of a bare JSON array. Resource-named keys (`videos`, `insights`,
+`clips`) match the existing `DnaGetOut.profile` / `ClipListOut.clips` convention rather
+than a generic `items`. Shared types live in `routers/_envelopes.py`.
+
+**Why for this project:**
+- The 2026-06-08 UX-focused `/assess` report flagged "barren" empty states as the highest-
+  leverage SEV2 cluster (`docs/assessment/REPORT.md`). Embedding the empty-state cause +
+  next step in the API keeps copy consistent across the 8 static pages and lets the
+  backend supply guidance based on data the frontend doesn't have (e.g. `onboarding_state`).
+- The existing `DnaGetOut { profile, message }` already established the precedent in this
+  codebase; we are generalizing, not inventing.
+- The CLAUDE.md honesty constraint applies to empty-state copy too — centralizing it makes
+  the structural disclaimer test cover one place instead of N.
+
+**Industry standard checked + deviation:**
+- Strict REST (Google AIP-158, Stripe, GitHub, JSON:API) returns `{items, next_page_token}`
+  or a bare list — UX copy is the client's job. We are deviating from this.
+- The pattern we're using IS standard in BFF / "frontend-coupled API" architectures
+  (Vercel, Supabase Edge Functions, Remix loaders) where backend and frontend are
+  co-owned and UX consistency outweighs API/client decoupling.
+- CreatorClip is a single-frontend, single-backend monorepo with no third-party API
+  consumers — the BFF posture is the right tradeoff.
+
+**Source/evidence:** Google AIP-158 (list responses); Vercel/Remix loader patterns;
+2026-06-08 `/assess` REPORT.md SEV2 cluster on dashboard/insights empty states.
+
+---
+
 ## 2026-06-08 — Issue 126: Trial UX + billing clarity
 
 **Decision:** Four design choices the Issue 126 spec left open:

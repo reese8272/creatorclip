@@ -37,6 +37,7 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
+from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 
 router = APIRouter(prefix="/creators/me/insights", tags=["insights"])
 logger = logging.getLogger(__name__)
@@ -98,6 +99,15 @@ class InsightOut(BaseModel):
     dna_version: int | None
     is_saved: bool
     created_at: str
+
+
+class SavedInsightsOut(BaseModel):
+    """Envelope for the saved-insights list (DECISIONS 2026-06-08)."""
+
+    insights: list[InsightOut]
+    state: EmptyState
+    message: str | None = None
+    next_action: NextActionOut | None = None
 
 
 class AnalyzePerformerIn(BaseModel):
@@ -617,14 +627,18 @@ async def save_insight(
     return _insight_to_dict(insight)
 
 
-@router.get("/saved", response_model=list[InsightOut])
+@router.get("/saved", response_model=SavedInsightsOut)
 @limiter.limit("60/minute", key_func=creator_key)
 async def list_saved_insights(
     request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
-) -> list[dict]:
-    """Return all saved insights for the creator, newest first."""
+) -> dict:
+    """Return all saved insights for the creator, newest first.
+
+    Wrapped in ``SavedInsightsOut`` (DECISIONS 2026-06-08) so the empty case
+    carries a guided next step instead of a silent ``[]``.
+    """
     rows = (
         (
             await session.execute(
@@ -637,7 +651,23 @@ async def list_saved_insights(
         .scalars()
         .all()
     )
-    return [_insight_to_dict(r) for r in rows]
+    items = [_insight_to_dict(r) for r in rows]
+    state = build_envelope_state(len(items))
+    message: str | None = None
+    next_action: dict | None = None
+    if state == "empty_initial":
+        message = "Save an insight from the Insights page to pin it here."
+        next_action = {
+            "label": "Open Insights",
+            "action_type": "navigate",
+            "url": "/static/insights.html",
+        }
+    return {
+        "insights": items,
+        "state": state,
+        "message": message,
+        "next_action": next_action,
+    }
 
 
 def _insight_to_dict(ins: CreatorInsight) -> dict:

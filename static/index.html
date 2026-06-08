@@ -614,7 +614,11 @@
     async function loadVideos() {
       const resp = await fetch('/videos', { credentials: 'include' });
       if (!resp.ok) return;
-      const videos = await resp.json();
+      const body = await resp.json();
+      // VideoListOut envelope (DECISIONS 2026-06-08). Fall back to a bare
+      // array so the page survives any in-flight rollback to the old shape.
+      const videos = Array.isArray(body) ? body : (body.videos || []);
+      const emptyMessage = (body && body.message) || 'No videos yet — pick a path above to get started.';
 
       document.getElementById('video-count').textContent = videos.length;
 
@@ -622,7 +626,7 @@
       const emptyHero = document.getElementById('empty-dashboard-hero');
       if (!videos.length) {
         if (emptyHero) emptyHero.classList.add('is-active');
-        tbody.innerHTML = '<tr><td colspan="4" class="empty">No videos yet — pick a path above to get started.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="4" class="empty">${emptyMessage}</td></tr>`;
         document.getElementById('clips-ready').textContent = '0';
         return;
       }

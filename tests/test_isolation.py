@@ -110,9 +110,11 @@ async def test_get_videos_scoped_to_creator(db_session: AsyncSession, client):
     try:
         resp = client.get("/videos", cookies=_cookie(creator_a))
         assert resp.status_code == 200
-        ids = [v["id"] for v in resp.json()]
+        # VideoListOut envelope (DECISIONS 2026-06-08).
+        videos = resp.json()["videos"]
+        ids = [v["id"] for v in videos]
         assert str(vid_a.id) in ids
-        assert all(v["id"] != str(creator_b.id) for v in resp.json())
+        assert all(v["id"] != str(creator_b.id) for v in videos)
     finally:
         await db_session.execute(
             delete(Creator).where(Creator.id.in_([creator_a.id, creator_b.id]))

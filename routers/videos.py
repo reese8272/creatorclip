@@ -15,7 +15,8 @@ from billing.ledger import check_balance_for_minutes, check_positive_balance, vi
 from config import settings
 from db import get_session
 from limiter import creator_key, limiter
-from models import Creator, IngestStatus, Video, VideoKind
+from models import Creator, IngestStatus, OnboardingState, Video, VideoKind
+from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 from worker.storage import upload_file
 from worker.tasks import start_pipeline
 from youtube.data_api import classify_video_kind, get_videos_metadata
@@ -35,6 +36,20 @@ class VideoListItemOut(BaseModel):
     ingest_status: str
     duration_s: float | None
     created_at: str
+
+
+class VideoListOut(BaseModel):
+    """Envelope for the videos list (DECISIONS 2026-06-08).
+
+    ``message`` + ``next_action`` are populated only when ``videos`` is empty;
+    the frontend uses them to render guided empty-state copy instead of a
+    hardcoded blank screen.
+    """
+
+    videos: list[VideoListItemOut]
+    state: EmptyState
+    message: str | None = None
+    next_action: NextActionOut | None = None
 
 
 class VideoLinkedOut(BaseModel):
@@ -63,13 +78,13 @@ def _validate_youtube_id(youtube_video_id: str) -> None:
         raise HTTPException(status_code=422, detail="Invalid youtube_video_id")
 
 
-@router.get("", response_model=list[VideoListItemOut])
+@router.get("", response_model=VideoListOut)
 @limiter.limit("120/minute", key_func=creator_key)
 async def list_videos(
     request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
-) -> list[dict]:
+) -> dict:
     """List all videos for the current creator, newest first.
 
     Excludes catalog-only rows (``source_uri IS NULL``) — those are DNA-only
@@ -79,6 +94,11 @@ async def list_videos(
     never transition. ``source_uri IS NULL`` is the canonical discriminator
     for catalog-only state (see ``docs/SOT.md`` data-model section).
     (Issue 90 — surfaced by Issue 88's display-vs-filter audit.)
+
+    Returns a ``VideoListOut`` envelope (DECISIONS 2026-06-08). When the list
+    is empty the response carries a ``message`` + ``next_action`` keyed to the
+    creator's ``onboarding_state`` so the dashboard can render a guided
+    empty hero instead of a blank table.
     """
     result = await session.execute(
         select(Video)
@@ -86,7 +106,7 @@ async def list_videos(
         .order_by(Video.created_at.desc())
     )
     videos = list(result.scalars())
-    return [
+    items = [
         {
             "id": str(v.id),
             "youtube_video_id": v.youtube_video_id,
@@ -98,6 +118,30 @@ async def list_videos(
         }
         for v in videos
     ]
+    state = build_envelope_state(len(items))
+    message: str | None = None
+    next_action: dict | None = None
+    if state == "empty_initial":
+        if creator.onboarding_state == OnboardingState.connected:
+            message = "Link your first video to see AutoClip work — it learns your style from your own content, not a generic virality score."
+            next_action = {
+                "label": "Link a video",
+                "action_type": "open_form",
+                "url": "/static/index.html#link-form",
+            }
+        else:
+            message = "Connect your YouTube channel so AutoClip can analyse your style and audience."
+            next_action = {
+                "label": "Connect YouTube",
+                "action_type": "navigate",
+                "url": "/auth/login",
+            }
+    return {
+        "videos": items,
+        "state": state,
+        "message": message,
+        "next_action": next_action,
+    }
 
 
 @router.post("/link", response_model=VideoLinkedOut)

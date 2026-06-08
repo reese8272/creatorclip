@@ -16,7 +16,7 @@ from config import settings
 from db import get_session
 from limiter import creator_key, limiter
 from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcript, Video, VideoKind
-from routers._schemas import TaskQueuedOut
+from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
 from worker.storage import upload_file
 from youtube.data_api import classify_video_kind
 from youtube.ingest import probe_duration_s
@@ -44,7 +44,19 @@ class ClipOut(BaseModel):
 
 
 class ClipListOut(BaseModel):
+    """Clip-list envelope. ``state`` / ``message`` / ``next_action`` were added
+    2026-06-08 (DECISIONS) so GET ``/videos/{id}/clips`` matches the empty-
+    state contract used by ``/videos`` and ``/insights/saved``.
+
+    POST ``/videos/{id}/clips/generate`` returns the same shape — clips it
+    just produced are always ``populated`` and the empty-state fields stay
+    ``None``.
+    """
+
     clips: list[ClipOut]
+    state: EmptyState = "populated"
+    message: str | None = None
+    next_action: NextActionOut | None = None
 
 
 class RenderQueuedOut(TaskQueuedOut):
@@ -135,7 +147,12 @@ async def list_clips(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Return ranked clips for a video."""
+    """Return ranked clips for a video.
+
+    Empty-state copy distinguishes "video still ingesting → wait" from
+    "ingest done but no clips generated yet → run /generate". This is
+    information the frontend would otherwise have to fetch separately.
+    """
     video = await session.get(Video, video_id)
     if not video or video.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -146,7 +163,26 @@ async def list_clips(
         .order_by(Clip.rank)
     )
     clips = list(result.scalars())
-    return {"clips": [_clip_response(c) for c in clips]}
+    items = [_clip_response(c) for c in clips]
+    state = build_envelope_state(len(items))
+    message: str | None = None
+    next_action: dict | None = None
+    if state == "empty_initial":
+        if video.ingest_status != IngestStatus.done:
+            message = "This video is still ingesting — clips appear once analysis finishes."
+        else:
+            message = "No clips yet — run analysis to extract setup-first candidates."
+            next_action = {
+                "label": "Generate clips",
+                "action_type": "navigate",
+                "url": f"/videos/{video_id}/clips/generate",
+            }
+    return {
+        "clips": items,
+        "state": state,
+        "message": message,
+        "next_action": next_action,
+    }
 
 
 # ── Clip-level actions ────────────────────────────────────────────────────────
