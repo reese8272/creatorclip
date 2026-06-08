@@ -271,6 +271,74 @@ def test_chapters_queued_when_transcript_exists() -> None:
     assert data["stream_url"] == f"/tasks/{fake_task.id}/events"
 
 
+# ── Unit: generate_chapters prompt assembly + _segment_text ───────────────────
+
+
+def test_generate_chapters_builds_request() -> None:
+    """generate_chapters delegates to stream_and_emit with cached system block."""
+    from knowledge.chapters import generate_chapters
+
+    fake_stream = MagicMock(
+        return_value=(
+            '{"chapters":[]}',
+            {
+                "input_tokens": 50,
+                "output_tokens": 25,
+                "cache_read": 0,
+                "cache_creation": 50,
+            },
+        )
+    )
+    segments = [
+        {"start": 0.0, "text": "intro"},
+        {"start": 120.0, "text": "second section"},
+    ]
+    with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
+        result = generate_chapters(
+            boundaries=[0.0, 120.0],
+            segments=segments,
+            video_duration_s=240.0,
+            task_id="t-c1",
+        )
+
+    assert result == '{"chapters":[]}'
+    call_kwargs = fake_stream.call_args.kwargs
+    system_blocks = call_kwargs["system"]
+    assert len(system_blocks) == 1
+    assert system_blocks[0]["cache_control"] == {"type": "ephemeral"}
+    user_msg = call_kwargs["messages"][0]["content"]
+    assert "intro" in user_msg
+    assert "second section" in user_msg
+    assert "4:00" in user_msg  # 240s formatted
+
+
+def test_generate_chapters_empty_segment_placeholder() -> None:
+    """Segments with no transcript text get a placeholder."""
+    from knowledge.chapters import generate_chapters
+
+    fake_stream = MagicMock(
+        return_value=(
+            '{"chapters":[]}',
+            {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read": 0,
+                "cache_creation": 0,
+            },
+        )
+    )
+    with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
+        generate_chapters(
+            boundaries=[0.0, 60.0],
+            segments=[],  # no transcript at all
+            video_duration_s=120.0,
+            task_id="t-c2",
+        )
+
+    user_msg = fake_stream.call_args.kwargs["messages"][0]["content"]
+    assert "no transcript" in user_msg.lower()
+
+
 def test_chapters_per_creator_isolation() -> None:
     """A video belonging to another creator returns 404."""
     creator_a = _make_creator()

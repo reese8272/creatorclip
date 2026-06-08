@@ -198,6 +198,111 @@ def test_hook_analysis_no_retention_data() -> None:
     assert "message" in data
 
 
+# ── Unit: analyze_hook prompt assembly ────────────────────────────────────────
+
+
+def test_analyze_hook_builds_prompt_with_drop() -> None:
+    """analyze_hook delegates to stream_and_emit with cached DNA + drop stats."""
+    from knowledge.hooks import analyze_hook
+
+    fake_stream = MagicMock(
+        return_value=(
+            '{"diagnosis":"x"}',
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read": 80,
+                "cache_creation": 20,
+            },
+        )
+    )
+    with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
+        result = analyze_hook(
+            channel_title="Test Channel",
+            dna_brief="DNA brief text " * 100,
+            retention_drop_at_s=12.5,
+            retention_at_drop=0.55,
+            creator_median_at_drop=0.80,
+            transcript_excerpt="hello world",
+            task_id="t-1",
+        )
+
+    assert result == '{"diagnosis":"x"}'
+    assert fake_stream.called
+    call_kwargs = fake_stream.call_args.kwargs
+    system_blocks = call_kwargs["system"]
+    assert len(system_blocks) == 3
+    assert system_blocks[1]["cache_control"] == {"type": "ephemeral"}
+    assert "12.5s" in system_blocks[2]["text"]
+    assert "55.0%" in system_blocks[2]["text"]
+
+
+def test_analyze_hook_no_drop_path() -> None:
+    """When drop is None, prompt says no significant drop."""
+    from knowledge.hooks import analyze_hook
+
+    fake_stream = MagicMock(
+        return_value=(
+            "{}",
+            {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read": 0,
+                "cache_creation": 0,
+            },
+        )
+    )
+    with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
+        analyze_hook(
+            channel_title="Channel",
+            dna_brief=None,
+            retention_drop_at_s=None,
+            retention_at_drop=None,
+            creator_median_at_drop=None,
+            transcript_excerpt="",
+            task_id="t-2",
+        )
+
+    system_blocks = fake_stream.call_args.kwargs["system"]
+    assert "No significant retention drop" in system_blocks[2]["text"]
+    assert "No DNA profile" in system_blocks[1]["text"]
+    assert "No transcript available" in system_blocks[2]["text"]
+
+
+# ── extract_transcript_excerpt ────────────────────────────────────────────────
+
+
+def test_extract_transcript_excerpt_filters_by_start() -> None:
+    from knowledge.util import extract_transcript_excerpt
+
+    segs = {
+        "segments": [
+            {"start": 0.0, "text": "first"},
+            {"start": 30.0, "text": "second"},
+            {"start": 90.0, "text": "third"},
+        ]
+    }
+    result = extract_transcript_excerpt(segs, max_s=60.0)
+    assert "first" in result
+    assert "second" in result
+    assert "third" not in result
+
+
+def test_extract_transcript_excerpt_empty() -> None:
+    from knowledge.util import extract_transcript_excerpt
+
+    assert extract_transcript_excerpt(None, 60.0) == ""
+    assert extract_transcript_excerpt({}, 60.0) == ""
+
+
+def test_get_transcript_segments_empty() -> None:
+    from knowledge.util import get_transcript_segments
+
+    assert get_transcript_segments(None) == []
+    assert get_transcript_segments({}) == []
+    assert get_transcript_segments({"segments": [{"text": "hi"}]}) == [{"text": "hi"}]
+
+
 def test_hook_analysis_queued_when_data_exists() -> None:
     creator = _make_creator()
     video = _make_video(creator.id)

@@ -2384,7 +2384,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
     from knowledge.hooks import analyze_hook as build_hook_report
     from knowledge.hooks import compute_retention_drop, parse_hook_report
     from knowledge.util import extract_transcript_excerpt
-    from models import RetentionCurve, Signals, Transcript, Video, VideoMetrics
+    from models import RetentionCurve, Transcript, Video
     from worker.progress import aemit
 
     try:
@@ -2406,14 +2406,12 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
 
             # Fetch the target video's retention curve
             video_curve_rows = (
-                (
-                    await session.execute(
-                        select(RetentionCurve.timestamp_s, RetentionCurve.audience_watch_ratio)
-                        .where(RetentionCurve.video_id == vid)
-                        .order_by(RetentionCurve.timestamp_s)
-                    )
-                ).all()
-            )
+                await session.execute(
+                    select(RetentionCurve.timestamp_s, RetentionCurve.audience_watch_ratio)
+                    .where(RetentionCurve.video_id == vid)
+                    .order_by(RetentionCurve.timestamp_s)
+                )
+            ).all()
             video_curves: list[tuple[float, float]] = [(r[0], r[1]) for r in video_curve_rows]
 
             # Fetch other creator videos' retention curves for the median baseline
@@ -2425,7 +2423,9 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
                             Video.id != vid,
                         )
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
 
             creator_curves: list[list[tuple[float, float]]] = []
@@ -2553,8 +2553,13 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
 
     from sqlalchemy import select
 
-    from knowledge.chapters import find_chapter_boundaries, generate_chapters as build_chapters
-    from knowledge.chapters import parse_chapters
+    from knowledge.chapters import (
+        find_chapter_boundaries,
+        parse_chapters,
+    )
+    from knowledge.chapters import (
+        generate_chapters as build_chapters,
+    )
     from knowledge.util import get_transcript_segments
     from models import Signals, Transcript, Video
     from worker.progress import aemit
@@ -2583,9 +2588,7 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
                 )
                 return
 
-            signals_row = await session.scalar(
-                select(Signals).where(Signals.video_id == vid)
-            )
+            signals_row = await session.scalar(select(Signals).where(Signals.video_id == vid))
 
         await aemit(job_id, "step", label="generating_chapters", stage="chapters")
 
