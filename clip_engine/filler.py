@@ -115,9 +115,7 @@ def detect_cut_segments(
     # Scope to clip window. Keep original list for adjacency lookups
     # (preceding/following gap calculations); but only emit cuts inside window.
     in_window = [
-        w
-        for w in words
-        if w.get("end", 0.0) > clip_start_s and w.get("start", 0.0) < clip_end_s
+        w for w in words if w.get("end", 0.0) > clip_start_s and w.get("start", 0.0) < clip_end_s
     ]
     if not in_window:
         return []
@@ -153,16 +151,8 @@ def detect_cut_segments(
             if phrase_dur > tier2_max_dur_s:
                 continue
             # Flank-gap test: gap >= flank_gap_s on at least one side.
-            prev_gap = (
-                phrase_start - float(in_window[i - 1]["end"])
-                if i > 0
-                else float("inf")
-            )
-            next_gap = (
-                float(in_window[j]["start"]) - phrase_end
-                if j < n
-                else float("inf")
-            )
+            prev_gap = phrase_start - float(in_window[i - 1]["end"]) if i > 0 else float("inf")
+            next_gap = float(in_window[j]["start"]) - phrase_end if j < n else float("inf")
             if max(prev_gap, next_gap) < flank_gap_s:
                 continue
             start = max(clip_start_s, phrase_start)
