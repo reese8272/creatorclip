@@ -1,8 +1,8 @@
-# dna — assessed 2026-06-07
+# dna — assessed 2026-06-08
 
 ## Findings
 
-- [SEV2] builder.py:88-96 — `_optimal_upload_gap_h` computes gaps from
+- [SEV2] builder.py:87-96 — `_optimal_upload_gap_h` computes gaps from
   `day_of_week*24 + hour` but never wraps the week boundary. Top peaks spanning
   Sat-night → Sun-morning produce a 23h "gap" computed as `~144h` (Sun is day 0),
   and the last-to-first peak gap is not included at all, so the mean is
@@ -76,4 +76,4 @@
 
 ## Module verdict
 
-NEEDS-WORK — 4 SEV2 correctness findings (upload-gap wrap bug, dateless-video weight, hardcoded niche-id table drift, prod-silent VOYAGE_API_KEY fallback) plus minor typing cleanup. No BLOCKER: per-creator isolation is enforced on every query, no PII is logged, no virality promise is emitted, and the resource/concurrency posture is sound. The most behaviourally-impactful item is the `_optimal_upload_gap_h` week-wrap bug because it silently biases the cadence recommendation the brief surfaces to creators.
+NEEDS-WORK — 4 SEV2 correctness findings (upload-gap wrap bug, dateless-video weight, hardcoded niche-id table drift, prod-silent VOYAGE_API_KEY fallback) persist unchanged since 2026-06-07. No BLOCKER: per-creator isolation is enforced on every query, no PII is logged, no virality promise is emitted, and the resource/concurrency posture is sound. The most behaviourally-impactful item is the `_optimal_upload_gap_h` week-wrap bug because it silently biases the cadence recommendation the brief surfaces to creators.

@@ -1,4 +1,4 @@
-# clip_engine — assessed 2026-06-07
+# clip_engine — assessed 2026-06-08
 
 ## Findings
 
@@ -74,18 +74,18 @@
   callers tighten when they know the segment count.
 
 - [cleanup] clip_engine/scoring.py:238-247 — the `# type: ignore` comment on
-  the `cache_control` system block masks an SDK-stub lag that has lingered
-  across several issues. Anthropic SDK ≥ 0.39 exposes `cache_control` on
-  `TextBlockParam`; bump the SDK pin and drop the ignore. | fix: bump
-  `anthropic` in `requirements.txt`, drop the `# type: ignore`, rerun mypy.
+  line 242 masks an SDK-stub lag that has lingered. Anthropic SDK 0.40.0 (current
+  pin in requirements.txt) has full `cache_control` support; the ignore is now
+  unnecessary. | fix: drop the `# type: ignore[typeddict-unknown-key]` comment
+  and re-run mypy to confirm clean output.
 
 - [cleanup] clip_engine/candidates.py:23 — `_TERMINAL_PUNCT` mixes single chars
   and 2-char suffixes (`'."'`, `'?"'`). `_is_sentence_end` does
   `any(text.endswith(p) for p in _TERMINAL_PUNCT)` which is O(N) per word and
   redundant: `endswith(('.', '?', '!', '…', '"'))` over a precomputed tuple is
-  simpler and faster, and a closing curly quote (`'.”'`) is not covered.
+  simpler and faster, and a closing curly quote (`'."'`) is not covered.
   | fix: simplify to a tuple of single-char terminators
-  `_TERMINAL_CHARS = (".", "?", "!", "…", "\"", "”", "'", "’")` and check
+  `_TERMINAL_CHARS = (".", "?", "!", "…", "\"", """, "'", "'")` and check
   `text.endswith(_TERMINAL_CHARS)` once.
 
 - [cleanup] clip_engine/filler.py:140-161 — the nested `for i / for length`
@@ -117,7 +117,7 @@
 | 2 Concurrency & scale | 1 finding — module-level `AsyncAnthropic` constructed at import time may bind to the wrong loop under celery prefork (SEV2, needs-runtime-confirmation). `extract_candidates` + `compute_features` correctly offloaded via `asyncio.to_thread` in ranking.py. No N+1. |
 | 3 Security & compliance | ok — no PII or token in logs; no f-string SQL; ranking.py queries scoped by `video_id` (worker is responsible for video→creator scoping). No virality promise in any string or prompt. |
 | 4 Clip-quality | 2 findings (SEV2) — forward-snap end can exceed `duration_s`; `_in_window` undercounts overlap-style events. Engine correctly cites named principles (#2, #6, #11, #12) and clip start is anchored to `setup_start_s` via `_find_setup_start` (backward look) + sentence-boundary snap. Honest fallback in `rerank_with_preference` when weight == 0. |
-| 5 Anthropic SDK | 2 findings (SEV2) — prompt caching present + token usage logged + 1h TTL correct; missing structured-output / tool enforcement on the response parse and `max_tokens=1200` is tight. No web-search tool needed for scoring. |
+| 5 Anthropic SDK | 2 findings (SEV2 + cleanup) — prompt caching present + token usage logged + 1h TTL correct; missing structured-output / tool enforcement on the response parse and `max_tokens=1200` is tight. type: ignore on cache_control no longer needed in SDK 0.40.0. |
 | 6 Cleanliness & typing | 3 cleanups — `render_clip_file` ~120 lines; `_signal_score` magic constants; `_normalise_word` recomputed in inner loop. No TODOs or print statements. |
 | 7 Error handling / API | n/a (no router surface in this module) |
 | 8 Config & paths | ok — all paths absolute (`Path` + tempfile); no new config introduced; `_FONTS_DIR` is the docker-installed location. |
@@ -128,6 +128,8 @@ NEEDS-WORK — clip-engine math, idempotency, and prompt-caching architecture ar
 sound, but the SEV2 cluster (subtitles-path escaping, forward-snap exceeding
 duration, fragile JSON-array parse of the scoring LLM call, possible per-loop
 Anthropic client binding under celery prefork, transcript-overlap word dedup,
-`_in_window` overlap semantics, and the 120s cleaned-render timeout) are all
-real defects that will surface under production load or with non-trivial
-transcripts. No BLOCKERs.
+`_in_window` overlap semantics, and the 120s cleaned-render timeout) remain
+unfixed from the prior run and will surface under production load or with
+non-trivial transcripts. No BLOCKERs. One cleanup item (SDK type: ignore) is now
+resolved by virtue of SDK upgrade to 0.40.0; the remaining 9 items from the
+2026-06-07 run persist.

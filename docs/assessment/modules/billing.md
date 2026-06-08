@@ -1,6 +1,23 @@
-# billing — assessed 2026-06-07
+# billing — assessed 2026-06-08
 
 ## Findings
+
+- [SEV1] routers/billing.py:203 — webhook idempotency fast-path query
+  `select(MinutePack.id).where(MinutePack.stripe_session_id == ...)` runs on
+  an app-role session but does NOT stamp `session.info["creator_id"]` first.
+  Under Issue 79 RLS, the policy `creator_id = current_setting('app.creator_id', true)::uuid`
+  evaluates the GUC as NULL → `creator_id = NULL` matches no rows → `existing`
+  is always `None` → the fast-path SHORT-CIRCUIT NEVER FIRES. Integrity is
+  preserved only because the downstream `grant_minutes(...)` catches the
+  `IntegrityError` from the UNIQUE(stripe_session_id) constraint. So the
+  intended optimization is dead code: every replay pays the full grant-path
+  cost, and any future change to the catch-and-noop behavior turns this into
+  a real double-fulfillment money bug. | fix: parse the `creator_id` from
+  webhook metadata first, then `session.info["creator_id"] = str(creator_id)`
+  BEFORE the idempotency query — the same pattern the worker async helpers
+  adopted in this cycle. Add a regression test that fires the same webhook
+  twice and asserts the fast path returns `already_fulfilled` on the second
+  call (today the test would pass via grant_minutes' catch, masking the bug).
 
 - [SEV2] billing/stripe_client.py:101 — Stripe `Idempotency-Key` is the raw
   client-supplied `intent_id` (a v4 UUID from sessionStorage). Stripe scopes
@@ -56,9 +73,12 @@
 
 ## Module verdict
 
-NEEDS-WORK (mild) — billing is structurally sound: every money/minute
-mutation is atomic and idempotent, per-creator isolation is enforced on
-every query, the sync Stripe SDK is offloaded to a thread with a 10s
-timeout, and logs are clean. The one real finding is the un-scoped Stripe
-`Idempotency-Key` (SEV2, defense-in-depth on a money path); the three
-cleanup items are stylistic / hardening touches.
+NEEDS-WORK — billing is structurally sound on the write path (every
+money/minute mutation is atomic and idempotent under the UNIQUE
+constraints; per-creator isolation is enforced on every query; the sync
+Stripe SDK is offloaded to a thread with a 10s timeout; logs are clean),
+but the webhook's idempotency optimization is dead under RLS (SEV1 — same
+class of `session.info["creator_id"]` omission the worker helpers
+shipped in this cycle). The Stripe `Idempotency-Key` is still raw, not
+tenant-scoped (SEV2). The three cleanup items are stylistic / hardening
+touches.
