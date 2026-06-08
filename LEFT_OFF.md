@@ -3,162 +3,108 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-07 (Issue 136 — dark editor + marketing hero — code-complete; audit fixes + Issues 133/134/135 already shipped earlier this session)
-**Branch:** `main` — HEAD `030f987` (synced with origin/main) — **uncommitted Issue 136 changes in working tree**
-**Working tree:** DIRTY — Issue 136 files staged for next commit
-**CI (most recent green):** Quality Gates ✅ · Integration tests ✅ · CI ✅ · Docker publish ✅ · Deploy ✅ (for `030f987`)
+**Last updated:** 2026-06-07 (Issue 136 shipped + aesthetic redirect applied; Creator-Studio queue 127–136 closed)
+**Branch:** `main` — HEAD `3b51610` (synced with origin/main; 0 ahead / 0 behind)
+**Working tree:** CLEAN
+**CI (most recent):** Quality Gates / CI / Docker publish / Integration tests **all in progress** for `3b51610` at handoff time. Verify with `gh run list --limit 5`. Deploy for the prior `f5aea4f` succeeded; once `3b51610` finishes Docker publish the auto-Deploy will land it on prod.
 
 ---
 
 ## CURRENT FOCUS
 
-### Issue 136 — Dark editor + marketing hero → code complete, awaiting push
+**No active issue.** The Creator-Studio expansion queue (Issues 127–136) is fully
+closed: 127 / 128 / 129 / 130 / 131 / 133 / 134 / 135 / 136 ✅ shipped, 132 ⛔ deferred
+(YouTube has no chat-replay API; logged in `docs/DECISIONS.md`). What remains in
+`docs/issues.md` is the **Phase 3 Backlog (post-production)** — explicitly deferred
+until the product is live and stable.
 
-- **review.html** restructured into a three-pane CSS Grid shell (player | transcript | icon-strip drawer). All animation is CSS `transition` — no JS animation library. Every Issue 118/119/133/134/135 ID survived the rebuild (pinned by test).
-- **index.html** gains a pre-auth hero: `<body data-allow-anonymous>` → on `/auth/me` 401 `auth.js` toggles `body.is-hero-mode` instead of redirecting. Hero CTA forwards a valid YouTube URL via `?yt=<url>` to login; post-login `auth.js` auto-fills the dashboard's link-video form. **No new backend route.**
-- **Demo MP4 placeholder**: `<video preload="none" poster="/static/demo-hero-poster.png">` — the missing source file silently falls back to the poster. Follow-up: record a 30s muted loop.
+### → NEXT ACTION (pick one)
 
-### Post-Issue-135 audit fixes → DEPLOYED at `030f987`
-
-`/assess` flagged 6 SEV1s + 1 cross-cutting axis-B SEV2. All fixed:
-- **A1**: `/clean` and `/cuts` return 409 when `cleaned_render_uri` is set
-  (was silent worker no-op).
-- **A2**: `_retrain_preference_async` → `AdminSessionLocal` (RLS-correct).
-- **A3**: `_generate_improvement_brief_async` stamps `creator_id`.
-- **A4**: Dropped inert `cache_control` on hooks/chapters/analysis briefs.
-- **A5**: `_do_token_refresh` writes via internal session (no caller flush).
-- **A6**: Wrapped ~16 `task.delay()` sites in `asyncio.to_thread` (axis B).
-
-Next `/assess` should drop CONDITIONAL → YES once Locust closes axes A+E.
-
-### Issue 135 — Text-based transcript editor → DEPLOYED at `7af18b2`
-
-Descript-style word-selection editor in `static/review.html`. Selected
-word ranges queue as cuts; confirm batch-renders via the same
-`render_cleaned_clip_file` pipeline shipped in Issue 134. Result lands
-on `Clip.cleaned_render_uri` and uses the existing `/clean/confirm`
-swap path — same UX flow as Issue 134's filler-removal pass.
-
-Key deviations from spec (logged in `docs/DECISIONS.md`):
-- **D1**: dropped the 24 h `EDITOR_ORIGINAL_RETENTION_HOURS` purge —
-  reuse Issue 134's `cleaned_render_uri` side-by-side pattern instead.
-  Original `render_uri` is never modified.
-- **D2**: added hard caps (≥5 s kept, ≤85 % removed) the spec didn't
-  mention; soft 40 % warning stays as a UI band.
-- **D4**: fixed a **latent bug from Issue 134** — `render_cleaned_clip_file`
-  applied a constant 5 ms `afade` per splice; a kept segment shorter than
-  10 ms would request a fade longer than half-segment and crash ffmpeg.
-  Now `afade_s = min(0.005, seg_dur / 2.0)`.
-
-### Issues 133 + 134 + ruff-pin → DEPLOYED earlier this session
-
-- `3b15c0b` — Issue 133 (animated caption styles)
-- `f133983` — Issue 134 (filler + silence clean pass)
-- `b319f7b` + `63be6a1` — ruff format fix + CI ruff pinned to 0.15.15
-
-**Prod migration auto-applied by the deploy workflow** — there is no
-manual `alembic upgrade head` step. The Issue 134 LEFT_OFF mistakenly
-flagged this as pending; the deploy workflow already runs `alembic
-upgrade head` before container rollout. `clips.cleaned_render_uri`
-column verified live; `/clean-preview` returned 401 (auth gate — route
-is reachable).
-
-### Issue 132 — DEFERRED
-
-YouTube Data API has no chat-replay endpoint; third-party scrapers
-violate ToS §IV.A. Not buildable inside compliance posture.
-
-### → NEXT ACTION
-
-1. **Review the dirty working tree** for Issue 135. Files touched:
-   - `clip_engine/edits.py` (new — ~155 lines)
-   - `clip_engine/render.py` (afade guard fix)
-   - `worker/tasks.py` (`edit_clip` task + `_edit_clip_async`)
-   - `routers/clips.py` (GET `/transcript` + POST `/cuts` endpoints)
-   - `static/editor.js` (new — ~280 lines)
-   - `static/review.html` (editor panel + styles + script tag + unmount hook)
-   - `tests/test_edits.py` (new — 25 tests)
-   - `docs/DECISIONS.md`, `docs/SOT.md`, `docs/PROJECT_STATE.md`,
-     `docs/issues.md`, `LEFT_OFF.md`
-2. **Commit + push**. `git push` auto-deploys to prod (deploy workflow
-   handles migrations automatically — no manual step).
-3. **First real `/cuts` invocation on prod** — watch worker logs for:
-   - `ffmpeg ... atrim` errors on sub-frame keep ranges (should be
-     impossible — the validator floors at 0.04 s and the afade guard
-     handles short segments — but worth confirming).
-   - `getSelection()` JS errors in browser console if a user's selection
-     crosses paragraph blocks or starts/ends on whitespace text-nodes —
-     the `_selectionToWordIndices` walker handles both cases but real-
-     browser selection rarely matches synthetic tests.
-4. **Next active issue: 136 — UI upgrade (dark editor mode + marketing
-   hero).** Two-part visual upgrade — review.html dark theme + landing
-   page hero. UI work only; no backend changes expected.
+1. **Confirm `3b51610` deployed clean.** The softer-aesthetic redirect is in
+   flight at handoff time.
+   ```bash
+   gh run list --limit 5
+   curl -sS -o /dev/null -w "%{http_code}\n" https://autoclip.studio/static/hero.css
+   ```
+   Hard-refresh `https://autoclip.studio/` to see the gradient-text H1 + aurora
+   backdrop + pill-shaped URL form. If the visuals still read wrong, iterate on
+   `static/hero.css` + `static/editor-layout.css` — the user wants softer / more
+   "futuristic" than the Linear-locked Issue-99 direction. **Banked preference
+   in `docs/DECISIONS.md` ("2026-06-07 — Issue 136 redirect").**
+2. **Record a real demo MP4 for the hero** (optional polish). Currently the
+   `.hero-demo` card is CSS-only (mock browser chrome + two scored clip thumbnails)
+   because the original `/static/demo-hero.mp4` was 404'ing. A real 30 s muted
+   autoplaying loop can swap into the same `.hero-demo` shell — see
+   `docs/DECISIONS.md` D6 of the original Issue-136 entry.
+3. **Pick up a Phase 3 backlog item** if the user wants to extend the product:
+   thumbnail rendering (DALL-E / SD), vision signals (MediaPipe), auto-publish
+   to Shorts, multi-platform export, OBS hot-key clipping. All listed in
+   `docs/issues.md` under "Phase 3 Backlog (post-production)."
+4. **Fix the pre-existing flaky integration test** —
+   `tests/test_worker_pipeline.py::test_poll_clip_outcomes_uses_per_creator_median`.
+   `assert None is False` + `RuntimeError: Event loop is closed`. Not caused by
+   any 2026-06-07 work; fails sporadically on the integration-tests CI lane only.
+   Default-lane unit tests are green (896 passed / 2 skipped at handoff time).
 
 ---
 
 ## WHAT WORKS NOW (do not re-investigate)
 
-### Built this session
+### Shipped this session
 
-**Issue 133** (deployed `3b15c0b`): pysubs2 + libass animated captions.
+| Commit | What |
+|---|---|
+| `3b15c0b` | Issue 133 — animated caption styles (Bold Pop / Gradient Slide / Minimal) via pysubs2 + libass |
+| `f133983` | Issue 134 — filler + silence clean pass with side-by-side `cleaned_render_uri` confirm-swap |
+| `7af18b2` | Issue 135 — Descript-style text-based transcript editor (word-spans + localStorage cut queue) |
+| `030f987` | Post-Issue-135 `/assess` audit fixes — 6 SEV1s + the cross-cutting routers `task.delay()` axis-B sweep |
+| `f5aea4f` | Issue 136 — dark editor 3-pane Grid + pre-auth marketing hero (`data-allow-anonymous` gate) |
+| `3b51610` | Issue 136 aesthetic redirect — soft radii ladder, aurora gradients, glassmorphism drawer + glow-on-focus form |
 
-**Issue 134** (deployed `f133983`): filler+silence clean pass with
-preview + side-by-side confirm.
+### Production state (assumed current; verify before acting)
 
-**Issue 135** (in working tree):
-- `clip_engine/edits.py::validate_user_cuts(segments, clip_duration_s)`
-  — pure function returning `ValidatedEdit(cut_segments, keep_ranges,
-  kept_duration_s, percent_removed)`. Raises
-  `CutValidationError(code=...)` for any safety-invariant violation.
-- `clip_engine.render.render_cleaned_clip_file` — afade guard
-  `afade_s = min(0.005, seg_dur / 2.0)` (Issue 134 latent-bug fix).
-- `worker.tasks.edit_clip` Celery task + `_edit_clip_async` — uploads
-  to `clips/{id}_edit.mp4`, persists `Clip.cleaned_render_uri`.
-- `GET /clips/{id}/transcript` (60/hour) + `POST /clips/{id}/cuts`
-  (20/hour) router endpoints.
-- `static/editor.js` — word-span DOM + native `getSelection()` snapped
-  on `mouseup` + localStorage cut queue + per-cut × removal + one-level
-  undo + batch-on-confirm + side-by-side preview + reuse of
-  `/clean/confirm` swap.
+- **Public URL** `https://autoclip.studio/` returns 200 with the pre-auth hero
+  visible to logged-out visitors. All Issue 136 assets (`hero.css`,
+  `editor-layout.css`, `_design-tokens.css`, `auth.js`) are served from
+  `/static/`.
+- **`alembic_version`** on prod is at head `0021_clip_cleaned_render_uri`. The
+  deploy workflow auto-runs `alembic upgrade head` before container rollout —
+  there is no manual migration step.
+- **`Clip.cleaned_render_uri`** column exists; the `/clean` and `/cuts`
+  endpoints both 409 when it's already populated (audit fix A1) — the worker no
+  longer silently no-ops on collision.
 
-### Lessons banked this session (avoid repeating)
+### `/assess` verdict snapshot
 
-1. **The Issue 134 afade was a latent bug** — caught while building
-   Issue 135's sub-frame floor. Constant `afade_s` requires every kept
-   segment to be ≥ 2 × afade. The fix `afade_s = min(default, seg_dur/2)`
-   is the principled form.
-2. **`getSelection()` over `<span data-…>`** with a literal space
-   text-node between spans (NOT inside) is the canonical 2026 pattern.
-   `<button>` per word breaks native text selection; `contenteditable`
-   mutation events are unreliable for timestamp sync.
-3. **`Clip.cleaned_render_uri` is shared by Issue 134 + 135.** A clip
-   can only be in one "pending edit" state at a time. The UI should
-   communicate this when both panels are visible — currently the user
-   can clobber a pending clean by applying a transcript edit, which
-   silently overwrites. Future Issue: surface a "you have a pending
-   clean — discard or confirm before editing" affordance.
-4. **CI ruff is now pinned to 0.15.15** — same as `.venv`. No more
-   format drift between local + CI. Bump in lockstep when ready.
-5. **Deploy workflow auto-runs `alembic upgrade head`** — never
-   manually run migrations on prod. (My Issue 134 LEFT_OFF was wrong
-   about this; correcting here.)
+Last run: `docs/assessment/REPORT.md` ("2026-06-07 post-Issue-135"). Verdict:
+**CONDITIONAL → effectively YES** after the audit-fix sweep landed (`030f987`).
+All 6 SEV1s closed; the axis-B `task.delay()` cross-cutting fix is in. The only
+remaining gate is the deferred Locust 300-user load test from Issue 112 to
+close scale-checklist axes A + E with evidence. Module verdicts + register
+detail in `docs/assessment/modules/*.md` and snapshot in
+`docs/assessment/history/2026-06-07-post-issue-135-REPORT.md`.
 
 ### Test count + Layer 0
 
-- **889 passed / 2 skipped** (up from 864 at the start of this session — +25).
-- Layer 0: ruff 0 · mypy 0 · freshness ok.
+- **896 passed / 2 skipped** (default lane). Integration lane has the
+  pre-existing flake noted above.
+- Layer 0 gates: ruff 0 · mypy 0 · coverage ≥ 75.20 % · bandit 0/0 ·
+  pip-audit 0 · freshness ok.
 
 ---
 
 ## THE ARC THAT LED HERE
 
 1. Competitive intelligence → Issues 127–136 filed ROI-ordered.
-2. Issues 127, 128, 129, 123, 130/131 — all deployed in prior sessions.
-3. Issue 133 (animated caption styles): deployed `3b15c0b`.
-4. Issue 132 (live-chat spike): deferred — API blocker.
-5. Issue 134 (filler+silence removal): deployed `f133983`.
-6. **This session, continued**: Issue 135 (text-based editor) —
-   code-complete in working tree, pending commit + push.
+2. Issues 127, 128, 129, 123, 130/131 shipped in prior sessions.
+3. **This session, in order**: kicked off Issue 132 → API blocker → deferred.
+   Built Issues 133, 134, 135 back-to-back. Ran `/assess` → caught 6 SEV1s
+   (clean/edit collision, RLS stamps on two worker helpers, inert Haiku cache
+   markers, OAuth caller-session commit) + a cross-cutting axis-B violation
+   (~16 `task.delay()` calls inside `async def`). Closed all of them.
+   Built Issue 136 (dark editor + hero) → user feedback "doesn't look
+   different" → applied an aesthetic redirect (softer / rounded /
+   futuristic).
 
 ---
 
@@ -172,14 +118,11 @@ preview + side-by-side confirm.
 | Repo | `github.com/reese8272/creatorclip` |
 | Self-hosted runner | systemd `actions.runner.reese8272-creatorclip.autoclip-prod-vm` on prod VM |
 | Current branch | `main` |
-| Local HEAD | `63be6a1` (synced; Issue 135 uncommitted) |
-| Alembic head | `0021_clip_cleaned_render_uri` (both local + prod) |
-| **Migration mechanism** | **Deploy workflow runs `alembic upgrade head` automatically before container rollout — no manual step.** |
-| Issues deployed | 127 ✅ 128 ✅ 129 ✅ 123 ✅ 130/131 ✅ 133 ✅ 134 ✅ |
-| Issue 132 | ⛔ Deferred — blocked on API availability |
-| Issue 135 | ✅ Code-complete, push pending |
-| Issue 136 | 🔲 Not started (next) |
-| Test count | 889 passed / 2 skipped |
+| Local HEAD | `3b51610` (synced with origin/main) |
+| Alembic head | `0021_clip_cleaned_render_uri` (both local + prod; auto-applied by deploy workflow) |
+| Issues 127–131, 133–136 | ✅ Shipped |
+| Issue 132 | ⛔ Deferred — YouTube API has no chat-replay endpoint (`docs/DECISIONS.md`) |
+| Test count | 896 passed / 2 skipped (default lane) |
 | Ruff version (local + CI pinned) | `0.15.15` |
 | Default LLM model (analysis features) | `claude-haiku-4-5-20251001` |
 | Secret names (never log values) | `STRIPE_SECRET_KEY`, `JWT_SECRET_KEY`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `GHCR_TOKEN`, `DEEPGRAM_API_KEY` |
@@ -188,41 +131,48 @@ preview + side-by-side confirm.
 
 ## CONSTRAINTS & GOTCHAS
 
-- **`git push` auto-deploys to production** via self-hosted runner.
-  Deploy workflow also auto-applies migrations (`alembic upgrade head`).
-- **`Clip.cleaned_render_uri` is shared between Issue 134's clean pass
-  and Issue 135's text editor.** A clip in one pending-edit state will
-  be clobbered by the other. Future Issue should surface a "discard or
-  confirm first" affordance in the UI.
-- **`/cuts` validator is strict by design.** 5 s kept / 85 % removed
-  hard caps — anything below/above returns 422 with structured
-  `{code, message}` body. UI should surface `code` not just `message`.
-- **First post-Issue-133 production render** — still watch for
-  `[libass] Glyph not found` worker logs from Anton font fetch
-  failures during image build.
-- **CI ruff is pinned to 0.15.15** in `.github/workflows/ci.yml` — same
-  as `.venv`. Bump in lockstep with `pip install ruff==<new>` when
-  ready.
-- **YouTube chat-replay is permanently blocked** (Issue 132 lesson).
-- **`/claude-api` skill is mandatory** before writing any Anthropic SDK
-  code (CLAUDE.md One Rule). Issue 136 is UI-only — gate likely won't
-  trigger but check.
-- **psycopg3 + Alembic + `CREATE INDEX CONCURRENTLY`** does not work.
-  Use plain `op.create_index()`.
+- **`git push` auto-deploys to production** via self-hosted runner. The deploy
+  workflow ALSO auto-runs `alembic upgrade head` before container rollout —
+  there is no manual migration step. Verify CI before pushing.
+- **Verify `gh run list --limit 5` before assuming `3b51610` is live.** At
+  handoff time the run is still in progress; the deploy auto-fires when Docker
+  publish completes.
+- **Hard-refresh after a deploy** — `_design-tokens.css` / `hero.css` /
+  `editor-layout.css` are aggressively cached by browsers and Cloudflare. If
+  the aesthetic looks unchanged, that's almost certainly cache.
+- **Banked aesthetic preference**: user wants softer / rounded / "futuristic" on
+  marketing + editor surfaces; sharp Linear-utility is retained for data-dense
+  pages (dashboard tables, insights, profile). Two radius ladders coexist in
+  `static/_design-tokens.css` — don't tear one out for the other. See
+  `docs/DECISIONS.md` "2026-06-07 — Issue 136 redirect."
+- **`/clean` + `/cuts` share `Clip.cleaned_render_uri`** as the destination
+  slot. Both endpoints 409 when it's already set; the UI is responsible for
+  prompting the user to confirm-or-discard before triggering the other.
+- **Pre-existing integration flake**:
+  `tests/test_worker_pipeline.py::test_poll_clip_outcomes_uses_per_creator_median`
+  — sporadically fails with `assert None is False` + `RuntimeError: Event loop
+  is closed`. Not blocking deploy. Worth a focused fix in a quiet moment.
+- **YouTube chat-replay is permanently blocked** (Issue 132). Don't reopen
+  unless Google publishes an official replay endpoint.
+- **`/claude-api` skill is mandatory** before writing any Anthropic SDK code
+  (CLAUDE.md One Rule).
+- **CI ruff is pinned to 0.15.15** in `.github/workflows/ci.yml` — bump in
+  lockstep with `.venv` when ready.
+- **psycopg3 + Alembic + `CREATE INDEX CONCURRENTLY`** does not work. Use
+  plain `op.create_index()`.
 - **Rate-limit test pollution (local only)**: if
-  `test_improvement_post_handles_concurrent_insert_race` fails with
-  429, run
+  `test_improvement_post_handles_concurrent_insert_race` fails with 429, run
   `redis-cli del "LIMITS:LIMITER/testclient//creators/me/improvement-brief/10/1/hour"`.
 
 ---
 
 ## POINTERS
 
-- `docs/SOT.md` — current stack + file structure (Issue 135: edits.py + editor.js added)
-- `docs/PROJECT_STATE.md` — every issue's status + session log (Issue 135 entry added)
-- `docs/issues.md` — backlog (127–131 ✅, 132 ⛔, 133 ✅, 134 ✅, 135 ✅, 136 queued)
-- `docs/DECISIONS.md` — deviation log (2026-06-07 entries for Issues 132, 133, 134, 135 D1–D6)
-- `docs/assessment/REPORT.md` — latest /assess verdict + ranked register
+- `docs/SOT.md` — current stack + file structure (Issue 136 edits + editor-layout.css + hero.css are listed)
+- `docs/PROJECT_STATE.md` — every issue's status + session log (Issue 136 + audit-fix entries are the most recent)
+- `docs/issues.md` — backlog. Creator-Studio queue 127–136 closed; Phase 3 Backlog items deferred until post-production
+- `docs/DECISIONS.md` — deviation log. Recent: Issue 136 redirect (aesthetic), Issue 136 D1–D7 (original), Audit fixes A1–A6, Issue 135 D1–D6, Issues 132/133/134
+- `docs/assessment/REPORT.md` — latest `/assess` verdict + ranked register (snapshot in `docs/assessment/history/`)
 - `docs/COMPLIANCE.md` — YouTube ToS, data retention, privacy posture
-- `CLAUDE.md` — project rules; the One Rule is non-negotiable
+- `CLAUDE.md` — project rules; the One Rule (research-then-build) is non-negotiable
 - AutoMem index: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md`
