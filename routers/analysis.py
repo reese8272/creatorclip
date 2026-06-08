@@ -144,14 +144,22 @@ async def start_video_analysis(
 # ── Hook analyzer (Issue 130) ──────────────────────────────────────────────────
 
 
-class HookAnalysisQueuedOut(BaseModel):
-    task_id: str
+class HookAnalysisOut(BaseModel):
+    """Union response for the hook-analysis endpoint.
+
+    Returned 202 when queued (task_id + stream_url populated).
+    Returned 200 when no retention data is available (status + message populated).
+    """
+
+    task_id: str | None = None
     stream_url: str | None = None
+    status: str | None = None
+    message: str | None = None
 
 
 @router.post(
     "/me/videos/{video_id}/hook-analysis",
-    response_model=None,  # returns 200 or 202 depending on data availability
+    response_model=HookAnalysisOut,
 )
 @limiter.limit("10/hour", key_func=creator_key)
 async def start_hook_analysis(

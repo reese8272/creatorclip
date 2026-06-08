@@ -54,16 +54,17 @@ def test_find_chapter_boundaries_always_starts_at_zero() -> None:
 
 
 def test_find_chapter_boundaries_silence_gaps() -> None:
+    """Silences spaced >= MAX_CHAPTER_PERIOD_S apart all become boundaries."""
     timeline = {
         "silences": [
-            {"start_s": 2.0, "end_s": 5.0},  # gap = 3s ≥ threshold → boundary
             {"start_s": 200.0, "end_s": 203.0},
             {"start_s": 400.0, "end_s": 402.5},
         ]
     }
     bounds = find_chapter_boundaries(timeline, 600.0)
     assert 0.0 in bounds
-    assert any(abs(b - 2.0) < 1.0 for b in bounds)  # 2s silence becomes a chapter start
+    assert any(abs(b - 200.0) < 1.0 for b in bounds)
+    assert any(abs(b - 400.0) < 1.0 for b in bounds)
 
 
 def test_find_chapter_boundaries_short_silences_ignored() -> None:
@@ -312,6 +313,28 @@ def test_generate_chapters_builds_request() -> None:
     assert "4:00" in user_msg  # 240s formatted
 
 
+def test_find_chapter_boundaries_short_video() -> None:
+    """Very short videos can't fit MIN_CHAPTERS — should not crash."""
+    bounds = find_chapter_boundaries(None, 30.0)  # 30s video
+    assert 0.0 in bounds
+    # No MIN_CHAPTERS fill when duration < MIN_CHAPTERS * 30 = 120s
+
+
+def test_find_chapter_boundaries_silence_at_zero_skipped() -> None:
+    """A silence at start_s=0 shouldn't be added (already covered by mandatory 0.0)."""
+    timeline = {"silences": [{"start_s": 0.0, "end_s": 5.0}]}
+    bounds = find_chapter_boundaries(timeline, 600.0)
+    # bounds[0] is always 0.0; we should not have duplicate
+    assert bounds.count(0.0) == 1
+
+
+def test_find_chapter_boundaries_silence_at_end_skipped() -> None:
+    """Silence at video end shouldn't be a chapter boundary."""
+    timeline = {"silences": [{"start_s": 599.0, "end_s": 601.0}]}
+    bounds = find_chapter_boundaries(timeline, 600.0)
+    assert all(b < 599.5 for b in bounds)
+
+
 def test_generate_chapters_empty_segment_placeholder() -> None:
     """Segments with no transcript text get a placeholder."""
     from knowledge.chapters import generate_chapters
@@ -337,6 +360,52 @@ def test_generate_chapters_empty_segment_placeholder() -> None:
 
     user_msg = fake_stream.call_args.kwargs["messages"][0]["content"]
     assert "no transcript" in user_msg.lower()
+
+
+# ── Worker task wrappers ──────────────────────────────────────────────────────
+
+
+def test_generate_chapters_task_calls_async_path() -> None:
+    """The Celery task wrapper runs the async helper via run_async."""
+    from worker import tasks as worker_tasks
+
+    called = {}
+
+    async def _fake_async(job_id, creator_id, video_id):
+        called["job_id"] = job_id
+        called["creator_id"] = creator_id
+        called["video_id"] = video_id
+
+    with (
+        patch.object(worker_tasks, "_generate_chapters_async", _fake_async),
+        patch.object(worker_tasks, "run_async", lambda coro: __import__("asyncio").run(coro)),
+    ):
+        fake_self = MagicMock()
+        fake_self.request.id = "task-c1"
+        worker_tasks.generate_chapters.run(fake_self, "creator-2", "video-2")
+
+    assert called == {"job_id": "task-c1", "creator_id": "creator-2", "video_id": "video-2"}
+
+
+def test_generate_chapters_task_retries_on_exception() -> None:
+    """When the async helper raises, the Celery task calls self.retry."""
+    from worker import tasks as worker_tasks
+
+    async def _failing(job_id, creator_id, video_id):
+        raise RuntimeError("boom")
+
+    fake_self = MagicMock()
+    fake_self.request.id = "task-c2"
+    fake_self.retry.side_effect = RuntimeError("retried")
+
+    with (
+        patch.object(worker_tasks, "_generate_chapters_async", _failing),
+        patch.object(worker_tasks, "run_async", lambda coro: __import__("asyncio").run(coro)),
+        pytest.raises(RuntimeError, match="retried"),
+    ):
+        worker_tasks.generate_chapters.run(fake_self, "c", "v")
+
+    fake_self.retry.assert_called_once()
 
 
 def test_chapters_per_creator_isolation() -> None:
