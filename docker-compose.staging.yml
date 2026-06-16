@@ -37,7 +37,12 @@ services:
       # DISCARD ALL resets prepared statements, temp tables, etc. on connection
       # return — required for transaction-mode safety.
       SERVER_RESET_QUERY: "DISCARD ALL"
-      AUTH_TYPE: md5
+      # scram-sha-256 matches Postgres 16's default password_encryption. The
+      # earlier AUTH_TYPE=md5 caused "server login failed: wrong password type"
+      # (pgbouncer expecting md5 hashes against scram-stored passwords), which
+      # left staging permanently degraded. (Issue 142 — found while standing up
+      # the LLM harness.)
+      AUTH_TYPE: scram-sha-256
     depends_on:
       postgres_staging:
         condition: service_healthy
@@ -49,7 +54,12 @@ services:
 
   # ── App (exposed on 8001 so prod on 8000 is untouched) ───────────────────
   app:
-    image: ghcr.io/reese8272/creatorclip:latest
+    # Build from the local checkout under a staging-only tag. Prod and the old
+    # staging both run ghcr.io/.../creatorclip:latest, so we must NEVER reuse
+    # that tag here or a branch build would leak into a prod restart. (Issue 142)
+    image: creatorclip:staging
+    build:
+      context: .
     restart: unless-stopped
     ports:
       - "8001:8000"
@@ -79,7 +89,7 @@ services:
 
   # ── Celery worker (reduced concurrency — staging, not prod scale) ─────────
   worker:
-    image: ghcr.io/reese8272/creatorclip:latest
+    image: creatorclip:staging
     restart: unless-stopped
     env_file: .env
     environment:
