@@ -1,90 +1,127 @@
-# youtube — assessed 2026-06-08
+# youtube — assessed 2026-06-09
 
 ## Findings
 
-- [SEV1-CLOSED] youtube/oauth.py:220-276 — `_do_token_refresh` was calling
-  `session.commit()` on a caller-owned `AsyncSession`, flushing unrelated pending
-  writes. FIXED in commit 030f987: now opens an internal `AdminSessionLocal()`
-  scoped to token writes only, and caller's session is refreshed via
-  `session.refresh(row)` so subsequent reads see the new token. ✓
+- [SEV2] youtube/data_api.py:84 + youtube/analytics.py:42 — `await consume(cost)`
+  runs ONCE at the top of `_get_json` / `_fetch_report`, but the retry loop issues
+  up to `_MAX_RETRIES=4` real HTTP requests against Google (429/5xx/RequestError
+  arms all `continue` without re-consuming). Google bills the project for every
+  accepted request; our Redis counter increments once. Under sustained 429/5xx
+  churn the real quota drains while the local counter shows budget — the daily
+  Beat refresh then 403s creators we believed had quota (ToS §4 quota-management
+  obligation). Carried over from 2026-06-08, unfixed. | fix: move
+  `await consume(cost)` inside the `for attempt` loop immediately before
+  `_http.client().get(...)`; unit test: two 429s + one 200 ⇒ counter += 3.
 
-- [SEV2] youtube/quota.py:64 + youtube/data_api.py:84 + youtube/analytics.py:42 —
-  `consume(cost)` runs ONCE at the top of `_get_json` / `_fetch_report` but the
-  retry loop issues up to 4 real HTTP requests against Google. Google bills our
-  project for every accepted request, but our Redis counter only ever decrements
-  once. Under sustained 429/5xx churn the worker exhausts the real Google quota
-  while our local counter still shows budget remaining — the daily Beat refresh
-  will start 403'ing creators we believed we had quota for. | fix: call
-  `await consume(cost)` inside the retry loop just before each `_http.client().get`,
-  so every actual HTTP call costs one quota unit. Add a unit test that issues two
-  429s + a 200 and asserts the counter incremented by 3.
+- [SEV2] youtube/oauth.py:312-332 — fail-open is broken by its own `finally`.
+  When Redis is unreachable, `redis_client.set(...)` raises, the except arm sets
+  `acquired = True` ("proceed without lock"), `_do_token_refresh` succeeds — and
+  then the `finally` at line 332 calls `redis_client.eval(_LUA_RELEASE_LOCK, ...)`
+  against the same dead Redis. The RedisError raised in `finally` REPLACES the
+  successful return, so the request 500s anyway and the documented circuit-breaker
+  intent (lines 314-325) never works. (The DB commit does land, so the *next*
+  request takes the fast path — blast radius is one 500 per creator per refresh
+  window during a Redis outage.) | fix: track `lock_held: bool` set only when the
+  Redis SET actually succeeded; release only if `lock_held`, and wrap the release
+  in `try/except aioredis.RedisError: logger.warning(...)`. Regression test: mock
+  redis `set` and `eval` to raise ConnectionError, assert the refreshed token is
+  returned.
 
-- [SEV2] youtube/analytics.py:252-286 — `sync_video_analytics(video, creator, ...)`
-  trusts the caller that `video.creator_id == creator.id`. It writes
-  `VideoMetrics(video_id=video.id)` and `RetentionCurve(video_id=video.id)`
-  without verifying ownership, so a future caller bug that crosses creators
-  would silently attach creator-A's analytics to creator-B's video row.
-  The 2026-05-28 cross-creator leak in `routers/improvement.py` (see
-  COMPLIANCE.md §Findings) is the exact failure mode this module should
-  refuse to enable. | fix: add an early `if video.creator_id != creator.id:
-  raise ValueError("creator/video mismatch")` guard; add a regression test
-  asserting the function raises when given a video owned by a different creator.
+- [SEV2] youtube/analytics.py:252-286 — `sync_video_analytics(session, video,
+  creator, access_token)` trusts the caller that `video.creator_id == creator.id`.
+  It writes `VideoMetrics(video_id=video.id)` (line 276) and `RetentionCurve`
+  rows (line 285) with no ownership check, so a future caller bug that crosses
+  creators silently attaches creator-A analytics to creator-B's video — the same
+  failure mode as the 2026-05-28 SEV-0 in `routers/improvement.py`
+  (COMPLIANCE.md §Findings). Carried over, unfixed. | fix: early guard
+  `if video.creator_id != creator.id: raise ValueError("creator/video mismatch")`
+  + regression test asserting the raise.
 
-- [SEV2] youtube/data_api.py:195-214 — `get_videos_metadata` silently truncates
-  `video_ids[:50]` (line 202). Today's two callers happen to chunk to 50 already
-  (`analytics.py:223` slices in 50s; `routers/videos.py` passes one id at a time),
-  so the bug is latent — but the function's signature accepts an unbounded
-  `list[str]` and gives no error on overflow. A future caller will pass 100 ids
-  and lose half the catalog with no log line. | fix: either `raise ValueError
-  ("get_videos_metadata accepts ≤50 ids per call; chunk first")` on
-  `len(video_ids) > 50`, OR move the chunking loop inside this function so the
-  caller contract is "pass any number, get them all". Choose one; the silent
-  truncation is the worst of both worlds.
+- [SEV2] youtube/data_api.py:202 — `get_videos_metadata` silently truncates
+  `",".join(video_ids[:50])`. Today's callers chunk to 50 already
+  (analytics.py:222-223 slices in 50s), so it is latent — but the signature
+  accepts an unbounded `list[str]` and drops ids 51+ with no error or log.
+  Carried over, unfixed. | fix: either raise
+  `ValueError("get_videos_metadata accepts ≤50 ids; chunk first")` when
+  `len(video_ids) > 50`, or move the 50-chunk loop inside the function. Silent
+  truncation is the worst of both.
 
-- [SEV2] youtube/oauth.py:139-151 — `fetch_creator_identity` looks parallel via
-  tuple unpacking but the awaits run **sequentially** (lines 141-143: Python
-  evaluates left to right, awaiting each before the next). Both calls hit
-  independent Google endpoints with no ordering dependency. Doubles
-  first-connect latency for no reason — and the structure implies the author
-  thought they were parallel. | fix: `user_info, channels = await asyncio.gather(
-  _call_userinfo(access_token), _call_youtube_channels(access_token))`.
+- [SEV2] youtube/oauth.py:144-156 — `fetch_creator_identity` looks parallel
+  (tuple unpacking) but the two awaits run sequentially (Python evaluates the
+  tuple left to right). `_call_userinfo` and `_call_youtube_channels` hit
+  independent Google endpoints; this doubles first-connect latency for nothing.
+  Carried over, unfixed. | fix: `user_info, channels = await asyncio.gather(
+  _call_userinfo(access_token), _call_youtube_channels(access_token))` —
+  `asyncio` is already imported (line 9).
 
-- [cleanup] youtube/analytics.py:41-101 and youtube/data_api.py:81-142 — the
-  retry/backoff/Retry-After/RequestError loops in `_fetch_report` and `_get_json`
-  are now ~60 lines of near-identical code. Already flagged in the prior
-  assessment; still unrefactored. Risk: any future fix (e.g. honoring
-  Retry-After on 503) has to be made in both places or they diverge. | fix:
-  extract `async def _retry_get(url, headers, params, *, cost, error_log_prefix)`
-  into `youtube/_http.py` next to the client singleton. Both modules call it.
+- [SEV2] youtube/data_api.py:158-192 — `list_channel_videos` paginates the
+  ENTIRE uploads playlist with no cap (while-True until `nextPageToken` runs
+  out) and accumulates every item in `results`. A whale channel (10k-20k
+  videos) burns ~2 quota units per 50 videos in catalog sync alone, and one
+  such onboarding can starve the shared `YOUTUBE_QUOTA_DAILY_UNITS=8000` budget
+  for every other creator that day (rubric 2: bounded work / fan-out). The
+  quota gate makes it fail gracefully, but fairness across tenants is not
+  bounded. (needs-runtime-confirmation on typical catalog sizes) | fix: add
+  `settings.MAX_CATALOG_VIDEOS` (e.g. 1000 → 20 pages, newest-first since the
+  uploads playlist is reverse-chronological) and stop paginating at the cap;
+  document in `.env.example`.
 
-- [cleanup] youtube/oauth.py:327 + youtube/quota.py:70,74-76 — `# type: ignore
-  [misc]  # SDK/stub typing lag (Issue 78c)` is repeated 4× for the redis-py
-  `eval` signature. The asyncio redis stubs have been correct since redis-py 5.2
-  (Aug 2025); these ignores may be stale. | fix: verify redis-py version in
-  requirements.txt is ≥5.2; if so, drop the ignores and let mypy verify. If
-  they're still needed, update the issue ID reference.
+- [cleanup] youtube/analytics.py:41-101 duplicates youtube/data_api.py:81-142 —
+  the retry/backoff/Retry-After/RequestError loops in `_fetch_report` and
+  `_get_json` are ~60 lines of near-identical code (DRY; flagged in the two
+  prior assessments, still unrefactored — and the Issue-88 RequestError fix
+  indeed had to be applied twice, lines 53-66 vs 92-106). | fix: extract
+  `async def _retry_get(url, headers, params, *, cost, log_prefix) -> dict`
+  into youtube/_http.py next to the client singleton; both modules call it.
 
-- [cleanup] youtube/ingest.py:36,63 — `subprocess.run` with `capture_output=True`
-  on potentially-large ffmpeg stderr loads the whole stream into memory. Bounded
-  by the 30s/configured timeout, but a misbehaving ffmpeg can still emit
-  megabytes of progress noise. | fix: pipe stderr to `subprocess.DEVNULL` for
-  `extract_audio_wav` (we only need the return code; we already truncate to 500
-  chars on failure at line 71) — or use `stderr=subprocess.PIPE` with a small
-  capped read. Low priority; only matters under repeated failure.
+- [cleanup] youtube/oauth.py:17,206,263-265,299,349-351,361 — domain-layer
+  module raises `fastapi.HTTPException` (400/401/503) directly. Router callers
+  work, but Celery/worker callers receive HTTP-coupled exceptions they must
+  special-case, and the module already has a typed-error home
+  (youtube/errors.py). | fix: raise `YouTubeAuthError` (and a small
+  `TokenRefreshInProgress`) here; translate to HTTP status in the routers.
+
+- [cleanup] youtube/ingest.py:36,63-65 — `subprocess.run(capture_output=True)`
+  buffers full ffmpeg/ffprobe stderr in memory; a misbehaving ffmpeg can emit
+  megabytes of progress noise before the timeout fires, yet only 500 chars are
+  ever used (line 71). | fix: `stderr=subprocess.PIPE, stdout=subprocess.DEVNULL`
+  for `extract_audio_wav` and truncate on read, or `-loglevel error` on the
+  ffmpeg command line. Low priority.
+
+### Closed / invalidated since 2026-06-08
+
+- [SEV1-CLOSED] oauth.py `_do_token_refresh` double-commit on the caller's
+  session — re-verified fixed: writes go through an internal
+  `AdminSessionLocal()` (oauth.py:242, 256-260, 267-276); caller session is
+  only `refresh`ed (line 279).
+- [cleanup-INVALID] "stale `type: ignore[misc]` for redis `eval`" — re-tested:
+  `requirements.txt` pins `redis[hiredis]==5.2.0` and
+  `.venv/bin/python -m mypy --warn-unused-ignores youtube/quota.py
+  youtube/oauth.py` returns "Success: no issues found" — mypy would flag an
+  unused ignore, so the ignores at oauth.py:332 and quota.py:70-76 are still
+  required. Dropped.
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | PASS (was 1 finding; SEV1 fixed in 030f987). httpx + redis singletons correct; subprocess bounded by timeout. |
-| 2 Concurrency & scale | 2 findings — sequential awaits in `fetch_creator_identity` (SEV2); quota-per-retry undercount (SEV2). No blocking calls hidden in async; httpx client is loop-bound singleton; quota Lua is atomic. |
-| 3 Security & compliance | PASS — every token read flows through `decrypt()` (oauth.py:298,348,374); no token, refresh_token, email, or channel_id appears in any `logger.*` call (only `creator_id` UUID); per-creator `WHERE` on every analytics/audience/token query verified; invalid_grant → row delete matches §III.D.2.3 revocation handling; `fetched_at` stamped on every analytics write so the 30-day staleness purge (COMPLIANCE.md) has the field it needs; `yt_dlp` gated behind `YTDLP_ENABLED=false` default per ToS source-acquisition rule. One SEV2 trust-boundary gap: `sync_video_analytics` doesn't enforce video↔creator ownership it accepts as parameters. |
-| 4 Clip-quality correctness | n/a (infrastructure module, no scoring). |
-| 5 Anthropic SDK usage | n/a (no LLM calls). |
-| 6 Cleanliness & typing | 2 findings — duplicate retry loop (cleanup, repeat from prior assessment); stale `type: ignore` annotations (cleanup). All function signatures typed; no TODO/print/commented blocks; functions stay ≤30 lines except `_get_json`/`_fetch_report` which the DRY fix collapses. |
-| 7 Error handling / API | n/a (no routers in module). Raises typed `YouTubeAuthError` / `QuotaExhaustedError` for callers; never leaks Google error JSON. |
-| 8 Config & paths | PASS — `ffprobe`/`ffmpeg` invoked by name (PATH-resolved, standard for ops tooling); all config via `settings` (`REDIS_URL`, `YOUTUBE_QUOTA_DAILY_UNITS`, `FFMPEG_EXTRACT_TIMEOUT_S`, `YTDLP_ENABLED`, `SHORTS_MAX_DURATION_S`, `GOOGLE_OAUTH_*`); fail-fast happens at pydantic-settings layer. |
+| 1 Resource lifecycle | ok — httpx AsyncClient lazy loop-bound singleton (_http.py:24-29) with shutdown `aclose()`; Redis singleton (_redis.py:20-29); token writes on a context-managed internal session (oauth.py:256,267); subprocesses bounded by timeout (ingest.py:36,63). Prior SEV1 confirmed closed. |
+| 2 Concurrency & scale | 4 findings — quota undercount per retry (SEV2), broken Redis fail-open in `finally` (SEV2), sequential awaits in `fetch_creator_identity` (SEV2), uncapped catalog pagination (SEV2). No blocking calls inside async paths (ingest.py's `subprocess.run` is sync-only, called from Celery); quota Lua check-and-incr is atomic; refresh lock is SET NX EX + Lua compare-and-delete with waiter `populate_existing` re-read. |
+| 3 Security & compliance | 1 finding (SEV2 ownership guard in `sync_video_analytics`). Otherwise PASS — every token read via `decrypt()` (oauth.py:244,303,353); no token/email/channel in any `logger.*` call (grep clean; only creator_id UUIDs); per-creator WHERE on every token/analytics query (oauth.py:200,295,342; analytics.py:227,331-338,341-349); invalid_grant ⇒ token-row delete (oauth.py:251-260) per RFC 6749 §5.2 + ToS revocation; `fetched_at` stamped on all analytics writes for the 30-day purge; yt-dlp gated off by default (ingest.py:82-85) per COMPLIANCE.md §5; ORM-parameterized SQL only; no virality language. |
+| 4 Clip-quality | n/a (API/infrastructure module, no scoring). |
+| 5 Anthropic SDK | n/a (no LLM calls). |
+| 6 Cleanliness & typing | 3 findings — duplicated retry loop (cleanup, 3rd assessment running), HTTPException from domain layer (cleanup), ffmpeg stderr buffering (cleanup). All signatures typed; no TODO/print/commented-out blocks; prior "stale type:ignore" finding invalidated by mypy --warn-unused-ignores. |
+| 7 Error handling / API | n/a (no routers). Typed `YouTubeAuthError` / `QuotaExhaustedError` for callers; Google error JSON never forwarded. |
+| 8 Config & paths | ok — all config via `settings` and present in `.env.example` (REDIS_URL:21, FFMPEG_EXTRACT_TIMEOUT_S:51, YTDLP_ENABLED:64, MIN_VIDEOS_FOR_DNA:70, MIN_SHORTS_FOR_DNA:71, SHORTS_MAX_DURATION_S:72, YOUTUBE_QUOTA_DAILY_UNITS:79); ffmpeg/ffprobe PATH-resolved by name (standard); fail-fast at pydantic-settings layer. |
 
 ## Module verdict
 
-NEEDS-WORK — SEV1 double-commit FIXED in 030f987. Remaining: 4 SEV2 (quota undercount per-retry, missing creator/video ownership check, silent 50-id truncation, sequential awaits) + 3 cleanups (duplicate retry loop, stale type:ignore, ffmpeg stderr buffering). Security & compliance posture is solid: tokens always decrypted, never logged; per-creator WHERE enforced on every query; revocation + retention plumbing correct. The 4 SEV2s should ship before the Beat refresh runs at production scale; 3 cleanups are optional but beneficial for maintainability.
+NEEDS-WORK — 0 blockers, 0 SEV1, 6 SEV2, 3 cleanups. Security/compliance core is
+solid (decrypt-only token reads, no PII in logs, per-creator isolation verified
+line-by-line, ToS retention + revocation plumbing correct). But four SEV2s carried
+over from 2026-06-08 remain untouched (quota undercount per retry, missing
+creator/video ownership guard, silent 50-id truncation, sequential identity
+fetch), and two new SEV2s landed this pass: the Redis fail-open path self-destructs
+in its own `finally`, and catalog pagination is uncapped against the shared daily
+quota. The quota undercount and fail-open fixes should ship before the Beat
+refresh runs at production scale.

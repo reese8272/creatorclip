@@ -1,84 +1,96 @@
-# billing — assessed 2026-06-08
+# billing — assessed 2026-06-09
 
 ## Findings
 
-- [SEV1] routers/billing.py:203 — webhook idempotency fast-path query
-  `select(MinutePack.id).where(MinutePack.stripe_session_id == ...)` runs on
-  an app-role session but does NOT stamp `session.info["creator_id"]` first.
-  Under Issue 79 RLS, the policy `creator_id = current_setting('app.creator_id', true)::uuid`
-  evaluates the GUC as NULL → `creator_id = NULL` matches no rows → `existing`
-  is always `None` → the fast-path SHORT-CIRCUIT NEVER FIRES. Integrity is
-  preserved only because the downstream `grant_minutes(...)` catches the
-  `IntegrityError` from the UNIQUE(stripe_session_id) constraint. So the
-  intended optimization is dead code: every replay pays the full grant-path
-  cost, and any future change to the catch-and-noop behavior turns this into
-  a real double-fulfillment money bug. | fix: parse the `creator_id` from
-  webhook metadata first, then `session.info["creator_id"] = str(creator_id)`
-  BEFORE the idempotency query — the same pattern the worker async helpers
-  adopted in this cycle. Add a regression test that fires the same webhook
-  twice and asserts the fast path returns `already_fulfilled` on the second
-  call (today the test would pass via grant_minutes' catch, masking the bug).
+- [SEV2] billing/stripe_client.py:34 — `stripe.max_network_retries = 3` is
+  silently a NO-OP for every `_STRIPE` call. Verified empirically against the
+  installed SDK (stripe 11.4.0): `StripeClient` builds its own
+  `RequestorOptions(max_network_retries=None)` and never falls back to the
+  module global (`_GlobalRequestorOptions` is only used by the legacy global
+  API surface); `HTTPClient.request_with_retries` resolves `None → 0`. So
+  Checkout-session creation runs with ZERO network retries despite the
+  documented hardening intent — a transient Stripe network blip surfaces
+  straight to the user as a failed checkout. | fix: pass it to the
+  constructor — `stripe.StripeClient(settings.STRIPE_SECRET_KEY,
+  http_client=stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S),
+  max_network_retries=3)` — and delete the inert global assignment. Retries
+  stay safe because the `intent_id` Idempotency-Key already dedupes at Stripe.
 
-- [SEV2] billing/stripe_client.py:101 — Stripe `Idempotency-Key` is the raw
-  client-supplied `intent_id` (a v4 UUID from sessionStorage). Stripe scopes
-  idempotency keys per API key, not per Stripe Customer, so any creator who
-  somehow obtains another creator's `intent_id` (XSS, shared device,
-  copy-pasted browser state, debugging) can collide with their pending
-  Checkout session and either replay it or poison it within Stripe's 24h
-  window. v4 UUIDs make the collision space astronomical, but the threat
-  model isn't random collision — it's adversarial reuse, and per-tenant
-  scoping is the standard hardening. | fix: scope the key by tenant —
+- [SEV2] billing/stripe_client.py:101 — (carried over from 2026-06-08,
+  unfixed) Stripe `Idempotency-Key` is the raw client-supplied `intent_id`.
+  Stripe scopes idempotency keys per API key, not per customer, so an
+  adversarially reused `intent_id` (leaked via XSS / shared device / pasted
+  browser state) can poison or replay another creator's pending Checkout
+  session within Stripe's 24h window. | fix: tenant-scope the key —
   `options={"idempotency_key": f"{creator_id}:{intent_id}"}`. No client
-  change required; the router already passes `creator_id` in. Add a brief
-  note in the module docstring explaining the scoping.
+  change required; `creator_id` is already a parameter.
 
-- [cleanup] billing/ledger.py:64 — fast-path idempotency check on
-  `MinutePack.stripe_session_id` does not filter by `creator_id`. The column
-  is globally UNIQUE so the query is semantically safe (at most one row), but
-  the missing filter is a defense-in-depth gap: a future code path that
-  passes a `stripe_session_id` from a different creator would silently
-  no-op instead of attempting the INSERT and surfacing the UNIQUE conflict.
-  | fix: `.where(MinutePack.stripe_session_id == stripe_session_id,
-  MinutePack.creator_id == creator_id)`.
+- [SEV2] billing/ledger.py:152 — `deduct_for_video` raises FastAPI
+  `HTTPException(402)` but is called from a Celery worker context
+  (worker/tasks.py:521, inside `_ingest_async`). When a creator's balance is
+  drained between the upload pre-check and worker execution (two concurrent
+  uploads both pass `check_balance_for_minutes`), the 402 propagates into
+  `ingest_video`'s generic `except Exception` (worker/tasks.py:134-135),
+  which retries the task 3× at 30s intervals — each retry re-downloads and
+  re-extracts the full video only to hit the same 402 — then terminally
+  fails with the actionable "purchase a pack" copy lost (the user sees a
+  generic failed video). | fix: raise a domain exception
+  `InsufficientBalanceError(detail)` from the ledger; routers map it to
+  `HTTPException(402, detail)` (the pre-flight guards `check_positive_balance`
+  / `check_balance_for_minutes` are router-only and may keep raising
+  HTTPException directly); `ingest_video` treats it as non-retryable
+  (re-raise without `self.retry`, like `SoftTimeLimitExceeded`) so the
+  on_failure/refund path fires immediately and the video's failure reason
+  can carry the balance copy.
 
-- [cleanup] billing/stripe_client.py:34 — `stripe.max_network_retries = 3`
-  mutates third-party SDK global state at import time. Works correctly today
-  but is order-dependent (any earlier `import stripe` elsewhere sees the
-  default) and not idiomatic. | fix: move into a `_configure_stripe_sdk()`
-  helper invoked from app startup (`app.py` lifespan) or set via the
-  `StripeClient` constructor / `with_options` if the SDK exposes a
-  per-client setter.
+- [cleanup] billing/ledger.py:64 — (carried over, unfixed) grant fast-path
+  idempotency check filters on `stripe_session_id` only. Column is globally
+  UNIQUE so at most one row matches, but adding
+  `MinutePack.creator_id == creator_id` is free defense-in-depth: a future
+  caller passing another creator's session id would surface the UNIQUE
+  conflict instead of silently no-oping. Same pattern applies to the deduct
+  fast-path at ledger.py:126 (`video_id` only — lower risk, system-generated
+  key). | fix: add the `creator_id` predicate to both fast-path SELECTs.
 
-- [cleanup] billing/refund.py:50 — `AdminSessionLocal` (BYPASSRLS) is opened
-  but the docstring justification is correct only as long as the on_failure
-  callback never has creator context available. Today that's true. If the
-  Celery task signature ever gains an explicit `creator_id` arg (likely when
-  per-creator quotas land), the refund path should switch to a scoped
-  session so the BYPASSRLS surface shrinks. | fix: leave as-is, but add a
-  `# TODO(scoped-session-when-context-available)` is exactly the kind of
-  thing CLAUDE.md bans, so instead log this as a follow-up in
-  `docs/OFF_COURSE_BUGS.md` and link the future-work issue.
+- [cleanup] billing/stripe_client.py:65 — `uuid.UUID(intent_id, version=4)`
+  does NOT enforce v4: per the stdlib contract, a supplied `version`
+  OVERRIDES the version/variant bits of the parsed value, so any valid UUID
+  string (v1, v3, v5, nil) passes. The shape validation — the load-bearing
+  part for key hygiene — works; the "must be a v4 UUID" claim in the
+  docstring and error message is not actually checked. | fix: parse with
+  `parsed = uuid.UUID(intent_id)` then `if parsed.version != 4: raise
+  ValueError(...)`, or relax the docstring/error to "must be a UUID".
+
+- [cleanup] billing/stripe_client.py:69 — `per_min = pack.price_cents /
+  pack.minutes` duplicates `Pack.per_minute_cents` (billing/packs.py:21)
+  (DRY). | fix: use `pack.per_minute_cents` and drop the local.
+
+Status of 2026-06-08 findings: the SEV1 (webhook fast-path dead under RLS)
+lives in routers/billing.py — outside this slice as of this cycle; owned by
+the routers agent. The stripe_client.py:101 SEV2 and ledger.py:64 cleanup
+remain unfixed and are re-listed above with current line numbers. The
+`stripe.max_network_retries` item was previously rated cleanup
+("order-dependent, not idiomatic"); re-verification against the installed
+SDK shows it is functionally inert for `StripeClient`, so it is promoted to
+SEV2. The refund.py:50 AdminSessionLocal note is dropped — the BYPASSRLS
+justification is documented and correct today; flagging a future-state
+migration is speculative (rubric: flag only present defects).
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — `AdminSessionLocal` used via `async with` in refund.py:50; rollback on the IntegrityError branch (refund.py:74). `_STRIPE` is a module-level singleton with explicit `HTTPXClient(timeout=STRIPE_TIMEOUT_S)`. Callers own the outer transaction commit and that contract is documented. |
-| 2 Concurrency & scale | ok — `create_checkout_session` is the sync Stripe SDK, wrapped in `asyncio.to_thread` at routers/billing.py:109; 10s timeout caps executor-slot occupancy under a Stripe slowdown. `construct_webhook_event` is pure HMAC (fast, fine sync inside `async def`). All money mutations are atomic via UPDATE…WHERE…RETURNING + SAVEPOINT + IntegrityError-catch. Idempotency keys are present at every layer: `MinuteDeduction.video_id` UNIQUE (Issue 34); `MinutePack.stripe_session_id` UNIQUE (models.py:578); partial UNIQUE on refund `pack_id` (migration 0013); Stripe `Idempotency-Key` on Checkout create (Issue 106). |
-| 3 Security & compliance | ok with one SEV2 — per-creator isolation verified on every balance/pack/deduction query (`get_balance` ledger.py:33, `grant_minutes` ledger.py:86, `deduct_for_video` ledger.py:145; refund derives `creator_id` from the existing deduction row). No secrets/PII in any log line — only opaque IDs (`pack_id`, `creator_id`, `video_id`, `stripe_session_id`). Parameterized SQL only (SQLAlchemy ORM). `intent_id` shape-validated as v4 UUID at stripe_client.py:65 before becoming an idempotency key. The one open item is the un-scoped Stripe idempotency key (finding 1). |
-| 4 Clip-quality | n/a (billing, not a clip module). |
-| 5 Anthropic SDK | n/a — no LLM calls. |
-| 6 Cleanliness & typing | ok — every function fully typed (`-> int`, `-> None`, `-> str`, `-> stripe.Event`). No TODOs, no commented-out blocks, no `print()`. All functions under ~30 LOC and single-responsibility. |
-| 7 Error handling | ok — user-facing failures raise `HTTPException(402/404)` with actionable copy (the 402 in `check_balance_for_minutes` surfaces the concrete gap, not a generic "insufficient"). Infra faults raise `RuntimeError`/`ValueError` and surface as a 502 in the router wrapper without leaking Stripe internals (`"Could not create checkout session"`). Webhook returns idempotent JSON statuses (`ignored` / `already_fulfilled` / `ok`) and uses 400 only for bad signature / payload — Stripe's recommended pattern. |
-| 8 Config & paths | ok — `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_TIMEOUT_S` all in `.env.example` with descriptions and wired through pydantic-settings; checkout endpoint fails fast with 503 if `STRIPE_SECRET_KEY` is unset. No paths in this module. |
+| 1 Resource lifecycle | ok — refund.py:50 opens `AdminSessionLocal` via `async with`; explicit `rollback()` on the IntegrityError branch (refund.py:74); `_STRIPE` is a module-level singleton with an explicit `HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S)`; ledger callers own the outer commit and that contract is documented in both docstrings. |
+| 2 Concurrency & scale | 2 findings — money mutations are sound (atomic `UPDATE … WHERE balance >= n … RETURNING` at ledger.py:144-148; SAVEPOINT + flush + IntegrityError-catch on both grant and deduct; UNIQUE keys verified at models.py:603 (stripe_session_id), models.py:627 (video_id), migration 0013 (refund pack_id partial)), but Stripe calls run with 0 network retries (finding 1) and a worker-side 402 triggers 3 wasted full-reprocess retries (finding 3). |
+| 3 Security & compliance | 1 SEV2 + 2 cleanup — per-creator isolation verified: `get_balance` ledger.py:33 and `_trial_expired` ledger.py:178 key on `Creator.id`; grant/deduct UPDATEs at ledger.py:86/145 filter `Creator.id == creator_id`; refund derives `creator_id` from the deduction row. Parameterized ORM SQL only. No PII/secret in any logger call — opaque IDs only. No virality language. Open: un-scoped Stripe idempotency key (finding 2), fast-path creator filters (finding 4), illusory v4 check (finding 5). |
+| 4 Clip-quality | n/a (billing) |
+| 5 Anthropic SDK | n/a (no LLM calls) |
+| 6 Cleanliness & typing | 1 cleanup — every signature typed; no TODO / commented-out code / print(); one DRY miss (finding 6); all functions single-purpose and under ~35 LOC. |
+| 7 Error handling / API | 1 finding — 402/404 copy is actionable and safe (no internals leaked); `RuntimeError` on missing checkout URL gives the router a clean 502 path; but `HTTPException` raised from the ledger in a non-HTTP (Celery) context loses the copy and triggers pointless retries (finding 3). |
+| 8 Config & paths | ok — `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_TIMEOUT_S` all present in `.env.example` (lines 83-90) with descriptions, wired via pydantic-settings; no filesystem paths in this module. |
 
 ## Module verdict
-
-NEEDS-WORK — billing is structurally sound on the write path (every
-money/minute mutation is atomic and idempotent under the UNIQUE
-constraints; per-creator isolation is enforced on every query; the sync
-Stripe SDK is offloaded to a thread with a 10s timeout; logs are clean),
-but the webhook's idempotency optimization is dead under RLS (SEV1 — same
-class of `session.info["creator_id"]` omission the worker helpers
-shipped in this cycle). The Stripe `Idempotency-Key` is still raw, not
-tenant-scoped (SEV2). The three cleanup items are stylistic / hardening
-touches.
+NEEDS-WORK — the money core is correct (atomic, idempotent, tenant-isolated
+mutations under verified UNIQUE constraints), but the Stripe client's retry
+hardening is provably inert, the idempotency key is still not tenant-scoped,
+and an out-of-balance race in the worker burns three full reprocess retries
+before failing with the actionable message lost.
