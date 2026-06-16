@@ -175,9 +175,7 @@ async def _trial_expired(creator_id: uuid.UUID, session: AsyncSession) -> bool:
     in the past. NULL `trial_ends_at` (legacy creators) is treated as "no
     trial" — they were never on one, so the 402 falls back to the generic
     "purchase a pack" copy."""
-    row = await session.scalar(
-        select(Creator.trial_ends_at).where(Creator.id == creator_id)
-    )
+    row = await session.scalar(select(Creator.trial_ends_at).where(Creator.id == creator_id))
     if row is None:
         return False
     if row.tzinfo is None:

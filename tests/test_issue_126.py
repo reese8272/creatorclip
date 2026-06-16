@@ -51,10 +51,9 @@ def test_issue_126_migration_0023_present_and_chains_after_0022():
     assert "trial_ends_at" in src
     # Multi-line add_column form — normalize whitespace before checking.
     normalized = " ".join(src.split())
-    assert (
-        'add_column( "creators"' in normalized
-        or 'add_column("creators"' in normalized
-    ), "migration must touch the creators table"
+    assert 'add_column( "creators"' in normalized or 'add_column("creators"' in normalized, (
+        "migration must touch the creators table"
+    )
 
 
 def test_issue_126_config_carries_trial_duration_and_low_balance_threshold():
@@ -105,6 +104,22 @@ def test_issue_126_expire_trials_beat_task_registered():
     )
     entry = schedule.celery.conf.beat_schedule["expire-trials-daily"]
     assert entry["task"] == "worker.tasks.expire_trials"
+
+
+def test_issue_138_expire_trials_logs_no_email_pii():
+    """SEV1 #4: the trial-expiry watchdog must never log creator email — that
+    violates the no-PII-in-logs invariant (CLAUDE.md). Source-level guard so a
+    future edit can't silently re-introduce the email into the SELECT or the
+    log line (the behavioral path needs Postgres and is integration-only)."""
+    import inspect
+
+    from worker import tasks
+
+    src = inspect.getsource(tasks._expire_trials_async)
+    assert "email=%s" not in src, "trial_expired log line must not include email"
+    assert "Creator.email" not in src, "SELECT must not pull Creator.email"
+    # The non-PII fields stay so the line is still useful.
+    assert "creator=%s" in src and "trial_ends_at=%s" in src
 
 
 # ── Behavioral: GET /billing/balance ────────────────────────────────────────
@@ -241,9 +256,7 @@ def test_issue_126_check_positive_balance_uses_trial_copy_when_expired():
 
     # First scalar() call returns 0 (balance); second returns trial_ends_at in the past.
     mock_session = AsyncMock()
-    mock_session.scalar = AsyncMock(
-        side_effect=[0, datetime.now(UTC) - timedelta(days=1)]
-    )
+    mock_session.scalar = AsyncMock(side_effect=[0, datetime.now(UTC) - timedelta(days=1)])
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(ledger.check_positive_balance(creator_id, mock_session))
@@ -277,9 +290,7 @@ def test_issue_126_check_positive_balance_keeps_generic_copy_for_legacy():
 
 
 def test_issue_126_dashboard_has_trial_banner_with_dismiss_and_pricing_cta():
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "index.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
     assert 'id="trial-banner"' in src, "dashboard must carry a #trial-banner element"
     assert "renderTrialBanner" in src, "dashboard must define a renderTrialBanner() function"
     assert "dismissTrialBanner" in src, (
@@ -292,9 +303,7 @@ def test_issue_126_dashboard_has_trial_banner_with_dismiss_and_pricing_cta():
 
 
 def test_issue_126_dashboard_has_low_balance_warning_above_actions():
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "index.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
     assert 'id="low-balance-warning"' in src
     assert "renderLowBalanceWarning" in src
     # Must point at pricing as the next step.
@@ -302,9 +311,7 @@ def test_issue_126_dashboard_has_low_balance_warning_above_actions():
 
 
 def test_issue_126_analysis_html_carries_pre_action_low_balance_warning():
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "analysis.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "analysis.html").read_text()
     assert 'id="low-balance-warning"' in src, (
         "analysis page must surface a low-balance warning above the Analyze button"
     )
@@ -312,12 +319,9 @@ def test_issue_126_analysis_html_carries_pre_action_low_balance_warning():
 
 
 def test_issue_126_auth_js_caches_balance_and_emits_billing_ready():
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "auth.js"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
     assert "window.__BALANCE__" in src, (
-        "auth.js must cache the full balance payload so every page can read it "
-        "without re-fetching"
+        "auth.js must cache the full balance payload so every page can read it without re-fetching"
     )
     assert "billing:ready" in src, (
         "auth.js must emit billing:ready so listeners (banner, chip, warnings) "
@@ -329,9 +333,7 @@ def test_issue_126_auth_js_caches_balance_and_emits_billing_ready():
 
 
 def test_issue_126_page_shell_css_has_low_chip_and_trial_banner_styles():
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "page-shell.css"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "page-shell.css").read_text()
     assert ".nav-balance.is-low" in src, (
         "page-shell.css must define the amber low-balance chip state"
     )

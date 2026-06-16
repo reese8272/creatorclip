@@ -1,221 +1,163 @@
-# routers — assessed 2026-06-08
-
-Scope: every file under `routers/` (clips, creators, videos, insights, auth, billing,
-analysis, thumbnails, titles, api_keys, improvement, activity, review, tasks,
-upload_intel, _schemas). HEAD `7af18b2`. Focus per orchestrator: UI/UX (discoverability,
-empty-state contracts, onboarding state, progress visibility, user-facing copy, 
-permission-gate clarity) PLUS carry-forward verification of SEV2 async hygiene.
+# routers — assessed 2026-06-16
 
 ## Findings
 
-### Carry-forward: sync Celery in async (SEV2 from 2026-06-07) — RESOLVED
+- [SEV2] routers/activity.py:38-44 — STILL BROKEN (carry-forward from 2026-06-09).
+  `creator = await get_current_creator(request)` calls the FastAPI dependency
+  directly with only `request`, so its `session` param stays the bare
+  `Depends(get_session)` marker object; `session.execute(...)` at auth.py:47 raises
+  `AttributeError`, which the blanket `except Exception: pass` swallows →
+  `creator_id` is ALWAYS `"anonymous"`, even for logged-in users. The beta-telemetry
+  attribution this endpoint exists for silently never works | fix: decode the session
+  cookie directly — `auth.decode_session_token(request.cookies.get(SESSION_COOKIE))`
+  → `uuid.UUID(payload["sub"])` (no DB round-trip needed for a log line) — and narrow
+  the except to `jwt.PyJWTError | KeyError | ValueError`.
 
-The prior assessment flagged ~15 sites where `task.delay(...)` and `start_pipeline(...)` 
-sync calls blocked the event loop from inside `async def`. **This has been fixed.** All 
-occurrences now wrap the producer in `await asyncio.to_thread(...)`:
+- [SEV2] routers/activity.py:46-59 — STILL BROKEN (carry-forward). Unauthenticated
+  client controls `extra` dict keys passed as `**safe_extra` into `log_event(...)`:
+  (a) a key equal to `page` / `creator_id` / `event_type` / `target` → duplicate-kwarg
+  `TypeError` → 500; (b) a key equal to a reserved `LogRecord` attribute
+  (`name`, `message`, `module`, `args`, …) → `KeyError: Attempt to overwrite ...`
+  inside `logging` → 500; (c) arbitrary keys land as top-level structured-log fields =
+  log-injection surface; (d) only `str` values are truncated — a nested dict/list value
+  of arbitrary size bloats the log line | fix: prefix every client key (`f"ui_{k}"`),
+  allowlist scalar value types (`str|int|float|bool`), drop the rest. Add a test posting
+  `extra={"message": "x", "page": "y"}` asserting 204 not 500.
 
-- routers/improvement.py:148 ✓ `await asyncio.to_thread(generate_improvement_brief_task.delay, ...)`
-- routers/thumbnails.py:197 ✓ `await asyncio.to_thread(generate_thumbnail_concepts_task.delay, ...)`
-- routers/clips.py:198, 375, 576 ✓ wrapped
-- routers/analysis.py:120, 217, 290 ✓ wrapped
-- routers/videos.py:279, 324 ✓ wrapped
-- routers/titles.py:78 ✓ wrapped
-- routers/creators.py:255 ✓ wrapped
+- [SEV2] routers/auth.py:232-236 — STILL PRESENT (carry-forward). The decrypted Google
+  refresh token is sent to the revoke endpoint as a URL query parameter
+  (`params={"token": refresh_token}`). Secrets in query strings are recorded by
+  proxies / egress logs, and an httpx exception whose message embeds the request URL
+  would put the token into the `logger.warning` at line 255
+  (needs-runtime-confirmation for the httpx-message vector; the query-string exposure
+  is structural). Google documents revocation as a form-encoded POST body | fix:
+  `client.post(url, data={"token": refresh_token},
+  headers={"Content-Type": "application/x-www-form-urlencoded"})`.
 
-The comments cite "scale-checklist B" as justification. **This eliminates the p99 latency 
-cliff that was the single highest-value fix from the prior run.**
+- [SEV2] routers/videos.py:157-189 / :250-293 — STILL PRESENT (carry-forward). Both
+  `link_video` and `upload_video` are check-then-insert: two concurrent submits of the
+  same `youtube_video_id` (double-click) both pass the SELECT, the loser hits the
+  `UNIQUE(creator_id, youtube_video_id)` constraint at `commit()` → unhandled
+  `IntegrityError` → raw 500 (verified: videos.py imports no `IntegrityError` and no
+  `try/except` wraps either commit). The repo already has the correct pattern at
+  improvement.py:115-129 | fix: wrap `commit()` in `try/except IntegrityError` →
+  `rollback()` → 409 "Video already registered"; add a two-concurrent-POSTs regression
+  test.
 
-### UX: Empty-state contracts — Missing guidance on list endpoints
+- [SEV2] routers/clips.py:100-139 — STILL PRESENT (carry-forward). `POST
+  /videos/{id}/clips/generate` awaits `generate_and_rank_clips` →
+  `score_candidates` → an AsyncAnthropic `messages.create` (clip_engine/scoring.py)
+  inside the request/response cycle. Every other LLM surface in this slice (analysis,
+  titles, thumbnail-concepts, improvement brief) was moved to 202 + Celery + SSE
+  precisely because LLM latency can exceed the LB timeout; this one endpoint still
+  holds the HTTP request open for the full scoring pass
+  (needs-runtime-confirmation on p95 duration) | fix: convert to the established
+  202 + `TaskQueuedOut` + `aset_owner` pattern; ranking.py's idempotent re-entry
+  already makes the worker retry-safe.
 
-[UX-B] list endpoints that return empty arrays do not surface a `message` or `next_action`
-field to guide the user:
+- [cleanup] routers/clips.py:139 — STILL PRESENT (carry-forward). The generate endpoint
+  returns only `{"clips": [...]}`, so `ClipListOut`'s default `state="populated"` is
+  emitted even when the engine produced zero candidates — contradicts the empty-state
+  envelope contract the same model implements at the list endpoint (:167-185) | fix:
+  return `state=build_envelope_state(len(items))` plus a "no candidates met the
+  threshold" message on empty.
 
-- routers/videos.py:66-100 — `GET /videos` returns `[]` when creator has zero videos.
-  Frontend cannot distinguish "no videos yet" from "still loading". | UX-B severity: SEV2 |
-  fix: return a wrapper payload with `videos: []` and `message: str | None` (matching the 
-  `DnaGetOut` pattern from routers/creators.py:276-307), e.g. `{"videos": [], "message": 
-  "Upload or link a YouTube video to get started"}` when empty.
+- [cleanup] routers/tasks.py:117-123 — STILL PRESENT (carry-forward). `task_events`
+  has no return type annotation (only untyped signature in the slice); tasks.py:83 uses
+  deprecated `asyncio.get_event_loop()` inside a coroutine | fix: annotate
+  `-> StreamingResponse`; use `asyncio.get_running_loop()`.
 
-- routers/insights.py:620-640 — `GET /creators/me/insights/saved` returns bare `list[InsightOut]`.
-  When a creator has 0 saved insights, the frontend sees `[]` with no guidance. | UX-B 
-  severity: SEV2 | fix: wrap in a model like `SavedInsightsOut = {"insights": list[InsightOut], 
-  "message": str | None}` and return `{"insights": [], "message": None}` normally, 
-  `{"insights": [...], "message": "You haven't saved any insights yet"}` on first visit.
+- [cleanup] routers/insights.py:456 — STILL PRESENT (carry-forward).
+  `_HAIKU_MODEL = "claude-haiku-4-5-20251001"` hardcoded in the router while
+  config.py owns `ANTHROPIC_MODEL` | fix: add `ANTHROPIC_HAIKU_MODEL` to Settings +
+  `.env.example` and read it here.
 
-- routers/clips.py:130-149 — `GET /videos/{video_id}/clips` returns `{"clips": []}` when 
-  the video has 0 clips (either not ingested yet or no clips passed the threshold). The 
-  endpoint doesn't signal whether the user should "wait for ingestion" or "try lower 
-  thresholds". | UX-B severity: SEV2 | fix: add `state: str` field to `ClipListOut` 
-  (e.g., `"not_ingested"` | `"no_candidates"` | `"ready"`), and include a `message` 
-  field, e.g. "Ingest complete but no clips met the quality threshold. Try lowering 
-  the confidence score."
+- [cleanup] routers/insights.py:118-165 — STILL PRESENT (carry-forward). Internal
+  symbols `_compute_virality_score` + "Virality score" comment; the wire field is
+  correctly `performance_score` and no response string promises virality, but the
+  internal name invites future leakage and dirties the no-virality structural grep |
+  fix: rename to `_compute_performance_score`.
 
-**Comparison**: `DnaGetOut` (routers/creators.py:76-79) is the ideal pattern: 
-`profile: DnaProfileOut | None` + `message: str | None` allows the frontend to show 
-user-facing context on empty state. Extend this pattern to all list/resource endpoints.
+- [cleanup] routers/insights.py:563-571 — inert `cache_control: {type: ephemeral}` on
+  the Haiku-4.5 analyze-performer call. With `max_tokens=256` and a short
+  instructions+DNA prefix the cached prefix is almost certainly below the model's
+  4096-token cache floor, so the marker is inert (1.25× write premium, zero reads).
+  ALREADY LOGGED in docs/OFF_COURSE_BUGS.md (2026-06-16) as out-of-scope cleanup; not
+  a new finding | fix (per the log): confirm prefix size via
+  `usage.cache_creation` on a live call; if < 4096, remove the marker.
 
-### UX: Discoverability — Error responses lack actionable next steps
+- [cleanup] routers/auth.py:50-62, :65-177 — STILL PRESENT (carry-forward).
+  `/auth/login` and `/auth/callback` carry no rate limit (unauthenticated; callback
+  does outbound Google token-exchange round-trips per hit). Pre-launch checklist
+  already tracks per-creator rate limiting | fix: add IP-keyed `@limiter.limit`
+  (e.g. `20/minute`, `key_func=get_remote_address`) to both before launch.
 
-[UX-A] Several 400/404/422 responses have bare detail strings that leave users guessing:
+- [cleanup] DRY — STILL PRESENT (carry-forward). The
+  `task = await asyncio.to_thread(x.delay, ...)` + `aset_owner` try/except
+  `RedisError` → `stream_url=None` block is copied ~12× (analysis.py:119-136,
+  217-224, 290-297; clips.py:234-250, 411-421, 612-622, 744-753; creators.py:220-235,
+  265-276; auth.py:142-155; thumbnails.py:275-288; titles.py:77-90) | fix: extract
+  `async def enqueue_with_stream(task_sig, owner_key, creator_id) -> tuple[str, str | None]`
+  into routers/_schemas.py or a new routers/_tasks_util.py.
 
-- routers/clips.py:101-105 — `"Video is not fully ingested yet"` and `"Signals not 
-  available for this video"` are descriptive but don't tell the user WHAT TO DO. The 
-  frontend cannot render "go back and wait" without hardcoding this English string. | 
-  UX-A severity: SEV2 | fix: include a `next_action` / `action_type` field in the error 
-  body (not just detail string), e.g. `{"detail": "...", "action_type": "wait_ingestion", 
-  "retry_after_s": 30}` so the frontend can render "Ingesting... Retry in 30s" generically.
+### SEV1 #3 (Issue 138) verification — CLOSED ✓
 
-- routers/analysis.py:83 — `"Channel not connected"` lacks a redirect hint. Frontend 
-  could show a link but doesn't know it's `/auth/login` or `/creators/me/connect-youtube` 
-  without hardcoding the route. | UX-A severity: cleanup | fix: add `action_url: str | None` 
-  field, e.g. `{"detail": "Channel not connected", "action_url": "/auth/login"}` (or 
-  construct in a middleware that rewrites all 400/403/401s).
+- routers/thumbnails.py:140-224 — `GET /creators/me/thumbnail-patterns` now has
+  `request: Request` + `@limiter.limit("10/hour", key_func=creator_key)` (line 144),
+  matching the POST below it. ✓
+- Per-creator single-flight via `_compute_patterns_single_flight` (thumbnails.py:77-122):
+  `SET NX EX 130` acquire (line 96), waiters poll the cache `_PATTERNS_WAIT_COUNT=3` ×
+  `0.4s` then fall through (lines 101-107), the billed `analyze_thumbnail_patterns`
+  runs in a worker thread via `asyncio.to_thread` (line 110), and the lock is released
+  in a `finally` (lines 115-119) via a Lua compare-and-delete that only deletes a token
+  it still owns (`_LUA_RELEASE_LOCK`, lines 36-42) — no risk of releasing another
+  request's lock. Release is gated on `if acquired:` so a waiter never deletes the
+  holder's key. Fail-open is correct on every Redis edge: acquire `RedisError` →
+  `acquired=True` → proceeds (rate limit still bounds exposure); release `RedisError`
+  is suppressed (lock then expires via the 130s TTL > the 120s Anthropic timeout, so
+  no permanent lock leak). Cache read/write are independently fail-open
+  (lines 57-74, 111-114). Helper is sound. ✓
 
-- routers/review.py:58 — same "Clip not found" pattern. The user may have deleted it or 
-  lost access; the response should hint at "go back to the gallery" not just 404. | UX-A 
-  severity: cleanup | fix: include `state: str` in the 404 body, e.g. 
-  `{"detail": "Clip not found", "state": "deleted_or_inaccessible"}`.
+### Carry-forward verification (2026-06-09 → today)
 
-### UX: Onboarding state clarity — Good, but state-machine is fragmented
-
-[UX-C] `CreatorMeOut` (routers/creators.py:22-32) surfaces `onboarding_state` (one of 
-`connected`, `awaiting_data`, `dna_pending`, `active`), which is excellent. However, a 
-frontend that needs to know the EXACT NEXT STEP must still call 5 separate endpoints:
-
-- `/creators/me` → read `onboarding_state`
-- `/creators/me/data-gate` → check if videos are ingested
-- `/creators/me/dna` → check if DNA exists
-- `/creators/me/identity` → check if identity is filled
-- `/billing/balance` → check if trial is active or balance is sufficient
-
-The state-machine inference is distributed. | UX-C severity: SEV2 | fix: extend `CreatorMeOut` 
-to include these derived fields (or create a `/creators/me/setup-status` endpoint that 
-aggregates them):
-```python
-class CreatorMeOut(BaseModel):
-    # ... existing fields ...
-    onboarding_state: str
-    # Derived from data-gate, DNA, identity, trial status
-    setup_step: int  # 1=YouTube, 2=videos/data, 3=identity, 4=DNA, 5=ready
-    setup_step_label: str  # "Connect YouTube", "Ingest videos", "Set up identity", 
-                           # "Build DNA", "Ready to use"
-    next_action_type: str | None  # "connect_youtube" | "wait_ingestion" | 
-                                   # "fill_identity" | "build_dna" | None
-```
-
-### UX: Progress visibility — Good for long tasks, but status enums could be more user-friendly
-
-[UX-D] The SSE endpoints (routers/tasks.py:117-151) provide live progress for long jobs 
-(DNA build, render, ingest). This is excellent. However, the `status` field in responses 
-like `RenderQueuedOut` (routers/clips.py:50-51) is always the enum value `"queued"` — 
-the frontend cannot differentiate between "queued at position 10" vs "queued at position 1000". 
-The SSE stream will emit richer events, but the initial 202 response gives no ETA. | UX-D 
-severity: cleanup | fix: add `queue_depth: int | None` or `estimated_seconds: int | None` 
-to `TaskQueuedOut`:
-```python
-class TaskQueuedOut(BaseModel):
-    task_id: str
-    status: str  # "queued"
-    stream_url: str | None = None
-    queue_depth: int | None = None  # How many jobs ahead?
-    estimated_seconds: int | None = None  # ETA?
-```
-
-### UX: Copy and user-facing enums — Mostly good, but one jargon leak
-
-[UX-E] Enum values returned in responses are mostly readable (`pending`, `running`, `done`, 
-`connected`, `awaiting_data`, `dna_pending`, `active`, `draft`, `confirmed`). However:
-
-- routers/insights.py:543, 375 — `insight_type` and `kind` (video kind) enums are returned 
-  as-is. Check models.py for these enum values... | reading models shows `VideoKind.short` 
-  and `VideoKind.long`, `InsightType.performer_analysis`. These are user-facing when 
-  rendered in the UI. `performer_analysis` should be `"Top/Bottom Performer"` or similar. 
-  | UX-E severity: cleanup | fix: wrap in a helper `_user_friendly_enum(e: Enum) -> str` 
-  that maps internal enum names to user-readable labels, e.g. 
-  `InsightType.performer_analysis → "Performer Analysis"`.
-
-### UX: Permission/plan-gate clarity — Excellent patterns already in place
-
-[UX-F] When a creator's trial expires or balance hits zero, the error responses include 
-actionable guidance:
-
-- routers/clips.py:170 calls `check_positive_balance(creator.id, session)`, which raises 402 
-  with detail like `"No minutes remaining. Purchase a pack at /pricing to process videos."` 
-  (per billing/ledger.py). This is ideal — the frontend can show a link to `/pricing` 
-  directly from the error message. ✓
-
-- routers/improvement.py:70-73 — `"Not enough data yet — link some videos first."` is honest 
-  and actionable. ✓
-
-- routers/billing.py:74-109 — `BalanceOut` includes `trial_ends_at`, `trial_active`, 
-  `trial_days_remaining`, `low_balance` so the UI can preemptively render "Trial ends in 3 days". ✓
-
-**No findings here — this is a model for good UX design.**
-
----
+- Async hygiene (`.delay` wrapped in `to_thread`) — still intact at all enqueue sites. ✓
+- Empty-state envelopes (`/videos`, `/insights/saved`, `/clips` list) — intact
+  (videos.py:121-144, insights.py:655-670, clips.py:167-185); gap on the generate path
+  noted above. ✓
+- Onboarding-state aggregation — `SetupStepOut` nested on `/auth/me` (auth.py:195) and
+  `/creators/me` (creators.py:158) via `resolve_setup_step`. ✓
+- Per-creator isolation — re-traced every SELECT/UPDATE in the slice: all queries on
+  creator-scoped tables carry `creator_id == creator.id`, or a `session.get` +
+  `creator_id !=` ownership check before any child-table access (Transcript / Signals /
+  VideoMetrics / RetentionCurve / Clip keyed by an already-verified parent id); SSE
+  streams gated by the Redis owner key (tasks.py:131-138); Stripe webhook stamps
+  `session.info["creator_id"]` before its idempotency query (billing.py:215). No
+  cross-tenant leak found. ✓
+- OAuth token handling — read via `decrypt()` (auth.py:231), never returned, never
+  logged directly (the query-param transport finding above is the residual structural
+  risk). ✓
+- anthropic 0.40.0→0.105.2 bump — the slice's only direct SDK call (insights.py:573-585)
+  uses `system` block + `messages.create` + token logging; signature unaffected by the
+  bump. The inert cache marker is the sole residue (logged, out-of-scope). ✓
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — 0 findings |
-| 2 Concurrency & scale | ok — SEV2 carry-forward (async hygiene) RESOLVED; prior blockers on Anthropic timeout + lazy redis fixed by Wave-3 |
-| 3 Security & compliance | ok — per-creator isolation verified; SEV2 PII-near-log and bare-except from prior assessment remain |
-| 4 Clip-quality | n/a (not a clip-engine module) |
-| 5 Anthropic SDK | ok — caching + token logging in place |
-| 6 Cleanliness & typing | NEEDS-WORK (cleanup) — 12-copy DRY violation + duplicated word-window logic from prior assessment remain; low priority |
-| 7 Error handling / API | ok on HTTP status codes and Pydantic models; bare detail strings flagged in UX section above |
-| 8 Config & paths | ok — absolute paths + temp file cleanup intact |
-| UX (NEW) | NEEDS-WORK — 5 SEV2 findings (empty-state contracts, discoverability, onboarding state aggregation, permission-gate clarity is good) |
+| 1 Resource lifecycle | ok — temp files unlinked in `finally` (videos.py:281, clips.py:722); Anthropic + Redis clients module-level singletons; SSE slot released in `finally` (tasks.py:113-114); sessions via DI |
+| 2 Concurrency & scale | 2 findings — link/upload insert race → 500 (SEV2), LLM in request path on `/clips/generate` (SEV2). SEV1 #3 (unratelimited in-request multimodal LLM) now CLOSED; to_thread + single-flight verified |
+| 3 Security & compliance | 3 findings — activity log injection + 500s (SEV2), refresh token in query string (SEV2), activity attribution broken → all "anonymous" (SEV2); per-creator isolation verified on every query, no virality promise on the wire |
+| 4 Clip-quality | n/a (router layer; engine owned elsewhere) |
+| 5 Anthropic SDK | ok — prompt caching marker + token logging present on the slice's one direct call; marker is inert (logged off-course, cleanup) |
+| 6 Cleanliness & typing | 5 cleanup — 12× aset_owner duplication, untyped `task_events`, deprecated `get_event_loop`, internal virality naming, hardcoded Haiku model id |
+| 7 Error handling / API | ok — Pydantic on every endpoint, correct codes, safe messages; residual: IntegrityError 500 path (counted under SEV2) and activity `**safe_extra` 500 path (counted under SEV2) |
+| 8 Config & paths | 1 cleanup — hardcoded Haiku model id; paths absolute, no missing `.env` entries found |
 
 ## Module verdict
 
-**NEEDS-WORK** — Carry-forward SEV2 (async hygiene) has been **resolved**. The new UX-focused 
-assessment adds 5 SEV2 findings: list endpoints lack empty-state guidance messages, 400/404 
-responses lack actionable next-step hints, onboarding state machine is fragmented across 
-5 endpoints (should aggregate into one), and progress endpoints don't expose queue depth/ETA. 
-These are moderate-blast, high-impact improvements for onboarding UX. No BLOCKER, no 
-cross-tenant leak, no new security defect. The app's core API surface is sound; the gaps are 
-user-experience signals (frontend cannot render smart guidance from bare `[]` or bare error 
-codes).
-
----
-
-## UX findings
-
-### Summary
-
-The routers layer serves the API surface that drives every user-facing interaction (onboarding, 
-errors, progress, empty states). Five UX-specific findings (all SEV2) emerge from the emphasis 
-on discoverability and ease-of-use:
-
-1. **Empty-state contracts** (UX-B): List endpoints return bare `[]` without a `message` field 
-   to guide first-time users. The `DnaGetOut` pattern (profile + message) is the standard; 
-   extend it to `/videos`, `/insights/saved`, `/clips`.
-
-2. **Error discoverability** (UX-A): 400/404/422 responses lack an `action_type` or `action_url` 
-   field so the frontend cannot render context-aware guidance ("go back and wait for ingestion" 
-   vs "visit pricing page"). Most error text is human-readable but not machine-actionable.
-
-3. **Onboarding state aggregation** (UX-C): The setup state machine is split across 5 endpoints 
-   (`/me`, `/data-gate`, `/dna`, `/identity`, `/balance`). Frontend must poll all 5 to infer 
-   the next step. Add `setup_step` + `next_action_type` to `CreatorMeOut` to centralize.
-
-4. **Progress visibility** (UX-D): `TaskQueuedOut` returns `status="queued"` with no queue depth 
-   or ETA. Add `queue_depth` and `estimated_seconds` fields so the UI can show "2 jobs ahead, ~30s wait".
-
-5. **User-facing enums** (UX-E): Internal enum names like `InsightType.performer_analysis` are 
-   returned as-is. Wrap in a user-friendly label helper (e.g. `"Performer Analysis"`).
-
-### Severity justification
-
-All five are **SEV2** (bounded blast, high user-impact):
-- Empty-state + discoverability gaps create a "barren, unclear app" first impression (the user 
-  problem stated at the outset).
-- Onboarding-state fragmentation forces naive clients to poll 5 endpoints sequentially, adding 
-  100-200ms to setup flows.
-- Enum naming is minor but compounds confusion when the UI must hardcode label strings.
-
-Each fix is mechanical (add fields to Pydantic models, wrap in helpers) and low-risk to 
-implement.
-
+NEEDS-WORK — the Issue-138 SEV1 #3 is properly CLOSED (rate limit + a sound
+single-flight lock with no leak path) and no cross-tenant leak exists, but five
+prior SEV2s persist unchanged: broken telemetry attribution (always "anonymous"),
+unauthenticated log-injection 500s on `/api/activity`, the Google refresh token in a
+query string, the link/upload double-submit 500 race, and the last in-request LLM call
+on `/clips/generate`. Fix these before launch.

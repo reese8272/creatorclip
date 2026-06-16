@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/static/page-shell.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
+  <script src="/static/util.js"></script>
   <script src="/static/progressStream.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
@@ -570,7 +571,7 @@
         const data = await resp.json();
         analysisEl.style.display = 'block';
         analysisEl.style.color = '';
-        analysisEl.innerHTML = `${data.content} <button onclick="saveInsight('${data.id}',this)" style="font-size:var(--text-xs);color:var(--color-accent);background:none;border:none;cursor:pointer;margin-left:4px">&#9733; Save</button>`;
+        analysisEl.innerHTML = `${escapeHtml(data.content)} <button onclick="saveInsight('${escapeHtml(data.id)}',this)" style="font-size:var(--text-xs);color:var(--color-accent);background:none;border:none;cursor:pointer;margin-left:4px">&#9733; Save</button>`;
         btn.textContent = 'Analyzed ✓';
       } catch (e) {
         btn.disabled = false; btn.textContent = 'Retry';
@@ -601,8 +602,8 @@
       panel.style.display = 'block';
       list.innerHTML = items.map(ins => `
         <div class="insight-card">
-          <div class="ic-title">${ins.title || 'Insight'}</div>
-          <div class="ic-content">${ins.content}</div>
+          <div class="ic-title">${escapeHtml(ins.title || 'Insight')}</div>
+          <div class="ic-content">${escapeHtml(ins.content)}</div>
           <div class="ic-meta">DNA v${ins.dna_version || '?'} · ${new Date(ins.created_at).toLocaleDateString()}</div>
         </div>
       `).join('');

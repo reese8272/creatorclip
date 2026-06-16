@@ -102,6 +102,15 @@ def test_generate_clips_has_10_per_hour_limit():
     )
 
 
+def test_thumbnail_patterns_has_10_per_hour_limit():
+    # SEV1 #3: the GET ran a billed multimodal LLM call in-request with NO limit.
+    import routers.thumbnails  # noqa: F401
+
+    assert _has_limit("routers.thumbnails.get_thumbnail_patterns", "10", "hour"), (
+        f"Expected 10/hour, got: {_limits_for('routers.thumbnails.get_thumbnail_patterns')}"
+    )
+
+
 def test_render_clip_has_20_per_hour_limit():
     import routers.clips  # noqa: F401
 

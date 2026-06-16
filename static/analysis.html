@@ -8,6 +8,7 @@
   <!-- Issue 137 — shared aurora + soft-card shell -->
   <link rel="stylesheet" href="/static/page-shell.css">
   <script src="/static/auth.js"></script>
+  <script src="/static/util.js"></script>
   <script src="/static/progressStream.js"></script>
   <script src="/static/activeTasks.js" defer></script>
   <script src="/static/activityPanel.js" defer></script>
@@ -704,8 +705,11 @@
       const unavailEl = document.getElementById('analytics-unavailable');
       if (unavailEl) {
         if (!analyticsAvailable) {
+          // Build from the in-scope urlRaw captured at the top of startAnalysis.
+          // This previously read a non-existent input element (the real input id
+          // is 'url-input'), throwing a TypeError that killed this whole branch.
           const ingestUrl = '/?yt=' + encodeURIComponent(
-            'https://www.youtube.com/watch?v=' + (document.getElementById('youtube_url').value.trim())
+            'https://www.youtube.com/watch?v=' + urlRaw
           );
           unavailEl.innerHTML =
             '<strong>Full analytics unavailable</strong> — this video isn\'t in your ingested catalog yet, so the analysis runs in metadata-only mode (title + description + transcript). ' +
@@ -790,13 +794,9 @@
       if (btn) { btn.disabled = false; btn.textContent = 'Analyze →'; }
     }
 
-    function _esc(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
+    // Delegate to the shared escaper (static/util.js) so the apostrophe is
+    // escaped too — the old local copy missed it.
+    const _esc = window.escapeHtml;
 
     // ── Title Optimizer ─────────────────────────────────────────────────────
 

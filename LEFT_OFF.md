@@ -3,139 +3,83 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a
 > source of truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-08 (post-`/assess` + top-of-register fix sweep — uncommitted)
-**Branch:** `main` — HEAD `d398cff` (Issue 137 video-intake + trial-expiration), `0` ahead / `0` behind `origin/main`
-**Working tree:** **DIRTY** — 23 modified + 3 untracked files from this session's assessment refresh + 4 register fixes. Nothing committed yet.
-**CI / Prod (latest push `d398cff`):** Deploy to production ✅ · scheduled production health checks running
+**Last updated:** 2026-06-16 (Issue 138 SEV1 bulk sweep — shipped + PR open; CI partially red)
+**Branch:** `issue-138-sev1-bulk-sweep` — HEAD `6236c79`, **6 ahead / 0 behind** `origin/main`
+**Working tree:** clean (all committed + pushed)
+**PR:** [#19](https://github.com/reese8272/creatorclip/pull/19) → base `main`, OPEN, mergeable
+**CI on the PR:** ⚠️ **partially red** — the `ruff format` Lint failure is **fixed + pushed** (commit `6236c79`, re-run pending). The **`pip-audit` gate is still red** and is the one open blocker (see NEXT ACTION #2).
 
 ---
 
 ## CURRENT FOCUS
 
-**The 2026-06-08 UX-focus production assessment ran end-to-end and I shipped the four highest-leverage fixes from the resulting top-10 register. Everything is local + green; ready to commit + push, then begin the deferred UX issues.**
+**Issue 138 closed all 7 SEV1s from the 2026-06-09 `/assess` (verified 7→0). Code is done, pushed, PR #19 open. The only thing between here and a green, mergeable PR is the `pip-audit` CI gate — failing on newly-disclosed 2026 CVEs in pinned deps, unrelated to this PR (it would fail `main` too).**
 
 ### → NEXT ACTION
 
-1. **Inspect the dirty tree** and confirm everything is intended:
+1. **Confirm the Lint gate went green** after the format push:
    ```bash
-   git status --short
-   git diff --stat
+   gh run list --branch issue-138-sev1-bulk-sweep --limit 4
    ```
-   You should see two clusters — assessment artifacts (`docs/assessment/**`) and the 4 fix patches (`static/`, `routers/billing.py`, `youtube/oauth.py`, `tests/`).
-2. **Run the gates one more time before committing** (they're already green; this is the muscle memory):
+   Expect `Lint (ruff)` ✅. If still red: `.venv/bin/ruff format --check .` locally (pinned ruff 0.15.15, whole-repo).
+2. **Decide how to clear the `pip-audit` gate** (the real blocker). 8 advisories outside the Issue-107 accepted-risk ignore list (`pyproject.toml` `[tool.pip-audit]`). Enumerate live:
    ```bash
-   PATH=".venv/bin:$PATH" python3 .claude/skills/production-assessment/scripts/run_layer0.py
-   PATH=".venv/bin:$PATH" python3 -m pytest -q
+   PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pip_audit
    ```
-   Expect: ruff 0 / mypy 0 / coverage 75.38% / bandit 0 / pip-audit 0 · 940 passed / 2 skipped.
-3. **Commit + push in two logical commits** so the assessment snapshot can be reverted independently of the code fixes if needed:
-   - Commit A: `docs/assessment/**` only (the new REPORT.md + module re-assessments + the 2026-06-08-ux-focus history snapshot).
-   - Commit B: the 4 fixes (`static/index.html`, `static/auth.js`, `static/login.html`, `routers/billing.py`, `youtube/oauth.py`, 7 other static pages with the `/auth/login` → `/static/login.html` redirect rename, plus 3 test files).
-   Verify after push: `gh run list --limit 3` should show CI green within ~5 min.
-4. **Verify the four fixes in the browser** (the user explicitly asked to be shown the new look before extending the pattern):
-   - Logout from the dashboard → should land on the new `/static/login.html` branded page, NOT a Google redirect.
-   - Click "Sign in with Google" → Google account picker should appear (because `prompt=consent select_account` now).
-   - Sign in with a fresh creator account → dashboard should show the new `#empty-dashboard-hero` ("Let's get your first clip") with the 3 numbered next-step cards.
-   - Open a video that's stuck in pending → after ~10 min the polling cap should kick in and the "video appears stuck" banner should appear.
-5. **Open follow-up issues** for the six items the user asked about that need Phase-1 CHECK briefs before code (see DEFERRED FOLLOW-UPS below). Each is a separate issue, not a single sweep.
-6. **Begin the highest-leverage deferred work** when the user gives direction: most likely the empty-state response wrappers on `/videos`, `/clips`, `/insights/saved` (touches Pydantic + every consumer). That's the natural follow-up to the dashboard empty-hero already shipped this session.
+   Flagged-but-unignored (with fix versions): `cryptography 46.0.7→48.0.1` (GHSA-537c-gmf6-5ccf), `pytest 8.3.3→9.0.3` (CVE-2025-71176, dev-only), `python-multipart 0.0.27→0.0.30/.31` (CVE-2026-53538/53539/53540), `starlette 0.49.1→1.1.0/1.3.x` (CVE-2026-48817/48818/54282/54283). **None in the `anthropic` tree** — advisory-DB drift since the 2026-05-31 ignore-list pass, NOT an Issue-138 regression.
+   - **Recommended scoping (confirm with user — it's a scope call, not mechanical):** do NOT bundle the risky bumps into the SEV1 PR. `starlette 0.49→1.x` is a FastAPI-coupled **major** bump; `pytest 8→9` a dev major. Cheapest correct unblock that matches the Issue-107 pattern: safe patch-bump `python-multipart` (→0.0.31) + `cryptography` (→48, re-test Fernet decrypt round-trip), and **add the `pytest`/`starlette` CVE IDs to the `[tool.pip-audit]` ignore list with justification**, deferring the `starlette` 1.x major to its own tracked issue.
+3. **Re-run gates + push** the decision, then **merge PR #19 once all gates are green.** ⚠️ Merging to `main` triggers a production deploy — only merge when intended.
 
 ---
 
-## WHAT WORKS NOW (do not re-investigate)
+## WHAT WORKS NOW (don't re-investigate)
 
-- **Layer 0 gates all green** (ruff 0 · mypy 0 · coverage 75.38% above baseline 75.20% · bandit 0 · pip-audit 0 · freshness ok). Baseline file: `docs/assessment/baselines.json`.
-- **940 unit tests pass · 2 skipped · 127 integration deselected by default** (need Postgres; CI runs them). The new regression test `test_webhook_fast_path_short_circuits_before_grant` is registered in the integration marker group.
-- **`/assess` skill ran end-to-end this session** — Layer 0 + 14 parallel Layer-1 subagents + Layer-2 verdict synthesis. The full register is at `docs/assessment/REPORT.md` and snapshotted at `docs/assessment/history/2026-06-08-ux-focus-REPORT.md`.
-- **All 6 SEV1s from the 2026-06-07 assessment are FIXED** (verified by re-running module subagents this cycle): worker clean/edit shared-idempotency, worker RLS-blind helpers ×2, knowledge cache_control inert markers ×2, youtube `_do_token_refresh` caller-session.
-- **Routers axis-B (`task.delay` inside `async def`) cross-cutting SEV2 is RESOLVED** — all 8 sites wrap in `await asyncio.to_thread(...)`.
-- **The 4 fixes shipped this session are wired and tested:**
-  - `static/index.html:759-815` — `_pollTimer` capped at 120 ticks (~10 min base), exponential backoff 5s → 30s ceiling, pauses while tab hidden, "video appears stuck" banner.
-  - `routers/billing.py:202-211` — `session.info["creator_id"]` stamped BEFORE the idempotency query so RLS matches; new regression test spies on `grant_minutes` and asserts the fast path actually fires (the prior test passed via `IntegrityError` catch — masked the bug).
-  - New `static/login.html` — branded sign-in landing page. All 401 redirects across 8 static pages now land here. `youtube/oauth.py` adds `select_account` to the prompt so Google's account picker appears after logout. Test `test_authorization_url_forces_consent_for_refresh_token` updated to accept both values.
-  - `static/index.html` — `#empty-dashboard-hero` lights up when the authenticated user has 0 videos; 3 numbered step cards + primary "Link a video →" CTA that auto-expands the link form and focuses the input.
-- **CI deploy workflow auto-applies `alembic upgrade head` before container rollout** (verified live 2026-06-07). No manual migration step needed on prod.
-- **Honesty-constraint scanner** (`tests/test_compliance_no_virality.py`) uses exact-substring whitelisting — disclaimers MUST keep the canonical phrases on a single line ("does not promise virality", "Audience-fit over generic virality"). Whitespace runs inside those phrases break the test.
-
----
+- **All 7 SEV1s fixed + re-verified** by a fresh `/assess` on this branch (`docs/assessment/REPORT.md`, 2026-06-16): **0 BLOCKER · 0 SEV1**.
+- **Layer 0 green locally** (venv): ruff 0 · ruff-format clean · mypy 0 · coverage **76.15%** · bandit 0/0.
+- **anthropic 0.40.0→0.105.2 bump is safe** — 967 non-integration tests pass, clip eval harness (`tests/test_clip_engine.py`) green, `test_scoring` still asserts the `ttl:"1h"` request shape, no new advisory in the anthropic dep tree.
+- The 7 fixes (file-level detail in the PR #19 body): XSS escaper `static/util.js`; `analysis.html` dead-id CTA; `_expire_trials` email PII; `chapters.py` max_tokens 512→2000 + schema trim; thumbnail-patterns rate-limit + single-flight; SDK bump + ttl `type:ignore` retired; inert cache markers removed (**Sonnet 4.6 floor = 2048**, corrected in `DECISIONS.md`).
+- **`pip-audit` red ≠ regression** — the 8 CVEs are all outside the anthropic tree and predate this branch.
 
 ## THE ARC THAT LED HERE
 
-1. **2026-06-08 morning** — User ran `/assess` with explicit UI/UX emphasis ("the app feels barren or not easy to know how to use") instead of naming a single module to slice on.
-2. Layer 0 ran clean. Fourteen Layer-1 subagents dispatched in parallel (added a new `static_frontend` module slice given the UX focus); 11 wrote module findings files directly, 4 ran under read-only Explore and returned 3-line summaries that the orchestrator merged into the existing module files (billing required a SEV1 escalation from a new finding).
-3. Layer-2 verdict synthesized: **CONDITIONAL** — all 6 prior SEV1s fixed + axis-B sweep resolved; 1 new BLOCKER (`_pollTimer` runaway) + 1 new SEV1 (billing webhook RLS-blind idempotency, masked by `grant_minutes` IntegrityError catch) + a 12-item UX SEV2 cluster directly mapping to the "barren" complaint.
-4. **User said "can we fix these diffs then?"** plus raised six new UX/product concerns: logout auto-relogs, dashboard/insights "still old style", editor "bland", tutorial walkthrough needed, "show how to connect the API key", and "have it BE the OBS editor" or far easier OBS connect.
-5. Sorted the work: 4 unambiguous defect fixes this session vs. 6 deferred items requiring Phase-1 CHECK briefs (per CLAUDE.md One Rule).
-6. **Shipped the 4 fixes** (BLOCKER, SEV1, logout flow, authenticated empty hero) + regression tests + Layer-0 re-run. All green. Working tree is the assessment artifacts + the fixes.
-
----
+1. 2026-06-09 `/assess` → **CONDITIONAL** with 7 new SEV1s across 5 modules.
+2. User asked to fix all SEV1s in bulk via the issue workflow → planned (Phase-1 research via the `claude-api` skill resolved Sonnet-4.6 cache-floor = 2048) → approved.
+3. Built in 3 risk-ordered phases (A mechanical, B rate-limit, C anthropic SDK), each gated + committed.
+4. Re-ran `/assess` → 7→0; pushed branch; opened PR #19.
+5. Close-out found PR CI red: `ruff format` (fixed this session) + `pip-audit` (open blocker, advisory drift).
 
 ## KEY COORDINATES & FACTS
 
-| Thing | Value |
+| Item | Value |
 |---|---|
 | Repo | `/home/reese/workspace/Youtube-Video-AI-Editor` |
-| Branch | `main` (work directly on main per project convention) |
-| HEAD | `d398cff` — "feat: Implement video intake modes and trial expiration handling" |
-| Trunk distance | `0` ahead / `0` behind `origin/main` |
-| Test command | `PATH=".venv/bin:$PATH" python3 -m pytest -q` |
-| Layer-0 command | `PATH=".venv/bin:$PATH" python3 .claude/skills/production-assessment/scripts/run_layer0.py` |
-| Latest assessment report | `docs/assessment/REPORT.md` |
-| Latest snapshot | `docs/assessment/history/2026-06-08-ux-focus-REPORT.md` |
-| Issue log | `docs/issues.md` |
-| Project state | `docs/PROJECT_STATE.md` |
-| Decision log | `docs/DECISIONS.md` |
-| Off-course bugs log | `docs/OFF_COURSE_BUGS.md` |
-| Deploy workflow | `Deploy to production` (auto-runs `alembic upgrade head` pre-rollout) |
-| Local Python | `python3.12` via `.venv/bin/` (no Docker available locally) |
-| Postgres for integration tests | **not available locally** — CI runs them |
-| OAuth scopes / Google prompt | `youtube/oauth.py::build_authorization_url` — now `prompt=consent select_account` |
-| Secrets/keys | by NAME only — see `docs/SECRETS.md` for the canonical list (`TOKEN_ENCRYPTION_KEY`, `GOOGLE_OAUTH_CLIENT_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `JWT_SECRET`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`) — never write values here |
-
----
-
-## DEFERRED FOLLOW-UPS (open as issues before starting)
-
-Each needs a Phase-1 CHECK brief per CLAUDE.md before any code. Ordered by my read of leverage; user can reorder:
-
-1. **Empty-state response wrappers** — wrap `[]` returns from `/videos`, `/clips`, `/insights/saved` in `{items, state, message}` (the existing `DnaGetOut` pattern). Frontend updates everywhere those endpoints are consumed. Direct fix for the "barren" complaint at the API layer.
-2. **Onboarding state aggregation** — add `setup_step`, `setup_step_label`, `next_action_type` to `CreatorMeOut`. Replaces frontend polling of 5 endpoints to infer the next step.
-3. **4xx `action_type` / `action_url` middleware** — structured error shape so the frontend can render generic guidance instead of hardcoding redirect URLs per status.
-4. **"Old-style UI" diagnostic** — user reported dashboard/insights "still feel old style" despite the Issue 137 + Issue 99 design-token rollouts. NEEDS a per-page audit before any redesign decisions. I have not done this audit yet.
-5. **Editor visual polish (review/editor "bland")** — design call. Research current shorts editor industry standard (Opus Clip, Descript, Submagic) before touching `static/editor.js` + `review.html`.
-6. **"SHOW how to connect the API key" walkthrough** — visual guide for OBS / folder-watcher API-key setup. Screenshots? Animated GIF? Inline copy-paste? Brief covers content + platform coverage.
-7. **OBS direction (product pivot question)** — own the recording surface (custom OBS plugin/dock) vs. far easier API-key pairing UX. Multi-week direction either way. NEEDS written direction from the user before code.
-8. **Tutorial walkthrough (interactive product tour)** — user said "eventually". Library choice (Shepherd.js / Driver.js / custom) + state-machine for step persistence + anchor selectors that survive UI changes.
-9. **Other open register items** — Stripe Idempotency-Key tenant scoping (`billing/stripe_client.py:101`), `_root_infra/crypto.py:13` MultiFernet caching, YouTube quota per-retry accounting (`youtube/quota.py:64`), DNA week-wrap (`dna/builder.py:88`). Each is SEV2; can batch.
-
----
+| Branch / HEAD | `issue-138-sev1-bulk-sweep` / `6236c79` (6 ahead of `origin/main`) |
+| PR | #19 — https://github.com/reese8272/creatorclip/pull/19 |
+| Phase commits | A `e12111f` · B `1fee950` · C1 `41e5eaf` · C2 `bb78a64` · assess `283a7a2` · format `6236c79` |
+| Open CI blocker | Quality-Gates → static gates → `pip_audit fail (8)` |
+| pip-audit ignore list | `pyproject.toml` `[tool.pip-audit] ignore-vulns` (Issue 107, 2026-05-31) |
+| Anthropic SDK pin | `anthropic==0.105.2` (`requirements.txt:35`) |
+| Test runner (local) | `.venv/bin/python -m pytest -m "not integration" -p no:langsmith -q` (needs Redis up) |
+| Layer-0 (local) | `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python .claude/skills/production-assessment/scripts/run_layer0.py` |
+| Deploy trigger | merge to `main` → `Deploy to production` workflow (auto `alembic upgrade head`) |
+| Secrets | by NAME only — canonical list in `docs/SECRETS.md` (`TOKEN_ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_OAUTH_CLIENT_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `JWT_SECRET`, `VOYAGE_API_KEY`) — never write values here |
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Working tree is dirty.** Commit before any context switch — the assessment artifacts and the fix patches are entangled in one tree but represent two logical units.
-- **Postgres isn't running locally** (per existing memory `local_dev_test_env.md`). Integration tests (including the new billing webhook RLS regression) only run in CI. Do not assume an integration assertion is verified just because the unit suite passed.
-- **Honesty-constraint scanner is strict-substring.** Any new user-visible copy that mentions "viral" or "promise" must use the exact whitelist phrases on a single line — multi-line HTML with whitespace inside `does not promise virality` will fail `tests/test_compliance_no_virality.py`. Two existing disclaimers in `index.html` and `login.html` were re-flowed to single lines this session for this reason.
-- **The new `static/login.html` does NOT include `static/auth.js`.** That's intentional — auth.js would call `/auth/me` → 401 → redirect to `/static/login.html` → infinite bounce. Keep login.html script-free except for the `?yt=` forwarder.
-- **The 8-page redirect rename** (`/auth/login` → `/static/login.html` on 401) was a `sed`-driven sweep; explicit "Sign in" / "Connect YouTube" CTA buttons that are USER-initiated still link to `/auth/login` (the OAuth initiator) intentionally. Don't unify them without thinking.
-- **The new `_pollTimer` uses `setTimeout` recursion, not `setInterval`.** This was the BLOCKER fix. The test (`test_dashboard_includes_polling`) was updated to accept either — be careful if someone "simplifies" back to `setInterval`.
-- **CLAUDE.md One Rule is in force for every non-trivial decision** (architecture, library, model, scoring math, security boundary, UX pattern). The 6 deferred follow-ups above each need a Phase-1 CHECK brief with industry-standard research before code, captured in `docs/DECISIONS.md` if anything deviates from the standard.
-- **Off-course bugs:** when something unrelated surfaces, log it in `docs/OFF_COURSE_BUGS.md` and keep going; don't chase it inline.
+- **Merging PR #19 to `main` auto-deploys to production.** Only merge when all gates are green and you intend to ship.
+- **`pip-audit` failing is advisory-DB drift, not this PR's fault** — but it blocks merge. `starlette 0.49→1.x` is a major, FastAPI-coupled bump; don't do it casually inside the SEV1 PR.
+- **CI installs `ruff==0.15.15` (same as local venv)** and runs `ruff format --check .` whole-repo — one unformatted file anywhere fails Lint. Always run `ruff format` (not just `ruff check`) before pushing.
+- **Local env: no Docker/Postgres.** Use `.venv` (NOT user-site `python3.12`, whose `langsmith` pytest plugin breaks collection — pass `-p no:langsmith`). Integration tests need Postgres and only run in CI. Redis must be up locally: `redis-server --daemonize yes --save '' --appendonly no`.
+- **Out-of-scope finding logged, not fixed:** a 4th, lower-severity self-XSS `innerHTML` sink at `onboarding.html:461` (creator's own channel title) — see `docs/OFF_COURSE_BUGS.md`.
+- Verdict stays **CONDITIONAL** until the deferred **Locust 300-user run** (user-side, `tests/perf/README.md`) + the `TOKEN_ENCRYPTION_KEY` rotation runbook — both pre-launch-checklist items, not code.
+- **CLAUDE.md One Rule** holds for every non-trivial decision: research the current industry standard first; log deviations in `docs/DECISIONS.md`.
 
----
+## POINTERS (sources of truth — this file is NOT one)
 
-## POINTERS
-
-- Architecture / stack / structure: `docs/SOT.md`
-- Issue queue: `docs/issues.md`
-- Project state (what's done, in-progress, blocked): `docs/PROJECT_STATE.md`
-- Decision log (deviations from PRD or industry standard): `docs/DECISIONS.md`
-- YouTube ToS / data retention / privacy posture: `docs/COMPLIANCE.md`
-- Named clip-engine principles: `docs/CLIPPING_PRINCIPLES.md`
-- Pre-launch / Kubernetes deployment plan: `docs/DEPLOYMENT.md`
-- Beta-launch runbook: `docs/BETA_LAUNCH_RUNBOOK.md`
-- Latest assessment report: `docs/assessment/REPORT.md`
-- All historical assessment snapshots: `docs/assessment/history/`
-- Per-module assessment findings: `docs/assessment/modules/`
-- Off-course bug log: `docs/OFF_COURSE_BUGS.md`
-- Production assessment skill: `.claude/skills/production-assessment/SKILL.md`
-- Memory index: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md`
+- `docs/PROJECT_STATE.md` — issue progress (Issue 138 entry current) · `docs/issues.md` — work queue
+- `docs/assessment/REPORT.md` — latest verdict (2026-06-16) + ranked register · `docs/assessment/history/` — snapshots · `docs/assessment/modules/` — per-module findings
+- `docs/DECISIONS.md` — design decisions (2026-06-16 entry: cache-floor, marker removal, SDK bump)
+- `docs/OFF_COURSE_BUGS.md` — incidental defects (incl. the onboarding.html XSS)
+- `docs/SOT.md` · `docs/COMPLIANCE.md` · `docs/CLIPPING_PRINCIPLES.md` · `docs/DEPLOYMENT.md` · `docs/BETA_LAUNCH_RUNBOOK.md` · `docs/SECRETS.md`
+- `CLAUDE.md` — project rules / issue workflow · `.claude/skills/production-assessment/SKILL.md`
+- Memory: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md` (`local_dev_test_env.md` refreshed this session)

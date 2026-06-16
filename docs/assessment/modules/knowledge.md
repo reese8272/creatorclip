@@ -1,137 +1,113 @@
-# knowledge — assessed 2026-06-08
+# knowledge — assessed 2026-06-16
 
 ## Findings
 
-- [FIXED] knowledge/hooks.py:174-179 — **SEV1 from prior assessment, now resolved.**
-  The `cache_control: {"type": "ephemeral"}` marker on the DNA-brief block has been
-  removed (lines 174-179 now contain an audit-fix comment explaining the removal).
-  The static instructions + DNA brief (~900 tokens) is below Haiku 4.5's 4096-token
-  floor; the marker was inert. Fix applied: marker removed, documentation added.
-  No regression test yet; DECISIONS.md references the precedent (improvement/brief.py).
+### Prior SEV1s — both VERIFIED CLOSED (Issue 138)
 
-- [FIXED] knowledge/chapters.py:182-185 — **SEV1 from prior assessment, now resolved.**
-  The `cache_control` breakpoint has been removed from the system block.
-  System prompt (~175 tokens) is far below Haiku 4.5's 4096-token floor; the marker
-  was inert. Fix applied: marker removed, audit-fix comment added. Same status as hooks.py.
+- [RESOLVED — was SEV1 #5] knowledge/chapters.py:213 — `max_tokens` is now **2000**
+  (was 512), and `description_block` was **removed** from the `_SYSTEM_INSTRUCTIONS`
+  output schema (chapters.py:47-56 now asks only for the `chapters` array). Verified
+  `parse_chapters` still rebuilds `description_block` deterministically in Python when
+  the model omits it (chapters.py:153-157: `if not description_block:` →
+  `"\n".join(f"{c['timestamp_formatted']} {c['title']}" ...)`). Output is therefore
+  complete on 1h+ videos: the model spends its whole budget on the chapters array and
+  Python regenerates the description block. The fix comment at chapters.py:208-212
+  accurately documents the rationale. Correctness confirmed.
 
-- [SEV2] knowledge/hooks.py:25 + knowledge/chapters.py:22 — `_HAIKU_MODEL` is
-  hardcoded to `"claude-haiku-4-5-20251001"` instead of routing through
-  `settings.ANTHROPIC_MODEL` or dedicated config keys (`ANTHROPIC_MODEL_HOOK_ANALYSIS`,
-  `ANTHROPIC_MODEL_CHAPTERS`). This blocks model rotation, A/B eval, and violates the
-  per-call-site config pattern documented in DECISIONS.md and used elsewhere
-  (e.g., `settings.ANTHROPIC_MODEL_DNA`). | fix: add `ANTHROPIC_MODEL_HOOK_ANALYSIS`
-  and `ANTHROPIC_MODEL_CHAPTERS` to `config.Settings` (default
-  `"claude-haiku-4-5-20251001"`), reference them in `.env.example`, replace both
-  hardcodes, and add a DECISIONS entry documenting the per-call-site model pattern.
+- [RESOLVED — was SEV1 #6] knowledge/titles.py:121-135 + knowledge/thumbnails.py:201-216
+  — the `cache_control: {"type": "ephemeral"}` markers are **removed** from both
+  `_build_request` (titles) and `_build_concepts_request` (thumbnails). Both system
+  blocks are now plain `{"type": "text", "text": ...}` with no `cache_control` key.
+  The in-code comments (titles.py:43-44, 104-107, 124-128; thumbnails.py:176-179,
+  204-206) now correctly state the prefix (~1,550 tokens) is **below** Sonnet 4.6's
+  2048-token floor and that a marker would be inert — they no longer falsely claim the
+  prefix clears the floor. This matches the hooks.py precedent (marker removed for the
+  Haiku 4.5 4096 floor, hooks.py:174-179). The root-cause doc error is also fixed:
+  docs/DECISIONS.md now records the Sonnet 4.6 floor as 2048 (lines 13-15, 2330,
+  601-602) with an explicit Issue-138 correction note (1024 is the Sonnet *4.5* floor).
+  Both fixes are correct and internally consistent.
 
-- [SEV2] knowledge/thumbnails.py:148-152 — `analyze_thumbnail_patterns` logs
-  token usage with only `input_tokens` and `output_tokens`, omitting `cache_read`
-  and `cache_creation` fields. The docstring and design doc note that the multimodal
-  prompt is per-call and cannot be cached — this is correct, but the absence of
-  cache metrics isn't documented in the code, and the architecture rule "Token usage
-  logged after every call" (rubric §5) passes literally while potentially hiding
-  whether other Anthropic call sites are violating the mandatory-caching rule.
-  | fix: add a one-line comment explaining why caching doesn't apply here (per-call
-  prompt), and update the log line to include `cache_read=0 cache_creation=0` for
-  consistency across the four knowledge surfaces (titles, thumbnails, hooks, chapters).
-  Alternatively, move the static schema-spec portion into a cached system block if
-  worthwhile (Sonnet 4.6 is in use here).
+### Carried-forward open findings (re-verified against current code)
 
-- [SEV2] knowledge/titles.py:105-106 + knowledge/thumbnails.py:177-179 — comments
-  claim the static instructions + DNA brief total "~2300 tokens" and clear the
-  "2048-token minimum". DECISIONS.md (line 2207) corrects the Sonnet 4.6 floor to
-  **1024 tokens**, not 2048. The actual measured size of these blocks (from prior
-  assessment context) is ~1100–1300 tokens — it clears 1024 but does NOT clear 2048.
-  The stale comment misleads future contributors sizing prompts against the wrong
-  floor. | fix: update both comments to reference the correct 1024-token minimum and
-  replace the "~2300 tokens" claim with the measured value (~1100–1300 tokens).
+- [SEV2] knowledge/hooks.py:25 + knowledge/chapters.py:22 — `_HAIKU_MODEL` still
+  hardcoded to `"claude-haiku-4-5-20251001"` in both files. The ID is valid, but it
+  bypasses the per-call-site config pattern (every other site uses
+  `settings.ANTHROPIC_MODEL`; config.py:51 only defines `ANTHROPIC_MODEL`, no
+  hook/chapter overrides exist). Blocks model rotation / A-B without a code change.
+  | fix: add `ANTHROPIC_MODEL_HOOK_ANALYSIS` and `ANTHROPIC_MODEL_CHAPTERS` to
+  `config.Settings` (default `"claude-haiku-4-5-20251001"`), document in `.env.example`,
+  replace both hardcodes, log the pattern in docs/DECISIONS.md.
 
-- [SEV2] knowledge/hooks.py:169 — the f-string arithmetic for the retention drop
-  calculation includes `(creator_median_at_drop or 0)` in the denominator of the
-  percentage-point delta. The parameter `creator_median_at_drop` is typed
-  `float | None` (line 153), and the branch guarding this code block (line 164) only
-  checks `retention_drop_at_s is not None`, not `creator_median_at_drop is not None`.
-  When `creator_median_at_drop` is None, the arithmetic silently evaluates to
-  `(0 - retention_at_drop) * 100` and the prompt reads "X pp below median" with a
-  misleading zero or negative number — Claude's diagnosis is built on wrong data.
-  | fix: guard `creator_median_at_drop is not None` before emitting the median delta;
-  otherwise drop the "pp below median" tail and only include the video-side retention
-  number. Add a comment on line 164 explaining the guard.
+- [cleanup] knowledge/titles.py:38-41 + knowledge/thumbnails.py:43-46 — `_DISCLAIMER`
+  remains dead code in BOTH files: defined, never imported or appended anywhere
+  (verified repo-wide grep — the only `_DISCLAIMER` consumers are dna/brief.py,
+  analysis/brief.py, improvement/brief.py, which define their own). The titles.py
+  module docstring (line 14) still claims "The honesty disclaimer is always appended by
+  Python — never left to the LLM", which is false for this module: the SSE/done payload
+  carries no disclaimer, while the equivalent honesty text is hardcoded separately in
+  static/analysis.html — backend and frontend copies can drift (DRY). | fix: either
+  append `_DISCLAIMER` to the done payload in the worker tasks and render from it, or
+  delete both constants and correct the titles.py docstring.
 
-- [cleanup] knowledge/titles.py:90-92 + knowledge/thumbnails.py:162-164 —
-  `_extract_transcript_summary` and `_extract_transcript_hook` are now single-line
-  wrappers around `knowledge.util.extract_transcript_text`. The wrapper shims exist
-  only to preserve the import name in `worker/tasks.py:2329` and `worker/tasks.py:2466`.
-  The util.py extraction (the stated point of Issue 130/131) is half-done — the
-  wrappers are dead weight. | fix: delete both wrappers and update the two import
-  sites in `worker/tasks.py` to import `extract_transcript_text` directly from
-  `knowledge.util` (with a local alias if a different `max_chars` default is needed).
+- [cleanup] knowledge/titles.py:204, knowledge/thumbnails.py:280, knowledge/hooks.py:208,
+  knowledge/chapters.py:203 — `_ANTHROPIC.with_options(timeout=...)` before every
+  streaming call. The module clients are built with `httpx.Timeout(X, connect=10.0)`;
+  `with_options(timeout=120.0)` (titles/thumbnails/hooks) and `with_options(timeout=60.0)`
+  (chapters) replace that with a flat scalar, silently loosening the connect timeout
+  from 10s to the full read budget. | fix: drop the `with_options(...)` calls and pass
+  `_ANTHROPIC` directly (the module-level timeout already matches).
 
-- [cleanup] knowledge/titles.py:202, knowledge/thumbnails.py:280,
-  knowledge/hooks.py:208, knowledge/chapters.py:204 — every streaming call does
-  `_ANTHROPIC.with_options(timeout=120.0)` (or 60.0 in chapters) but the module-level
-  `_ANTHROPIC` was already constructed with the same `httpx.Timeout(120.0, connect=10.0)`.
-  The `with_options(...)` call is a no-op view that adds visual noise without changing
-  behavior. | fix: drop the `with_options(...)` call and pass `_ANTHROPIC` directly
-  to `stream_and_emit(...)`.
+- [cleanup] knowledge/hooks.py:164-169 — `(creator_median_at_drop or 0)` arithmetic can
+  emit a misleading "Xpp below median" line if `creator_median_at_drop` is None while
+  `retention_drop_at_s` is not. The sole caller (worker/tasks.py) computes a non-None
+  median whenever `drop_at_s` is not None, so unreachable today, but the `float | None`
+  signature permits it for any future caller. | fix: guard
+  `creator_median_at_drop is not None` before emitting the median-delta tail.
 
-- [cleanup] knowledge/titles.py:101 + knowledge/thumbnails.py:173 —
-  `_build_request` and `_build_concepts_request` return bare `tuple` (no inner types).
-  The calling code in `generate_title_suggestions` (line 196) and
-  `generate_thumbnail_concepts` (line 274) unpacks them as `system, tools, messages`,
-  but the type annotation does not document this contract. | fix: annotate both as
+- [cleanup] knowledge/titles.py:91-93 + knowledge/thumbnails.py:162-164 —
+  `_extract_transcript_summary` / `_extract_transcript_hook` are one-line wrapper shims
+  over `knowledge.util.extract_transcript_text`, kept only to preserve import names in
+  worker/tasks.py:2387/2524 (and the test imports in tests/test_titles.py,
+  tests/test_thumbnails.py). | fix: import `extract_transcript_text` directly at the
+  two call sites, update the two tests, and delete the shims.
+
+- [cleanup] knowledge/titles.py:35 + knowledge/hooks.py:34 — dead constants:
+  `_GENERATE_N = 10` and `TRANSCRIPT_EXCERPT_S = 60.0` are never referenced (the "10"
+  lives in the prompt text; the 60.0 is passed literally by the caller). | fix: delete,
+  or reference them where the values are used.
+
+- [cleanup] knowledge/titles.py:102 + knowledge/thumbnails.py:173 — `_build_request`
+  / `_build_concepts_request` still return bare `tuple`. | fix: annotate
   `-> tuple[list[dict], list[dict], list[dict]]`.
 
-- [cleanup] knowledge/thumbnails.py:100 (`analyze_thumbnail_patterns` → `dict`) +
-  knowledge/thumbnails.py:89 (`_empty_patterns()` → `dict`) — both return a bare `dict`
-  with a documented key shape (`face_present`, `dominant_emotions`, `text_overlay_style`,
-  `typical_colors`, `composition_pattern`, `channel_thumbnail_signature`). The shape is
-  enforced only by string conventions in the code. | fix: define a `TypedDict
-  ChannelThumbnailPatterns` in `knowledge/util.py` with the six documented keys,
-  annotate both functions with it, and update `_build_concepts_request` to take
-  `patterns: ChannelThumbnailPatterns` instead of `patterns: dict`.
-
-- [cleanup] knowledge/util.py — three extraction helpers (`extract_transcript_text`,
-  `extract_transcript_excerpt`, `get_transcript_segments`) share ~6 lines of identical
-  scaffolding (null-guard, segment list lookup, text filter, join+slice). The
-  duplication is KISS-acceptable as is, but the contract between `extract_transcript_text`
-  and `extract_transcript_excerpt` (both extract text, one with time filtering) could
-  collapse into a single function: `extract_transcript_text(segments_jsonb, *,
-  max_chars=1500, before_s=None)`. This would also clarify whether `get_transcript_segments`
-  has any live callers (only `worker/tasks.py:2832` uses it). | fix: optional —
-  if no other callers depend on the current signature, merge the two functions;
-  otherwise, document the time-filter parameter and remove `get_transcript_segments`
-  if unused.
-
-- [cleanup] knowledge/__init__.py — empty file. Acceptable as a namespace marker, but
-  the module exports four public entry points: `generate_title_suggestions`,
-  `analyze_thumbnail_patterns`, `generate_thumbnail_concepts`, `analyze_hook`,
-  `generate_chapters`, plus several `parse_*` helpers. Currently, `worker/tasks.py`
-  and `routers/thumbnails.py` reach directly into submodules. | fix: optional —
-  add `__all__` and re-exports to `knowledge/__init__.py` so consumers can do
-  `from knowledge import analyze_hook` instead of late imports; otherwise, leave as is.
+- [cleanup] knowledge/thumbnails.py:89, 100, 142-159 — `analyze_thumbnail_patterns`
+  and `_empty_patterns` return bare `dict` with a six-key documented shape enforced only
+  by convention; the token log line (148-152) omits cache fields with no comment
+  explaining why (the result is Redis-cached 24h per channel — `PATTERNS_CACHE_TTL`,
+  line 38 — so the multimodal call runs at most once/day/channel and prompt caching is
+  genuinely N/A). | fix: add a `ChannelThumbnailPatterns` TypedDict in knowledge/util.py
+  and a one-line "per-day multimodal call — prompt caching N/A" comment at the log line.
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | **ok** — `_ANTHROPIC` is a module-level singleton in each of four files; no per-call client construction. Stream context manager (`worker/anthropic_stream.py:78`) guarantees release. |
-| 2 Concurrency & scale | **ok** — all entry points are sync, invoked via `asyncio.to_thread` (lines 2372, 2547, 2573, 2768, 2887 in worker/tasks.py; line 131 in routers/thumbnails.py). No hidden blocking calls inside `async def`. |
-| 3 Security & compliance | **ok** — no PII or token in logger calls (only token counts and labels). No SQL. Per-creator isolation enforced at caller sites. No virality language; explicit honesty disclaimers in titles.py and thumbnails.py. ANTHROPIC_API_KEY loaded via pydantic settings, never logged. |
-| 4 Clip-quality | **n/a** — knowledge module is advisory (title / thumbnail / hook / chapter generation), not on clip-extraction path. |
-| 5 Anthropic SDK | **IMPROVED, 1 SEV2 remains** — The two SEV1 cache-floor defects (hooks.py, chapters.py) are **fixed**: inert markers removed, audit comments added. Stale cache-floor comments in titles.py / thumbnails.py remain (marked SEV2). Token usage logged on all four call sites; `cache_read` and `cache_creation` fields missing on `analyze_thumbnail_patterns` (marked SEV2). web_search tool wired on three of four; thumbnails multimodal-only (correct, no tools). |
-| 6 Cleanliness & typing | **5 cleanup items** — wrapper shims in titles.py / thumbnails.py are dead code; bare `tuple` and `dict` returns need inner types; missing `ChannelThumbnailPatterns` TypedDict; redundant `with_options` calls on four streaming sites; util.py extraction is half-done. No TODO, no commented-out code, no `print()`. |
-| 7 Error handling / API | **n/a** — no FastAPI router in `knowledge/`. Public surface is library functions raising `ValueError` on bad input (parse_*) and letting SDK exceptions propagate for Celery retry. Error contract consistent across four features. |
-| 8 Config & paths | **SEV2** — `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_WEB_SEARCH_TOOL` all route through `config.Settings`; no file-system paths in module. **But** `_HAIKU_MODEL` is hardcoded (SEV2) instead of per-call-site config keys (`ANTHROPIC_MODEL_HOOK_ANALYSIS`, `ANTHROPIC_MODEL_CHAPTERS`). `.env.example` needs entries for those keys. |
+| 1 Resource lifecycle | ok — `_ANTHROPIC` is a module-level singleton in all four files; no per-call construction; streaming via the shared `stream_and_emit` context manager; no temp files in this module |
+| 2 Concurrency & scale | ok — prior SEV1 (chapters max_tokens) is fixed; all entry points sync and invoked via `asyncio.to_thread` from worker tasks; inputs bounded (`_SEGMENT_MAX_CHARS`, `_DNA_BRIEF_MAX_CHARS`, 10-thumbnail cap, 20-curve cap at caller); no blocking call inside `async def` |
+| 3 Security & compliance | ok — no SQL in module; logger lines carry token counts only, no PII/tokens; API key via pydantic settings, never logged; per-creator isolation enforced at caller sites (verified worker/tasks.py creator_id checks); all generated copy hedged, honesty constraints in prompts, no virality language (but see `_DISCLAIMER` dead-code cleanup) |
+| 4 Clip-quality | n/a (advisory title/thumbnail/hook/chapter surfaces, not on the clip-extraction path) |
+| 5 Anthropic SDK | ok — both prior SEV1 cache defects CLOSED: chapters max_tokens=2000 + description_block dropped from schema; titles/thumbnails inert cache_control markers removed and comments corrected; hooks marker removal still in place (hooks.py:174-179). Token usage logged after every streaming call and the multimodal call; web_search wired where intended (titles/thumbnails/hooks); SDK pinned anthropic==0.105.2 (no shape change). Open: `_HAIKU_MODEL` hardcoded (SEV2 config item below) |
+| 6 Cleanliness & typing | 7 cleanup items — dead `_DISCLAIMER` + false docstring, dead constants, wrapper shims, bare `tuple`/`dict` returns, connect-timeout-loosening `with_options`, hooks median-delta guard. No TODO, no commented-out code, no `print()` |
+| 7 Error handling / API | n/a (no router; library functions raise `ValueError`/SDK errors for Celery retry — consistent contract; tests exist: tests/test_titles.py, test_chapters.py, test_hooks.py, test_thumbnails.py) |
+| 8 Config & paths | 1 SEV2 — `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` / `ANTHROPIC_WEB_SEARCH_TOOL` via settings + `.env.example`; no filesystem paths in module; `_HAIKU_MODEL` hardcode bypasses config (no `ANTHROPIC_MODEL_CHAPTERS`/`_HOOK_ANALYSIS` in config.py:51) |
 
 ## Module verdict
 
-IMPROVING — The two SEV1 prompt-caching defects (hooks.py:176, chapters.py:182)
-are **now resolved** by removing the inert `cache_control` markers and documenting
-the reason in audit comments. One SEV2 config defect remains (hardcoded Haiku model
-strings block per-call-site override pattern); another SEV2 affects token visibility
-(cache metrics missing from thumbnails.py). Five cleanup items address typing,
-dead code, and stale comments. The caching architecture rule ("mandatory prompt
-caching") is no longer silently violated, but the per-call-site model-override
-pattern (documented in DECISIONS.md) is still not applied here.
-
+NEEDS-WORK — Both Issue-138 SEV1 fixes are verified correct and complete:
+chapters.py now caps output at 2000 tokens with `description_block` dropped from the
+schema and rebuilt in Python (no truncation on long-form videos), and the inert
+`cache_control` markers are removed from titles.py/thumbnails.py with the comments and
+docs/DECISIONS.md (2048 Sonnet 4.6 floor) corrected. No BLOCKER or SEV1 remains. One
+SEV2 (hardcoded `_HAIKU_MODEL` in hooks.py/chapters.py bypasses config) and seven
+cleanups (dead `_DISCLAIMER` + false docstring, dead constants, wrapper shims, bare
+return types, connect-timeout-loosening `with_options`, hooks median guard) are open.

@@ -32,7 +32,7 @@ PyJWT==2.13.0
 bcrypt==4.2.0
 
 # ── Anthropic / Embeddings ───────────────────────────────────────────────────
-anthropic==0.40.0
+anthropic==0.105.2
 voyageai==0.3.2
 # aiohttp is a transitive dep of voyageai. Pinned to 3.14.1 to close
 # CVE-2026-34993 and CVE-2026-47265 (both fixed in >=3.14.0).

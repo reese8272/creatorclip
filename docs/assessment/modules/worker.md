@@ -1,180 +1,145 @@
-# worker — assessed 2026-06-08
+# worker — assessed 2026-06-16
 
 ## Findings
 
-- [SEV1-FIXED] worker/tasks.py:352 — `_retrain_preference_async` previously used
-  `db.AsyncSessionLocal()` without setting `session.info["creator_id"]`, causing
-  RLS to silently return zero ClipFeedback rows under the production role split.
-  Now correctly uses `db.AdminSessionLocal()` at line 364, matching the pattern
-  at lines 401, 424, 1114, 1272, etc. | status: FIXED in HEAD.
+- [SEV2] worker/tasks.py:130–134, 151–153, 170–172 — `except SoftTimeLimitExceeded:
+  raise` in `ingest_video` / `transcribe_video` / `build_signals` re-raises BEFORE
+  the generic `except Exception` handler (136/155/174) that runs
+  `_set_status(video_id, IngestStatus.failed)`. On soft-timeout the refund fires
+  (`RefundOnFailureTask.on_failure`) but `ingest_status` stays `running` forever —
+  the UI shows a perpetual spinner and the video can never be retried by the user |
+  fix: call `run_async(_set_status(video_id, IngestStatus.failed))` inside the
+  `SoftTimeLimitExceeded` branch before re-raising (soft limit leaves ~300 s of
+  headroom before the hard limit; a 1-row UPDATE fits easily). Carried forward from
+  2026-06-09; UNCHANGED in HEAD (re-verified: the grep-matched `_set_status` calls
+  are all in the generic handler, not the soft-timeout branch).
 
-- [SEV1-FIXED] worker/tasks.py:2003 — `_generate_improvement_brief_async` previously
-  used `db.AsyncSessionLocal()` without stamping creator_id, causing the brief
-  query + VideoMetrics join to return empty under role split. Now correctly stamps
-  `session.info["creator_id"] = str(cid)` at line 2035 BEFORE any query (matches
-  the RLS `after_begin` listener pattern). The session type was intentionally kept
-  as AsyncSessionLocal (not AdminSessionLocal) because brief generation is
-  user-scoped, not a cross-tenant sweep. | status: FIXED in HEAD.
+- [SEV2] worker/tasks.py:373/415, 1295/1378, 1500/1525, 1590/1640, 1737/1877,
+  1903/1983 — six sites use session-scoped `pg_try_advisory_lock` with the unlock in
+  a `finally` INSIDE the `async with db.AdminSessionLocal()` block. If the unlock
+  `session.execute` itself fails (connection reset, or the session is in
+  PendingRollback after a failed commit — e.g. the per-creator `session.commit()` at
+  1375 in `_poll_clip_outcomes_async` is UNGUARDED by a rollback and would propagate
+  straight into its `finally` at 1377), the pooled connection returns to the pool
+  with the lock STILL HELD and every later Beat tick skips ("advisory lock held")
+  until the connection is recycled. db.py has NO pool-reset handler (re-verified:
+  no `pg_advisory_unlock_all`, no `PoolEvents.reset`; the only event listener is the
+  RLS `after_begin` at db.py:132) | fix: register a SQLAlchemy `PoolEvents.reset`
+  listener on both engines emitting `SELECT pg_advisory_unlock_all()`, OR migrate
+  these six to `pg_advisory_xact_lock` (auto-releases on commit/rollback — the
+  pattern `_build_dna_async` already uses at tasks.py:1140). Note the refresh sweep
+  (1958/1971/1980) and retrain DID add `rollback()` handlers, so their finally is
+  now safer; `_poll_clip_outcomes_async`'s commit at 1375 is the live unguarded
+  path. Carried forward; structurally UNCHANGED in HEAD.
 
-- [SEV1-FIXED] worker/tasks.py:874+1006 — `_clean_clip_async` and `_edit_clip_async`
-  previously shared `clip.cleaned_render_uri` as idempotency key, causing a race
-  where clean→edit (or edit→clean) before confirm would silently drop the second
-  operation's work. Now the router checks for pending `cleaned_render_uri` and
-  rejects with HTTP 409 at lines 361–368 (clean endpoint) and 549–556 (edit
-  endpoint) with a descriptive error guiding the user to confirm or discard first.
-  The 409 response mirrors the WAI "one pending edit at a time" UX. | status: FIXED
-  in HEAD.
+- [SEV2] worker/tasks.py:1496–1548 — `_purge_stale_source_media_async` acquires the
+  advisory lock, collects targets, then releases the lock in the `finally` at
+  1523–1527 BEFORE the R2 delete loop (1533–1540) and the `UPDATE ... source_uri=NULL`
+  (1545–1547). Two concurrent ticks can both pass the check, read the same targets,
+  and race the deletes/updates — safe today only because both ops happen to be
+  idempotent; the lock protects only the target read, not the purge work | fix: hold
+  the lock across the whole sweep (release after the final commit), or accept the
+  race and delete the lock with a comment — the current half-lock is misleading.
+  Carried forward; UNCHANGED in HEAD.
 
-- [SEV2] worker/tasks.py:1498–1527 — `_purge_stale_source_media_async` acquires an
-  advisory lock, collects R2 URIs under lock, then releases the lock at line
-  1525 in a `finally` BEFORE the actual R2 delete loop at line 1537. Two concurrent
-  Beat ticks (or a redelivery) can both pass the lock check, both read the same
-  targets, and race the R2 deletes + database UPDATEs. R2 delete is idempotent and
-  the UPDATE is too, so today this is safe-by-luck; the lock is doing nothing. |
-  fix: move the lock-release to a finally that wraps the entire function body
-  (after the R2 loop at line 1541 and the database update at line 1547), or use
-  `pg_advisory_xact_lock` inside a single transaction the whole sweep is part of
-  (matches `_build_dna_async:1122` pattern).
+- [SEV2] worker/tasks.py:1328–1375 (poll) and 1930–1985 (refresh) —
+  `_poll_clip_outcomes_async` holds one DB session + the advisory lock across every
+  `get_video_stats` YouTube round-trip (line 1348, inside the nested per-outcome
+  loop); `_refresh_youtube_analytics_async` does the same across an UNBOUNDED
+  all-creators sweep (`select(Creator)` with no limit at 1915–1921) and per creator
+  runs `select(Video).where(creator_id)` with NO LIMIT (1943–1944). At hundreds of
+  creators × videos this pins a pooled connection for minutes-to-hours per tick and
+  can starve API requests (needs-runtime-confirmation for exact pool pressure) | fix:
+  collect outcomes + tokens under the lock, close the session during the YouTube
+  loop, reopen a short session per-creator for the commit (the shape
+  `_purge_stale_source_media_async` already uses for R2); for refresh, bound the
+  per-creator video sweep (e.g. `last_fetched ASC LIMIT 100` per tick). The
+  per-creator `session.commit()` at 1375/1951 (good) is present but the session is
+  still held across the whole loop. Carried forward; UNCHANGED in HEAD.
 
-- [SEV2] worker/tasks.py:1290–1375 — `_poll_clip_outcomes_async` holds the session
-  connection AND the advisory lock for the duration of every YouTube API round-trip.
-  The `get_video_stats(...)` call at line 1348 runs inside the loop while the
-  session is open and locked. With 1000 outcomes per tick × ~200ms each, that's
-  >3 minutes holding a pooled connection. With pool_size=15 across replicas, a
-  single Beat task can starve API requests. | fix: collect all outcomes + access
-  tokens under lock (lines 1303–1326), close the session, make all YouTube calls
-  outside the session, then reopen a session for per-creator commits. Matches the
-  shape used in `_ingest_async` and other tasks that separate data collection from
-  long-latency external calls.
+- [SEV2] worker/tasks.py:828, 973, 1060 — ffmpeg encodes run via
+  `asyncio.to_thread(render_clip_file / render_cleaned_clip_file, ...)`. On
+  `SoftTimeLimitExceeded` the main loop raises (refund/retry fires) but the thread +
+  ffmpeg subprocess keep burning CPU. clip_engine/render.py now bounds the burn with
+  `subprocess.run(..., timeout=...)`, but `start_new_session=True` is still absent so
+  the orphan encode cannot be killed early and overlaps the retry's encode on the
+  same box | fix (cross-module, owned by clip_engine): add `start_new_session=True`
+  and kill the process group on cancellation; worker side needs no change once that
+  lands. Carried forward, partially mitigated (timeout present).
 
-- [SEV2] worker/tasks.py:339–397 + 1290–1362 + 1489–1527 + 1568–1640 + 1682–1876
-  + 1846–1933 — `pg_try_advisory_lock` is session-scoped (= PostgreSQL backend
-  connection = pooled handle), but the unlock is wrapped in `try/finally` that
-  runs INSIDE the `async with db.AsyncSessionLocal()` block. If the unlock
-  execute itself fails (network blip, cancelled task, connection reset),
-  the connection returns to the pool with the lock STILL HELD, and the next caller
-  that checks out that connection inherits a phantom lock on `retrain:<other-uuid>`
-  or another key. SQLAlchemy's `AsyncSession.__aexit__` does not emit
-  `pg_advisory_unlock_all` on return-to-pool. Same pattern appears at all six sites
-  listed above. | fix: register a SQLAlchemy `reset` event on both engines (in
-  db.py) that emits `SELECT pg_advisory_unlock_all()` when a connection is
-  returned to the pool (one-line defense in depth), OR migrate all of these to
-  `pg_advisory_xact_lock` which auto-releases on commit/rollback (the xact variant
-  is what `_build_dna_async:1122` already uses successfully).
+- [SEV2] worker/tasks.py:207–214, 217–231, 1003 — `clean_clip` / `edit_clip` /
+  `_edit_clip_async` take only `clip_id` (+`cut_segments`); the worker never
+  re-verifies clip ownership. Authorization lives solely in routers/clips.py. A
+  malformed/forged Celery message re-encodes any clip. Defence-in-depth gap, not a
+  current exploit (broker not internet-facing) | fix: add `creator_id` to the task
+  signature (mirrors `generate_chapters` which already takes `creator_id`) and assert
+  `clip.creator_id == cid` at entry. Carried forward; UNCHANGED.
 
-- [SEV2] worker/tasks.py:810, 961, 1048 — ffmpeg shellouts run via
-  `asyncio.to_thread(render_clip_file, ...)` / `render_cleaned_clip_file`. On
-  Celery `SoftTimeLimitExceeded` the worker raises in the main loop but the
-  underlying thread (and the ffmpeg subprocess it spawned via `subprocess.run`)
-  keeps executing — zombie ffmpeg processes can pile up after repeated soft-timeouts.
-  The temp file in the `finally` is unlinked but the subprocess still holds it open
-  until kernel cleanup, and the `RefundOnFailureTask` refund fires while the encode
-  is still burning CPU. The `clip_engine/render.py` module's `subprocess.run` calls
-  do NOT use `start_new_session=True`, so only the parent Python process is in a
-  killable process group. | fix: modify `clip_engine/render.py::_run` and
-  `render_cleaned_clip_file` to accept a `timeout_s` parameter (already computed
-  per clip) and pass `start_new_session=True` to all `subprocess.run` calls. This
-  puts ffmpeg in its own process group, so `asyncio.to_thread` timeout or
-  `SoftTimeLimitExceeded` can `os.killpg()` the entire subprocess tree. Timeout
-  values are already computed (render_timeout_s at line 171 of render.py);
-  thread-timeout coordination matches the CELERY_SOFT_TIME_LIMIT_S architecture
-  in docs/DEPLOYMENT.md.
+- [SEV2] worker/tasks.py:196–204, 207–231 — render/clean/edit re-renders are
+  invisible to the billing ledger: `render_clip` is not a `RefundOnFailureTask` (by
+  design — minutes charged at ingest) but a creator hitting clean/edit N times burns
+  N ffmpeg encodes with zero ledger entry or quota | fix: record the free-by-design
+  decision in docs/DECISIONS.md, or add a per-re-render ledger debit/quota check
+  before enqueue. Carried forward; still undocumented.
 
-- [SEV2] worker/tasks.py:1290–1357 — `_poll_clip_outcomes_async` is a Beat task
-  that holds the session + lock while making YouTube API calls. Secondary finding:
-  the per-creator retry loop at line 1328–1375 commits per creator (line 1375),
-  which is correct for partial-failure resilience. However, if a YouTube call
-  fails mid-batch, the next retry tick will re-fetch all outcomes from line 1303
-  (a concurrent query while another instance holds the lock will timeout / return
-  nothing). The intent was stated in comments at line 1373–1374 ("partial progress
-  survives"), but the architecture (single read + recheck under lock per tick)
-  doesn't guarantee it. | fix: (deferred to next phase — this is defensive
-  hardening, not a correctness bug today). Consider a "mark fetched" flag per
-  outcome so retries skip already-polled rows, or split the poll into per-creator
-  sub-tasks that can retry independently.
+- [SEV2] worker/tasks.py:50–64 — `_thumb_redis()` async-Redis singleton has no
+  loop-binding guard (contrast worker/progress.py:142–165 `_async_client`, which
+  rebuilds on loop mismatch and resets on failure). Test-only friction today (one
+  loop per worker process in prod), but the inconsistency is a trap if the worker
+  loop is ever recreated | fix: track `_THUMB_REDIS_LOOP` and rebuild on mismatch —
+  copy the 6 lines from progress.py. Carried forward; UNCHANGED.
 
-- [SEV2] worker/tasks.py:2152–2153 — `_generate_video_analysis_async`
-  re-imports `Sequence` and `Any` inside the function despite both being
-  imported at module top (lines 15, 18). | fix: delete the inner imports at lines
-  2152–2153.
+- [cleanup] worker/tasks.py:808, 961, 1048 (`import tempfile` ×3, already imported at
+  line 13); 930 (`from config import settings as _s` inline alias, also at line 56) —
+  dead duplicate imports | fix: delete the inner imports; use module-top names.
+  Carried forward; UNCHANGED.
 
-- [SEV2] worker/tasks.py:790, 943, 1030 — `import tempfile` is inlined INSIDE
-  the function body three times despite being already imported at module top
-  (line 13). | fix: delete the three nested `import tempfile` lines and use the
-  module-top import.
+- [cleanup] worker/tasks.py — file is 2976 lines; six brief-style tasks share the
+  same ~120-line shape (emit step → load DNA/identity/transcript → `asyncio.to_thread`
+  Claude → parse JSON → emit done/error) | fix: extract a `worker/_brief_runner.py`
+  helper (job_id, load_context_fn, call_fn, parse_fn, stage) — cuts ~500 lines.
+  Carried forward.
 
-- [SEV2] worker/tasks.py:912 — `from config import settings as _s` inlined
-  inside `_clean_clip_async` despite being imported elsewhere with the same
-  alias pattern. | fix: establish a single module-level alias shape
-  (recommend `from config import settings` at module top without alias, or
-  `from config import settings as _settings` consistently) and use it everywhere.
+- [cleanup] worker/storage.py:93 — `import shutil as _shutil` inside `delete_prefix`
+  duplicates the module-top import; storage.py:29 — `def _r2():` missing return
+  annotation; storage.py:139 — `alocal_path` duplicates `local_path`'s
+  tempfile/download logic (102+) | fix: drop the inner import, annotate the client
+  return, and have `alocal_path` delegate the s3 branch to `asyncio.to_thread` over
+  shared helpers. Carried forward.
 
-- [SEV2] worker/tasks.py:985–1069 — `_edit_clip_async` has no `creator_id`
-  argument and the worker doesn't re-verify clip ownership before re-encoding.
-  Authorization lives entirely in the router (routers/clips.py:553). If a
-  future code path enqueues this task directly (or a malformed Celery message
-  arrives), the worker happily reads any clip's render_uri and writes a new
-  cleaned_render_uri. This matches the existing worker convention (clip_id-only
-  signatures), but the new tasks should at least log `(clip_id, creator_id)` for
-  audit, matching the `analyze_hook` / `generate_chapters` shape. | fix: add
-  `creator_id` to the task signature (mirrors `generate_chapters` at line 2807),
-  assert `clip.creator_id == cid` at the start of `_edit_clip_async`, raise a
-  permanent error otherwise. Defence-in-depth, not a current exploit.
+- [cleanup] worker/celery_app.py:88–102 — `_shutdown_worker_loop` closes the engine
+  (`db.dispose_engine`) and the youtube HTTP client (`_http.aclose`) but never closes
+  `worker.progress._AIO` (a `progress.aclose()` exists at progress.py:269 and is
+  unused here) nor `worker.tasks._THUMB_REDIS`; shutdown-time connection leak only |
+  fix: also run `progress.aclose()` and aclose the thumb singleton in the hook.
+  Carried forward.
 
-- [SEV2] worker/tasks.py:202 — `render_clip` does NOT inherit
-  `RefundOnFailureTask` even though it consumes minutes via the same upstream
-  ledger (the ingest tasks all use it). If a clip render exhausts retries
-  (3 × 60s), no refund fires — the creator was already charged at ingest. This
-  matches the design (refund is per-VIDEO, not per-clip, and the clip's
-  embedded minutes were already paid at ingest), but the same pattern leaves
-  `clean_clip`/`edit_clip` (Issues 134/135) silently re-using minutes the
-  ledger has no view of: a creator hitting "edit" 10× burns 10× the ffmpeg
-  cost. | fix: confirm in DECISIONS.md that clean/edit re-renders are FREE by
-  design (covered by the original video's minutes), or wire a tiny per-render
-  cost into the ledger before enqueueing. Track in OFF_COURSE_BUGS.md and route
-  to billing review.
-
-- [SEV2] worker/tasks.py:53–64 — `_thumb_redis` singleton has no loop-binding
-  guard (compare progress.py:146 `_async_client`, which rebuilds on loop
-  mismatch). Pytest's per-test loop scope will hit `RuntimeError: no running
-  event loop` if test 1 instantiates the singleton on loop A and test 2 reuses
-  it on loop B. Production worker has one long-lived loop per process so this
-  is test-only friction today; ditto if a future Celery prefork hook ever
-  recreates the worker loop without nulling the singleton. | fix: lift the
-  loop-binding rebuild pattern from `worker/progress.py::_async_client` (track
-  `_THUMB_REDIS_LOOP`, rebuild on mismatch). Two extra lines of code.
-
-- [cleanup] worker/tasks.py:2106 + 2625 + 2798 — section banners `# ── Title
-  suggestions ──` / `# ── Hook analyzer ──` / `# ── Auto chapter markers ──`
-  proliferate; the file is now 2919 lines and 13 task pairs. The brief-style
-  tasks (title, thumbnail, hook, chapters, video_analysis, improvement_brief)
-  all follow the same shape: emit step → fetch DNA/identity/transcript →
-  asyncio.to_thread Claude → parse JSON → emit done. | fix: extract a
-  `worker/_brief_runner.py` helper that takes (job_id, load_context_fn,
-  call_claude_fn, parse_fn, stage_label) and runs the boilerplate. Cuts ~500
-  lines and removes the duplicated emit-error-shape across six tasks. Pure
-  KISS/DRY — no behaviour change.
+- [cleanup] worker/tasks.py:2762–2764 — `_analyze_hook_async` issues one
+  RetentionCurve query per other video (N+1, capped at 20) | fix: single query
+  `WHERE video_id IN (...)` grouped in Python. Carried forward.
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 3 SEV2 findings (advisory-lock-on-pooled-connection leak; lock released before work in purge; ffmpeg zombie on soft-timeout) — all carried forward from prior run. |
-| 2 Concurrency & scale | 2 SEV2 findings (ffmpeg subprocess cancellation; `_poll_clip_outcomes` holds connection across YouTube API loop). Zombie subprocess issue is inherited; connection-holding issue is carried forward. |
-| 3 Security & compliance | 3 SEV1s FIXED (RLS-blind sessions in retrain + improvement_brief, shared idempotency key for clean/edit). All three previous SEV1s are now resolved in HEAD. |
-| 4 Clip-quality | n/a (worker is the scheduler — scoring lives in clip_engine/) |
-| 5 Anthropic SDK | covered by anthropic_stream.py — clean (prompt caching, token usage logged, structured output, no virality strings); `tools=None` drop at line 75 is correct for older SDK. |
-| 6 Cleanliness & typing | 4 findings (duplicate tempfile imports ×3; duplicate Sequence/Any imports; brief-runner extraction; settings alias consistency). |
-| 7 Error handling / API | n/a (worker is not a router; emit shape is reviewed at progress.py and is safe — exc_type only, never exc.args) |
-| 8 Config & paths | ok (all paths via Path / tempfile; STORAGE_BACKEND/REDIS_URL/SOURCE_MEDIA_RETENTION_HOURS/YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS/CELERY_SOFT_TIME_LIMIT_S all flow through pydantic-settings) |
+| 1 Resource lifecycle | 3 SEV2 (advisory-lock leak on pooled connection ×6 sites; purge lock released before work; ffmpeg orphan on soft-timeout — now timeout-bounded). Temp media cleaned in `finally`; sessions via context manager everywhere. |
+| 2 Concurrency & scale | 2 SEV2 (session+lock held across YouTube API loops in poll + unbounded all-creators/all-videos refresh sweep; ffmpeg overlap). Loop-singleton pattern (Issue 39) is sound; all blocking work goes through `asyncio.to_thread`. |
+| 3 Security & compliance | RESOLVED: prior SEV1 #4 (creator email in `expire_trials` log) is CLOSED — commit e12111f (Issue 138) dropped `Creator.email` from the SELECT (tasks.py:1675 now selects `id, trial_ends_at, minutes_balance`) and the log line at 1685 is `creator=%s trial_ends_at=%s`, PII-free (comment at 1680 records the invariant). Grepped all 64 `logger.*` calls in worker/: no email/token/name/secret leaks; the two `Cannot get token`/`no valid token` warnings (1332, 1760) log only `creator_id` + a generic exception, never the token. 1 SEV2 remains (clean/edit tasks lack ownership re-check — defence-in-depth). Per-creator isolation intact; ToS purges (source media, 30-day analytics) implemented. |
+| 4 Clip-quality | n/a (worker schedules; scoring lives in clip_engine/ — render correctly uses the `setup_start_s` fallback). |
+| 5 Anthropic SDK | ok — anthropic_stream.py forwards cache/token/thinking deltas, returns a usage dict for caller-side logging, swallows per-event Redis hiccups without losing `get_final_message()`; no virality strings. |
+| 6 Cleanliness & typing | 5 cleanup (duplicate imports; brief-runner extraction at 2976 lines; storage DRY/typing; shutdown not closing Redis singletons; hook N+1). |
+| 7 Error handling / API | n/a (not a router). Emit payloads carry `exc_type`/string only, never raw DB errors to the wire. |
+| 8 Config & paths | ok — all config via pydantic-settings (REDIS_URL, retention/staleness/soft-time-limit/filler thresholds); relative paths resolved; temp files via `tempfile`. |
 
 ## Module verdict
 
-NEEDS-WORK — The three critical SEV1s from the prior run are now FIXED (RLS blindness,
-idempotency collision). However, the six SEV2s regarding advisory locks, connection
-pooling, ffmpeg subprocess lifecycle, and concurrent YouTube polling remain open.
-The file also accumulates 4 cleanup findings (duplicate imports, brief-runner
-extraction, settings alias). None block today's production deployment, but the
-advisory-lock + connection-pooling pattern is structural and appears in six
-locations — fixing it once in `db.py` via a `reset` event handler would harden
-all of them simultaneously.
+NEEDS-WORK — the prior SEV1 (PII in `expire_trials` log) is verified CLOSED by
+Issue 138 (commit e12111f). No new defects introduced; e12111f is the only worker
+change since the prior assessment. The structural SEV2s from 2026-06-08/09 are all
+still present and re-verified unchanged: advisory-lock leak across six session-scoped
+sites (no `pg_advisory_unlock_all` pool-reset in db.py), soft-timeout leaves
+`ingest_status=running`, purge lock released before the R2 sweep, session held across
+YouTube API loops + unbounded refresh sweep, ffmpeg orphan (now timeout-bounded),
+clean/edit lacking ownership re-check. A single `pg_advisory_unlock_all` pool-reset
+listener in db.py (or migrating the six to `pg_advisory_xact_lock`) plus the
+soft-timeout `failed`-status fix would close the highest-risk half of the list.

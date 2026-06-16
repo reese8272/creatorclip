@@ -1,6 +1,7 @@
 """Thumbnail pattern analysis + concept generator endpoints (Issue 129)."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid as _uuid_mod
@@ -23,6 +24,23 @@ logger = logging.getLogger(__name__)
 # Module-level Redis singleton for pattern cache.
 _aio_redis: aredis.Redis | None = None
 
+# Single-flight lock around the billed multimodal pattern analysis (SEV1 #3).
+# Without it, N concurrent first-hits (or a degraded cache) each fire a separate
+# vision call. TTL must comfortably exceed one analyze_thumbnail_patterns round
+# trip (the underlying Anthropic client uses a 120s timeout); waiters poll the
+# cache briefly, then fall through fail-open so a stuck holder never blocks them.
+_PATTERNS_LOCK_TTL_S = 130
+_PATTERNS_WAIT_COUNT = 3
+_PATTERNS_WAIT_SLEEP_S = 0.4
+# Compare-and-delete so we never release a lock another request now holds.
+_LUA_RELEASE_LOCK = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
 
 def _get_redis() -> aredis.Redis:
     global _aio_redis
@@ -34,6 +52,74 @@ def _get_redis() -> aredis.Redis:
             socket_connect_timeout=2.0,
         )
     return _aio_redis
+
+
+async def _read_patterns_cache(redis: aredis.Redis, cache_key: str) -> dict | None:
+    """Return the cached patterns dict (with cached=True) or None on miss/error.
+
+    Fail-open: any Redis or decode error is treated as a miss so a degraded cache
+    never 500s the endpoint."""
+    try:
+        raw = await redis.get(cache_key)
+    except aredis.RedisError as exc:
+        logger.warning("thumbnail_patterns cache read failed err=%s", exc)
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    data["cached"] = True
+    return data
+
+
+async def _compute_patterns_single_flight(
+    redis: aredis.Redis,
+    *,
+    lock_id: object,
+    cache_key: str,
+    compute,
+    cache_ttl: int,
+) -> dict:
+    """Run ``compute`` under a per-creator single-flight lock (SEV1 #3).
+
+    Only the lock holder runs the (billed, multimodal) ``compute``; concurrent
+    callers poll the cache briefly for the holder's result, then fall through
+    and compute themselves so a stuck holder never blocks them. Fully fail-open
+    on Redis errors — the rate limit still bounds total exposure. ``compute`` is
+    a zero-arg sync callable run in a worker thread; it returns the patterns dict.
+    """
+    lock_key = f"thumbnail-patterns-lock:{lock_id}"
+    lock_token = str(_uuid_mod.uuid4())
+    try:
+        acquired = await redis.set(lock_key, lock_token, nx=True, ex=_PATTERNS_LOCK_TTL_S)
+    except aredis.RedisError as exc:
+        logger.warning("thumbnail_patterns lock acquire failed id=%s err=%s", lock_id, exc)
+        acquired = True
+
+    if not acquired:
+        for _ in range(_PATTERNS_WAIT_COUNT):
+            await asyncio.sleep(_PATTERNS_WAIT_SLEEP_S)
+            cached = await _read_patterns_cache(redis, cache_key)
+            if cached is not None:
+                return cached
+        # Holder still working — proceed rather than hang the request.
+
+    try:
+        patterns = await asyncio.to_thread(compute)
+        try:
+            await redis.setex(cache_key, cache_ttl, json.dumps(patterns))
+        except aredis.RedisError as exc:
+            logger.warning("thumbnail_patterns cache write failed id=%s err=%s", lock_id, exc)
+    finally:
+        # Best-effort release; if Redis is unreachable the lock expires via TTL.
+        if acquired:
+            with contextlib.suppress(aredis.RedisError):
+                await redis.eval(_LUA_RELEASE_LOCK, 1, lock_key, lock_token)  # type: ignore[misc]  # SDK/stub typing lag (Issue 78c)
+
+    patterns["cached"] = False
+    return patterns
 
 
 class ThumbnailPatternsOut(BaseModel):
@@ -55,7 +141,9 @@ class ThumbnailConceptsQueuedOut(BaseModel):
     "/me/thumbnail-patterns",
     response_model=ThumbnailPatternsOut,
 )
+@limiter.limit("10/hour", key_func=creator_key)
 async def get_thumbnail_patterns(
+    request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -65,9 +153,11 @@ async def get_thumbnail_patterns(
     Uses Claude multimodal to extract face presence, emotion, text overlay style,
     colors, and composition patterns. No new YouTube API scopes needed — thumbnail
     URLs are public at i.ytimg.com/vi/{id}/hqdefault.jpg.
-    """
-    import asyncio
 
+    Rate-limited to 10/hour per creator and guarded by a per-creator single-flight
+    lock so concurrent first-hits (or a degraded cache) cannot fan out into
+    multiple billed multimodal calls (SEV1 #3).
+    """
     from knowledge.thumbnails import (
         PATTERNS_CACHE_KEY_PREFIX,
         PATTERNS_CACHE_TTL,
@@ -76,15 +166,10 @@ async def get_thumbnail_patterns(
 
     cache_key = f"{PATTERNS_CACHE_KEY_PREFIX}{creator.id}"
 
-    try:
-        redis = _get_redis()
-        cached_raw = await redis.get(cache_key)
-        if cached_raw:
-            data = json.loads(cached_raw)
-            data["cached"] = True
-            return data
-    except Exception as exc:
-        logger.warning("thumbnail_patterns cache read failed creator=%s err=%s", creator.id, exc)
+    redis = _get_redis()
+    cached = await _read_patterns_cache(redis, cache_key)
+    if cached is not None:
+        return cached
 
     dna = await session.scalar(
         select(CreatorDna).where(
@@ -129,20 +214,14 @@ async def get_thumbnail_patterns(
             detail="Could not resolve YouTube video IDs for pattern analysis.",
         )
 
-    patterns = await asyncio.to_thread(
-        analyze_thumbnail_patterns,
-        youtube_ids,
-        creator.channel_title or "Unknown Channel",
+    channel_title = creator.channel_title or "Unknown Channel"
+    return await _compute_patterns_single_flight(
+        redis,
+        lock_id=creator.id,
+        cache_key=cache_key,
+        compute=lambda: analyze_thumbnail_patterns(youtube_ids, channel_title),
+        cache_ttl=PATTERNS_CACHE_TTL,
     )
-
-    try:
-        redis = _get_redis()
-        await redis.setex(cache_key, PATTERNS_CACHE_TTL, json.dumps(patterns))
-    except Exception as exc:
-        logger.warning("thumbnail_patterns cache write failed creator=%s err=%s", creator.id, exc)
-
-    patterns["cached"] = False
-    return patterns
 
 
 @router.post(

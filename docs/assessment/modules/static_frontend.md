@@ -1,114 +1,164 @@
-# static_frontend — assessed 2026-06-08
+# static_frontend — assessed 2026-06-16
 
 ## Findings
 
-### UX — First-run discoverability (Category A)
+### Issue-138 SEV1 fixes — VERIFIED CLOSED
 
-- [SEV2] index.html:276–315 — Hero block (get-started form + clip preview mockup) is only visible when `body.is-hero-mode` class is set by auth.js on 401. Pre-auth visitors see an empty dashboard layout with no CTA until login. The "Get clips →" form uses a basic URL regex (line 324) that silently accepts malformed URLs; user lands on onboarding with a broken URL and the form doesn't auto-fill the input, requiring re-entry | fix: (1) validate the YouTube URL regex against the actual routers/videos.py validation before auth (routers/videos.py:275 uses `YouTubeParser` which is stricter), (2) improve the 401 → hero fallback copy to be clearer ("Sign in to get started →" instead of showing an orphaned form), (3) test the `?yt=` hint auto-fill on auth.js:35-50 end-to-end; the param should survive the OAuth redirect.
+- [RESOLVED] analysis.html non-catalog crash (was SEV1) — the dead
+  `getElementById('youtube_url')` is gone. `startAnalysis()` now builds the ingest CTA
+  href from the in-scope `urlRaw` captured at line 645: analysis.html:711–713
+  `const ingestUrl = '/?yt=' + encodeURIComponent('https://www.youtube.com/watch?v=' +
+  urlRaw)`, escaped through `_esc` at :716. The only remaining `youtube_url` token is the
+  JSON request-body key at :676 (`{ youtube_url: urlRaw, query }`), which is correct.
+  The metadata-only analysis path and the Issue-125 "Ingest this video" CTA now work.
 
-- [cleanup] walkthrough.html:13–14, onboarding.html:1–6, index.html:336–350 — Three separate onboarding surfaces exist but no explicit sequential CTA linking them. A brand-new creator goes walkthrough.html → onboarding.html (hardcoded in auth.js:66) → dashboard (redirected on confirm), but the walkthrough "continue →" button at line 247 doesn't explain what comes next. A creator who skips the walkthrough and manually visits onboarding.html has no "back to dashboard" on success. The back button on review.html / analysis.html / insights.html (consistent nav links) all point to "/" (dashboard), but none point to onboarding | fix: (1) after DNA confirm in onboarding.html, redirect to `/static/profile.html` (not dismissed to dashboard) so the user sees the brief immediately and can edit identity before their first review session, (2) add a "Back" link on onboarding.html step 1 → walkthrough if they haven't confirmed yet, (3) update walkthrough.html:247 button text to "Set up my AutoClip →" (already correct; no change needed).
+- [RESOLVED] innerHTML XSS sinks (was SEV1) — all three flagged sinks now escape via the
+  shared `window.escapeHtml` (static/util.js, escapes `& < > " '`):
+  index.html:682 `${escapeHtml(v.title || '—')}` (third-party YouTube title) and :683
+  `${escapeHtml(v.youtube_video_id)}`; insights.html:574 `${escapeHtml(data.content)}`
+  (reflected LLM output) with the Save button's id `${escapeHtml(data.id)}`;
+  insights.html:605 `${escapeHtml(ins.title || 'Insight')}` and :606
+  `${escapeHtml(ins.content)}` (stored saved-insights). analysis.html:799
+  `const _esc = window.escapeHtml;` now delegates to the canonical escaper, used at
+  :703/:716/:817/:819/:943/:1114/:1201/:1325. util.js is linked in `<head>` BEFORE the
+  inline scripts on all three pages (index.html:14, insights.html:12, analysis.html:11;
+  it is a non-deferred classic script, so `window.escapeHtml` is defined before any
+  inline script at index.html:396/570, insights.html:370, analysis.html:539/631 runs).
+  Regression scan of every `innerHTML = \`...${...}\`` across static/ found no remaining
+  unescaped third-party/LLM/DB interpolation on these three pages.
 
-### UX — Empty states (Category B)
+### New finding surfaced by the regression scan
 
-- [SEV2] index.html:497–500, review.html:562–576, analysis.html (multiple endpoints with no empty state) — Multiple pages fetch data on load and display a placeholder ("Loading…" / "No clips yet") but don't distinguish between "loading", "loaded-empty", and "error". When `/videos` returns `[]`, the dashboard shows "No videos yet — link one above" but doesn't explain what "link" means (it's a collapsed `<details>` element 50px below the message). Review page shows "No clips yet — generate them from the Dashboard" but doesn't provide a "generate now →" CTA or a "back to dashboard" link. When `/creators/me/insights/analytics` fails (line 669), the grid shows a two-line error but doesn't mention "try again" or rate limits | fix: (1) extract empty-state patterns into reusable HTML blocks with a `template` element; use consistent affordances (why-no-data explanation + next-step CTA), (2) for the "no videos" case, make the "link a video" section auto-expand (details.open = true) when the table is empty, (3) on insights/analysis endpoints: if `analyticsAvailable === false`, surface an explicit "Ingest this video" CTA instead of a silent "no data" inline note (already partially done in analysis.html:705–717 for `analytics_unavailable`, but not for review/insights).
+- [SEV2] onboarding.html:461 — `el.innerHTML = \`<span class="ok">Connected as
+  ${user.channel_title || user.email}</span>\`` interpolates the third-party YouTube
+  `channel_title` into innerHTML UNESCAPED, and onboarding.html does NOT link util.js
+  (no `escapeHtml` available). Every other page renders this same value via the safe
+  `textContent` path (auth.js:83, index.html:586, analysis.html:639). This sink is
+  outside the three Issue-138 targeted, so the bulk sweep did not touch it; a channel
+  title containing `<img src=x onerror=…>` executes on the onboarding page | fix: link
+  `<script src="/static/util.js"></script>` in the head and wrap with
+  `escapeHtml(...)`, or build the node with `textContent` like the other pages.
 
-- [cleanup] index.html:388–389 — Analytics grid shows a single placeholder cell ("Loading…") instead of skeleton loader cards (4–5 cells). On a slow connection, the grid jumps from one cell to 5+ cells | fix: pre-render 5 empty analytics-cell divs and use CSS to style them as skeletal (opacity: 0.3; background: gradient) while loading. Replace on data arrival.
+### Carried forward from 2026-06-09 — STILL PRESENT
 
-### UX — In-app help / tooltips / inline hints (Category C)
+- [SEV2] profile.html:881 — `onclick="openRevokeModal('${_escape(k.id)}','${_escape(k.name)}')"`
+  — HTML-entity escaping does not protect a JS-in-attribute context (the parser decodes
+  `&#39;` back to `'` before the JS runs), so an API-key name with `');payload//` is
+  self-XSS and any apostrophe breaks the Revoke button | fix: drop the inline handler;
+  render the row, then `btn.addEventListener('click', ...)` reading `row.dataset.keyId`
+  and the name from a closure/dataset.
 
-- [OK] Tooltips are extensively used (index.html:262–263, 681–682, 311–312; insights.html:311–312, 324–326, 335–336) via `data-tooltip="..."` attribute. tooltip.js implements WCAG 1.4.13 viewport-flip logic + Escape-key dismissal. Tooltip text is plain English ("Average time viewers spent watching…") and cites the metric source.
+- [SEV2] review.html:803 + editor.js:275 — `registerTask({ taskId, streamUrl, ... })`
+  passes camelCase, but `activeTasks.registerTask` (activeTasks.js:184) requires
+  `task_id` AND `stream_url` and silently `return`s otherwise. Clean-pass and
+  transcript-edit renders are NEVER tracked in the cross-page activity panel. Every
+  other call site uses snake_case correctly | fix: rename the keys at both call sites;
+  add a `console.warn` in registerTask when required keys are missing.
 
-- [cleanup] review.html:440 — Score tooltip ("Estimated fit with your channel's content DNA…") differs in phrasing from analysis.html score explanation. analysis.html says "estimated fit with your style + audience" while review.html says "grounded in your own data, not a guarantee". Both are honest, but inconsistency suggests the codebase lacks a canonical "what is a score?" explanation | fix: extract "Score: estimated fit, 0–1 scale, grounded in your own data" as a shared constant in a helpers file (or a `<template>` HTML block) and reuse in both review.html + analysis.html tooltip.
+- [SEV2] pricing.html:312 — `const authed = !!e.detail?.creator;` is always false:
+  `/auth/me` returns `{id, channel_id, channel_title, email, onboarding_state, setup}`
+  — no `creator` key. Every signed-in user sees "Sign in to buy" and the balance bar
+  never renders on the purchase page | fix: `const authed = !!(e.detail && e.detail.id);`.
 
-### UX — Action affordances (Category D)
+- [SEV2] pricing.html:184 — `<body class="app-page">` still lacks `data-allow-anonymous`,
+  so auth.js redirects every anonymous visitor of the public pricing funnel to
+  login.html, while hero.css keeps the Pricing nav link visible in anonymous mode | fix:
+  add `data-allow-anonymous` and listen for `auth:anonymous` (renderPacks(false) already
+  pre-renders the anonymous display).
 
-- [OK] Primary actions ("Analyze →", "Generate clips", "Keep", "Build Creator DNA") use `btn btn-primary` (accent color, white text) while secondary / exploratory actions ("Rebuild", "Preview", "Skip") use `btn btn-secondary` (border-only, muted text). The pattern is consistent across all pages via _design-tokens.css + page-shell.css.
+- [SEV2] htmx CDN on index.html:12, review.html:11, insights.html:10, profile.html:10,
+  onboarding.html:10 — `<script src="https://unpkg.com/htmx.org@1.9.12">` loaded with no
+  `integrity`/`crossorigin`, and a repo-wide grep for `hx-(get|post|target|swap|trigger|
+  boost)` finds ZERO uses: unused third-party CDN script with full DOM access on five
+  authenticated pages (supply-chain risk + wasted bytes) | fix: delete the five tags; if
+  htmx is adopted later, self-host or pin with SRI.
 
-- [SEV2] index.html:515, 538 — Button text varies per analysis_mode: in "auto" mode the queue button is secondary ("Queue for analysis"), in "selective"/"manual" it's primary. No visual feedback tells the user what mode they're in. A creator switching modes on profile.html won't see the button appearance change on the dashboard without a hard refresh | fix: (1) fetch `analysis_mode` on the dashboard init (already done: line 506 reads `window.__USER__.analysis_mode`), (2) if the mode isn't present in the initial `auth:ready` payload, the page should assume "auto" rather than leaving the button text undefined, (3) on profile.html mode change, dispatch a `CustomEvent('analysis-mode:changed')` that the dashboard listens to and re-renders the button.
+- [SEV2] privacy.html:85 + tos.html:58 — both policies promise "the account deletion
+  option in your profile settings". `DELETE /auth/me` exists, but profile.html has no
+  account-deletion UI (the only DELETE in profile.html, line 968, is the API-key revoke
+  call to `/creators/me/api-keys/{id}`). The published policy describes a control that
+  does not exist (Google OAuth verification reviewers check this) | fix: add a "Delete
+  account" danger-zone to profile.html that confirms then calls `DELETE /auth/me` and
+  redirects to login.
 
-- [cleanup] profile.html:482, 535, 569 — Three separate buttons for "confirm DNA", "save identity", "save mode" all use the same `btn btn-primary` style and similar layout, but they're not visually grouped or clearly sequential. A creator filling the form top-to-bottom might save identity, save mode, then scroll back up to confirm DNA—three separate confirmations for one "get ready" flow | fix: consider a single "Save & proceed" button at the bottom of profile.html that POSTs to all three endpoints in series (with error recovery), or at least group the sections with clear section headers ("Identity", "Video intake", "API keys") so the user knows the order of operations.
+- [SEV2] early-access.html:225/230/231 vs pricing.html — two contradictory live pricing
+  surfaces: early-access sells $29/$79-per-month subscriptions ("Unlimited videos") while
+  pricing.html sells one-time minute packs ("No subscription. No expiry."). early-access
+  is also the ONLY page with no honesty-constraint statement (confirmed: 0 disclaimer
+  matches vs ≥1 on every other surface) | fix: retire early-access.html or rewrite it on
+  the minute-pack model and add the standard disclaimer block.
 
-### UX — Progress / status visibility (Category E)
+- [SEV2] review.html:702–706 (sendFeedback) — handles only `resp.ok` and the network
+  `catch`; a 4xx/5xx response does nothing (no `else`), so a Keep/Drop vote silently
+  vanishes and preference-model training data is lost without the user knowing | fix:
+  add an `else` surfacing `(await resp.json()).detail` in `#feedback-flash` with danger
+  styling.
 
-- [OK] onboarding.html:314–360 (buildDna), analysis.html:728–770 (startAnalysis), profile.html:703–711 (rebuildDna) all stream progress via SSE. progressStream.js renders step/cache/token/done events into a terminal block. The live-progress aesthetic is consistent.
+- [SEV2] index.html:777, 790 — `queueVideo()`/`generateClips()` failure path still sets
+  only `btn.textContent = 'Retry'` with no error message or danger styling | fix:
+  surface `data.detail` next to the button and color it `--color-danger`.
 
-- [SEV2] index.html:638–642 — "Queuing…" state is set on the button (line 632: `btn.textContent = 'Queuing…'`) but if the POST fails (line 636), the button text reverts to "Retry" WITHOUT clearing the "Queuing…" spinner from the user's mind. There's no visual indication that the request failed or what the error was. On a slow network, the user sees "Queue for analysis" → click → "Queuing…" → [5s later no change] → sees it says "Retry" and has to figure out what went wrong | fix: (1) on fetch error (line 639), set `btn.textContent = 'Error · Retry'` and `btn.style.color = 'var(--color-danger)'`, (2) add a status message below the button (e.g., a `<div id="queue-status">` in the cell) that shows the server error detail (from `resp.json().detail`).
+- [cleanup] analysis.html:733 & :743 — duplicate `onEvent` key in the
+  `subscribeToTaskStream` options literal; the first block (732–737) is dead (second key
+  wins) | fix: delete the first `onEvent` (merge its `step` handling into the second).
 
-- [cleanup] onboarding.html:232–290 (refreshDataGate) — Complex polling loop with two concurrent timers (`_gatePoll` and per-request logic) and a "stable ticks" heuristic (line 277–278). If the user clicks "Refresh data status" twice, `_gatePoll` is cleared and restarted (good), but the stream subscription (`_catalogSub`) is only closed if it's live (line 234–235); if the prior stream never started, there's a leak. The logic is correct but fragile | fix: (1) extract the polling + stream lifecycle into a reusable `subscribeWithFallback(apiEndpoint, pollInterval, successCondition)` helper that handles subscription cleanup on new subscription, (2) simplify the "stable ticks" heuristic: just poll until `data.ready === true` (simpler and matches the data contract), or expose a `ready_at` timestamp from the backend so the frontend stops polling when `Date.now() > ready_at + 3s`.
+- [cleanup] DRY escape helpers only PARTIALLY consolidated by Issue 138 — analysis.html
+  now delegates to `window.escapeHtml`, but editor.js:151 and profile.html:857 still
+  define their own full `_escape` copies, and activityPanel.js:147 still defines a
+  text-node-only `safe` (missing `"`/`'`). editor.js (loaded on review.html),
+  profile.html, and activityPanel.js do not link util.js, so they cannot delegate yet |
+  fix: link `static/util.js` on review.html/profile.html and replace the three local
+  helpers with `window.escapeHtml`.
 
-### UX — Error messages (Category F)
+- [cleanup] auth.js:109 defines `logout()` and six pages redefine it identically
+  (index.html:580, review.html:553, analysis.html:632, insights.html:371,
+  profile.html:622, onboarding.html:452) | fix: delete the page copies; auth.js's global
+  is loaded everywhere.
 
-- [OK] index.html:624–625, analysis.html:683–685, insights.html:529–531 (multiple endpoints) — Error responses are consistently unpacked as `await resp.json()` and `.detail` is displayed (e.g., "Error linking video." with data.detail fallback). The copy is plain English.
+- [cleanup] review.html:592 — `metaEl.textContent += ' (not yet rendered)'` is appended,
+  then immediately overwritten by the line-595 assignment, so the hint never shows | fix:
+  compose the meta line first, then append the suffix.
 
-- [SEV2] index.html:608 — If `extractYouTubeId(raw)` fails (line 603), the status is set to "Enter a YouTube video ID or URL." but the input is left populated. User sees an error but their text is still in the box, so they might click again thinking it's a transient error. No "clear" button or affordance to fix the input | fix: (1) on validation failure, also `input.select()` to highlight the bad text, (2) add a "Clear and try again" link next to the error, (3) if the extracted ID is malformed, POST it anyway and let the backend validation error come back with a richer detail message (e.g., "Video ID must be 11 alphanumeric characters").
+- [cleanup] pricing.html:196 — `<span id="nav-auth">` is never populated by any script
+  (auth.js writes `#nav-user`/`#nav-balance`), so signed-in users get no name/logout on
+  the pricing nav | fix: use the standard `#nav-user` + logout pattern.
 
-### UX — Navigation coherence (Category G)
+- [cleanup] _design-tokens.css:20 — Google Fonts loaded via render-blocking `@import`
+  from fonts.googleapis.com; leaks visitor IPs to Google on every page (German GDPR
+  rulings have sanctioned this) and is on the pre-launch critical path | fix: self-host
+  Inter + JetBrains Mono (woff2) before EU-facing launch.
 
-- [OK] Nav structure is consistent across all pages: `<nav class="nav">` with `.nav-brand`, `.nav-links` (dashboard / review / insights / profile / analyze / pricing), `.nav-spacer`, user name, balance, help link (?), logout. The pattern is identical on every authenticated page.
+- [cleanup] index.html:654 — `loadVideos()` issues one `/videos/{id}/clips` fetch per
+  done video on every load and poll refresh (client-side N+1; 50 videos → 50 parallel
+  requests) | fix: have `/videos` return `clips_total`/`clips_rendered` counts per row
+  and drop the fan-out.
 
-- [cleanup] onboarding.html:138–142, walkthrough.html (no nav) — onboarding.html has a minimal nav (brand + logout) because it's a setup flow. walkthrough.html has NO nav (only footer links at line 298–302). If a creator sees the walkthrough in a small window, they have NO way to navigate home or to another page. The footer is small and easy to miss. No visual escape hatch if they land on walkthrough by accident | fix: (1) add a minimal nav to walkthrough.html matching onboarding.html, (2) add a "Skip walkthrough" button in the top-right corner (lined button, not primary), (3) if the user is already authenticated (onboarding_state > 'connected'), show the full nav + a "Back to dashboard" button at the top.
-
-- [cleanup] The walkthrough.html and onboarding.html footer links (tos / privacy) are styled inline with `<footer class="footer">`, but the footer appears at the bottom of the viewport even on a short page (e.g., walkthrough on mobile). The footer should be sticky or the page should have a minimum height to avoid awkward visual breakage | fix: add a `min-height: 100vh; display: flex; flex-direction: column;` to walkthrough/onboarding bodies, and use `flex: 1` on the main content to push the footer down. (Already done on index.html line 22, onboarding.html line 20—these pages just need the same pattern.)
-
-### UX — Honesty Constraint compliance (Category H)
-
-- [OK] Grep across all static files found ZERO instances of "go viral", "will trend", or "guaranteed [growth]". Honesty statements appear on every page:
-  - "AutoClip predicts fit with your style and audience — it does not promise virality" (index.html:271, review.html:329, insights.html:278, etc.)
-  - "Recommendations are estimates grounded in your own data, not guarantees" (walkthrough.html:252, analysis.html:496–497, tos.html).
-  - The `<div class="disclaimer">` appears below every nav and is consistent styling.
-
-### Standard Rubric § 3 — Security & compliance
-
-- [OK] No OAuth tokens, API keys, or PII appear in the JavaScript. auth.js:28 receives `/auth/me` response with user data but doesn't log it. Tokens are stored server-side in encrypted cookies (Fernet-encrypted, per routers/auth.py).
-
-- [OK] No environment variables or hardcoded secret endpoints in JS. API calls use relative paths (`/auth/me`, `/videos`, etc.) or template literals that are safe (`/creators/me/dna`, `/clips/${currentClip.id}/feedback`).
-
-### Standard Rubric § 6 — Code cleanliness & typing
-
-- [cleanup] activeTasks.js:1–46, progressStream.js:19–110, activityPanel.js:1–50 — These are well-commented but could use JSDoc types on the public APIs (e.g. `/**@param {string} url*/`, `/**@returns {Object}*/`). The code is vanilla JS with no TypeScript, which matches the repo decision. No `console.log` or `TODO` found.
-
-- [cleanup] review.html:529–543 — `APPROVE_TAGS` and `DENY_TAGS` are inline arrays defined in a `<script>` block. The tag list mirrors API shape but isn't fetched from the backend. If new tags are added to the clip-feedback schema, this frontend list will silently fall out of sync | fix: either (1) fetch `GET /creators/me/feedback-tags` on page load to populate the tag grid dynamically, or (2) document the tag list in a backend config endpoint and embed a comment in the code linking to the routers endpoint that defines the canonical list.
-
-- [cleanup] Multiple `<script>` blocks in single-page HTML files (e.g., index.html has 4 inline script blocks: lines 317–333, 443–776, 778–796). No bundler, no build step. This is fine for a small frontend, but increases code size and parse time. No minification applied. The cache-bust comment (line 784: `<!-- cache-bust: 2026-06-08 -->`) is manual.
-
-### Standard Rubric § 7 — Error handling & API surface
-
-- [OK] fetch() calls check `resp.ok` before calling `resp.json()` (index.html:490–492, analysis.html:682–685, profile.html:632, etc.). Most catch errors and display them.
-
-- [SEV2] editor.js (line 200+, code not fully read) — The file ends at line 150 but the complete editor state machine (~200+ additional lines) wasn't read. The JS file is 396 lines total. Error handling for POST /clips/{id}/cuts and polling for cleaned_render_uri (review.html:808–822) uses a 2-minute timeout with no fallback if the server is slow | fix: (1) read the complete editor.js to ensure no silent failures, (2) add a retry button if a clean render fails or times out.
-
-- [cleanup] analysis.html:643–650 — The alert() calls (lines 648–649) should be replaced with DOM-based error messages. They're blocking and disruptive on mobile. The `if (!urlRaw)` check is input validation, not an error from the API, so an alert is the wrong affordance | fix: show inline validation errors in the form (red text below the input) using the `<div id="low-balance-warning">` pattern already established.
-
-### Standard Rubric § 8 — Config & paths
-
-- [OK] All fetch() calls use relative paths (`/auth/me`, `/videos`, `/creators/me/dna`, `/clips/{id}/feedback`) or `encodeURIComponent()` for user-supplied strings (index.html:332, analysis.html:675–676, review.html:696). No hardcoded localhost or IP addresses.
-
-### Standard Rubric § 2 — Concurrency & scale
-
-- [cleanup] Multiple concurrent EventSources can be open (activeTasks.js:144 opens one per task in localStorage). At scale (10+ concurrent tasks per user), each EventSource consumes a browser connection slot. This is probably OK (browsers allow ~6–10 concurrent HTTP connections per host), but if a creator queues 15 clip renders, some streams might be stalled waiting for connection slots | fix: (1) run a load test with 20 concurrent tasks and confirm no visible lag, (2) if needed, implement a pool: only open 3 EventSources at a time and queue the rest (low priority—unlikely to hit in practice).
-
-- [OK] No blocking calls found in async contexts. Activities like DNA build / analysis run server-side (Celery) and stream progress via EventSource, not via polling `while (true)`.
-
-## Additional findings — UX-critical
-
-- [BLOCKER] index.html:769–770 — The polling loop `_pollTimer = setInterval(...)` to check video ingest status polls every 5 seconds and NEVER stops if in-flight videos stall. If a video gets stuck in "pending" or "running" state on the server, the client will poll forever until the user navigates away. There's no stop condition other than "all videos are done or failed". On a creator's machine with the dashboard open 24/7, this becomes a background battery drain | fix: (1) add a max-retries cap (e.g., 120 polls = 10 minutes, then give up and show an error), (2) exponential backoff after the first 3 failures (5s → 10s → 20s), (3) show a "video stuck" warning if no progress for >5 min.
-
-- [SEV2] index.html:557–589 — The `_registerInFlightIngests()` function walks `videos[]` and registers in-flight tasks, but if the API returns a stale list (e.g., creator has slow network and the /videos request times out), the code might skip real tasks. This is a race condition | fix: (1) on /videos fetch error, don't clear the in-flight task list (keep showing them), (2) deduplicate: check `tracked.has(v.id)` BEFORE registering, so double-registration doesn't happen.
+Re-verified: no virality promise anywhere (the only `viral`/`guarantee` hits are
+anti-virality framing — login.html:137 "audience-fit over generic virality",
+analysis.html:586 "cannot guarantee specific CTR or view outcomes"). Honesty disclaimer
+present on every authenticated/public surface except early-access.html (flagged). No
+OAuth tokens or secrets in any JS; all API fetch paths are relative; user input passes
+through `encodeURIComponent`. The dashboard ingest-polling BLOCKER fixed in the
+2026-06-08 sweep remains fixed (bounded ticks, backoff, hidden-tab pause).
 
 ## Rubric coverage
-
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | n/a (frontend) |
-| 2 Concurrency & scale | ok — EventSource pooling not needed at current load |
-| 3 Security & compliance | ok — no tokens/secrets, per-creator data routed via auth, honesty constraint enforced |
-| 4 Clip-quality | n/a (frontend) |
-| 5 Anthropic SDK | n/a (frontend) |
-| 6 Cleanliness & typing | needs-work — duplicated error message patterns, inline tag lists, scattered inline <script> blocks |
-| 7 Error handling / API | needs-work — missing affordances on transient errors, alerts instead of inline feedback |
-| 8 Config & paths | ok — relative paths, proper encoding |
+| 1 Resource lifecycle | n/a (frontend; EventSources closed on terminal events, polls bounded) |
+| 2 Concurrency & scale | 1 finding (client N+1 in loadVideos; EventSource-per-task acceptable at the ≤3-slot cap) |
+| 3 Security & compliance | 6 findings (NEW onboarding channel_title innerHTML sink; JS-in-attribute escape bug; htmx CDN w/o SRI; deletion UI promised but absent; fonts-CDN PII) — both Issue-138 SEV1 XSS/dead-id fixes VERIFIED CLOSED; no tokens/secrets in JS; honesty constraint green except early-access.html |
+| 4 Clip-quality | n/a (frontend; principle + setup→peak→end surfaced read-only in review.html) |
+| 5 Anthropic SDK | n/a (frontend; LLM streams consumed via SSE only) |
+| 6 Cleanliness & typing | 5 findings (duplicate onEvent key; escape-helper consolidation only partial; 6× logout copies; dead meta suffix; unpopulated nav-auth) |
+| 7 Error handling / API | 3 findings (silent feedback failure; Retry-with-no-reason; pricing auth flag) |
+| 8 Config & paths | ok — relative fetch paths, encodeURIComponent on user input, no hardcoded hosts |
 
 ## Module verdict
-
-**NEEDS-WORK** — The frontend is coherent and largely works, but UX gaps will make the app feel "barren" to new users. Three concrete issues impact discoverability: (1) The pre-auth hero CTA is hidden on 401 instead of replacing the empty dashboard, making it unclear how to get started. (2) Empty states lack "what do I do next?" CTAs—the user lands on an empty page with no affordance to proceed. (3) Error messages are silent (button state changes with no explanation), and the video ingest polling loop never stops. These are fixable with straightforward DOM updates and state machine improvements. The design tokens, CSS architecture, and honesty-constraint compliance are solid; the issue is UX *completeness*, not correctness.
-
+NEEDS-WORK — both Issue-138 SEV1s (analysis non-catalog crash, the three innerHTML XSS
+sinks) are verified closed with util.js correctly linked and ordered; no BLOCKER and no
+token/cross-tenant exposure remain. The regression scan surfaced one new SEV2 the sweep
+left behind (onboarding.html:461 interpolates the third-party YouTube channel_title into
+innerHTML unescaped, and onboarding does not link util.js), and the prior SEV2/cleanup
+backlog — JS-in-attribute escape bug, broken activity-panel registration, signed-in
+pricing telling users to "Sign in to buy", missing account-deletion UI the policies
+promise, unused htmx CDN — is still entirely open.

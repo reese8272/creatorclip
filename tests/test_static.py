@@ -1106,12 +1106,12 @@ def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
     # Issue 137 added `app-page` alongside `editor-page` on <body> for the
     # shared aurora/glass shell, so the class attribute is now a list. The
     # load-bearing assertion is that `editor-page` is still in the class list.
-    assert 'class="editor-page"' in src \
-        or 'class="editor-page ' in src \
-        or 'class="editor-page\t' in src \
-        or "editor-page app-page" in src, (
-        "review.html <body> must carry .editor-page to opt into dark mode."
-    )
+    assert (
+        'class="editor-page"' in src
+        or 'class="editor-page ' in src
+        or 'class="editor-page\t' in src
+        or "editor-page app-page" in src
+    ), "review.html <body> must carry .editor-page to opt into dark mode."
     assert 'class="editor-shell"' in src, "Three-pane shell wrapper must be present."
     assert 'class="editor-transcript"' in src, "Always-visible transcript pane must be present."
     assert 'class="editor-tools"' in src, "Icon-strip nav must be present."
@@ -1249,9 +1249,7 @@ def test_static_cachebust_middleware_sets_no_store_on_html(client):
         resp = client.get(path)
         assert resp.status_code == 200
         cc = resp.headers.get("cache-control", "")
-        assert "no-store" in cc, (
-            f"{path}: Cache-Control must include no-store but got {cc!r}"
-        )
+        assert "no-store" in cc, f"{path}: Cache-Control must include no-store but got {cc!r}"
 
 
 def test_static_cachebust_middleware_strips_etag_from_html(client):
@@ -1336,14 +1334,13 @@ def test_issue_137_authenticated_pages_link_page_shell_and_opt_in():
     static_dir = pathlib.Path(__file__).parent.parent / "static"
     for page in _ISSUE_137_AUTHENTICATED_PAGES:
         src = (static_dir / page).read_text()
-        assert '/static/page-shell.css' in src, (
+        assert "/static/page-shell.css" in src, (
             f"{page}: must <link> /static/page-shell.css for the shared shell."
         )
         # Body must carry `app-page` (review.html keeps editor-page too;
         # the class list ordering is not pinned, just presence).
         assert 'class="app-page"' in src or 'class="editor-page app-page"' in src, (
-            f"{page}: <body> must include the app-page class to opt into the "
-            f"page-shell rules."
+            f"{page}: <body> must include the app-page class to opt into the page-shell rules."
         )
 
 
@@ -1399,3 +1396,73 @@ def test_issue_137_page_shell_loaded_via_html_route_and_cachebust_applied(client
         "page-shell.css must carry a cache-bust ?v=<sha> query string so "
         "deploys force a fresh fetch."
     )
+
+
+# ── Issue 138 — SEV1 #1/#2: XSS sinks + shared escapeHtml + dead-id fix ────────
+
+
+def test_shared_escape_util_exists_and_is_complete():
+    """SEV1 #1: static/util.js must define a single escapeHtml that escapes all
+    five HTML-significant chars INCLUDING the apostrophe — the prior per-page
+    helpers were inconsistent (analysis.html `_esc` missed `'`; activityPanel.js
+    `safe` was text-node only)."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "util.js").read_text()
+    assert "function escapeHtml" in src
+    assert "window.escapeHtml" in src
+    for needle in ("&amp;", "&lt;", "&gt;", "&quot;", "&#39;"):
+        assert needle in src, f"escapeHtml must map {needle!r}"
+
+
+def test_index_escapes_third_party_video_title():
+    """SEV1 #1: YouTube titles (third-party via /videos/link) must be escaped
+    before reaching tbody.innerHTML — otherwise a hostile title is stored XSS
+    on the dashboard."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
+    assert '<script src="/static/util.js"></script>' in src
+    assert "escapeHtml(v.title" in src
+    assert "escapeHtml(v.youtube_video_id)" in src
+    # The raw unescaped sink must be gone.
+    assert "${v.title || '—'}" not in src
+
+
+def test_insights_escapes_llm_and_persisted_content():
+    """SEV1 #1: LLM analysis output (reflected) and persisted saved-insights
+    (stored XSS on every page load) must be escaped before innerHTML."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "insights.html").read_text()
+    assert '<script src="/static/util.js"></script>' in src
+    assert "escapeHtml(data.content)" in src
+    assert "escapeHtml(ins.title" in src
+    assert "escapeHtml(ins.content)" in src
+    # Raw stored-XSS sinks gone.
+    assert "${ins.content}" not in src
+    assert "${data.content} <button" not in src
+
+
+def test_analysis_escape_includes_apostrophe_via_shared_util():
+    """SEV1 #1: analysis.html must use the shared escaper (which escapes the
+    apostrophe), not the old local `_esc` that missed it."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "analysis.html").read_text()
+    assert '<script src="/static/util.js"></script>' in src
+    assert "_esc = window.escapeHtml" in src
+
+
+def test_analysis_ingest_cta_uses_urlraw_not_dead_id():
+    """SEV1 #2: the 'Ingest this video' CTA built the URL from a non-existent
+    element id ('youtube_url'; the real input is 'url-input'), throwing a
+    TypeError that killed the entire non-catalog analysis path. It must build
+    from the in-scope urlRaw instead."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "analysis.html").read_text()
+    assert "getElementById('youtube_url')" not in src, (
+        "Dead element id must be gone — it throws and kills the analysis path."
+    )
+    assert "'https://www.youtube.com/watch?v=' + urlRaw" in src

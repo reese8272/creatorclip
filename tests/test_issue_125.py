@@ -330,17 +330,13 @@ def test_issue_125_analysis_queued_out_has_analytics_available_field():
     assert "analytics_available" in fields, (
         "AnalysisQueuedOut must carry analytics_available (Issue 125)."
     )
-    assert "has_metrics" in fields, (
-        "has_metrics must remain alongside as the back-compat alias."
-    )
+    assert "has_metrics" in fields, "has_metrics must remain alongside as the back-compat alias."
 
 
 def test_issue_125_analysis_route_populates_analytics_available_identically():
     """Read the source: the route handler must populate analytics_available
     from the same has_metrics value, so the two fields can never drift."""
-    src = (
-        pathlib.Path(__file__).parent.parent / "routers" / "analysis.py"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "routers" / "analysis.py").read_text()
     # Both fields must appear in the same return dict and reference has_metrics.
     assert '"analytics_available": has_metrics' in src, (
         "analytics_available must be populated directly from has_metrics so "
@@ -354,14 +350,10 @@ def test_issue_125_analysis_route_populates_analytics_available_identically():
 def test_issue_125_profile_html_intake_mode_form_with_three_radios():
     """The profile page must offer all three modes as radios + wire to the
     PATCH endpoint via saveAnalysisMode()."""
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "profile.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "profile.html").read_text()
     assert 'id="intake-mode-form"' in src
     for mode in ("auto", "selective", "manual"):
-        assert f'value="{mode}"' in src, (
-            f"profile.html must offer a radio for analysis_mode={mode}"
-        )
+        assert f'value="{mode}"' in src, f"profile.html must offer a radio for analysis_mode={mode}"
     assert "/creators/me/analysis-mode" in src, (
         "profile.html must POST/PATCH to /creators/me/analysis-mode"
     )
@@ -372,9 +364,7 @@ def test_issue_125_index_html_has_what_costs_minutes_tooltip():
     """The dashboard nav must expose the 'what costs minutes' explainer
     via the existing tooltip system so the user can answer the question
     without leaving the page."""
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "index.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
     # The tooltip system from Issue 124 reads data-tooltip on focusable spans.
     assert "data-tooltip=" in src
     # The honesty copy must mention what's billable AND what's free — pinning
@@ -390,9 +380,7 @@ def test_issue_125_index_html_has_what_costs_minutes_tooltip():
 def test_issue_125_index_html_queue_button_wired_to_endpoint():
     """The dashboard must surface a Queue CTA for pending videos — and that
     CTA must hit /videos/{id}/queue, not silently call generate-clips."""
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "index.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
     assert "queueVideo(" in src, "dashboard must define a queueVideo() handler"
     assert "/queue" in src, "queueVideo() must POST to the /queue endpoint"
     assert "Queue for analysis" in src, (
@@ -403,9 +391,7 @@ def test_issue_125_index_html_queue_button_wired_to_endpoint():
 def test_issue_125_analysis_html_has_explicit_unavailable_surface():
     """The analysis page must carry a dedicated element for the analytics-
     unavailable copy (with an Ingest CTA), not bury it inline."""
-    src = (
-        pathlib.Path(__file__).parent.parent / "static" / "analysis.html"
-    ).read_text()
+    src = (pathlib.Path(__file__).parent.parent / "static" / "analysis.html").read_text()
     assert 'id="analytics-unavailable"' in src
     # The fallback copy MUST be honest about what runs in metadata-only mode.
     assert "Full analytics unavailable" in src

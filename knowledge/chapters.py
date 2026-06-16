@@ -52,8 +52,7 @@ Return ONLY a valid JSON object with this exact schema:
       "timestamp_formatted": "<YouTube format, e.g. 0:00 or 4:23 or 1:02:45>",
       "title": "<string, max 40 chars>"
     }
-  ],
-  "description_block": "<ready-to-paste YouTube description, e.g. 0:00 Intro\n4:23 Title...>"
+  ]
 }
 
 Return valid JSON ONLY — no preamble, no markdown code fences, no extra text."""
@@ -206,7 +205,12 @@ def generate_chapters(
         client,
         task_id,
         model=_HAIKU_MODEL,
-        max_tokens=512,
+        # 2000 (was 512): a 1h+ video yields 20+ chapters whose JSON exceeded
+        # the 512-token cap, truncating the response and failing all 3 retries
+        # identically. description_block was also dropped from the output schema
+        # (parse_chapters rebuilds it in Python), so the model spends its budget
+        # only on the chapters array.
+        max_tokens=2000,
         system=system,
         messages=messages,
     )
