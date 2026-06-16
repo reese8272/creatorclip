@@ -22,6 +22,7 @@ Then read the percentile table. What to look for is documented in tests/perf/REA
 from __future__ import annotations
 
 import os
+import random
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -32,15 +33,28 @@ SESSION_COOKIE = "cc_session"
 _ALGORITHM = "HS256"
 
 
+def _creator_ids() -> list[str]:
+    """Seeded creator ids to spread load across.
+
+    The rate limiter is per-creator (limiter.creator_key), so a single creator
+    caps real DB load at the per-creator limit and the test mostly exercises the
+    rate limiter, not the connection pool (axis A). Set CC_CREATOR_IDS (comma-
+    separated) to fan out across N seeded creators and actually stress the pool.
+    Falls back to the single CC_CREATOR_ID for backward compatibility.
+    """
+    ids = os.environ.get("CC_CREATOR_IDS", "") or os.environ["CC_CREATOR_ID"]
+    return [s.strip() for s in ids.split(",") if s.strip()]
+
+
 def _mint_token() -> str:
     """Mint a session JWT the same way auth.create_session_token does.
 
-    Requires CC_JWT_SECRET (the staging JWT_SECRET_KEY) and CC_CREATOR_ID
-    (a seeded creator). Kept in lock-step with auth.py — if the auth scheme
-    changes, this must change too.
+    Requires CC_JWT_SECRET (the staging JWT_SECRET_KEY) and CC_CREATOR_ID or
+    CC_CREATOR_IDS. Kept in lock-step with auth.py — if the auth scheme changes,
+    this must change too.
     """
     secret = os.environ["CC_JWT_SECRET"]
-    creator_id = os.environ["CC_CREATOR_ID"]
+    creator_id = random.choice(_creator_ids())  # noqa: S311 — load distribution, not crypto
     now = datetime.now(UTC)
     payload = {
         "sub": str(uuid.UUID(creator_id)),
