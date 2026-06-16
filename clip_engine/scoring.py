@@ -239,7 +239,7 @@ async def score_candidates(
         max_tokens=1200,
         system=[
             {"type": "text", "text": static_text},
-            {  # type: ignore[typeddict-unknown-key]  # SDK/stub typing lag (Issue 78c)
+            {
                 "type": "text",
                 "text": f"CREATOR DNA:\n{dna_brief}",
                 "cache_control": {"type": "ephemeral", "ttl": "1h"},
@@ -248,11 +248,17 @@ async def score_candidates(
         messages=[{"role": "user", "content": user_text}],
     )
 
+    # anthropic>=0.105 exposes per-TTL cache-write tiers on usage.cache_creation;
+    # cached_write_1h lets us confirm the ttl:"1h" breakpoint actually lands in
+    # the 1-hour tier (not the default 5-min one). Defensive getattrs keep the
+    # line working if usage.cache_creation is None (no write this call).
+    _cache_creation = getattr(response.usage, "cache_creation", None)
     logger.info(
-        "clip_scoring tokens: in=%d cached_read=%d cached_write=%d out=%d",
+        "clip_scoring tokens: in=%d cached_read=%d cached_write=%d cached_write_1h=%d out=%d",
         response.usage.input_tokens,
-        getattr(response.usage, "cache_read_input_tokens", 0),
-        getattr(response.usage, "cache_creation_input_tokens", 0),
+        getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        getattr(_cache_creation, "ephemeral_1h_input_tokens", 0) or 0,
         response.usage.output_tokens,
     )
 

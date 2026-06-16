@@ -142,7 +142,7 @@ def analyze_thumbnail_patterns(
     response = _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=512,
-        messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]  # SDK/stub typing lag (0.40.0 TypedDict doesn't model list[dict] as valid content)
+        messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]  # SDK stub doesn't model a locally-built list[dict] of content blocks as valid content
     )
 
     logger.info(
