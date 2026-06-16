@@ -15,7 +15,7 @@ from billing.ledger import check_balance_for_minutes, check_positive_balance, vi
 from config import settings
 from db import get_session
 from limiter import creator_key, limiter
-from models import Creator, IngestStatus, OnboardingState, Video, VideoKind
+from models import Creator, IngestStatus, OnboardingState, Video, VideoKind, VideoOrigin
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 from worker.storage import upload_file
 from worker.tasks import start_pipeline
@@ -36,6 +36,11 @@ class VideoListItemOut(BaseModel):
     ingest_status: str
     duration_s: float | None
     created_at: str
+    # Issue 139: provenance lets the dashboard tell a clip-trackable upload from
+    # a linked video that still needs its source file. ``clippable`` is the
+    # derived convenience flag (True only when stored media exists).
+    origin: str
+    clippable: bool
 
 
 class VideoListOut(BaseModel):
@@ -87,13 +92,14 @@ async def list_videos(
 ) -> dict:
     """List all videos for the current creator, newest first.
 
-    Excludes catalog-only rows (``source_uri IS NULL``) — those are DNA-only
-    references created by ``sync_channel_catalog`` and never enter the local
-    clip pipeline. Surfacing them would show "N pending forever" on the
-    dashboard and have the polling loop hammer ``/status`` for rows that will
-    never transition. ``source_uri IS NULL`` is the canonical discriminator
-    for catalog-only state (see ``docs/SOT.md`` data-model section).
-    (Issue 90 — surfaced by Issue 88's display-vs-filter audit.)
+    Excludes catalog-only rows (``origin == catalog``) — those are DNA/analytics
+    references upserted by ``sync_video_catalog`` and have no stored media.
+    Surfacing them would show "N pending forever" on the dashboard and have the
+    polling loop hammer ``/status`` for rows that will never transition.
+    Linked rows (``origin == link``) ARE shown — they were previously hidden by
+    the old ``source_uri IS NULL`` heuristic, the SEV1 fixed in Issue 139 — but
+    carry ``clippable: false`` so the UI offers an "upload your source file"
+    affordance instead of a doomed clip CTA (we never download from YouTube).
 
     Returns a ``VideoListOut`` envelope (DECISIONS 2026-06-08). When the list
     is empty the response carries a ``message`` + ``next_action`` keyed to the
@@ -102,7 +108,7 @@ async def list_videos(
     """
     result = await session.execute(
         select(Video)
-        .where(Video.creator_id == creator.id, Video.source_uri.isnot(None))
+        .where(Video.creator_id == creator.id, Video.origin != VideoOrigin.catalog)
         .order_by(Video.created_at.desc())
     )
     videos = list(result.scalars())
@@ -115,6 +121,9 @@ async def list_videos(
             "ingest_status": v.ingest_status.value,
             "duration_s": v.duration_s,
             "created_at": v.created_at.isoformat(),
+            "origin": v.origin.value,
+            # Only uploaded videos carry stored media and can run the pipeline.
+            "clippable": v.source_uri is not None,
         }
         for v in videos
     ]
@@ -185,6 +194,7 @@ async def link_video(
         youtube_video_id=youtube_video_id,
         kind=kind,
         duration_s=duration_s,
+        origin=VideoOrigin.link,
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
@@ -289,6 +299,7 @@ async def upload_video(
         kind=kind,
         duration_s=duration_s,
         source_uri=source_uri,
+        origin=VideoOrigin.upload,
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
@@ -362,6 +373,18 @@ async def queue_video_for_analysis(
     video = await session.get(Video, video_id)
     if not video or video.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Video not found")
+    # Issue 139: the ingest pipeline needs stored source media — we never
+    # download from YouTube (ToS). A linked/catalog row has no source_uri, so
+    # queuing it would fail ingest with a confusing error. Reject up front with
+    # an actionable 409 pointing the creator at the upload path instead.
+    if video.source_uri is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This video has no source file to analyse. Upload the original "
+                "video file (e.g. from Google Takeout) to generate clips."
+            ),
+        )
     if video.ingest_status != IngestStatus.pending:
         # Already in flight or terminal — nothing to do; return current state
         # so the caller can refresh its row without seeing a 4xx.

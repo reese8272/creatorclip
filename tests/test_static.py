@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import IngestStatus, OnboardingState, VideoKind
+from models import IngestStatus, OnboardingState, VideoKind, VideoOrigin
 
 # ── Root and static routes ────────────────────────────────────────────────────
 
@@ -97,6 +97,8 @@ def _mock_video(creator_id, title="Test video", yt_id="abc123"):
     v.ingest_status = IngestStatus.done
     v.duration_s = 600.0
     v.created_at = datetime.datetime.now(datetime.UTC)
+    v.origin = VideoOrigin.upload
+    v.source_uri = f"source/{creator_id}/{yt_id}.mp4"
     return v
 
 
@@ -190,8 +192,20 @@ def test_list_videos_response_has_required_keys(client):
         app.dependency_overrides.clear()
 
     item = resp.json()["videos"][0]
-    for key in ("id", "youtube_video_id", "title", "kind", "ingest_status", "created_at"):
+    for key in (
+        "id",
+        "youtube_video_id",
+        "title",
+        "kind",
+        "ingest_status",
+        "created_at",
+        "origin",
+        "clippable",
+    ):
         assert key in item
+    # Issue 139: an uploaded video is clip-trackable; provenance is surfaced.
+    assert item["origin"] == "upload"
+    assert item["clippable"] is True
 
 
 # ── Issue 90: catalog-only rows excluded from /videos list ───────────────────
@@ -836,8 +850,9 @@ def test_profile_page_exposes_api_keys_section():
 
 
 def test_list_videos_excludes_catalog_only_rows(client):
-    """The SELECT must filter `Video.source_uri IS NOT NULL`. Verified by
-    introspecting the SQLAlchemy statement passed to session.execute.
+    """The SELECT must filter out catalog-only rows via `Video.origin != catalog`
+    (Issue 139 — replaced the old `source_uri IS NOT NULL` heuristic that wrongly
+    hid linked videos). Verified by introspecting the SQLAlchemy statement.
     """
     captured_statements: list = []
     creator = _mock_creator()
@@ -867,9 +882,10 @@ def test_list_videos_excludes_catalog_only_rows(client):
     assert resp.status_code == 200
     assert len(captured_statements) == 1
     compiled = str(captured_statements[0].compile(compile_kwargs={"literal_binds": True}))
-    assert "source_uri IS NOT NULL" in compiled, (
-        "list_videos must filter Video.source_uri.isnot(None) so catalog-only "
-        "(DNA-reference) rows don't pollute the dashboard. (Issue 90)"
+    assert "origin != 'catalog'" in compiled or "origin <> 'catalog'" in compiled, (
+        "list_videos must filter Video.origin != catalog so catalog-only "
+        "(DNA-reference) rows don't pollute the dashboard, while linked videos "
+        "still appear. (Issue 139, supersedes Issue 90's source_uri heuristic)"
     )
 
 

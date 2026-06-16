@@ -20,9 +20,9 @@ canonical mapping:
 |------|-----------|------------------|
 | **CreatorClip** | The product / brand / code name | `CLAUDE.md`, docs, Docker image `ghcr.io/reese8272/creatorclip` |
 | **autoclip** | The **server directory** the app is deployed into | `/opt/autoclip` on the VM; `deploy.yml` target path |
-| **agenticlip.studio** | The **public domain** | Cloudflare DNS, `OAUTH_REDIRECT_URI`, `ALLOWED_ORIGINS`, `APP_BASE_URL`, the `/health` smoke test |
+| **autoclip.studio** | The **public domain** | Cloudflare DNS, `OAUTH_REDIRECT_URI`, `ALLOWED_ORIGINS`, `APP_BASE_URL`, the `/health` smoke test |
 
-> When in doubt: **image = creatorclip, folder = /opt/autoclip, URL = agenticlip.studio.**
+> When in doubt: **image = creatorclip, folder = /opt/autoclip, URL = autoclip.studio.**
 
 ---
 
@@ -66,7 +66,7 @@ These are read by `config.py` (pydantic-settings). **Required** vars have no def
 | `TOKEN_ENCRYPTION_KEY` | 🔑 | ✅ | Fernet key encrypting YouTube OAuth tokens at rest | `python -c "from crypto import generate_key; print(generate_key())"` |
 | `JWT_SECRET_KEY` | 🔑 | ✅ | Signs session JWTs (≥32 bytes) | `openssl rand -hex 32` |
 | `JWT_EXPIRY_MINUTES` | – | – (`60`) | Session lifetime | n/a |
-| `ALLOWED_ORIGINS` | – | ✅ | CORS allow-list. **In production: exactly `https://agenticlip.studio`** — never `*`, never localhost. | You set it |
+| `ALLOWED_ORIGINS` | – | ✅ | CORS allow-list. **In production: exactly `https://autoclip.studio`** — never `*`, never localhost. | You set it |
 
 ### AI / LLM / embeddings
 
@@ -102,7 +102,7 @@ These are read by `config.py` (pydantic-settings). **Required** vars have no def
 | `STRIPE_SECRET_KEY` | 🔑 | ⚠️ | Server-side Stripe key (`sk_live_…`/`sk_test_…`). Empty ⇒ billing disabled. | dashboard.stripe.com → Developers → API keys |
 | `STRIPE_PUBLISHABLE_KEY` | – | ⚠️ | Browser key (`pk_…`) used in `pricing.html` | same screen |
 | `STRIPE_WEBHOOK_SECRET` | 🔑 | ⚠️ | Verifies webhook signatures (`whsec_…`) | Stripe → Developers → Webhooks → your endpoint |
-| `APP_BASE_URL` | – | – (`localhost`) | Public base for Stripe redirect/cancel URLs. **Prod: `https://agenticlip.studio`** | n/a |
+| `APP_BASE_URL` | – | – (`localhost`) | Public base for Stripe redirect/cancel URLs. **Prod: `https://autoclip.studio`** | n/a |
 | `FREE_TRIAL_MINUTES` | – | – (`60`) | Minutes granted on first login | n/a |
 
 ### Google / YouTube OAuth
@@ -111,13 +111,13 @@ These are read by `config.py` (pydantic-settings). **Required** vars have no def
 |-----|:------:|:--------:|--------------|-----------------|
 | `GOOGLE_OAUTH_CLIENT_ID` | – | ✅ | OAuth client id (`….apps.googleusercontent.com`) | console.cloud.google.com → APIs & Services → Credentials |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | 🔑 | ✅ | OAuth client secret | same Credentials screen |
-| `OAUTH_REDIRECT_URI` | – | ✅ | Callback URL. **Prod: `https://agenticlip.studio/auth/callback`** — must match the Google console exactly. | you set it; register it in Google |
+| `OAUTH_REDIRECT_URI` | – | ✅ | Callback URL. **Prod: `https://autoclip.studio/auth/callback`** — must match the Google console exactly. | you set it; register it in Google |
 
 ### Deploy / tunnel
 
 | Var | Secret? | Required | What it does | Where to get it |
 |-----|:------:|:--------:|--------------|-----------------|
-| `CLOUDFLARE_TUNNEL_TOKEN` | 🔑 | ✅ (prod) | Auth token for the `cloudflared` service in `docker-compose.prod.yml`; routes `agenticlip.studio` → `app:8000` with no open inbound ports. | Cloudflare → Zero Trust → Networks → Tunnels → your tunnel → Install connector (token is in the `--token` value) |
+| `CLOUDFLARE_TUNNEL_TOKEN` | 🔑 | ✅ (prod) | Auth token for the `cloudflared` service in `docker-compose.prod.yml`; routes `autoclip.studio` → `app:8000` with no open inbound ports. | Cloudflare → Zero Trust → Networks → Tunnels → your tunnel → Install connector (token is in the `--token` value) |
 
 ### Engine tunables (non-secret, safe defaults)
 
@@ -139,7 +139,7 @@ pipeline can reach the VM and pull the image — they are **not** app config.
 | `VPS_SSH_KEY` | secret | **Private** SSH key the runner uses to reach the VM | your deploy keypair (see [`docs/ACCESS.md`](ACCESS.md)) |
 | `VPS_PORT` | secret | SSH port (defaults to 22 if unset) | your sshd config |
 | `GHCR_TOKEN` | secret | PAT (read:packages) so the VM can `docker login ghcr.io` and pull the private image | github.com → Settings → Developer settings → PAT |
-| `PRODUCTION_URL` | **variable** | Base URL the scheduled health check probes (`https://agenticlip.studio`) | you set it |
+| `PRODUCTION_URL` | **variable** | Base URL the scheduled health check probes (`https://autoclip.studio`) | you set it |
 | `POSTGRES_APP_PASSWORD` | secret | Password for the `creatorclip_app` Postgres role (RLS-enforced, no `BYPASSRLS`). Set BEFORE running `activate-rls.yml`. Once set on the role, this becomes the password segment of `DATABASE_URL` on the VM. | generate: `openssl rand -hex 24` |
 | `POSTGRES_MIGRATE_PASSWORD` | secret | Password for the `creatorclip_migrate` Postgres role (`BYPASSRLS`, used by Alembic and Celery worker tasks). Set BEFORE running `activate-rls.yml`. Once set on the role, this becomes the password segment of `DATABASE_MIGRATION_URL` on the VM. | generate: `openssl rand -hex 24` |
 

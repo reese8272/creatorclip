@@ -46,6 +46,23 @@ class VideoKind(enum.Enum):
     short = "short"
 
 
+class VideoOrigin(enum.Enum):
+    """How a Video row entered the system — the canonical provenance discriminator.
+
+    ``catalog`` rows are DNA/analytics-only references upserted by
+    ``sync_video_catalog`` from the creator's uploads playlist (no stored media,
+    excluded from the dashboard list). ``link`` rows are registered by ID via
+    ``POST /videos/link`` (also no stored media — the creator must upload the
+    source file to clip, per YouTube ToS we never download it). ``upload`` rows
+    carry stored source media (``source_uri``) and are the only clip-trackable
+    path. Replaces the prior ``source_uri IS NULL`` heuristic, which wrongly hid
+    linked videos (Issue 139)."""
+
+    catalog = "catalog"
+    link = "link"
+    upload = "upload"
+
+
 class IngestStatus(enum.Enum):
     pending = "pending"
     running = "running"
@@ -231,6 +248,11 @@ class Video(Base):
     published_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     duration_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     source_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    origin: Mapped[VideoOrigin] = mapped_column(
+        sa.Enum(VideoOrigin, name="video_origin_enum"),
+        nullable=False,
+        default=VideoOrigin.upload,
+    )
     captions_available: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     ingest_status: Mapped[IngestStatus] = mapped_column(
         sa.Enum(IngestStatus, name="ingest_status_enum"),

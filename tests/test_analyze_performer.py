@@ -215,6 +215,36 @@ def test_analyze_performer_llm_success_creates_insight() -> None:
     assert data["insight_type"] == "performer_analysis"
 
 
+def test_analyze_performer_no_inert_cache_marker() -> None:
+    """Issue 140: the system prefix (~30 tokens) is below Haiku 4.5's 4096-token
+    cacheable-prefix floor, so a cache_control marker would be inert (pays the
+    1.25x write premium for zero reads). Assert none is sent."""
+    creator = _make_creator()
+    video = _make_video(creator.id)
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _fake_session(video=video)
+
+    mock_msg = MagicMock()
+    mock_msg.content = [MagicMock(text="ok")]
+    mock_msg.usage.input_tokens = 100
+    mock_msg.usage.output_tokens = 20
+
+    with (
+        patch("routers.insights._ANTHROPIC") as mock_anthropic,
+        TestClient(app) as client,
+    ):
+        mock_anthropic.messages.create.return_value = mock_msg
+        client.post(
+            _URL,
+            json={"video_id": str(video.id), "performer_kind": "top"},
+            cookies={"session": "x"},
+        )
+
+    system = mock_anthropic.messages.create.call_args.kwargs["system"]
+    assert all("cache_control" not in block for block in system)
+
+
 def test_analyze_performer_empty_llm_content_returns_fallback() -> None:
     creator = _make_creator()
     video = _make_video(creator.id)

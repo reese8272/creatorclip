@@ -5,6 +5,83 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-16 — Issue 139: Linked-video visibility + the yt-dlp ToS decision
+
+**What changed:** Added a `Video.origin` enum (`catalog | link | upload`) as the canonical
+provenance discriminator (migration 0024), replacing the `source_uri IS NULL` heuristic that
+`list_videos` used to hide catalog rows. That heuristic also hid every *linked* video
+(`link_video` never sets `source_uri`), so a creator who clicked "Link a video" got a 200 and
+then watched the row vanish — the SEV1 logged in `OFF_COURSE_BUGS.md` (2026-05-31). Now
+`list_videos` filters `origin != catalog`, so linked videos appear, each carrying a derived
+`clippable` flag (true only when stored media exists). `_has_clip_track_videos` (onboarding)
+switched to the same `origin != catalog` rule so a creator who only *links* a video still
+progresses past `link_first_video`.
+
+**The load-bearing decision — we do NOT download from YouTube.** Investigating the fix surfaced
+that the clip pipeline hard-requires `source_uri` (ingest raises without it), which only
+*uploads* ever have. So linked + catalog videos can't be clipped without their source file. The
+tempting fix was to wire the existing `download_via_ytdlp` (own-channel content) into ingest.
+**We rejected it.** Research (One Rule) confirmed:
+
+- Downloading via yt-dlp violates **YouTube's ToS even for your own content** — the ToS bars
+  downloading unless YouTube shows a download link; ownership is a *copyright* defense, not a
+  ToS exemption.
+- CreatorClip is bound by the stricter **YouTube API Services ToS**, which explicitly prohibits
+  API clients from letting users "download" videos or "modify the audio or video portions of a
+  video" outside YouTube Premium. A server-side download-and-recut pipeline is squarely
+  prohibited.
+- It would **jeopardize Google OAuth verification** (the #1 public-launch gate — sensitive
+  YouTube scopes are reviewed for ToS compliance) and contradicts CLAUDE.md's Honesty
+  Constraint ("comply with the YouTube API Services Terms of Service at all times") and
+  COMPLIANCE.md.
+- The **sanctioned** way for a creator to obtain their own file is Google Takeout / their
+  original export, then upload it.
+
+**Chosen path (Option A — compliant):** linked videos are visible but flagged non-clippable.
+`POST /videos/{id}/queue` now returns **409** with upload guidance when `source_uri` is null
+(instead of firing a doomed ingest); the dashboard renders an "Upload source file to clip"
+affordance (guiding to Google Takeout) for those rows, and the in-flight-ingest tracker +
+status poller skip non-clippable rows so they don't trip the "stuck" warning. `yt-dlp` stays
+commented-out in `requirements.txt` and `YTDLP_ENABLED` stays default-false, now documented as
+a self-host-only, ToS-risk escape hatch (COMPLIANCE.md).
+
+**Accepted limitation:** migration 0024 backfills `origin` from `source_uri` (`NOT NULL` →
+`upload`, else `catalog`). Pre-existing linked rows (source_uri NULL) backfill to `catalog` and
+stay hidden — they're indistinguishable from catalog rows in old data and are unrecoverable.
+The fix is forward-looking; new links set `origin = link`.
+
+**Source/evidence:** [YouTube API Services ToS](https://developers.google.com/youtube/terms/api-services-terms-of-service),
+[Developer Policies](https://developers.google.com/youtube/terms/developer-policies),
+[yt-dlp legality](https://audioutils.com/blog/is-yt-dlp-legal),
+[Google Takeout as the sanctioned export](https://support.google.com/youtube/thread/14052201/update-to-how-videos-are-downloaded-from-google-takeout).
+Tests: `tests/test_issue_139.py`. **Date:** 2026-06-16
+
+---
+
+## 2026-06-16 — Issue 140: Remove inert cache marker on analyze-performer
+
+**Decision:** Removed the `cache_control: {type: ephemeral}` marker from the
+`analyze-performer` system block (`routers/insights.py`). The system prefix is a single
+static ~30-token instruction string; the per-video DNA context lives in the user message
+(capped at 800 chars). That prefix is far below Haiku 4.5's 4096-token cacheable-prefix
+floor, so the marker was inert — paying the 1.25× write premium for zero cache reads.
+
+**Why:** Same class as the `titles.py` / `thumbnails.py` markers removed in Issue 138.
+This was the 4th marker flagged in that sweep but deferred (logged in `OFF_COURSE_BUGS.md`)
+because it hadn't been verified token-for-token. Inspection confirmed the prefix is static
+and tiny — no growth path to 4096 tokens — so removal is correct, not a micro-optimization
+of prefix padding.
+
+**Source/evidence:** `routers/insights.py` `analyze-performer` handler (system is one static
+text block; prompt built by `_build_analysis_prompt`, DNA capped at 800 chars in the user
+turn). Floors per the Issue 138 entry below (Haiku 4.5 = 4096, Sonnet 4.6 = 2048). Regression
+test `tests/test_analyze_performer.py::test_analyze_performer_no_inert_cache_marker` asserts no
+`cache_control` reaches `messages.create`.
+
+**Date:** 2026-06-16
+
+---
+
 ## 2026-06-16 — Issue 138: SEV1 bulk sweep (cache-floor correction + SDK bump)
 
 **Decision:** Closed the 7 SEV1s from the 2026-06-09 `/assess` in one sweep. The two

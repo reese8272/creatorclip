@@ -6,7 +6,7 @@ Tunnel** for the beta deployment. Tailored to the real infrastructure:
 | Thing | Value |
 |-------|-------|
 | VM (DigitalOcean Droplet) | `147.182.136.107` |
-| Public domain | `agenticlip.studio` |
+| Public domain | `autoclip.studio` |
 | Deploy directory on VM | `/opt/autoclip` |
 | Docker image | `ghcr.io/reese8272/creatorclip:latest` |
 
@@ -177,7 +177,7 @@ tunnel must point at the app over the Compose network, not at `localhost`.
 ### 3a. Find the existing tunnel and its token
 
 1. Go to **one.dash.cloudflare.com** (Cloudflare **Zero Trust**).
-2. Left nav: **Networks** → **Tunnels**. Find the tunnel for `agenticlip.studio`.
+2. Left nav: **Networks** → **Tunnels**. Find the tunnel for `autoclip.studio`.
 3. Click it → **Configure**. Under the connector install instructions you'll see a command like
    `cloudflared service install eyJhIjoi...` — the long `eyJ…` string **is** the tunnel token.
    (If it isn't shown, use **Refresh token** to mint a new one — this does not break the tunnel,
@@ -193,7 +193,7 @@ tunnel must point at the app over the Compose network, not at `localhost`.
 This is the step that most likely fixes a tunnel that "connects but 502s":
 
 1. Same tunnel → **Configure** → **Public Hostname** tab.
-2. There should be a rule for **`agenticlip.studio`**. Edit it:
+2. There should be a rule for **`autoclip.studio`**. Edit it:
    - **Service → Type:** `HTTP`
    - **Service → URL:** `app:8000`  ← **not** `localhost:80` and **not** `localhost:8000`
 3. Save. `app` resolves over the Compose network to the FastAPI container's port 8000.
@@ -211,7 +211,7 @@ docker compose -f docker-compose.prod.yml ps          # cloudflared + app should
 docker compose -f docker-compose.prod.yml logs --tail 50 cloudflared   # look for "Registered tunnel connection"
 
 # from anywhere:
-curl -s https://agenticlip.studio/health               # → {"status":"ok",...}
+curl -s https://autoclip.studio/health               # → {"status":"ok",...}
 ```
 
 ---

@@ -212,19 +212,19 @@ All code is written. These issues are infrastructure + configuration only.
 **Status**: ✅ Done (production live on `autoclip.studio` via Cloudflare Tunnel)
 
 **What**: Provision a cloud VM (DigitalOcean Droplet at `147.182.136.107`), install Docker
-+ Docker Compose, point `agenticlip.studio` at it via Cloudflare Tunnel (no open inbound
++ Docker Compose, point `autoclip.studio` at it via Cloudflare Tunnel (no open inbound
 ports needed), and verify HTTPS is live.
 
 **Steps**:
 - SSH into the VM; install Docker Engine + Docker Compose v2
-- Install `cloudflared`; authenticate and create a tunnel for `agenticlip.studio`
-- Configure Cloudflare DNS to route `agenticlip.studio` → tunnel (CNAME, orange cloud)
+- Install `cloudflared`; authenticate and create a tunnel for `autoclip.studio`
+- Configure Cloudflare DNS to route `autoclip.studio` → tunnel (CNAME, orange cloud)
 - Write `docker-compose.prod.yml` cloudflared service (or run as systemd unit)
 - Verify the app container listens on port 80 (already configured)
 
 **Acceptance criteria**:
 - [ ] `docker compose -f docker-compose.prod.yml up -d` starts all services without errors
-- [ ] `https://agenticlip.studio/health` returns `{status: ok, postgres: ok, redis: ok}` from public internet
+- [ ] `https://autoclip.studio/health` returns `{status: ok, postgres: ok, redis: ok}` from public internet
 - [ ] HTTPS terminates at Cloudflare; no direct port exposure on the VM (ports 80/443 not open)
 - [ ] SSH access is key-only; password auth disabled
 
@@ -240,14 +240,14 @@ and docs settings, and set GitHub Actions secrets for CI/CD.
 - Copy `.env.example` → `.env` on the VM at `/opt/autoclip/`; fill every required field
 - Generate `TOKEN_ENCRYPTION_KEY`: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 - Generate `JWT_SECRET_KEY`: `openssl rand -hex 32`
-- Set `ENV=production`, `ALLOWED_ORIGINS=https://agenticlip.studio`, `OAUTH_REDIRECT_URI=https://agenticlip.studio/auth/callback`
-- Set `APP_BASE_URL=https://agenticlip.studio`
+- Set `ENV=production`, `ALLOWED_ORIGINS=https://autoclip.studio`, `OAUTH_REDIRECT_URI=https://autoclip.studio/auth/callback`
+- Set `APP_BASE_URL=https://autoclip.studio`
 - Confirm `/docs` is disabled (`ENV=production` already gates this in `main.py`)
 - Set GitHub Actions secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `GHCR_TOKEN`
 
 **Acceptance criteria**:
 - [ ] App starts with `ENV=production`; `/docs` returns 404
-- [ ] `ALLOWED_ORIGINS` is exactly `https://agenticlip.studio` (no wildcard, no localhost)
+- [ ] `ALLOWED_ORIGINS` is exactly `https://autoclip.studio` (no wildcard, no localhost)
 - [ ] `TOKEN_ENCRYPTION_KEY` and `JWT_SECRET_KEY` are unique, random, and not committed to git
 - [ ] `.env` is in `.gitignore` (verify)
 - [ ] CI/CD pipeline (`deploy.yml`) succeeds end-to-end on a manual trigger
@@ -285,16 +285,16 @@ OAuth flow end-to-end against the production URL.
 **Steps**:
 - In Google Cloud Console → APIs & Services → OAuth consent screen:
   - User type: **External**; Publishing status: **Testing** (stays in testing until public launch)
-  - Add app name (`CreatorClip`), support email, and `agenticlip.studio` as authorized domain
+  - Add app name (`CreatorClip`), support email, and `autoclip.studio` as authorized domain
   - Add scopes: `youtube.readonly`, `yt-analytics.readonly`, `userinfo.email`, `userinfo.profile`
   - Add each beta tester's Gmail address under **Test users** (up to 100 allowed in Testing status)
-- In Credentials → OAuth 2.0 Client IDs: confirm Authorized redirect URI includes `https://agenticlip.studio/auth/callback`
+- In Credentials → OAuth 2.0 Client IDs: confirm Authorized redirect URI includes `https://autoclip.studio/auth/callback`
 - Verify `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `.env` match this project
 
 **Acceptance criteria**:
 - [ ] At least 2 beta testers added as test users in Google Cloud Console
 - [ ] OAuth consent screen shows app name and correct scopes
-- [ ] Full OAuth flow works end-to-end: visit `https://agenticlip.studio/auth/login` → Google consent → redirect back → creator record created in DB
+- [ ] Full OAuth flow works end-to-end: visit `https://autoclip.studio/auth/login` → Google consent → redirect back → creator record created in DB
 - [ ] Protected routes return 401 without a session (verify with curl)
 - [ ] Cross-creator isolation test passes on the live DB
 
@@ -365,7 +365,7 @@ Billing implemented (Issue 21 — minute packs + Stripe Checkout).
 Testing status (100-user limit) to Published (unlimited users).
 
 **Steps**:
-- Ensure TOS and Privacy Policy pages are live at `agenticlip.studio` (already built — Issue 14)
+- Ensure TOS and Privacy Policy pages are live at `autoclip.studio` (already built — Issue 14)
 - Prepare scope justification for each requested YouTube scope
 - Submit for verification via Google Cloud Console → OAuth consent screen → Publish App
 - Respond to Google review team requests (this process typically takes 1–4 weeks)
@@ -414,7 +414,7 @@ preflight validator, faster/more-consistent deploys, and container auto-recovery
 - `scripts/doctor.py` (+ `tests/test_doctor.py`) — presence + format + live checks with redacted
   output; non-zero exit so it gates the deploy. `--full` / `--offline` / `--json` modes.
 - `docs/ACCESS.md` — click-by-click SSH + CI deploy-key + Cloudflare Tunnel runbook (tailored to
-  the droplet + agenticlip.studio), with key inventory/consolidation steps.
+  the droplet + autoclip.studio), with key inventory/consolidation steps.
 - Deploy hardening — amd64-only image build; `deploy.yml` doctor preflight before migrate/cutover;
   job/domain naming reconciled.
 - `docker-compose.prod.yml` — `cloudflared` service + no host port; app/worker healthchecks; dev

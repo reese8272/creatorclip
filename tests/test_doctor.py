@@ -62,7 +62,7 @@ def test_fmt_prefix():
 def test_cors_rejects_wildcard_and_localhost_in_prod():
     assert check_cors("*", "production") is not None
     assert check_cors("http://localhost:8000", "production") is not None
-    assert check_cors("https://agenticlip.studio", "production") is None
+    assert check_cors("https://autoclip.studio", "production") is None
 
 
 def test_cors_permissive_in_development():
