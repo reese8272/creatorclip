@@ -130,7 +130,9 @@ async def list_videos(
                 "url": "/static/index.html#link-form",
             }
         else:
-            message = "Connect your YouTube channel so AutoClip can analyse your style and audience."
+            message = (
+                "Connect your YouTube channel so AutoClip can analyse your style and audience."
+            )
             next_action = {
                 "label": "Connect YouTube",
                 "action_type": "navigate",

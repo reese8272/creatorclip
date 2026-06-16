@@ -1106,12 +1106,12 @@ def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
     # Issue 137 added `app-page` alongside `editor-page` on <body> for the
     # shared aurora/glass shell, so the class attribute is now a list. The
     # load-bearing assertion is that `editor-page` is still in the class list.
-    assert 'class="editor-page"' in src \
-        or 'class="editor-page ' in src \
-        or 'class="editor-page\t' in src \
-        or "editor-page app-page" in src, (
-        "review.html <body> must carry .editor-page to opt into dark mode."
-    )
+    assert (
+        'class="editor-page"' in src
+        or 'class="editor-page ' in src
+        or 'class="editor-page\t' in src
+        or "editor-page app-page" in src
+    ), "review.html <body> must carry .editor-page to opt into dark mode."
     assert 'class="editor-shell"' in src, "Three-pane shell wrapper must be present."
     assert 'class="editor-transcript"' in src, "Always-visible transcript pane must be present."
     assert 'class="editor-tools"' in src, "Icon-strip nav must be present."
@@ -1249,9 +1249,7 @@ def test_static_cachebust_middleware_sets_no_store_on_html(client):
         resp = client.get(path)
         assert resp.status_code == 200
         cc = resp.headers.get("cache-control", "")
-        assert "no-store" in cc, (
-            f"{path}: Cache-Control must include no-store but got {cc!r}"
-        )
+        assert "no-store" in cc, f"{path}: Cache-Control must include no-store but got {cc!r}"
 
 
 def test_static_cachebust_middleware_strips_etag_from_html(client):
@@ -1336,14 +1334,13 @@ def test_issue_137_authenticated_pages_link_page_shell_and_opt_in():
     static_dir = pathlib.Path(__file__).parent.parent / "static"
     for page in _ISSUE_137_AUTHENTICATED_PAGES:
         src = (static_dir / page).read_text()
-        assert '/static/page-shell.css' in src, (
+        assert "/static/page-shell.css" in src, (
             f"{page}: must <link> /static/page-shell.css for the shared shell."
         )
         # Body must carry `app-page` (review.html keeps editor-page too;
         # the class list ordering is not pinned, just presence).
         assert 'class="app-page"' in src or 'class="editor-page app-page"' in src, (
-            f"{page}: <body> must include the app-page class to opt into the "
-            f"page-shell rules."
+            f"{page}: <body> must include the app-page class to opt into the page-shell rules."
         )
 
 
