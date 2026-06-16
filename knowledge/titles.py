@@ -2,8 +2,10 @@
 
 Prompt structure (three system blocks):
   Block 1 — static instructions: role, task, CTR principles, neutral-band definition.
-  Block 2 — DNA brief (cache_control breakpoint): per-creator, stable across calls.
-  Block 3 — per-video context: video title + transcript summary. Uncached.
+  Block 2 — DNA brief: per-creator, stable across calls. No cache_control — the
+            block 1 + block 2 prefix (~1,550 tokens) is below Sonnet 4.6's
+            2048-token cacheable-prefix floor, so a marker would be inert (SEV1 #6).
+  Block 3 — per-video context: video title + transcript summary.
 
 Claude generates 10 ranked candidates; the caller surfaces the top 5.
 Results stream via stream_and_emit and are returned as a JSON string for the
@@ -38,9 +40,8 @@ _DISCLAIMER = (
     "current search trends. AutoClip cannot guarantee specific CTR or view outcomes."
 )
 
-# Static block — never contains per-creator data. Precedes the cache breakpoint
-# so the token cost of block 1 + block 2 exceeds the 2048-token minimum for
-# cache engagement. The "neutral" CTR band is defined here to avoid label drift.
+# Static block — never contains per-creator data. The "neutral" CTR band is
+# defined here to avoid label drift.
 _SYSTEM_INSTRUCTIONS = """\
 You are a YouTube title strategist with access to real-time web search.
 
@@ -101,9 +102,9 @@ def _build_request(
 ) -> tuple:
     """Assemble (system, tools, messages) for both .create and streaming paths.
 
-    Cache breakpoint sits at the end of the DNA-brief block so the combined
-    static instructions + DNA brief (~2300 tokens) clears the 2048-token minimum.
-    Per-video context (block 3) is intentionally uncached.
+    No cache_control breakpoint: the static instructions + DNA brief prefix
+    (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-prefix floor, so
+    a marker would be inert (SEV1 #6). Per-video context is block 3.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
@@ -118,17 +119,18 @@ def _build_request(
     video_context = "\n\n".join(video_context_parts)
 
     system: list[dict] = [
-        # Block 1: static instructions — precedes the cache breakpoint.
+        # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — carries the cache_control breakpoint. This block +
-        # block 1 together exceed the 2048-token minimum so caching can engage.
-        # Stable per-creator across multiple title generation calls in a session.
+        # Block 2: DNA brief — stable per-creator. NO cache_control: the static
+        # instructions + DNA brief together run ~1,550 tokens, BELOW Sonnet 4.6's
+        # 2048-token cacheable-prefix floor, so a marker here is inert — it only
+        # pays the 1.25x write premium for zero reads. (SEV1 #6; same precedent
+        # as knowledge/hooks.py / improvement/brief.py — see docs/DECISIONS.md.)
         {
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral"},
         },
-        # Block 3: per-video context — uncached, changes with each video.
+        # Block 3: per-video context — changes with each video.
         {"type": "text", "text": f"VIDEO TO TITLE:\n{video_context}"},
     ]
     tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]

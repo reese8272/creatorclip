@@ -132,7 +132,10 @@ class TestBuildConceptsRequest:
         )
         assert len(system) == 3
 
-    def test_cache_control_on_block_2_only(self):
+    def test_no_inert_cache_control_marker(self):
+        # SEV1 #6: NO cache_control on any block — the static instructions + DNA
+        # brief prefix (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-
+        # prefix floor, so a marker is inert (write premium for zero reads).
         system, _, _ = _build_concepts_request(
             channel_title="Test",
             dna_brief="DNA brief.",
@@ -140,8 +143,8 @@ class TestBuildConceptsRequest:
             transcript_hook="",
             stated_identity=None,
         )
-        assert system[1].get("cache_control") == {"type": "ephemeral"}
         assert system[0].get("cache_control") is None
+        assert system[1].get("cache_control") is None
         assert system[2].get("cache_control") is None
 
     def test_web_search_tool_in_tools(self):

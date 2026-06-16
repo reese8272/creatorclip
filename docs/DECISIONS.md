@@ -5,6 +5,49 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-16 — Issue 138: SEV1 bulk sweep (cache-floor correction + SDK bump)
+
+**Decision:** Closed the 7 SEV1s from the 2026-06-09 `/assess` in one sweep. The two
+LLM-related ones carry design decisions worth logging:
+
+1. **Corrected Sonnet 4.6's cacheable-prefix floor to 2048 tokens** (was mis-recorded
+   as 1024 in three places: the hooks-precedent entry, the title-cache-placement entry,
+   and the Issue-84 audit entry). 1024 is the Sonnet **4.5** floor; 4.6 is 2048 per the
+   canonical Anthropic prompt-caching docs. This is load-bearing: it's why the markers
+   below are inert.
+2. **Removed the inert `cache_control` markers** from `knowledge/titles.py` and
+   `knowledge/thumbnails.py`. Their cached prefix (`_SYSTEM_INSTRUCTIONS` ~800 tok + DNA
+   brief capped at 3000 chars ≈ ~750 tok ≈ **~1,550 tok**) is below the 2048 floor, so
+   the markers only paid the 1.25× write premium for zero reads. Chose removal over
+   growing the prefix past 2048 (the DNA brief does repeat per-creator, but padding the
+   prefix purely to engage caching is a fragile micro-optimisation; the hooks.py /
+   analysis/brief.py precedent is removal).
+3. **Bumped `anthropic` 0.40.0 → 0.105.2.** Pre-vetted in the Issue-84 entry as no
+   breaking changes on our call shapes; full non-integration suite (967) + the clip eval
+   harness stayed green. Retired the now-unused `type: ignore[typeddict-unknown-key]` on
+   the `clip_engine/scoring.py` `ttl:"1h"` block (mypy `--warn-unused-ignores` confirms;
+   all other ignores in the tree are still required). The 1h extended-cache TTL needs no
+   beta header on the current API. Added `cached_write_1h` (from
+   `usage.cache_creation.ephemeral_1h_input_tokens`, a field the bump unlocks) to the
+   clip-scoring token log to confirm the 1h breakpoint lands in the 1h tier.
+
+Other SEV1s in the sweep were mechanical (XSS escaping via a shared `static/util.js`;
+a dead `getElementById` in `analysis.html`; dropping creator email from the
+`_expire_trials` log; raising `chapters.py` `max_tokens` 512→2000 and dropping the
+redundant `description_block` from the model schema since `parse_chapters` rebuilds it;
+rate-limit + single-flight lock on the `thumbnail-patterns` GET).
+
+**Why:** Flip the 2026-06-09 production-readiness verdict from CONDITIONAL toward YES
+(7 SEV1 → 0) ahead of the deferred Locust 300-user run.
+
+**Source/evidence:** `docs/assessment/REPORT.md` (2026-06-09); Anthropic prompt-caching
+docs via the `claude-api` skill (Sonnet 4.6 = 2048, Haiku 4.5 = 4096); mypy
+`--warn-unused-ignores`; pip-audit (no advisory in the anthropic dep tree).
+
+**Date:** 2026-06-16
+
+---
+
 ## 2026-06-08 — Onboarding state aggregation on `/auth/me` + `/creators/me`
 
 **Decision:** Both `/auth/me` and `/creators/me` now return a nested `setup: SetupStepOut`
@@ -555,8 +598,9 @@ silently wrote an empty `ready` row under the role split.
 size:
 - Haiku 4.5 (`hooks.py`, `chapters.py`): 4096-token floor. The static
   prefix in each is ~175–900 tokens.
-- Sonnet 4.6 (`analysis/brief.py`): 1024-token floor. Static prefix is
-  ~175 tokens.
+- Sonnet 4.6 (`analysis/brief.py`): **2048**-token floor (corrected
+  2026-06-16, Issue 138 — was mis-recorded as 1024, which is Sonnet *4.5*'s
+  floor). Static prefix is ~175 tokens, well below either value.
 
 The markers were inert — every call paid full input-token cost while the
 token log silently reported `cache_read=0`. Same precedent as
@@ -1135,15 +1179,18 @@ binary + channel-relative threshold. User confirmed "fine as is" in Phase 2 appr
 
 ### Prompt cache placement
 
-**Decision:** The `cache_control: {type: ephemeral}` breakpoint sits on the DNA-brief block
-(system block 2), NOT on the static instructions block. Combined token count of instructions
-(~400) + DNA brief (~2000) targets ~2400 tokens, clearing the 2048-token minimum for caching.
+**Decision (superseded 2026-06-16, Issue 138 — marker removed):** The original
+plan placed the `cache_control: {type: ephemeral}` breakpoint on the DNA-brief
+block (system block 2), on the estimate that instructions (~400) + DNA brief
+(~2000) ≈ ~2400 tokens would clear Sonnet 4.6's 2048-token floor.
 
-**Why:** Caching only the static instructions (~400 tokens) would fall below the 2048-token
-minimum on Sonnet 4.6 and silently not engage. The DNA brief is stable per-creator across
-multiple title generation calls in a session, making it the right content to include under
-the breakpoint. Risk: the DNA brief at exactly ~2000 tokens may still miss the minimum; mitigation
-is to measure `cache_creation_input_tokens` on first call.
+**Why it was removed:** The estimate was wrong. The real prefix is `_SYSTEM_INSTRUCTIONS`
+(~800 tokens) + the DNA brief (capped at `_DNA_BRIEF_MAX_CHARS=3000` chars ≈ ~750
+tokens) ≈ **~1,550 tokens — below the 2048 floor**. So the breakpoint never engaged:
+every call paid the 1.25× cache-write premium for zero reads (`cache_read=0`). The
+marker was removed from `knowledge/titles.py` and `knowledge/thumbnails.py` (same
+precedent as `hooks.py`/`analysis/brief.py` above). The 2048 floor stated here was
+always correct — it's the prefix size that was over-estimated.
 
 ### Sync Anthropic + asyncio.to_thread (not AsyncAnthropic)
 
@@ -2280,7 +2327,7 @@ The web_search bump is the smallest correct shipped win: 1 LOC + 1 test, lowest 
 ### Industry standard checked (2026-05-31 via industry-standards-researcher)
 
 - **Anthropic Python SDK:** latest GA `0.105.2`; no breaking changes between 0.40 and current on our call shapes; `client.count_tokens()` removed in v0.39 (we don't use it).
-- **Sonnet 4.6 cacheable-prefix minimum: 1024 tokens** (not 2048 as previously documented). Opus 4.6/4.7 minimum: 4096. Haiku 4.5 minimum: 4096.
+- **Sonnet 4.6 cacheable-prefix minimum: 2048 tokens.** (Corrected 2026-06-16, Issue 138: this line previously read "1024 tokens (not 2048 as previously documented)" — that was wrong. 1024 is the Sonnet **4.5** floor; Sonnet 4.6 is 2048, per the canonical Anthropic prompt-caching docs.) Opus 4.5/4.6/4.7/4.8 minimum: 4096. Haiku 4.5 minimum: 4096.
 - **Cache TTLs:** two options — 5min ephemeral (1.25× write, 0.1× read), 1h ephemeral (2× write, 0.1× read). No 24h.
 - **Web search:** `web_search_20260209` is GA with dynamic filtering; `web_search_20250305` still supported (no filtering). Pricing: $10 per 1k searches + standard token costs.
 - **Model pricing (per MTok):** Opus 4.7 $5/$25, Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5.

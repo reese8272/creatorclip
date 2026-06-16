@@ -173,10 +173,10 @@ def _build_concepts_request(
 ) -> tuple:
     """Assemble (system, tools, messages) for concept generation.
 
-    Cache breakpoint at the end of the DNA-brief block — same strategy as
-    knowledge/titles.py. The static instructions + DNA brief combined clears
-    the 2048-token minimum for cache engagement. Per-video patterns and context
-    are in block 3, intentionally uncached.
+    No cache_control breakpoint — same reasoning as knowledge/titles.py: the
+    static instructions + DNA brief prefix (~1,550 tokens) is below Sonnet 4.6's
+    2048-token cacheable-prefix floor, so a marker would be inert (SEV1 #6).
+    Per-video patterns and context are in block 3.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
@@ -199,16 +199,16 @@ def _build_concepts_request(
     video_context = "\n\n".join(video_context_parts)
 
     system: list[dict] = [
-        # Block 1: static instructions — precedes the cache breakpoint.
+        # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — carries the cache_control breakpoint. Combined with
-        # block 1 these exceed the 2048-token minimum for cache engagement.
+        # Block 2: DNA brief — stable per-creator. NO cache_control: block 1 +
+        # block 2 (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-prefix
+        # floor, so a marker is inert (1.25x write premium, zero reads). SEV1 #6.
         {
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral"},
         },
-        # Block 3: per-video context — uncached, changes per request.
+        # Block 3: per-video context — changes per request.
         {
             "type": "text",
             "text": f"CHANNEL THUMBNAIL PATTERNS:\n{pattern_text}\n\nVIDEO CONTEXT:\n{video_context}",

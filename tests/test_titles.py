@@ -79,12 +79,11 @@ def test_build_request_three_system_blocks() -> None:
         transcript_summary="This is the transcript.",
     )
     assert len(system) == 3, "Expected exactly 3 system blocks"
-    # Block 2 carries the cache_control breakpoint
-    assert system[1].get("cache_control") == {"type": "ephemeral"}, (
-        "cache_control must be on the DNA-brief block (block 2), not block 1 or 3"
-    )
-    # Block 1 and 3 must NOT have cache_control
+    # SEV1 #6: NO cache_control on any block — the static instructions + DNA
+    # brief prefix (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-
+    # prefix floor, so a marker is inert (pays the write premium for zero reads).
     assert "cache_control" not in system[0]
+    assert "cache_control" not in system[1]
     assert "cache_control" not in system[2]
 
 
