@@ -1672,17 +1672,18 @@ async def _expire_trials_async() -> None:
         now = datetime.now(UTC)
         window_start = now - timedelta(hours=25)
         rows = await session.execute(
-            select(Creator.id, Creator.email, Creator.trial_ends_at, Creator.minutes_balance)
+            select(Creator.id, Creator.trial_ends_at, Creator.minutes_balance)
             .where(Creator.trial_ends_at.is_not(None))
             .where(Creator.trial_ends_at > window_start)
             .where(Creator.trial_ends_at <= now)
         )
-        for cid, email, trial_ends_at, balance in rows.all():
+        # Never log creator email — the creator id is sufficient to correlate
+        # and keeps this line PII-free (no-PII-in-logs invariant, CLAUDE.md).
+        for cid, trial_ends_at, balance in rows.all():
             if balance <= 0:
                 logger.info(
-                    "trial_expired_zero_balance creator=%s email=%s trial_ends_at=%s",
+                    "trial_expired_zero_balance creator=%s trial_ends_at=%s",
                     cid,
-                    email,
                     trial_ends_at.isoformat() if trial_ends_at else None,
                 )
 

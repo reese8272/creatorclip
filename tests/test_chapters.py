@@ -157,6 +157,39 @@ def test_parse_chapters_description_block_fallback() -> None:
     assert "Intro" in result["description_block"]
 
 
+def test_parse_chapters_long_video_no_description_block_field() -> None:
+    """SEV1 #5: description_block was dropped from the model's output schema
+    (parse_chapters rebuilds it in Python). A 1h+ video's ~60-chapter payload
+    with NO description_block key must still parse fully and yield a rebuilt
+    block — proving the schema-drop is safe and the old 512-token truncation
+    is gone."""
+    import json
+
+    chapters = [
+        {
+            "timestamp_s": float(i * 60),
+            "timestamp_formatted": format_timestamp(i * 60),
+            "title": f"Section {i}",
+        }
+        for i in range(60)
+    ]
+    raw = json.dumps({"chapters": chapters})  # note: no description_block field
+    result = parse_chapters(raw)
+    assert len(result["chapters"]) == 60
+    # Rebuilt in Python from the chapter list.
+    assert result["description_block"], "description_block must be rebuilt when absent"
+    assert "Section 59" in result["description_block"]
+    assert "0:00" in result["description_block"]
+
+
+def test_system_instructions_drop_description_block_from_schema() -> None:
+    """SEV1 #5: the model is no longer asked to emit description_block, so it
+    spends its (now 2000) token budget only on the chapters array."""
+    from knowledge.chapters import _SYSTEM_INSTRUCTIONS
+
+    assert "description_block" not in _SYSTEM_INSTRUCTIONS
+
+
 # ── API endpoint tests ─────────────────────────────────────────────────────────
 
 
@@ -304,6 +337,9 @@ def test_generate_chapters_builds_request() -> None:
 
     assert result == '{"chapters":[]}'
     call_kwargs = fake_stream.call_args.kwargs
+    # SEV1 #5: max_tokens raised 512 -> 2000 so a 1h+ video's 20+ chapters no
+    # longer truncate the JSON (which failed all 3 retries identically).
+    assert call_kwargs["max_tokens"] == 2000
     system_blocks = call_kwargs["system"]
     assert len(system_blocks) == 1
     # No cache_control — Issue-135 audit fix: ~175-token system prompt is

@@ -107,6 +107,22 @@ def test_issue_126_expire_trials_beat_task_registered():
     assert entry["task"] == "worker.tasks.expire_trials"
 
 
+def test_issue_138_expire_trials_logs_no_email_pii():
+    """SEV1 #4: the trial-expiry watchdog must never log creator email — that
+    violates the no-PII-in-logs invariant (CLAUDE.md). Source-level guard so a
+    future edit can't silently re-introduce the email into the SELECT or the
+    log line (the behavioral path needs Postgres and is integration-only)."""
+    import inspect
+
+    from worker import tasks
+
+    src = inspect.getsource(tasks._expire_trials_async)
+    assert "email=%s" not in src, "trial_expired log line must not include email"
+    assert "Creator.email" not in src, "SELECT must not pull Creator.email"
+    # The non-PII fields stay so the line is still useful.
+    assert "creator=%s" in src and "trial_ends_at=%s" in src
+
+
 # ── Behavioral: GET /billing/balance ────────────────────────────────────────
 
 
