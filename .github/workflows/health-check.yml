@@ -32,9 +32,29 @@ jobs:
       - name: Probe /health
         id: probe
         run: |
-          RESPONSE=$(curl -sf --max-time 10 "${{ steps.url.outputs.target }}/health")
-          echo "response=${RESPONSE}" >> "$GITHUB_OUTPUT"
-          echo "$RESPONSE" | python3 -c "
+          TARGET="${{ steps.url.outputs.target }}/health"
+          # A realistic User-Agent + retries: a bare `curl` from a GitHub-hosted
+          # datacenter IP can be challenged/blocked by the Cloudflare edge even when
+          # the origin is healthy. Retry to ride out transient edge challenges and
+          # capture the real HTTP code for diagnosis. (Issue 144)
+          UA="CreatorClip-HealthCheck/1.0 (+https://autoclip.studio)"
+          CODE=""; BODY=""
+          for i in 1 2 3 4 5; do
+            OUT=$(curl -s --max-time 10 -A "$UA" -w $'\n%{http_code}' "$TARGET" || true)
+            CODE="${OUT##*$'\n'}"
+            BODY="${OUT%$'\n'*}"
+            echo "Attempt $i: HTTP ${CODE:-<none>}"
+            [ "$CODE" = "200" ] && break
+            [ "$i" -lt 5 ] && sleep 10
+          done
+          echo "response=${BODY}" >> "$GITHUB_OUTPUT"
+          echo "http_code=${CODE}" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::/health returned HTTP ${CODE:-<none>} (origin may be healthy — check for an edge/WAF block)"
+            echo "Body (first 500 chars): $(echo "$BODY" | head -c 500)"
+            exit 1
+          fi
+          echo "$BODY" | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
           assert d.get('status') == 'ok', f'status not ok: {d}'
