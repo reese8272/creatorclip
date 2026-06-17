@@ -6,7 +6,9 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: **Issues 143–147 cleanup sweep** (branch `issue-139-142-sweep`). Order: 143 → 144 → 145 (gated on green) → 146 + 147. **Issues 143 + 144 — DONE 2026-06-17.** Next: **145 (branch model)**.
+**Active issue**: **Issues 143–147 cleanup sweep** (branch `issue-139-142-sweep`). Order: 143 → 144 → 145 (gated on green) → 146 + 147. **Issues 143 + 144 + 145 — DONE 2026-06-17.** Next: **146 (docs) + 147 (UI/UX)**, then the single PR #20 → main merge.
+
+**Last completed (Issue 145 — staging + main branch model, 2026-06-17):** Established `feature → staging → main` (`docs/BRANCHING.md`). Cut `staging` from `main`; pruned stale `issue-138-sev1-bulk-sweep` (PR #19 squash-merged — content verified in `main`). Remote branches now: `main`, `staging`, `issue-139-142-sweep`. **Branch protection deferred:** rulesets need GitHub Pro on a private repo (API 403); kept as convention with the per-PR `CI` workflow as the gate — ready-to-apply ruleset written in `docs/BRANCHING.md`. PR #20 → main deferred to end of sweep (one-time direct-to-main). See `docs/DECISIONS.md` 2026-06-17.
 
 **Last completed (Issue 144 — GH Actions + healthcheck audit, 2026-06-17):** Consolidated `ci.yml`+`quality.yml`+`integration.yml` into one `CI` workflow (8 workflows → 6; parallel jobs, names preserved so required-check rules resolve). **Integration now runs on PRs** — the gap that let Issue 143's breakage sit red 9+ days. Least-privilege `permissions: contents: read` on every workflow; bumped Node-20-deprecated actions (checkout@v6/setup-python@v6/buildx@v4/build-push@v7). **Health-check:** was a silent no-op (unset `PRODUCTION_URL`); enabling it exposed **Cloudflare Bot Fight Mode 403s** on GH-hosted datacenter IPs (origin healthy — 200 from a normal IP). Moved uptime monitoring to **Cloudflare Health Checks** (runbook in `docs/DEPLOYMENT.md`); demoted the GH cron to a manual smoke test. **Verified:** consolidated CI green on PR — all 6 jobs incl. integration 127/127. See `docs/DECISIONS.md` 2026-06-17.
 

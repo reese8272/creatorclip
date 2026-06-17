@@ -212,6 +212,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
     ├── CLIPPING_PRINCIPLES.md
     ├── COMPLIANCE.md
     ├── DEPLOYMENT.md
+    ├── BRANCHING.md            # Branch model (feature→staging→main) + protection ruleset (Issue 145)
     ├── RUNBOOKS.md             # Encryption-key rotation procedures
     ├── SECRETS.md              # Canonical secrets/config registry (what, where, how-to-obtain)
     └── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel runbook

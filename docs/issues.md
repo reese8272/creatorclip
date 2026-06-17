@@ -3355,18 +3355,24 @@ Cloudflare Health Checks; demoted the GH cron to a manual smoke test.
 ---
 
 ## Issue 145: staging + main branch model
-**Status**: ⬜ Not started
+**Status**: ✅ Done (2026-06-17) — branch protection *enforcement* deferred to GitHub Pro
 **Depends on**: 143, 144 (gated on green CI)
 
-**What**: Merge PR #20, cut a `staging` branch, add branch protection + a promotion
-flow (feature → staging → main), prune stale branches (`issue-138-*`).
+**What**: Established the `feature → staging → main` model (`docs/BRANCHING.md`). Cut
+`staging` from `main`; pruned the stale `issue-138-*` branch (PR #19 squash-merged —
+verified content present in `main`). Branch protection can't be enforced on a private
+free-tier repo (API 403, needs GitHub Pro) → kept as convention with the per-PR `CI`
+workflow as the gate; the ready-to-apply ruleset is written for the Pro upgrade. PR #20
+merge deferred to the end of the sweep (one-time direct-to-main transition).
 
 **Acceptance criteria**:
-- [ ] Phase 1: research trunk-based vs staging-promotion branch models for a
-      small team + the CI gates each protected branch should require
-- [ ] PR #20 merged; `staging` cut from `main`
-- [ ] Branch protection on `main` + `staging` (required checks, no direct red push)
-- [ ] Promotion flow documented; stale branches pruned
+- [x] Phase 1: research branch models + protection (Rulesets vs classic; solo-dev gate
+      = required checks + linear history, no required reviews)
+- [x] `staging` cut from `main`; stale `issue-138-*` pruned (content-verified safe)
+- [x] Branch-protection ruleset documented + ready to apply (deferred: needs Pro on
+      private repo — API 403)
+- [x] Promotion flow documented (`docs/BRANCHING.md`, registered in `docs/SOT.md`)
+- [~] PR #20 → main: deferred to end of sweep (after 146 + 147), per plan
 
 ---
 

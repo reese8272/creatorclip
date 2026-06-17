@@ -5,6 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 145: staging + main branch model (protection deferred to GitHub Pro)
+
+**What changed:** Established a two-tier branch model — `feature/* → staging → main` —
+documented in `docs/BRANCHING.md` (registered in `docs/SOT.md`). Cut the long-lived
+`staging` branch from `main`. Pruned the stale `issue-138-sev1-bulk-sweep` branch
+(verified its work shipped via PR #19's squash-merge — `escapeHtml`, the single-flight
+test, and the rate-limit tests are all present in `main`/the sweep tree; the leftover
+ref was already gone remotely). Remote branches now: `main`, `staging`,
+`issue-139-142-sweep`.
+
+**Branch protection is NOT enforced — deferred.** Branch protection / rulesets require
+**GitHub Pro** on a private repo; the API returns 403 "Upgrade to GitHub Pro or make
+this repository public" on the free tier (confirmed live, 2026-06-17). Decision: stay
+private and keep the model as **convention for now**, with the `CI` workflow (runs on
+every PR) as the real gate. The exact ruleset — required status checks (the 6 CI job
+names), `required_linear_history`, `allow_force_pushes:false`, and
+`required_pull_request_reviews:null` (a solo maintainer can't self-approve, which would
+deadlock merges) — is written in `docs/BRANCHING.md` ready to one-click apply when Pro
+is enabled.
+
+**One-time transition:** the in-flight 143–147 sweep (`issue-139-142-sweep`, PR #20)
+merges directly to `main` at the end of the sweep rather than routing through `staging`;
+subsequent work follows `feature → staging → main`.
+
+**Source / evidence:** GitHub branch-protection API 403 on private free tier; PR #19
+state `MERGED`; content verification that 138's fixes are in the current tree. GitHub
+guidance now favors **Rulesets** over classic protection (same contexts apply).
+
+**Date:** 2026-06-17
+
 ## 2026-06-17 — Issue 144: CI consolidation, integration-on-PR, Cloudflare health monitoring
 
 **What changed:**
