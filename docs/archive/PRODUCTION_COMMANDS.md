@@ -1,3 +1,7 @@
+> ⚠️ **ARCHIVED (Issue 146).** Frozen snapshot of slash-command/skill bodies. The **live,
+> authoritative** versions are in `.claude/skills/` and `.claude/commands/` — this copy
+> drifts and must not be followed. Kept for provenance only.
+
 # CreatorClip — Production Commands & Skills (Raw)
 
 All skills and commands concatenated in issue-lifecycle order.

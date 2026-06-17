@@ -1,3 +1,7 @@
+> ⚠️ **ARCHIVED (Issue 146).** Point-in-time Phase-1 approval log for long-shipped issues.
+> Current behavior lives in the code + SOT.md; divergences are in DECISIONS.md. Historical
+> reference only.
+
 # Approved Phase 1 Plans — Issues 7–19
 
 All approved. Build sequentially; do not deviate from these approaches without a DECISIONS.md entry.

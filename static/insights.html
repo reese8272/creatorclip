@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/_design-tokens.css">
   <!-- Issue 137 — shared aurora + soft-card shell -->
   <link rel="stylesheet" href="/static/page-shell.css">
+  <link rel="stylesheet" href="/static/components.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/util.js"></script>
@@ -26,7 +27,7 @@
       font-size: var(--text-xs);
       color: var(--color-text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: var(--tracking-eyebrow);
       font-weight: 500;
       margin-bottom: var(--space-3);
     }
@@ -218,7 +219,7 @@
       font-size: var(--text-xs);
       color: var(--color-text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: var(--tracking-eyebrow);
       margin-bottom: var(--space-2);
     }
     .gap-value {

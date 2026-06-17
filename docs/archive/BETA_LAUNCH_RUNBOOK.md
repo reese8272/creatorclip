@@ -1,3 +1,8 @@
+> ⚠️ **ARCHIVED (Issue 146) — contains STALE steps.** It cites a dead migration hash
+> (`b8c9d0e1f2a3`; head is now `0024`) and a dead deploy branch. The still-useful **Google
+> OAuth closed-beta onboarding** steps were merged into `docs/ACCESS.md`; for deploy/branching
+> follow `docs/DEPLOYMENT.md` + `docs/BRANCHING.md`. Do not follow this doc for current procedure.
+
 # AutoClip — Beta Launch Runbook (human steps)
 
 A plain-English, do-this-then-check-that checklist to take AutoClip from "code is

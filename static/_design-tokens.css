@@ -45,11 +45,25 @@
   --color-warning: #f39c12;
   --color-danger:  #e74c3c;
 
+  /* Semantic tints + on-colors (Issue 147 — replace hardcoded rgba()/#000/#fff
+     literals that pages had inlined; keeps status pills/buttons in sync with the
+     base hues above). */
+  --color-success-soft:   rgba(46, 204, 113, 0.08);
+  --color-success-border: rgba(46, 204, 113, 0.30);
+  --color-warning-soft:   rgba(243, 156, 18, 0.08);
+  --color-warning-border: rgba(243, 156, 18, 0.30);
+  --color-danger-soft:    rgba(231, 76, 60, 0.08);
+  --color-danger-border:  rgba(231, 76, 60, 0.30);
+  --color-on-accent:  #ffffff;  /* text on a filled accent button */
+  --color-on-success: #0a0a0a;  /* text on a filled success button */
+  --color-backdrop:   rgba(0, 0, 0, 0.6);  /* modal/dialog scrim */
+
   /* ── Typography ───────────────────────────────────────────────── */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, 'Cascadia Code', monospace;
 
   /* Type scale — modest, content-driven, NOT marketing-heroic. */
+  --text-2xs:  0.65rem;  /* micro-labels/badges (Issue 147 — was font-size:10px) */
   --text-xs:   0.72rem;
   --text-sm:   0.82rem;
   --text-base: 0.9rem;
@@ -61,6 +75,10 @@
   --leading-tight:  1.25;
   --leading-normal: 1.5;
   --leading-relaxed: 1.65;
+
+  /* One canonical eyebrow/label tracking — pages had drifted to 0.04/0.06/0.08em
+     for the same uppercase-label pattern (Issue 147). */
+  --tracking-eyebrow: 0.06em;
 
   /* ── Spacing (4px base) ───────────────────────────────────────── */
   --space-1: 4px;

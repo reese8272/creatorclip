@@ -175,11 +175,9 @@ PIP_AUDIT_IGNORES = {
     # pytest-asyncio<0.25 caps pytest<9 — a test-stack cascade, not a runtime
     # exposure (dev/CI only). Lift when the test stack is bumped together.
     "GHSA-6w46-j5rx-g56g",
-    # Starlette Host-header path injection. Fixed only in starlette 1.0.1, which
-    # needs FastAPI 0.136.x (the documented on_startup/on_shutdown 1.x landmine).
-    # Routing is on the actual path and we sit behind Cloudflare + locked
-    # ALLOWED_ORIGINS; tracked as a starlette-1.x migration follow-up.
-    "PYSEC-2026-161",
+    # NOTE (Issue 143, 2026-06-17): starlette PYSEC-2026-161 was lifted from this
+    # list — the starlette 1.x migration (FastAPI 0.137.1 + starlette 1.3.1) shipped,
+    # so it now has a real fix in our compatible range. See docs/DECISIONS.md.
     # pip CVEs (dev/build-time only — pip is not a runtime dep; these require
     # installing a maliciously crafted wheel/tar, a supply-chain vector, not a
     # production runtime vulnerability). Fix versions require pip 25.3–26.1.2;

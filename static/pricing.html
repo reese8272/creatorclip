@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/_design-tokens.css" />
   <!-- Issue 137 — shared aurora + soft-card shell -->
   <link rel="stylesheet" href="/static/page-shell.css" />
+  <link rel="stylesheet" href="/static/components.css">
   <style>
     /* Issue 99 Phase A — pricing.html is the proof retrofit for the new
        Linear-style design system. Page-specific styles only; everything
@@ -79,7 +80,7 @@
       font-weight: 600;
       color: var(--color-text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: var(--tracking-eyebrow);
     }
 
     /* Mono data register — minutes, price, $/min are all data values. */
@@ -125,7 +126,7 @@
       padding: var(--space-3) 0;
       border-radius: var(--radius);
       background: var(--color-accent);
-      color: #ffffff;
+      color: var(--color-on-accent);
       font-weight: 500;
       font-size: var(--text-sm);
       transition: background var(--duration-fast) var(--ease);

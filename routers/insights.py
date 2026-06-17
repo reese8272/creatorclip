@@ -560,6 +560,11 @@ async def analyze_performer(
     import asyncio as _aio
 
     try:
+        # No cache_control: this system prefix (~30 tokens) is far below Haiku
+        # 4.5's 4096-token cacheable-prefix floor, so a marker would be inert —
+        # paying the 1.25x write premium for zero reads. Same class as the
+        # titles.py / thumbnails.py markers removed in Issue 138 (DECISIONS
+        # 2026-06-16); promoted from OFF_COURSE_BUGS in Issue 140.
         _system: list[dict] = [
             {
                 "type": "text",
@@ -567,7 +572,6 @@ async def analyze_performer(
                     "You are an analyst interpreting YouTube video performance data. "
                     "Be concise, data-driven, and never promise virality outcomes."
                 ),
-                "cache_control": {"type": "ephemeral"},
             }
         ]
         msg = await _aio.to_thread(

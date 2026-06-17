@@ -62,7 +62,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated origins; never `*` in production |
-| `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `agenticlip.studio` → `app:8000` with no open inbound ports |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `autoclip.studio` → `app:8000` with no open inbound ports |
 
 ---
 
@@ -124,6 +124,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 │   # static/editor-layout.css + static/hero.css added in Issue 136 (dark editor layout + pre-auth hero)
 │   # static/page-shell.css added in Issue 137 (project-wide aurora + soft-card shell + overflow-x: clip guard)
+│   # static/components.css added in Issue 147 (shared component layer on tokens: .eyebrow/.stat-cell/.status-pill/.callout/…; full per-template migration → Issue 148)
 │
 ├── preference/
 │   ├── model.py                # Learned reranker (online update)
@@ -204,6 +205,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
 │
 └── docs/
+    ├── README.md              # ← START HERE: full documentation index (Issue 146)
     ├── PRD.md
     ├── SOT.md                  # (this file)
     ├── DECISIONS.md
@@ -211,10 +213,16 @@ This describes how CreatorClip **is built**. Update on every architectural chang
     ├── issues.md
     ├── CLIPPING_PRINCIPLES.md
     ├── COMPLIANCE.md
+    ├── OFF_COURSE_BUGS.md      # Incidental-defect log
     ├── DEPLOYMENT.md
-    ├── RUNBOOKS.md             # Encryption-key rotation procedures
+    ├── BRANCHING.md            # Branch model (feature→staging→main) + protection ruleset (Issue 145)
+    ├── RUNBOOKS.md             # Canonical encryption/JWT-key rotation procedures
     ├── SECRETS.md              # Canonical secrets/config registry (what, where, how-to-obtain)
-    └── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel runbook
+    ├── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel + closed-beta OAuth onboarding
+    ├── STAGING_ACCESS.md       # Staging stack runbook + llm_harness E2E driver
+    ├── SKILL_FRESHNESS.md      # Skill-freshness convention + --require-fresh gate
+    ├── COMPETITIVE_RESEARCH.md # Market/pricing/UX analysis (was other_apps_research.md)
+    └── archive/                # Superseded docs, preserved for provenance (Issue 146)
 ```
 
 ---
@@ -235,12 +243,18 @@ youtube_tokens
 
 videos
   id, creator_id (FK), youtube_video_id, title, kind (long/short),
-  published_at, duration_s, source_uri, captions_available,
-  ingest_status (pending/running/done/failed), created_at
-  -- source_uri IS NULL is the canonical marker for CATALOG-ONLY rows
-  --   (created by sync_channel_catalog as DNA references; do NOT run
-  --   through the local clip pipeline). /videos list excludes them so
-  --   the dashboard never shows "pending forever" rows. (Issue 90)
+  published_at, duration_s, source_uri, origin (catalog/link/upload),
+  captions_available, ingest_status (pending/running/done/failed), created_at
+  -- origin is the canonical provenance discriminator (Issue 139):
+  --   catalog = DNA/analytics reference from sync_video_catalog (no media,
+  --     hidden from /videos so the dashboard never shows "pending forever").
+  --   link    = registered by ID via POST /videos/link (no media — we never
+  --     download from YouTube per ToS; shown with clippable=false, the
+  --     creator uploads the source file to clip).
+  --   upload  = carries source_uri (stored media); the only clip-trackable path.
+  -- /videos filters `origin != catalog`. source_uri now means strictly
+  --   "has stored media" (used by ingest + the stale-media purge), no longer
+  --   doubling as the catalog discriminator. (Issue 139 supersedes Issue 90.)
 
 video_metrics
   video_id (FK), views, watch_time_s, avg_view_duration_s,

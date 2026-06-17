@@ -212,19 +212,19 @@ All code is written. These issues are infrastructure + configuration only.
 **Status**: ✅ Done (production live on `autoclip.studio` via Cloudflare Tunnel)
 
 **What**: Provision a cloud VM (DigitalOcean Droplet at `147.182.136.107`), install Docker
-+ Docker Compose, point `agenticlip.studio` at it via Cloudflare Tunnel (no open inbound
++ Docker Compose, point `autoclip.studio` at it via Cloudflare Tunnel (no open inbound
 ports needed), and verify HTTPS is live.
 
 **Steps**:
 - SSH into the VM; install Docker Engine + Docker Compose v2
-- Install `cloudflared`; authenticate and create a tunnel for `agenticlip.studio`
-- Configure Cloudflare DNS to route `agenticlip.studio` → tunnel (CNAME, orange cloud)
+- Install `cloudflared`; authenticate and create a tunnel for `autoclip.studio`
+- Configure Cloudflare DNS to route `autoclip.studio` → tunnel (CNAME, orange cloud)
 - Write `docker-compose.prod.yml` cloudflared service (or run as systemd unit)
 - Verify the app container listens on port 80 (already configured)
 
 **Acceptance criteria**:
 - [ ] `docker compose -f docker-compose.prod.yml up -d` starts all services without errors
-- [ ] `https://agenticlip.studio/health` returns `{status: ok, postgres: ok, redis: ok}` from public internet
+- [ ] `https://autoclip.studio/health` returns `{status: ok, postgres: ok, redis: ok}` from public internet
 - [ ] HTTPS terminates at Cloudflare; no direct port exposure on the VM (ports 80/443 not open)
 - [ ] SSH access is key-only; password auth disabled
 
@@ -240,14 +240,14 @@ and docs settings, and set GitHub Actions secrets for CI/CD.
 - Copy `.env.example` → `.env` on the VM at `/opt/autoclip/`; fill every required field
 - Generate `TOKEN_ENCRYPTION_KEY`: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 - Generate `JWT_SECRET_KEY`: `openssl rand -hex 32`
-- Set `ENV=production`, `ALLOWED_ORIGINS=https://agenticlip.studio`, `OAUTH_REDIRECT_URI=https://agenticlip.studio/auth/callback`
-- Set `APP_BASE_URL=https://agenticlip.studio`
+- Set `ENV=production`, `ALLOWED_ORIGINS=https://autoclip.studio`, `OAUTH_REDIRECT_URI=https://autoclip.studio/auth/callback`
+- Set `APP_BASE_URL=https://autoclip.studio`
 - Confirm `/docs` is disabled (`ENV=production` already gates this in `main.py`)
 - Set GitHub Actions secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `GHCR_TOKEN`
 
 **Acceptance criteria**:
 - [ ] App starts with `ENV=production`; `/docs` returns 404
-- [ ] `ALLOWED_ORIGINS` is exactly `https://agenticlip.studio` (no wildcard, no localhost)
+- [ ] `ALLOWED_ORIGINS` is exactly `https://autoclip.studio` (no wildcard, no localhost)
 - [ ] `TOKEN_ENCRYPTION_KEY` and `JWT_SECRET_KEY` are unique, random, and not committed to git
 - [ ] `.env` is in `.gitignore` (verify)
 - [ ] CI/CD pipeline (`deploy.yml`) succeeds end-to-end on a manual trigger
@@ -285,16 +285,16 @@ OAuth flow end-to-end against the production URL.
 **Steps**:
 - In Google Cloud Console → APIs & Services → OAuth consent screen:
   - User type: **External**; Publishing status: **Testing** (stays in testing until public launch)
-  - Add app name (`CreatorClip`), support email, and `agenticlip.studio` as authorized domain
+  - Add app name (`CreatorClip`), support email, and `autoclip.studio` as authorized domain
   - Add scopes: `youtube.readonly`, `yt-analytics.readonly`, `userinfo.email`, `userinfo.profile`
   - Add each beta tester's Gmail address under **Test users** (up to 100 allowed in Testing status)
-- In Credentials → OAuth 2.0 Client IDs: confirm Authorized redirect URI includes `https://agenticlip.studio/auth/callback`
+- In Credentials → OAuth 2.0 Client IDs: confirm Authorized redirect URI includes `https://autoclip.studio/auth/callback`
 - Verify `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `.env` match this project
 
 **Acceptance criteria**:
 - [ ] At least 2 beta testers added as test users in Google Cloud Console
 - [ ] OAuth consent screen shows app name and correct scopes
-- [ ] Full OAuth flow works end-to-end: visit `https://agenticlip.studio/auth/login` → Google consent → redirect back → creator record created in DB
+- [ ] Full OAuth flow works end-to-end: visit `https://autoclip.studio/auth/login` → Google consent → redirect back → creator record created in DB
 - [ ] Protected routes return 401 without a session (verify with curl)
 - [ ] Cross-creator isolation test passes on the live DB
 
@@ -365,7 +365,7 @@ Billing implemented (Issue 21 — minute packs + Stripe Checkout).
 Testing status (100-user limit) to Published (unlimited users).
 
 **Steps**:
-- Ensure TOS and Privacy Policy pages are live at `agenticlip.studio` (already built — Issue 14)
+- Ensure TOS and Privacy Policy pages are live at `autoclip.studio` (already built — Issue 14)
 - Prepare scope justification for each requested YouTube scope
 - Submit for verification via Google Cloud Console → OAuth consent screen → Publish App
 - Respond to Google review team requests (this process typically takes 1–4 weeks)
@@ -414,7 +414,7 @@ preflight validator, faster/more-consistent deploys, and container auto-recovery
 - `scripts/doctor.py` (+ `tests/test_doctor.py`) — presence + format + live checks with redacted
   output; non-zero exit so it gates the deploy. `--full` / `--offline` / `--json` modes.
 - `docs/ACCESS.md` — click-by-click SSH + CI deploy-key + Cloudflare Tunnel runbook (tailored to
-  the droplet + agenticlip.studio), with key inventory/consolidation steps.
+  the droplet + autoclip.studio), with key inventory/consolidation steps.
 - Deploy hardening — amd64-only image build; `deploy.yml` doctor preflight before migrate/cutover;
   job/domain naming reconciled.
 - `docker-compose.prod.yml` — `cloudflared` service + no host port; app/worker healthchecks; dev
@@ -3303,6 +3303,137 @@ page across the 320 → 1920px viewport range. Explicit reversal of Issue 99's
 
 ---
 
+## Issue 143: Fix all red CI to 0 failures
+**Status**: ✅ Done (2026-06-17)
+**Depends on**: none (gating issue for the 143–147 cleanup sweep)
+
+**What**: PR #20 and `main` carried two standing CI failures. (1) The Layer-0
+`pip_audit` gate reported 8 CVEs (4 starlette + 3 python-multipart + 1 cryptography).
+(2) The integration suite was red 9+ days: `test_poll_clip_outcomes_uses_per_creator_median`
+got `performed_well=None` because the poll's session-level `pg_advisory_lock` leaked
+across pytest-asyncio's per-test event loops on the shared module `admin_engine` pool,
+making the poll `acquired=False` and silently skip.
+
+**Files**: `requirements.txt`, `pyproject.toml`,
+`.claude/skills/production-assessment/scripts/run_layer0.py`, `worker/tasks.py`,
+`tests/test_worker_pipeline.py`, `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [x] Phase 1: research live — FastAPI↔starlette 1.x compatibility, each CVE's
+      fix version + exploitability, pytest-asyncio↔pytest 9 (DECISIONS 2026-06-17)
+- [x] Bump fastapi 0.120.4→0.137.1, starlette 0.49.1→1.3.1, python-multipart
+      0.0.27→0.0.31, cryptography 46.0.7→48.0.1; lift now-fixed PYSEC-2026-161
+- [x] pytest CVE (CVE-2025-71176) stays VEX-ignored (test-only, ephemeral CI)
+- [x] Fix advisory-lock leak: rollback-before-unlock (prod) + admin-engine
+      dispose fixture (test determinism)
+- [x] Unit suite 974 passed under bumped stack; pip-audit 0 unignored vulns
+- [x] **PR #20 all-green on real CI** + integration dispatch 127 passed / 0 failed
+
+---
+
+## Issue 144: GH Actions + healthcheck audit
+**Status**: ✅ Done (2026-06-17)
+**Depends on**: 143
+
+**What**: Audited 8 workflow files. Consolidated `ci.yml` + `quality.yml` +
+`integration.yml` into one `CI` workflow (parallel jobs, names preserved). Integration
+now runs on PRs (closing the gap that hid Issue 143's breakage 9+ days). Least-privilege
+`permissions` on every workflow; bumped Node-20-deprecated actions. Root-caused the
+"skipping" health-check (unset `PRODUCTION_URL`) → enabling it revealed Cloudflare Bot
+Fight Mode 403s the GH datacenter IP (origin healthy) → moved uptime monitoring to
+Cloudflare Health Checks; demoted the GH cron to a manual smoke test.
+
+**Acceptance criteria**:
+- [x] Phase 1: research current GH Actions best practice (least-privilege
+      `GITHUB_TOKEN`, service containers for PR integration, reusable workflows)
+- [x] Root-cause the skipping `health-check.yml` (unset `PRODUCTION_URL`; then CF
+      Bot-Fight 403) → Cloudflare Health Checks + manual-only GH smoke test
+- [x] Consolidate overlapping workflows (8 → 6); each workflow's purpose documented
+- [x] Integration on PRs; least-privilege permissions; deprecated actions bumped
+- [x] **Consolidated CI green on PR** — all 6 jobs pass (integration 127/127)
+
+---
+
+## Issue 145: staging + main branch model
+**Status**: ✅ Done (2026-06-17) — branch protection *enforcement* deferred to GitHub Pro
+**Depends on**: 143, 144 (gated on green CI)
+
+**What**: Established the `feature → staging → main` model (`docs/BRANCHING.md`). Cut
+`staging` from `main`; pruned the stale `issue-138-*` branch (PR #19 squash-merged —
+verified content present in `main`). Branch protection can't be enforced on a private
+free-tier repo (API 403, needs GitHub Pro) → kept as convention with the per-PR `CI`
+workflow as the gate; the ready-to-apply ruleset is written for the Pro upgrade. PR #20
+merge deferred to the end of the sweep (one-time direct-to-main transition).
+
+**Acceptance criteria**:
+- [x] Phase 1: research branch models + protection (Rulesets vs classic; solo-dev gate
+      = required checks + linear history, no required reviews)
+- [x] `staging` cut from `main`; stale `issue-138-*` pruned (content-verified safe)
+- [x] Branch-protection ruleset documented + ready to apply (deferred: needs Pro on
+      private repo — API 403)
+- [x] Promotion flow documented (`docs/BRANCHING.md`, registered in `docs/SOT.md`)
+- [~] PR #20 → main: deferred to end of sweep (after 146 + 147), per plan
+
+---
+
+## Issue 146: Docs consolidation + searchable index
+**Status**: ✅ Done (2026-06-17)
+**Depends on**: none (can run parallel to 147)
+
+**What**: Consolidated `docs/` (20 → 17 live + index) preserving the 8 canonical SOT roles.
+New `docs/README.md` index; archived 4 superseded docs (KICKSTART, PRODUCTION_COMMANDS,
+ISSUE_APPROVED_PLANS, BETA_LAUNCH_RUNBOOK) with salvage (aspirations→issues, OAuth
+onboarding→ACCESS); deduped the divergent `TOKEN_ENCRYPTION_KEY` rotation (canonical in
+RUNBOOKS, pointer in DEPLOYMENT); renamed research doc → COMPETITIVE_RESEARCH; removed the
+root `Project Idea.md` duplicate; triaged OFF_COURSE_BUGS.
+
+**Acceptance criteria**:
+- [x] Phase 1: research docs-as-code IA (single index, one-source-per-fact, archive/)
+- [x] `docs/README.md` searchable index added; pointed to from SOT
+- [x] Legacy overlap archived (preserved, banners); 8 canonical SOT roles untouched
+- [x] Divergent key-rotation procedure deduped (real hazard removed)
+- [x] OFF_COURSE_BUGS triaged (advisory-lock → Fixed/143; "11 failures" → Resolved)
+
+---
+
+## Issue 147: UI/UX cohesion audit → design-system remediation
+**Status**: ✅ Done (2026-06-17) — foundation + audit + safe remediation; structural migration → Issue 148
+**Depends on**: none (can run parallel to 146)
+
+**What**: 4-agent per-template audit found the incohesion was duplicated components (same
+card/stat-cell/status-pill/eyebrow redefined per page under different names), not missing
+tokens. Delivered the shared `static/components.css` layer + token additions
+(semantic tints, on-colors, one `--tracking-eyebrow`), fixed the `--editor-*` vs `--color-*`
+card mismatch, tokenized hardcoded colors. Full per-template structural migration deferred to
+Issue 148 (needs visual QA).
+
+**Acceptance criteria**:
+- [x] Phase 1: research design-system standard (tokens→components→pages, cascade layers)
+- [x] Cohesion audit with prioritized findings (4-agent per-template catalog)
+- [x] Shared component layer (`components.css`) + token additions implemented + wired
+- [x] Critical drift fixed (intake-mode editor-tokens, divergent letter-spacing, hardcoded colors)
+- [x] Static tests pin the component-layer contract; full suite green (976)
+- [~] Full per-template visual uniformity → **Issue 148** (structural migration, needs visual QA)
+
+---
+
+## Issue 148: UI design-system migration — adopt shared components per template
+**Status**: ⬜ Not started (follow-up from 147)
+**Depends on**: 147
+
+**What**: Adopt the `components.css` shared classes across the core templates — delete each
+page's local `.panel`/`.card`/`.stat-cell`/`.status-chip`/eyebrow/callout copies and swap the
+HTML to the canonical classes, with **visual QA** per page. Optionally introduce CSS `@layer`
+(tokens, base, components, page) to make the cascade explicit (see DECISIONS 2026-06-17 — the
+existing specificity-based overrides must be migrated together).
+
+**Acceptance criteria**:
+- [ ] Each core template uses the shared components; local duplicates removed
+- [ ] Visual QA per page (no regressions); screenshots before/after
+- [ ] Consider `@layer` adoption; full suite green
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
@@ -3312,3 +3443,8 @@ Items deferred until the product is live and stable:
 - Multi-platform export (TikTok / Reels)
 - Hot-key clipping during live recording / OBS integration
 - No-auth demo mode (full processing without signup — follows Issue 136 hero)
+- Per-Short mini-editor: left/right arrow to browse Shorts one-by-one with an inline
+  crop/clip/cut/subtitle/font tool + a feedback comment box (salvaged from KICKSTART
+  "aspirations", Issue 146)
+- All-in-one direction: grow toward an editor / analyzer / video+audio management hub so
+  creators keep everything together (salvaged from KICKSTART "aspirations", Issue 146)

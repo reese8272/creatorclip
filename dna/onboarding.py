@@ -22,7 +22,7 @@ from typing import Literal, TypedDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Creator, OnboardingState, Video
+from models import Creator, OnboardingState, Video, VideoOrigin
 from youtube.analytics import check_data_gate
 
 SetupStepName = Literal[
@@ -84,14 +84,17 @@ def _step(
 
 
 async def _has_clip_track_videos(session: AsyncSession, creator_id: uuid.UUID) -> bool:
-    """True when the creator has at least one ``source_uri IS NOT NULL`` video
-    (i.e. a video that actually runs the clip pipeline — catalog-only DNA
-    references are excluded, matching ``routers/videos.py::list_videos``).
+    """True when the creator has added at least one non-catalog video
+    (i.e. a linked or uploaded video that shows on the dashboard — catalog-only
+    DNA references are excluded, matching ``routers/videos.py::list_videos``).
+    Issue 139: switched from the ``source_uri IS NOT NULL`` heuristic to the
+    ``origin`` discriminator so a creator who only *links* a video (no stored
+    media yet) still progresses past the ``link_first_video`` onboarding step.
     """
     result = await session.execute(
         select(func.count(Video.id)).where(
             Video.creator_id == creator_id,
-            Video.source_uri.is_not(None),
+            Video.origin != VideoOrigin.catalog,
         )
     )
     return (result.scalar_one() or 0) > 0

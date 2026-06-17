@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import IngestStatus, OnboardingState, VideoKind
+from models import IngestStatus, OnboardingState, VideoKind, VideoOrigin
 
 # ── Root and static routes ────────────────────────────────────────────────────
 
@@ -97,6 +97,8 @@ def _mock_video(creator_id, title="Test video", yt_id="abc123"):
     v.ingest_status = IngestStatus.done
     v.duration_s = 600.0
     v.created_at = datetime.datetime.now(datetime.UTC)
+    v.origin = VideoOrigin.upload
+    v.source_uri = f"source/{creator_id}/{yt_id}.mp4"
     return v
 
 
@@ -190,8 +192,20 @@ def test_list_videos_response_has_required_keys(client):
         app.dependency_overrides.clear()
 
     item = resp.json()["videos"][0]
-    for key in ("id", "youtube_video_id", "title", "kind", "ingest_status", "created_at"):
+    for key in (
+        "id",
+        "youtube_video_id",
+        "title",
+        "kind",
+        "ingest_status",
+        "created_at",
+        "origin",
+        "clippable",
+    ):
         assert key in item
+    # Issue 139: an uploaded video is clip-trackable; provenance is surfaced.
+    assert item["origin"] == "upload"
+    assert item["clippable"] is True
 
 
 # ── Issue 90: catalog-only rows excluded from /videos list ───────────────────
@@ -836,8 +850,9 @@ def test_profile_page_exposes_api_keys_section():
 
 
 def test_list_videos_excludes_catalog_only_rows(client):
-    """The SELECT must filter `Video.source_uri IS NOT NULL`. Verified by
-    introspecting the SQLAlchemy statement passed to session.execute.
+    """The SELECT must filter out catalog-only rows via `Video.origin != catalog`
+    (Issue 139 — replaced the old `source_uri IS NOT NULL` heuristic that wrongly
+    hid linked videos). Verified by introspecting the SQLAlchemy statement.
     """
     captured_statements: list = []
     creator = _mock_creator()
@@ -867,9 +882,10 @@ def test_list_videos_excludes_catalog_only_rows(client):
     assert resp.status_code == 200
     assert len(captured_statements) == 1
     compiled = str(captured_statements[0].compile(compile_kwargs={"literal_binds": True}))
-    assert "source_uri IS NOT NULL" in compiled, (
-        "list_videos must filter Video.source_uri.isnot(None) so catalog-only "
-        "(DNA-reference) rows don't pollute the dashboard. (Issue 90)"
+    assert "origin != 'catalog'" in compiled or "origin <> 'catalog'" in compiled, (
+        "list_videos must filter Video.origin != catalog so catalog-only "
+        "(DNA-reference) rows don't pollute the dashboard, while linked videos "
+        "still appear. (Issue 139, supersedes Issue 90's source_uri heuristic)"
     )
 
 
@@ -1466,3 +1482,86 @@ def test_analysis_ingest_cta_uses_urlraw_not_dead_id():
         "Dead element id must be gone — it throws and kills the analysis path."
     )
     assert "'https://www.youtube.com/watch?v=' + urlRaw" in src
+
+
+def test_shared_components_layer_exists_and_is_linked():
+    """Issue 147 — the cohesion layer. static/components.css is the canonical
+    shared component set (built only on _design-tokens.css), and every core
+    authenticated template must link it after page-shell.css. The audit found
+    the same components (stat cells, status pills, eyebrow labels, callouts,
+    log streams) redefined locally per page; this pins the shared layer + its
+    adoption so a page can't silently re-fork them.
+    """
+    import pathlib
+
+    static = pathlib.Path(__file__).parent.parent / "static"
+    comp = (static / "components.css").read_text()
+
+    # Canonical components defined on the shared layer.
+    for cls in (
+        ".eyebrow",
+        ".stat-cell",
+        ".status-pill",
+        ".callout",
+        ".stream-output",
+        ".status-line",
+        ".input",
+        ".btn-danger",
+    ):
+        assert f"{cls}" in comp, (
+            f"components.css must define {cls} — the shared, deduplicated "
+            f"component the per-page copies collapse into (Issue 147)."
+        )
+    # Built on tokens, not hardcoded literals.
+    assert "#fff" not in comp.lower() and "rgba(" not in comp, (
+        "components.css must consume tokens (var(--…)), never hardcoded "
+        "colors — that is the whole point of the cohesion layer."
+    )
+
+    # Every core authenticated template links it, after page-shell.css.
+    for page in (
+        "index",
+        "insights",
+        "profile",
+        "onboarding",
+        "analysis",
+        "walkthrough",
+        "pricing",
+    ):
+        src = (static / f"{page}.html").read_text()
+        assert "/static/components.css" in src, (
+            f"{page}.html must link components.css (Issue 147 cohesion layer)."
+        )
+        assert src.index("page-shell.css") < src.index("components.css"), (
+            f"{page}.html must load components.css AFTER page-shell.css so the "
+            f"shared component layer can build on the shell."
+        )
+
+
+def test_eyebrow_label_tracking_is_tokenized():
+    """Issue 147 — the uppercase eyebrow/label pattern had drifted to three
+    different letter-spacings (0.04/0.06/0.08em) across pages. Pin the single
+    --tracking-eyebrow token and that the core templates no longer carry the
+    divergent literals."""
+    import pathlib
+
+    static = pathlib.Path(__file__).parent.parent / "static"
+    tokens = (static / "_design-tokens.css").read_text()
+    assert "--tracking-eyebrow:" in tokens, (
+        "_design-tokens.css must define --tracking-eyebrow (one canonical "
+        "label letter-spacing) — Issue 147."
+    )
+    for page in (
+        "index",
+        "insights",
+        "profile",
+        "onboarding",
+        "analysis",
+        "walkthrough",
+        "pricing",
+    ):
+        src = (static / f"{page}.html").read_text()
+        assert "letter-spacing: 0.04em" not in src and "letter-spacing: 0.08em" not in src, (
+            f"{page}.html must not carry a divergent eyebrow letter-spacing "
+            f"(use var(--tracking-eyebrow)) — Issue 147 cohesion."
+        )

@@ -5,6 +5,264 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 147: UI/UX cohesion — shared component layer
+
+**The diagnosis (from a 4-agent per-template audit):** the incohesion was **not** missing
+tokens — `_design-tokens.css` already had a full token system and `.card`/`.btn*`/`.badge*`,
+and pages already linked it. The problem: **every page re-defined the same components in its
+own embedded `<style>`** under different names (the card concept appeared 8+ times as
+`.summary-card`/`.panel`/`.insight-card`/`.brief-box`/`.step-card`/`.pack-card`/…; the stat
+cell 3–4×; the status pill 5× in analysis alone), so "the same" element rendered differently
+page to page. Plus concrete drift: `.intake-mode-option` used the `--editor-*` token family
+while sibling cards used `--color-*` (guaranteed surface+radius mismatch); three different
+eyebrow letter-spacings (0.04/0.06/0.08em); hardcoded `#000`/`#ffffff`/semantic `rgba()`.
+
+**What changed (this issue — the foundation + safe remediation):**
+- **New `static/components.css`** — the canonical shared layer (`.eyebrow`, `.stat-cell`,
+  `.status-pill`, `.state-pill`, `.callout`, `.tag`, `.stream-output`, `.status-line`,
+  `.input`, `.btn-danger`/`.btn-success`/`.btn-sm`), built only on tokens, linked into the 7
+  core authenticated templates after `page-shell.css`.
+- **Token additions** to `_design-tokens.css`: semantic tints (`--color-{success,warning,
+  danger}-{soft,border}`), `--color-on-accent`/`--color-on-success`, `--color-backdrop`,
+  `--text-2xs`, and one `--tracking-eyebrow` (replacing the 3 divergent letter-spacings).
+- **Fixed the load-bearing mismatch:** `.intake-mode-option` migrated off `--editor-*` onto
+  `--color-*` + `--radius` so it matches the cards around it.
+- **Tokenized** the hardcoded `#000`/`#ffffff`/`rgba()` literals across the core templates.
+- Pinned with `tests/test_static.py` (shared layer exists + linked after shell + tokenized;
+  eyebrow tracking tokenized). Full suite green (976 unit).
+
+**Deferred — recorded, not silently dropped:**
+- **CSS `@layer` was NOT introduced.** The existing system deliberately relies on
+  source-order + specificity (`body.app-page .btn-primary` out-specifies the base). Adding
+  `@layer` mid-system would invert those overrides; it's tracked as a follow-up.
+- **The full per-template structural migration** (deleting each page's local `.panel`/
+  `.stat-cell`/`.status-chip` copies and replacing the HTML with the shared classes) is the
+  remaining "make it visibly uniform" work. It needs **visual QA** (not available in this
+  environment), so this issue delivered the audit + the shared layer + the safe,
+  render-equivalent normalizations rather than risking un-QA'd visual rewrites. Scope:
+  index/insights/profile/onboarding/analysis/walkthrough/pricing; review.html (editor) and
+  the legal/login pages were out of scope per the issue plan.
+
+**Source / evidence:** design-system standard = tokens → components → pages with one source
+of truth per component; CSS cascade-layer guidance (MDN). 4-agent audit catalogued the
+divergences per template.
+
+**Date:** 2026-06-17
+
+## 2026-06-17 — Issue 146: docs consolidation + searchable index
+
+**What changed:** Consolidated `docs/` (was 20 files / ~15K lines) around a single
+discoverable entry point and one-source-of-truth-per-fact, preserving the 8 canonical SOT
+roles untouched.
+- **New `docs/README.md`** — the documentation index (canonical / operations / reference /
+  archive), pointed to from `docs/SOT.md`.
+- **Archived** (→ `docs/archive/`, preserved with ⚠️ banners): `KICKSTART.md`,
+  `PRODUCTION_COMMANDS.md` (drift-prone skill dump — live skills are in `.claude/`),
+  `ISSUE_APPROVED_PLANS.md`, `BETA_LAUNCH_RUNBOOK.md` (stale migration hash + dead branch).
+  Salvaged first: KICKSTART's product-idea "aspirations" → `issues.md` backlog; BETA's
+  Google-OAuth closed-beta onboarding (test users, 7-day caveat, consent-screen URLs) →
+  `ACCESS.md`.
+- **Deduped the `TOKEN_ENCRYPTION_KEY` rotation** — there were two *divergent* procedures
+  (a real hazard). Canonicalized the **zero-downtime MultiFernet** flow in `RUNBOOKS.md`
+  (where `SECRETS.md` already points); `DEPLOYMENT.md` is now a pointer. (The previous
+  `RUNBOOKS.md` flow needed a maintenance window and risked decrypt failures — replaced.)
+- **Renamed** `other_apps_research.md` → `COMPETITIVE_RESEARCH.md` + date-stamp (feeds 147).
+- **Removed** root-level `Project Idea.md` — an unreferenced 1165-line duplicate of the
+  archived KICKSTART (content preserved in `docs/archive/` + git history).
+- **OFF_COURSE_BUGS triage:** marked the advisory-lock flake ✅ Fixed (Issue 143) and the
+  stale "11 pre-existing failures" entry ✅ Resolved (suite green: 974 unit + 127 integration).
+
+**Why:** future sessions read `docs/` first (CLAUDE.md Read Order); superseded/duplicated
+docs caused real errors (a stale embedded CLAUDE.md, a dead-branch deploy runbook, two
+key-rotation procedures). Net: **20 → 17 live docs + an index**; canonical roles intact.
+
+**Source / evidence:** docs-as-code information-architecture standard — single entry
+point/index, one source of truth per fact, `archive/` for superseded-but-preserved history.
+Legacy-doc supersession verified by a per-doc content assessment (not just filenames).
+
+**Date:** 2026-06-17
+
+## 2026-06-17 — Issue 145: staging + main branch model (protection deferred to GitHub Pro)
+
+**What changed:** Established a two-tier branch model — `feature/* → staging → main` —
+documented in `docs/BRANCHING.md` (registered in `docs/SOT.md`). Cut the long-lived
+`staging` branch from `main`. Pruned the stale `issue-138-sev1-bulk-sweep` branch
+(verified its work shipped via PR #19's squash-merge — `escapeHtml`, the single-flight
+test, and the rate-limit tests are all present in `main`/the sweep tree; the leftover
+ref was already gone remotely). Remote branches now: `main`, `staging`,
+`issue-139-142-sweep`.
+
+**Branch protection is NOT enforced — deferred.** Branch protection / rulesets require
+**GitHub Pro** on a private repo; the API returns 403 "Upgrade to GitHub Pro or make
+this repository public" on the free tier (confirmed live, 2026-06-17). Decision: stay
+private and keep the model as **convention for now**, with the `CI` workflow (runs on
+every PR) as the real gate. The exact ruleset — required status checks (the 6 CI job
+names), `required_linear_history`, `allow_force_pushes:false`, and
+`required_pull_request_reviews:null` (a solo maintainer can't self-approve, which would
+deadlock merges) — is written in `docs/BRANCHING.md` ready to one-click apply when Pro
+is enabled.
+
+**One-time transition:** the in-flight 143–147 sweep (`issue-139-142-sweep`, PR #20)
+merges directly to `main` at the end of the sweep rather than routing through `staging`;
+subsequent work follows `feature → staging → main`.
+
+**Source / evidence:** GitHub branch-protection API 403 on private free tier; PR #19
+state `MERGED`; content verification that 138's fixes are in the current tree. GitHub
+guidance now favors **Rulesets** over classic protection (same contexts apply).
+
+**Date:** 2026-06-17
+
+## 2026-06-17 — Issue 144: CI consolidation, integration-on-PR, Cloudflare health monitoring
+
+**What changed:**
+- **Consolidated** `ci.yml` + `quality.yml` + `integration.yml` into a single `CI`
+  workflow with parallel jobs (lint / unit / integration / coverage / static-gates /
+  docker). Job *names* preserved so any required-status-check rules still resolve.
+- **Integration tests now run on `pull_request`**, not just push-to-`main`. This is the
+  direct fix for the root cause of Issue 143's 9-day-red integration suite: integration
+  was main-only, so a regression never blocked a PR.
+- **Least-privilege `permissions: contents: read`** added to every workflow (GitHub
+  Actions 2026 security guidance); `docker-publish` keeps `packages: write`.
+- Bumped Node-20-deprecated actions (checkout@v6, setup-python@v6, setup-buildx@v4,
+  build-push@v7).
+- **Production health monitoring moved off the GitHub Actions cron to Cloudflare Health
+  Checks.** The scheduled `health-check.yml` probe was a no-op for weeks (its `if:`
+  guard required an unset `PRODUCTION_URL`); once enabled, it returned **403 Cloudflare
+  "Just a moment…" challenge** — Bot Fight Mode blocks GitHub-hosted datacenter IPs even
+  though the origin is healthy (200 from a normal IP). A JS challenge can't be satisfied
+  by curl, so a GH cron probe through Cloudflare false-reds every run.
+
+**Why Cloudflare Health Checks:** they probe from Cloudflare's own edge (not bot-
+challenged) and alert natively — the right tool for external uptime, vs. a GH cron which
+is a known anti-pattern (delayed scheduling, weak alerting, and this CF-block). The GH
+`health-check.yml` is demoted to manual-dispatch-only (a smoke test with a `url`
+override for non-CF targets); deploy-time health is already covered by `deploy.yml`'s
+internal localhost `/health` smoke test. Runbook: `docs/DEPLOYMENT.md` →
+"Production health monitoring".
+
+**Source / evidence:**
+- Cloudflare challenge confirmed live: `curl autoclip.studio/health` → 200 from a normal
+  IP; GH-hosted runner → HTTP 403 with body `<title>Just a moment...</title>` +
+  `challenges.cloudflare.com` (Issue 144 dispatch run, 2026-06-17).
+- GitHub Actions 2026 security roadmap (least-privilege GITHUB_TOKEN, per-job perms);
+  service containers for PR integration tests.
+- **Validation:** consolidated `CI` ran green on the PR — all 6 jobs pass, including
+  integration-on-PR (127 passed).
+
+**Date:** 2026-06-17
+
+## 2026-06-17 — Issue 143: starlette 1.x migration + CVE remediation (FastAPI bump)
+
+**What changed:** Bumped the web framework to clear 8 pip-audit CVEs that were failing the
+Layer-0 `pip_audit` gate (and blocking PR #20 + the 143–147 cleanup sweep):
+
+- `fastapi 0.120.4 → 0.137.1`
+- `starlette 0.49.1 → 1.3.1` (crosses the starlette **1.0 major**)
+- `python-multipart 0.0.27 → 0.0.31`
+- `cryptography 46.0.7 → 48.0.1`
+
+Also **lifted** the `PYSEC-2026-161` accepted-risk ignore from `pyproject.toml
+[tool.pip-audit].ignore-vulns` and the mirrored `PIP_AUDIT_IGNORES` in
+`run_layer0.py` — starlette 1.3.1 ships the real fix, so it is no longer accepted-risk.
+The pytest CVE (`GHSA-6w46-j5rx-g56g` / CVE-2025-71176) **stays** VEX-ignored.
+
+**Why:** The 8 failing CVEs broke down as 4 starlette + 3 python-multipart + 1 cryptography.
+All starlette fixes land only in the **1.x line**, and FastAPI 0.120.4 hard-pins
+`starlette>=0.40.0,<0.50.0` — so starlette could not be patched without bumping FastAPI.
+The decisive CVE was **CVE-2026-54283** (HIGH: `request.form()` limits silently ignored for
+`application/x-www-form-urlencoded`, a DoS), which is reachable through our login / OAuth-callback
+endpoints — too exploitable to VEX-ignore. The pytest CVE is a local-only `/tmp` priv-esc
+fixable only by a breaking pytest 9 + pytest-asyncio 0.24→1.x migration; it is a test-only
+dependency on an ephemeral single-tenant CI runner, so it stays documented-ignored.
+
+**Source / evidence:**
+- `pip-audit -r requirements.txt` (8 → 0 unignored after bumps, verified on the `.venv`).
+- FastAPI 0.137.1 `requires_dist`: `starlette>=0.46.0` (no upper cap) — confirmed via PyPI JSON.
+- starlette CVE-2026-54283 fixed in 1.3.1 (GitLab advisory DB); cryptography GHSA-537c-gmf6-5ccf
+  (OpenSSL OOB read in wheels) fixed in 48.0.1; python-multipart CVE-2026-53538/53539/53540
+  fixed in 0.0.30/0.0.31.
+- **Validation:** full unit suite `974 passed / 0 failed` under the bumped stack — the starlette
+  1.0 major caused no regressions in our usage. Integration suite validated separately on CI.
+
+**Date:** 2026-06-17
+
+## 2026-06-16 — Issue 139: Linked-video visibility + the yt-dlp ToS decision
+
+**What changed:** Added a `Video.origin` enum (`catalog | link | upload`) as the canonical
+provenance discriminator (migration 0024), replacing the `source_uri IS NULL` heuristic that
+`list_videos` used to hide catalog rows. That heuristic also hid every *linked* video
+(`link_video` never sets `source_uri`), so a creator who clicked "Link a video" got a 200 and
+then watched the row vanish — the SEV1 logged in `OFF_COURSE_BUGS.md` (2026-05-31). Now
+`list_videos` filters `origin != catalog`, so linked videos appear, each carrying a derived
+`clippable` flag (true only when stored media exists). `_has_clip_track_videos` (onboarding)
+switched to the same `origin != catalog` rule so a creator who only *links* a video still
+progresses past `link_first_video`.
+
+**The load-bearing decision — we do NOT download from YouTube.** Investigating the fix surfaced
+that the clip pipeline hard-requires `source_uri` (ingest raises without it), which only
+*uploads* ever have. So linked + catalog videos can't be clipped without their source file. The
+tempting fix was to wire the existing `download_via_ytdlp` (own-channel content) into ingest.
+**We rejected it.** Research (One Rule) confirmed:
+
+- Downloading via yt-dlp violates **YouTube's ToS even for your own content** — the ToS bars
+  downloading unless YouTube shows a download link; ownership is a *copyright* defense, not a
+  ToS exemption.
+- CreatorClip is bound by the stricter **YouTube API Services ToS**, which explicitly prohibits
+  API clients from letting users "download" videos or "modify the audio or video portions of a
+  video" outside YouTube Premium. A server-side download-and-recut pipeline is squarely
+  prohibited.
+- It would **jeopardize Google OAuth verification** (the #1 public-launch gate — sensitive
+  YouTube scopes are reviewed for ToS compliance) and contradicts CLAUDE.md's Honesty
+  Constraint ("comply with the YouTube API Services Terms of Service at all times") and
+  COMPLIANCE.md.
+- The **sanctioned** way for a creator to obtain their own file is Google Takeout / their
+  original export, then upload it.
+
+**Chosen path (Option A — compliant):** linked videos are visible but flagged non-clippable.
+`POST /videos/{id}/queue` now returns **409** with upload guidance when `source_uri` is null
+(instead of firing a doomed ingest); the dashboard renders an "Upload source file to clip"
+affordance (guiding to Google Takeout) for those rows, and the in-flight-ingest tracker +
+status poller skip non-clippable rows so they don't trip the "stuck" warning. `yt-dlp` stays
+commented-out in `requirements.txt` and `YTDLP_ENABLED` stays default-false, now documented as
+a self-host-only, ToS-risk escape hatch (COMPLIANCE.md).
+
+**Accepted limitation:** migration 0024 backfills `origin` from `source_uri` (`NOT NULL` →
+`upload`, else `catalog`). Pre-existing linked rows (source_uri NULL) backfill to `catalog` and
+stay hidden — they're indistinguishable from catalog rows in old data and are unrecoverable.
+The fix is forward-looking; new links set `origin = link`.
+
+**Source/evidence:** [YouTube API Services ToS](https://developers.google.com/youtube/terms/api-services-terms-of-service),
+[Developer Policies](https://developers.google.com/youtube/terms/developer-policies),
+[yt-dlp legality](https://audioutils.com/blog/is-yt-dlp-legal),
+[Google Takeout as the sanctioned export](https://support.google.com/youtube/thread/14052201/update-to-how-videos-are-downloaded-from-google-takeout).
+Tests: `tests/test_issue_139.py`. **Date:** 2026-06-16
+
+---
+
+## 2026-06-16 — Issue 140: Remove inert cache marker on analyze-performer
+
+**Decision:** Removed the `cache_control: {type: ephemeral}` marker from the
+`analyze-performer` system block (`routers/insights.py`). The system prefix is a single
+static ~30-token instruction string; the per-video DNA context lives in the user message
+(capped at 800 chars). That prefix is far below Haiku 4.5's 4096-token cacheable-prefix
+floor, so the marker was inert — paying the 1.25× write premium for zero cache reads.
+
+**Why:** Same class as the `titles.py` / `thumbnails.py` markers removed in Issue 138.
+This was the 4th marker flagged in that sweep but deferred (logged in `OFF_COURSE_BUGS.md`)
+because it hadn't been verified token-for-token. Inspection confirmed the prefix is static
+and tiny — no growth path to 4096 tokens — so removal is correct, not a micro-optimization
+of prefix padding.
+
+**Source/evidence:** `routers/insights.py` `analyze-performer` handler (system is one static
+text block; prompt built by `_build_analysis_prompt`, DNA capped at 800 chars in the user
+turn). Floors per the Issue 138 entry below (Haiku 4.5 = 4096, Sonnet 4.6 = 2048). Regression
+test `tests/test_analyze_performer.py::test_analyze_performer_no_inert_cache_marker` asserts no
+`cache_control` reaches `messages.create`.
+
+**Date:** 2026-06-16
+
+---
+
 ## 2026-06-16 — Issue 138: SEV1 bulk sweep (cache-floor correction + SDK bump)
 
 **Decision:** Closed the 7 SEV1s from the 2026-06-09 `/assess` in one sweep. The two

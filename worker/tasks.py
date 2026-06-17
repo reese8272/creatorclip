@@ -1374,6 +1374,11 @@ async def _poll_clip_outcomes_async() -> None:
                 # across the whole batch, and partial progress survives a mid-batch failure.
                 await session.commit()
         finally:
+            # Roll back first: if the body aborted (e.g. a per-creator commit raised),
+            # the session is in a failed-transaction state and the unlock execute would
+            # itself raise — silently *leaking* the session-level advisory lock and
+            # blocking every future poll on this pooled backend. Issue 143.
+            await session.rollback()
             await session.execute(
                 text("SELECT pg_advisory_unlock(hashtext(:k))"),
                 {"k": "poll_clip_outcomes"},

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/_design-tokens.css">
   <!-- Issue 137 — shared aurora + soft-card shell for authenticated pages -->
   <link rel="stylesheet" href="/static/page-shell.css">
+  <link rel="stylesheet" href="/static/components.css">
   <!-- Issue 136 — pre-auth marketing hero (toggled by auth.js when /auth/me 401s) -->
   <link rel="stylesheet" href="/static/hero.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
@@ -163,6 +164,13 @@
       height: var(--row-height);
     }
     .video-table tr:hover td { background: var(--color-elevated); }
+    /* Issue 139: honest affordance for linked videos with no stored source. */
+    .source-needed {
+      color: var(--color-text-subtle);
+      font-size: var(--text-sm);
+      border-bottom: 1px dotted var(--color-border);
+      cursor: help;
+    }
     .yt-id {
       color: var(--color-text-subtle);
       font-family: var(--font-mono);
@@ -644,7 +652,14 @@
       let clipsReadyCount = 0;
       const rows = await Promise.all(videos.map(async v => {
         let clipsHtml = '';
-        if (v.ingest_status === 'pending') {
+        if (v.ingest_status === 'pending' && !v.clippable) {
+          // Issue 139: linked videos have no stored source. We never download
+          // from YouTube (their Terms of Service), so clipping needs the
+          // original file. Offer the honest upload path — guided toward the
+          // sanctioned Google Takeout export — instead of a "Queue for
+          // analysis" CTA that would fail ingest.
+          clipsHtml = `<div class="action-row"><span class="source-needed" title="We never download your video from YouTube (per their Terms of Service). To generate clips, upload the original file — for example export it from Google Takeout — and it will process automatically.">Upload source file to clip</span></div>`;
+        } else if (v.ingest_status === 'pending') {
           // Stronger primary CTA when the creator opted into manual control;
           // secondary affordance in auto mode (where the pipeline is normally
           // expected to start on its own via upload / OBS / catalog flow).
@@ -677,7 +692,7 @@
           }
         }
         const badgeVariant = STATUS_BADGE[v.ingest_status] || '';
-        return `<tr data-video-id="${v.id}" data-status="${v.ingest_status}">
+        return `<tr data-video-id="${v.id}" data-status="${v.ingest_status}" data-clippable="${v.clippable}">
           <td>
             <div class="title-cell">${escapeHtml(v.title || '—')}</div>
             <div class="yt-id">${escapeHtml(v.youtube_video_id)}</div>
@@ -705,16 +720,17 @@
     // (no tasks tracked) even though work was actively happening.
     //
     // Registering here makes the panel surface ingest progress on the
-    // dashboard regardless of where the upload was started. Linked-only
-    // rows never appear here (list_videos filters `source_uri IS NOT NULL`
-    // per Issue 90), so we don't register tasks for videos that have no
-    // running pipeline.
+    // dashboard regardless of where the upload was started. Linked videos now
+    // appear in the list (Issue 139 — origin != catalog) but have no stored
+    // source and therefore no running pipeline, so we skip non-clippable rows
+    // to avoid tracking a task that will never complete.
     function _registerInFlightIngests(videos) {
       if (!window.activeTasks) return;
       const tracked = new Set(
         (window.activeTasks.getActiveTasks() || []).map(t => t.task_id)
       );
       for (const v of videos) {
+        if (!v.clippable) continue;
         if (v.ingest_status !== 'pending' && v.ingest_status !== 'running') continue;
         if (tracked.has(v.id)) continue;
         window.activeTasks.registerTask({
@@ -914,7 +930,10 @@
       }
       const rows = document.querySelectorAll('[data-video-id][data-status]');
       const inProgress = [...rows].filter(r =>
-        r.dataset.status === 'pending' || r.dataset.status === 'running'
+        // Issue 139: non-clippable linked rows have no running pipeline — never
+        // poll /status for them (would otherwise trip the "stuck" warning).
+        r.dataset.clippable !== 'false' &&
+        (r.dataset.status === 'pending' || r.dataset.status === 'running')
       );
       if (!inProgress.length) { _stopPolling(); return; }
       if (++_pollTicks > POLL_MAX_TICKS) {

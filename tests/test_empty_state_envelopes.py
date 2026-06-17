@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import IngestStatus, OnboardingState, RenderStatus, VideoKind
+from models import IngestStatus, OnboardingState, RenderStatus, VideoKind, VideoOrigin
 
 
 def _mock_creator(onboarding_state=OnboardingState.active):
@@ -64,6 +64,8 @@ def _mock_video(creator_id):
     v.ingest_status = IngestStatus.done
     v.duration_s = 600.0
     v.created_at = datetime.datetime.now(datetime.UTC)
+    v.origin = VideoOrigin.upload
+    v.source_uri = f"source/{creator_id}/abc12345678.mp4"
     return v
 
 

@@ -26,6 +26,7 @@ from models import (
     Video,
     VideoKind,
     VideoMetrics,
+    VideoOrigin,
 )
 from youtube import _http
 from youtube.data_api import _classify_error, get_videos_metadata, list_channel_videos
@@ -244,6 +245,7 @@ async def sync_video_catalog(session: AsyncSession, creator: Creator, access_tok
                 kind=meta.get("kind", VideoKind.long),
                 published_at=published_at,
                 duration_s=meta.get("duration_s"),
+                origin=VideoOrigin.catalog,
                 ingest_status=IngestStatus.pending,
             )
         )

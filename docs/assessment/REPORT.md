@@ -4,7 +4,37 @@
 
 ## VERDICT: PRODUCTION-READY — **CONDITIONAL**
 
-**All 7 SEV1s from the 2026-06-09 run are FIXED and re-verified** (Issue 138 bulk sweep): the two frontend ships-broken defects (dead non-catalog analysis path + the `innerHTML` XSS sinks), the unratelimited multimodal cost hole, the `expire_trials` email PII leak, the chapter-truncation `max_tokens`, the inert Sonnet-4.6 cache markers, and the `ttl:"1h"`-on-stale-SDK risk. Layer 0 is green (ruff 0 / mypy 0 / coverage **76.15%** ↑ / bandit 0/0) and the register now carries **0 BLOCKER · 0 SEV1**. The verdict stays CONDITIONAL only on the two standing items that reading cannot settle: the **Locust 300-user run** (axes A + E lack load evidence) and the **`TOKEN_ENCRYPTION_KEY` rotation runbook** — both pre-launch-checklist items, not code defects. A ~62-strong SEV2 layer remains (advisory-lock hygiene, generate check-then-insert race, slowapi-on-loop) for scheduled hardening; one new SEV2 surfaced this run (a 4th, self-XSS `innerHTML` sink at `onboarding.html:461`).
+**All 7 SEV1s from the 2026-06-09 run are FIXED and re-verified** (Issue 138 bulk sweep): the two frontend ships-broken defects (dead non-catalog analysis path + the `innerHTML` XSS sinks), the unratelimited multimodal cost hole, the `expire_trials` email PII leak, the chapter-truncation `max_tokens`, the inert Sonnet-4.6 cache markers, and the `ttl:"1h"`-on-stale-SDK risk. Layer 0 is green (ruff 0 / mypy 0 / coverage **76.15%** ↑ / bandit 0/0) and the register now carries **0 BLOCKER · 0 SEV1**. **Update 2026-06-16 (Issue 142):** both standing items are now CLOSED — the **Locust 300-user run** was executed on staging (axes A + E, see below) and the **`TOKEN_ENCRYPTION_KEY` rotation runbook** is written (`docs/DEPLOYMENT.md`). Standing code gates clear; remaining launch blockers are external/ops (Google OAuth verification, prod `.env` lock). A ~62-strong SEV2 layer remains (advisory-lock hygiene, generate check-then-insert race, slowapi-on-loop) for scheduled hardening; one new SEV2 surfaced this run (a 4th, self-XSS `innerHTML` sink at `onboarding.html:461`).
+
+---
+
+## Load test — Locust 300 users — axes A + E (2026-06-16, Issue 142)
+
+Run on staging (project `cc139`, app on `:8001` behind PgBouncer transaction-pooling),
+300 users, 20/s spawn, 180s, fanned out across 13 seeded creators so traffic clears the
+per-creator rate limiter and actually exercises the connection pool. ~138 req/s aggregate.
+
+| Endpoint | p50 | p95 | p99 | Error % (all 429, rate-limit) |
+|---|---|---|---|---|
+| GET /videos | 53 ms | 400 ms | 730 ms | 32.6% (per-creator limiter) |
+| GET /creators/me | 51 ms | 380 ms | 660 ms | 16.6% |
+| GET /creators/me/dna | 50 ms | 340 ms | 600 ms | 2.5% |
+| GET /billing/balance | 49 ms | 400 ms | 650 ms | 0% |
+| GET /creators/me/data-gate | 58 ms | 400 ms | 710 ms | 0% |
+| GET /creators/me/upload-intel | 50 ms | 390 ms | 660 ms | 0% |
+| GET /health | 50 ms | 400 ms | 770 ms | 0% |
+| **Aggregated** | **52 ms** | **390 ms** | **680 ms** | **13.3%** |
+
+**Verdict: axes A + E CLOSED.** ~87% of requests cleared the rate limiter and hit Postgres
+through PgBouncer (transaction mode) at sustained load — **zero 500s, zero timeouts, zero
+pool-exhaustion / `prepared statement` errors**, p99 680ms. The pool budget holds
+(`pool_size 15 + max_overflow 5 = 20 ≤ PgBouncer DEFAULT_POOL_SIZE 25`). `/health` served
+1,353 reqs at **0% failure** under concurrency (axis E — the Issue-112 health connection-churn
+fix holds). The remaining errors are exclusively **429s** on hot endpoints — the per-creator
+rate limiter working as designed, not system failure. Prod (`autoclip.studio`) stayed `ok`
+throughout (verified via the tunnel). Note: a single-creator run is dominated by the limiter
+(85% 429) and does NOT exercise the pool — the multi-creator fan-out (`CC_CREATOR_IDS`) is
+required for real axis-A evidence (locustfile updated in Issue 142).
 
 ---
 

@@ -85,7 +85,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # Cloudflare Tunnel: routes https://agenticlip.studio → app:8000 with no open
+  # Cloudflare Tunnel: routes https://autoclip.studio → app:8000 with no open
   # inbound ports on the VM. The token (and the hostname→service ingress rule) is
   # configured in the Cloudflare Zero Trust dashboard; see docs/ACCESS.md.
   cloudflared:

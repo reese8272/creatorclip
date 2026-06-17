@@ -48,9 +48,19 @@ the ToS would result in API access revocation, destroying the product.
    backoff on 429/403 responses.
 
 5. **Source acquisition**: Downloading YouTube video bytes via third-party tools (`yt-dlp`)
-   may violate the ToS. CreatorClip's compliant path is creator-initiated upload or use of
-   the creator's own content via authorized API methods. `yt-dlp` is off by default and
-   must never be used on third-party channels.
+   violates the ToS — **even for the creator's own content** (Issue 139 research, 2026-06-16).
+   YouTube's ToS bars downloading unless a download link is shown; the stricter YouTube **API
+   Services ToS** that binds CreatorClip additionally prohibits API clients from letting users
+   download or "modify the audio or video portions of a video" outside YouTube Premium.
+   Ownership is a copyright defense, not a ToS exemption. **CreatorClip's only compliant clip
+   path is creator-initiated upload** (the source file obtained the sanctioned way, e.g. Google
+   Takeout / original export). Linked + catalog videos are visible for analytics/DNA but are
+   non-clippable until a source file is uploaded; `POST /videos/{id}/queue` returns 409 with
+   upload guidance for source-less rows. `yt-dlp` (`youtube/ingest.py::download_via_ytdlp`,
+   `YTDLP_ENABLED`) stays **off by default, commented-out of `requirements.txt`, and is NOT
+   wired into the hosted pipeline** — it exists only as a self-host escape hatch for operators
+   who own their own compliance posture, and must never be used on third-party channels.
+   See DECISIONS 2026-06-16 (Issue 139) for the full rationale + sources.
 
 6. **Token storage**: OAuth tokens must be encrypted at rest. CreatorClip uses Fernet
    encryption on token columns. Tokens must never appear in logs.

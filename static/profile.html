@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/_design-tokens.css">
   <!-- Issue 137 — shared aurora + soft-card shell -->
   <link rel="stylesheet" href="/static/page-shell.css">
+  <link rel="stylesheet" href="/static/components.css">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="/static/auth.js"></script>
   <script src="/static/progressStream.js"></script>
@@ -71,7 +72,7 @@
       gap: var(--space-2);
       flex-wrap: wrap;
     }
-    .btn-confirm { background: var(--color-success); color: #000; }
+    .btn-confirm { background: var(--color-success); color: var(--color-on-success); }
     .btn-confirm:hover { opacity: 0.88; background: var(--color-success); }
     .btn-rebuild {
       background: var(--color-surface);
@@ -128,13 +129,13 @@
     }
     .sync-chip.synced {
       color: var(--color-success);
-      border-color: rgba(46, 204, 113, 0.3);
-      background: rgba(46, 204, 113, 0.08);
+      border-color: var(--color-success-border);
+      background: var(--color-success-soft);
     }
     .sync-chip.not-synced {
       color: var(--color-warning);
-      border-color: rgba(243, 156, 18, 0.3);
-      background: rgba(243, 156, 18, 0.08);
+      border-color: var(--color-warning-border);
+      background: var(--color-warning-soft);
     }
     .dna-inner { padding-top: var(--space-3); }
 
@@ -184,7 +185,7 @@
       color: var(--color-text-muted);
       margin-bottom: var(--space-2);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: var(--tracking-eyebrow);
     }
     .form-field label .req { color: var(--color-warning); margin-left: var(--space-1); }
     .form-field label .opt {
@@ -273,16 +274,16 @@
       column-gap: var(--space-3);
       row-gap: var(--space-1);
       padding: var(--space-3) var(--space-4);
-      border: 1px solid var(--editor-border);
-      border-radius: var(--radius-md);
-      background: var(--editor-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      background: var(--color-surface);
       cursor: pointer;
       transition: border-color var(--duration) var(--ease),
                   background var(--duration) var(--ease);
     }
     .intake-mode-option:hover {
       border-color: var(--color-accent);
-      background: var(--editor-surface-elev);
+      background: var(--color-elevated);
     }
     .intake-mode-option input[type="radio"] {
       grid-area: radio;
@@ -388,7 +389,7 @@
       color: var(--color-danger);
     }
     .btn-danger:hover {
-      background: rgba(231, 76, 60, 0.08);
+      background: var(--color-danger-soft);
       border-color: var(--color-danger);
     }
     #api-keys-status { font-size: var(--text-xs); margin-top: var(--space-2); min-height: 18px; }

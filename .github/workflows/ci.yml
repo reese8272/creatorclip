@@ -1,22 +1,36 @@
 name: CI
 
+# Single PR/main gate. Consolidates the former ci.yml (lint/unit/docker),
+# quality.yml (mypy/bandit/pip-audit/coverage), and integration.yml (postgres+redis)
+# into one workflow with parallel jobs so a PR shows one coherent status surface and
+# one concurrency group. Integration tests now run on PRs too — the 2026-06 lesson
+# (Issue 144): integration was main-only, so a poll-task regression sat red for 9+
+# days without ever blocking a PR.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Least privilege (GitHub Actions 2026 security guidance): default the GITHUB_TOKEN
+# to read-only for the whole workflow; no job here needs write. Escalate per-job only
+# if a future job must (e.g. push a package).
+permissions:
+  contents: read
 
 jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       # Pin ruff to match the .venv version locally so `ruff format --check`
@@ -26,14 +40,13 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
 
-  test:
+  unit:
     name: Unit tests (pytest)
     runs-on: ubuntu-latest
     # conftest.py injects fake creds and DB/external APIs are overridden, but the
     # slowapi rate limiter talks to a real Redis (no in-memory fallback), so the
     # unit suite needs a Redis service. conftest defaults REDIS_URL to
     # redis://localhost:6379/0, which maps to the service below.
-    # Integration tests (marker: integration) run separately against a full stack.
     services:
       redis:
         image: redis:7-alpine
@@ -45,44 +58,141 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-
       - name: Install system deps (ffmpeg + libpq)
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
-
       - name: Install Python deps
         run: pip install -r requirements.txt
-
       - name: Import smoke (fail fast on dep drift)
         # Catches transitive-dep drift before running the full suite — e.g. a
         # 2026-05-28 regression where unpinned starlette resolved to 1.x (incompatible
         # with FastAPI 0.115.x). pytest --collect-only imports every test module and
         # surfaces TypeError/ImportError in ~2s rather than 30s.
         run: pytest --collect-only -q
-
       - name: Run unit tests
         # pytest.ini already applies -m "not integration"
         run: pytest --tb=short -q
 
+  integration:
+    name: Integration tests (postgres + redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: creatorclip_test
+          POSTGRES_USER: creatorclip
+          POSTGRES_PASSWORD: ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U creatorclip -d creatorclip_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://creatorclip:ci_password@localhost:5432/creatorclip_test
+      REDIS_URL: redis://localhost:6379/0
+      # Fake values — config.py requires these present; no real API calls made in CI
+      ANTHROPIC_API_KEY: sk-ant-ci-placeholder
+      GOOGLE_OAUTH_CLIENT_ID: 000000000000-ci.apps.googleusercontent.com
+      GOOGLE_OAUTH_CLIENT_SECRET: ci-secret
+      OAUTH_REDIRECT_URI: http://localhost:8000/auth/callback
+      TOKEN_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      JWT_SECRET_KEY: ci-jwt-secret-key-not-used-in-tests
+      ALLOWED_ORIGINS: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+      - name: Run integration tests
+        run: pytest -m integration --tb=short -q
+
+  coverage:
+    name: Coverage floor (pytest-cov ratchet)
+    runs-on: ubuntu-latest
+    # Mirrors the unit job: the slowapi limiter needs a real Redis.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system deps (ffmpeg + libpq)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+      - name: Install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run coverage gate
+        # --require-coverage turns a skipped coverage run into a hard failure so
+        # the floor is genuinely enforced in CI (unlike local runs).
+        run: >-
+          python3 .claude/skills/production-assessment/scripts/run_layer0.py
+          --gates coverage --require-coverage
+
+  static-gates:
+    name: Types + SAST + deps (mypy, bandit, pip-audit)
+    runs-on: ubuntu-latest
+    # No DB/Redis needed — these gates are static. Fast feedback (~1 min). All gating
+    # logic lives in scripts/run_layer0.py so CI and a local `/assess` measure identically.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run static gates
+        run: >-
+          python3 .claude/skills/production-assessment/scripts/run_layer0.py
+          --gates ruff,mypy,bandit,pip_audit,freshness
+
   docker-build:
     name: Docker build (smoke test)
     runs-on: ubuntu-latest
-    # Verifies the image builds successfully without a push — runs on every PR.
-    # Push to GHCR happens only on merge to main (see docker-publish.yml).
+    # Verifies the image builds without a push — runs on every PR. Push to GHCR
+    # happens only on merge to main (see docker-publish.yml).
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false

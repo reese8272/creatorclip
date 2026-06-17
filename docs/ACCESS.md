@@ -6,7 +6,7 @@ Tunnel** for the beta deployment. Tailored to the real infrastructure:
 | Thing | Value |
 |-------|-------|
 | VM (DigitalOcean Droplet) | `147.182.136.107` |
-| Public domain | `agenticlip.studio` |
+| Public domain | `autoclip.studio` |
 | Deploy directory on VM | `/opt/autoclip` |
 | Docker image | `ghcr.io/reese8272/creatorclip:latest` |
 
@@ -25,6 +25,35 @@ There are exactly **three** access paths into this system. Everything below is o
 3. **The public internet → app**, over HTTPS, through the **Cloudflare Tunnel** (no open ports).
 
 The goal of this runbook is **one canonical key per path, in one known place.** No sprawl.
+
+---
+
+## Closed-beta / Google OAuth onboarding
+
+Letting invited creators actually log in. (Salvaged from the retired BETA_LAUNCH_RUNBOOK
+in Issue 146 — deploy/migration steps there were stale; for those follow
+[`docs/BRANCHING.md`](BRANCHING.md) + [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).)
+
+**1 — Add testers (OAuth "Testing" mode).** The Google app is in **Testing** mode, which
+only lets explicitly-listed accounts in. Google Cloud Console → **APIs & Services → OAuth
+consent screen → Test users → + Add users**; add each tester's Google account email (the
+one tied to their YouTube channel), up to 100. Save.
+
+> ⚠️ **7-day expiry caveat:** in Testing mode Google expires each tester's connection
+> after **7 days** — they must re-click "Connect YouTube" weekly. For a short beta that's
+> fine. For a longer beta either (a) accept weekly re-connect, or (b) submit the app for
+> **Google verification** (removes the 7-day limit + the "unverified app" warning, but the
+> sensitive-YouTube-scope review takes days–weeks — start early). Verification is a
+> standing pre-public-launch gate (see `docs/PROJECT_STATE.md`).
+
+**2 — Link policies on the consent screen.** Google requires a Privacy Policy link to show
+the consent screen. The pages are live at `https://autoclip.studio/static/privacy.html`
+and `.../static/tos.html`. In **OAuth consent screen → App information**, set the
+**Privacy Policy URL** and **Terms of Service URL** to those links. Save; confirm both
+render (not 404).
+
+**Confirm the whole path:** from a listed tester account, open `https://autoclip.studio`
+→ **Connect YouTube** → you land on the dashboard with the channel name shown.
 
 ---
 
@@ -177,7 +206,7 @@ tunnel must point at the app over the Compose network, not at `localhost`.
 ### 3a. Find the existing tunnel and its token
 
 1. Go to **one.dash.cloudflare.com** (Cloudflare **Zero Trust**).
-2. Left nav: **Networks** → **Tunnels**. Find the tunnel for `agenticlip.studio`.
+2. Left nav: **Networks** → **Tunnels**. Find the tunnel for `autoclip.studio`.
 3. Click it → **Configure**. Under the connector install instructions you'll see a command like
    `cloudflared service install eyJhIjoi...` — the long `eyJ…` string **is** the tunnel token.
    (If it isn't shown, use **Refresh token** to mint a new one — this does not break the tunnel,
@@ -193,7 +222,7 @@ tunnel must point at the app over the Compose network, not at `localhost`.
 This is the step that most likely fixes a tunnel that "connects but 502s":
 
 1. Same tunnel → **Configure** → **Public Hostname** tab.
-2. There should be a rule for **`agenticlip.studio`**. Edit it:
+2. There should be a rule for **`autoclip.studio`**. Edit it:
    - **Service → Type:** `HTTP`
    - **Service → URL:** `app:8000`  ← **not** `localhost:80` and **not** `localhost:8000`
 3. Save. `app` resolves over the Compose network to the FastAPI container's port 8000.
@@ -211,7 +240,7 @@ docker compose -f docker-compose.prod.yml ps          # cloudflared + app should
 docker compose -f docker-compose.prod.yml logs --tail 50 cloudflared   # look for "Registered tunnel connection"
 
 # from anywhere:
-curl -s https://agenticlip.studio/health               # → {"status":"ok",...}
+curl -s https://autoclip.studio/health               # → {"status":"ok",...}
 ```
 
 ---
