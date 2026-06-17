@@ -56,6 +56,26 @@ async def db_session():
     await engine.dispose()
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_admin_pool():
+    """Clear the shared module admin-engine pool around each test.
+
+    `_poll_clip_outcomes_async` takes a *session-level* `pg_advisory_lock` on the
+    module-level `db.admin_engine` (pool_size=5). pytest-asyncio runs each test in
+    its own event loop, so a lock left on a pooled backend by a prior test (e.g.
+    `test_poll_outcomes_bound_integration`, whose unlock coroutine can be torn down
+    with its loop) survives into the next loop — the next poll then gets
+    `acquired=False` and silently skips, leaving `performed_well` unset. Disposing
+    the admin pool closes those backends so Postgres releases any leaked advisory
+    lock; fresh backends start clean. Issue 143.
+    """
+    import db
+
+    await db.admin_engine.dispose()
+    yield
+    await db.admin_engine.dispose()
+
+
 # ── Seeding helpers ───────────────────────────────────────────────────────────
 
 
