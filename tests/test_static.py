@@ -1482,3 +1482,64 @@ def test_analysis_ingest_cta_uses_urlraw_not_dead_id():
         "Dead element id must be gone — it throws and kills the analysis path."
     )
     assert "'https://www.youtube.com/watch?v=' + urlRaw" in src
+
+
+def test_shared_components_layer_exists_and_is_linked():
+    """Issue 147 — the cohesion layer. static/components.css is the canonical
+    shared component set (built only on _design-tokens.css), and every core
+    authenticated template must link it after page-shell.css. The audit found
+    the same components (stat cells, status pills, eyebrow labels, callouts,
+    log streams) redefined locally per page; this pins the shared layer + its
+    adoption so a page can't silently re-fork them.
+    """
+    import pathlib
+
+    static = pathlib.Path(__file__).parent.parent / "static"
+    comp = (static / "components.css").read_text()
+
+    # Canonical components defined on the shared layer.
+    for cls in (".eyebrow", ".stat-cell", ".status-pill", ".callout",
+                ".stream-output", ".status-line", ".input", ".btn-danger"):
+        assert f"{cls}" in comp, (
+            f"components.css must define {cls} — the shared, deduplicated "
+            f"component the per-page copies collapse into (Issue 147)."
+        )
+    # Built on tokens, not hardcoded literals.
+    assert "#fff" not in comp.lower() and "rgba(" not in comp, (
+        "components.css must consume tokens (var(--…)), never hardcoded "
+        "colors — that is the whole point of the cohesion layer."
+    )
+
+    # Every core authenticated template links it, after page-shell.css.
+    for page in ("index", "insights", "profile", "onboarding",
+                 "analysis", "walkthrough", "pricing"):
+        src = (static / f"{page}.html").read_text()
+        assert "/static/components.css" in src, (
+            f"{page}.html must link components.css (Issue 147 cohesion layer)."
+        )
+        assert src.index("page-shell.css") < src.index("components.css"), (
+            f"{page}.html must load components.css AFTER page-shell.css so the "
+            f"shared component layer can build on the shell."
+        )
+
+
+def test_eyebrow_label_tracking_is_tokenized():
+    """Issue 147 — the uppercase eyebrow/label pattern had drifted to three
+    different letter-spacings (0.04/0.06/0.08em) across pages. Pin the single
+    --tracking-eyebrow token and that the core templates no longer carry the
+    divergent literals."""
+    import pathlib
+
+    static = pathlib.Path(__file__).parent.parent / "static"
+    tokens = (static / "_design-tokens.css").read_text()
+    assert "--tracking-eyebrow:" in tokens, (
+        "_design-tokens.css must define --tracking-eyebrow (one canonical "
+        "label letter-spacing) — Issue 147."
+    )
+    for page in ("index", "insights", "profile", "onboarding",
+                 "analysis", "walkthrough", "pricing"):
+        src = (static / f"{page}.html").read_text()
+        assert "letter-spacing: 0.04em" not in src and "letter-spacing: 0.08em" not in src, (
+            f"{page}.html must not carry a divergent eyebrow letter-spacing "
+            f"(use var(--tracking-eyebrow)) — Issue 147 cohesion."
+        )

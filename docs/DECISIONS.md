@@ -5,6 +5,50 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 147: UI/UX cohesion — shared component layer
+
+**The diagnosis (from a 4-agent per-template audit):** the incohesion was **not** missing
+tokens — `_design-tokens.css` already had a full token system and `.card`/`.btn*`/`.badge*`,
+and pages already linked it. The problem: **every page re-defined the same components in its
+own embedded `<style>`** under different names (the card concept appeared 8+ times as
+`.summary-card`/`.panel`/`.insight-card`/`.brief-box`/`.step-card`/`.pack-card`/…; the stat
+cell 3–4×; the status pill 5× in analysis alone), so "the same" element rendered differently
+page to page. Plus concrete drift: `.intake-mode-option` used the `--editor-*` token family
+while sibling cards used `--color-*` (guaranteed surface+radius mismatch); three different
+eyebrow letter-spacings (0.04/0.06/0.08em); hardcoded `#000`/`#ffffff`/semantic `rgba()`.
+
+**What changed (this issue — the foundation + safe remediation):**
+- **New `static/components.css`** — the canonical shared layer (`.eyebrow`, `.stat-cell`,
+  `.status-pill`, `.state-pill`, `.callout`, `.tag`, `.stream-output`, `.status-line`,
+  `.input`, `.btn-danger`/`.btn-success`/`.btn-sm`), built only on tokens, linked into the 7
+  core authenticated templates after `page-shell.css`.
+- **Token additions** to `_design-tokens.css`: semantic tints (`--color-{success,warning,
+  danger}-{soft,border}`), `--color-on-accent`/`--color-on-success`, `--color-backdrop`,
+  `--text-2xs`, and one `--tracking-eyebrow` (replacing the 3 divergent letter-spacings).
+- **Fixed the load-bearing mismatch:** `.intake-mode-option` migrated off `--editor-*` onto
+  `--color-*` + `--radius` so it matches the cards around it.
+- **Tokenized** the hardcoded `#000`/`#ffffff`/`rgba()` literals across the core templates.
+- Pinned with `tests/test_static.py` (shared layer exists + linked after shell + tokenized;
+  eyebrow tracking tokenized). Full suite green (976 unit).
+
+**Deferred — recorded, not silently dropped:**
+- **CSS `@layer` was NOT introduced.** The existing system deliberately relies on
+  source-order + specificity (`body.app-page .btn-primary` out-specifies the base). Adding
+  `@layer` mid-system would invert those overrides; it's tracked as a follow-up.
+- **The full per-template structural migration** (deleting each page's local `.panel`/
+  `.stat-cell`/`.status-chip` copies and replacing the HTML with the shared classes) is the
+  remaining "make it visibly uniform" work. It needs **visual QA** (not available in this
+  environment), so this issue delivered the audit + the shared layer + the safe,
+  render-equivalent normalizations rather than risking un-QA'd visual rewrites. Scope:
+  index/insights/profile/onboarding/analysis/walkthrough/pricing; review.html (editor) and
+  the legal/login pages were out of scope per the issue plan.
+
+**Source / evidence:** design-system standard = tokens → components → pages with one source
+of truth per component; CSS cascade-layer guidance (MDN). 4-agent audit catalogued the
+divergences per template.
+
+**Date:** 2026-06-17
+
 ## 2026-06-17 — Issue 146: docs consolidation + searchable index
 
 **What changed:** Consolidated `docs/` (was 20 files / ~15K lines) around a single

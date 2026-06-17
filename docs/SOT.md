@@ -124,6 +124,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 │   # static/editor-layout.css + static/hero.css added in Issue 136 (dark editor layout + pre-auth hero)
 │   # static/page-shell.css added in Issue 137 (project-wide aurora + soft-card shell + overflow-x: clip guard)
+│   # static/components.css added in Issue 147 (shared component layer on tokens: .eyebrow/.stat-cell/.status-pill/.callout/…; full per-template migration → Issue 148)
 │
 ├── preference/
 │   ├── model.py                # Learned reranker (online update)

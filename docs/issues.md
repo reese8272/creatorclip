@@ -3397,18 +3397,40 @@ root `Project Idea.md` duplicate; triaged OFF_COURSE_BUGS.
 ---
 
 ## Issue 147: UI/UX cohesion audit → design-system remediation
-**Status**: ⬜ Not started
+**Status**: ✅ Done (2026-06-17) — foundation + audit + safe remediation; structural migration → Issue 148
 **Depends on**: none (can run parallel to 146)
 
-**What**: The UI/UX still lacks cohesion and uniformity. Audit the full surface for
-inconsistency (spacing, type scale, components, color usage), then implement shared
-design tokens + a component pass so the app reads as one product. Audit **and** remediate.
+**What**: 4-agent per-template audit found the incohesion was duplicated components (same
+card/stat-cell/status-pill/eyebrow redefined per page under different names), not missing
+tokens. Delivered the shared `static/components.css` layer + token additions
+(semantic tints, on-colors, one `--tracking-eyebrow`), fixed the `--editor-*` vs `--color-*`
+card mismatch, tokenized hardcoded colors. Full per-template structural migration deferred to
+Issue 148 (needs visual QA).
 
 **Acceptance criteria**:
-- [ ] Phase 1: research current design-system / token best practice (2026)
-- [ ] Cohesion audit with prioritized findings
-- [ ] Shared design tokens + component pass implemented; pages made uniform
-- [ ] Static tests pin the token contract; full suite green
+- [x] Phase 1: research design-system standard (tokens→components→pages, cascade layers)
+- [x] Cohesion audit with prioritized findings (4-agent per-template catalog)
+- [x] Shared component layer (`components.css`) + token additions implemented + wired
+- [x] Critical drift fixed (intake-mode editor-tokens, divergent letter-spacing, hardcoded colors)
+- [x] Static tests pin the component-layer contract; full suite green (976)
+- [~] Full per-template visual uniformity → **Issue 148** (structural migration, needs visual QA)
+
+---
+
+## Issue 148: UI design-system migration — adopt shared components per template
+**Status**: ⬜ Not started (follow-up from 147)
+**Depends on**: 147
+
+**What**: Adopt the `components.css` shared classes across the core templates — delete each
+page's local `.panel`/`.card`/`.stat-cell`/`.status-chip`/eyebrow/callout copies and swap the
+HTML to the canonical classes, with **visual QA** per page. Optionally introduce CSS `@layer`
+(tokens, base, components, page) to make the cascade explicit (see DECISIONS 2026-06-17 — the
+existing specificity-based overrides must be migrated together).
+
+**Acceptance criteria**:
+- [ ] Each core template uses the shared components; local duplicates removed
+- [ ] Visual QA per page (no regressions); screenshots before/after
+- [ ] Consider `@layer` adoption; full suite green
 
 ---
 
