@@ -1498,8 +1498,16 @@ def test_shared_components_layer_exists_and_is_linked():
     comp = (static / "components.css").read_text()
 
     # Canonical components defined on the shared layer.
-    for cls in (".eyebrow", ".stat-cell", ".status-pill", ".callout",
-                ".stream-output", ".status-line", ".input", ".btn-danger"):
+    for cls in (
+        ".eyebrow",
+        ".stat-cell",
+        ".status-pill",
+        ".callout",
+        ".stream-output",
+        ".status-line",
+        ".input",
+        ".btn-danger",
+    ):
         assert f"{cls}" in comp, (
             f"components.css must define {cls} — the shared, deduplicated "
             f"component the per-page copies collapse into (Issue 147)."
@@ -1511,8 +1519,15 @@ def test_shared_components_layer_exists_and_is_linked():
     )
 
     # Every core authenticated template links it, after page-shell.css.
-    for page in ("index", "insights", "profile", "onboarding",
-                 "analysis", "walkthrough", "pricing"):
+    for page in (
+        "index",
+        "insights",
+        "profile",
+        "onboarding",
+        "analysis",
+        "walkthrough",
+        "pricing",
+    ):
         src = (static / f"{page}.html").read_text()
         assert "/static/components.css" in src, (
             f"{page}.html must link components.css (Issue 147 cohesion layer)."
@@ -1536,8 +1551,15 @@ def test_eyebrow_label_tracking_is_tokenized():
         "_design-tokens.css must define --tracking-eyebrow (one canonical "
         "label letter-spacing) — Issue 147."
     )
-    for page in ("index", "insights", "profile", "onboarding",
-                 "analysis", "walkthrough", "pricing"):
+    for page in (
+        "index",
+        "insights",
+        "profile",
+        "onboarding",
+        "analysis",
+        "walkthrough",
+        "pricing",
+    ):
         src = (static / f"{page}.html").read_text()
         assert "letter-spacing: 0.04em" not in src and "letter-spacing: 0.08em" not in src, (
             f"{page}.html must not carry a divergent eyebrow letter-spacing "
