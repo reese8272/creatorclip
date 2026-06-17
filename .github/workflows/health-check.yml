@@ -1,14 +1,20 @@
 name: Production health check
 
+# MANUAL smoke test only. Continuous production uptime monitoring is owned by
+# **Cloudflare Health Checks** (edge-probed, real alerting) — see
+# docs/DEPLOYMENT.md → "Production health monitoring". The old `schedule` trigger
+# was removed in Issue 144: the prod URL sits behind Cloudflare Bot Fight Mode,
+# which serves a 403 JS-challenge to GitHub-hosted datacenter IPs even though the
+# origin is healthy, so a cron probe here false-reds every run.
+#
+# Probing the Cloudflare-fronted prod URL from a GH-hosted runner WILL 403 by
+# design. For a useful manual run, pass `url` pointing at a non-challenged target
+# (the origin IP, or a staging URL not behind Bot Fight Mode).
 on:
-  # Run every 30 minutes to catch silent degradation
-  schedule:
-    - cron: "*/30 * * * *"
-  # Allow manual trigger (useful after a deploy)
   workflow_dispatch:
     inputs:
       url:
-        description: "Base URL to check (overrides PRODUCTION_URL secret)"
+        description: "Base URL to check (overrides the PRODUCTION_URL variable)"
         required: false
         type: string
 

@@ -5,6 +5,45 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 144: CI consolidation, integration-on-PR, Cloudflare health monitoring
+
+**What changed:**
+- **Consolidated** `ci.yml` + `quality.yml` + `integration.yml` into a single `CI`
+  workflow with parallel jobs (lint / unit / integration / coverage / static-gates /
+  docker). Job *names* preserved so any required-status-check rules still resolve.
+- **Integration tests now run on `pull_request`**, not just push-to-`main`. This is the
+  direct fix for the root cause of Issue 143's 9-day-red integration suite: integration
+  was main-only, so a regression never blocked a PR.
+- **Least-privilege `permissions: contents: read`** added to every workflow (GitHub
+  Actions 2026 security guidance); `docker-publish` keeps `packages: write`.
+- Bumped Node-20-deprecated actions (checkout@v6, setup-python@v6, setup-buildx@v4,
+  build-push@v7).
+- **Production health monitoring moved off the GitHub Actions cron to Cloudflare Health
+  Checks.** The scheduled `health-check.yml` probe was a no-op for weeks (its `if:`
+  guard required an unset `PRODUCTION_URL`); once enabled, it returned **403 Cloudflare
+  "Just a moment…" challenge** — Bot Fight Mode blocks GitHub-hosted datacenter IPs even
+  though the origin is healthy (200 from a normal IP). A JS challenge can't be satisfied
+  by curl, so a GH cron probe through Cloudflare false-reds every run.
+
+**Why Cloudflare Health Checks:** they probe from Cloudflare's own edge (not bot-
+challenged) and alert natively — the right tool for external uptime, vs. a GH cron which
+is a known anti-pattern (delayed scheduling, weak alerting, and this CF-block). The GH
+`health-check.yml` is demoted to manual-dispatch-only (a smoke test with a `url`
+override for non-CF targets); deploy-time health is already covered by `deploy.yml`'s
+internal localhost `/health` smoke test. Runbook: `docs/DEPLOYMENT.md` →
+"Production health monitoring".
+
+**Source / evidence:**
+- Cloudflare challenge confirmed live: `curl autoclip.studio/health` → 200 from a normal
+  IP; GH-hosted runner → HTTP 403 with body `<title>Just a moment...</title>` +
+  `challenges.cloudflare.com` (Issue 144 dispatch run, 2026-06-17).
+- GitHub Actions 2026 security roadmap (least-privilege GITHUB_TOKEN, per-job perms);
+  service containers for PR integration tests.
+- **Validation:** consolidated `CI` ran green on the PR — all 6 jobs pass, including
+  integration-on-PR (127 passed).
+
+**Date:** 2026-06-17
+
 ## 2026-06-17 — Issue 143: starlette 1.x migration + CVE remediation (FastAPI bump)
 
 **What changed:** Bumped the web framework to clear 8 pip-audit CVEs that were failing the

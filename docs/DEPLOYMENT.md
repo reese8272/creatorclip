@@ -93,6 +93,35 @@ See `docs/PROJECT_STATE.md` Pre-Public-Launch Gates section.
 
 ---
 
+## Production health monitoring (Issue 144)
+
+Continuous uptime monitoring is owned by **Cloudflare Health Checks**, not a GitHub
+Actions cron. Rationale: prod sits behind Cloudflare **Bot Fight Mode**, which serves a
+403 JS-challenge to GitHub-hosted datacenter IPs even when the origin is healthy — so a
+scheduled GH probe false-reds every run (confirmed Issue 144). Cloudflare Health Checks
+probe from Cloudflare's own edge, so they are not bot-challenged, and they alert natively.
+
+**One-time setup (Cloudflare dashboard):**
+1. **Traffic → Health Checks → Create**.
+2. Name `autoclip-health`; **Monitor type** `HTTPS`; **Path** `/health`.
+3. **Expected codes** `200`; enable **Response body** match on `"status":"ok"`.
+4. **Check regions**: a spread (e.g. WEU + ENAM); **interval** 60s; **consecutive
+   fails to alert** 2.
+5. **Notifications**: add an email/webhook (Slack/PagerDuty) destination.
+
+This watches `status`/`postgres`/`redis` exactly as the old probe did — the `/health`
+endpoint already returns `{"status":"ok","postgres":"ok","redis":"ok"}` (degrades to
+non-`ok` + 503 when a backing service is down).
+
+**What's left in CI:**
+- `deploy.yml` runs an **internal** localhost `/health` smoke test on every deploy
+  (bypasses Cloudflare) — the deploy-time gate.
+- `.github/workflows/health-check.yml` is now **manual-dispatch only** — a smoke test
+  you can point at a non-Cloudflare target via the `url` input (origin IP / staging).
+  Running it against the Cloudflare-fronted prod URL returns 403 by design.
+
+---
+
 ## RLS one-time setup (Issue 79)
 
 Alembic migration `0010_rls_policies` introduces Postgres Row-Level Security
