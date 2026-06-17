@@ -5,6 +5,41 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 143: starlette 1.x migration + CVE remediation (FastAPI bump)
+
+**What changed:** Bumped the web framework to clear 8 pip-audit CVEs that were failing the
+Layer-0 `pip_audit` gate (and blocking PR #20 + the 143–147 cleanup sweep):
+
+- `fastapi 0.120.4 → 0.137.1`
+- `starlette 0.49.1 → 1.3.1` (crosses the starlette **1.0 major**)
+- `python-multipart 0.0.27 → 0.0.31`
+- `cryptography 46.0.7 → 48.0.1`
+
+Also **lifted** the `PYSEC-2026-161` accepted-risk ignore from `pyproject.toml
+[tool.pip-audit].ignore-vulns` and the mirrored `PIP_AUDIT_IGNORES` in
+`run_layer0.py` — starlette 1.3.1 ships the real fix, so it is no longer accepted-risk.
+The pytest CVE (`GHSA-6w46-j5rx-g56g` / CVE-2025-71176) **stays** VEX-ignored.
+
+**Why:** The 8 failing CVEs broke down as 4 starlette + 3 python-multipart + 1 cryptography.
+All starlette fixes land only in the **1.x line**, and FastAPI 0.120.4 hard-pins
+`starlette>=0.40.0,<0.50.0` — so starlette could not be patched without bumping FastAPI.
+The decisive CVE was **CVE-2026-54283** (HIGH: `request.form()` limits silently ignored for
+`application/x-www-form-urlencoded`, a DoS), which is reachable through our login / OAuth-callback
+endpoints — too exploitable to VEX-ignore. The pytest CVE is a local-only `/tmp` priv-esc
+fixable only by a breaking pytest 9 + pytest-asyncio 0.24→1.x migration; it is a test-only
+dependency on an ephemeral single-tenant CI runner, so it stays documented-ignored.
+
+**Source / evidence:**
+- `pip-audit -r requirements.txt` (8 → 0 unignored after bumps, verified on the `.venv`).
+- FastAPI 0.137.1 `requires_dist`: `starlette>=0.46.0` (no upper cap) — confirmed via PyPI JSON.
+- starlette CVE-2026-54283 fixed in 1.3.1 (GitLab advisory DB); cryptography GHSA-537c-gmf6-5ccf
+  (OpenSSL OOB read in wheels) fixed in 48.0.1; python-multipart CVE-2026-53538/53539/53540
+  fixed in 0.0.30/0.0.31.
+- **Validation:** full unit suite `974 passed / 0 failed` under the bumped stack — the starlette
+  1.0 major caused no regressions in our usage. Integration suite validated separately on CI.
+
+**Date:** 2026-06-17
+
 ## 2026-06-16 — Issue 139: Linked-video visibility + the yt-dlp ToS decision
 
 **What changed:** Added a `Video.origin` enum (`catalog | link | upload`) as the canonical

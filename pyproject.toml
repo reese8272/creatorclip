@@ -61,10 +61,9 @@ ignore-vulns = [
     # Fixed only in pytest 9; pytest-asyncio<0.25 caps pytest<9. Dev/CI only,
     # not a runtime exposure. Re-evaluate when the test stack is bumped together.
     "GHSA-6w46-j5rx-g56g",
-    # starlette PYSEC-2026-161 — Host-header path injection, fix in starlette
-    # 1.0.1 only (needs FastAPI 0.136.x). Routing matches on actual path; behind
-    # Cloudflare + locked ALLOWED_ORIGINS. Re-evaluate on starlette-1.x migration.
-    "PYSEC-2026-161",
+    # starlette PYSEC-2026-161 — LIFTED in Issue 143 (2026-06-17): the starlette-1.x
+    # migration shipped (FastAPI 0.137.1 + starlette 1.3.1), so this now has a real
+    # fix in our compatible range and is no longer accepted-risk.
     # pip GHSA-4xh5-x5gv-qwph (CVE-2025-8869) — symlink check on tar extraction.
     # pip is a dev/build-time tool, not a runtime dep. Requires installing a
     # maliciously crafted archive. Re-evaluate when venv is rebuilt with pip>=25.3.
