@@ -3377,19 +3377,22 @@ merge deferred to the end of the sweep (one-time direct-to-main transition).
 ---
 
 ## Issue 146: Docs consolidation + searchable index
-**Status**: ⬜ Not started
+**Status**: ✅ Done (2026-06-17)
 **Depends on**: none (can run parallel to 147)
 
-**What**: Robust consolidation of `docs/` (20 files, several >100KB) preserving the
-7 canonical SOT roles (SOT / PROJECT_STATE / issues / DECISIONS / COMPLIANCE /
-CLIPPING_PRINCIPLES / OFF_COURSE_BUGS), retiring legacy overlap (KICKSTART, RUNBOOKS,
-ACCESS, etc.) into a smaller, searchable tree with a top-level index. Triage
-`OFF_COURSE_BUGS.md` into tracked issues.
+**What**: Consolidated `docs/` (20 → 17 live + index) preserving the 8 canonical SOT roles.
+New `docs/README.md` index; archived 4 superseded docs (KICKSTART, PRODUCTION_COMMANDS,
+ISSUE_APPROVED_PLANS, BETA_LAUNCH_RUNBOOK) with salvage (aspirations→issues, OAuth
+onboarding→ACCESS); deduped the divergent `TOKEN_ENCRYPTION_KEY` rotation (canonical in
+RUNBOOKS, pointer in DEPLOYMENT); renamed research doc → COMPETITIVE_RESEARCH; removed the
+root `Project Idea.md` duplicate; triaged OFF_COURSE_BUGS.
 
 **Acceptance criteria**:
-- [ ] Phase 1: research docs-as-code / information-architecture best practice
-- [ ] Searchable index added; legacy overlap retired; SOT roles preserved
-- [ ] OFF_COURSE_BUGS triaged into issues.md; non-issues dropped
+- [x] Phase 1: research docs-as-code IA (single index, one-source-per-fact, archive/)
+- [x] `docs/README.md` searchable index added; pointed to from SOT
+- [x] Legacy overlap archived (preserved, banners); 8 canonical SOT roles untouched
+- [x] Divergent key-rotation procedure deduped (real hazard removed)
+- [x] OFF_COURSE_BUGS triaged (advisory-lock → Fixed/143; "11 failures" → Resolved)
 
 ---
 
@@ -3418,3 +3421,8 @@ Items deferred until the product is live and stable:
 - Multi-platform export (TikTok / Reels)
 - Hot-key clipping during live recording / OBS integration
 - No-auth demo mode (full processing without signup — follows Issue 136 hero)
+- Per-Short mini-editor: left/right arrow to browse Shorts one-by-one with an inline
+  crop/clip/cut/subtitle/font tool + a feedback comment box (salvaged from KICKSTART
+  "aspirations", Issue 146)
+- All-in-one direction: grow toward an editor / analyzer / video+audio management hub so
+  creators keep everything together (salvaged from KICKSTART "aspirations", Issue 146)

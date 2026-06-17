@@ -204,6 +204,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   └── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
 │
 └── docs/
+    ├── README.md              # ← START HERE: full documentation index (Issue 146)
     ├── PRD.md
     ├── SOT.md                  # (this file)
     ├── DECISIONS.md
@@ -211,11 +212,16 @@ This describes how CreatorClip **is built**. Update on every architectural chang
     ├── issues.md
     ├── CLIPPING_PRINCIPLES.md
     ├── COMPLIANCE.md
+    ├── OFF_COURSE_BUGS.md      # Incidental-defect log
     ├── DEPLOYMENT.md
     ├── BRANCHING.md            # Branch model (feature→staging→main) + protection ruleset (Issue 145)
-    ├── RUNBOOKS.md             # Encryption-key rotation procedures
+    ├── RUNBOOKS.md             # Canonical encryption/JWT-key rotation procedures
     ├── SECRETS.md              # Canonical secrets/config registry (what, where, how-to-obtain)
-    └── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel runbook
+    ├── ACCESS.md               # SSH + CI deploy key + Cloudflare Tunnel + closed-beta OAuth onboarding
+    ├── STAGING_ACCESS.md       # Staging stack runbook + llm_harness E2E driver
+    ├── SKILL_FRESHNESS.md      # Skill-freshness convention + --require-fresh gate
+    ├── COMPETITIVE_RESEARCH.md # Market/pricing/UX analysis (was other_apps_research.md)
+    └── archive/                # Superseded docs, preserved for provenance (Issue 146)
 ```
 
 ---

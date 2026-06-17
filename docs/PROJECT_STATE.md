@@ -6,7 +6,9 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Active issue**: **Issues 143–147 cleanup sweep** (branch `issue-139-142-sweep`). Order: 143 → 144 → 145 (gated on green) → 146 + 147. **Issues 143 + 144 + 145 — DONE 2026-06-17.** Next: **146 (docs) + 147 (UI/UX)**, then the single PR #20 → main merge.
+**Active issue**: **Issues 143–147 cleanup sweep** (branch `issue-139-142-sweep`). Order: 143 → 144 → 145 (gated on green) → 146 + 147. **Issues 143 + 144 + 145 + 146 — DONE 2026-06-17.** Next: **147 (UI/UX)**, then the single PR #20 → main merge.
+
+**Last completed (Issue 146 — docs consolidation, 2026-06-17):** `docs/` 20 → 17 live + a new `docs/README.md` index (canonical roles untouched). Archived 4 superseded docs to `docs/archive/` (KICKSTART, PRODUCTION_COMMANDS, ISSUE_APPROVED_PLANS, BETA_LAUNCH_RUNBOOK) with ⚠️ banners; salvaged KICKSTART's product "aspirations" → issues backlog and BETA's Google-OAuth closed-beta steps → ACCESS.md. **Deduped a divergent `TOKEN_ENCRYPTION_KEY` rotation** (two procedures → one zero-downtime MultiFernet flow canonical in RUNBOOKS, pointer in DEPLOYMENT). Renamed `other_apps_research.md` → `COMPETITIVE_RESEARCH.md`; removed root `Project Idea.md` (unreferenced KICKSTART dup). OFF_COURSE_BUGS triaged. See `docs/DECISIONS.md` 2026-06-17.
 
 **Last completed (Issue 145 — staging + main branch model, 2026-06-17):** Established `feature → staging → main` (`docs/BRANCHING.md`). Cut `staging` from `main`; pruned stale `issue-138-sev1-bulk-sweep` (PR #19 squash-merged — content verified in `main`). Remote branches now: `main`, `staging`, `issue-139-142-sweep`. **Branch protection deferred:** rulesets need GitHub Pro on a private repo (API 403); kept as convention with the per-PR `CI` workflow as the gate — ready-to-apply ruleset written in `docs/BRANCHING.md`. PR #20 → main deferred to end of sweep (one-time direct-to-main). See `docs/DECISIONS.md` 2026-06-17.
 

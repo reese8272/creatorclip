@@ -17,99 +17,68 @@ with key B, so rotation requires a re-encryption step while the app is operation
 - Scheduled rotation per your security policy (recommended: every 90 days)
 - Before the first production deployment if the key was ever used in a non-production env
 
+### Why this is zero-downtime
+
+`crypto._fernet()` builds a `MultiFernet([primary, previous])`: `encrypt()` always uses the
+primary (`TOKEN_ENCRYPTION_KEY`); `decrypt()` tries primary **then** previous
+(`TOKEN_ENCRYPTION_KEY_PREVIOUS`). Setting `PREVIOUS` = the current key *before* re-encrypting
+means tokens stay readable under either key throughout — **no maintenance window needed.**
+
 ### Pre-flight checklist
 
-- [ ] You have read access to the production database
-- [ ] You have write access to the production secrets store (`.env`, Kubernetes Secret, etc.)
-- [ ] A maintenance window is scheduled (rotation causes a brief ~seconds window where
-      old and new ciphertexts co-exist — `MultiFernet` handles this transparently)
-- [ ] A database backup has been taken
+- [ ] Read access to the production database; write access to the secrets store (`.env`
+      at `/opt/autoclip/.env` chmod 600, or the Kubernetes Secret) — keys live there, never in git
+- [ ] A database backup has been taken (belt-and-suspenders; the re-encrypt is atomic)
 
 ---
 
 ### Step 1 — Generate a new key
 
 ```bash
-python3 -c "from crypto import generate_key; print(generate_key())"
+docker compose -f docker-compose.prod.yml exec -T app \
+  python -c "from crypto import generate_key; print(generate_key())"
 ```
 
-Copy the output. It looks like: `p7k3R8...=` (44 base64 chars). Call it `NEW_KEY`.
+Copy the output (44 base64 chars). Call it `NEW_KEY`; the current key is `OLD_KEY`.
 
----
+### Step 2 — Enter the decrypt-both window
 
-### Step 2 — Re-encrypt all tokens
+In the secrets store set `TOKEN_ENCRYPTION_KEY_PREVIOUS` to the **current** key, leaving
+`TOKEN_ENCRYPTION_KEY` unchanged, then restart so the app can decrypt under either key:
 
-Run the re-encryption script. It accepts the old key and new key, re-encrypts every row
-in `youtube_tokens`, and commits atomically.
+```
+# .env: TOKEN_ENCRYPTION_KEY=<OLD_KEY>   TOKEN_ENCRYPTION_KEY_PREVIOUS=<OLD_KEY>
+docker compose -f docker-compose.prod.yml up -d app worker beat
+# Kubernetes: patch the Secret, then `kubectl rollout restart deploy/creatorclip-app deploy/creatorclip-worker`
+```
+
+### Step 3 — Re-encrypt every stored token (atomic)
 
 ```bash
-python3 scripts/rotate_token_key.py \
-  --old-key "$OLD_TOKEN_ENCRYPTION_KEY" \
-  --new-key "$NEW_KEY"
+docker compose -f docker-compose.prod.yml exec -T app \
+  python3 scripts/rotate_token_key.py --old-key "<OLD_KEY>" --new-key "<NEW_KEY>"
 ```
 
-The script prints a progress line for every creator row and a final summary:
+The script re-encrypts every `youtube_tokens` row old→new in one transaction and prints a
+final `Done. N rows re-encrypted, 0 errors.` If any row fails it rolls the whole transaction
+back and exits non-zero — **do not change the primary key; investigate.**
 
-```
-Re-encrypting tokens for 42 creator(s)...
-  [1/42] creator=<uuid> ok
-  ...
-  [42/42] creator=<uuid> ok
-Done. 42 rows re-encrypted, 0 errors.
-```
+### Step 4 — Promote the new key
 
-If any row fails, the script rolls back the entire transaction and exits non-zero.
-**Do not update the key in the environment until this step reports 0 errors.**
+Set `TOKEN_ENCRYPTION_KEY=<NEW_KEY>` and **clear** `TOKEN_ENCRYPTION_KEY_PREVIOUS=` (so a
+leaked old key can no longer decrypt anything), then restart `app worker beat`.
 
----
+### Step 5 — Verify
 
-### Step 3 — Update the secret
-
-Replace `TOKEN_ENCRYPTION_KEY` in your secrets store with `NEW_KEY`:
-
-**Docker Compose / `.env` file:**
-```
-TOKEN_ENCRYPTION_KEY=<NEW_KEY>
-```
-
-**Kubernetes Secret:**
-```bash
-kubectl create secret generic creatorclip-secrets \
-  --from-literal=TOKEN_ENCRYPTION_KEY=<NEW_KEY> \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
----
-
-### Step 4 — Restart the app
-
-```bash
-# Docker Compose
-docker compose restart app worker
-
-# Kubernetes
-kubectl rollout restart deployment/creatorclip-app deployment/creatorclip-worker
-kubectl rollout status deployment/creatorclip-app
-```
-
----
-
-### Step 5 — Smoke test
-
-```bash
-# A protected endpoint should return 200 (token decrypt works with new key)
-curl -s -b "cc_session=<valid_jwt>" https://<host>/auth/me | jq .
-```
-
----
+Sign in / trigger a YouTube refresh for one creator; confirm a clean `decrypt()` (no
+`TokenDecryptError` in logs). The old key can now be destroyed.
 
 ### Rollback
 
-If Step 4 fails (bad key format, missed a row):
-
-1. Restore the database from the pre-rotation backup
-2. Re-deploy with the original `TOKEN_ENCRYPTION_KEY`
-3. Investigate the script error before retrying
+- **Before step 4:** if the re-encrypt errors it already rolled itself back — leave the key
+  unchanged and keep `TOKEN_ENCRYPTION_KEY_PREVIOUS` as-is.
+- **After step 4:** set `TOKEN_ENCRYPTION_KEY` back to `OLD_KEY` and re-run step 3 in reverse
+  (`--old-key NEW --new-key OLD`), or restore the pre-rotation DB backup.
 
 ---
 

@@ -1,5 +1,9 @@
 # The AI Video Auto-Clipping Market: A Competitive Intelligence Report for autoclip.studio
 
+> _Research snapshot (compiled ~2026-06; renamed from `other_apps_research.md` in Issue 146).
+> Pricing/feature claims are a point-in-time capture — **verify live before citing publicly.**
+> Kept as living strategic reference; feeds the Issue 147 UI/UX cohesion work._
+
 ## TL;DR
 
 - **The market is large, fast-growing, and crowded at the “general repurposing” layer (Opus Clip, Vizard, Klap, Captions, Submagic all do the same talking-head-to-shorts job), but it is genuinely underserved in YouTube/stream-native highlight detection with a style-learning angle — which is exactly autoclip.studio’s wedge.** Opus Clip is the category leader (~$20M ARR, 10M+ users, $215M valuation, 172M+ clips and 57B+ views generated) on the back of one feature — the Virality Score — and aggressive product-led + affiliate growth.

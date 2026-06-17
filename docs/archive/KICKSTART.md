@@ -1,3 +1,8 @@
+> ⚠️ **ARCHIVED (Issue 146).** Pre-build planning megadoc — its sections were promoted into
+> the canonical docs (PRD/SOT/CLIPPING_PRINCIPLES/issues/CLAUDE.md), now authoritative. The
+> CLAUDE.md template embedded below is a **stale copy** — do not follow it. The "aspiration"
+> product ideas were ported to `issues.md`. Kept only for provenance.
+
 # CreatorClip — AI-Powered Personal Editor for YouTube Creators — Project Kickstart
 
 **Working title**: `creatorclip` (rename freely)

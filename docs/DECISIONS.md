@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 146: docs consolidation + searchable index
+
+**What changed:** Consolidated `docs/` (was 20 files / ~15K lines) around a single
+discoverable entry point and one-source-of-truth-per-fact, preserving the 8 canonical SOT
+roles untouched.
+- **New `docs/README.md`** — the documentation index (canonical / operations / reference /
+  archive), pointed to from `docs/SOT.md`.
+- **Archived** (→ `docs/archive/`, preserved with ⚠️ banners): `KICKSTART.md`,
+  `PRODUCTION_COMMANDS.md` (drift-prone skill dump — live skills are in `.claude/`),
+  `ISSUE_APPROVED_PLANS.md`, `BETA_LAUNCH_RUNBOOK.md` (stale migration hash + dead branch).
+  Salvaged first: KICKSTART's product-idea "aspirations" → `issues.md` backlog; BETA's
+  Google-OAuth closed-beta onboarding (test users, 7-day caveat, consent-screen URLs) →
+  `ACCESS.md`.
+- **Deduped the `TOKEN_ENCRYPTION_KEY` rotation** — there were two *divergent* procedures
+  (a real hazard). Canonicalized the **zero-downtime MultiFernet** flow in `RUNBOOKS.md`
+  (where `SECRETS.md` already points); `DEPLOYMENT.md` is now a pointer. (The previous
+  `RUNBOOKS.md` flow needed a maintenance window and risked decrypt failures — replaced.)
+- **Renamed** `other_apps_research.md` → `COMPETITIVE_RESEARCH.md` + date-stamp (feeds 147).
+- **Removed** root-level `Project Idea.md` — an unreferenced 1165-line duplicate of the
+  archived KICKSTART (content preserved in `docs/archive/` + git history).
+- **OFF_COURSE_BUGS triage:** marked the advisory-lock flake ✅ Fixed (Issue 143) and the
+  stale "11 pre-existing failures" entry ✅ Resolved (suite green: 974 unit + 127 integration).
+
+**Why:** future sessions read `docs/` first (CLAUDE.md Read Order); superseded/duplicated
+docs caused real errors (a stale embedded CLAUDE.md, a dead-branch deploy runbook, two
+key-rotation procedures). Net: **20 → 17 live docs + an index**; canonical roles intact.
+
+**Source / evidence:** docs-as-code information-architecture standard — single entry
+point/index, one source of truth per fact, `archive/` for superseded-but-preserved history.
+Legacy-doc supersession verified by a per-doc content assessment (not just filenames).
+
+**Date:** 2026-06-17
+
 ## 2026-06-17 — Issue 145: staging + main branch model (protection deferred to GitHub Pro)
 
 **What changed:** Established a two-tier branch model — `feature/* → staging → main` —

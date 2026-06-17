@@ -194,44 +194,13 @@ deploy pgbouncer in statement pooling mode with this stack.
 
 ## TOKEN_ENCRYPTION_KEY rotation runbook
 
-OAuth access/refresh tokens are stored Fernet-encrypted (`crypto.py`). Rotation is
-**zero-downtime** because `crypto._fernet()` builds a `MultiFernet([primary, previous])`:
-`encrypt()` always uses the primary key, while `decrypt()` tries the primary then the previous
-key — so tokens still readable while we re-encrypt the table. Pre-launch checklist item; rotate
-on a fixed cadence (e.g. every 90 days) and immediately on any suspected key exposure.
-
-**Keys live only in the VM `.env` (`/opt/autoclip/.env`, chmod 600) — never in git.**
-
-1. **Generate a new key:**
-   ```bash
-   docker compose -f docker-compose.prod.yml exec -T app \
-     python -c "from crypto import generate_key; print(generate_key())"
-   ```
-2. **Enter the decrypt-both window.** In `/opt/autoclip/.env`, set
-   `TOKEN_ENCRYPTION_KEY_PREVIOUS` to the *current* key (the one still in
-   `TOKEN_ENCRYPTION_KEY`), then restart so the app can decrypt under either key:
-   ```bash
-   # .env: TOKEN_ENCRYPTION_KEY=<current>   TOKEN_ENCRYPTION_KEY_PREVIOUS=<current>
-   docker compose -f docker-compose.prod.yml up -d app worker beat
-   ```
-3. **Re-encrypt every stored token** old→new in one atomic transaction (auto-rolls back on any
-   failure — if it errors, do NOT change the key and investigate):
-   ```bash
-   docker compose -f docker-compose.prod.yml exec -T app \
-     python3 scripts/rotate_token_key.py --old-key "<current>" --new-key "<new>"
-   ```
-4. **Promote the new key.** In `.env`, set `TOKEN_ENCRYPTION_KEY=<new>` and **clear**
-   `TOKEN_ENCRYPTION_KEY_PREVIOUS=` (so a leaked old key no longer decrypts anything), then
-   restart:
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d app worker beat
-   ```
-5. **Verify:** sign in / trigger a YouTube refresh for one creator and confirm a clean
-   `decrypt()` (no `TokenDecryptError` in logs). The old key can now be destroyed.
-
-**Rollback (steps 1–3 only):** if the re-encrypt fails it rolled itself back; leave the key
-unchanged and keep `TOKEN_ENCRYPTION_KEY_PREVIOUS` as-is. After step 4, rollback means setting
-`TOKEN_ENCRYPTION_KEY` back to the old key and re-running step 3 in reverse.
+→ **Canonical procedure: [`docs/RUNBOOKS.md`](RUNBOOKS.md) → "TOKEN_ENCRYPTION_KEY
+Rotation".** (Consolidated in Issue 146 — this section previously held a second, divergent
+copy.) In short: it's zero-downtime via `MultiFernet([primary, previous])` —
+set `TOKEN_ENCRYPTION_KEY_PREVIOUS` to the current key, re-encrypt with
+`scripts/rotate_token_key.py`, then promote the new key and clear `PREVIOUS`. Rotate every
+~90 days and immediately on any suspected key exposure. Keys live only in the VM `.env`
+(`/opt/autoclip/.env`, chmod 600) — never in git.
 
 ---
 

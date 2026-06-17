@@ -28,6 +28,35 @@ The goal of this runbook is **one canonical key per path, in one known place.** 
 
 ---
 
+## Closed-beta / Google OAuth onboarding
+
+Letting invited creators actually log in. (Salvaged from the retired BETA_LAUNCH_RUNBOOK
+in Issue 146 — deploy/migration steps there were stale; for those follow
+[`docs/BRANCHING.md`](BRANCHING.md) + [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).)
+
+**1 — Add testers (OAuth "Testing" mode).** The Google app is in **Testing** mode, which
+only lets explicitly-listed accounts in. Google Cloud Console → **APIs & Services → OAuth
+consent screen → Test users → + Add users**; add each tester's Google account email (the
+one tied to their YouTube channel), up to 100. Save.
+
+> ⚠️ **7-day expiry caveat:** in Testing mode Google expires each tester's connection
+> after **7 days** — they must re-click "Connect YouTube" weekly. For a short beta that's
+> fine. For a longer beta either (a) accept weekly re-connect, or (b) submit the app for
+> **Google verification** (removes the 7-day limit + the "unverified app" warning, but the
+> sensitive-YouTube-scope review takes days–weeks — start early). Verification is a
+> standing pre-public-launch gate (see `docs/PROJECT_STATE.md`).
+
+**2 — Link policies on the consent screen.** Google requires a Privacy Policy link to show
+the consent screen. The pages are live at `https://autoclip.studio/static/privacy.html`
+and `.../static/tos.html`. In **OAuth consent screen → App information**, set the
+**Privacy Policy URL** and **Terms of Service URL** to those links. Save; confirm both
+render (not 404).
+
+**Confirm the whole path:** from a listed tester account, open `https://autoclip.studio`
+→ **Connect YouTube** → you land on the dashboard with the channel name shown.
+
+---
+
 ## Step 0 — Inventory what you actually have
 
 You said the key situation is a mess. Before changing anything, find out the truth. Run these
