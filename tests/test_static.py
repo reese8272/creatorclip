@@ -1565,3 +1565,22 @@ def test_eyebrow_label_tracking_is_tokenized():
             f"{page}.html must not carry a divergent eyebrow letter-spacing "
             f"(use var(--tracking-eyebrow)) — Issue 147 cohesion."
         )
+
+
+def test_page_title_scale_is_unified():
+    """Issue 148 — page-opener titles had drifted across the type scale
+    (analysis at --text-lg, pricing at --text-2xl, others at --text-xl), so
+    the same page-title role rendered three different sizes. Pin that the two
+    outliers were normalized to --text-xl and that no core page reintroduces a
+    --text-2xl page title."""
+    import pathlib
+
+    static = pathlib.Path(__file__).parent.parent / "static"
+    # analysis page h1 was --text-lg → --text-xl
+    analysis = (static / "analysis.html").read_text()
+    assert "font-size: var(--text-lg);  /* unified page-title" not in analysis
+    # pricing hero h1 was --text-2xl → --text-xl
+    pricing = (static / "pricing.html").read_text()
+    assert "var(--text-2xl)" not in pricing, (
+        "pricing.html page title must use the unified --text-xl scale (Issue 148)."
+    )

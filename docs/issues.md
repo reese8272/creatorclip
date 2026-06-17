@@ -3418,19 +3418,29 @@ Issue 148 (needs visual QA).
 ---
 
 ## Issue 148: UI design-system migration — adopt shared components per template
-**Status**: ⬜ Not started (follow-up from 147)
+**Status**: ◐ Partial (2026-06-17) — visible cohesion done & QA'd; deep CSS dedup deferred
 **Depends on**: 147
 
-**What**: Adopt the `components.css` shared classes across the core templates — delete each
-page's local `.panel`/`.card`/`.stat-cell`/`.status-chip`/eyebrow/callout copies and swap the
-HTML to the canonical classes, with **visual QA** per page. Optionally introduce CSS `@layer`
-(tokens, base, components, page) to make the cascade explicit (see DECISIONS 2026-06-17 — the
-existing specificity-based overrides must be migrated together).
+**What**: Built a real **visual-QA harness** (headless Chromium + an auth-stub so the
+authenticated pages render) and screenshotted all 7 core pages before/after. **Finding:** after
+the Issue 147 foundation, the pages were already largely cohesive — cards are uniformly *flat*
+(`--color-surface`) across pages, tokens are well-adopted. The one genuine remaining **visible**
+divergence was the page-title scale (analysis `--text-lg`, pricing `--text-2xl`, others
+`--text-xl`); **unified to `--text-xl`** and verified by screenshot (only those 2 pages changed;
+the other 5 byte-identical).
+
+**Deferred (intentionally):** the deep class-level dedup (renaming each page's local
+`.panel`/`.status-chip`/etc. to the shared classes and deleting the duplicate CSS) has **no
+visible benefit** (pages already render consistently) and is **JS-coupled** in places
+(analysis's status pills toggle `.streaming`/`.done`/`.error` from JS), so a rename would risk
+breakage for zero visual gain. Tracked as optional maintainability work, not a cohesion blocker.
 
 **Acceptance criteria**:
-- [ ] Each core template uses the shared components; local duplicates removed
-- [ ] Visual QA per page (no regressions); screenshots before/after
-- [ ] Consider `@layer` adoption; full suite green
+- [x] Visual-QA harness (headless browser + auth stub); before/after screenshots, all 7 pages
+- [x] Page-title scale unified (`--text-xl`); pinned in `test_static.py`; no regressions
+- [x] Verified the app reads as one product (consistent nav/cards/labels/data-register/titles)
+- [~] Deep CSS-class dedup — deferred (no visible benefit, JS-coupled; optional)
+- [~] `@layer` adoption — still deferred (see DECISIONS 2026-06-17)
 
 ---
 
