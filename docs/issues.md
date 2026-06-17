@@ -3303,6 +3303,101 @@ page across the 320 → 1920px viewport range. Explicit reversal of Issue 99's
 
 ---
 
+## Issue 143: Fix all red CI to 0 failures
+**Status**: ✅ Done (2026-06-17)
+**Depends on**: none (gating issue for the 143–147 cleanup sweep)
+
+**What**: PR #20 and `main` carried two standing CI failures. (1) The Layer-0
+`pip_audit` gate reported 8 CVEs (4 starlette + 3 python-multipart + 1 cryptography).
+(2) The integration suite was red 9+ days: `test_poll_clip_outcomes_uses_per_creator_median`
+got `performed_well=None` because the poll's session-level `pg_advisory_lock` leaked
+across pytest-asyncio's per-test event loops on the shared module `admin_engine` pool,
+making the poll `acquired=False` and silently skip.
+
+**Files**: `requirements.txt`, `pyproject.toml`,
+`.claude/skills/production-assessment/scripts/run_layer0.py`, `worker/tasks.py`,
+`tests/test_worker_pipeline.py`, `docs/DECISIONS.md`.
+
+**Acceptance criteria**:
+- [x] Phase 1: research live — FastAPI↔starlette 1.x compatibility, each CVE's
+      fix version + exploitability, pytest-asyncio↔pytest 9 (DECISIONS 2026-06-17)
+- [x] Bump fastapi 0.120.4→0.137.1, starlette 0.49.1→1.3.1, python-multipart
+      0.0.27→0.0.31, cryptography 46.0.7→48.0.1; lift now-fixed PYSEC-2026-161
+- [x] pytest CVE (CVE-2025-71176) stays VEX-ignored (test-only, ephemeral CI)
+- [x] Fix advisory-lock leak: rollback-before-unlock (prod) + admin-engine
+      dispose fixture (test determinism)
+- [x] Unit suite 974 passed under bumped stack; pip-audit 0 unignored vulns
+- [x] **PR #20 all-green on real CI** + integration dispatch 127 passed / 0 failed
+
+---
+
+## Issue 144: GH Actions + healthcheck audit
+**Status**: ⬜ Not started
+**Depends on**: 143
+
+**What**: Audit the 8 workflow files for coverage + correctness. Fix the scheduled
+`Production health check` (currently a 2s no-op — every run "skipped"). Consolidate
+overlapping workflows (`ci.yml` / `quality.yml` / `integration.yml`). Ensure 0 failing
+checks remain after consolidation.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research current GH Actions CI best practice (reusable workflows,
+      concurrency, least-privilege `permissions`, health-probe patterns)
+- [ ] Root-cause + fix the skipping `health-check.yml`
+- [ ] Consolidate/clarify overlapping workflows; document each workflow's purpose
+- [ ] All workflows green on a clean push
+
+---
+
+## Issue 145: staging + main branch model
+**Status**: ⬜ Not started
+**Depends on**: 143, 144 (gated on green CI)
+
+**What**: Merge PR #20, cut a `staging` branch, add branch protection + a promotion
+flow (feature → staging → main), prune stale branches (`issue-138-*`).
+
+**Acceptance criteria**:
+- [ ] Phase 1: research trunk-based vs staging-promotion branch models for a
+      small team + the CI gates each protected branch should require
+- [ ] PR #20 merged; `staging` cut from `main`
+- [ ] Branch protection on `main` + `staging` (required checks, no direct red push)
+- [ ] Promotion flow documented; stale branches pruned
+
+---
+
+## Issue 146: Docs consolidation + searchable index
+**Status**: ⬜ Not started
+**Depends on**: none (can run parallel to 147)
+
+**What**: Robust consolidation of `docs/` (20 files, several >100KB) preserving the
+7 canonical SOT roles (SOT / PROJECT_STATE / issues / DECISIONS / COMPLIANCE /
+CLIPPING_PRINCIPLES / OFF_COURSE_BUGS), retiring legacy overlap (KICKSTART, RUNBOOKS,
+ACCESS, etc.) into a smaller, searchable tree with a top-level index. Triage
+`OFF_COURSE_BUGS.md` into tracked issues.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research docs-as-code / information-architecture best practice
+- [ ] Searchable index added; legacy overlap retired; SOT roles preserved
+- [ ] OFF_COURSE_BUGS triaged into issues.md; non-issues dropped
+
+---
+
+## Issue 147: UI/UX cohesion audit → design-system remediation
+**Status**: ⬜ Not started
+**Depends on**: none (can run parallel to 146)
+
+**What**: The UI/UX still lacks cohesion and uniformity. Audit the full surface for
+inconsistency (spacing, type scale, components, color usage), then implement shared
+design tokens + a component pass so the app reads as one product. Audit **and** remediate.
+
+**Acceptance criteria**:
+- [ ] Phase 1: research current design-system / token best practice (2026)
+- [ ] Cohesion audit with prioritized findings
+- [ ] Shared design tokens + component pass implemented; pages made uniform
+- [ ] Static tests pin the token contract; full suite green
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
