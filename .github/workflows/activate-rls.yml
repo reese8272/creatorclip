@@ -43,6 +43,11 @@ on:
         type: boolean
         default: false
 
+# Least privilege: activation runs over SSH with repo Secrets, not the
+# GITHUB_TOKEN. (Issue 144)
+permissions:
+  contents: read
+
 jobs:
   activate:
     name: SSH → activate RLS on autoclip.studio

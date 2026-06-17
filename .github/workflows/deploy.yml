@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege: deploy authenticates via SSH/GHCR secrets, not the
+# GITHUB_TOKEN, so read-only is sufficient. (Issue 144)
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: Deploy → autoclip.studio
@@ -22,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout (for docker-compose.prod.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Copy compose file to deploy dir
         run: cp ${{ github.workspace }}/docker-compose.prod.yml /opt/autoclip/docker-compose.prod.yml
