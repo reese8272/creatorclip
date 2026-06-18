@@ -238,10 +238,17 @@ async def _log_request_events(request: Request, call_next):
     path = request.url.path
     if request.method != "OPTIONS" and not path.startswith(_LOG_SKIP_PREFIXES):
         status = response.status_code
+        # request.state.creator_id is set only when the endpoint ran the
+        # get_current_creator dependency; fall back to the signed cookie so
+        # http_request events on routes that don't depend on auth are still
+        # attributed to the logged-in creator (Issue 151 fix).
+        from auth import creator_id_from_cookie
+
+        creator_id = getattr(request.state, "creator_id", None) or creator_id_from_cookie(request)
         await event_log.record_event(
             source="backend",
             event="http_request",
-            creator_id=getattr(request.state, "creator_id", None),
+            creator_id=creator_id,
             level="error" if status >= 500 else "warn" if status >= 400 else "info",
             request_id=request_id_ctx.get(),
             page=path,

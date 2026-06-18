@@ -34,18 +34,16 @@ class ActivityEvent(BaseModel):
 @router.post("", status_code=204, include_in_schema=False)
 @limiter.limit("200/minute", key_func=get_remote_address)
 async def record_activity(request: Request, event: ActivityEvent) -> None:
-    # Resolve creator id from session JWT if present; fall back to anonymous so
-    # pre-login pages (onboarding, pricing) are still captured.
-    creator_id = "anonymous"
-    creator_uuid: uuid.UUID | None = None
-    try:
-        from auth import get_current_creator
+    # Resolve creator id from the signed session cookie (no DB lookup — this
+    # endpoint runs outside the dependency graph); fall back to anonymous so
+    # pre-login pages (onboarding, pricing) are still captured. The previous
+    # manual `get_current_creator(request)` call passed the Depends() sentinel as
+    # the session and always threw → every event logged as anonymous (Issue 151
+    # bug, caught by the event_log integration tests on their first CI run).
+    from auth import creator_id_from_cookie
 
-        creator = await get_current_creator(request)
-        creator_id = str(creator.id)
-        creator_uuid = creator.id
-    except Exception:
-        pass
+    creator_uuid: uuid.UUID | None = creator_id_from_cookie(request)
+    creator_id = str(creator_uuid) if creator_uuid else "anonymous"
 
     # Sanitize extra: cap key count and string value lengths to prevent log bloat.
     safe_extra = {
