@@ -1,22 +1,34 @@
+import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import type { Balance, CurrentUser } from '@/types'
 
-// Links point at the existing vanilla pages during the incremental migration;
-// only the ported page (Profile) targets the SPA route under /app.
-const LINKS = [
-  { label: 'Dashboard', href: '/' },
-  { label: 'Review', href: '/static/review.html' },
-  { label: 'Insights', href: '/static/insights.html' },
-  { label: 'Profile', href: '/app/profile', active: true },
-  { label: 'Assistant', href: '/app/chat' },
-  { label: 'Analyze', href: '/static/analysis.html' },
-  { label: 'Pricing', href: '/static/pricing.html' },
+// During the incremental migration, links split two ways: ported pages are
+// SPA routes (client-side NavLink, auto active state); un-ported pages are still
+// vanilla files reached by a full navigation (`external` → plain <a>). As each
+// page ports, flip its entry's `external` to false and point `href` at the
+// /app route.
+interface NavItem {
+  label: string
+  href: string
+  external: boolean
+}
+
+const LINKS: NavItem[] = [
+  { label: 'Dashboard', href: '/dashboard', external: false },
+  { label: 'Review', href: '/review', external: false },
+  { label: 'Insights', href: '/insights', external: false },
+  { label: 'Profile', href: '/profile', external: false },
+  { label: 'Assistant', href: '/chat', external: false },
+  { label: 'Analyze', href: '/analysis', external: false },
+  { label: 'Pricing', href: '/pricing', external: false },
 ]
+
+const LINK_BASE = 'text-muted transition-colors hover:text-fg'
 
 async function logout() {
   await api('/auth/logout', { method: 'POST', redirectOn401: false }).catch(() => {})
-  window.location.href = '/static/login.html'
+  window.location.href = '/app/login'
 }
 
 export function Nav({ user, balance }: { user: CurrentUser | null; balance: Balance | null }) {
@@ -26,24 +38,25 @@ export function Nav({ user, balance }: { user: CurrentUser | null; balance: Bala
         AutoClip
       </a>
       <div className="flex items-center gap-4 text-sm">
-        {LINKS.map((l) => (
-          <a
-            key={l.href}
-            href={l.href}
-            className={cn(
-              'text-muted transition-colors hover:text-fg',
-              l.active && 'text-fg',
-            )}
-          >
-            {l.label}
-          </a>
-        ))}
+        {LINKS.map((l) =>
+          l.external ? (
+            <a key={l.href} href={l.href} className={LINK_BASE}>
+              {l.label}
+            </a>
+          ) : (
+            <NavLink
+              key={l.href}
+              to={l.href}
+              className={({ isActive }) => cn(LINK_BASE, isActive && 'text-fg')}
+            >
+              {l.label}
+            </NavLink>
+          ),
+        )}
       </div>
       <span className="flex-1" />
       {user && (
-        <span className="font-mono text-xs text-subtle">
-          {user.channel_title || user.email}
-        </span>
+        <span className="font-mono text-xs text-subtle">{user.channel_title || user.email}</span>
       )}
       {balance && (
         <span

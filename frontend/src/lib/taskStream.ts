@@ -15,7 +15,13 @@ interface StreamEvent {
 
 interface StreamHandlers {
   onRender?: (buffer: string) => void
-  onDone?: (data: StreamEvent) => void
+  /** Each assistant/prose `token` chunk as it streams (analysis narrative). */
+  onToken?: (chunk: string) => void
+  /** Latest `step` label — drives a status chip without the flattened buffer. */
+  onStep?: (label: string) => void
+  /** Final `done` event payload — carries structured results (suggestions,
+   *  concepts, report, chapters, …) for the analysis features (Issue 85e). */
+  onDone?: (data: Record<string, unknown>) => void
   onError?: (message: string) => void
 }
 
@@ -102,7 +108,9 @@ export function subscribeToTaskStream(url: string, handlers: StreamHandlers): St
       buffer = INLINE.has(type) ? buffer + line : buffer ? `${buffer}\n${line}` : line
       handlers.onRender?.(buffer)
     }
-    if (type === 'done') handlers.onDone?.(data)
+    if (type === 'token') handlers.onToken?.(data.chunk || '')
+    if (type === 'step') handlers.onStep?.(data.label || '')
+    if (type === 'done') handlers.onDone?.(data as unknown as Record<string, unknown>)
     if (type === 'error') handlers.onError?.(data.message || 'unknown error')
     if (type === 'done' || type === 'error') es.close()
   }

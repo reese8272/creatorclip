@@ -35,7 +35,9 @@ def test_auth_js_contains_logout(client):
 
 
 def test_index_includes_auth_js(client):
-    resp = client.get("/")
+    # Legacy-index content. `/` redirects to the SPA once built (Issue 85g),
+    # so assert against the legacy file directly (still served).
+    resp = client.get("/static/index.html")
     assert b"auth.js" in resp.content
 
 
@@ -63,7 +65,7 @@ def test_insights_includes_auth_js(client):
 
 
 def test_index_has_nav(client):
-    content = client.get("/").text
+    content = client.get("/static/index.html").text
     assert "Dashboard" in content or "AutoClip" in content
     assert "/static/review.html" in content
 

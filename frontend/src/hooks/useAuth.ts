@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { useQuery } from '@tanstack/react-query'
+import { api, ApiError } from '@/lib/api'
 import type { Balance, CurrentUser } from '@/types'
 
 interface AuthState {
@@ -8,25 +8,32 @@ interface AuthState {
   loading: boolean
 }
 
-// Mirrors the vanilla auth.js bootstrap: probe /auth/me (a 401 redirects to the
-// login page inside api()), then fetch the balance chip. The first-run
-// walkthrough gate is intentionally not re-implemented here — it lives in the
-// shared bootstrap and only fires for brand-new creators who never reach the
-// profile page; it moves into the shared SPA layout when more pages are ported.
+// Auth + balance bootstrap, backed by TanStack Query (one cached /auth/me +
+// /billing/balance shared by the chrome and every page). The probe does NOT
+// redirect on 401 — it resolves to `user: null` so public pages (pricing) can
+// render for logged-out visitors. The redirect decision lives in <AuthGate>,
+// which protects the authenticated routes (Issue 85b).
 export function useAuth(): AuthState {
-  const [state, setState] = useState<AuthState>({ user: null, balance: null, loading: true })
+  const userQuery = useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: async () => {
+      try {
+        return await api<CurrentUser>('/auth/me', { redirectOn401: false })
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) return null
+        throw e
+      }
+    },
+  })
+  const balanceQuery = useQuery({
+    queryKey: ['billing', 'balance'],
+    queryFn: () => api<Balance>('/billing/balance', { redirectOn401: false }),
+    enabled: userQuery.data != null,
+  })
 
-  useEffect(() => {
-    let active = true
-    ;(async () => {
-      const user = await api<CurrentUser>('/auth/me')
-      const balance = await api<Balance>('/billing/balance').catch(() => null)
-      if (active) setState({ user, balance, loading: false })
-    })()
-    return () => {
-      active = false
-    }
-  }, [])
-
-  return state
+  return {
+    user: userQuery.data ?? null,
+    balance: balanceQuery.data ?? null,
+    loading: userQuery.isPending,
+  }
 }

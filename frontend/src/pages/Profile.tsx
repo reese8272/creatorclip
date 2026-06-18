@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
-import { Nav } from '@/components/Nav'
-import { Footer } from '@/components/Footer'
+import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { DnaCard } from '@/components/profile/DnaCard'
 import { IdentitySection } from '@/components/profile/IdentitySection'
 import { IntakeModeSection } from '@/components/profile/IntakeModeSection'
@@ -10,7 +9,7 @@ import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
 import type { Identity, IdentityResponse, NicheOption } from '@/types'
 
 export function Profile() {
-  const { user, balance, loading } = useAuth()
+  const { user } = useAuth()
   const [niches, setNiches] = useState<NicheOption[]>([])
   const [identity, setIdentity] = useState<Identity | null>(null)
   const [conflict, setConflict] = useState<string | null>(null)
@@ -30,20 +29,12 @@ export function Profile() {
       .catch(() => {})
   }, [reloadToken])
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted">Loading…</div>
-    )
-  }
-
   return (
-    <div className="flex min-h-screen flex-col">
-      <Nav user={user} balance={balance} />
-
-      <div className="border-b border-default bg-surface px-6 py-2 text-center text-xs text-muted">
-        AutoClip predicts fit with your style and audience — it does not promise virality. This brief
-        is grounded in your own channel data.
-      </div>
+    <>
+      <DisclaimerBand>
+        AutoClip predicts fit with your style and audience — it does not promise virality. This
+        brief is grounded in your own channel data.
+      </DisclaimerBand>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
         <DnaCard identityCreatedAt={identity?.created_at ?? null} />
@@ -57,8 +48,6 @@ export function Profile() {
         <IntakeModeSection initialMode={user?.analysis_mode ?? 'auto'} />
         <ApiKeysSection />
       </main>
-
-      <Footer />
-    </div>
+    </>
   )
 }

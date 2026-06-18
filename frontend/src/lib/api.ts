@@ -5,7 +5,7 @@
 // vite.config.ts). A 401 means the session lapsed; we bounce to the existing
 // login page, matching the vanilla auth.js guard.
 
-const LOGIN_URL = '/static/login.html'
+const LOGIN_URL = '/app/login'
 
 export class ApiError extends Error {
   status: number

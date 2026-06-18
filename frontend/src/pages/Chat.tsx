@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
-import { useAuth } from '@/hooks/useAuth'
-import { Nav } from '@/components/Nav'
-import { Footer } from '@/components/Footer'
+import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Button } from '@/components/ui/button'
 import { subscribeToChatStream, type StreamSubscription } from '@/lib/taskStream'
 
@@ -31,7 +29,6 @@ function toolLabel(label: string): string {
 }
 
 export function Chat() {
-  const { user, balance, loading } = useAuth()
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [streamingText, setStreamingText] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -138,24 +135,16 @@ export function Chat() {
     setToolStatus(null)
   }
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted">Loading…</div>
-    )
-  }
-
   const empty = messages.length === 0 && !streaming
   const canRegenerate =
     !streaming && messages.length > 0 && messages[messages.length - 1].role === 'assistant'
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <Nav user={user} balance={balance} />
-
-      <div className="border-b border-default bg-surface px-6 py-2 text-center text-xs text-muted">
+    <>
+      <DisclaimerBand>
         The assistant answers from your own channel data. It estimates fit with your style and
         audience — it does not promise virality.
-      </div>
+      </DisclaimerBand>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6">
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto pb-4">
@@ -183,7 +172,7 @@ export function Chat() {
           <div className="mb-3 rounded-md border border-[color:var(--color-danger-border)] bg-[color:var(--color-danger-soft)] px-3 py-2 text-sm text-danger">
             {error}
             {gated && (
-              <a href="/static/pricing.html" className="ml-2 font-medium underline">
+              <a href="/app/pricing" className="ml-2 font-medium underline">
                 View plans →
               </a>
             )}
@@ -230,9 +219,7 @@ export function Chat() {
           )}
         </form>
       </main>
-
-      <Footer />
-    </div>
+    </>
   )
 }
 

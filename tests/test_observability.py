@@ -73,7 +73,9 @@ def test_middleware_mints_and_echoes_request_id(client: TestClient):
 
 
 def test_middleware_respects_inbound_request_id(client: TestClient):
-    resp = client.get("/", headers={"X-Request-ID": "upstream-trace-001"})
+    # Target a non-redirecting route: `/` 302s to the SPA once built (Issue 85g),
+    # and following it would drop the inbound header on the second hop.
+    resp = client.get("/static/login.html", headers={"X-Request-ID": "upstream-trace-001"})
     assert resp.headers.get("X-Request-ID") == "upstream-trace-001"
 
 

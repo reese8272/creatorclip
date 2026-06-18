@@ -26,7 +26,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Auth | Google OAuth 2.0 (YouTube scopes) + server-side session JWT | PyJWT; bcrypt where local creds needed |
 | Token encryption at rest | `cryptography` MultiFernet on token columns | Primary key from `TOKEN_ENCRYPTION_KEY`; optional previous key for zero-downtime rotation |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
-| Frontend | **Migrating: vanilla HTML/CSS/JS → React + TypeScript (Vite, Tailwind v4, shadcn-style components)** | Framework candidate resolved 2026-06-17 (DECISIONS.md). Incremental strangler-fig: SPA served under `/app/*`, legacy `static/` pages unchanged. Profile is the pilot page. Build: `npm --prefix frontend run build` → `frontend/dist/`. The dark Linear design tokens (Issue 99) are mapped into the Tailwind theme. |
+| Frontend | **Migrating: vanilla HTML/CSS/JS → React + TypeScript (Vite, Tailwind v4, shadcn-style)**. Data layer **TanStack Query v5**; routing **React Router v7 Data Mode**; tests **Vitest + React Testing Library**. | Framework resolved 2026-06-17; foundation + design system 2026-06-18 (Issue 85a, DECISIONS.md). Incremental strangler-fig: SPA served under `/app/*`, legacy `static/` pages unchanged. Layouts = `AuthGate` (protects routes) + `AppChrome` (Nav/Footer shell); four route contexts (protected/public × chrome/bare). Ported: Dashboard (`/app/dashboard`, live status via gated TanStack refetch — Issue 85c), Onboarding (`/app/onboarding`, protected+bare 5-step flow w/ dual SSE consoles — Issue 85d), Insights + Analysis (`/app/insights`, `/app/analysis` — LLM-streaming via new `useTaskResult` hook — Issue 85e), Review/Editor (`/app/review` — player-first redesign + transcript editor — Issue 85f), Profile, Chat, Pricing (public-or-authed), Login, Walkthrough. **Cutover (85g, soft): `/` now redirects to `/app/dashboard` when the SPA bundle is built (`main.py` `_SPA_BUILT` gate; legacy index still boots without a build). `static/*.html` pages remain served (unlinked) as rollback insurance — full retirement + backend `next_action` URL repointing is a staging-verified follow-up; `early-access.html` deleted.** Build: `npm --prefix frontend run build` → `frontend/dist/`. Design system in `docs/UI.md` (warmer OKLCH dark-Linear palette in the SPA `@theme`); legacy pages keep `static/_design-tokens.css`. |
 | Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
 | Production deployment | Kubernetes (research pending) | Docker Compose = dev/test only. Production target: EKS / GKE / managed K8s. See `docs/DEPLOYMENT.md`. |
 
@@ -194,18 +194,26 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 ├── frontend/                   # React + TS SPA (2026-06-17 adoption; served under /app/*)
 │   ├── index.html              # Vite entry shell
-│   ├── vite.config.ts          # base=/app/, React + Tailwind v4 plugins, @ alias, dev API proxy
-│   ├── package.json            # scripts: dev / build / lint / test (vitest)
+│   ├── vite.config.ts          # base=/app/, React + Tailwind v4 plugins, @ alias, dev API proxy, vitest (jsdom)
+│   ├── package.json            # scripts: dev / build / lint / test (vitest); deps incl. @tanstack/react-query
 │   ├── dist/                   # build output (gitignored) — `npm --prefix frontend run build`
 │   └── src/
-│       ├── main.tsx / App.tsx  # router (basename /app)
-│       ├── index.css           # Tailwind v4 @theme — maps the Issue 99 design tokens
+│       ├── main.tsx            # QueryClientProvider → App
+│       ├── App.tsx             # React Router v7 Data Mode (createBrowserRouter, basename /app)
+│       ├── index.css           # Tailwind v4 @theme — Issue 85 design system (warmer OKLCH; docs/UI.md)
 │       ├── types.ts            # API response shapes
-│       ├── lib/                # api.ts (typed fetch) · brief.ts (+test) · taskStream.ts (SSE) · utils.ts
-│       ├── hooks/useAuth.ts    # /auth/me + balance bootstrap (mirrors static/auth.js)
+│       ├── test/setup.ts       # Vitest + RTL setup (jest-dom matchers, cleanup)
+│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts
+│       ├── hooks/              # useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f)
+│       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · Nav.tsx (+test) · Footer.tsx · DisclaimerBand.tsx
 │       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal
 │       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
-│       └── pages/Profile.tsx   # pilot page (port of static/profile.html)
+│       ├── components/dashboard/ # SummaryCards · AnalyticsPanel · LinkVideoForm · VideoTable · EmptyHero · DashboardBanners (Issue 85c)
+│       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
+│       ├── components/insights/ # InsightsPanel · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e)
+│       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)
+│       ├── components/review/   # ClipPlayer · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (Issue 85f)
+│       └── pages/              # Dashboard (+test, 85c) · Onboarding (+test, 85d) · Insights (+test, 85e) · Analysis (+test, 85e) · Review (+test, 85f) · Profile · Chat · Pricing (+test) · Login · Walkthrough (+test)
 │
 ├── tests/
 │   ├── conftest.py
@@ -229,6 +237,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 └── docs/
     ├── README.md              # ← START HERE: full documentation index (Issue 146)
+    ├── UI.md                   # Frontend design system (Issue 85; SPA tokens, type, motion, confidence badges)
     ├── PRD.md
     ├── SOT.md                  # (this file)
     ├── DECISIONS.md
@@ -443,7 +452,7 @@ Research Mode (parallel):
 - **Transcription compute**: WhisperX needs a GPU. Either provision a GPU box or default to hosted transcription — decide before Issue 5.
 - **Production deployment**: Docker Compose is dev-only. Production needs Kubernetes (EKS/GKE research pending). See `docs/DEPLOYMENT.md`.
 - **Pricing / billing**: Usage-based tiers with prompt caching. Research pending (Claude/Stripe patterns). See `docs/DECISIONS.md`.
-- **Review-UI framework**: Vanilla JS may not deliver the "feels like scrolling" bar. Flagged as a DECISIONS.md candidate before Issue 10.
+- **Review-UI framework**: ✅ Resolved — React + TS + Tailwind v4 adopted (2026-06-17) with a documented design system (2026-06-18, Issue 85a; `docs/UI.md`). Strangler-fig migration in progress (Issues 85a–85g); the player-first "feels like scrolling" review surface lands in the review-page port (85f).
 - **YouTube quota ceilings**: Analytics/Data API quotas may throttle large catalogs — needs backoff + caching, sized once real quota is known.
 - **Preference cold-start**: below threshold, ranking leans on DNA + signals only; communicate honestly.
 - **`TOKEN_ENCRYPTION_KEY` rotation runbook** not yet written — required before public launch.

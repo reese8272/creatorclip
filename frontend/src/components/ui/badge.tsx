@@ -12,6 +12,8 @@ const badgeVariants = cva(
         success:
           'bg-[color:var(--color-success-soft)] text-success border border-[color:var(--color-success-border)]',
         warning: 'bg-elevated text-warning',
+        danger:
+          'bg-[color:var(--color-danger-soft)] text-danger border border-[color:var(--color-danger-border)]',
       },
     },
     defaultVariants: { variant: 'muted' },

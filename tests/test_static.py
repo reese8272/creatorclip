@@ -7,23 +7,32 @@ import datetime
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from auth import get_current_creator
 from db import get_session
-from main import app
+from main import _SPA_BUILT, app
 from models import IngestStatus, OnboardingState, VideoKind, VideoOrigin
 
 # ── Root and static routes ────────────────────────────────────────────────────
 
 
-def test_root_returns_html(client):
+@pytest.mark.skipif(_SPA_BUILT, reason="SPA bundle built — `/` redirects instead (see below)")
+def test_root_serves_legacy_index_without_spa_bundle(client):
+    # Fresh checkout / CI stage with no frontend build: `/` still boots the
+    # legacy index so the app is usable without a Node build step.
     resp = client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-
-
-def test_root_contains_creatorclip(client):
-    resp = client.get("/")
     assert b"AutoClip" in resp.content
+
+
+@pytest.mark.skipif(not _SPA_BUILT, reason="no SPA bundle — `/` serves the legacy index")
+def test_root_redirects_to_spa_when_built(client):
+    # Issue 85g cutover: once the SPA is built, `/` is the React app's front door.
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/app/dashboard"
 
 
 def test_static_onboarding_served(client):
@@ -278,9 +287,8 @@ def test_all_authenticated_templates_include_active_tasks_and_panel():
     is present on every page. The user's stated need: 'when going from
     tab to tab, we are not refreshing the information.'
 
-    Static (unauthenticated) pages — privacy.html, tos.html,
-    early-access.html — are deliberately excluded; they're public
-    marketing/legal surfaces with no user state.
+    Static (unauthenticated) pages — privacy.html, tos.html — are
+    deliberately excluded; they're public legal surfaces with no user state.
     """
     import pathlib
 
@@ -595,7 +603,6 @@ def test_all_templates_use_design_tokens():
         "pricing.html",
         "tos.html",
         "privacy.html",
-        "early-access.html",
     ]
     for name in templates:
         src = (static_dir / name).read_text()
@@ -724,7 +731,6 @@ def test_every_template_has_legal_footer():
         "pricing.html",
         "tos.html",
         "privacy.html",
-        "early-access.html",
     ]
     for name in templates:
         src = (static_dir / name).read_text()
@@ -1241,7 +1247,9 @@ def test_static_cachebust_middleware_appends_version_to_css(client):
     treats the asset URL as new and stops serving the old cached copy."""
     from config import settings
 
-    resp = client.get("/")
+    # Legacy HTML carries /static/* refs; `/` redirects to the SPA once built
+    # (Issue 85g), so verify the rewrite against the legacy file directly.
+    resp = client.get("/static/index.html")
     assert resp.status_code == 200
     body = resp.text
     expected_suffix = f"?v={settings.STATIC_VERSION}"

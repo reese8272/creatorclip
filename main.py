@@ -9,7 +9,7 @@ from pathlib import Path
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -124,22 +124,30 @@ app.include_router(tasks_router.router)
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
+# ── React SPA (incremental migration → cutover — docs/DECISIONS.md 2026-06-17/18)
+# The Vite build (frontend/dist, base=/app/) is served under /app/*: hashed
+# assets via the StaticFiles mount; every other /app path returns the SPA shell
+# so React Router (basename=/app) owns client routing.
+#
+# Issue 85g soft cutover: once the bundle is built, `/` REDIRECTS to the SPA
+# (`/app/dashboard`) — the React app is now the primary surface. A fresh checkout
+# with no build still boots on the legacy index, so dev/CI without a frontend
+# build is unaffected (the same `_SPA_BUILT` gate used since adoption). The
+# legacy `static/*.html` pages remain served (now unlinked) as rollback
+# insurance; full retirement is a staging-verified follow-up.
+_SPA_DIST = Path(__file__).parent / "frontend" / "dist"
+_SPA_INDEX = _SPA_DIST / "index.html"
+_SPA_BUILT = _SPA_INDEX.is_file()
 
-@app.get("/")
-async def index() -> FileResponse:
+
+@app.get("/", include_in_schema=False)
+async def index() -> Response:
+    if _SPA_BUILT:
+        return RedirectResponse(url="/app/dashboard", status_code=302)
     return FileResponse(_STATIC / "index.html")
 
 
-# ── React SPA (incremental migration — docs/DECISIONS.md 2026-06-17) ──────────
-# The Vite build (frontend/dist, base=/app/) is served under /app/*. Hashed
-# assets resolve via the StaticFiles mount; every other /app path returns the
-# SPA's index.html so React Router can own client-side routing. The legacy
-# `static/` pages keep working untouched. The block is a no-op until the SPA is
-# built (`npm --prefix frontend run build`), so a fresh checkout still boots.
-_SPA_DIST = Path(__file__).parent / "frontend" / "dist"
-_SPA_INDEX = _SPA_DIST / "index.html"
-
-if _SPA_INDEX.is_file():
+if _SPA_BUILT:
     app.mount("/app/assets", StaticFiles(directory=_SPA_DIST / "assets"), name="spa-assets")
 
     @app.get("/app", include_in_schema=False)

@@ -4,141 +4,146 @@
 > source of truth — those live in `docs/` (start at [`docs/README.md`](docs/README.md)).
 > Updated at the end of every session.
 
-**Last updated:** 2026-06-17 (React adoption + beta logging + insight sort + **Issue 152 Pro chatbot**)
-**Branch:** `main` — HEAD `75845cb`
-**Working tree:** ⚠️ **DIRTY — this session's work (incl. Issue 152) is entirely uncommitted.** Nothing committed or pushed yet. Issue 152 added: `chat/`, `routers/chat.py`, `tests/test_chat*.py`, `alembic/versions/0026_chat.py`, `frontend/src/pages/Chat.tsx`, plus edits to `models.py`/`config.py`/`main.py`/`worker/tasks.py`/`worker/anthropic_stream.py`/`.env.example`/`frontend` (App/Nav/taskStream/vite) + docs.
-**Prod:** live & healthy — `https://autoclip.studio/health` → `{"status":"ok",...}`. **Prod does NOT yet have any of this session's work.**
-**CI:** green at HEAD `75845cb` (this session's changes have not hit CI).
+**Last updated:** 2026-06-18 (Issue 85 React/TS UI overhaul — **85a–85g DONE; full migration complete (85g = soft cutover)**)
+**Branch:** `main` — HEAD `7ca6330`
+**Working tree:** ⚠️ **DIRTY — this session's work (Issue 85a–85g) is entirely uncommitted.** Changes under `frontend/` + `docs/` + `LEFT_OFF.md` **and now Python**: `main.py` (`/`→`/app` redirect), deleted `static/early-access.html`, and 4 test files repointed/flip-aware (`test_static.py`, `test_user_flow.py`, `test_pipeline_trigger.py`, `test_observability.py`). (One untracked stray `Screenshot 2026-06-17 211516.png` at repo root — leave it out of the commit.)
+**Prod:** live & healthy at `https://autoclip.studio` — **does NOT have this session's work.**
+**CI:** green on `origin/main`; `origin/main` and local `main` are in sync (0/0). This session's changes have not hit CI.
 
 ---
 
 ## CURRENT FOCUS
 
-**This session built four things — all verified locally, none committed yet:** (1) adopted
-**React + TypeScript** for the frontend and ported the **profile page** as the pilot, (2) wired the
-**Docker/CI build** for the SPA, (3) shipped **Issue 149** (insight sort) and **Issue 151** (beta
-logging to a DB), and (4) **built Issue 152 — the Pro chatbot** (streaming assistant scoped to the
-creator's own channel; full issue-workflow CHECK→APPROVE→BUILD→REVIEW; `docs/DECISIONS.md`
-2026-06-17). The immediate job is now to **land all of it**.
+**Goal:** Execute Issue 85 — the full UI/UX overhaul to **React + TypeScript** — as an incremental
+strangler-fig (one shippable slice at a time). Completed: **85a–85g — the full React/TS overhaul is DONE.** All seven app pages ported (dashboard,
+onboarding, insights, analysis, review, profile, chat) + pre-auth (login, pricing, walkthrough); and
+**85g soft cutover** flips `/` → `/app/dashboard` when the SPA bundle is built. Verified locally:
+frontend **vitest 32/32** + eslint 0 + build clean; touched Python is AST-clean + **ruff clean**
+(mypy/pytest **CI-authoritative** — no Postgres here). Nothing committed yet.
 
-**→ NEXT ACTION:**
+**→ NEXT ACTION** (pick one):
 
-1. **Commit + ship the session work** (it's on `main` uncommitted — do NOT commit to `main` directly;
-   the model is `feature → staging → main`, and a push to `main` auto-deploys):
-   ```bash
-   git checkout -b feature/react-adoption-logging
-   git add frontend/ .dockerignore alembic/versions/0025_event_logs.py event_log.py routers/logs.py \
-           tests/test_event_log.py tests/test_event_log_integration.py tests/test_spa_serving.py
-   git add .env.example .github/workflows/ci.yml .gitignore Dockerfile config.py main.py models.py \
-           routers/activity.py static/insights.html tests/test_static.py docs/
-   git status   # confirm frontend/node_modules + frontend/dist are NOT staged (both gitignored)
-   git commit   # message below
-   git push -u origin feature/react-adoption-logging
-   gh pr create --base staging   # PR into staging, NOT main
-   ```
-   - Watch the new **`Frontend (lint, test, build)`** CI job + the **`Docker build`** smoke job — both
-     are new this session and have never run in CI. The integration job will apply migration **0025**
-     and run the CI-authoritative `event_logs` tests (`tests/test_event_log_integration.py`).
-   - Consider splitting into two PRs if you want cleaner history (frontend/React+Docker vs.
-     logging+sort) — they're independent. One branch is fine too; they're all this session.
-2. **Issue 152 (Pro chatbot) is BUILT** ✅ — verify it lands cleanly in CI. Watch for: **migration
-   0026** (`chat_conversations` + `chat_messages`, RLS on the conversation table) applying after 0025
-   on the integration job, and the **CI-authoritative isolation test**
-   `tests/test_chat_isolation_integration.py` (per-creator tool scoping — needs real Postgres). The
-   gate is **active-creator + 25/day quota, no per-message minute deduction in v1** (DECISIONS
-   2026-06-17). Add `CHAT_*` env vars (see `.env.example`) to the prod `.env` on deploy. Next product
-   step (separate issue): revisit per-message credit metering after ~30 days of real token logs.
-3. **Visual-QA the React profile page** (deferred — needs the running backend + a seeded DNA). To see
-   it locally: start FastAPI on `:8000`, `npm --prefix frontend run dev`, open
-   `http://localhost:5173/app/profile` (dev server proxies the API).
+**A. Land 85a→85g** (recommended — the migration is complete; ship it). The branch model is
+`feature → staging → main`, and **pushing to `main` auto-deploys**, so do NOT commit on `main`:
+```bash
+cd /home/reese/workspace/Youtube-Video-AI-Editor
+git checkout -b feature/issue-85-react-overhaul
+git add frontend/ docs/ LEFT_OFF.md
+git status            # confirm frontend/node_modules + frontend/dist are NOT staged (gitignored)
+git commit            # see suggested message below
+git push -u origin feature/issue-85-react-overhaul
+gh pr create --base staging   # PR into STAGING, not main
+```
+Watch **BOTH** the `Frontend (lint, test, build)` job **and the Python jobs** (this turn touched
+`main.py` + 4 test files — first Python change in the 85 series). Suggested commit subject:
+`feat(85): React/TS overhaul complete — 85a–85g (all pages ported; / → /app soft cutover)`
+**CI is the real gate for the Python bits** (no Postgres/Docker here): watch the unit job (no SPA
+build → `/` serves legacy, flip-aware root tests) AND the integration job (builds the image w/ the
+SPA bundle → `/` redirects; the repointed `/static/index.html` tests must hold).
+
+**B. Deferred follow-up (the "full retirement", staging-verified)**: delete/redirect the remaining
+`static/*.html` (keep `tos.html` + `privacy.html`), repoint backend `next_action` URLs in
+`routers/insights.py` + `routers/videos.py` from `/static/*` → `/app/*`, build the **global
+activity-panel** widget (cross-page, in `AppChrome`), and a **React marketing hero** for anonymous
+visitors if/when the app goes public (the Issue-136 `?yt=` funnel isn't ported — anon currently lands
+on `/app/login`). Do this once the stack is verifiable on staging.
+
+**C. Live visual QA** of the ported pages (login/pricing/walkthrough/profile/chat) in the running
+app — **not yet done** (no Docker in this env). Needs the running backend + a seeded creator.
+
+**Frontend gate (run from `frontend/`):** `npm run lint` · `npm run build` · `npm test`.
+Last run this session: **eslint 0 · build clean · vitest 22/22.**
 
 ---
 
-## WHAT WORKS NOW (built + verified this session — don't re-investigate)
+## WHAT WORKS NOW (verified this session — don't re-investigate)
 
-- **React SPA stack stood up** in `frontend/`: Vite 8 + React 19 + TypeScript + Tailwind v4 +
-  hand-written shadcn-style primitives. Served by FastAPI under **`/app/*`** (hashed assets via a
-  StaticFiles mount; `/app/{path}` falls back to the SPA shell for client routing; legacy `static/`
-  pages untouched). The Issue-99 dark design tokens are mapped into the Tailwind `@theme`.
-- **Profile page ported** (`frontend/src/pages/Profile.tsx` + `components/profile/*`): DNA brief now
-  renders as **real structured HTML** via a `.textContent`-safe parser (fixes the "wall of asterisks"),
-  the internal `v3 · active` badge is replaced by a plain **provenance badge**, plus identity / intake
-  mode / API-keys sections. Verified: `npm run build` clean, `eslint` 0, `vitest` 6/6.
-- **Docker/CI wired for the SPA:** Dockerfile gained a `node:22` `frontend-build` stage → copies
-  `dist` into the runtime image at `/app/frontend/dist`; new `.dockerignore` (was none — `COPY . .`
-  had been baking `.venv`/`node_modules`/`.env` into the image); new `frontend` CI job. `npm ci` clean.
-  **Not run as a real `docker build` (no Docker in this WSL env)** — CI's docker-build job is authoritative.
-- **Issue 149 (insight sort) DONE:** Sort dropdown on the Top/Underperformers panels (default score
-  high→low; +low→high, +Title A–Z). Fixed an inline **stored-XSS** (performer title/kind were
-  unescaped in `innerHTML`) → now `escapeHtml`-wrapped, pinned in `test_static.py`.
-- **Issue 151 (beta logging to DB) DONE:** new `event_logs` table (migration **0025**) + `event_log.py`
-  sink (isolated engine on `LOGS_DATABASE_URL`, **boundary PII/token redaction**, best-effort writes).
-  `/api/activity` now persists UI events (+ keeps `app.log`); a new `http_request` middleware logs
-  every backend request; `GET /api/logs/me` returns a creator's own rows (app-level isolation).
-- **Verification:** `ruff` + `mypy` clean on all touched Python; **full unit suite 986 passed** (also
-  fixed a latent bug — the `/app` HTML routes were failing `test_response_models`, now
-  `include_in_schema=False`). Redaction unit-tested; logging integration tests are **CI-only**.
+- **85a foundation** (all under `frontend/src/`):
+  - **React Router v7 Data Mode** (`App.tsx`: `createBrowserRouter` + `RouterProvider`, basename `/app`).
+  - **TanStack Query v5** data layer (`lib/queryClient.ts`, provider in `main.tsx`); `useAuth` is a cached `useQuery`.
+  - **`useTaskStream`** SSE hook (`hooks/useTaskStream.ts`) — EventSource lifecycle + guaranteed unmount cleanup.
+  - **React Testing Library + jsdom** on Vitest (`test/setup.ts`, `vite.config.ts` `test` block).
+  - **Design system** in **`docs/UI.md`** + applied to `index.css` `@theme` (warmer **OKLCH** dark-Linear palette; token NAMES preserved so utilities still resolve).
+- **85b layouts + pages:**
+  - `AuthGate` (protects routes; 401 → `/app/login`) + `AppChrome` (auth-agnostic Nav/Footer) replace the old `AppLayout`. Four route contexts: protected/public × chrome/bare.
+  - **`useAuth` resolves to `user: null` on 401 (no hard redirect)** — this is what lets **pricing render for anonymous visitors**.
+  - Ported: **Login** (`/app/login`, faithful; Google button = real nav to `/auth/login`, `?yt=` carried), **Pricing** (`/app/pricing`, public-or-authed; Stripe checkout + `crypto.randomUUID` intent preserved), **Walkthrough** (`/app/walkthrough`, 5-panel first-run + keyboard nav). Profile + Chat re-homed onto the shared shell.
+- **85c dashboard** (`pages/Dashboard.tsx` + `components/dashboard/*`, route `/app/dashboard`):
+  - Summary cards, YouTube-analytics panel (period selector), link-a-video form, video table with
+    per-row Queue/Generate/review/Titles actions + the Issue-139 upload affordance, empty-state hero,
+    trial + low-balance + DNA-CTA banners.
+  - **Live status = gated TanStack `refetchInterval`** (polls `/videos` only while a clip-trackable
+    video is in-flight; pauses on tab blur). Per-video clip counts via `useQueries`.
+  - **Activity panel: inline now, global floating widget deferred** (user-approved). SPA catch-all +
+    Nav "Dashboard" now point at `/app/dashboard`. `Badge` gained a `danger` variant.
+- **85d onboarding** (`pages/Onboarding.tsx` + `components/onboarding/*`, route `/app/onboarding`, protected+bare):
+  - 5-step flow: connect → data gate (catalog sync **live SSE console** + gated data-gate poll) →
+    optional slim identity intake (unlocks step 4) → DNA build (**live SSE console** + brief poll) → confirm (→ profile).
+  - Dual `useTaskStream` consoles (`StreamConsole`). **Issue-100 identity gate preserved** (Build-DNA
+    disabled until identity exists). Dashboard `DnaCta` rewired to SPA routes by `setup.step`.
+- **85e insights + analysis** (`pages/Insights.tsx`, `pages/Analysis.tsx` + `components/insights/*`, `components/analysis/*`):
+  - Insights `/app/insights`: channel + DNA snapshots, sortable top/bottom performers w/ per-row AI analyze + save, upload windows, improvement brief (SSE log + gated poll), saved insights.
+  - Analysis `/app/analysis`: token-streamed video-analysis prose + four `?video_id=`-gated features (Title Optimizer, Hook Analyzer, Chapter Markers, Thumbnail Concepts).
+  - **New `useTaskResult` hook** (token/step/done-payload) + `onToken`/`onStep` on the stream layer + `useStreamAction` helper. Nav + dashboard links rewired to SPA routes.
+- **85f review/editor** (`pages/Review.tsx` + `components/review/*`, route `/app/review`):
+  - **Player-first redesign** (replaces the Issue-136 icon-rail/drawer): player + Keep/Drop/Skip/Trim + tag feedback lead; transcript editor alongside; Why-this-clip / Caption style / Clean pass as collapsible sections.
+  - Full clip-queue nav. Transcript editor reimplemented (drag-select → `.ed-word[data-index]` snapping, cuts in state + localStorage, merge/undo, apply→poll→confirm). New `useCleanedUriPoll` hook (clean + edit share it). All nav + dashboard review links → `/app/review`.
+- **Tests:** 32/32 (85a 6 + 85b 5 + 85c 5 + 85d 3 + 85e 4 + 85f 3: no-video prompt; clip loads meta/reasoning/transcript/disclaimer; Keep opens tag panel). **All nav links are now SPA-internal.**
+- **85g cutover (soft, Python):** `main.py` `/` → `RedirectResponse('/app/dashboard', 302)` when `_SPA_BUILT`, else legacy index (fresh-checkout safe). `early-access.html` deleted. Root tests flip-aware (`skipif(_SPA_BUILT)`); legacy-content `/` tests repointed to `/static/index.html`. AST + ruff clean locally; **mypy/pytest CI-authoritative**.
+- **Strangler-fig:** legacy `static/*.html` still on disk + served (now unlinked) as rollback insurance; full retirement deferred to a staging-verified follow-up.
+
+---
 
 ## THE ARC THAT LED HERE
 
-1. User asked 7 things about the app (barren UI, ugly profile, insight sort, profile nav, a Pro
-   chatbot, log-everything-to-a-DB, and "what did the ToS say"). The ToS answer: downloading YouTube
-   bytes via yt-dlp is barred **even for own content** (`COMPLIANCE.md` §5 / Issue 139).
-2. Diagnosed the barren/ugly look as raw-markdown rendering + sparse layout. Researched **React vs
-   vanilla** → adopted **React + TypeScript** (DECISIONS 2026-06-17); profile = pilot page.
-3. Wired the SPA into FastAPI + Docker/CI.
-4. Built **#3 insight sort** and the **#6 logging-to-DB** system; filed **Issue 150** (continuous OBS
-   capture as the ToS-clean clip source) and **Issue 152** (Pro chatbot, next).
+1. Prior session adopted React/TS (Profile pilot), beta logging (149/151), Pro chatbot (152) — **now committed/landed** (see `git log`; `origin/main` current).
+2. User asked (via `/issue-workflow`) **how to bring React/TS to the rest of the project**; they have **no prior React/TS experience** (taught the model from the ported code).
+3. Approved **foundation-first sequencing + a genuine redesign**. Filed the migration as **85a–85g** in `docs/issues.md`.
+4. Built **85a** (architecture + design system), **85b** (pre-auth + presentational pages),
+   **85c** (dashboard — first data-heavy page; gated-refetch live status), **85d** (onboarding —
+   focused 5-step flow; dual `useTaskStream` SSE consoles; identity-gated DNA build), **85e**
+   (insights + analysis — the LLM-streaming pages; new `useTaskResult`/`useStreamAction` primitives),
+   **85f** (review/editor — player-first redesign; transcript editor; `useCleanedUriPoll`), then
+   **85g** (soft cutover — `/` → `/app/dashboard` when the SPA is built; first Python touch of the
+   series). The full React/TS overhaul is now complete.
+5. En route: **`early-access` descoped** — it POSTs to a non-existent `/billing/early-access` route and sells subscriptions that contradict the minutes-pack model (logged in `docs/OFF_COURSE_BUGS.md`; product decision deferred to 85g).
+
+---
 
 ## KEY COORDINATES & FACTS
 
-| Thing | Value |
-|-------|-------|
-| New frontend | `frontend/` — Vite+React+TS+Tailwind v4. Build: `npm --prefix frontend run build` → `frontend/dist/` (gitignored). Dev: `npm --prefix frontend run dev` (proxies API to `:8000`). |
-| SPA serving | FastAPI serves `dist/` under **`/app/*`** (see `main.py`, guarded — no-op if `dist` absent). Profile lives at `/app/profile`. |
-| New backend files | `event_log.py` (sink), `routers/logs.py` (`/api/logs/me`), `alembic/versions/0025_event_logs.py` |
-| New config | `LOGS_DATABASE_URL` (defaults to `DATABASE_URL`), `EVENT_LOG_DB_ENABLED` (default true) — in `.env.example` |
-| Migration to apply | **0025** (`event_logs`) — applied by CI integration + on deploy; NOT applied locally |
-| Prod domain / VM | `https://autoclip.studio` · DO droplet `147.182.136.107`, dir `/opt/autoclip` |
-| Docker image | `ghcr.io/reese8272/creatorclip:latest` |
-| Deploy pipeline | push to `main` → `docker-publish.yml` (self-hosted runner) → `deploy.yml` (auto-deploys prod) |
-| Branches | `main` (live) + `staging` (pre-prod) — both at `75845cb` |
-| Open issues from this session | **150** (OBS live capture, planned), **151** (logging, done — needs commit), **152** (Pro chatbot, **NEXT**) |
-| Repo plan | private, free tier (no branch protection without Pro) |
-| Docs index | `docs/README.md` |
+| What | Value |
+|------|-------|
+| Branch / HEAD | `main` / `7ca6330` (work uncommitted) |
+| Trunk model | `feature → staging → main`; **push to `main` auto-deploys** (`docs/BRANCHING.md`) |
+| Prod URL / health | `https://autoclip.studio` · `/health` |
+| Frontend dir | `frontend/` (Vite + React 19 + TS + Tailwind v4); SPA served under `/app/*` |
+| Frontend gate | from `frontend/`: `npm run lint`, `npm run build`, `npm test` |
+| New deps this session | `@tanstack/react-query`, `@testing-library/*`, `jsdom` |
+| Migration breakdown | Issue 85a–85g in `docs/issues.md` — **all ✅ (85g = soft cutover); full static retirement deferred** |
+| Secrets (names only) | `docs/SECRETS.md` — never read values |
+
+---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Working tree is dirty on `main`.** First move is a feature branch — do not commit to `main`.
-- **Pushing/merging to `main` triggers a production deploy** (docker-publish → deploy). Go via
-  `feature → staging → main`. `staging → main`: fast-forward / `--merge`, **never `--rebase`**.
-- **Migration 0025 must run on deploy.** The deploy applies `alembic upgrade head`; if the SPA serves
-  but `/api/logs/me` 500s or activity writes silently fail, check the migration ran.
-- **The SPA won't serve in prod until the image is rebuilt** with the new `frontend-build` Dockerfile
-  stage (this session added it; the current prod image predates it). `/app/*` is a guarded no-op
-  without `frontend/dist`.
-- **No Docker in this WSL env** and **no local Postgres** (no sudo). The `docker build`, Alembic
-  migrations, and all `*_integration.py` tests are **CI-authoritative**. Redis *is* up locally; the
-  unit suite runs: `.venv/bin/python -m pytest -m "not integration" -q` (986 pass).
-- **Frontend `node_modules` (181M) + `dist` are gitignored** — confirm they're not staged before commit.
-- **CI ruff is pinned to `0.15.15`** — match it locally (`.venv` has it) or `ruff format` diverges.
-- **`event_logs` has no RLS by design** (telemetry; mirrors `audit_log`). Per-creator read isolation is
-  enforced in `/api/logs/me` at the app layer, NOT by the database. Redaction (`event_log._redact`) is
-  the load-bearing PII/token guard — keep it.
-- **Cloudflare Bot Fight Mode 403s GitHub-hosted IPs** (external GH probes of prod fail even when
-  healthy). **`StarletteDeprecationWarning`** on every test run is harmless noise.
+- **Do not commit on `main`** — branch first; a push to `main` triggers the production deploy.
+- **No Docker in this env** → backend tests + image build are **CI-authoritative**; **no live visual QA** possible locally. 85a–85f touched no Python; **85g touches `main.py` + 4 test files** — AST + ruff verified locally, but **mypy/pytest are CI-authoritative** (no Postgres here). Watch unit AND integration jobs (the `/` flip differs by whether the SPA bundle is present — see the redirect/legacy split).
+- **Tailwind `@theme` parser trap:** never let a `*/` sequence appear inside a CSS comment (e.g. `--text-*/`) — it closes the comment early and breaks the build. `@theme` values also can't use `var(...)` (inline literals instead).
+- **react-hooks v7 lint rules** are strict: no synchronous `setState` in an effect body (use lazy `useState` init or callbacks), and no `window.location.href =` mutation (use `window.location.assign(...)`).
+- **`MemoryRouter` in tests** needs `basename="/app"` + `initialEntries={['/app/...']}` or it renders nothing (location must be under the basename).
+- **`frontend/dist` + `frontend/node_modules` are gitignored** — confirm they're not staged.
+- Verify `origin/main` is current before branching (it is now: 0/0).
 
-## OPEN FOLLOW-UPS (pre-existing, still optional / external)
-
-1. **Enable Cloudflare Health Checks** — `docs/DEPLOYMENT.md` → "Production health monitoring". *User.*
-2. **GitHub Pro → apply branch protection** — ready ruleset in `docs/BRANCHING.md`. *User/account.*
-3. **Issue 148 deep CSS dedup** — intentionally deferred (no visible benefit, JS-coupled).
+---
 
 ## POINTERS
 
 - **Docs index:** [`docs/README.md`](docs/README.md)
-- **State:** [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) · **Decisions:** [`docs/DECISIONS.md`](docs/DECISIONS.md) (React adoption + logging entries, 2026-06-17)
-- **Issues / backlog:** [`docs/issues.md`](docs/issues.md) — **149** (done), **150** (OBS), **151** (logging, done), **152** (chatbot, next)
-- **Compliance:** [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) (ToS §5; event-log data class) · **Branching:** [`docs/BRANCHING.md`](docs/BRANCHING.md) · **Deploy:** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-- **Off-course bugs:** [`docs/OFF_COURSE_BUGS.md`](docs/OFF_COURSE_BUGS.md)
-- **Memory:** `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/`
+- **Architecture / stack / file layout:** [`docs/SOT.md`](docs/SOT.md)
+- **Design system (this overhaul):** [`docs/UI.md`](docs/UI.md)
+- **Decisions (incl. 85a/85b, 2026-06-18):** [`docs/DECISIONS.md`](docs/DECISIONS.md)
+- **Progress / session log:** [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md)
+- **Issue queue (85a–85g):** [`docs/issues.md`](docs/issues.md)
+- **Incidental defects (early-access):** [`docs/OFF_COURSE_BUGS.md`](docs/OFF_COURSE_BUGS.md)
+- **Auto-memory:** `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/MEMORY.md`

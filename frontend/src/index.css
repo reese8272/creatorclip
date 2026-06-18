@@ -1,46 +1,67 @@
-/* AutoClip SPA Tailwind v4 theme. The dark Linear-style design tokens from
-   static/_design-tokens.css (Issue 99) are preserved verbatim and mapped into
-   Tailwind theme namespaces (color, text, radius, font) so the React port
-   renders identically to the vanilla pages. Spacing uses the default 4px scale,
-   which already matches the project --space ladder. A stack change, not a visual
-   redirection: see docs/DECISIONS.md (2026-06-17). */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* AutoClip SPA Tailwind v4 theme - the Issue 85 design system (docs/UI.md).
+   Evolution of the Issue 99 dark-Linear look: a warmer, OKLCH-built palette
+   (hue 285 neutrals, warmer violet accent) plus the foundation tokens for the
+   overhaul (accent states, semantic set, "channel fit" confidence tiers, 8pt
+   spacing, spring motion, dark-surface shadows, Geist+Inter type).
+
+   Token NAMES are preserved from the Issue 99 set so existing utilities
+   (bg-surface, text-muted, border-default) keep resolving; only the VALUES
+   moved to OKLCH. The existing text and radius metrics and the global body font
+   are intentionally unchanged here; the refined type scale and Geist UI font
+   land per page as each ports and gets visual QA (see docs/UI.md). This @theme
+   styles the React SPA only; legacy static pages keep static/_design-tokens.css.
+   See docs/DECISIONS.md (2026-06-18). */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;650;700&family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 
 @theme {
-  /* Surfaces */
-  --color-bg: #0a0a0a;
-  --color-surface: #111111;
-  --color-elevated: #1a1a1a;
-  --color-raised: #1f1f1f;
+  /* Surfaces (OKLCH, hue 285 = faint blue-violet warmth) */
+  --color-bg: oklch(8% 0.008 285);
+  --color-surface: oklch(11% 0.01 285);
+  --color-elevated: oklch(14% 0.012 285);
+  --color-raised: oklch(17% 0.013 285);
 
   /* Borders (border-default / border-strong) */
-  --color-default: #1f1f1f;
-  --color-strong: #2a2a2a;
+  --color-default: oklch(22% 0.012 285);
+  --color-strong: oklch(30% 0.015 285);
 
   /* Text (text-fg / text-muted / text-subtle) */
-  --color-fg: #ededed;
-  --color-muted: #888888;
-  --color-subtle: #666666;
+  --color-fg: oklch(94% 0.008 285);
+  --color-muted: oklch(65% 0.01 285);
+  --color-subtle: oklch(45% 0.008 285);
 
-  /* Accent (indigo) */
-  --color-accent: #5e6ad2;
-  --color-accent-hover: #6b7ae8;
-  --color-accent-soft: rgba(94, 106, 210, 0.12);
-  --color-on-accent: #ffffff;
+  /* Accent (warmer indigo) */
+  --color-accent: oklch(58% 0.18 280);
+  --color-accent-hover: oklch(63% 0.19 278);
+  --color-accent-active: oklch(53% 0.17 282);
+  --color-accent-soft: oklch(20% 0.06 280);
+  --color-accent-border: oklch(35% 0.1 280);
+  --color-on-accent: oklch(98% 0.004 285);
 
   /* Semantic status */
-  --color-success: #2ecc71;
-  --color-warning: #f39c12;
-  --color-danger: #e74c3c;
-  --color-success-soft: rgba(46, 204, 113, 0.08);
-  --color-success-border: rgba(46, 204, 113, 0.3);
-  --color-danger-soft: rgba(231, 76, 60, 0.08);
-  --color-danger-border: rgba(231, 76, 60, 0.3);
+  --color-success: oklch(68% 0.17 145);
+  --color-success-soft: oklch(18% 0.05 145);
+  --color-success-border: oklch(32% 0.09 145);
+  --color-warning: oklch(75% 0.16 75);
+  --color-warning-soft: oklch(18% 0.05 75);
+  --color-warning-border: oklch(32% 0.09 75);
+  --color-danger: oklch(62% 0.2 25);
+  --color-danger-soft: oklch(18% 0.06 25);
+  --color-danger-border: oklch(32% 0.11 25);
 
-  /* Typography */
+  /* Channel-fit confidence tiers — never a virality score (docs/UI.md). */
+  --color-fit-strong: oklch(72% 0.16 145);
+  --color-fit-strong-soft: oklch(20% 0.06 145);
+  --color-fit-moderate: oklch(78% 0.14 75);
+  --color-fit-moderate-soft: oklch(20% 0.05 75);
+  --color-fit-exploratory: oklch(55% 0.01 285);
+  --color-fit-exploratory-soft: oklch(17% 0.01 285);
+
+  /* Typography (font-ui = Geist for chrome on port; docs/UI.md). */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-ui: 'Geist', 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --text-2xs: 0.65rem;
   --text-xs: 0.72rem;
@@ -51,14 +72,42 @@
   --text-xl: 1.6rem;
   --text-2xl: 2rem;
 
-  /* Radii — 4px lock for dashboard/profile surfaces */
+  /* Radii (existing metrics preserved; refined ladder in docs/UI.md lands per page) */
   --radius-sm: 2px;
   --radius-md: 4px;
   --radius-lg: 8px;
   --radius-xl: 12px;
 
+  /* Spacing — 8pt ladder (CSS-var tokens for custom layout; docs/UI.md) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
   /* Motion */
+  --duration-instant: 80ms;
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+  --duration-slow: 350ms;
+  --duration-spring: 500ms;
   --ease-snappy: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Shadows (dark-surface: black-alpha elevation + accent glow) */
+  --shadow-sm: 0 1px 3px oklch(0% 0 0 / 0.4), 0 1px 2px oklch(0% 0 0 / 0.3);
+  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.5), 0 2px 4px oklch(0% 0 0 / 0.3);
+  --shadow-lg: 0 12px 32px oklch(0% 0 0 / 0.6), 0 4px 8px oklch(0% 0 0 / 0.35);
+  --shadow-accent-glow: 0 0 0 1px oklch(35% 0.1 280), 0 4px 20px oklch(58% 0.18 280 / 0.25);
+  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.06);
 }
 
 @layer base {
@@ -79,5 +128,14 @@
     font-weight: 600;
     letter-spacing: -0.01em;
     line-height: 1.25;
+  }
+
+  /* Honour reduced-motion: collapse spring/entrance animations (docs/UI.md a11y). */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

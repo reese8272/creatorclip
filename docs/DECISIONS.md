@@ -5,6 +5,311 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-18 — Issue 85g: Cutover — `/` → the React SPA (soft flip)
+
+**What changed:** With all seven app pages ported (85a–85f), `/` now redirects to the SPA. `main.py`'s
+root route returns `RedirectResponse("/app/dashboard", 302)` **when the SPA bundle is built**
+(`_SPA_BUILT`), else still serves the legacy `static/index.html` so a no-build checkout/CI stage boots
+unchanged. The React app is now the primary surface; anonymous visitors land on `/app/login` via the
+auth gate.
+
+**Decisions:**
+1. **Soft flip, not a hard cutover (user-chosen).** Redirect `/`, delete the one orphaned page
+   (`early-access.html`), but **keep the other `static/*.html` pages on disk and served** (now
+   unlinked from the SPA). Rationale: there is no local backend (no Docker/Postgres here), so the
+   Python suite is **CI-authoritative** — a hard cutover (deleting files, redirecting every
+   `/static/*.html`, repointing backend `next_action` URLs, rewriting ~8 tests) would be a large
+   blind change. The redirect is the headline "flip"; full file retirement is a **staging-verified
+   follow-up**. Keeping the files is also instant rollback insurance.
+2. **Bundle-gated redirect** (`_SPA_BUILT`) — reuses the gate the SPA has had since adoption, so
+   dev/CI without a frontend build still serves the legacy index. The Python CI job doesn't build
+   `frontend/dist`; the integration job (docker image) does — so tests must be robust to **both**.
+3. **Repointed legacy-content tests to `/static/index.html`** (behavior-preserving — it's the exact
+   file `/` used to serve). `test_user_flow` (auth.js / nav), `test_pipeline_trigger` (polling JS),
+   `test_static` (cache-bust body rewrite), `test_observability` (inbound-request-id echo) asserted
+   legacy `/` HTML; under the redirect (with a bundle present) they'd follow to the SPA shell and
+   break. The root tests (`test_static.py`) are now flip-aware via `skipif(_SPA_BUILT)` — mirroring
+   the established `test_spa_serving.py` pattern (redirect when built, legacy when not).
+4. **Anonymous marketing hero dropped for now.** The Issue-136 paste-a-URL hero on the legacy `/`
+   isn't ported; anon → `/app/login` (the ported login page). Acceptable for the closed beta
+   (OAuth test-users only, no public traffic); the `?yt=` funnel can be re-added if/when the app
+   goes public. Logged as a deferred item.
+5. **`early-access.html` deleted** — orphaned funnel (POSTs to a non-existent `/billing/early-access`,
+   sells subscriptions that contradict the minutes model). OFF_COURSE_BUGS entry resolved; its two
+   `test_static.py` inventory-list references removed.
+
+**Deferred to a follow-up (staging-verified):** delete/redirect the remaining `static/*.html`
+(except `tos.html` + `privacy.html`), repoint the backend `next_action` URLs in `routers/insights.py`
++ `routers/videos.py` from `/static/*` → `/app/*`, the global cross-page activity-panel widget, and
+(if going public) the React marketing hero.
+
+**Testing:** Python changes are CI-authoritative (AST-clean + ruff-clean locally; no Postgres here).
+Frontend untouched (gate stays **vitest 32/32**). No `main.py` behavior change when the bundle is
+absent — the legacy path is byte-for-byte unchanged.
+
+---
+
+## 2026-06-18 — Issue 85f: Review / Editor → React (player-first redesign, transcript editor)
+
+**What was built:** Ported the biggest, most stateful page — `static/review.html` + `static/editor.js`
+→ `pages/Review.tsx` (+ `components/review/*`) at `/app/review` (protected + chrome). Carries the
+full review surface: clip-queue nav, player, why-this-clip, trim + tag feedback, caption-style
+render, clean pass, and the Descript-style transcript editor.
+
+**Decisions:**
+1. **Player-first redesign over the vanilla icon-rail + slide-out drawer.** Issue 85's AC explicitly
+   calls for "review surface redesigned to the chosen player-first shape," so this is a sanctioned
+   redesign, not a pixel port: the player + review actions lead, the transcript editor sits
+   alongside (2-col on `lg`, stacked on mobile), and the secondary tools (Why this clip / Caption
+   style / Clean pass) are plain **collapsible sections** (`CollapsibleTool`). Simpler, more
+   maintainable, and mobile-responsive — the Issue-136 3-pane Grid + `data-active-tool` drawer was a
+   clever vanilla solution that React disclosure state makes unnecessary.
+2. **`useCleanedUriPoll` shared hook.** Both the clean pass and the transcript edit kick a Celery
+   render and wait for `cleaned_render_uri` to land; extracted the gated-`refetchInterval` poll of
+   `/videos/{id}/clips` once (stops as soon as the URI appears). The tasks also emit SSE, but the
+   URI is the authoritative "preview ready" signal the vanilla page used.
+3. **Transcript drag-select reimplemented faithfully.** `onMouseUp` → `window.getSelection()` snapped
+   to the enclosing `.ed-word[data-index]` span (the server provides the stable `index` on each
+   word), cuts in React state + `localStorage["clip:{id}:cuts"]`, sort+merge-adjacent + one-level
+   undo — same model as `editor.js`. Words render as spans with literal text-node spaces between
+   them (`{i > 0 && ' '}`) so selection boundary-snapping works.
+4. **Single source of truth for the swapped render.** Clean/edit confirm POSTs `/clean/confirm`, then
+   **invalidates `['review-clips', videoId]`** — the page derives `currentClip` from that query +
+   `currentIndex`, so the main player picks up the new `render_uri` automatically (no local
+   render-uri state to drift).
+5. **All nav links now SPA-internal.** Review was the last `external: true` Nav entry; flipped it,
+   plus the dashboard "N clips" row link + "Review queue" summary link, to `/app/review`. Legacy
+   `static/review.html` stays served until the 85g cutover.
+
+**Testing:** +3 (no-video-id prompt; clip loads → meta + why-this-clip reasoning + transcript words
++ honesty disclaimer; Keep opens the tag-feedback panel). SSE/poll/render flows aren't re-mocked
+(jsdom has no EventSource/media playback; the gated polls stay disabled until an action fires).
+Verified: eslint 0, `tsc -b` + build clean, **vitest 32/32**. No Python touched (legacy page served
+until 85g; backend Layer 0 unaffected). **All seven app pages are now ported — only the 85g cutover
+remains.**
+
+---
+
+## 2026-06-18 — Issue 85e: Insights + Analysis → React (the LLM-streaming pages)
+
+**What was built:** Ported the two heaviest pages — `static/insights.html` → `pages/Insights.tsx`
+and `static/analysis.html` → `pages/Analysis.tsx` (+ `components/insights/*` and
+`components/analysis/*`) — at `/app/insights` and `/app/analysis` (protected + chrome). Together they
+carry ~9 features and five distinct SSE consumers (improvement brief; video-analysis prose; titles;
+hook; chapters; thumbnail concepts).
+
+**Decisions:**
+1. **New `useTaskResult` hook + `onToken`/`onStep` on the stream layer.** The 85a `useTaskStream`
+   flattens step/cache/token into one buffer — right for a progress *log*, wrong for these pages,
+   which need (a) **token-only prose** (the video-analysis narrative, no `→ step` lines mixed in)
+   and (b) the **structured `done` payload** (titles/concepts/report/chapters arrive in the final
+   event, not the buffer). So I extended `subscribeToTaskStream` with optional `onToken`/`onStep`
+   callbacks (additive — existing callers unaffected) and broadened `onDone` to a
+   `Record<string, unknown>` payload, then built `useTaskResult` → `{status, step, tokens, result,
+   error}`. `useTaskStream` is untouched and still used where a flat log is what's wanted
+   (onboarding consoles, improvement-brief log).
+2. **`useStreamAction` for the three uniform per-video features** (titles, chapters, thumbnails):
+   each is "POST → 202 `{stream_url}` → stream the result", so the POST + URL lifecycle + error
+   surface is extracted once. Video-analysis (needs the synchronous `video_title`/`analytics_available`
+   context first) and the hook analyzer (handles the 200 `{status:"no_data"}` non-error branch) have
+   bespoke flows and don't use it.
+3. **Improvement brief = `useTaskStream` log + gated poll.** POST returns a stream URL (live log via
+   the flat buffer) AND we poll `GET /improvement-brief` via `refetchInterval` until `status` leaves
+   `pending` — faithful to the async-202-then-poll backend (Issue 78d). The brief text comes from the
+   poll, not the stream.
+4. **Per-video features gated on `?video_id=`** via `useSearchParams`, exactly like the vanilla
+   page's `DOMContentLoaded` check — the dashboard "Titles" link (now a SPA `<Link to="/analysis?…">`)
+   is the entry point.
+5. **Rewired Nav + dashboard links to the SPA routes.** Nav "Insights"/"Analyze" flipped from
+   `/static/*` to `/insights` / `/analysis`; the dashboard "Analyze →" CTA and per-row "Titles" link
+   now use client-side `<Link>`. The "Review queue" links stay legacy until 85f. Legacy
+   `static/insights.html` + `static/analysis.html` remain served until the 85g cutover.
+
+**Testing:** +4 (Insights: snapshot + top performer + honesty disclaimer renders; analyze-performer
+→ content + Save; Analysis: query form + disclaimer + per-video panels hidden without `?video_id=`;
+panels revealed with it). SSE-driven flows are exercised by the 85a stream-layer tests, not
+re-mocked here (jsdom has no EventSource; rendering alone opens none). Verified: eslint 0, `tsc -b` +
+build clean, **vitest 29/29**. No Python touched (legacy pages still served until 85g; backend
+Layer 0 unaffected).
+
+---
+
+## 2026-06-18 — Issue 85d: Onboarding → React (connect → data gate → identity → DNA build → confirm)
+
+**What was built:** Ported `static/onboarding.html` to `pages/Onboarding.tsx` (+
+`components/onboarding/*`) — the 5-step first-run flow — on the 85a foundation. Route added at
+`/app/onboarding`, **protected + bare** (under `AuthGate`, *not* `AppChrome`): a focused full-screen
+flow with a minimal header, exactly like the walkthrough.
+
+**Decisions:**
+1. **Two concurrent live consoles via `useTaskStream`** (not a bespoke SSE juggler). Catalog sync
+   and DNA build each get their own stream URL held in state; the hook opens/closes each EventSource
+   on its own lifecycle. `StreamConsole` renders + auto-scrolls the buffer. Same SSE primitive 85a
+   built; no new transport code.
+2. **Data-gate poll = gated `refetchInterval` + invalidate-on-`done`.** Poll `/creators/me/data-gate`
+   every 4s only while the catalog stream is `streaming`; an effect invalidates the query once when
+   the stream emits `done` for the final read. This replaces the vanilla page's manual
+   `setInterval` + "stable for 2 ticks" + "22 tries" heuristics — the worker's own `done` event is
+   the authoritative stop signal, so the heuristics are unnecessary.
+3. **Preserved the Issue-100 identity gate.** Step 4 (Build DNA) stays disabled until an identity
+   row exists (`identitySaved` this session OR `/creators/me/identity` returns one). This is
+   intentional product behavior ("your identity tells us what fit means for you"), so the port keeps
+   it rather than making intake truly optional — changing it would be the deviation needing
+   justification, not keeping it. Backend still validates data-gate readiness on `/dna/build` and
+   the 400 detail surfaces inline.
+4. **Rewired the dashboard `DnaCta` to SPA routes by `setup.step`.** The server's
+   `next_action_url` still points at `/static/*`; now that onboarding (85d) + profile (85a) are
+   ported, the CTA routes `sync_catalog`/`build_dna` → `/app/onboarding` and `confirm_dna` →
+   `/app/profile` via a `<Link>`, falling back to the server URL for any unexpected step. Without
+   this the new page would be unreachable from inside the SPA. Legacy `static/onboarding.html` stays
+   served until the 85g cutover.
+5. **Slim intake, not the full editor.** `OnboardingIdentity` collects only niche (1–3) + audience
+   — the 45-second version. The full identity editor (mission, pillars, tone, hard-nos) already
+   lives on the Profile page (85a `IdentitySection`); duplicating it here would bloat the first-run
+   flow. Both POST the same `/creators/me/identity` (the extra fields are optional server-side).
+
+**Testing:** +3 (connected status + honesty disclaimer + data-gate readiness render; Build-DNA locked
+when no identity; Build-DNA unlocked when identity already on file). Verified: eslint 0, `tsc -b` +
+build clean, **vitest 25/25**. No Python touched (legacy `static/onboarding.html` still served until
+85g; backend Layer 0 unaffected).
+
+---
+
+## 2026-06-18 — Issue 85c: Dashboard → React (link/upload, video table, live status)
+
+**What was built:** Ported `static/index.html` to a React `Dashboard` page on the 85a foundation
+(`pages/Dashboard.tsx` + `components/dashboard/*`), in the `docs/UI.md` design system. Route added
+at `/app/dashboard` (protected + chrome); the SPA catch-all now lands on `/dashboard` (the natural
+home) and the Nav "Dashboard" link flipped from a `/` full-navigation to the SPA route.
+
+**Decisions:**
+1. **Live status via gated `refetchInterval`, not a hand-rolled timer.** The vanilla page ran a
+   bespoke `_pollOnce` loop (manual backoff + visibility checks + a 10-min stuck cap). The React
+   port uses TanStack Query's `refetchInterval` callback, polling `/videos` every 5s **only while a
+   clip-trackable video is `pending`/`running`** and returning `false` once everything settles.
+   `refetchIntervalInBackground` defaults to `false`, so polling pauses when the tab is unfocused —
+   we get the static page's "don't hammer the API from an idle dashboard" property for free.
+   *Source:* https://tanstack.com/query/v5/docs/framework/react/guides/important-defaults +
+   `refetchInterval` reference.
+2. **Per-video clip counts via `useQueries` (N+1 preserved, parallel).** The summary "clips
+   rendered" total and each done-row's action CTA both need that video's clip list. Kept the
+   existing one-fetch-per-done-video shape (parallelised by `useQueries`) rather than inventing a
+   new aggregate endpoint — backend unchanged, and the N is bounded by a creator's done-video
+   count. A batch endpoint is a future optimisation, not a blocker (noted in OFF_COURSE_BUGS).
+3. **Activity panel: inline now, global widget deferred** (user-approved). In-flight ingest status
+   surfaces inline through the gated refetch (status badge updates live). The legacy floating
+   cross-page widget (`activeTasks.js`/`activityPanel.js`, localStorage + SSE resume across full
+   navigations) is a cross-cutting concern best built once as a context provider in `AppChrome`,
+   when more pages exist / at the 85g cutover — porting it now would be speculative.
+4. **Dropped the explicit "stuck for >10 min" warning.** It existed because the vanilla timer could
+   spin forever; TanStack Query's focus-pause + settle-stop makes it far less load-bearing, and the
+   honest `pending`/`running` status badge already communicates state. Conscious minor scope cut,
+   logged here so it isn't silently lost (can return as a `dataUpdatedAt`-driven hint if wanted).
+5. **`/videos/link` stays a raw form-encoded `fetch`**, not the JSON `api()` helper — the endpoint
+   takes `Form(...)` fields. AuthGate already guarantees a session on this page, so the helper's
+   401-redirect isn't needed here. Queue/Generate use `api()`-equivalent POSTs and invalidate the
+   `['videos']` query so the table reflects the new status.
+
+**Testing:** +5 dashboard tests (empty-state hero + honesty disclaimer present; pending→"Queue for
+analysis"; non-clippable linked→upload affordance, no queue CTA; done-with-clips→review link;
+done-no-clips→"Generate clips") + Nav test asserts the now-ported `/app/dashboard` link. Added a
+`danger` variant to the `Badge` primitive (failed ingests). Verified: eslint 0, `tsc -b` + build
+clean, **vitest 22/22**. No Python touched (legacy `static/index.html` still served until 85g;
+backend Layer 0 unaffected).
+
+---
+
+## 2026-06-18 — Issue 85b: Pre-auth + presentational pages → React (login, pricing, walkthrough)
+
+**What was built:** Ported three vanilla pages to React on the 85a foundation, and split the
+single auth-gated layout into composable layout primitives to serve the different auth/chrome
+contexts these pages need.
+
+**Decisions:**
+1. **Layout split — `AuthGate` + `AppChrome`** (replacing the 85a `AppLayout`). `AuthGate` gates
+   auth and redirects to `/app/login` when there's no session; `AppChrome` is the auth-agnostic
+   Nav/Footer shell. This yields four route contexts via nested layout routes (the standard
+   React Router v7 pattern): protected+chrome (profile, chat), protected+bare (walkthrough —
+   focused, no nav), public+chrome (pricing), public+bare (login). *Source:*
+   https://reactrouter.com/start/modes
+2. **`useAuth` no longer redirects on 401** — it resolves to `user: null`. The redirect decision
+   moved into `AuthGate`. This is what lets **pricing render for anonymous visitors** (the
+   load-bearing new capability — a public page can't live behind a hard-redirecting probe). The
+   `api()` 401 hard-redirect target moved `/static/login.html` → `/app/login` (+ Nav logout +
+   Chat's gated link).
+3. **Login ported faithfully** (user's stated design north star) — the Google button stays a real
+   navigation to `/auth/login`, preserving the `?yt=` hint carry. Stripe checkout on pricing
+   keeps the Issue-106 `crypto.randomUUID` idempotency key; its `success_url`/`cancel_url` now
+   point at `/app/pricing`.
+4. **`early-access` descoped** — `static/early-access.html` POSTs to a **non-existent**
+   `/billing/early-access` route and sells **$29/$79 subscriptions** that contradict the current
+   minutes-pack model. It's an orphaned funnel; logged in `OFF_COURSE_BUGS.md` for a product
+   decision (delete in 85g or rebuild as a real issue), not ported.
+
+**Testing:** +5 (Walkthrough panel nav + finish side-effect; AuthGate anon-redirect vs
+authed-render via stubbed fetch; pricing renders the grid + sign-in CTA for anon). Verified:
+eslint 0, `tsc -b` + build clean, vitest 17/17. No Python touched (legacy static pages remain
+until the 85g cutover; backend Layer 0 unaffected).
+
+---
+
+## 2026-06-18 — Issue 85: Full UI/UX overhaul to React — foundation (85a) + design system
+
+**What was decided/built (Phase 3 of the issue-workflow; user approved foundation-first
+sequencing + a genuine redesign):** The frontend overhaul is structured as a series of
+shippable issues — **85a foundation**, then page redesigns 85b–85f, then 85g cutover (filed in
+`docs/issues.md`). This entry covers 85a (architecture foundation, built + verified) and the
+design-system direction (applied to the SPA `@theme` + documented in the new `docs/UI.md`).
+
+**Three architecture decisions that change what the 2026-06-17 React pilot built — logged per
+the One Rule (researched live, not from memory):**
+
+1. **Data fetching → TanStack Query v5** (added `@tanstack/react-query`). The pilot hand-rolled
+   `useEffect + fetch + useState`; with ~10 pages sharing auth/balance/cached server state that
+   is the documented anti-pattern. `useAuth` is now a `useQuery` so the layout nav and each page
+   share ONE cached `/auth/me` + `/billing/balance` instead of refetching per mount.
+   *Ruled out:* SWR (Next.js-skewed), RTK Query (Redux-tied), staying hand-rolled.
+   *Source:* https://tanstack.com/query/v5/docs/framework/react/comparison ,
+   https://tanstack.com/query/v5/docs/framework/react/guides/migrating-to-v5
+
+2. **Routing → React Router v7 Data Mode** (`createBrowserRouter` + `RouterProvider`), replacing
+   the pilot's declarative `<BrowserRouter><Routes>`. Data Mode is the current default for an
+   auth-gated, shared-layout client SPA: a layout route (`AppLayout`) owns the persistent
+   Nav/Footer + auth gate via `<Outlet/>`; the per-page Nav/Footer duplication is gone.
+   *Ruled out:* declarative mode (still valid, no longer the recommended default), Framework
+   mode (no server framework here). *Source:* https://reactrouter.com/start/modes
+
+3. **SSE → a standalone `useTaskStream` hook bridging to the query layer**, not SSE-inside-a-query
+   (queries are promise-based; SSE is a persistent connection — intentionally not a TanStack
+   Query feature). The hook owns the EventSource lifecycle with guaranteed unmount cleanup.
+   *Source:* https://github.com/TanStack/query/discussions/418
+
+   **Testing:** added React Testing Library + jsdom on the existing Vitest (standard 2026 stack);
+   6 new tests lock the SSE state machine/cleanup and the Nav SPA-vs-static link split.
+
+**Design system (new `docs/UI.md`, applied to `frontend/src/index.css` `@theme`):** Evolve — not
+abandon — the dark-indigo-Linear look, with three pivots: (1) a warmer **OKLCH** palette (hue-285
+neutrals, warmer violet accent), (2) a **player-first clip experience** (applied in the dashboard/
+review page issues), (3) honest **three-tier "fit with your channel style" confidence badges**
+(never a virality score — the visible form of the `CLAUDE.md` honesty constraint, and the
+differentiator vs. Opus Clip's opaque score). System: Geist Sans + Inter, 8pt spacing, spring
+motion, dark-surface shadows. *Sources:* Linear 2026 refresh; Vercel Geist; Material Design 3
+motion; OKLCH-for-dark-mode (UX Collective, LogRocket); AI-confidence UX (aiuxdesign.guide,
+DesignKey).
+
+**Deliberate staging (not yet applied, to avoid silent visual regressions before QA):** token
+NAMES are preserved so existing utilities keep resolving; only color VALUES moved to OKLCH. The
+existing text/radius metrics and the global body font are unchanged in `@theme` — the refined
+type scale and the Geist UI font are made *available* and adopted per page on port. The SPA
+`@theme` is independent of legacy `static/_design-tokens.css`, so this restyles only the React
+pages (Profile, Chat); vanilla pages are untouched until ported.
+
+**Verification:** frontend `eslint` 0, `tsc -b` + `vite build` clean, `vitest` 12/12 (6 new). No
+Python touched (backend Layer 0 unaffected; CI-authoritative). Live visual QA of the warmer
+palette still pending the running stack + a seeded creator (same caveat as the 2026-06-17 pilot).
+
+---
+
 ## 2026-06-17 — Issue 152: Pro chatbot — gate model, agentic streaming, margin guards
 
 **Context:** Issue 152 adds a conversational, *streaming* assistant for Pro users with

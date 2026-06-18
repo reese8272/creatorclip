@@ -107,7 +107,8 @@ def test_video_status_404_wrong_creator(client):
 
 
 def test_dashboard_includes_polling(client):
-    content = client.get("/").text
+    # Legacy-dashboard content; `/` redirects to the SPA once built (Issue 85g).
+    content = client.get("/static/index.html").text
     # The dashboard schedules an in-progress poll. The 2026-06-08 BLOCKER fix
     # switched from `setInterval` (no cap, no backoff) to a `setTimeout`
     # recursion so we can cap total ticks AND back off when nothing changes.
@@ -117,11 +118,11 @@ def test_dashboard_includes_polling(client):
 
 
 def test_dashboard_polling_calls_status_endpoint(client):
-    content = client.get("/").text
+    content = client.get("/static/index.html").text
     assert "/videos/" in content
     assert "/status" in content
 
 
 def test_dashboard_starts_polling_after_load(client):
-    content = client.get("/").text
+    content = client.get("/static/index.html").text
     assert "startPolling" in content

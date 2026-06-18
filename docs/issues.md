@@ -1729,7 +1729,66 @@ state move fast):**
 ### Issue 85: UI redesign — sleek editing-tool aesthetic (away from "AI-generated website" vibe)
 **Severity**: FEATURE — pre-public-launch polish
 **Depends on**: 84 ✅ (so any UI surfacing of LLM output is informed by the assessment) — soft dep
-**Status**: 🔲 Not started
+**Status**: ✅ Done (2026-06-18) — executed as the React + TS overhaul (strangler-fig). Foundation-first
+sequencing + genuine redesign approved 2026-06-18. **85a–85g: DONE (85g = soft cutover).** Full
+static-file retirement is a tracked staging-verified follow-up.
+
+**Migration breakdown (filed 2026-06-18; each shippable + verifiable on its own):**
+- **85a — Foundation ✅ DONE 2026-06-18**: React Router v7 **Data Mode** (`createBrowserRouter`)
+  + shared `AppLayout` (persistent Nav/Footer + auth gate via `<Outlet/>`); **TanStack Query v5**
+  data layer (`useAuth` → cached `useQuery`); `useTaskStream` SSE hook (lifecycle + cleanup);
+  **React Testing Library** added to Vitest (6 new tests); **design system** documented in
+  `docs/UI.md` + applied to the SPA `@theme` (warmer OKLCH dark-Linear palette, confidence-tier
+  + motion + shadow + 8pt tokens); Profile + Chat **re-homed** onto the shared shell. Verified:
+  eslint 0, `tsc -b`+build clean, vitest 12/12. (Visual QA of palette pending running stack.)
+- **85b — Pre-auth + presentational ✅ DONE 2026-06-18**: ported **login** (faithful; OAuth button
+  stays a real nav, `?yt=` carried), **pricing** (public-or-authed — renders the grid for anon;
+  Stripe checkout + `crypto.randomUUID` intent preserved, URLs → `/app/pricing`), **walkthrough**
+  (5-panel first-run, keyboard nav). Split `AppLayout` → `AuthGate` + `AppChrome` (four route
+  contexts); `useAuth` now 401→null (redirect moved to `AuthGate`); `api()`/Nav/Chat login+pricing
+  targets → `/app/*`. **`early-access` descoped** — dead `/billing/early-access` endpoint +
+  subscription tiers that contradict the minutes model (OFF_COURSE_BUGS; product decision in 85g).
+  Verified: eslint 0, build clean, vitest 17/17 (+5).
+- **85c — Dashboard ✅ DONE 2026-06-18** (`static/index.html` → `pages/Dashboard.tsx` at
+  `/app/dashboard`): summary cards, YouTube-analytics panel, link-a-video form, video table with
+  per-row Queue/Generate/review/Titles actions + the Issue-139 upload affordance, empty-state hero,
+  trial + low-balance + DNA-CTA banners. **Live status via gated TanStack `refetchInterval`**
+  (replaces the hand-rolled poll loop; pauses when the tab is unfocused). Per-video clip counts via
+  `useQueries`. **Activity panel: inline now, global floating widget deferred** (user-approved).
+  SPA catch-all + Nav "Dashboard" now point at the SPA route. Verified: eslint 0, build clean,
+  vitest 22/22 (+5). DECISIONS 2026-06-18.
+- **85d — Onboarding ✅ DONE 2026-06-18** (`static/onboarding.html` → `pages/Onboarding.tsx` at
+  `/app/onboarding`, protected+bare): 5-step flow — connect YouTube, channel data gate (catalog sync
+  with a **live SSE console** + gated data-gate poll), optional slim identity intake (niche + audience,
+  unlocks the next step), DNA build (**live SSE console** + brief-ready poll), confirm (→ profile).
+  Reuses `useTaskStream` for both consoles. Preserved the Issue-100 identity gate on DNA build.
+  Dashboard `DnaCta` rewired to SPA routes (`sync_catalog`/`build_dna` → onboarding, `confirm_dna` →
+  profile). Verified: eslint 0, build clean, vitest 25/25 (+3). DECISIONS 2026-06-18.
+- **85e — Insights + Analysis ✅ DONE 2026-06-18** (`static/insights.html` → `pages/Insights.tsx` at
+  `/app/insights`; `static/analysis.html` → `pages/Analysis.tsx` at `/app/analysis`). Insights:
+  channel snapshot, DNA snapshot, sortable top/bottom performers with per-row AI analyze + save,
+  upload windows, improvement brief (SSE log + gated poll), saved insights. Analysis: free-form
+  video-analysis (token-streamed prose) + four `?video_id=`-gated features — Title Optimizer, Hook
+  Analyzer, Chapter Markers, Thumbnail Concepts. New **`useTaskResult`** hook (token/step/done-payload
+  SSE) + `onToken`/`onStep` on the stream layer + `useStreamAction` helper. Nav + dashboard links
+  rewired to the SPA routes. Verified: eslint 0, build clean, vitest 29/29 (+4). DECISIONS 2026-06-18.
+- **85f — Review / Editor ✅ DONE 2026-06-18** (`static/review.html` + `static/editor.js` →
+  `pages/Review.tsx` + `components/review/*` at `/app/review`). **Player-first redesign** (replaces
+  the Issue-136 icon-rail + slide-out drawer): clip player + Keep/Drop/Skip/Trim + tag feedback lead;
+  transcript editor alongside; Why-this-clip / Caption style / Clean pass as collapsible sections.
+  Full clip-queue nav. Transcript editor faithfully reimplemented (drag-select → `.ed-word` index
+  snapping, cuts in state + localStorage, merge/undo, apply → poll → confirm swap). New
+  `useCleanedUriPoll` hook (clean + edit share it). All nav + dashboard review links flipped to the
+  SPA route. Verified: eslint 0, build clean, vitest 32/32 (+3). DECISIONS 2026-06-18.
+- **85g — Cutover ✅ DONE 2026-06-18 (soft)**: `main.py` `/` now **redirects to `/app/dashboard`**
+  when the SPA bundle is built (`_SPA_BUILT` gate; legacy index still boots without a build) — the
+  React app is the primary surface. Deleted orphaned `early-access.html`. Root tests made flip-aware
+  (`skipif(_SPA_BUILT)`, mirroring `test_spa_serving`); legacy-content `/` assertions repointed to
+  `/static/index.html` (behavior-preserving, robust whether or not the integration job builds the
+  bundle). **Deferred follow-up (staging-verified):** delete/redirect the remaining `static/*.html`
+  (keep tos/privacy), repoint backend `next_action` URLs (`routers/insights.py`, `routers/videos.py`)
+  to `/app/*`, the global activity-panel widget, and a React marketing hero if/when public. DECISIONS
+  2026-06-18.
 
 **What**: User flagged that current static pages (`static/index.html`,
 `static/onboarding.html`, `static/profile.html`, `static/review.html`,
@@ -1753,15 +1812,17 @@ contributor to that vibe and should be reworked in this issue.
 - Component-library candidates if a framework is adopted.
 
 **Acceptance criteria**:
-- [ ] Phase 1: industry references collected; framework-vs-vanilla DECISIONS entry
-- [ ] Design system documented (typography, spacing, color, motion) in `docs/UI.md`
-- [ ] Review surface redesigned to the chosen player-first / timeline-first shape
-- [ ] Profile + onboarding + insights surfaces reworked to the design system
-- [ ] Identity intake form (Issue 83) reworked in the new aesthetic
-- [ ] No regression in the structural honesty test (the AutoClip predicts-fit
-      disclaimer must remain visible per `CLAUDE.md`)
-- [ ] Mobile-responsive baseline (90% of YouTubers check phone first)
-- [ ] All a11y basics: keyboard navigation, focus rings, contrast AA on body text
+- [x] Phase 1: industry references collected; framework-vs-vanilla DECISIONS entry (2026-06-17 stack + 2026-06-18 foundation/design-system)
+- [x] Design system documented (typography, spacing, color, motion) in `docs/UI.md` (2026-06-18, Issue 85a)
+- [x] Review surface redesigned to the chosen player-first / timeline-first shape (85f — player-first 2-col, collapsible tools)
+- [x] Profile + onboarding + insights surfaces reworked to the design system (Profile re-homed 85a; onboarding 85d; insights + analysis 85e)
+- [x] Identity intake form (Issue 83) reworked in the new aesthetic — full editor on Profile (85a `IdentitySection`) + slim intake in onboarding (85d `OnboardingIdentity`)
+- [x] No regression in the structural honesty test — `DisclaimerBand` / honesty copy on every ported
+      page (asserted in each page's vitest); legacy static honesty tests untouched
+- [x] Mobile-responsive baseline — responsive Tailwind throughout (auto-fit/auto-fill grids, `lg:`
+      breakpoints that stack on narrow viewports; review is 2-col→1-col)
+- [x] All a11y basics — `focus-visible` rings on the Button/input primitives, `aria-label`/`aria-pressed`/
+      `aria-expanded` on controls, OKLCH palette tuned for AA body contrast (`docs/UI.md`)
 
 ---
 

@@ -1,0 +1,134 @@
+import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { api, ApiError } from '@/lib/api'
+import { Panel } from '@/components/insights/InsightsPanel'
+import type { Performer, PerformerInsight } from '@/types'
+
+type SortMode = 'score-desc' | 'score-asc' | 'title'
+
+function sortPerformers(rows: Performer[], mode: SortMode): Performer[] {
+  const sorted = rows.slice()
+  if (mode === 'title') {
+    return sorted.sort((a, b) =>
+      String(a.title || a.youtube_video_id || '').localeCompare(
+        String(b.title || b.youtube_video_id || ''),
+      ),
+    )
+  }
+  const dir = mode === 'score-asc' ? 1 : -1
+  return sorted.sort((a, b) => {
+    const sa = a.performance_score
+    const sb = b.performance_score
+    if (sa == null && sb == null) return 0
+    if (sa == null) return 1 // unscored rows always sort last
+    if (sb == null) return -1
+    return (sa - sb) * dir
+  })
+}
+
+// One performer row owns its own AI-analysis lifecycle (analyze → show → save).
+function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [label, setLabel] = useState('Analyze')
+  const [analysis, setAnalysis] = useState<{ id: string; content: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  async function analyze() {
+    setBusy(true)
+    setLabel('Analyzing…')
+    setError(null)
+    try {
+      const data = await api<PerformerInsight>('/creators/me/insights/analyze-performer', {
+        method: 'POST',
+        body: { video_id: p.video_id, performer_kind: kind },
+      })
+      setAnalysis({ id: data.id, content: data.content })
+      setLabel('Analyzed ✓')
+    } catch (e) {
+      setBusy(false)
+      setLabel('Retry')
+      setError(e instanceof ApiError ? e.message : 'Analysis failed — try again.')
+    }
+  }
+
+  async function save() {
+    if (!analysis) return
+    await api(`/creators/me/insights/save/${analysis.id}`, { method: 'POST' }).catch(() => {})
+    setSaved(true)
+    queryClient.invalidateQueries({ queryKey: ['saved-insights'] })
+  }
+
+  const score = p.performance_score != null ? p.performance_score.toFixed(0) : '—'
+  return (
+    <div className="grid grid-cols-[1fr_auto_auto_auto] items-start gap-3 border-b border-default py-3 last:border-b-0">
+      <div className="min-w-0">
+        <div className="truncate text-sm text-fg">{p.title || p.youtube_video_id}</div>
+        {error && <div className="mt-2 text-xs text-danger">{error}</div>}
+        {analysis && (
+          <div className="mt-2 text-xs leading-relaxed text-muted">
+            {analysis.content}{' '}
+            {!saved ? (
+              <button onClick={save} className="ml-1 text-accent hover:text-accent-hover">
+                ★ Save
+              </button>
+            ) : (
+              <span className="ml-1 text-success">★ Saved</span>
+            )}
+          </div>
+        )}
+      </div>
+      <span className="font-mono text-xs uppercase text-subtle">{p.kind}</span>
+      <span className="text-right font-mono text-sm font-medium text-accent">{score}</span>
+      <button
+        onClick={analyze}
+        disabled={busy && label === 'Analyzing…'}
+        className="whitespace-nowrap rounded-md border border-strong px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-accent disabled:opacity-50"
+      >
+        {label}
+      </button>
+    </div>
+  )
+}
+
+export function PerformerPanel({
+  kind,
+  title,
+  sub,
+  performers,
+}: {
+  kind: 'top' | 'bottom'
+  title: string
+  sub: string
+  performers: Performer[]
+}) {
+  const [mode, setMode] = useState<SortMode>('score-desc')
+  const sorted = useMemo(() => sortPerformers(performers, mode), [performers, mode])
+
+  const aside = (
+    <label className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs text-muted">
+      Sort
+      <select
+        value={mode}
+        onChange={(e) => setMode(e.target.value as SortMode)}
+        aria-label={`Sort ${title}`}
+        className="rounded-sm border border-strong bg-bg px-2 py-0.5 text-xs"
+      >
+        <option value="score-desc">Score: high → low</option>
+        <option value="score-asc">Score: low → high</option>
+        <option value="title">Title: A → Z</option>
+      </select>
+    </label>
+  )
+
+  return (
+    <Panel title={title} sub={sub} aside={aside}>
+      {sorted.length === 0 ? (
+        <div className="text-sm italic text-subtle">Build your DNA to surface this list.</div>
+      ) : (
+        sorted.map((p) => <PerformerRow key={p.video_id} p={p} kind={kind} />)
+      )}
+    </Panel>
+  )
+}
