@@ -53,12 +53,11 @@ def upgrade() -> None:
     )
     op.create_index("ix_chat_conversations_creator_id", "chat_conversations", ["creator_id"])
 
-    # create_type=False: we create the type explicitly below, so create_table
-    # must NOT also emit CREATE TYPE for the column (that double-create is what
-    # raised DuplicateObject "type chat_role_enum already exists").
-    chat_role = sa.Enum("user", "assistant", name="chat_role_enum", create_type=False)
-    sa.Enum("user", "assistant", name="chat_role_enum").create(op.get_bind(), checkfirst=True)
-
+    # chat_role_enum is used by only this one table, so let create_table emit the
+    # single CREATE TYPE (plain sa.Enum, no explicit .create()) — the established
+    # repo pattern (cf. video_kind_enum / ingest_status_enum in 0001). The earlier
+    # explicit .create() on top of this was the second CREATE TYPE that raised
+    # DuplicateObject.
     op.create_table(
         "chat_messages",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
@@ -68,7 +67,7 @@ def upgrade() -> None:
             sa.ForeignKey("chat_conversations.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("role", chat_role, nullable=False),
+        sa.Column("role", sa.Enum("user", "assistant", name="chat_role_enum"), nullable=False),
         sa.Column("content", sa.Text, nullable=False),
         sa.Column("tokens_in", sa.Integer, nullable=True),
         sa.Column("tokens_out", sa.Integer, nullable=True),
