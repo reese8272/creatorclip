@@ -126,13 +126,17 @@ async def test_chat_tools_are_creator_scoped(db_session: AsyncSession):
 
         # get_video_performance: B's video id is unreachable for A.
         perf = json.loads(
-            await execute_tool("get_video_performance", {"video_query": b_youtube_id}, a.id, db_session)
+            await execute_tool(
+                "get_video_performance", {"video_query": b_youtube_id}, a.id, db_session
+            )
         )
         assert perf["found"] is False
 
         # ...but A can reach A's own video.
         own = json.loads(
-            await execute_tool("get_video_performance", {"video_query": "A video"}, a.id, db_session)
+            await execute_tool(
+                "get_video_performance", {"video_query": "A video"}, a.id, db_session
+            )
         )
         assert own["found"] is True
         assert own["title"].startswith("A ")

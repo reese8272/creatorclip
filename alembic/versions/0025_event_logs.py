@@ -27,7 +27,9 @@ def upgrade() -> None:
     op.create_table(
         "event_logs",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+        ),
         sa.Column("source", sa.String(16), nullable=False),
         sa.Column("event", sa.String(64), nullable=False),
         sa.Column("level", sa.String(16), nullable=False, server_default="info"),

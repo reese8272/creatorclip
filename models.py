@@ -909,9 +909,7 @@ class ChatMessage(Base):
         nullable=False,
         index=True,
     )
-    role: Mapped[ChatRole] = mapped_column(
-        sa.Enum(ChatRole, name="chat_role_enum"), nullable=False
-    )
+    role: Mapped[ChatRole] = mapped_column(sa.Enum(ChatRole, name="chat_role_enum"), nullable=False)
     content: Mapped[str] = mapped_column(sa.Text, nullable=False)
     # Token accounting on assistant rows only (NULL on user rows). Summed across
     # the whole tool-loop turn so the cost log reflects real spend per message.

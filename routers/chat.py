@@ -91,7 +91,9 @@ async def _owned_conversation(
     return conv
 
 
-async def _enqueue_reply(creator: Creator, conversation_id: _uuid_mod.UUID) -> tuple[str, str | None]:
+async def _enqueue_reply(
+    creator: Creator, conversation_id: _uuid_mod.UUID
+) -> tuple[str, str | None]:
     """Dispatch the chat_respond task and register SSE ownership."""
     import redis as _redis_pkg
 
@@ -135,9 +137,7 @@ async def post_message(
         session.add(conv)
         await session.flush()  # assigns conv.id
 
-    user_msg = ChatMessage(
-        conversation_id=conv.id, role=ChatRole.user, content=body.message
-    )
+    user_msg = ChatMessage(conversation_id=conv.id, role=ChatRole.user, content=body.message)
     session.add(user_msg)
     conv.updated_at = datetime.now(UTC)
     await session.commit()
@@ -166,7 +166,9 @@ async def regenerate(
 ) -> dict:
     """Re-run the last user turn (drops the previous assistant reply first)."""
     _require_chat_access(creator)
-    conv = await _owned_conversation(_parse_uuid(conversation_id, "conversation_id"), creator, session)
+    conv = await _owned_conversation(
+        _parse_uuid(conversation_id, "conversation_id"), creator, session
+    )
 
     last = await session.scalar(
         select(ChatMessage)
@@ -225,7 +227,9 @@ async def get_messages(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    conv = await _owned_conversation(_parse_uuid(conversation_id, "conversation_id"), creator, session)
+    conv = await _owned_conversation(
+        _parse_uuid(conversation_id, "conversation_id"), creator, session
+    )
     rows = (
         (
             await session.execute(
@@ -241,8 +245,12 @@ async def get_messages(
         "conversation_id": str(conv.id),
         "title": conv.title,
         "messages": [
-            {"id": str(m.id), "role": m.role.value, "content": m.content,
-             "created_at": m.created_at.isoformat()}
+            {
+                "id": str(m.id),
+                "role": m.role.value,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
             for m in rows
         ],
     }
@@ -254,6 +262,8 @@ async def delete_conversation(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    conv = await _owned_conversation(_parse_uuid(conversation_id, "conversation_id"), creator, session)
+    conv = await _owned_conversation(
+        _parse_uuid(conversation_id, "conversation_id"), creator, session
+    )
     await session.delete(conv)  # cascades to messages
     await session.commit()

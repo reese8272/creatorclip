@@ -39,16 +39,25 @@ def upgrade() -> None:
         ),
         sa.Column("title", sa.String(256), nullable=True),
         sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
         ),
         sa.Column(
-            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
         ),
     )
     op.create_index("ix_chat_conversations_creator_id", "chat_conversations", ["creator_id"])
 
-    chat_role = sa.Enum("user", "assistant", name="chat_role_enum")
-    chat_role.create(op.get_bind(), checkfirst=True)
+    # create_type=False: we create the type explicitly below, so create_table
+    # must NOT also emit CREATE TYPE for the column (that double-create is what
+    # raised DuplicateObject "type chat_role_enum already exists").
+    chat_role = sa.Enum("user", "assistant", name="chat_role_enum", create_type=False)
+    sa.Enum("user", "assistant", name="chat_role_enum").create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "chat_messages",
@@ -65,7 +74,10 @@ def upgrade() -> None:
         sa.Column("tokens_out", sa.Integer, nullable=True),
         sa.Column("cache_read", sa.Integer, nullable=True),
         sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
         ),
     )
     op.create_index("ix_chat_messages_conversation_id", "chat_messages", ["conversation_id"])

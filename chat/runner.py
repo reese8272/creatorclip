@@ -100,9 +100,7 @@ async def run_chat_turn(
                 continue
             await aemit(task_id, "step", label=f"tool:{block.name}", stage="chat")
             result = await execute_tool(block.name, block.input, creator_id, session)
-            tool_results.append(
-                {"type": "tool_result", "tool_use_id": block.id, "content": result}
-            )
+            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
         messages.append({"role": "user", "content": tool_results})
 
     logger.info(

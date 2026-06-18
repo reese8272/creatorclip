@@ -167,9 +167,7 @@ async def _get_video_performance(creator_id: uuid.UUID, session: AsyncSession, i
     # Match on youtube id first (exact), then a case-insensitive title fragment.
     # Both branches are creator-scoped.
     video = await session.scalar(
-        select(Video).where(
-            Video.creator_id == creator_id, Video.youtube_video_id == query
-        )
+        select(Video).where(Video.creator_id == creator_id, Video.youtube_video_id == query)
     )
     if video is None:
         video = await session.scalar(

@@ -3050,9 +3050,7 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
 
             history = [{"role": m.role.value, "content": m.content} for m in rows]
 
-            final_text, usage = await run_chat_turn(
-                job_id, cid, channel_title, history, session
-            )
+            final_text, usage = await run_chat_turn(job_id, cid, channel_title, history, session)
 
             if not final_text:
                 await aemit(job_id, "error", stage="chat", message="No reply generated.")
@@ -3074,7 +3072,9 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
         await aemit(job_id, "done", stage="chat", message="Reply complete.")
 
     except Exception as exc:
-        logger.error("_chat_respond_async failed creator=%s conv=%s: %s", creator_id, conversation_id, exc)
+        logger.error(
+            "_chat_respond_async failed creator=%s conv=%s: %s", creator_id, conversation_id, exc
+        )
         await aemit(
             job_id,
             "error",
