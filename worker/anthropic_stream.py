@@ -100,6 +100,54 @@ def stream_and_emit(
     return final_text, usage_dict
 
 
+def stream_message(
+    client: Any,
+    task_id: str,
+    *,
+    model: str,
+    max_tokens: int,
+    system: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> tuple[Any, dict[str, int]]:
+    """Run one streamed Anthropic call and return the FULL final message + usage.
+
+    Unlike ``stream_and_emit`` (which returns only the last text block), this
+    returns the raw ``Message`` so the caller can inspect ``stop_reason`` and any
+    ``tool_use`` blocks to drive a client-side agentic loop (Issue 152). Token
+    ``text_delta``s are still forwarded as ``token`` SSE events; ``tool_use``
+    input deltas are not human-readable text and are dropped by ``_forward_event``.
+
+    The caller emits the terminal ``done`` / ``error`` event — this only forwards
+    intra-stream events for a single LLM round-trip.
+    """
+    stream_kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if tools is not None:
+        stream_kwargs["tools"] = tools
+
+    with client.messages.stream(**stream_kwargs) as stream:
+        for event in stream:
+            try:
+                _forward_event(task_id, event)
+            except Exception as exc:
+                logger.warning("stream_message: forward failed task=%s err=%s", task_id, exc)
+        final = stream.get_final_message()
+
+    usage = final.usage
+    usage_dict = {
+        "input_tokens": getattr(usage, "input_tokens", 0),
+        "output_tokens": getattr(usage, "output_tokens", 0),
+        "cache_read": getattr(usage, "cache_read_input_tokens", 0),
+        "cache_creation": getattr(usage, "cache_creation_input_tokens", 0),
+    }
+    return final, usage_dict
+
+
 def _forward_event(task_id: str, event: Any) -> None:
     """Forward a single SDK event to the progress stream.
 

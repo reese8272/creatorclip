@@ -64,3 +64,7 @@ logs/
 # baselines ARE committed; these machine outputs are not).
 docs/assessment/_machine.json
 docs/assessment/_coverage.xml
+
+# Node / React frontend (Issue: React adoption 2026-06-17)
+node_modules/
+frontend/node_modules/

@@ -449,6 +449,31 @@ def test_insights_page_consumes_new_insights_endpoint():
     assert "/creators/me/improvement-brief" in src
 
 
+def test_insights_performers_have_sort_control():
+    """Issue 149 — the Top/Underperformers panels expose a Sort control
+    (default score high→low; flip to low→high or A–Z) and render via the
+    client-side renderPerfPanel(). Also pins the XSS-escape regression: the
+    performer title/kind/id (YouTube-sourced) must go through escapeHtml in
+    the innerHTML render (Issue 138's sweep had missed this row)."""
+    import pathlib
+
+    src = (pathlib.Path(__file__).parent.parent / "static" / "insights.html").read_text()
+
+    # Sort dropdowns wired to the renderer for both panels.
+    for sel_id in ('id="top-sort"', 'id="bottom-sort"'):
+        assert sel_id in src
+    assert 'onchange="renderPerfPanel(' in src
+    assert 'value="score-desc"' in src and 'value="title"' in src
+    assert "function renderPerfPanel" in src and "function _sortPerf" in src
+
+    # The default option must be score high→low (descending).
+    assert src.index('value="score-desc"') < src.index('value="score-asc"')
+
+    # XSS regression: titles are escaped in the performer row render.
+    assert "escapeHtml(p.title" in src
+    assert "escapeHtml(p.kind)" in src
+
+
 def test_walkthrough_page_exists_with_five_panels():
     """Issue 100 — first-run walkthrough has exactly 5 panels (the
     user-locked structure: what-this-is / DNA / what-a-clip-is /

@@ -28,6 +28,19 @@ FROM base AS builder
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
+# ── Frontend build (Vite SPA → /app/frontend/dist) ───────────────────────────
+# The React + TS app (frontend/, base=/app/) is compiled here and the static
+# bundle is copied into the runtime image. main.py serves it under /app/* and
+# no-ops if the bundle is absent, so this stage is what makes the SPA live in
+# prod. npm ci layer is cached until package-lock.json changes. See
+# docs/DECISIONS.md (2026-06-17).
+FROM node:22-slim AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 # ── Runtime image ─────────────────────────────────────────────────────────────
 FROM base AS runtime
 COPY --from=builder /root/.local /root/.local
@@ -47,6 +60,10 @@ ARG GIT_SHA=dev
 ENV STATIC_VERSION=$GIT_SHA
 
 COPY . .
+# Overlay the compiled SPA on top of the copied source tree. .dockerignore keeps
+# the local frontend/dist + node_modules out of the build context, so this is the
+# only frontend/dist that lands in the image.
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 
 EXPOSE 8000
 

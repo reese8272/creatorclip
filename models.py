@@ -696,6 +696,40 @@ class AuditLog(Base):
     after_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
+class EventLog(Base):
+    """High-volume beta telemetry: UI events (click/submit/navigate) and backend
+    events (http_request, task milestones). Append-only — written ONLY via
+    event_log.record_event(), which redacts PII/tokens at the boundary.
+
+    Distinct from AuditLog (transactional security/data-change trail with
+    before/after state): this is behavioural telemetry for beta analysis, not a
+    compliance audit trail. No RLS policy — it carries no tenant business data,
+    reads are isolated at the application layer (a creator sees only their own
+    rows via /api/logs/me); operators query the table directly. See Issue 151 +
+    docs/DECISIONS.md (2026-06-17)."""
+
+    __tablename__ = "event_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(sa.String(16), nullable=False)  # "ui" | "backend"
+    event: Mapped[str] = mapped_column(sa.String(64), nullable=False, index=True)
+    level: Mapped[str] = mapped_column(sa.String(16), nullable=False, default="info")
+    # Nullable: anonymous/pre-login UI events and system backend events have no creator.
+    creator_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, nullable=True, index=True)
+    request_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    page: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    target: Mapped[str | None] = mapped_column(sa.String(256), nullable=True)
+    status_code: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 
@@ -812,4 +846,82 @@ class CreatorInsight(Base):
     is_saved: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ChatRole(enum.Enum):
+    """Author of a chat message. Mirrors the Anthropic Messages API roles we
+    persist — tool-use / tool-result turns are NOT stored as their own rows;
+    they are reconstructed live inside a single assistant turn (Issue 152)."""
+
+    user = "user"
+    assistant = "assistant"
+
+
+class ChatConversation(Base):
+    """A Pro-chatbot conversation thread, scoped to one creator (Issue 152).
+
+    Carries a direct ``creator_id`` so it sits behind the RLS ``tenant_isolation``
+    policy (migration 0026) AND is filtered explicitly at the app layer in
+    routers/chat.py — defense in depth, mirroring the improvement-brief fix.
+    """
+
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str | None] = mapped_column(sa.String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        "ChatMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    """One user or assistant turn in a conversation (Issue 152).
+
+    Reaches its tenant via the ``conversation_id`` FK to chat_conversations
+    (which is RLS-gated) — child-table pattern, no direct policy, mirroring
+    video_metrics / clip_outcomes in migration 0010. Token counts on assistant
+    rows feed the per-message cost log (the One Rule; honesty on spend).
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("chat_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[ChatRole] = mapped_column(
+        sa.Enum(ChatRole, name="chat_role_enum"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # Token accounting on assistant rows only (NULL on user rows). Summed across
+    # the whole tool-loop turn so the cost log reflects real spend per message.
+    tokens_in: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    tokens_out: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    cache_read: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    conversation: Mapped["ChatConversation"] = relationship(
+        "ChatConversation", back_populates="messages"
     )

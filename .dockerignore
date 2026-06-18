@@ -1,0 +1,32 @@
+# Keep the Docker build context small and free of secrets / build artifacts.
+# (Before this file, `COPY . .` baked .venv, node_modules, and .env into the image.)
+
+# Python
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / frontend — installed and built inside the frontend-build stage instead
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# VCS + local
+.git/
+.github/
+*.log
+logs/
+
+# Secrets — never bake into the image (config comes from runtime env)
+.env
+.env.*
+!.env.example
+
+# Editor / OS cruft
+.DS_Store
+*.png

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re as _re
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
 from starlette.responses import Response as _StarletteResponse
 
+import event_log
 from config import settings
 from db import engine
 from limiter import limiter
@@ -24,16 +26,19 @@ from observability import (
     RequestIDMiddleware,
     configure_logging,
     metrics_response,
+    request_id_ctx,
 )
 from routers import activity as activity_router
 from routers import analysis as analysis_router
 from routers import api_keys as api_keys_router
 from routers import auth as auth_router
 from routers import billing as billing_router
+from routers import chat as chat_router
 from routers import clips as clips_module
 from routers import creators as creators_router
 from routers import improvement as improvement_router
 from routers import insights as insights_router
+from routers import logs as logs_router
 from routers import review as review_router
 from routers import tasks as tasks_router
 from routers import thumbnails as thumbnails_router
@@ -73,6 +78,8 @@ async def lifespan(app: FastAPI):
     # Close the health-check Redis singleton.
     if _health_redis is not None:
         await _health_redis.aclose()
+    # Close the event-log sink pool (Issue 151).
+    await event_log.dispose()
     logger.info("CreatorClip shutdown")
 
 
@@ -108,6 +115,8 @@ app.include_router(review_router.router)
 app.include_router(upload_intel_router.router)
 app.include_router(improvement_router.router)
 app.include_router(insights_router.router)
+app.include_router(logs_router.router)
+app.include_router(chat_router.router)
 app.include_router(thumbnails_router.router)
 app.include_router(titles_router.router)
 app.include_router(tasks_router.router)
@@ -119,6 +128,26 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html")
+
+
+# ── React SPA (incremental migration — docs/DECISIONS.md 2026-06-17) ──────────
+# The Vite build (frontend/dist, base=/app/) is served under /app/*. Hashed
+# assets resolve via the StaticFiles mount; every other /app path returns the
+# SPA's index.html so React Router can own client-side routing. The legacy
+# `static/` pages keep working untouched. The block is a no-op until the SPA is
+# built (`npm --prefix frontend run build`), so a fresh checkout still boots.
+_SPA_DIST = Path(__file__).parent / "frontend" / "dist"
+_SPA_INDEX = _SPA_DIST / "index.html"
+
+if _SPA_INDEX.is_file():
+    app.mount("/app/assets", StaticFiles(directory=_SPA_DIST / "assets"), name="spa-assets")
+
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/{spa_path:path}", include_in_schema=False)
+    async def spa(spa_path: str = "") -> FileResponse:
+        return FileResponse(_SPA_INDEX)
+else:  # pragma: no cover - only hit when the SPA bundle has not been built
+    logger.warning("SPA bundle not found at %s; /app routes disabled until built", _SPA_DIST)
 
 
 # ── Cache-busting middleware (2026-06-07 follow-up to Issue 136) ───────
@@ -180,6 +209,48 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Backend request telemetry (Issue 151) ────────────────────────────────────
+# One event_logs row per real request — the "what was done" half of the
+# click→action trail. Registered before RequestIDMiddleware so that (being
+# inner) the correlation id is already bound when it runs; the creator id is
+# read after call_next, by which point the auth dependency has stashed it on
+# request.state. Static assets, the SPA shell, health/metrics probes, and the
+# activity/logs endpoints themselves are skipped as noise/recursion. record_event
+# is best-effort (never raises); it is awaited so reads are read-after-write
+# consistent — a high-throughput async queue is the documented scale path.
+_LOG_SKIP_PREFIXES = (
+    "/static",
+    "/app",
+    "/metrics",
+    "/health",
+    "/favicon",
+    "/api/activity",
+    "/api/logs",
+)
+
+
+@app.middleware("http")
+async def _log_request_events(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    path = request.url.path
+    if request.method != "OPTIONS" and not path.startswith(_LOG_SKIP_PREFIXES):
+        status = response.status_code
+        await event_log.record_event(
+            source="backend",
+            event="http_request",
+            creator_id=getattr(request.state, "creator_id", None),
+            level="error" if status >= 500 else "warn" if status >= 400 else "info",
+            request_id=request_id_ctx.get(),
+            page=path,
+            target=request.method,
+            status_code=status,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+    return response
+
 
 # Added last → outermost layer, so the correlation id is bound before any other
 # middleware runs and the latency metric spans the whole request (Issue 75f).
