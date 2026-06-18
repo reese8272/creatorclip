@@ -91,7 +91,7 @@ async def _seed_creator(
             creator_id=creator.id,
             version=1,
             brief_text=f"{suffix} channel brief.",
-            status=DnaStatus.active,
+            status=DnaStatus.confirmed,  # get_active() returns the confirmed profile
         )
     )
     await session.commit()
