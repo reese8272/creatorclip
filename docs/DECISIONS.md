@@ -5,6 +5,56 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-17 — Issue 152: Pro chatbot — gate model, agentic streaming, margin guards
+
+**Context:** Issue 152 adds a conversational, *streaming* assistant for Pro users with
+tool-use scoped to the requesting creator's own analytics. Two non-obvious decisions were
+researched live (per the One Rule) rather than recalled.
+
+**1. "Pro" gate = active creator + daily message quota — NOT a subscription, NOT per-message
+minute deduction (in v1).**
+- *What:* Access is gated on **positive `minutes_balance` OR an unexpired free trial**
+  (`routers/chat.py::_require_chat_access`); margin is then protected by a **per-creator daily
+  message quota** (`CHAT_DAILY_MESSAGE_LIMIT`, default 25) via the existing slowapi limiter,
+  plus runner caps (≤`CHAT_MAX_TOOL_ITERATIONS` tool rounds, `CHAT_MAX_TOKENS` output, 8-turn
+  history truncation, mandatory prompt caching). v1 does **not** deduct video-minutes per chat
+  message.
+- *Why:* There is no subscription tier in the product (billing is one-time minute-packs +
+  trial). Research found that **adding a recurring subscription to a one-time-credit product is
+  the wrong move** — the credit-economy SaaS that ship in-app AI (ElevenLabs, Runway,
+  Midjourney) meter AI against the *existing* credit currency, not a new subscription. Charging
+  *video-minutes* per chat turn conflates units (a chat turn is not "a minute of video"), so the
+  daily quota is the cleaner v1 margin guard. Worst-case spend is bounded to ≈ 25 × ~$0.04 ≈
+  **$1/active creator/day** (typical ~$0.40). Per-message token usage is logged on every
+  assistant row so per-message credit metering can be added after 30 days of real cost data.
+- *Source/evidence:* industry-standards research (web, 2025-26) — Anthropic pricing page
+  (Sonnet 4.6 $3/$15 per MTok; cache read 0.1×; ~$0.014–0.08/message with tool use); ElevenLabs
+  / Runway / Midjourney credit models; Intercom Fin ($0.99/resolution); Perplexity & ChatGPT
+  usage caps; LeanOps token-runaway report (agentic loops burn 3–30× a plain turn → cap tool
+  iterations).
+
+**2. Streaming WITH client-side tools = manual agentic loop, not the SDK tool-runner.**
+- *What:* `chat/runner.py` runs the SDK-documented manual loop — `messages.stream()` →
+  `get_final_message()` → if `stop_reason == "tool_use"`, execute the creator-scoped tools
+  locally, append `tool_result`, loop. Each blocking streamed round-trip runs in
+  `asyncio.to_thread`; tool execution stays in async land so it can touch the DB. New
+  `worker/anthropic_stream.py::stream_message` returns the full final message (the existing
+  `stream_and_emit` returns only text, which can't drive a tool loop).
+- *Why:* The SDK `beta_tool` tool-runner hides the loop and returns whole messages — it can't
+  give us per-iteration token streaming over SSE, per-call per-creator isolation, or per-call
+  token logging. The manual loop is the documented pattern for exactly this (per `/claude-api`
+  python/claude-api/tool-use.md). One model per conversation (no mid-conversation Haiku
+  downgrade) to keep the prompt-cache prefix intact (switching models invalidates the cache).
+- *Source/evidence:* `/claude-api` skill (SDK 0.105.2) — streaming.md, tool-use.md,
+  prompt-caching.md.
+
+**Isolation:** every tool in `chat/tools.py` filters by the worker-injected `creator_id`; the
+model never supplies it. `chat_conversations` is RLS-gated (migration 0026, mirroring 0010) and
+filtered at the app layer; `chat_messages` reaches its tenant via the conversation FK
+(child-table pattern). Pinned by `tests/test_chat_isolation_integration.py`.
+
+---
+
 ## 2026-06-17 — Issue 147: UI/UX cohesion — shared component layer
 
 **The diagnosis (from a 4-agent per-template audit):** the incohesion was **not** missing
@@ -5919,3 +5969,85 @@ scale to a standard z-score at large N.
 
 **Source**: Iglewicz & Hoaglin (1993) "How to Detect and Handle Outliers"; PMC statistical
 methods reference (PMC2789971); Statology modified z-score guide. 2026-06-02.
+
+### 2026-06-17 — Frontend framework: adopt React + TypeScript (Vite + Tailwind + shadcn), incrementally
+
+**What changed**: The frontend moves from hand-authored vanilla HTML/CSS/JS (one
+standalone `.html` per page under `static/`, shared via three CSS partials) to a
+**Vite + React + TypeScript** SPA, styled with **Tailwind** and component primitives in
+the **shadcn/ui** copy-own model. This was the explicitly flagged "review-UI framework"
+DECISIONS candidate in `CLAUDE.md` (Architecture Constraints). The migration is
+**incremental (strangler-fig)**: the SPA is served under `/app/*`, existing `static/`
+pages keep working unchanged, and pages are ported one at a time. The **profile/DNA page
+is the pilot** (first ported page).
+
+**Why**: Three near-term roadmap items are framework-shaped and at/over the scaling limit
+of vanilla MPA: (1) a *streaming* Claude chatbot for Pro users, (2) data-heavy
+logging/analytics dashboards, (3) a high-polish profile/dashboard redesign. The vanilla
+codebase already shows the strain — ~7,660 lines across 12 pages with 300–460 lines of
+inline `<style>` duplicated per page and the nav hand-copied across 7 pages
+(`profile.html` alone is 1,037 lines / 12 fetch calls). Rendering streamed LLM tokens with
+partial-markdown/stop/regenerate in vanilla JS means hand-building a reactive layer (200–400
+LOC per feature). TypeScript (not plain JS) because the ecosystem we're adopting — shadcn,
+TanStack Table, Vercel AI SDK — is TypeScript-first, and the product's defining trait is
+heavy ongoing UI/UX iteration, exactly where a type checker catches refactor breakage at
+compile time instead of at runtime.
+
+**Scope boundaries (where the anti-dependency culture still wins)**: **No SSR / Next.js** —
+the app is authenticated (no SEO need), so a pure static Vite SPA served as files keeps the
+deploy model simple. Backend is untouched: the SPA calls the existing cookie-authed
+`/api`-style endpoints on the same origin. The committed dark "Linear-style" design tokens
+(`static/_design-tokens.css`, Issue 99) are **preserved**, mapped into the Tailwind theme —
+this is a stack change, not a visual redirection. For the pilot we hand-write the few needed
+shadcn-style primitives (Card/Button/Badge) rather than pulling the full shadcn CLI, keeping
+the dependency surface minimal; the full CLI can be adopted later without rework.
+
+**Production topology**: `nginx`/Cloudflare routes `/app/*` → static Vite `dist/`
+(CDN-cacheable), `/api/*` and legacy `/*` → FastAPI. CI gains an `npm run build` step
+emitting `dist/`. On the K8s target this is either a static-serving pod or `dist/` uploaded
+to R2 behind the CDN; FastAPI pods unchanged.
+
+**Source**: industry-standards research (2026-06-17) — Vercel AI SDK streaming-chat docs;
+shadcn/ui (Radix primitives + Tailwind, copy-own model); TanStack Table; Martin Fowler
+Strangler Fig Application pattern; exemplars Cal.com / Resend / Linear / Stripe Dashboard
+(SPA-static + API-server topology). OWASP DOM-XSS Cheat Sheet (2024) for the
+`.textContent`-safe brief renderer carried into the React port.
+
+### 2026-06-17 — Beta event logging: dedicated `event_logs` table, not a separate physical DB or log-shipping stack (Issue 151)
+
+**What changed**: Added a queryable telemetry sink — a single `event_logs` Postgres table
+(migration 0025) written via `event_log.record_event()`. UI events (the existing
+`/api/activity` endpoint, Issue 122) now persist there *in addition to* the rotating
+`app.log` file, and a new `@app.middleware("http")` records one `http_request` row per
+real backend request (the "what was done" half of the click→action trail). Reads go
+through `GET /api/logs/me` (a creator's own events).
+
+**Why this shape (the decisions):**
+- *Table, not a separate physical database (for now).* The user asked for "a database just
+  for logs." For beta scale a dedicated **table** is the pragmatic, queryable choice; a
+  separate physical DB or a log-shipping stack (Loki/ELK) is real ops overhead
+  (provision/migrate/back up/monitor) not justified yet. We split the difference with a
+  `LOGS_DATABASE_URL` setting + a **dedicated SQLAlchemy engine** in `event_log.py`: today
+  it defaults to `DATABASE_URL` (one Postgres, pool-isolated from the request path), and it
+  can be repointed at a separate DB later with zero code change (apply 0025 there too).
+- *No RLS policy on `event_logs`* (unlike tenant tables) — it carries no tenant business
+  data, operators must read across all rows for beta analysis, and anonymous/system events
+  have no creator. Mirrors the `audit_log` RLS exemption (0010). Per-creator isolation is
+  enforced at the application layer in `/api/logs/me` (`WHERE creator_id = :me`). Default
+  privileges from 0010 (`ALTER DEFAULT PRIVILEGES … GRANT … TO creatorclip_app`) cover the
+  app role automatically, so it works under both single-role and the prod role split.
+- *Distinct from `audit_log`* — that is the transactional security/data-change trail
+  (actor/action/before/after); `event_logs` is high-volume behavioural telemetry. Keeping
+  them separate avoids polluting the compliance audit trail with click noise.
+- *Redaction at the boundary is load-bearing*: `_redact()` masks any `extra` key that looks
+  like an email/token/password/cookie/secret, caps key count, truncates strings. Creator is
+  id-only, never email. Unit-tested (`test_event_log.py`); satisfies the `CLAUDE.md` no-PII /
+  no-token-in-logs invariant.
+- *Writes are best-effort and awaited*: `record_event` swallows all exceptions (telemetry
+  must never break the request). It is `await`ed in the request path (read-after-write
+  consistency for tests + the per-creator view) rather than fire-and-forget; the documented
+  **scale path** when request volume grows is an async queue / batched writer / log shipping.
+
+**Source**: industry practice for app telemetry (don't co-mingle high-volume events with the
+primary OLTP path; redact at ingestion) — OWASP Logging Cheat Sheet (no secrets/PII in logs);
+Postgres default-privileges + RLS-exemption pattern already established in this repo (0010).

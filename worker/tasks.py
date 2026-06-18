@@ -23,6 +23,9 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 import db
 from models import (
+    ChatConversation,
+    ChatMessage,
+    ChatRole,
     Clip,
     ClipFeedback,
     ClipOutcome,
@@ -2976,6 +2979,107 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
             "error",
             stage="chapters",
             message="Chapter generation failed — please try again.",
+            exc_type=type(exc).__name__,
+        )
+        raise
+
+
+# ── Pro chatbot (Issue 152) ───────────────────────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=0,  # a chat reply is not worth re-charging tokens on retry
+    name="worker.tasks.chat_respond",
+)
+def chat_respond(self: Task, creator_id: str, conversation_id: str) -> str:
+    """Generate one streamed assistant reply for a conversation (Issue 152).
+
+    The user message is already persisted by the router; this task loads the
+    recent history, runs the agentic tool loop (streaming tokens to the SSE
+    channel keyed on ``self.request.id``), and persists the assistant reply.
+    Not retried — a partial token stream already reached the user, and a retry
+    would double-spend tokens.
+    """
+    run_async(_chat_respond_async(self.request.id, creator_id, conversation_id))
+    return creator_id
+
+
+async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str) -> None:
+    from sqlalchemy import select
+
+    from chat.runner import run_chat_turn
+    from config import settings
+    from worker.progress import aemit
+
+    cid = uuid.UUID(creator_id)
+    conv_uuid = uuid.UUID(conversation_id)
+    history_turns = settings.CHAT_HISTORY_TURNS
+
+    try:
+        async with db.AdminSessionLocal() as session:
+            conv = await session.get(ChatConversation, conv_uuid)
+            if conv is None or conv.creator_id != cid:
+                # Ownership re-check in the worker (defense in depth — the router
+                # already gated). Don't leak whether the id exists.
+                await aemit(job_id, "error", stage="chat", message="Conversation not found.")
+                return
+
+            creator = await session.get(Creator, cid)
+            channel_title = creator.channel_title if creator else None
+
+            # Load the tail of the conversation, oldest-first, capped at
+            # history_turns*2 messages, then drop any leading assistant rows so
+            # the first message sent to Anthropic is a user turn.
+            rows = list(
+                (
+                    await session.execute(
+                        select(ChatMessage)
+                        .where(ChatMessage.conversation_id == conv_uuid)
+                        .order_by(ChatMessage.created_at.desc())
+                        .limit(history_turns * 2)
+                    )
+                ).scalars()
+            )
+            rows.reverse()
+            while rows and rows[0].role is not ChatRole.user:
+                rows.pop(0)
+            if not rows:
+                await aemit(job_id, "error", stage="chat", message="Nothing to respond to.")
+                return
+
+            history = [{"role": m.role.value, "content": m.content} for m in rows]
+
+            final_text, usage = await run_chat_turn(
+                job_id, cid, channel_title, history, session
+            )
+
+            if not final_text:
+                await aemit(job_id, "error", stage="chat", message="No reply generated.")
+                return
+
+            session.add(
+                ChatMessage(
+                    conversation_id=conv_uuid,
+                    role=ChatRole.assistant,
+                    content=final_text,
+                    tokens_in=usage["input_tokens"] + usage["cache_read"],
+                    tokens_out=usage["output_tokens"],
+                    cache_read=usage["cache_read"],
+                )
+            )
+            conv.updated_at = datetime.now(UTC)
+            await session.commit()
+
+        await aemit(job_id, "done", stage="chat", message="Reply complete.")
+
+    except Exception as exc:
+        logger.error("_chat_respond_async failed creator=%s conv=%s: %s", creator_id, conversation_id, exc)
+        await aemit(
+            job_id,
+            "error",
+            stage="chat",
+            message="The assistant hit an error — please try again.",
             exc_type=type(exc).__name__,
         )
         raise

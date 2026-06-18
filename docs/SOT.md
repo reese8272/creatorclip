@@ -26,7 +26,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Auth | Google OAuth 2.0 (YouTube scopes) + server-side session JWT | PyJWT; bcrypt where local creds needed |
 | Token encryption at rest | `cryptography` MultiFernet on token columns | Primary key from `TOKEN_ENCRYPTION_KEY`; optional previous key for zero-downtime rotation |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
-| Frontend | Vanilla HTML/CSS/JS, player-first | No build step. **Review-UI framework is a flagged DECISIONS.md candidate — resolve before Issue 10.** |
+| Frontend | **Migrating: vanilla HTML/CSS/JS → React + TypeScript (Vite, Tailwind v4, shadcn-style components)** | Framework candidate resolved 2026-06-17 (DECISIONS.md). Incremental strangler-fig: SPA served under `/app/*`, legacy `static/` pages unchanged. Profile is the pilot page. Build: `npm --prefix frontend run build` → `frontend/dist/`. The dark Linear design tokens (Issue 99) are mapped into the Tailwind theme. |
 | Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
 | Production deployment | Kubernetes (research pending) | Docker Compose = dev/test only. Production target: EKS / GKE / managed K8s. See `docs/DEPLOYMENT.md`. |
 
@@ -89,6 +89,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
 ├── crypto.py                   # Fernet helpers for token columns
 ├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
+├── event_log.py                # Beta telemetry sink → event_logs table (Issue 151). Isolated engine (LOGS_DATABASE_URL), boundary PII/token redaction, best-effort writes
 ├── clients.py                  # Anthropic singleton, Voyage client, YouTube client factory, storage client
 │
 ├── youtube/
@@ -151,8 +152,15 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── improvement/
 │   └── brief.py                # Content-improvement brief generation
 │
+├── chat/                       # Pro chatbot (Issue 152)
+│   ├── prompt.py               # Cached, honesty-constrained system prompt
+│   ├── tools.py                # 5 creator-scoped tools (DNA/recent videos/video perf/averages/timing) — every query filtered by creator_id
+│   └── runner.py               # Manual agentic streaming loop (stream → tool_use → execute → loop), iteration/token capped
+│
 ├── routers/
-│   ├── activity.py             # POST /api/activity — browser UI event logging (Issue 122)
+│   ├── activity.py             # POST /api/activity — browser UI events → app.log + event_logs (Issue 122/151)
+│   ├── logs.py                 # GET /api/logs/me — creator's own event_logs rows, app-level isolation (Issue 151)
+│   ├── chat.py                 # /api/chat/* — Pro chatbot: gated+quota'd message → SSE stream, list/get/regenerate (Issue 152)
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
 │   ├── videos.py               # Link/upload video, ingestion status
@@ -170,7 +178,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── tasks.py                # Pipeline tasks (ingest → render)
 │   ├── schedule.py             # Beat: profile refresh, token refresh, media purge
 │   ├── progress.py             # Issue 86 — per-task Redis Stream emit/read + SSE slot cap + ownership
-│   └── anthropic_stream.py     # Issue 86 — wraps Anthropic .stream() so tokens flow into progress events
+│   └── anthropic_stream.py     # Issue 86 — wraps Anthropic .stream() so tokens flow into progress events; stream_message() returns full final message for the chat tool loop (Issue 152)
 │
 ├── static/
 │   ├── index.html              # Dashboard
@@ -183,6 +191,21 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── activityPanel.js        # Wave 5 — floating bottom-right widget; reacts to activeTasks.subscribe
 │   ├── activity.js             # Beta-testing UI event tracker: click/submit/navigate → POST /api/activity (Issue 122)
 │   └── analysis.html           # Video performance analysis page (Issue 121)
+│
+├── frontend/                   # React + TS SPA (2026-06-17 adoption; served under /app/*)
+│   ├── index.html              # Vite entry shell
+│   ├── vite.config.ts          # base=/app/, React + Tailwind v4 plugins, @ alias, dev API proxy
+│   ├── package.json            # scripts: dev / build / lint / test (vitest)
+│   ├── dist/                   # build output (gitignored) — `npm --prefix frontend run build`
+│   └── src/
+│       ├── main.tsx / App.tsx  # router (basename /app)
+│       ├── index.css           # Tailwind v4 @theme — maps the Issue 99 design tokens
+│       ├── types.ts            # API response shapes
+│       ├── lib/                # api.ts (typed fetch) · brief.ts (+test) · taskStream.ts (SSE) · utils.ts
+│       ├── hooks/useAuth.ts    # /auth/me + balance bootstrap (mirrors static/auth.js)
+│       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal
+│       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
+│       └── pages/Profile.tsx   # pilot page (port of static/profile.html)
 │
 ├── tests/
 │   ├── conftest.py
@@ -338,6 +361,15 @@ creator_insights                      -- AI per-performer + channel insights (Is
 
 -- clips additions (Issue 119) --
   style_preset: JSONB | None          -- {subtitle, background, captions_enabled}
+
+chat_conversations                    -- Pro chatbot threads (Issue 152)
+  id, creator_id (FK), title, created_at, updated_at
+  -- RLS tenant_isolation policy (migration 0026, mirrors 0010) + app-layer filter
+
+chat_messages                         -- one user/assistant turn (Issue 152)
+  id, conversation_id (FK), role (user|assistant), content,
+  tokens_in, tokens_out, cache_read (assistant rows only — per-message cost log), created_at
+  -- reaches tenant via conversation FK (child-table pattern; no own RLS policy)
 ```
 
 ---

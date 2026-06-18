@@ -27,6 +27,20 @@ class Settings(BaseSettings):
     def database_migration_url(self) -> str:
         return self.DATABASE_MIGRATION_URL or self.DATABASE_URL
 
+    # --- Beta event logging (Issue 151) ---
+    # Dedicated connection string for the high-volume event/telemetry log
+    # (event_logs table). Defaults to DATABASE_URL so beta runs on one Postgres,
+    # but can point at a separate logical/physical database to keep click/request
+    # telemetry off the primary OLTP path. If split out, the 0025 migration must
+    # also be applied there. Toggle off to disable DB persistence entirely
+    # (events still hit the rotating app.log via observability.log_event).
+    LOGS_DATABASE_URL: str | None = None
+    EVENT_LOG_DB_ENABLED: bool = True
+
+    @property
+    def logs_database_url(self) -> str:
+        return self.LOGS_DATABASE_URL or self.DATABASE_URL
+
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str
     OAUTH_REDIRECT_URI: str
@@ -55,6 +69,18 @@ class Settings(BaseSettings):
     # shape as the prior _20250305 (`name: "web_search"`); no call-site
     # changes required to swap. (Issue 84)
     ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20260209"
+    # --- Pro chatbot (Issue 152) ---
+    # Per-creator daily message cap — the load-bearing margin guard. Bounds
+    # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per
+    # active creator/day. Tune from real token logs (DECISIONS 2026-06-17).
+    CHAT_DAILY_MESSAGE_LIMIT: int = 25
+    # Max creator-scoped tool rounds per message before the model is forced to
+    # answer in text. Caps agentic token blow-up (tools burn 3–30× a plain turn).
+    CHAT_MAX_TOOL_ITERATIONS: int = 4
+    # Hard per-reply output ceiling.
+    CHAT_MAX_TOKENS: int = 1500
+    # How many prior turns (user+assistant pairs) of history to send per request.
+    CHAT_HISTORY_TURNS: int = 8
     TRANSCRIPTION_BACKEND: str = "deepgram"
     # Job-level upper bound for a single transcription (Issue 68). A hung provider
     # fails the task after this many seconds (→ Celery retry) instead of stalling

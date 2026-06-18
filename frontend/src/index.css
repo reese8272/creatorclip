@@ -1,0 +1,83 @@
+/* AutoClip SPA Tailwind v4 theme. The dark Linear-style design tokens from
+   static/_design-tokens.css (Issue 99) are preserved verbatim and mapped into
+   Tailwind theme namespaces (color, text, radius, font) so the React port
+   renders identically to the vanilla pages. Spacing uses the default 4px scale,
+   which already matches the project --space ladder. A stack change, not a visual
+   redirection: see docs/DECISIONS.md (2026-06-17). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  /* Surfaces */
+  --color-bg: #0a0a0a;
+  --color-surface: #111111;
+  --color-elevated: #1a1a1a;
+  --color-raised: #1f1f1f;
+
+  /* Borders (border-default / border-strong) */
+  --color-default: #1f1f1f;
+  --color-strong: #2a2a2a;
+
+  /* Text (text-fg / text-muted / text-subtle) */
+  --color-fg: #ededed;
+  --color-muted: #888888;
+  --color-subtle: #666666;
+
+  /* Accent (indigo) */
+  --color-accent: #5e6ad2;
+  --color-accent-hover: #6b7ae8;
+  --color-accent-soft: rgba(94, 106, 210, 0.12);
+  --color-on-accent: #ffffff;
+
+  /* Semantic status */
+  --color-success: #2ecc71;
+  --color-warning: #f39c12;
+  --color-danger: #e74c3c;
+  --color-success-soft: rgba(46, 204, 113, 0.08);
+  --color-success-border: rgba(46, 204, 113, 0.3);
+  --color-danger-soft: rgba(231, 76, 60, 0.08);
+  --color-danger-border: rgba(231, 76, 60, 0.3);
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-2xs: 0.65rem;
+  --text-xs: 0.72rem;
+  --text-sm: 0.82rem;
+  --text-base: 0.9rem;
+  --text-md: 1rem;
+  --text-lg: 1.2rem;
+  --text-xl: 1.6rem;
+  --text-2xl: 2rem;
+
+  /* Radii — 4px lock for dashboard/profile surfaces */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Motion */
+  --ease-snappy: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+
+  h1, h2, h3, h4 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+}

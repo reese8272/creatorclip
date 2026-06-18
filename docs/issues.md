@@ -3444,6 +3444,131 @@ breakage for zero visual gain. Tracked as optional maintainability work, not a c
 
 ---
 
+## Issue 149: Insight sort control (descending default + sort-by)
+
+**Status**: ✅ Done (2026-06-17)
+
+**What**: The Top/Underperformers panels on `insights.html` now expose a **Sort**
+dropdown — default **score high→low**, plus low→high and Title A–Z. Pure client-side
+reorder of already-fetched rows (`renderPerfPanel` / `_sortPerf`); no refetch. Done on the
+vanilla page (insights not yet ported to React — carries over on port).
+
+**Also fixed inline** (off-course, in the rewritten render block): the performer
+**title/kind/id are now `escapeHtml`-escaped** — Issue 138's XSS sweep escaped reflected
+LLM output + saved insights but missed this YouTube-sourced row. Logged in
+`OFF_COURSE_BUGS.md`.
+
+**Acceptance criteria**:
+- [x] Sort dropdown on both performer panels; default descending by score
+- [x] Score asc/desc + Title A–Z; unscored rows always sort last
+- [x] Performer title/kind escaped (XSS regression pinned in `test_static.py`)
+
+---
+
+## Issue 150: OBS live-feed capture — continuous program feed (ToS-clean source)
+
+**Status**: ☐ Planned (concrete) — **extends Issue 95**, requested 2026-06-17
+**Depends on**: 95 (companion app + API-key upload seam already exist)
+
+**Why this matters (the ToS angle):** Downloading a creator's own YouTube video bytes via
+`yt-dlp` is barred by the YouTube **API Services** ToS even for own content — which is why
+the only compliant clip path today is creator-initiated upload (`COMPLIANCE.md` §5, Issue
+139). **Capturing from OBS sidesteps that entirely**: the bytes come from the creator's own
+local capture, never from YouTube's API. This is the strategic "grab the live feed from OBS
+itself, not YouTube" path.
+
+**Scope vs Issue 95:** Issue 95 is the *manual replay-buffer hotkey* model — the streamer
+presses OBS's replay-save and the companion app folder-watches the output dir and uploads
+that one clip. Issue 150 is the *continuous* model: capture the **whole live session** so
+AutoClip can analyze it end-to-end and *auto-suggest* clips from anywhere in the stream (the
+North-Star "knows your channel" loop applied live), not only the moments the creator flagged.
+
+**Approach (concrete):**
+1. **Transport: `obs-websocket` v5** — built into OBS 28+ (no plugin install). The companion
+   app authenticates to the local OBS WebSocket (password from OBS settings, stored in the OS
+   keyring next to the existing API key).
+2. **Continuous capture**: companion app issues `StartRecord` (or taps the configured
+   recording output) at stream start; on `StopRecord` (or a rolling segment boundary) it
+   uploads the session file(s) via the existing API-key endpoint. Prefer **segmented
+   recording** (OBS "Automatic File Splitting", e.g. 10-min chunks) so upload + ingest
+   pipeline during a long stream instead of waiting for the whole session.
+3. **Pipeline reuse**: each uploaded segment enters the normal
+   `ingest → transcribe → build_signals → score` chain; clips land in `/review` exactly like
+   uploaded source — DNA + preference ranking apply unchanged.
+4. **On-demand still supported**: trigger OBS `SaveReplayBuffer` over the same WebSocket so
+   the creator can flag a moment from anywhere (Issue 95's UX, minus the second hotkey).
+
+**Open design questions (resolve in Phase 1 CHECK):**
+- Upload mechanics for long sessions: chunked multipart vs resumable (tus) vs presigned R2
+  PUT direct from the companion app (keeps large bytes off the API pods).
+- Minutes/billing: continuous capture can run hours — confirm the per-minute meter + refund
+  policy still fit, or add a "live session" plan affordance.
+- Privacy/retention: session media follows `SOURCE_MEDIA_RETENTION_HOURS` purge like any
+  upload; confirm no extra exposure (`COMPLIANCE.md`).
+
+**Acceptance criteria**:
+- [ ] Companion app connects to OBS via obs-websocket v5 (auth via keyring)
+- [ ] Continuous/segmented capture uploads session media via the API-key seam
+- [ ] Uploaded segments run the standard ingest→signals→clip pipeline; clips in `/review`
+- [ ] On-demand `SaveReplayBuffer` path retained
+- [ ] Zero YouTube API bytes involved — documented as the ToS-clean source path
+- [ ] Billing + retention behaviour confirmed for long live sessions
+
+---
+
+## Issue 151: Beta logging to a dedicated logs database
+
+**Status**: ◐ In progress (2026-06-17)
+
+**What**: Persist UI + backend events to a dedicated append-only logs store (today they only
+hit the rotating `app.log` file via `observability.log_event` + `/api/activity`, Issue 122).
+Every click / submit / navigation and key backend process gets a queryable row for beta
+analysis. **Hard invariant: no PII, no OAuth tokens, no secrets** ever land in a log row
+(redaction at the boundary; per-creator id only). Dedicated logical store so high-volume
+telemetry never contends with the primary OLTP path.
+
+**Acceptance criteria**:
+- [ ] Dedicated logs table(s) + migration; append-only; indexed for query
+- [ ] Single sink fed by both the UI activity endpoint and backend events
+- [ ] Redaction guard (no email/token/secret) with a test that proves it
+- [ ] Per-creator isolation on reads; admin/query surface
+- [ ] Retention policy documented (COMPLIANCE.md)
+
+---
+
+## Issue 152: Pro chatbot — streaming assistant scoped to the creator's own channel
+
+**Status**: ✅ Done (2026-06-17) — built; CI-authoritative for migration 0026 + isolation integration test
+**Depends on**: 151 (reuse the SSE primitive), Pro tier gating
+
+**What**: An interactive, *streaming* assistant for Pro users that helps them navigate the
+UI and interpret their analytics — like the Analyze feature, but conversational, with
+**tool-use scoped to the requesting creator's own DNA/analytics** (per-creator isolation on
+every tool call). Anthropic streaming reusing the SSE primitive; React chat page.
+
+**Delivered:** `chat/` package (`prompt.py` cached honesty-constrained system prompt;
+`tools.py` 5 creator-scoped tools — DNA / recent videos / video performance / channel
+averages / upload timing; `runner.py` manual agentic streaming loop). New
+`worker/anthropic_stream.stream_message` (full-message return for the tool loop) +
+`worker.tasks.chat_respond`. `routers/chat.py` (gate + daily quota + SSE enqueue + list/get/
+regenerate/delete). Models `ChatConversation`/`ChatMessage` + migration **0026** (RLS on the
+conversation table). React `/app/chat` page reusing `taskStream`. Config:
+`CHAT_DAILY_MESSAGE_LIMIT`/`CHAT_MAX_TOOL_ITERATIONS`/`CHAT_MAX_TOKENS`/`CHAT_HISTORY_TURNS`.
+Gate model + agentic-loop choice recorded in `docs/DECISIONS.md` (2026-06-17).
+
+**Acceptance criteria** (refined in CHECK):
+- [x] Gate = active creator (positive balance OR live trial); non-active → 402 + upgrade affordance
+- [x] Per-creator daily message quota (429 past the cap)
+- [x] Streaming responses; stop/regenerate
+- [x] Tools fetch ONLY the requesting creator's data (isolation integration test — CI)
+- [x] Tool-loop capped (≤4); `max_tokens` + 8-turn history truncation
+- [x] No virality promise; honesty constraint in the system prompt (structural test)
+- [x] Prompt caching engaged + per-message token logging per `/claude-api` best practices
+- [x] Conversation persists server-side; reads scoped to the owning creator
+- [x] React `/app/chat` page; unit suite green (993); ruff + mypy + bandit clean; frontend lint/build/vitest green
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:
@@ -3451,7 +3576,7 @@ Items deferred until the product is live and stable:
 - Vision signals (MediaPipe / face-emotion) — Phase 2
 - Auto-publish to YouTube Shorts (additional OAuth scope)
 - Multi-platform export (TikTok / Reels)
-- Hot-key clipping during live recording / OBS integration
+- Hot-key clipping during live recording / OBS integration → promoted to **Issue 150** (continuous OBS capture)
 - No-auth demo mode (full processing without signup — follows Issue 136 hero)
 - Per-Short mini-editor: left/right arrow to browse Shorts one-by-one with an inline
   crop/clip/cut/subtitle/font tool + a feedback comment box (salvaged from KICKSTART

@@ -54,6 +54,20 @@
       font-size: var(--text-xs);
       color: var(--color-text-subtle);
     }
+    /* Sort control (Issue 149) — pushed to the right of the panel header. */
+    .sort-control {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      white-space: nowrap;
+    }
+    .sort-control select {
+      font-size: var(--text-xs);
+      padding: 2px var(--space-2);
+    }
     .panel-empty {
       color: var(--color-text-subtle);
       font-size: var(--text-sm);
@@ -313,6 +327,13 @@
           <span class="info-icon" tabindex="0"
             data-tooltip="Performance score 0–100: how each video performed relative to your channel average. 50 = average. Weighted: retention (40%), engagement (35%), views (25%). Requires ≥3 videos with metrics.">?</span>
         </span>
+        <label class="sort-control">Sort
+          <select id="top-sort" onchange="renderPerfPanel('top')" aria-label="Sort top performers">
+            <option value="score-desc">Score: high → low</option>
+            <option value="score-asc">Score: low → high</option>
+            <option value="title">Title: A → Z</option>
+          </select>
+        </label>
       </div>
       <div id="top-performers"><span class="loading">Loading…</span></div>
     </div>
@@ -326,6 +347,13 @@
           <span class="info-icon" tabindex="0"
             data-tooltip="Performance score 0–100: how each video performed relative to your channel average. 50 = average. Weighted: retention (40%), engagement (35%), views (25%). Requires ≥3 videos with metrics.">?</span>
         </span>
+        <label class="sort-control">Sort
+          <select id="bottom-sort" onchange="renderPerfPanel('bottom')" aria-label="Sort underperformers">
+            <option value="score-desc">Score: high → low</option>
+            <option value="score-asc">Score: low → high</option>
+            <option value="title">Title: A → Z</option>
+          </select>
+        </label>
       </div>
       <div id="bottom-performers"><span class="loading">Loading…</span></div>
     </div>
@@ -430,28 +458,62 @@
         </div>`
       ).join('');
 
-      // Performers with AI analyze button (Issue 117)
-      const renderPerf = (rows, kind) => {
-        if (!rows || !rows.length) {
-          return '<div class="panel-empty">Build your DNA to surface this list.</div>';
-        }
-        return rows.map(p => {
-          const score = p.performance_score != null ? p.performance_score.toFixed(0) : '—';
-          return `
-          <div class="perf-row" id="perf-${p.video_id}">
+      // Performers with AI analyze button (Issue 117). Sortable client-side
+      // (Issue 149): stash the rows and render via renderPerfPanel so the Sort
+      // dropdowns can reorder without refetching.
+      _perfData.top = data.top_performers || [];
+      _perfData.bottom = data.bottom_performers || [];
+      renderPerfPanel('top');
+      renderPerfPanel('bottom');
+    }
+
+    // ── Performer sort (Issue 149) ──────────────────────────────────────────
+    // Default order is score high→low; the per-panel <select> lets the creator
+    // flip to low→high or A–Z. Pure client-side reorder of already-fetched rows.
+    let _perfData = { top: [], bottom: [] };
+
+    function _sortPerf(rows, mode) {
+      const sorted = rows.slice();
+      if (mode === 'title') {
+        return sorted.sort((a, b) =>
+          String(a.title || a.youtube_video_id || '')
+            .localeCompare(String(b.title || b.youtube_video_id || '')));
+      }
+      const dir = mode === 'score-asc' ? 1 : -1;
+      return sorted.sort((a, b) => {
+        const sa = a.performance_score, sb = b.performance_score;
+        if (sa == null && sb == null) return 0;
+        if (sa == null) return 1;   // unscored rows always sort last
+        if (sb == null) return -1;
+        return (sa - sb) * dir;
+      });
+    }
+
+    function renderPerfPanel(kind) {
+      const el = document.getElementById(kind + '-performers');
+      if (!el) return;
+      const rows = _perfData[kind] || [];
+      if (!rows.length) {
+        el.innerHTML = '<div class="panel-empty">Build your DNA to surface this list.</div>';
+        return;
+      }
+      const sel = document.getElementById(kind + '-sort');
+      const mode = (sel && sel.value) || 'score-desc';
+      el.innerHTML = _sortPerf(rows, mode).map(p => {
+        const score = p.performance_score != null ? p.performance_score.toFixed(0) : '—';
+        // escapeHtml: titles/kind originate from YouTube — never trust them in innerHTML.
+        return `
+          <div class="perf-row" id="perf-${escapeHtml(p.video_id)}">
             <div class="perf-info">
-              <div class="perf-title">${p.title || p.youtube_video_id}</div>
-              <div class="perf-analysis" id="analysis-${p.video_id}" style="display:none"></div>
+              <div class="perf-title">${escapeHtml(p.title || p.youtube_video_id)}</div>
+              <div class="perf-analysis" id="analysis-${escapeHtml(p.video_id)}" style="display:none"></div>
             </div>
-            <span class="perf-kind">${p.kind}</span>
+            <span class="perf-kind">${escapeHtml(p.kind)}</span>
             <span class="perf-stat">${score}</span>
-            <button class="btn-analyze" onclick="analyzePerformer('${p.video_id}','${kind}',this)">Analyze</button>
+            <button class="btn-analyze" onclick="analyzePerformer('${escapeHtml(p.video_id)}','${kind}',this)">Analyze</button>
           </div>
-          `;
-        }).join('');
-      };
-      document.getElementById('top-performers').innerHTML = renderPerf(data.top_performers, 'top');
-      document.getElementById('bottom-performers').innerHTML = renderPerf(data.bottom_performers, 'bottom');
+        `;
+      }).join('');
     }
 
     async function loadTiming() {

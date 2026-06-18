@@ -8,6 +8,48 @@ Updated after every issue closes.
 
 **Active issue**: **Issues 143–147 cleanup sweep COMPLETE** (branch `issue-139-142-sweep`). **143 + 144 + 145 + 146 + 147 — all DONE 2026-06-17.** Remaining: the single **PR #20 → main** merge (one-time direct-to-main per Issue 145), and the queued follow-up **Issue 148** (per-template design-system migration, needs visual QA).
 
+**Last completed (Issue 152 — Pro chatbot, 2026-06-17):** Streaming conversational assistant
+scoped to the creator's own channel. New `chat/` package — `prompt.py` (cached,
+honesty-constrained system prompt), `tools.py` (5 creator-scoped tools: DNA / recent videos /
+video performance / channel averages / upload timing, every query filtered by the
+worker-injected `creator_id`), `runner.py` (manual agentic streaming loop: stream → `tool_use`
+→ execute → loop, capped at `CHAT_MAX_TOOL_ITERATIONS`). New
+`worker/anthropic_stream.stream_message` (full-message return for the loop) +
+`worker.tasks.chat_respond`. `routers/chat.py` — **gate = active creator (positive balance OR
+live trial) + per-creator daily message quota** (no subscription, no per-message minute
+deduction in v1 — research-backed, see DECISIONS), SSE-streamed reply reusing the Issue-86
+`/tasks/{id}/events` channel, list/get/regenerate/delete. Models `ChatConversation` /
+`ChatMessage` + **migration 0026** (RLS on the conversation table, child-table pattern on
+messages). React **`/app/chat`** page reusing `taskStream` (new `subscribeToChatStream`).
+Config: `CHAT_DAILY_MESSAGE_LIMIT`/`CHAT_MAX_TOOL_ITERATIONS`/`CHAT_MAX_TOKENS`/
+`CHAT_HISTORY_TURNS`. **Verified:** ruff + mypy + bandit clean; **993 unit green** (7 new chat
+unit tests — honesty structural, tool-schema, gate, agentic-loop cap); frontend eslint 0 +
+build + vitest 6/6. **CI-authoritative:** migration 0026 + `tests/test_chat_isolation_
+integration.py` (per-creator tool isolation) need real Postgres. Phase 1 used `/claude-api` +
+industry-standards research; gate + agentic-loop decisions in `docs/DECISIONS.md` 2026-06-17.
+
+**Last completed (Issues 149 + 151 + OBS-150 filed, 2026-06-17):** Three of the user's
+"final" beta items. **149 (insight sort) DONE** — Top/Underperformers panels on
+`insights.html` got a Sort dropdown (default score high→low; +low→high, +Title A–Z),
+client-side reorder of fetched rows; fixed an **off-course stored-XSS** inline (performer
+title/kind/id were unescaped in innerHTML — Issue 138's sweep missed this row) → now
+`escapeHtml`-wrapped, pinned in `test_static.py`, logged in OFF_COURSE_BUGS. **151
+(beta logging to DB) DONE** — new `event_logs` table (migration 0025) + `event_log.py` sink
+(isolated engine on `LOGS_DATABASE_URL`, **boundary PII/token redaction**, best-effort
+writes); `/api/activity` now persists UI events (+keeps app.log), a new `http_request`
+middleware logs every backend request (the click→action trail), `GET /api/logs/me` returns
+a creator's own rows (app-level isolation). No RLS (telemetry; mirrors audit_log exemption);
+default-privileges from 0010 cover the app role. Unit tests (redaction) pass; integration
+tests (persist/redact/isolation) are CI-authoritative; **ruff+mypy clean; full unit suite
+986 passed** — that run also fixed a latent bug from the SPA turn (the `/app` HTML routes
+were failing `test_response_models` → marked `include_in_schema=False`). **150 (OBS live
+capture) FILED** as a concrete issue — continuous obs-websocket capture of the whole session
+as the *ToS-clean* clip source (extends Issue 95; sidesteps the YouTube-download bar). **Still
+open: 152 (Pro chatbot)** — brief ready, needs the `/claude-api` skill + build. Docs updated:
+DECISIONS, COMPLIANCE (event-log data class + retention), SOT, issues.md (149/150/151/152).
+
+**Last completed (Frontend framework adoption — React + TS, pilot, 2026-06-17):** Resolved the long-standing "review-UI framework" DECISIONS candidate: adopted **Vite + React + TypeScript + Tailwind v4 + shadcn-style components**, incrementally (strangler-fig). Stood up `frontend/` served by FastAPI under `/app/*` (hashed assets via StaticFiles mount; `/app/{path}` falls back to the SPA shell so React Router owns client routing; legacy `static/` pages untouched and verified non-regressed). The Issue-99 dark Linear design tokens are mapped into the Tailwind `@theme`. **Profile is the pilot page** — full port of `static/profile.html` (DNA card, identity, intake mode, API keys) with the headline fixes: the DNA brief now renders as **real structured HTML** via a `.textContent`-safe parser (was a raw-markdown "wall of asterisks"), and the internal `v3 · active` badge is replaced by a plain **provenance badge** ("Updated <date>", synced/status chips). **Verified:** `npm run build` clean, eslint 0, vitest 6/6 (brief parser incl. an XSS-safety assertion), new `tests/test_spa_serving.py` + `test_static.py` 69/69 green. **Docker/CI wiring DONE (2026-06-17):** Dockerfile gained a `node:22` `frontend-build` stage that `npm ci && npm run build`s the SPA and copies `dist` into the runtime image at `/app/frontend/dist`; added a `.dockerignore` (was none — `COPY . .` had been baking `.venv`/`node_modules`/`.env` into the image); added a `frontend` CI job (eslint + vitest + build). The existing `docker-build` smoke job + `docker-publish` build the SPA automatically (same Dockerfile, `context: .`). Validated: `npm ci` clean + full CI sequence green locally; YAML valid. **Docker image build itself not run locally (no Docker in this env)** — CI's docker-build job is authoritative. **Follow-ups still open:** (1) live visual QA of the rendered page needs the running backend + a seeded DNA; (2) remaining pages still vanilla, ported on demand. See `docs/DECISIONS.md` 2026-06-17.
+
 **Last completed (Issue 147 — UI/UX cohesion, 2026-06-17):** A 4-agent per-template audit found the incohesion was **duplicated components**, not missing tokens — the card concept was redefined 8+ times across pages under different names, stat-cell 3–4×, status-pill 5× in analysis alone. Delivered the foundation: new `static/components.css` shared layer (`.eyebrow`/`.stat-cell`/`.status-pill`/`.callout`/`.stream-output`/`.status-line`/`.input`/`.btn-danger` etc., tokens-only), wired into the 7 core templates; token additions (semantic tints, `--color-on-accent/-on-success`, one `--tracking-eyebrow`); fixed the `.intake-mode-option` `--editor-*`→`--color-*` mismatch; tokenized hardcoded `#000`/`#ffffff`/`rgba()`. Pinned with new `test_static.py` tests; **976 unit green**. `@layer` and the full per-template structural migration deferred to **Issue 148** (needs visual QA). See `docs/DECISIONS.md` 2026-06-17.
 
 **Last completed (Issue 146 — docs consolidation, 2026-06-17):** `docs/` 20 → 17 live + a new `docs/README.md` index (canonical roles untouched). Archived 4 superseded docs to `docs/archive/` (KICKSTART, PRODUCTION_COMMANDS, ISSUE_APPROVED_PLANS, BETA_LAUNCH_RUNBOOK) with ⚠️ banners; salvaged KICKSTART's product "aspirations" → issues backlog and BETA's Google-OAuth closed-beta steps → ACCESS.md. **Deduped a divergent `TOKEN_ENCRYPTION_KEY` rotation** (two procedures → one zero-downtime MultiFernet flow canonical in RUNBOOKS, pointer in DEPLOYMENT). Renamed `other_apps_research.md` → `COMPETITIVE_RESEARCH.md`; removed root `Project Idea.md` (unreferenced KICKSTART dup). OFF_COURSE_BUGS triaged. See `docs/DECISIONS.md` 2026-06-17.
