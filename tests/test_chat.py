@@ -66,9 +66,7 @@ def test_chat_access_gate():
     # Positive balance → allowed.
     _require_chat_access(_creator(balance=10, trial_ends_at=None))
     # Zero balance but live trial → allowed.
-    _require_chat_access(
-        _creator(balance=0, trial_ends_at=datetime.now(UTC) + timedelta(days=3))
-    )
+    _require_chat_access(_creator(balance=0, trial_ends_at=datetime.now(UTC) + timedelta(days=3)))
     # Zero balance + expired trial → 402.
     with pytest.raises(HTTPException) as exc:
         _require_chat_access(
@@ -152,7 +150,10 @@ async def test_runner_caps_tool_iterations(_patch_runner):
     # Model "never stops" calling tools — the loop must still terminate.
     def _always_tool(client, task_id, **kwargs):
         calls["stream"] += 1
-        return (_msg("tool_use", [_tool_block("get_channel_dna", {}, f"tu_{calls['stream']}")]), _usage())
+        return (
+            _msg("tool_use", [_tool_block("get_channel_dna", {}, f"tu_{calls['stream']}")]),
+            _usage(),
+        )
 
     monkeypatch.setattr("chat.runner.stream_message", _always_tool)
 
