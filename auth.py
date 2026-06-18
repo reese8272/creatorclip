@@ -29,6 +29,26 @@ def decode_session_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[_ALGORITHM])
 
 
+def creator_id_from_cookie(request: Request) -> uuid.UUID | None:
+    """Best-effort: resolve the creator UUID from the session cookie's signed JWT
+    ``sub``, with NO database lookup.
+
+    For attribution-only paths (telemetry — ``record_activity`` and the
+    http_request middleware, Issue 151) that run outside the dependency graph and
+    therefore can't take a ``Depends(get_session)``-backed
+    ``get_current_creator``. The JWT signature is the trust boundary (a forged
+    cookie fails to decode); we only need the id, not a verified Creator row.
+    Returns ``None`` for no/invalid cookie. (Issue 152 follow-up fix.)
+    """
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    try:
+        return uuid.UUID(decode_session_token(token)["sub"])
+    except (jwt.PyJWTError, ValueError, KeyError):
+        return None
+
+
 async def get_current_creator(
     request: Request,
     session: AsyncSession = Depends(get_session),
