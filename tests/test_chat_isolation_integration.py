@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from chat.tools import execute_tool
@@ -103,10 +103,10 @@ async def test_chat_tools_are_creator_scoped(db_session: AsyncSession):
     a = await _seed_creator(db_session, suffix="A", views=100, activity_hour=9)
     b = await _seed_creator(db_session, suffix="B", views=999_999, activity_hour=20)
 
-    # B's youtube id — A must NOT be able to reach it.
-    b_video = await db_session.scalar(
-        Video.__table__.select().where(Video.creator_id == b.id).limit(1)
-    )
+    # B's youtube id — A must NOT be able to reach it. Use an ORM select so
+    # scalar() returns the Video object (a Core .__table__.select() would yield
+    # the first column — the id UUID — not the row).
+    b_video = await db_session.scalar(select(Video).where(Video.creator_id == b.id).limit(1))
     b_youtube_id = b_video.youtube_video_id
 
     try:
