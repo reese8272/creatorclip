@@ -3726,24 +3726,22 @@ rows but no `ui` rows.
 
 ---
 
-## Issue 156: [SEV2] Restore global active-tasks progress panel (+ fix stale Walkthrough copy)
+## Issue 156: [SEV3] Fix stale Walkthrough "activity panel" copy (panel rebuild → Issue 160)
 
-**Status**: ☐ Not started
+**Status**: ✅ Done (2026-06-18) — pending deploy of `frontend/dist`
 
-**What**: The static app mounted a persistent "activity panel" (`activeTasks.js` +
-`activityPanel.js`) that tracked every in-flight worker job (catalog sync, DNA build,
-improvement brief, video analysis) via `/tasks/{id}/events` SSE and **followed the user across
-pages**. The SPA chrome (`AppChrome.tsx`) renders only Nav + Outlet + Footer; each job's live
-progress is now bound to its originating page's local `useTaskStream`, so navigating away
-mid-job loses all progress visibility (the job continues server-side). The Walkthrough step-04
-copy (`Walkthrough.tsx:107-110`) still *describes* this panel ("the activity panel… follows
-you"), so the onboarding copy now references a feature that doesn't exist.
+**What**: Walkthrough step-04 told users "the **activity panel** in the bottom right shows live
+progress… the panel follows you" — a feature the static app had (`activeTasks.js` +
+`activityPanel.js`) but the React cutover dropped. Rather than rush the panel rebuild into this
+batch, the false copy is corrected to match the shipped reality (the dashboard shows per-row
+status and auto-refreshes), and the cross-page panel itself is promoted to its own focused issue
+(**160**) — the 3-slot SSE cap (`MAX_CONCURRENT_SSE_PER_CREATOR=3`) makes it a
+single-EventSource-owner refactor, not a drop-in. Descope recorded in `docs/DECISIONS.md`.
 
 **Acceptance criteria**:
-- [ ] A global active-tasks store + persistent panel (or nav indicator) in `AppChrome` lists `pending`/`running` jobs and streams live progress cross-page
-- [ ] Reuses `useTaskStream('/tasks/{id}/events')`; no new endpoint
-- [ ] Walkthrough step-04 copy matches the shipped reality
-- [ ] `frontend` lint/build/vitest green
+- [x] Walkthrough step-04 copy matches the shipped reality (no promised panel)
+- [x] Panel rebuild re-filed as Issue 160 with the architectural constraint captured
+- [x] `frontend` lint/build/vitest green
 
 ---
 
@@ -3802,6 +3800,36 @@ pre-existing, surfaced by the cutover). Triage each: wire it into the SPA or ret
 - [ ] Each item above either wired into the SPA or retired with a one-line `DECISIONS.md` rationale
 - [ ] No orphaned router endpoint left undocumented
 - [ ] Tests/`/assess` Layer 0 green; no coverage regression
+
+---
+
+## Issue 160: [SEV2] Cross-page active-tasks panel (single-owner SSE store)
+
+**Status**: ☐ Not started — carved out of Issue 156 (2026-06-18)
+
+**What**: Restore the cross-page background-job visibility the static app had (a persistent
+bottom-right "activity panel" that followed the user across pages, streaming catalog sync / DNA
+build / improvement brief / video analysis via `/tasks/{id}/events`). The React cutover bound
+each job's progress to its originating page's local `useTaskStream`, so navigating away mid-job
+loses live progress (the job continues server-side; status stays visible via the dashboard
+`/videos` poll, so this is degraded, not broken).
+
+**Design constraint (load-bearing):** `routers/tasks.py:48` caps SSE at
+`MAX_CONCURRENT_SSE_PER_CREATOR = 3`. A panel that streams every active task *plus* a page
+streaming the current task would exhaust the cap. So the global store must be the **single
+EventSource owner per task**, and the existing streaming sites must read progress *from the
+store* rather than opening their own connection. In an SPA an in-memory React context naturally
+"follows the user" across client-side navigation — the old `localStorage` cross-page machinery
+(`static/activeTasks.js`) is unnecessary (it existed only because the static app full-reloaded
+on every navigation).
+
+**Acceptance criteria**:
+- [ ] A global `ActiveTasks` context: single `EventSource` per registered task; auto-prunes on `done`/`error`
+- [ ] Persistent panel in `AppChrome` (collapsed badge → expand to per-task progress); hidden when idle
+- [ ] The 4 streaming sites (Onboarding catalog+DNA, profile `DnaCard`, Insights `ImprovementBrief`, Analysis) register tasks and read progress from the store — no double-subscribe (respects the 3-slot cap)
+- [ ] Their existing on-`done` behaviors preserved (e.g. Onboarding query invalidations)
+- [ ] Walkthrough step-04 copy updated to describe the panel
+- [ ] Tests cover the store lifecycle + panel render; `frontend` lint/build/vitest green
 
 ---
 

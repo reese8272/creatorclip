@@ -107,8 +107,9 @@ const PANELS: Panel[] = [
           ))}
         </ul>
         <p className="text-sm leading-relaxed text-muted">
-          When something's in flight, the <strong className="text-fg">activity panel</strong> in the
-          bottom right shows live progress. You can navigate anywhere; the panel follows you.
+          When something's in flight, your <strong className="text-fg">dashboard</strong> shows its
+          status and refreshes on its own — you don't have to sit and watch. Come back any time and
+          the latest state is waiting for you.
         </p>
       </>
     ),

@@ -6356,3 +6356,26 @@ through `GET /api/logs/me` (a creator's own events).
 **Source**: industry practice for app telemetry (don't co-mingle high-volume events with the
 primary OLTP path; redact at ingestion) — OWASP Logging Cheat Sheet (no secrets/PII in logs);
 Postgres default-privileges + RLS-exemption pattern already established in this repo (0010).
+
+---
+
+## 2026-06-18 — Descope: cross-page active-tasks panel split from Issue 156 → Issue 160
+
+**What changed:** The Issue 85 regression audit filed Issue 156 as "restore the global
+active-tasks panel + fix the stale Walkthrough copy." During CHECK we split it: the trivial
+false-copy fix ships under 156; the panel rebuild is promoted to a dedicated **Issue 160**.
+
+**Why:** `routers/tasks.py` caps live SSE at `MAX_CONCURRENT_SSE_PER_CREATOR = 3`. A panel that
+streams every active task alongside a page streaming the current task would exhaust that cap, so
+the correct design is a single-EventSource-owner store with the ~4 existing streaming sites
+refactored to read from it — a careful refactor of high-value onboarding/insights/analysis
+flows, not a drop-in. Rushing it inside a batched regression sweep risked those flows. Splitting
+keeps the batch (153–159) safe and gives the panel its own focused issue-workflow.
+
+**Source/evidence:** `routers/tasks.py:48` (`MAX_CONCURRENT_SSE_PER_CREATOR = 3`); the
+Redis-Stream SSE consumer (`_event_stream`, cursor / `Last-Event-ID`) confirms multiple
+subscribers are correct but each consumes a slot. SPA client-side routing keeps an in-memory
+context alive across navigation, making the old `static/activeTasks.js` localStorage cross-page
+machinery unnecessary.
+
+**Date:** 2026-06-18
