@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { Footer } from '@/components/Footer'
 
 // Port of static/walkthrough.html — the first-run explainer (5 panels). Local
 // only: no API calls until "Set up my AutoClip", which marks it seen and routes
@@ -217,6 +218,12 @@ export function Walkthrough() {
           AutoClip predicts fit with your style and audience — it does not promise virality.
           Recommendations are estimates grounded in your own data, not guarantees.
         </p>
+      </div>
+
+      {/* ToS/Privacy footer — bare first-run flow still carries the OAuth-verification
+          links (Issue 153); this route sits outside AppChrome, so render it here. */}
+      <div className="mt-auto w-full">
+        <Footer />
       </div>
     </div>
   )

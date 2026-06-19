@@ -28,4 +28,15 @@ describe('Walkthrough', () => {
     await user.click(screen.getByRole('button', { name: /Set up my AutoClip/ }))
     expect(localStorage.getItem('creatorclip:walkthrough_seen')).toBe('1')
   })
+
+  // OAuth-verification gate (Issue 153): this first-run page sits outside AppChrome,
+  // so it must carry the ToS/Privacy footer links itself.
+  it('exposes the ToS and Privacy footer links', () => {
+    render(<Walkthrough />)
+    expect(screen.getByRole('link', { name: 'Terms' })).toHaveAttribute('href', '/static/tos.html')
+    expect(screen.getByRole('link', { name: 'Privacy' })).toHaveAttribute(
+      'href',
+      '/static/privacy.html',
+    )
+  })
 })

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { StepCard } from '@/components/onboarding/StepCard'
 import { StreamConsole } from '@/components/onboarding/StreamConsole'
 import { OnboardingIdentity } from '@/components/onboarding/OnboardingIdentity'
+import { Footer } from '@/components/Footer'
 import type { DataGate, DnaResponse, IdentityResponse, TaskQueued } from '@/types'
 
 async function logout() {
@@ -188,6 +189,12 @@ export function Onboarding() {
           </Link>
         </StepCard>
       </main>
+
+      {/* ToS/Privacy footer — bare first-run flow still carries the OAuth-verification
+          links (Issue 153); this route sits outside AppChrome, so render it here. */}
+      <div className="mt-auto w-full">
+        <Footer />
+      </div>
     </div>
   )
 }

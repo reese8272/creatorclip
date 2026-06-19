@@ -3630,6 +3630,166 @@ Gate model + agentic-loop choice recorded in `docs/DECISIONS.md` (2026-06-17).
 
 ---
 
+## Issue 85 Overhaul — Regression & Gap Audit (filed 2026-06-18)
+
+> Issues 153–159 were produced by a 6-dimension behavioral-parity audit of the Issue 85
+> React/TS soft cutover (`/` → `/app/dashboard`; legacy `static/*.html` kept as unlinked
+> rollback). The audit found the SPA silently became the primary surface while dropping
+> several behaviors the old pages had. Tracing/observability and security dimensions came
+> back **clean** (middleware stack unchanged; no `dangerouslySetInnerHTML`; server-side auth
+> boundary intact). The honesty/"no virality" invariant is intact. Worked in priority order.
+
+---
+
+## Issue 153: [BLOCKER] Restore ToS/Privacy footer on Onboarding & Walkthrough (OAuth-verification gate)
+
+**Status**: ✅ Done (2026-06-18) — pending deploy of `frontend/dist`
+
+**Delivered:** Imported the shared `<Footer/>` component (reused, not re-hand-rolled like
+`Login.tsx`) into `Onboarding.tsx` and `Walkthrough.tsx`, pinned to the bottom (`mt-auto w-full`)
+since both routes sit outside `AppChrome`. Per-page tests assert both links resolve to
+`/static/tos.html` + `/static/privacy.html`. No routing/architecture change. Frontend
+lint + vitest (34) + build all green.
+
+**What**: The React `Onboarding` and `Walkthrough` routes are nested under `AuthGate` but
+*outside* `AppChrome`, so they never render the shared `<Footer/>` that links
+`/static/tos.html` + `/static/privacy.html`. The old `static/onboarding.html` (lines 477–478)
+and `static/walkthrough.html` (lines 300–301) both carried those links. **Onboarding is a
+first-run surface Google's OAuth reviewer walks through** — a missing ToS/Privacy link is a
+verification-gate breach (the "ToS + Privacy live AND linked from every page" invariant,
+Issue 29 / CLAUDE.md Pre-Public-Launch). Root cause is structural: both routes deliberately
+use a minimal nav (no `AppChrome`) and that inadvertently dropped the footer too.
+
+**Acceptance criteria**:
+- [x] `Onboarding.tsx` renders ToS + Privacy links (shared `Footer` or inline), resolving to the served `/static/tos.html` + `/static/privacy.html`
+- [x] `Walkthrough.tsx` renders the same
+- [x] A test asserts both routes expose both links (mirror the static-page footer test)
+- [x] Honesty disclaimer remains present on both (already OK — don't regress it)
+- [x] `frontend` lint/build/vitest green
+
+---
+
+## Issue 154: [SEV1] Walkthrough primary CTA dead-ends into legacy `/static/onboarding.html`
+
+**Status**: ☐ Not started
+
+**What**: The Walkthrough's terminal "Set up my AutoClip" CTA (and the Enter-key handler) does
+a full-page `window.location.href = '/static/onboarding.html'` (`Walkthrough.tsx:144,155`),
+bouncing a first-run user out of the SPA into a rollback-only legacy page mid-onboarding. The
+ported route already exists at `/app/onboarding` (`App.tsx:37`). Any other `/static/*` links
+in the SPA copy (e.g. the line-144 reference) should likewise stay in-SPA.
+
+**Acceptance criteria**:
+- [ ] Walkthrough CTA + Enter handler navigate within the SPA (`useNavigate('/onboarding')` or `/app/onboarding`)
+- [ ] Grep confirms no SPA code links into `/static/*.html` user pages (ToS/Privacy excepted — those are the canonical served docs)
+- [ ] Test covers the CTA target
+- [ ] `frontend` lint/build/vitest green
+
+---
+
+## Issue 155: [SEV2] Restore frontend UI telemetry in the SPA (`/api/activity`)
+
+**Status**: ☐ Not started
+**Logged**: `docs/OFF_COURSE_BUGS.md` 2026-06-18
+
+**What**: The old static pages loaded `static/activity.js`, which fired fire-and-forget
+`POST /api/activity` on every click, form submit, and navigation. The React SPA has **zero**
+callers of `/api/activity`, so all client UI telemetry has been dark since the cutover —
+route changes (the highest-signal SPA event) emit nothing. The backend endpoint
+(`routers/activity.py`), the file sink (`observability.log_event`), and the `event_logs` DB
+sink (`event_log.record_event`, Issue 151) are all healthy and waiting for data. Verified on
+prod: only 5 `ui` rows ever, all pre-cutover; current sessions log `backend`/`http_request`
+rows but no `ui` rows.
+
+**Acceptance criteria**:
+- [ ] SPA emits `navigate` events on React Router route change (a `useLocation` effect)
+- [ ] SPA emits `click`/`submit` events (delegated listeners or `lib/api.ts` mutation wrap), matching the existing `ActivityEvent` shape (`page`, `event_type`, `target`, `extra`)
+- [ ] Instrument the same surfaces the old footprint covered (the 6 authed/funnel pages), not pre-auth-only noise
+- [ ] No PII/token in any emitted `extra` (redaction already server-side; don't send secrets client-side)
+- [ ] Verified end-to-end: a click produces a `source='ui'` row in `event_logs`
+- [ ] `frontend` lint/build/vitest green
+
+---
+
+## Issue 156: [SEV2] Restore global active-tasks progress panel (+ fix stale Walkthrough copy)
+
+**Status**: ☐ Not started
+
+**What**: The static app mounted a persistent "activity panel" (`activeTasks.js` +
+`activityPanel.js`) that tracked every in-flight worker job (catalog sync, DNA build,
+improvement brief, video analysis) via `/tasks/{id}/events` SSE and **followed the user across
+pages**. The SPA chrome (`AppChrome.tsx`) renders only Nav + Outlet + Footer; each job's live
+progress is now bound to its originating page's local `useTaskStream`, so navigating away
+mid-job loses all progress visibility (the job continues server-side). The Walkthrough step-04
+copy (`Walkthrough.tsx:107-110`) still *describes* this panel ("the activity panel… follows
+you"), so the onboarding copy now references a feature that doesn't exist.
+
+**Acceptance criteria**:
+- [ ] A global active-tasks store + persistent panel (or nav indicator) in `AppChrome` lists `pending`/`running` jobs and streams live progress cross-page
+- [ ] Reuses `useTaskStream('/tasks/{id}/events')`; no new endpoint
+- [ ] Walkthrough step-04 copy matches the shipped reality
+- [ ] `frontend` lint/build/vitest green
+
+---
+
+## Issue 157: [SEV2] Insights page — loading state + surface sub-fetch errors
+
+**Status**: ☐ Not started
+
+**What**: `Insights.tsx` only branches on `insightsQuery.isError`. During the normal initial
+fetch (`isPending`), `data` is undefined so `ChannelSnapshot`/`DnaSnapshot` render nothing and
+the performer panels show their "Build your DNA to surface this list." empty copy — misleading
+for a user who *has* DNA and is just waiting on the fetch. Separately, `upload-intel` and
+`saved-insights` query errors are swallowed: a failed sub-fetch is indistinguishable from a
+genuine empty state (the old `static/insights.html` surfaced "Could not load timing data.").
+
+**Acceptance criteria**:
+- [ ] Insights body gates on `isPending` with a loading state (no misleading empty/"build DNA" copy mid-load)
+- [ ] `upload-intel` and `saved-insights` `isError` states surface distinctly from genuine empty
+- [ ] Performer "Build your DNA" empty text shows only after the query settles
+- [ ] `frontend` lint/build/vitest green
+
+---
+
+## Issue 158: [SEV2] Account-deletion UI — right-to-erasure (`DELETE /auth/me`)
+
+**Status**: ☐ Not started
+**Note**: Pre-existing gap (not an Issue 85 regression) — surfaced by the audit's orphaned-endpoint sweep.
+
+**What**: `DELETE /auth/me` (token revocation + media purge) exists in `routers/auth.py:204`
+but has **no UI caller** in either the old static pages or the SPA. CLAUDE.md Pre-Public-Launch
+lists "Account-deletion endpoint (right-to-erasure: token revocation + media purge)" as a
+launch requirement. The backend is done; the user-facing affordance is missing.
+
+**Acceptance criteria**:
+- [ ] Profile (or settings) surfaces an account-deletion affordance with a confirm step
+- [ ] Calls `DELETE /auth/me`; on success, clears session and routes to a logged-out/confirmation state
+- [ ] Honest copy on what is purged (tokens + media) per COMPLIANCE.md
+- [ ] Test covers the delete flow
+- [ ] `frontend` lint/build/vitest green
+
+---
+
+## Issue 159: [cleanup] Orphaned-endpoint & dead-affordance sweep
+
+**Status**: ☐ Not started
+
+**What**: The audit confirmed several endpoints/affordances now dead from the UI (mostly
+pre-existing, surfaced by the cutover). Triage each: wire it into the SPA or retire it (with a
+`docs/DECISIONS.md` note for anything removed).
+- `GET /videos/{id}/status` (`routers/videos.py:397`) — superseded by the `/videos` list `refetchInterval`; no UI caller. Retire or document.
+- `GET /creators/me/identity/history` (`routers/creators.py:439`) — no caller; Profile shows current identity only.
+- `GET /logs/me` (`routers/logs.py:21`) — operator/self read surface; no UI caller (intentional? document).
+- Dead "Upload source file to clip" CTA — non-functional copy in both old and new UI (`VideoTable.tsx:122`); the web UI never POSTs `/videos/upload` (OBS/API-key path only). Clarify or wire.
+- Dashboard ignores the `/videos` empty-envelope `next_action` (`Dashboard.tsx`); the not-connected branch is unreachable post-auth dead weight — consume it or drop it from the envelope.
+
+**Acceptance criteria**:
+- [ ] Each item above either wired into the SPA or retired with a one-line `DECISIONS.md` rationale
+- [ ] No orphaned router endpoint left undocumented
+- [ ] Tests/`/assess` Layer 0 green; no coverage regression
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

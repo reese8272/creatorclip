@@ -51,6 +51,21 @@ describe('Onboarding', () => {
     expect(await screen.findByText('Ready to build your Creator DNA.')).toBeInTheDocument()
   })
 
+  // OAuth-verification gate (Issue 153): this first-run page sits outside AppChrome,
+  // so it must carry the ToS/Privacy footer links itself.
+  it('exposes the ToS and Privacy footer links', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderOnboarding()
+    expect(await screen.findByRole('link', { name: 'Terms' })).toHaveAttribute(
+      'href',
+      '/static/tos.html',
+    )
+    expect(screen.getByRole('link', { name: 'Privacy' })).toHaveAttribute(
+      'href',
+      '/static/privacy.html',
+    )
+  })
+
   it('locks the Build-DNA step until an identity row exists', async () => {
     vi.stubGlobal('fetch', mockFetch({ identity: null }))
     renderOnboarding()
