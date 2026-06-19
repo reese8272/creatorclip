@@ -6,7 +6,32 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Last completed (Issue 85g — Cutover, soft flip, 2026-06-18):** With all seven app pages ported,
+**Last completed (Issues 153–159 — post-cutover regression audit + fixes, 2026-06-18):** A
+6-dimension behavioral-parity audit of the Issue 85 soft cutover (telemetry, tracing, API
+parity, compliance, security, UX state) — triggered by finding that live UI click telemetry had
+gone dark on prod. Tracing/observability and security came back **clean** (middleware stack
+unchanged; no `dangerouslySetInnerHTML`; cache-`no-store` still fires on the SPA shell;
+server-side auth boundary intact). Honesty/"no virality" invariant intact. Filed Issues 153–161
+in `docs/issues.md` and worked the batch (branch `feature/issue-85-overhaul-regressions`):
+- **153 [BLOCKER]** Onboarding/Walkthrough lost the ToS/Privacy footer (outside `AppChrome`) — an
+  OAuth-verification-gate breach on the page Google's reviewer walks. Shared `<Footer/>` rendered on both.
+- **154 [SEV1]** Walkthrough CTA dead-ended into legacy `/static/onboarding.html` → in-SPA
+  `navigate('/onboarding')`; also fixed a second dead-end in `DashboardBanners`.
+- **155 [SEV2]** SPA UI telemetry restored (`lib/activity.ts` + `useActivityTelemetry` via a
+  `RootLayout`) — clicks/submits/route-changes POST to `/api/activity` again.
+- **156 [SEV3]** Walkthrough false "activity panel" copy corrected; panel rebuild split to **Issue 160**.
+- **157 [SEV2]** Insights loading state + surfaced swallowed upload-intel/saved sub-fetch errors.
+- **158 [SEV2]** Account-deletion UI (right-to-erasure, `DELETE /auth/me`) added to Profile — closes a CLAUDE.md launch item.
+- **159 [cleanup]** Orphaned-endpoint sweep triaged (intentional retentions documented); stale
+  backend `next_action` `/static` URLs split to **Issue 161** (needs a real Postgres to validate).
+
+Batch is **frontend + docs only** (zero backend, zero migrations). Frontend **lint clean, vitest
+38/38, build green**. **Deploy:** pending a single batched prod deploy (merge → `main` auto-builds
+the image incl. `frontend/dist` and auto-deploys on the self-hosted VM; `alembic upgrade head` is a
+no-op). Follow-ups: Issues **160** (cross-page active-tasks panel — gated by the 3-slot SSE cap) and
+**161** (repoint stale envelope URLs). DECISIONS 2026-06-18.
+
+**Prior (Issue 85g — Cutover, soft flip, 2026-06-18):** With all seven app pages ported,
 `main.py`'s `/` now **redirects to `/app/dashboard`** when the SPA bundle is built (`_SPA_BUILT`
 gate; a no-build checkout/CI stage still boots the legacy index byte-for-byte). The React app is the
 primary surface; anonymous visitors land on `/app/login` via the auth gate. **Soft cutover (user-
