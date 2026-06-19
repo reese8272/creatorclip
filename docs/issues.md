@@ -3797,21 +3797,42 @@ and the DELETE call. Closes the CLAUDE.md launch item. Frontend lint + vitest (3
 
 ## Issue 159: [cleanup] Orphaned-endpoint & dead-affordance sweep
 
-**Status**: ☐ Not started
+**Status**: ✅ Done (2026-06-18) — triaged; genuine remaining defect split to Issue 161. DECISIONS 2026-06-18.
 
-**What**: The audit confirmed several endpoints/affordances now dead from the UI (mostly
-pre-existing, surfaced by the cutover). Triage each: wire it into the SPA or retire it (with a
-`docs/DECISIONS.md` note for anything removed).
-- `GET /videos/{id}/status` (`routers/videos.py:397`) — superseded by the `/videos` list `refetchInterval`; no UI caller. Retire or document.
-- `GET /creators/me/identity/history` (`routers/creators.py:439`) — no caller; Profile shows current identity only.
-- `GET /logs/me` (`routers/logs.py:21`) — operator/self read surface; no UI caller (intentional? document).
-- Dead "Upload source file to clip" CTA — non-functional copy in both old and new UI (`VideoTable.tsx:122`); the web UI never POSTs `/videos/upload` (OBS/API-key path only). Clarify or wire.
-- Dashboard ignores the `/videos` empty-envelope `next_action` (`Dashboard.tsx`); the not-connected branch is unreachable post-auth dead weight — consume it or drop it from the envelope.
+**What**: The audit flagged a cluster of "orphaned" endpoints/affordances. Triaged each:
+- `GET /videos/{id}/status`, `GET /creators/me/identity/history`, `GET /api/logs/me` — **retained,
+  intentionally UI-less** (API-key/OBS consumers; future/audit; auth-gated self/operator read).
+  Documented in `docs/DECISIONS.md`; not removed (removing public API risks external consumers).
+- "Upload source file to clip" (`VideoTable.tsx:122`) — **not a defect**: an intentional
+  non-clickable help affordance from Issue 139 (linked video, no stored source). Audit
+  mischaracterised it as a dead CTA. No change.
+- Stale `/static/*` URLs in the `next_action` / `setup.next_action_url` envelope contract →
+  **split to Issue 161** (backend; tested `NextActionOut` contract across 3 routers; needs a real
+  Postgres to validate, unavailable this session).
 
 **Acceptance criteria**:
-- [ ] Each item above either wired into the SPA or retired with a one-line `DECISIONS.md` rationale
-- [ ] No orphaned router endpoint left undocumented
-- [ ] Tests/`/assess` Layer 0 green; no coverage regression
+- [x] Each item triaged: wired, retired, or documented with a `DECISIONS.md` rationale
+- [x] No orphaned router endpoint left undocumented (DECISIONS 2026-06-18)
+- [x] Genuine remaining defect tracked (Issue 161) rather than rushed unvalidated
+
+---
+
+## Issue 161: [cleanup] Backend `next_action` envelope URLs still point at dead `/static/*` pages
+
+**Status**: ☐ Not started — carved out of Issue 159 (2026-06-18); backend, DB-test-gated
+
+**What**: The empty-state `next_action` URLs and the `setup.next_action_url` still reference
+legacy `/static/*` pages that the cutover unlinked: `routers/videos.py`
+(`/static/index.html#link-form`), `routers/insights.py` (`/static/insights.html`), and the
+setup-step builder (`/static/onboarding.html`, `/static/profile.html`). Currently harmless — the
+SPA ignores the resource-envelope `next_action` (EmptyHero owns its CTAs) and `DashboardBanners`
+overrides the `setup` URLs in-SPA — but the live API contract emits stale links. (`routers/clips.py`
+already points at the `/clips/generate` action path, not a `/static` page — leave it.)
+
+**Acceptance criteria**:
+- [ ] `next_action` / `setup.next_action_url` resolve to SPA routes (or are dropped) — no `/static/*` user-page links in API responses
+- [ ] `test_static.py`, `test_empty_state_envelopes.py`, `test_onboarding_setup_step.py` updated to match
+- [ ] Full backend suite green on a real Postgres (CI or DB-up session); Layer 0 no regression
 
 ---
 

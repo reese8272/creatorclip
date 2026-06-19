@@ -6379,3 +6379,37 @@ context alive across navigation, making the old `static/activeTasks.js` localSto
 machinery unnecessary.
 
 **Date:** 2026-06-18
+
+---
+
+## 2026-06-18 — Issue 159 triage: orphaned endpoints retained; upload affordance intentional; stale envelope URLs → Issue 161
+
+**What changed:** The Issue 85 audit flagged a cluster of "orphaned" endpoints/affordances. After
+triage:
+- **Retained, intentionally UI-less** (documented, not removed): `GET /videos/{id}/status`
+  (polling for API-key / OBS-companion consumers; the SPA uses the `/videos` list
+  `refetchInterval` instead), `GET /creators/me/identity/history` (version history; future/audit
+  surface), `GET /api/logs/me` (auth-gated self/operator read — already documented in
+  `routers/logs.py`). Removing public API endpoints risks external consumers for no benefit.
+- **Not a defect:** the "Upload source file to clip" item (`VideoTable.tsx:122`) is an
+  *intentional* non-clickable help affordance from Issue 139 (a linked video with no stored
+  source), not a dead CTA. The audit mischaracterised it. No change.
+- **Real remaining defect → Issue 161:** the empty-state `next_action` URLs (and the `setup`
+  envelope `next_action_url`) still point at dead `/static/*` pages across `routers/videos.py`
+  (`/static/index.html#link-form`), `routers/insights.py` (`/static/insights.html`), and the
+  setup-step builder. The SPA does not consume the resource-envelope `next_action` (EmptyHero
+  owns its CTAs) and `DashboardBanners` overrides the `setup` URLs in-SPA, so this is currently
+  harmless — but the live API contract emits stale links.
+
+**Why split #161 out:** it touches 3 routers + a tested `NextActionOut` contract
+(`test_static.py`, `test_empty_state_envelopes.py`, `test_onboarding_setup_step.py`) and the
+project rule forbids DB mocking — validating it needs a real Postgres, which this session's
+environment lacks (Redis only). Doing it under CI/DB rather than rushing unvalidated backend
+edits into the frontend batch.
+
+**Source/evidence:** `routers/videos.py:133-149`, `routers/insights.py:661-673`,
+`routers/clips.py:169-184` (clips already points at the `/clips/generate` action path, not a
+`/static` page — OK); `grep next_action frontend/src` shows only `setup.next_action_url` is read
+(via `DashboardBanners`, already overridden). `pg_isready` unavailable in-session.
+
+**Date:** 2026-06-18
