@@ -35,7 +35,9 @@ export function Insights() {
       </DisclaimerBand>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
-        {insightsQuery.isError ? (
+        {insightsQuery.isPending ? (
+          <p className="text-sm text-muted">Loading your channel insights…</p>
+        ) : insightsQuery.isError ? (
           <p className="text-sm text-danger">Could not load insights — try again.</p>
         ) : (
           <>
@@ -53,9 +55,12 @@ export function Insights() {
               sub="Useful contrast — patterns you've moved past."
               performers={data?.bottom_performers ?? []}
             />
-            <UploadWindows intel={uploadQuery.data} />
+            <UploadWindows intel={uploadQuery.data} isError={uploadQuery.isError} />
             <ImprovementBrief />
-            <SavedInsights insights={savedQuery.data?.insights ?? []} />
+            <SavedInsights
+              insights={savedQuery.data?.insights ?? []}
+              isError={savedQuery.isError}
+            />
           </>
         )}
       </main>

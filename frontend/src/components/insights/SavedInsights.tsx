@@ -2,7 +2,22 @@ import { Panel } from '@/components/insights/InsightsPanel'
 import type { SavedInsight } from '@/types'
 
 // Bookmarked AI analyses (Issue 117). Hidden entirely when there are none.
-export function SavedInsights({ insights }: { insights: SavedInsight[] }) {
+export function SavedInsights({
+  insights,
+  isError,
+}: {
+  insights: SavedInsight[]
+  isError?: boolean
+}) {
+  // A failed fetch is distinct from "no saved insights yet" (Issue 157): surface it
+  // rather than silently rendering nothing (which reads as an empty state).
+  if (isError) {
+    return (
+      <Panel title="Saved insights" sub="Bookmarked AI analyses">
+        <p className="text-sm text-danger">Could not load saved insights.</p>
+      </Panel>
+    )
+  }
   if (insights.length === 0) return null
   return (
     <Panel title="Saved insights" sub="Bookmarked AI analyses">

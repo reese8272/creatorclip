@@ -61,4 +61,50 @@ describe('Insights', () => {
     expect(await screen.findByText(/Strong hook in the first 3 seconds/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '★ Save' })).toBeInTheDocument()
   })
+
+  // Issue 157: a loading state instead of misleading empty/"build DNA" copy mid-fetch.
+  it('shows a loading state while insights are in flight', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => {})),
+    ) // never resolves → query stays pending
+    renderInsights()
+    expect(screen.getByText(/loading your channel insights/i)).toBeInTheDocument()
+  })
+
+  // Issue 157: a failed sub-fetch surfaces distinctly from a genuine empty state.
+  it('surfaces an upload-intel fetch error distinctly from "no data yet"', async () => {
+    const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.endsWith('/upload-intel'))
+          return { status: 500, ok: false, json: async () => ({ detail: 'boom' }) }
+        if (url.endsWith('/insights/saved')) return json({ insights: [] })
+        if (url.endsWith('/creators/me/insights'))
+          return json({
+            totals: {
+              videos_analyzed: 1,
+              shorts: 0,
+              longs: 1,
+              ingested_done: 1,
+              total_minutes_processed: 10,
+            },
+            dna: {
+              version: 1,
+              status: 'confirmed',
+              optimal_clip_len_s: 30,
+              best_source_region: 'mid',
+              optimal_upload_gap_h: 6,
+            },
+            top_performers: [],
+            bottom_performers: [],
+          })
+        return json({})
+      }),
+    )
+    renderInsights()
+    expect(await screen.findByText('Could not load timing data.')).toBeInTheDocument()
+  })
 })

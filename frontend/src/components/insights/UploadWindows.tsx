@@ -1,7 +1,21 @@
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { UploadIntel } from '@/types'
 
-export function UploadWindows({ intel }: { intel: UploadIntel | undefined }) {
+export function UploadWindows({
+  intel,
+  isError,
+}: {
+  intel: UploadIntel | undefined
+  isError?: boolean
+}) {
+  // A failed fetch is distinct from a genuine "no data yet" empty state (Issue 157).
+  if (isError) {
+    return (
+      <Panel title="Best upload windows">
+        <p className="text-sm text-danger">Could not load timing data.</p>
+      </Panel>
+    )
+  }
   if (!intel || !intel.data_available || intel.best_windows.length === 0) {
     return (
       <Panel title="Best upload windows">

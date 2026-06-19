@@ -3747,20 +3747,26 @@ single-EventSource-owner refactor, not a drop-in. Descope recorded in `docs/DECI
 
 ## Issue 157: [SEV2] Insights page — loading state + surface sub-fetch errors
 
-**Status**: ☐ Not started
+**Status**: ✅ Done (2026-06-18) — pending deploy of `frontend/dist`
 
-**What**: `Insights.tsx` only branches on `insightsQuery.isError`. During the normal initial
-fetch (`isPending`), `data` is undefined so `ChannelSnapshot`/`DnaSnapshot` render nothing and
-the performer panels show their "Build your DNA to surface this list." empty copy — misleading
-for a user who *has* DNA and is just waiting on the fetch. Separately, `upload-intel` and
-`saved-insights` query errors are swallowed: a failed sub-fetch is indistinguishable from a
-genuine empty state (the old `static/insights.html` surfaced "Could not load timing data.").
+**What**: `Insights.tsx` only branched on `insightsQuery.isError`. During the normal initial
+fetch (`isPending`), `data` was undefined so the snapshots rendered nothing and the performer
+panels showed their "Build your DNA to surface this list." empty copy — misleading for a user
+who *has* DNA and is just waiting on the fetch. Separately, `upload-intel` and `saved-insights`
+errors were swallowed (indistinguishable from a genuine empty state).
+
+**Delivered:** Insights body now gates `isPending → loading → isError → content`; gating on
+`isPending` also fixes the performer flicker (in the success branch `data` is defined, so the
+"Build your DNA" empty text only shows when genuinely empty). `UploadWindows` and `SavedInsights`
+take an `isError` prop and render a distinct error line ("Could not load timing data." /
+"Could not load saved insights.") instead of the empty state. Tests cover the loading state and
+the upload-intel error path. Frontend lint + vitest (37) + build green.
 
 **Acceptance criteria**:
-- [ ] Insights body gates on `isPending` with a loading state (no misleading empty/"build DNA" copy mid-load)
-- [ ] `upload-intel` and `saved-insights` `isError` states surface distinctly from genuine empty
-- [ ] Performer "Build your DNA" empty text shows only after the query settles
-- [ ] `frontend` lint/build/vitest green
+- [x] Insights body gates on `isPending` with a loading state (no misleading empty/"build DNA" copy mid-load)
+- [x] `upload-intel` and `saved-insights` `isError` states surface distinctly from genuine empty
+- [x] Performer "Build your DNA" empty text shows only after the query settles
+- [x] `frontend` lint/build/vitest green
 
 ---
 
