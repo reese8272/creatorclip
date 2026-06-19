@@ -18,7 +18,7 @@ export function StatusChip({
   if (status === 'done') return <span className="font-mono text-xs text-success">done</span>
   if (status === 'streaming')
     return (
-      <span className="font-mono text-xs text-accent">
+      <span className="font-mono text-xs text-accent-text">
         {step ? step.replace(/_/g, ' ') : 'generating…'}
       </span>
     )

@@ -36,7 +36,7 @@ export function UploadWindows({
               so render it alone — prepending day_name double-printed it
               ("Friday Friday 12:00 PM"). */}
           <span className="text-fg">{w.label}</span>
-          <span className="font-mono font-semibold text-accent">
+          <span className="font-mono font-semibold text-accent-text">
             {(w.activity_index * 100).toFixed(0)}%
           </span>
         </div>

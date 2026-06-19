@@ -56,7 +56,7 @@ export function Brief({ markdown }: { markdown: string }) {
       )}
       {parsed.sections.map((section, i) => (
         <section key={i} className="flex flex-col gap-2">
-          <h3 className="text-2xs font-semibold uppercase tracking-[0.06em] text-accent">
+          <h3 className="text-2xs font-semibold uppercase tracking-[0.06em] text-accent-text">
             {section.title}
           </h3>
           <Blocks blocks={section.blocks} />

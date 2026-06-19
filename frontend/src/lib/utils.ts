@@ -1,5 +1,27 @@
 import { clsx, type ClassValue } from 'clsx'
-import { twMerge } from 'tailwind-merge'
+import { extendTailwindMerge } from 'tailwind-merge'
+
+// The design system defines custom text-size utilities (text-body, text-h1,
+// text-small, text-md, text-2xs, …) via @theme. Stock tailwind-merge doesn't know
+// these are FONT SIZES, so it conflated them with custom text-COLOR utilities
+// (text-bg, text-on-accent) in the same conflict group and dropped the color —
+// filled buttons silently lost their text color and inherited the page fg, failing
+// WCAG contrast (Issue 165, DECISIONS 2026-06-19). Registering the size scale keeps
+// size and color in separate groups so both survive a merge.
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [
+        {
+          text: [
+            '2xs', 'xs', 'sm', 'small', 'base', 'body', 'md', 'lg', 'xl', '2xl',
+            'h1', 'h2', 'h3', 'label', 'mono',
+          ],
+        },
+      ],
+    },
+  },
+})
 
 // shadcn-convention class combiner: merge conditional classes and de-dupe
 // conflicting Tailwind utilities (last wins).

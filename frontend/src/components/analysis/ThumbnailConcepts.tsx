@@ -28,7 +28,7 @@ export function ThumbnailConcepts({ videoId }: { videoId: string }) {
             <div className="mb-2 flex items-center justify-between">
               <span className="font-mono text-xs text-subtle">#{i + 1}</span>
               {c.dominant_emotion && (
-                <span className="rounded-sm bg-accent-soft px-1.5 font-mono text-xs text-accent">
+                <span className="rounded-sm bg-accent-soft px-1.5 font-mono text-xs text-accent-text">
                   {c.dominant_emotion}
                 </span>
               )}

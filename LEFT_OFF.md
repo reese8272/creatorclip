@@ -4,34 +4,47 @@
 > truth — those live in `docs/`. Updated at the end of every session.
 
 **Last updated:** 2026-06-19
-**Branch:** `main` @ `d476860` — PUSHED. `main` and `staging` are byte-identical (both local + both
-`origin`) at `d476860` via fast-forward. Issue 162 = `9dcac43`, Issue 163 = `d476860`.
-**Working tree:** CLEAN.
-**Prod:** `https://autoclip.studio` (React SPA under `/app`). Pushed `main` @ `d476860` → a prod deploy
-was triggered. **Issue 163 IS user-facing** (Nav collapse + Review/Analysis/Chat layout) — verify it
-on prod once the `docker-publish` → `deploy` pipeline finishes.
+**Branch:** `main` — Issues 162/163 are live on `origin` @ `d476860`. **Issues 164 + 165 are committed
+LOCALLY but NOT pushed** (push is gated). `main` is ahead of `origin/main`; staging not yet re-synced.
+**Working tree:** see below (164/165 committed; verify with `git status`).
+**Prod:** `https://autoclip.studio` (React SPA under `/app`). Live is still `d476860` (Issue 163). The
+**Issue 165 contrast fix has NOT shipped yet** — it lands on the next push.
 
 ---
 
 ## CURRENT FOCUS
 
-**Issues 162 + 163 are DONE, committed, pushed, and staging is synced.** This session: committed the
-Playwright harness (162), did the full Issue 163 UI-polish pass (all four audit defects fixed +
-re-verified), pushed `main`, and fast-forwarded `staging` to match. Nothing remains on 162/163.
+**Issues 164 + 165 are DONE and verified locally, committed, awaiting a gated push.** This session
+also: live-audited the real site, found a systemic WCAG-AA contrast gap, and fixed it at the root.
 
 ### → NEXT ACTION
-1. **Confirm the prod deploy landed** and spot-check the Issue 163 changes live (mobile nav hamburger
-   at narrow width; Review/Analysis/Chat layouts) once the deploy pipeline completes.
-2. **Pick the next issue.** Issues 160 and 161 are still open from prior sessions — check
-   `docs/issues.md` for their specs.
+1. **Push when the user OKs it** (gated — prod deploy). `git push origin main` then fast-forward
+   `staging` to match (`git push origin main:staging` + `git branch -f staging main`).
+2. **Re-verify on prod after the deploy rolls out:** `cd frontend && npm run test:prod` — expect the
+   axe `color-contrast` count to drop from 420 → ~0 live. Needs a fresh `cc_session` (the captured one
+   in `e2e/.auth/` expires ~1h; re-capture via `npm run test:prod:auth:cookie` after pasting a new
+   cookie into `e2e/.auth/cc_session.txt`).
+3. **Then pick the next issue** — 160 and 161 still open.
 
-### What Issue 163 changed (all verified — lint clean, vitest 45/45, build ok, test:e2e 20/20)
-- **[SEV2]** `Nav.tsx` — responsive collapse to a hamburger below `sm` (640px); toggled panel holds
-  the 7 links + channel + Logout, closes on link tap. New toggle test in `Nav.test.tsx`.
-- **[SEV3]** `Review.tsx` — rebalanced grid: left = player + Why-this-clip; right = Transcript +
-  Caption-style + Clean-filler (fills the old empty bottom-right quadrant).
-- **[SEV3]** `Analysis.tsx` — four feature cards → `sm:grid-cols-2` 2×2 block.
-- **[SEV3]** `Chat.tsx` — empty-state vertically centered until first message; composer stays pinned.
+### What Issues 164/165 changed (all verified locally — lint, vitest 45/45, build, test:e2e smoke+a11y green)
+- **Issue 164** — live-site harness: `frontend/playwright.config.prod.ts` + `e2e/prod/` (audit.spec,
+  flows.spec, save-auth.mjs, build-auth-from-cookie.mjs). Runs vs prod with a real session. Scripts:
+  `test:prod`, `test:prod:flows`, `test:prod:auth`, `test:prod:auth:cookie`, `test:prod:report`.
+- **Issue 165** — WCAG AA contrast fix: `src/index.css` (`--color-subtle` ↑, accent split +
+  `--color-accent-text`), `src/lib/utils.ts` (**root cause:** `extendTailwindMerge` registers the
+  custom font-size scale so button text-color classes stop being dropped), 28 `text-accent`→
+  `text-accent-text` swaps, Profile `<dl>` dt/dd, Review slider `aria-label`. New gate
+  `e2e/a11y.spec.ts` (0 serious, 9 routes × 2 vp).
+- **Residual (OFF_COURSE):** paid flows `analysis`/`titles` timed out at 60s on the real account
+  (chat ✓) — slow LLM vs latency, needs investigation.
+
+### Live-site audit how-to (Issue 164 — reuse this)
+- Auth: log into `autoclip.studio` in a normal browser → DevTools → Application → Cookies → copy
+  `cc_session` → paste into `frontend/e2e/.auth/cc_session.txt` → `npm run test:prod:auth:cookie`.
+  (Headed `npm run test:prod:auth` exists but Google blocks the automated-browser OAuth.)
+- Then `npm run test:prod` (audit) / `npm run test:prod:flows` (paid, real cost). Findings →
+  `e2e/.results/prod/`, screenshots → `e2e/__screenshots__/prod/` (both gitignored).
+- `e2e/.auth/` is gitignored (holds a live session token) — never commit it.
 
 ## WHAT WORKS NOW (verified — don't re-investigate)
 

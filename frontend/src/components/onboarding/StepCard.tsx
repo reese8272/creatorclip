@@ -17,7 +17,7 @@ export function StepCard({
   return (
     <section className="rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
       <h2 className="mb-3 flex items-center gap-2 text-h3 font-ui text-fg">
-        <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-xs font-semibold text-accent">
+        <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-xs font-semibold text-accent-text">
           {num}
         </span>
         {title}

@@ -30,15 +30,22 @@
   --color-default: oklch(26% 0.014 285);
   --color-strong: oklch(34% 0.016 285);
 
-  /* Text (text-fg / text-muted / text-subtle) */
+  /* Text (text-fg / text-muted / text-subtle). All three meet WCAG AA (4.5:1) on
+     the page bg — subtle was raised from 45% (failed at 2.7:1) per the live-site
+     a11y audit (Issue 165, DECISIONS 2026-06-19). */
   --color-fg: oklch(94% 0.008 285);
   --color-muted: oklch(65% 0.01 285);
-  --color-subtle: oklch(45% 0.008 285);
+  --color-subtle: oklch(62% 0.009 285);
 
-  /* Accent (warmer indigo) */
-  --color-accent: oklch(58% 0.18 280);
-  --color-accent-hover: oklch(63% 0.19 278);
-  --color-accent-active: oklch(53% 0.17 282);
+  /* Accent (warmer indigo). Role-split per Radix's solid-vs-text convention
+     (Issue 165): --color-accent is the SOLID background, tuned dark enough that
+     white (--color-on-accent) text clears 4.5:1 on it; --color-accent-text is the
+     lighter foreground used for accent-colored TEXT on dark, which the solid value
+     is too dark to satisfy. One token can't do both — they pull opposite ways. */
+  --color-accent: oklch(54% 0.18 280);
+  --color-accent-text: oklch(72% 0.15 280);
+  --color-accent-hover: oklch(59% 0.19 278);
+  --color-accent-active: oklch(49% 0.17 282);
   --color-accent-soft: oklch(20% 0.06 280);
   --color-accent-border: oklch(35% 0.1 280);
   --color-on-accent: oklch(98% 0.004 285);

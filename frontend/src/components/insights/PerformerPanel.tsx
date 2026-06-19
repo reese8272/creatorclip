@@ -70,7 +70,7 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
           <div className="mt-2 text-xs leading-relaxed text-muted">
             {analysis.content}{' '}
             {!saved ? (
-              <button onClick={save} className="ml-1 text-accent hover:text-accent-hover">
+              <button onClick={save} className="ml-1 text-accent-text hover:text-fg">
                 ★ Save
               </button>
             ) : (
@@ -80,11 +80,11 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
         )}
       </div>
       <span className="font-mono text-xs uppercase text-subtle">{p.kind}</span>
-      <span className="text-right font-mono text-sm font-medium text-accent">{score}</span>
+      <span className="text-right font-mono text-sm font-medium text-accent-text">{score}</span>
       <button
         onClick={analyze}
         disabled={busy && label === 'Analyzing…'}
-        className="whitespace-nowrap rounded-md border border-strong px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-accent disabled:opacity-50"
+        className="whitespace-nowrap rounded-md border border-strong px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-accent-text disabled:opacity-50"
       >
         {label}
       </button>

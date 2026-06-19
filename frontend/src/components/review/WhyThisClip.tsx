@@ -10,7 +10,7 @@ export function WhyThisClip({ clip }: { clip: ReviewClip }) {
   return (
     <div className="text-sm">
       <div className="mb-3 flex items-center justify-between gap-3 border-b border-default pb-2">
-        <span className="font-mono text-xs text-accent">[principle] {clip.principle || '—'}</span>
+        <span className="font-mono text-xs text-accent-text">[principle] {clip.principle || '—'}</span>
         <FitBadge tier={fitTier(clip.score)} />
       </div>
       <div className="leading-relaxed text-fg">

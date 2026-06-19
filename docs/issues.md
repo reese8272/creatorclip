@@ -3924,6 +3924,47 @@ Issue 162 visual-regression follow-up) so these fixes lock in pixel-for-pixel. N
 
 ---
 
+## Issue 164 — Live-site Playwright audit (real backend + real auth) ✅ DONE (2026-06-19)
+
+**Problem:** The Issue 162 harness mocks the backend, so it can't catch real-data / real-auth /
+real-CSS gaps on production. Built a second harness (`frontend/playwright.config.prod.ts` +
+`e2e/prod/`) that runs against `autoclip.studio` with a real `cc_session` (Playwright `storageState`),
+capturing per-page console errors, failed requests, broken images, and axe accessibility violations at
+desktop/tablet/mobile, plus gated paid-flow specs. See DECISIONS 2026-06-19.
+
+**Acceptance criteria:**
+- [x] Prod config (no webServer/mocks), 3 viewports, session reuse via storageState.
+- [x] Auth capture: headed login (`save-auth.mjs`) + manual-cookie fallback (`build-auth-from-cookie.mjs`).
+- [x] Audit spec: console/network/broken-image + axe, per-page findings JSON, screenshots.
+- [x] Paid flows gated (`test:prod:flows`, render behind `RUN_RENDER=1`).
+- [x] Local mocked run isolated from prod specs (`testIgnore` in `playwright.config.ts`).
+- [x] First live run executed: **0 console/network/image errors**; surfaced the contrast gap → Issue 165.
+
+**Residual / follow-ups (logged in OFF_COURSE_BUGS):**
+- Paid flows `analysis` + `titles` timed out at 60s on the real account (chat ✓) — slow LLM gen vs.
+  latency gap, needs investigation; raise flow timeout or assert on response headers only.
+- The combined "analysis + review with a real video" audit test does 2 pages in one test → >60s; split it.
+- CI does not run the prod audit (needs a live session) — local/manual only, like Issue 162's `test:e2e`.
+
+## Issue 165 — WCAG AA contrast fix (token retune + tailwind-merge root cause) ✅ DONE (2026-06-19)
+
+**Problem:** The Issue 164 live axe audit found **420 serious `color-contrast` failures** on every page
+(insights 52, pricing 26, profile 20, dashboard 16, …). Root causes: `--color-subtle` too dark; the
+accent token straddling text-vs-background roles; and — the real bug — tailwind-merge dropping custom
+text-COLOR classes on buttons because the custom font-size scale wasn't registered. See DECISIONS.
+
+**Acceptance criteria:**
+- [x] `--color-subtle` raised (45%→62%) to clear 4.5:1.
+- [x] Accent role-split: `--color-accent` darkened (solid bg, white passes) + new `--color-accent-text`
+      (text on dark); 28 `text-accent` usages repointed; link hovers → `text-fg`.
+- [x] `extendTailwindMerge` registers the custom size scale so button text colors survive the merge.
+- [x] Profile `<dl>` fixed to dt/dd; Review trim sliders given `aria-label`.
+- [x] New permanent a11y gate `frontend/e2e/a11y.spec.ts`: **0 serious violations, 9 routes × 2 viewports**.
+- [x] No regression: lint clean, vitest 45/45, build ok, `test:e2e` (smoke + a11y) green.
+- [ ] **Re-verify on prod after deploy** — re-run `npm run test:prod` once the live build rolls out.
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

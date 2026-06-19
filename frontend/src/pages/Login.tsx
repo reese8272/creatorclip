@@ -10,7 +10,7 @@ export function Login() {
     <div className="flex min-h-screen flex-col bg-bg">
       <main className="flex flex-1 items-center justify-center px-6 py-12">
         <div className="w-full max-w-md rounded-lg border border-default bg-surface px-9 py-10 text-center shadow-lg">
-          <div className="mb-1.5 text-xl font-semibold tracking-tight text-accent">AutoClip</div>
+          <div className="mb-1.5 text-xl font-semibold tracking-tight text-accent-text">AutoClip</div>
           <div className="mb-7 text-sm leading-relaxed text-muted">
             The only AI editor that truly knows your channel.
           </div>

@@ -22,7 +22,7 @@ export function CollapsibleTool({
         className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium uppercase tracking-[0.06em] text-muted hover:text-fg"
       >
         {title}
-        <span className="font-mono text-accent">{open ? '−' : '+'}</span>
+        <span className="font-mono text-accent-text">{open ? '−' : '+'}</span>
       </button>
       {open && <div className="border-t border-default p-4">{children}</div>}
     </div>

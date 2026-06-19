@@ -95,7 +95,7 @@ export function AnalysisQuery() {
         {balance?.low_balance && (
           <div className="mt-3 rounded-md border border-warning-border bg-[color:var(--color-warning-soft)] px-4 py-3 text-sm text-fg">
             Low balance — <strong className="font-mono">{balance.minutes_balance} min</strong> left.{' '}
-            <Link to="/pricing" className="text-accent hover:text-accent-hover">
+            <Link to="/pricing" className="text-accent-text hover:text-fg">
               Add minutes
             </Link>{' '}
             before running another analysis.
@@ -123,7 +123,7 @@ export function AnalysisQuery() {
           ) : (
             <div className="min-h-[48px] whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
               {stream.tokens || <span className="italic text-subtle">Starting…</span>}
-              {stream.status === 'streaming' && <span className="ml-px animate-pulse text-accent">▊</span>}
+              {stream.status === 'streaming' && <span className="ml-px animate-pulse text-accent-text">▊</span>}
             </div>
           )}
           {stream.status === 'done' && (

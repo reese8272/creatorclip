@@ -103,6 +103,7 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
         <div className="flex items-center gap-2">
           <input
             type="range"
+            aria-label="Trim start"
             min={0}
             max={clipDur}
             step={0.1}
@@ -118,6 +119,7 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
         <div className="flex items-center gap-2">
           <input
             type="range"
+            aria-label="Trim end"
             min={0}
             max={clipDur}
             step={0.1}
@@ -157,7 +159,7 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
                 className={cn(
                   'rounded-md border px-3 py-1 text-xs',
                   selected.has(t.id)
-                    ? 'border-accent bg-accent-soft text-accent'
+                    ? 'border-accent bg-accent-soft text-accent-text'
                     : 'border-strong bg-bg text-muted hover:border-muted hover:text-fg',
                 )}
               >

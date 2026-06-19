@@ -67,7 +67,7 @@ export function OnboardingIdentity({ onSaved }: { onSaved: () => void }) {
             className={cn(
               'rounded-md border px-3 py-1 text-xs transition-colors',
               selected.has(opt.id)
-                ? 'border-accent bg-accent-soft text-accent'
+                ? 'border-accent bg-accent-soft text-accent-text'
                 : 'border-strong text-muted hover:border-muted hover:text-fg',
             )}
           >

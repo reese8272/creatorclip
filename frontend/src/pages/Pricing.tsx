@@ -118,7 +118,7 @@ export function Pricing() {
             }`}
           >
             {p.featured && (
-              <span className="absolute -top-px right-4 -translate-y-1/2 rounded-sm border border-accent bg-bg px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-accent">
+              <span className="absolute -top-px right-4 -translate-y-1/2 rounded-sm border border-accent bg-bg px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-accent-text">
                 Most picked
               </span>
             )}
@@ -137,7 +137,7 @@ export function Pricing() {
               className={
                 authed
                   ? 'mt-4 w-full rounded-sm bg-accent py-3 text-sm font-medium text-on-accent shadow-inset transition-colors duration-fast hover:bg-accent-hover'
-                  : 'mt-4 w-full rounded-sm border border-strong py-3 text-sm font-medium text-fg transition-colors duration-fast hover:border-accent hover:text-accent'
+                  : 'mt-4 w-full rounded-sm border border-strong py-3 text-sm font-medium text-fg transition-colors duration-fast hover:border-accent hover:text-accent-text'
               }
             >
               {authed ? 'Buy now' : 'Sign in to buy'}

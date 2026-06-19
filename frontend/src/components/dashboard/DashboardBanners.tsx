@@ -118,7 +118,7 @@ export function LowBalanceWarning({ balance }: { balance: Balance | null }) {
       className="mb-4 rounded-md border border-warning-border bg-[color:var(--color-warning-soft)] px-4 py-3 text-sm text-fg"
     >
       Low balance — <strong className="font-mono">{balance.minutes_balance} min</strong> left.{' '}
-      <Link to="/pricing" className="text-accent hover:text-accent-hover">
+      <Link to="/pricing" className="text-accent-text hover:text-fg">
         Add minutes
       </Link>{' '}
       before queuing more clips.

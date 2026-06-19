@@ -5,6 +5,56 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-19 — Issue 164: Live-site Playwright audit (real backend + real auth)
+
+**What changed:** Added a second Playwright config (`frontend/playwright.config.prod.ts`) that runs
+against production (`autoclip.studio`) with the REAL FastAPI backend and a REAL authenticated session,
+distinct from the Issue 162 harness (mocked backend, Vite dev server). It captures per-page console
+errors, failed requests, broken images, and **axe-core accessibility violations** at desktop/tablet/
+mobile, plus gated paid-flow specs (`flows.spec.ts`) for the LLM/render actions.
+
+**Decisions:**
+1. **Auth via captured `cc_session`, not automated OAuth.** Google blocks sign-in inside an
+   automation-controlled browser ("this browser may not be secure"). Industry-standard workaround:
+   capture the post-login session and reuse it via Playwright `storageState`. Two capture paths
+   provided — headed login (`save-auth.mjs`) and a manual-cookie fallback (`build-auth-from-cookie.mjs`,
+   used here because Google blocked the headed bundled-Chromium login). The session file lives under
+   gitignored `e2e/.auth/`.
+2. **Tablet project on Chromium, not WebKit.** `devices['iPad Mini']` defaults to WebKit (not
+   installed here); a 768px Chromium viewport exercises the same responsive breakpoints.
+3. **Paid flows gated + serial.** `workers:1`, `retries:0`, render behind `RUN_RENDER=1` — running on
+   the real account spends trial minutes + LLM tokens and writes data, so it never runs by accident.
+
+**Source/evidence:** Playwright auth docs (storageState); axe-core WCAG 2.1 AA rules. First live run
+found 0 console/network/image errors but a systemic contrast problem → Issue 165.
+
+## 2026-06-19 — Issue 165: WCAG AA contrast — token retune + tailwind-merge root-cause fix
+
+**What changed:** The live axe audit flagged **420 serious `color-contrast` failures** across every
+page. Root causes were both token values AND a class-merge bug:
+
+1. **`--color-subtle` too dark** — `oklch(45%)` gave 2.7:1 on the page bg (need 4.5:1). Raised to
+   `oklch(62%)`. Fixes the bulk (~72 elements: small labels, channel title, tags).
+2. **Accent role-split** (Radix solid-vs-text convention). One `--color-accent` can't satisfy both
+   accent-colored TEXT on dark (wants lighter) and white TEXT on an accent BUTTON (wants darker) —
+   they pull opposite ways. Split into `--color-accent` (solid bg, darkened to `oklch(54%)` so white
+   clears 4.5:1) + new `--color-accent-text` (`oklch(72%)` for text on dark). `text-accent` usages
+   (28) repointed to `text-accent-text`; link hovers brightened to `text-fg`.
+3. **tailwind-merge dropped button text colors (the real bug).** The design system's custom font-size
+   utilities (`text-body`, `text-small`, `text-md`, `text-h1…`) weren't registered with
+   tailwind-merge, so it grouped them with custom text-COLOR utilities (`text-bg`, `text-on-accent`)
+   as conflicting and **dropped the color** — every filled button silently inherited the page fg
+   (`#eaeaf0`), so the green "Keep" button and accent buttons failed contrast. Fixed by
+   `extendTailwindMerge` registering the custom size scale (`src/lib/utils.ts`).
+
+**Why:** WCAG 2.1 AA (4.5:1 normal text) is the accessibility standard; the audit proved the live UI
+failed it pervasively. **Source/evidence:** axe-core (dequeuniversity color-contrast rule); verified
+by a new permanent local a11y gate (`frontend/e2e/a11y.spec.ts`) going from 420 violations → **0
+serious across 9 routes × 2 viewports**. Also fixed: Profile `<dl>` structure (dt/dd) and Review trim
+sliders missing `aria-label`.
+
+---
+
 ## 2026-06-18 — Issue 85g: Cutover — `/` → the React SPA (soft flip)
 
 **What changed:** With all seven app pages ported (85a–85f), `/` now redirects to the SPA. `main.py`'s

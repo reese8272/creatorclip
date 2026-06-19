@@ -11,6 +11,11 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report e2e/.report",
+    "test:prod:auth": "node e2e/prod/save-auth.mjs",
+    "test:prod:auth:cookie": "node e2e/prod/build-auth-from-cookie.mjs",
+    "test:prod": "playwright test --config=playwright.config.prod.ts --project=desktop --project=tablet --project=mobile",
+    "test:prod:flows": "playwright test --config=playwright.config.prod.ts --project=flows",
+    "test:prod:report": "playwright show-report e2e/.report-prod",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -23,6 +28,7 @@
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.0",
     "@tailwindcss/vite": "^4.3.1",

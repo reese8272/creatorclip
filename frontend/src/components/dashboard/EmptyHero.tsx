@@ -37,7 +37,7 @@ export function EmptyHero({ onLinkClick }: { onLinkClick: () => void }) {
       <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
         {STEPS.map((s) => (
           <div key={s.num} className="rounded-lg border border-default bg-bg p-4">
-            <span className="mb-2 inline-flex h-[22px] w-[22px] items-center justify-center rounded-full bg-accent-soft font-mono text-xs font-semibold text-accent">
+            <span className="mb-2 inline-flex h-[22px] w-[22px] items-center justify-center rounded-full bg-accent-soft font-mono text-xs font-semibold text-accent-text">
               {s.num}
             </span>
             <div className="mb-1 text-sm font-semibold text-fg">{s.title}</div>

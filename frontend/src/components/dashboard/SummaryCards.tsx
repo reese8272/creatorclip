@@ -36,7 +36,7 @@ export function SummaryCards({
         label="Clips rendered"
         value={clipsRendered}
         sub={
-          <Link to="/review" className="text-accent hover:text-accent-hover">
+          <Link to="/review" className="text-accent-text hover:text-fg">
             Review queue →
           </Link>
         }

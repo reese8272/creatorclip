@@ -98,17 +98,17 @@ export function IdentitySection({ niches, identity, conflict, onSaved }: Props) 
             <div className="mb-2 text-2xs uppercase tracking-[0.06em] text-subtle">Current</div>
             <dl className="flex flex-col gap-1 text-fg/90">
               <div>
-                <span className="text-muted">Niche: </span>
-                {identity.niches.map(labelFor).join(', ')}
+                <dt className="inline text-muted">Niche: </dt>
+                <dd className="inline">{identity.niches.map(labelFor).join(', ')}</dd>
               </div>
               <div>
-                <span className="text-muted">Audience: </span>
-                {identity.audience_summary}
+                <dt className="inline text-muted">Audience: </dt>
+                <dd className="inline">{identity.audience_summary}</dd>
               </div>
               {identity.mission && (
                 <div>
-                  <span className="text-muted">Mission: </span>
-                  {identity.mission}
+                  <dt className="inline text-muted">Mission: </dt>
+                  <dd className="inline">{identity.mission}</dd>
                 </div>
               )}
             </dl>
@@ -127,7 +127,7 @@ export function IdentitySection({ niches, identity, conflict, onSaved }: Props) 
                   className={cn(
                     'rounded-full border px-3 py-1 text-xs transition-colors',
                     selected.has(opt.id)
-                      ? 'border-accent bg-accent-soft text-accent'
+                      ? 'border-accent bg-accent-soft text-accent-text'
                       : 'border-default text-muted hover:border-strong hover:text-fg',
                   )}
                 >

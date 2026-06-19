@@ -54,7 +54,7 @@ const PANELS: Panel[] = [
             'The upload windows your audience is online',
           ].map((t) => (
             <li key={t} className="relative pl-6 text-sm leading-relaxed text-fg">
-              <span className="absolute left-0 font-mono text-accent">→</span>
+              <span className="absolute left-0 font-mono text-accent-text">→</span>
               {t}
             </li>
           ))}
@@ -101,7 +101,7 @@ const PANELS: Panel[] = [
             ['failed', 'something broke; your minutes are automatically refunded'],
           ].map(([k, v]) => (
             <li key={k} className="relative pl-6 text-sm leading-relaxed text-fg">
-              <span className="absolute left-0 font-mono text-accent">→</span>
+              <span className="absolute left-0 font-mono text-accent-text">→</span>
               <strong className="text-fg">{k}</strong> — {v}
             </li>
           ))}

@@ -34,7 +34,7 @@ export function ChaptersPanel({ videoId }: { videoId: string }) {
                 key={i}
                 className="flex gap-3 border-b border-default py-2 text-sm last:border-b-0"
               >
-                <span className="min-w-[48px] pt-0.5 font-mono text-xs text-accent">
+                <span className="min-w-[48px] pt-0.5 font-mono text-xs text-accent-text">
                   {c.timestamp_formatted}
                 </span>
                 <span className="text-fg">{c.title}</span>

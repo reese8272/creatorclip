@@ -6,6 +6,21 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Last completed (Issues 164 + 165 — live-site audit + WCAG AA contrast fix, 2026-06-19):** Built a
+second Playwright harness that runs against PROD (`autoclip.studio`) with the real backend + a real
+`cc_session` (captured via storageState; Google blocks automated OAuth, so a manual-cookie fallback was
+used) — `frontend/playwright.config.prod.ts` + `e2e/prod/`, capturing console/network/broken-image +
+**axe** at desktop/tablet/mobile, with gated paid-flow specs. **First live run: 0 console/network/image
+errors**, but **420 serious `color-contrast` (WCAG AA) failures on every page** — the real "gaps." Issue
+165 fixed them at the root: raised `--color-subtle`, split the accent token into solid-bg vs.
+`--color-accent-text` (Radix convention), and — the actual bug — taught `tailwind-merge` the custom
+font-size scale so it stopped dropping button text-color classes (filled buttons were silently
+inheriting the page fg). Also fixed Profile `<dl>` + Review slider `aria-label`. Added a permanent local
+a11y gate (`e2e/a11y.spec.ts`): **420 → 0 serious across 9 routes × 2 viewports.** Green: lint, vitest
+45/45, build, `test:e2e` (smoke + a11y). Paid flows: chat ✓; analysis/titles timed out at 60s (logged,
+OFF_COURSE). **Not yet deployed — prod re-verify (`npm run test:prod`) pending the push.** DECISIONS
+2026-06-19 (Issues 164, 165).
+
 **Last completed (Issue 163 — SPA UI polish from the Issue 162 audit, 2026-06-19):** Fixed the four
 layout/responsive defects the Playwright audit surfaced. **[SEV2]** `Nav.tsx` now collapses to a
 hamburger below Tailwind's `sm` (640px) — the bar shows `AutoClip … [142 min] [☰]` and a toggled panel

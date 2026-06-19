@@ -30,7 +30,7 @@ const LINKS: NavItem[] = [
 // selected-surface treatment); inactive hovers to an elevated surface.
 const LINK_BASE =
   'rounded-sm px-2.5 py-1 text-muted transition-colors duration-fast ease-standard hover:bg-elevated hover:text-fg'
-const LINK_ACTIVE = 'bg-accent-soft text-accent hover:bg-accent-soft hover:text-accent'
+const LINK_ACTIVE = 'bg-accent-soft text-accent-text hover:bg-accent-soft hover:text-accent-text'
 
 async function logout() {
   await api('/auth/logout', { method: 'POST', redirectOn401: false }).catch(() => {})
