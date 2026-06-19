@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { Nav } from './Nav'
@@ -31,5 +31,16 @@ describe('Nav', () => {
     expect(screen.getByRole('link', { name: 'Assistant' })).toHaveAttribute('href', '/app/chat')
     expect(screen.getByRole('link', { name: 'Analyze' })).toHaveAttribute('href', '/app/analysis')
     expect(screen.getByRole('link', { name: 'Pricing' })).toHaveAttribute('href', '/app/pricing')
+  })
+
+  it('collapses the links behind a toggle on mobile (Issue 163)', () => {
+    renderNav()
+    const toggle = screen.getByRole('button', { name: 'Open menu' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Close menu' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
   })
 })

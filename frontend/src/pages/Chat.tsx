@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Button } from '@/components/ui/button'
 import { subscribeToChatStream, type StreamSubscription } from '@/lib/taskStream'
@@ -147,9 +148,17 @@ export function Chat() {
       </DisclaimerBand>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6">
-        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto pb-4">
+        <div
+          ref={scrollRef}
+          className={cn(
+            'flex-1 overflow-y-auto pb-4',
+            // Center the intro in the available space until the first message,
+            // then fall back to top-aligned scrolling with inter-bubble spacing.
+            empty ? 'flex items-center justify-center' : 'space-y-4',
+          )}
+        >
           {empty && (
-            <div className="mt-12 text-center text-sm text-muted">
+            <div className="text-center text-sm text-muted">
               <h2 className="mb-2 text-h2 text-fg">Ask about your channel</h2>
               <p>
                 Try “What were my best videos this month?” or “When should I post?” — I’ll pull your

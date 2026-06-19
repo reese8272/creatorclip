@@ -6,6 +6,18 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Last completed (Issue 163 — SPA UI polish from the Issue 162 audit, 2026-06-19):** Fixed the four
+layout/responsive defects the Playwright audit surfaced. **[SEV2]** `Nav.tsx` now collapses to a
+hamburger below Tailwind's `sm` (640px) — the bar shows `AutoClip … [142 min] [☰]` and a toggled panel
+holds the 7 links + channel title + Logout (closes on link tap); the old 7-link-in-one-row mobile
+cram is gone. **[SEV3]** `Review.tsx` rebalanced to fill the empty bottom-right quadrant (left =
+player + Why-this-clip; right = Transcript + Caption-style + Clean-filler). **[SEV3]** `Analysis.tsx`
+feature cards → `sm:grid-cols-2` 2×2 block. **[SEV3]** `Chat.tsx` empty-state vertically centered
+until the first message. All four re-verified against regenerated screenshots (incl. a throwaway spec
+for the open mobile menu). **Green: lint clean, vitest 45/45 (+1 nav toggle test), build ok,
+`test:e2e` 20/20.** No DECISIONS entry — standard responsive patterns. OFF_COURSE_BUGS rows marked
+fixed. Visual-regression baselines (`toHaveScreenshot()`) remain a deferred follow-up.
+
 **Last completed (Issue 162 — Playwright E2E + visual harness, 2026-06-19):** Stood up a real-browser
 test layer for the React SPA, the first coverage of *rendered* UI (jsdom/Vitest can't compute CSS or
 paint). `@playwright/test` 1.61 under `frontend/`; `playwright.config.ts` runs every SPA route ×

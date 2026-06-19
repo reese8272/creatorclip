@@ -32,12 +32,16 @@ export function Analysis() {
         <AnalysisQuery />
 
         {videoId && (
-          <>
+          // 2×2 on desktop so the four per-video tools read as a compact block
+          // instead of a tall full-width stack; single column on mobile. Only a
+          // column gap here — each AnalysisPanel already carries mb-6 for the row
+          // rhythm. items-start lets cards grow independently as results expand.
+          <div className="grid items-start gap-x-4 sm:grid-cols-2">
             <TitleOptimizer videoId={videoId} videoTitle={videoTitle} />
             <HookAnalyzer videoId={videoId} />
             <ChaptersPanel videoId={videoId} />
             <ThumbnailConcepts videoId={videoId} />
-          </>
+          </div>
         )}
       </main>
     </>

@@ -65,24 +65,30 @@ export function Review() {
       </DisclaimerBand>
 
       <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
+        {/* Left: the clip itself + why it was picked. Right: the editing tools
+            (transcript + caption + clean). Splitting the secondary panels across
+            both columns keeps them balanced — otherwise the player-heavy left
+            column dwarfs a lone transcript and leaves the bottom-right empty. */}
         <div className="flex flex-col gap-4">
           <ClipPlayer key={clip.id} clip={clip} onAdvance={() => setIndex((i) => i + 1)} />
           <CollapsibleTool title="Why this clip" defaultOpen>
             <WhyThisClip clip={clip} />
           </CollapsibleTool>
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <div>
+            <h2 className="mb-3 text-sm font-medium uppercase tracking-[0.06em] text-muted">
+              Transcript
+            </h2>
+            <TranscriptEditor key={clip.id} clip={clip} />
+          </div>
           <CollapsibleTool title="Caption style">
             <CaptionStylePanel clip={clip} />
           </CollapsibleTool>
           <CollapsibleTool title="Clean filler + silence">
             <CleanPassPanel clip={clip} />
           </CollapsibleTool>
-        </div>
-
-        <div>
-          <h2 className="mb-3 text-sm font-medium uppercase tracking-[0.06em] text-muted">
-            Transcript
-          </h2>
-          <TranscriptEditor key={clip.id} clip={clip} />
         </div>
       </main>
     </>

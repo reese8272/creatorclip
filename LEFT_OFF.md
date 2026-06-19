@@ -4,39 +4,35 @@
 > truth — those live in `docs/`. Updated at the end of every session.
 
 **Last updated:** 2026-06-19
-**Branch:** `main` @ `4d3f067` — in sync with `origin/main` (0 ahead / 0 behind).
-**Working tree:** UNCOMMITTED — this session's Issue 162 work (Playwright E2E harness + doc updates).
-New: `frontend/e2e/`, `frontend/playwright.config.ts`. Modified: `frontend/{package.json,
-package-lock.json,vite.config.ts,eslint.config.js,.gitignore}`, `docs/{DECISIONS,SOT,PROJECT_STATE,
-issues,OFF_COURSE_BUGS}.md`, and this file.
+**Branch:** `main` — Issue 162 committed (`9dcac43`), Issue 163 committed locally this session.
+**Local `main` is AHEAD of `origin/main`** by these 2 commits — both UNPUSHED (push is gated; see below).
+**Working tree:** CLEAN after the Issue 163 commit.
 **Prod:** `https://autoclip.studio` (React SPA under `/app`). Auto-deploys on push to `main`. Live
-commit unchanged this session (`4d3f067`) — Issue 162 is test tooling only, nothing user-facing shipped.
+commit is still `4d3f067` — nothing has shipped this session; Issue 162 is test tooling, Issue 163 is
+queued in the unpushed commits.
 
 ---
 
 ## CURRENT FOCUS
 
-**Issue 162 (Playwright E2E + visual harness) is DONE and green, but UNCOMMITTED.** This session built
-the harness, ran the first rendered-UI audit, and filed the findings as **Issue 163**. Two things
-remain: commit Issue 162, then start Issue 163 (the UI polish).
+**Issues 162 + 163 are both DONE and green, committed locally, NOT pushed.** This session: committed
+the Playwright harness (162), then did the full Issue 163 UI-polish pass — all four audit defects
+fixed and re-verified. Nothing remains on 162/163 except the gated push.
 
 ### → NEXT ACTION
-1. **Commit Issue 162** (test tooling — does NOT touch prod, safe to land on `main`):
-   ```
-   cd /home/reese/workspace/Youtube-Video-AI-Editor
-   git add frontend/ docs/ LEFT_OFF.md
-   git commit   # message: "feat(test): Playwright E2E + visual harness for the SPA (Issue 162)"
-   ```
-   Note: pushing `main` triggers a prod deploy + is gated — get explicit user go-ahead before `git push`
-   (the commit itself is fine to make locally).
-2. **Start Issue 163** (`docs/issues.md` → "Issue 163 — SPA UI polish from the Issue 162 audit").
-   Run the harness first to regenerate the evidence: `cd frontend && npm run test:e2e` →
-   screenshots land in `frontend/e2e/__screenshots__/`. Fix in priority order:
-   - **[SEV2]** Mobile nav overflow at 390px (`Nav.tsx` / `AppChrome.tsx`) — add a responsive collapse below ~640px.
-   - **[SEV3]** Review desktop empty bottom-right quadrant (`pages/Review.tsx` grid).
-   - **[SEV3]** Analysis cards → 2×2 grid (`pages/Analysis.tsx`).
-   - **[SEV3]** Chat empty-state vertical void (`pages/Chat.tsx`).
-3. **Re-verify after each fix:** `npm run lint && npm test && npm run build && npm run test:e2e` (20/20).
+1. **Push when the user gives the go-ahead** (pushing `main` triggers a prod deploy and is gated —
+   do NOT push without explicit intent). Issue 163 IS user-facing (Nav + 3 pages change), so the
+   prod deploy will reflect it. `git push origin main` lands both `9dcac43` (162) + the 163 commit.
+2. **Then pick the next issue.** Issues 160 and 161 are still open from prior sessions — check
+   `docs/issues.md` for their specs.
+
+### What Issue 163 changed (all verified — lint clean, vitest 45/45, build ok, test:e2e 20/20)
+- **[SEV2]** `Nav.tsx` — responsive collapse to a hamburger below `sm` (640px); toggled panel holds
+  the 7 links + channel + Logout, closes on link tap. New toggle test in `Nav.test.tsx`.
+- **[SEV3]** `Review.tsx` — rebalanced grid: left = player + Why-this-clip; right = Transcript +
+  Caption-style + Clean-filler (fills the old empty bottom-right quadrant).
+- **[SEV3]** `Analysis.tsx` — four feature cards → `sm:grid-cols-2` 2×2 block.
+- **[SEV3]** `Chat.tsx` — empty-state vertically centered until first message; composer stays pinned.
 
 ## WHAT WORKS NOW (verified — don't re-investigate)
 

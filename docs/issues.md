@@ -3895,7 +3895,7 @@ Docker needed). See DECISIONS 2026-06-19 (Issue 162).
 
 ---
 
-## Issue 163 — SPA UI polish from the Issue 162 screenshot audit 📋 OPEN (filed 2026-06-19)
+## Issue 163 — SPA UI polish from the Issue 162 screenshot audit ✅ DONE (2026-06-19)
 
 **Problem:** The Issue 162 Playwright harness produced the first rendered-UI audit of the React
 overhaul. Overall it holds up (honesty banner everywhere, dark-mode elevation reads, FitBadge works),
@@ -3903,23 +3903,24 @@ but four layout/responsive issues surfaced that jsdom could never have shown. Pr
 `docs/OFF_COURSE_BUGS.md` (2026-06-19 audit rows). All are reproducible from the committed harness:
 `cd frontend && npm run test:e2e` → `e2e/__screenshots__/`.
 
-**Acceptance criteria** (each fix should be re-verified against the harness screenshots):
-- [ ] **[SEV2] Mobile nav overflow (390px)** — `AppChrome`/`Nav` packs 6 links + channel + balance
-      pill + Logout into one row; the `142 min` pill wraps and the row is cramped. Add a responsive
-      collapse (menu/hamburger) below ~640px. Evidence: `mobile-dashboard.png`, `mobile-review.png`.
-- [ ] **[SEV3] Review desktop empty bottom-right quadrant (≥1024px)** — transcript panel sits
-      top-right with ~60% void below while the left column continues. Rebalance the two-column grid
-      (e.g. move why-this-clip/caption/clean panels right, or cap left-column width). Mobile is fine.
-      Evidence: `desktop-review.png` vs `mobile-review.png`.
-- [ ] **[SEV3] Analysis feature cards full-width with right gutter (desktop)** — Title/Hook/Chapters/
-      Thumbnail stack full-width on 1440px; a 2×2 grid tightens it. Evidence: `desktop-analysis.png`.
-- [ ] **[SEV3] Chat empty-state vertical void (desktop)** — large gap between intro and the
-      bottom-pinned composer; center the empty state or raise the composer until first message.
-      Evidence: `desktop-chat.png`.
-- [ ] No regression: `frontend` lint / vitest / build green; `npm run test:e2e` 20/20 still passes.
+**Acceptance criteria** (each fix re-verified against the regenerated harness screenshots):
+- [x] **[SEV2] Mobile nav overflow (390px)** — `Nav.tsx` now collapses to a hamburger below
+      Tailwind's `sm` (640px): bar shows `AutoClip … [142 min] [☰]`, and a toggled panel holds the
+      7 links + channel title + Logout. Closes on link tap (`onNavigate`). Verified: closed state in
+      `mobile-dashboard.png`, open panel captured via throwaway spec. Added a toggle test to `Nav.test.tsx`.
+- [x] **[SEV3] Review desktop empty bottom-right quadrant (≥1024px)** — `Review.tsx` rebalanced:
+      left = player + Why-this-clip; right = Transcript + Caption-style + Clean-filler. Both columns
+      now carry comparable weight. Mobile single-column unchanged. Verified: `desktop-review.png`.
+- [x] **[SEV3] Analysis feature cards full-width (desktop)** — `Analysis.tsx` wraps the four
+      per-video tools in `grid items-start gap-x-4 sm:grid-cols-2` (2×2 desktop, single-col mobile;
+      `AnalysisPanel`'s own `mb-6` keeps the row rhythm). Verified: `desktop-analysis.png`.
+- [x] **[SEV3] Chat empty-state vertical void (desktop)** — `Chat.tsx` centers the intro in the
+      scroll area while empty (`flex items-center justify-center`), reverting to top-aligned
+      `space-y-4` scrolling once messages exist. Composer stays pinned. Verified: `desktop-chat.png`.
+- [x] No regression: lint clean, vitest 45/45 (+1 toggle test), build ok, `npm run test:e2e` 20/20.
 
-**Note:** consider adding `toHaveScreenshot()` visual-regression baselines for the pages touched here
-(the visual-regression follow-up from Issue 162) so these fixes are locked in pixel-for-pixel.
+**Follow-up (deferred):** `toHaveScreenshot()` visual-regression baselines for the touched pages (the
+Issue 162 visual-regression follow-up) so these fixes lock in pixel-for-pixel. Not blocking — logged here.
 
 ---
 

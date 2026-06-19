@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
@@ -36,51 +37,105 @@ async function logout() {
   window.location.href = '/app/login'
 }
 
-export function Nav({ user, balance }: { user: CurrentUser | null; balance: Balance | null }) {
+// Single source of link markup, reused by the desktop row and the mobile panel.
+// `onNavigate` lets the mobile panel close itself when a destination is chosen.
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   return (
-    <nav className="sticky top-0 z-40 flex items-center gap-6 border-b border-default bg-bg/80 px-6 py-3 shadow-sm backdrop-blur-md">
-      <a href="/" className="font-display text-md font-semibold tracking-tight text-fg hover:text-fg">
-        AutoClip
-      </a>
-      <div className="flex items-center gap-1 text-small">
-        {LINKS.map((l) =>
-          l.external ? (
-            <a key={l.href} href={l.href} className={LINK_BASE}>
-              {l.label}
-            </a>
-          ) : (
-            <NavLink
-              key={l.href}
-              to={l.href}
-              className={({ isActive }) => cn(LINK_BASE, isActive && LINK_ACTIVE)}
-            >
-              {l.label}
-            </NavLink>
-          ),
+    <>
+      {LINKS.map((l) =>
+        l.external ? (
+          <a key={l.href} href={l.href} className={LINK_BASE} onClick={onNavigate}>
+            {l.label}
+          </a>
+        ) : (
+          <NavLink
+            key={l.href}
+            to={l.href}
+            onClick={onNavigate}
+            className={({ isActive }) => cn(LINK_BASE, isActive && LINK_ACTIVE)}
+          >
+            {l.label}
+          </NavLink>
+        ),
+      )}
+    </>
+  )
+}
+
+function BalancePill({ balance }: { balance: Balance }) {
+  return (
+    <span
+      className={cn(
+        'rounded-full px-2.5 py-0.5 font-mono text-small',
+        balance.low_balance
+          ? 'bg-[color:var(--color-warning-soft)] text-warning'
+          : 'bg-elevated text-muted',
+      )}
+    >
+      {balance.minutes_balance} min
+    </span>
+  )
+}
+
+export function Nav({ user, balance }: { user: CurrentUser | null; balance: Balance | null }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <nav className="sticky top-0 z-40 border-b border-default bg-bg/80 shadow-sm backdrop-blur-md">
+      <div className="flex items-center gap-6 px-6 py-3">
+        <a href="/" className="font-display text-md font-semibold tracking-tight text-fg hover:text-fg">
+          AutoClip
+        </a>
+        {/* Desktop link row — collapses into the hamburger panel below 640px. */}
+        <div className="hidden items-center gap-1 text-small sm:flex">
+          <NavLinks />
+        </div>
+        <span className="flex-1" />
+        {user && (
+          <span className="hidden font-mono text-xs text-subtle sm:inline">
+            {user.channel_title || user.email}
+          </span>
         )}
-      </div>
-      <span className="flex-1" />
-      {user && (
-        <span className="font-mono text-xs text-subtle">{user.channel_title || user.email}</span>
-      )}
-      {balance && (
-        <span
-          className={cn(
-            'rounded-full px-2.5 py-0.5 font-mono text-small',
-            balance.low_balance
-              ? 'bg-[color:var(--color-warning-soft)] text-warning'
-              : 'bg-elevated text-muted',
-          )}
+        {balance && <BalancePill balance={balance} />}
+        <button
+          onClick={logout}
+          className="hidden rounded-sm px-2 py-1 text-small text-muted transition-colors duration-fast hover:bg-elevated hover:text-fg sm:block"
         >
-          {balance.minutes_balance} min
-        </span>
+          Logout
+        </button>
+        {/* Mobile menu toggle — only rendered below 640px. */}
+        <button
+          type="button"
+          aria-label={open ? 'Close menu' : 'Open menu'}
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+          className="rounded-sm px-2 py-1 text-md text-muted transition-colors duration-fast hover:bg-elevated hover:text-fg sm:hidden"
+        >
+          {open ? '✕' : '☰'}
+        </button>
+      </div>
+
+      {/* Mobile panel — links + channel + Logout, shown only when toggled open. */}
+      {open && (
+        <div className="border-t border-default px-6 py-3 sm:hidden">
+          <div className="flex flex-col gap-1 text-small">
+            <NavLinks onNavigate={() => setOpen(false)} />
+          </div>
+          <div className="mt-3 flex items-center justify-between border-t border-default pt-3">
+            {user && (
+              <span className="font-mono text-xs text-subtle">
+                {user.channel_title || user.email}
+              </span>
+            )}
+            <button
+              onClick={logout}
+              className="rounded-sm px-2 py-1 text-small text-muted transition-colors duration-fast hover:bg-elevated hover:text-fg"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
       )}
-      <button
-        onClick={logout}
-        className="rounded-sm px-2 py-1 text-small text-muted transition-colors duration-fast hover:bg-elevated hover:text-fg"
-      >
-        Logout
-      </button>
     </nav>
   )
 }
