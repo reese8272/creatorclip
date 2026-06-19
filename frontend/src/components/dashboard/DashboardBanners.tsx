@@ -29,7 +29,7 @@ export function DnaCta({ setup }: { setup: SetupStep | null | undefined }) {
           <Button>Set up →</Button>
         </Link>
       ) : (
-        <a href={setup.next_action_url ?? '/static/onboarding.html'}>
+        <a href={setup.next_action_url ?? '/app/onboarding'}>
           <Button>Set up →</Button>
         </a>
       )}

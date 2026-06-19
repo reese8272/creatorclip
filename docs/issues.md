@@ -3671,19 +3671,26 @@ use a minimal nav (no `AppChrome`) and that inadvertently dropped the footer too
 
 ## Issue 154: [SEV1] Walkthrough primary CTA dead-ends into legacy `/static/onboarding.html`
 
-**Status**: ☐ Not started
+**Status**: ✅ Done (2026-06-18) — pending deploy of `frontend/dist`
 
-**What**: The Walkthrough's terminal "Set up my AutoClip" CTA (and the Enter-key handler) does
-a full-page `window.location.href = '/static/onboarding.html'` (`Walkthrough.tsx:144,155`),
-bouncing a first-run user out of the SPA into a rollback-only legacy page mid-onboarding. The
-ported route already exists at `/app/onboarding` (`App.tsx:37`). Any other `/static/*` links
-in the SPA copy (e.g. the line-144 reference) should likewise stay in-SPA.
+**What**: The Walkthrough's terminal "Set up my AutoClip" CTA (and the Enter-key handler) did
+a full-page `window.location.href = '/static/onboarding.html'`, bouncing a first-run user out
+of the SPA into a rollback-only legacy page mid-onboarding. The ported route already exists at
+`/app/onboarding` (`App.tsx:37`).
+
+**Delivered:** `Walkthrough` now hands off via `useNavigate('/onboarding')` (in-SPA, no reload);
+`markWalkthroughSeen` split from the navigation; CTA + Enter handler both use it. Audit-found a
+**second** dead-end the original report missed — `DashboardBanners.tsx` fell back to
+`?? '/static/onboarding.html'` for unknown setup steps; changed to `/app/onboarding`. Grep
+confirms no remaining SPA link into a `/static/*.html` user page (only ToS/Privacy, by design).
+Test asserts the finish hand-off lands on an in-SPA route (stub `/onboarding`), not a full-page
+exit. Frontend lint + vitest (34) + build green.
 
 **Acceptance criteria**:
-- [ ] Walkthrough CTA + Enter handler navigate within the SPA (`useNavigate('/onboarding')` or `/app/onboarding`)
-- [ ] Grep confirms no SPA code links into `/static/*.html` user pages (ToS/Privacy excepted — those are the canonical served docs)
-- [ ] Test covers the CTA target
-- [ ] `frontend` lint/build/vitest green
+- [x] Walkthrough CTA + Enter handler navigate within the SPA (`useNavigate('/onboarding')`)
+- [x] Grep confirms no SPA code links into `/static/*.html` user pages (ToS/Privacy excepted — those are the canonical served docs); also fixed the `DashboardBanners` fallback
+- [x] Test covers the CTA target (asserts in-SPA navigation)
+- [x] `frontend` lint/build/vitest green
 
 ---
 

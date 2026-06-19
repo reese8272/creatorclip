@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Footer } from '@/components/Footer'
 
 // Port of static/walkthrough.html — the first-run explainer (5 panels). Local
@@ -136,28 +137,35 @@ const PANELS: Panel[] = [
   },
 ]
 
-function finishWalkthrough() {
+function markWalkthroughSeen() {
   try {
     localStorage.setItem('creatorclip:walkthrough_seen', '1')
   } catch {
     /* private-mode browsers can still proceed */
   }
-  window.location.href = '/static/onboarding.html'
 }
 
 export function Walkthrough() {
+  const navigate = useNavigate()
   const [current, setCurrent] = useState(1)
   const isLast = current === PANELS.length
+
+  // Mark seen, then hand off WITHIN the SPA to the ported onboarding route
+  // (Issue 154 — previously did a full-page exit to the dead /static/onboarding.html).
+  const finish = useCallback(() => {
+    markWalkthroughSeen()
+    navigate('/onboarding')
+  }, [navigate])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight') setCurrent((c) => Math.min(c + 1, PANELS.length))
       else if (e.key === 'ArrowLeft') setCurrent((c) => Math.max(c - 1, 1))
-      else if (e.key === 'Enter' && current === PANELS.length) finishWalkthrough()
+      else if (e.key === 'Enter' && current === PANELS.length) finish()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [current])
+  }, [current, finish])
 
   const panel = PANELS[current - 1]
 
@@ -198,7 +206,7 @@ export function Walkthrough() {
             </span>
             {isLast ? (
               <button
-                onClick={finishWalkthrough}
+                onClick={finish}
                 className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover"
               >
                 Set up my AutoClip →
