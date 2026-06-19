@@ -3772,20 +3772,26 @@ the upload-intel error path. Frontend lint + vitest (37) + build green.
 
 ## Issue 158: [SEV2] Account-deletion UI — right-to-erasure (`DELETE /auth/me`)
 
-**Status**: ☐ Not started
+**Status**: ✅ Done (2026-06-18) — pending deploy of `frontend/dist`
 **Note**: Pre-existing gap (not an Issue 85 regression) — surfaced by the audit's orphaned-endpoint sweep.
 
-**What**: `DELETE /auth/me` (token revocation + media purge) exists in `routers/auth.py:204`
-but has **no UI caller** in either the old static pages or the SPA. CLAUDE.md Pre-Public-Launch
-lists "Account-deletion endpoint (right-to-erasure: token revocation + media purge)" as a
-launch requirement. The backend is done; the user-facing affordance is missing.
+**What**: `DELETE /auth/me` (revoke OAuth + purge media + cascade-delete, clears the session
+cookie) existed in `routers/auth.py:204` but had **no UI caller**. CLAUDE.md Pre-Public-Launch
+lists account deletion (right-to-erasure) as a launch requirement; the backend was done, the
+affordance was missing.
+
+**Delivered:** `components/profile/AccountDeletion.tsx` — a "Danger zone" section at the bottom
+of Profile with a two-step confirm (arm → "Yes, permanently delete"), honest copy on what's
+purged (OAuth access + uploaded media + all data, irreversible), calls `DELETE /auth/me` then
+redirects to `/app/login` (cookie already cleared server-side). Test covers the two-step gate
+and the DELETE call. Closes the CLAUDE.md launch item. Frontend lint + vitest (38) + build green.
 
 **Acceptance criteria**:
-- [ ] Profile (or settings) surfaces an account-deletion affordance with a confirm step
-- [ ] Calls `DELETE /auth/me`; on success, clears session and routes to a logged-out/confirmation state
-- [ ] Honest copy on what is purged (tokens + media) per COMPLIANCE.md
-- [ ] Test covers the delete flow
-- [ ] `frontend` lint/build/vitest green
+- [x] Profile surfaces an account-deletion affordance with a (two-step) confirm
+- [x] Calls `DELETE /auth/me`; on success redirects to login (session cleared server-side)
+- [x] Honest copy on what is purged (OAuth access + media + all data) per COMPLIANCE.md
+- [x] Test covers the delete flow (two-step confirm + DELETE call)
+- [x] `frontend` lint/build/vitest green
 
 ---
 

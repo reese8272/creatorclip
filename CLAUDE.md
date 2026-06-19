@@ -268,7 +268,7 @@ docker compose logs --tail 100 app worker
 - `TOKEN_ENCRYPTION_KEY` rotation runbook written
 - ✅ Terms of Service + Privacy Policy pages live AND linked — pages existed at `/static/tos.html` + `/static/privacy.html`; Wave-6 Fix B added a footer linking both from every static template (Google OAuth verification gate, Issue 29)
 - Google OAuth app verification completed
-- Account-deletion endpoint (right-to-erasure: token revocation + media purge)
+- ✅ Account deletion (right-to-erasure: token revocation + media purge) — endpoint `DELETE /auth/me` plus the Profile "Danger zone" UI affordance (Issue 158)
 - Billing + plan-tier wired (usage-based tiers — pricing research pending)
 - Eval harness hardened with adversarial/edge cases
 
