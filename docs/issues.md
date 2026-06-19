@@ -3696,8 +3696,16 @@ exit. Frontend lint + vitest (34) + build green.
 
 ## Issue 155: [SEV2] Restore frontend UI telemetry in the SPA (`/api/activity`)
 
-**Status**: ☐ Not started
+**Status**: ✅ Done (2026-06-18) — pending deploy of `frontend/dist`; prod row-level confirmation after deploy
 **Logged**: `docs/OFF_COURSE_BUGS.md` 2026-06-18
+
+**Delivered:** `lib/activity.ts` (fire-and-forget `sendActivity` + delegated capture-phase
+click/submit listeners, ported from `static/activity.js`; uses `textContent` not browser-only
+`innerText`; slices `page`/`target` to the server's Pydantic limits so a long title can't 422).
+`hooks/useActivityTelemetry.ts` installs the listeners once and emits `navigate` on initial load
++ every React Router location change. Wired via a new `RootLayout` wrapping all routes in
+`App.tsx`. Test asserts all three event types (`navigate` on load + route change, `click`) POST
+to `/api/activity`. Backend endpoint + `event_logs` sink were already healthy (confirmed live).
 
 **What**: The old static pages loaded `static/activity.js`, which fired fire-and-forget
 `POST /api/activity` on every click, form submit, and navigation. The React SPA has **zero**
@@ -3709,12 +3717,12 @@ prod: only 5 `ui` rows ever, all pre-cutover; current sessions log `backend`/`ht
 rows but no `ui` rows.
 
 **Acceptance criteria**:
-- [ ] SPA emits `navigate` events on React Router route change (a `useLocation` effect)
-- [ ] SPA emits `click`/`submit` events (delegated listeners or `lib/api.ts` mutation wrap), matching the existing `ActivityEvent` shape (`page`, `event_type`, `target`, `extra`)
-- [ ] Instrument the same surfaces the old footprint covered (the 6 authed/funnel pages), not pre-auth-only noise
-- [ ] No PII/token in any emitted `extra` (redaction already server-side; don't send secrets client-side)
-- [ ] Verified end-to-end: a click produces a `source='ui'` row in `event_logs`
-- [ ] `frontend` lint/build/vitest green
+- [x] SPA emits `navigate` events on React Router route change (a `useLocation` effect)
+- [x] SPA emits `click`/`submit` events (delegated listeners), matching the existing `ActivityEvent` shape (`page`, `event_type`, `target`, `extra`)
+- [x] Instrumented app-wide via `RootLayout` (covers all routes, including the 6 authed/funnel surfaces); pre-auth pages now also covered (login/pricing) — a deliberate superset, low volume
+- [x] No PII/token in any emitted `extra` (only `href` on links; redaction also enforced server-side)
+- [~] Verified end-to-end: unit test proves the POST shape; live `source='ui'` row confirmation pending deploy
+- [x] `frontend` lint/build/vitest green
 
 ---
 
