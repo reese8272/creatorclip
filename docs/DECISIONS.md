@@ -6492,3 +6492,34 @@ Token-adoption audit now shows every group consumed — type scale (h1–mono), 
 entrance animations, all 6 radii rungs, all 3 surface tiers, and `FitBadge` (fit-* tiers).
 
 **Date:** 2026-06-19
+
+---
+
+## 2026-06-19 — UI polish pass 3: dark-mode elevation correction (validated by headless render)
+
+**What changed:** Re-tuned the surface/border/shadow tokens in `index.css`:
+- `--color-bg` 8% → **7%**, `--color-surface` 11% → **13%** (card now clears the page by ~6% L,
+  was ~3%), `--color-elevated` 14% → 16.5%, `--color-raised` 17% → 20%.
+- `--color-default` (card borders) 22% → **26%**, `--color-strong` 30% → **34%**.
+- `--shadow-inset` top-edge highlight 6% → **10%** white; `--shadow-sm/md/lg` given more
+  spread/opacity.
+
+**Why:** The user reported the pass-1/2 UI "looks almost the exact same." Rendered the real
+compiled CSS in headless Chromium (Playwright) and confirmed it visually: the `shadow-sm` +
+`shadow-inset` elevation added to every card was **imperceptible** — a black drop-shadow on a
+near-black surface doesn't register, and a +3% L surface gap doesn't separate from the page. Only
+`shadow-accent-glow` (accent-tinted) and the `FitBadge` read. This is the classic dark-mode
+elevation mistake: depth on dark comes from **surface-contrast + borders + a brighter top-edge
+catch-light**, not black shadows (how Linear/Vercel do it). The earlier pass "consumed" the tokens
+but they were the wrong values to be *visible*.
+
+**Source/evidence:** before/after headless screenshots of a gallery built from the actual compiled
+`dist` CSS (bg/surface/border/shadow values read straight from the bundle). After re-tune, the card
+visibly separates from the page. `npm run build` green, `npm test` 44/44, `eslint` clean.
+
+**Related (not a code change — flagged for the user):** `frontend/dist` is gitignored and built at
+deploy time (`Dockerfile` `npm run build`); `deploy.yml` runs on a **self-hosted** runner that
+falls back to manual `scripts/deploy.sh` when offline. So a "looks the same" live site may simply
+be serving a pre-overhaul container — the deploy must actually run for any of these passes to appear.
+
+**Date:** 2026-06-19

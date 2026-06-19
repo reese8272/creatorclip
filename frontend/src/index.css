@@ -15,15 +15,20 @@
 @import 'tailwindcss';
 
 @theme {
-  /* Surfaces (OKLCH, hue 285 = faint blue-violet warmth) */
-  --color-bg: oklch(8% 0.008 285);
-  --color-surface: oklch(11% 0.01 285);
-  --color-elevated: oklch(14% 0.012 285);
-  --color-raised: oklch(17% 0.013 285);
+  /* Surfaces (OKLCH, hue 285 = faint blue-violet warmth).
+     Dark-mode elevation comes from SURFACE CONTRAST + borders, not black
+     drop-shadows (which are invisible on a near-black bg — verified by render
+     2026-06-19, DECISIONS). The page bg is pushed darker and surface lifted so
+     a card clears the page by ~6% L (was ~3%, imperceptible). */
+  --color-bg: oklch(7% 0.008 285);
+  --color-surface: oklch(13% 0.011 285);
+  --color-elevated: oklch(16.5% 0.013 285);
+  --color-raised: oklch(20% 0.014 285);
 
-  /* Borders (border-default / border-strong) */
-  --color-default: oklch(22% 0.012 285);
-  --color-strong: oklch(30% 0.015 285);
+  /* Borders (border-default / border-strong) — the primary card-definition cue
+     on dark; bumped so edges read crisply. */
+  --color-default: oklch(26% 0.014 285);
+  --color-strong: oklch(34% 0.016 285);
 
   /* Text (text-fg / text-muted / text-subtle) */
   --color-fg: oklch(94% 0.008 285);
@@ -140,12 +145,15 @@
   --animate-scale-in: scale-in var(--duration-base) var(--ease-spring);
   --animate-slide-up: slide-up var(--duration-base) var(--ease-enter);
 
-  /* Shadows (dark-surface: black-alpha elevation + accent glow) */
-  --shadow-sm: 0 1px 3px oklch(0% 0 0 / 0.4), 0 1px 2px oklch(0% 0 0 / 0.3);
-  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.5), 0 2px 4px oklch(0% 0 0 / 0.3);
-  --shadow-lg: 0 12px 32px oklch(0% 0 0 / 0.6), 0 4px 8px oklch(0% 0 0 / 0.35);
+  /* Shadows (dark-surface: black-alpha elevation + accent glow). Black shadows
+     barely register on near-black, so the load-bearing cue is the inset top-edge
+     highlight (a brighter "catch-light" that reads as a raised lip) plus the
+     surface/border contrast above; the drop shadows just ground larger overlays. */
+  --shadow-sm: 0 2px 6px oklch(0% 0 0 / 0.55), 0 1px 2px oklch(0% 0 0 / 0.4);
+  --shadow-md: 0 6px 16px oklch(0% 0 0 / 0.6), 0 2px 4px oklch(0% 0 0 / 0.4);
+  --shadow-lg: 0 16px 40px oklch(0% 0 0 / 0.7), 0 4px 8px oklch(0% 0 0 / 0.45);
   --shadow-accent-glow: 0 0 0 1px oklch(35% 0.1 280), 0 4px 20px oklch(58% 0.18 280 / 0.25);
-  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.06);
+  --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.1);
 }
 
 @layer base {
