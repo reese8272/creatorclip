@@ -25,7 +25,7 @@ export function AccountDeletion() {
   }
 
   return (
-    <section className="rounded-lg border border-[color:var(--color-danger-border)] bg-surface p-5">
+    <section className="rounded-md border border-[color:var(--color-danger-border)] bg-surface p-5 shadow-sm shadow-inset">
       <h2 className="mb-1 text-sm font-semibold text-fg">Delete account</h2>
       <p className="mb-4 text-sm text-muted">
         Permanently deletes your account: revokes AutoClip's access to your YouTube channel,

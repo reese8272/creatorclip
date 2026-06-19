@@ -150,7 +150,7 @@ export function Chat() {
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto pb-4">
           {empty && (
             <div className="mt-12 text-center text-sm text-muted">
-              <p className="mb-2 text-base font-medium text-fg">Ask about your channel</p>
+              <h2 className="mb-2 text-h2 text-fg">Ask about your channel</h2>
               <p>
                 Try “What were my best videos this month?” or “When should I post?” — I’ll pull your
                 own analytics to answer.

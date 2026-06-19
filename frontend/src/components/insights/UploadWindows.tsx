@@ -32,9 +32,10 @@ export function UploadWindows({
           key={i}
           className="flex items-center justify-between border-b border-default py-2 text-sm last:border-b-0"
         >
-          <span className="text-fg">
-            {w.day_name} {w.label}
-          </span>
+          {/* `label` already includes the day name (upload_intel/timing.py),
+              so render it alone — prepending day_name double-printed it
+              ("Friday Friday 12:00 PM"). */}
+          <span className="text-fg">{w.label}</span>
           <span className="font-mono font-semibold text-accent">
             {(w.activity_index * 100).toFixed(0)}%
           </span>

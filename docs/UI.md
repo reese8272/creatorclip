@@ -5,8 +5,11 @@
 **Polish pass 1 (2026-06-19):** `index.css` reconciled to this spec (radii ladder, semantic
 type scale, Geist app-shell font) and the system applied to the shared primitives (Card, Panel,
 Button, Badge, **FitBadge**, Modal, Nav) — elevation/shadow/motion/confidence tokens now consumed.
-Remaining per-page work: `shadow-accent-glow` on the Review clip feed, `text-h1/h2` on page titles,
-mounting `FitBadge` on performer/clip rows, `animate-slide-up` list entrances. See DECISIONS 2026-06-19.
+**Polish pass 2 / per-page sweep (2026-06-19):** deferred items landed — `FitBadge` mounted on the
+Review clips (fit-tier thresholds in `frontend/src/lib/fit.ts`; **tunable** — see DECISIONS),
+`shadow-accent-glow` on the active clip + featured pricing pack, `text-h1/h2` on page titles,
+`animate-fade-in`/`slide-up` entrances. Every token group now has consumers (verified by audit).
+See DECISIONS 2026-06-19 (pass 1 + pass 2).
 
 This document is the **design** source of truth. The **implementation** source of
 truth is the Tailwind v4 `@theme` block in `frontend/src/index.css` — every value

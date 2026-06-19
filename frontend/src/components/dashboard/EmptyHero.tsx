@@ -26,9 +26,9 @@ export function EmptyHero({ onLinkClick }: { onLinkClick: () => void }) {
   return (
     <section
       aria-label="Get started"
-      className="my-6 rounded-xl border border-default bg-surface px-7 py-8"
+      className="my-6 animate-slide-up rounded-xl border border-default bg-surface px-7 py-8 shadow-sm shadow-inset"
     >
-      <h2 className="mb-2 text-xl font-semibold text-fg">Let's get your first clip.</h2>
+      <h2 className="mb-2 text-h2 text-fg">Let's get your first clip.</h2>
       <p className="mb-5 max-w-[60ch] text-sm leading-relaxed text-muted">
         AutoClip needs one YouTube video to learn from before it can rank clips against your
         channel's DNA. Pick whichever path fits your workflow — all three land in the same review

@@ -1,13 +1,17 @@
+import { FitBadge } from '@/components/ui/fit-badge'
+import { fitTier } from '@/lib/fit'
 import type { ReviewClip } from '@/types'
 
 // Issue 94 transparency: the named principle + Claude's reasoning + score/timing
-// the engine cited. The score tooltip stays honest — fit estimate, not a promise.
+// the engine cited. The honest fit tier leads; the raw score stays below as the
+// transparency detail (fit estimate, not a promise).
 export function WhyThisClip({ clip }: { clip: ReviewClip }) {
   const setupStart = clip.setup_start_s ?? clip.start_s
   return (
     <div className="text-sm">
-      <div className="mb-3 border-b border-default pb-2 font-mono text-xs text-accent">
-        [principle] {clip.principle || '—'}
+      <div className="mb-3 flex items-center justify-between gap-3 border-b border-default pb-2">
+        <span className="font-mono text-xs text-accent">[principle] {clip.principle || '—'}</span>
+        <FitBadge tier={fitTier(clip.score)} />
       </div>
       <div className="leading-relaxed text-fg">
         {clip.reasoning ||

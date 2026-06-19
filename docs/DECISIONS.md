@@ -6457,3 +6457,38 @@ utility resolves (`duration-fast`, `text-h3`, `rounded-xs`, `bg-fit-strong-soft`
 motion all moved from 0 → consumed.
 
 **Date:** 2026-06-19
+
+---
+
+## 2026-06-19 — UI polish pass 2 (per-page sweep): mount the deferred tokens + define clip fit-tier thresholds
+
+**What changed:** Applied the design system to the pages (the work pass 1 deferred), so every
+token group now has real consumers:
+- **`FitBadge` mounted** on the Review surface (the differentiator) — `ClipPlayer` meta (headline
+  tier replaces the raw `score 0.xx`) and `WhyThisClip` header. The numeric score stays in the
+  `WhyThisClip` detail panel for Issue 94 transparency (additive, not a deletion).
+- **`shadow-accent-glow`** on the active clip video (Review) and the featured pricing pack.
+- **Entrance motion**: `animate-fade-in` per clip advance (ClipPlayer remounts on `key`),
+  `animate-slide-up` on the EmptyHero + feedback panel.
+- **Page titles → `text-h1`/`text-h2`** (Pricing, Analysis, Login, Onboarding, Walkthrough, Chat
+  hero); the token carries weight, so redundant `font-semibold` was dropped. Base `h1,h2` already
+  routes these to Inter (`font-display`).
+- **Elevation** on remaining flat cards (Analysis form, Dashboard "Analyze a video" strip,
+  Pricing tiers at the correct `radius-md`, EmptyHero), plus button radii fixed to `radius-sm`.
+
+**Product decision needing a note — clip fit-tier thresholds.** `docs/UI.md` says the three
+"channel fit" tiers exist but "tier thresholds are a product decision." The engine emits a
+**0.0–1.0 fit score** (`clip_engine/scoring.py:58` — 0 = poor fit, 1 = excellent fit for this
+creator). Chosen mapping, centralized in `frontend/src/lib/fit.ts` as the single source of truth:
+**strong ≥ 0.70 · moderate ≥ 0.45 · else exploratory.** Rationale: ≥0.70 = high-confidence fit;
+the engine's own 0.5 fallback default lands in *moderate* (an unknown clip reads as "plausible,"
+not "strong"); below ~midpoint is *exploratory*. These are first-pass defaults and intentionally
+tunable in one file — they should be revisited against the real score distribution once there's
+production clip-score data. No raw score is ever the headline (UI.md); the tier is.
+
+**Source/evidence:** `clip_engine/scoring.py:58` (score semantics + range), `ranking.py` (0–1
+preference blend). Verification: `npm run build` green, `npm test` 38/38, `eslint` clean.
+Token-adoption audit now shows every group consumed — type scale (h1–mono), all 5 shadows, all 3
+entrance animations, all 6 radii rungs, all 3 surface tiers, and `FitBadge` (fit-* tiers).
+
+**Date:** 2026-06-19

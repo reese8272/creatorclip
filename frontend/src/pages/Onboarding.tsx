@@ -116,7 +116,7 @@ export function Onboarding() {
       </nav>
 
       <main className="flex w-full max-w-lg flex-col gap-3 px-4 pb-6 pt-10">
-        <h1 className="mt-6 text-center text-xl font-semibold text-fg">Set up AutoClip</h1>
+        <h1 className="mt-6 text-center text-h1 text-fg">Set up AutoClip</h1>
         <p className="mb-2 text-center text-sm text-muted">
           Connect your channel once. We learn the rest from your data.
         </p>

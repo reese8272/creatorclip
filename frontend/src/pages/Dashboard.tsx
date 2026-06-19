@@ -96,7 +96,7 @@ export function Dashboard() {
 
         <AnalyticsPanel />
 
-        <div className="mt-8 flex items-center justify-between gap-4 rounded-md border border-default border-l-2 border-l-accent bg-surface px-5 py-4">
+        <div className="mt-8 flex items-center justify-between gap-4 rounded-md border border-default border-l-2 border-l-accent bg-surface px-5 py-4 shadow-sm shadow-inset">
           <div>
             <h3 className="mb-1 text-sm font-medium text-fg">Analyze a video</h3>
             <p className="text-xs text-subtle">

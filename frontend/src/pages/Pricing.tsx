@@ -92,7 +92,7 @@ export function Pricing() {
       </DisclaimerBand>
 
       <main className="px-4 pb-6 pt-12 text-center">
-        <h1 className="mb-2 text-xl font-semibold text-fg">Buy the minutes you need.</h1>
+        <h1 className="mb-2 text-h1 text-fg">Buy the minutes you need.</h1>
         <p className="mx-auto mb-8 max-w-xl text-sm text-muted">
           No subscription. No expiry. Pay once, use whenever — stash extras for next season.
         </p>
@@ -111,8 +111,10 @@ export function Pricing() {
         {PACKS.map((p) => (
           <div
             key={p.id}
-            className={`relative flex flex-col gap-2 rounded-lg border bg-surface p-5 transition-colors hover:border-strong ${
-              p.featured ? 'border-accent' : 'border-default'
+            className={`relative flex flex-col gap-2 rounded-md border bg-surface p-5 shadow-inset transition-[background-color,border-color,box-shadow,transform] duration-base ease-standard hover:-translate-y-0.5 hover:shadow-md ${
+              p.featured
+                ? 'border-accent shadow-accent-glow'
+                : 'border-default shadow-sm hover:border-strong'
             }`}
           >
             {p.featured && (
@@ -134,8 +136,8 @@ export function Pricing() {
               onClick={() => buyPack(p.id)}
               className={
                 authed
-                  ? 'mt-4 w-full rounded-lg bg-accent py-3 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover'
-                  : 'mt-4 w-full rounded-lg border border-strong py-3 text-sm font-medium text-fg transition-colors hover:border-accent hover:text-accent'
+                  ? 'mt-4 w-full rounded-sm bg-accent py-3 text-sm font-medium text-on-accent shadow-inset transition-colors duration-fast hover:bg-accent-hover'
+                  : 'mt-4 w-full rounded-sm border border-strong py-3 text-sm font-medium text-fg transition-colors duration-fast hover:border-accent hover:text-accent'
               }
             >
               {authed ? 'Buy now' : 'Sign in to buy'}
@@ -150,7 +152,7 @@ export function Pricing() {
       </p>
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-strong bg-surface px-5 py-3 text-sm text-fg">
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 animate-slide-up rounded-lg border border-strong bg-elevated px-5 py-3 text-sm text-fg shadow-lg">
           {toast}
         </div>
       )}

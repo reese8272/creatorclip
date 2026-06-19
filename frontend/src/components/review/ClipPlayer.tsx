@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { FitBadge } from '@/components/ui/fit-badge'
+import { fitTier } from '@/lib/fit'
 import { cn } from '@/lib/utils'
 import type { FeedbackAction, FeedbackPayload, ReviewClip } from '@/types'
 
@@ -70,7 +72,7 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
   const tags = panel === 'upvote' ? APPROVE_TAGS : DENY_TAGS
 
   return (
-    <div className="flex flex-col items-center gap-4">
+    <div className="flex animate-fade-in flex-col items-center gap-4">
       {clip.render_uri ? (
         <video
           key={clip.id}
@@ -78,17 +80,20 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
           controls
           playsInline
           autoPlay
-          className="aspect-[9/16] w-full max-w-[360px] rounded-md border border-default bg-black"
+          className="aspect-[9/16] w-full max-w-[360px] rounded-xl border border-default bg-black shadow-accent-glow"
         />
       ) : (
-        <div className="flex aspect-[9/16] w-full max-w-[360px] items-center justify-center rounded-md border border-default bg-black text-sm text-subtle">
+        <div className="flex aspect-[9/16] w-full max-w-[360px] items-center justify-center rounded-xl border border-default bg-black text-sm text-subtle">
           Not yet rendered
         </div>
       )}
 
-      <div className="text-center font-mono text-xs text-muted">
-        Clip #{clip.rank ?? '—'} · {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s ·
-        score {(clip.score ?? 0).toFixed(2)}
+      <div className="flex flex-col items-center gap-2">
+        <div className="text-center font-mono text-xs text-muted">
+          Clip #{clip.rank ?? '—'} · {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
+        </div>
+        {/* Headline fit signal is the honest tier, not a raw number (docs/UI.md). */}
+        <FitBadge tier={fitTier(clip.score)} />
       </div>
 
       <div className="w-full max-w-[360px]">
@@ -140,7 +145,7 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
       </div>
 
       {panel && (
-        <div className="w-full max-w-[360px] rounded-md border border-default bg-surface p-4">
+        <div className="w-full max-w-[360px] animate-slide-up rounded-md border border-default bg-surface p-4 shadow-sm shadow-inset">
           <h4 className="mb-3 text-xs uppercase tracking-[0.06em] text-muted">
             {panel === 'upvote' ? 'Why are you keeping this?' : 'Why are you dropping this?'}
           </h4>

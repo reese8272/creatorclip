@@ -9,13 +9,13 @@ export function Login() {
   return (
     <div className="flex min-h-screen flex-col bg-bg">
       <main className="flex flex-1 items-center justify-center px-6 py-12">
-        <div className="w-full max-w-md rounded-xl border border-default bg-surface px-9 py-10 text-center">
+        <div className="w-full max-w-md rounded-lg border border-default bg-surface px-9 py-10 text-center shadow-lg">
           <div className="mb-1.5 text-xl font-semibold tracking-tight text-accent">AutoClip</div>
           <div className="mb-7 text-sm leading-relaxed text-muted">
             The only AI editor that truly knows your channel.
           </div>
 
-          <h1 className="mb-2.5 text-2xl font-semibold tracking-tight text-fg">Sign in to continue</h1>
+          <h1 className="mb-2.5 text-h1 text-fg">Sign in to continue</h1>
           <p className="mb-7 text-sm leading-relaxed text-muted">
             AutoClip learns your style from your own analytics and ranks clips against your
             channel's DNA — audience-fit over generic virality.

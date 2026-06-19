@@ -5,8 +5,8 @@ import type { DnaProfile } from '@/types'
 
 function SummaryCard({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
-    <div className="rounded-md border border-default bg-surface p-5">
-      <div className="mb-2 text-xs uppercase tracking-[0.06em] text-subtle">{label}</div>
+    <div className="rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
+      <div className="mb-2 text-label uppercase tracking-[0.08em] text-muted">{label}</div>
       <div className="font-mono text-xl font-semibold leading-tight text-fg">{value}</div>
       {sub && <div className="mt-2 text-xs text-subtle">{sub}</div>}
     </div>

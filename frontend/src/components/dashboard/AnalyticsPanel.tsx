@@ -34,9 +34,9 @@ export function AnalyticsPanel() {
   })
 
   return (
-    <div className="rounded-md border border-default bg-surface p-5">
+    <div className="rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
       <div className="mb-4 flex items-center justify-between">
-        <div className="text-xs uppercase tracking-[0.06em] text-subtle">YouTube Analytics</div>
+        <div className="text-label uppercase tracking-[0.08em] text-muted">YouTube Analytics</div>
         <select
           aria-label="Analytics period"
           value={period}

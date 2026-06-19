@@ -184,11 +184,11 @@ export function Walkthrough() {
           ))}
         </div>
 
-        <div className="rounded-lg border border-default bg-surface px-8 py-10">
+        <div className="rounded-lg border border-default bg-surface px-8 py-10 shadow-md shadow-inset">
           <div className="mb-3 font-mono text-xs uppercase tracking-wide text-subtle">
             {panel.step}
           </div>
-          <h1 className="mb-4 text-xl font-semibold tracking-tight text-fg">{panel.title}</h1>
+          <h1 className="mb-4 text-h1 text-fg">{panel.title}</h1>
           {panel.body}
 
           <div className="mt-8 flex items-center justify-between">
