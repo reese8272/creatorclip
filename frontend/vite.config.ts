@@ -33,5 +33,9 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     globals: false,
     css: false,
+    // Vitest owns src/ component tests; Playwright owns e2e/ (its own runner and
+    // a conflicting `test` export). Keep the two suites from colliding.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    exclude: ['e2e/**', 'node_modules/**'],
   },
 })

@@ -4,63 +4,66 @@
 > truth — those live in `docs/`. Updated at the end of every session.
 
 **Last updated:** 2026-06-19
-**Branch:** `main` @ `322a0ba` — in sync with `origin/main`. Working tree: only `LEFT_OFF.md` modified (this file).
-**Trunk state:** `origin/main` @ `322a0ba` · `origin/staging` @ `322a0ba`. **`main` and `staging` are byte-identical** (`git diff main staging` empty). The `fix/ui-dark-mode-elevation` branch is **merged and deleted** (local + remote).
-**Prod:** `https://autoclip.studio` (React SPA under `/app`). Auto-deploys on push to `main`. **Now serving `322a0ba`** — the dark-mode elevation fix shipped this session (Deploy to production run `27838545605`, success, 16:57 UTC).
+**Branch:** `main` @ `4d3f067` — in sync with `origin/main` (0 ahead / 0 behind).
+**Working tree:** UNCOMMITTED — this session's Issue 162 work (Playwright E2E harness + doc updates).
+New: `frontend/e2e/`, `frontend/playwright.config.ts`. Modified: `frontend/{package.json,
+package-lock.json,vite.config.ts,eslint.config.js,.gitignore}`, `docs/{DECISIONS,SOT,PROJECT_STATE,
+issues,OFF_COURSE_BUGS}.md`, and this file.
+**Prod:** `https://autoclip.studio` (React SPA under `/app`). Auto-deploys on push to `main`. Live
+commit unchanged this session (`4d3f067`) — Issue 162 is test tooling only, nothing user-facing shipped.
 
 ---
 
 ## CURRENT FOCUS
 
-The elevation fix is **merged to main and deployed to prod.** The merge work is done. The one
-remaining step is a **human eyeball check** — confirm the cards now visibly separate from the dark
-background on the live site (a bot/headless check can't do this reliably; see gotchas).
+**Issue 162 (Playwright E2E + visual harness) is DONE and green, but UNCOMMITTED.** This session built
+the harness, ran the first rendered-UI audit, and filed the findings as **Issue 163**. Two things
+remain: commit Issue 162, then start Issue 163 (the UI polish).
 
 ### → NEXT ACTION
-1. **Visually confirm prod** — hard-refresh `https://autoclip.studio/app` (Cmd/Ctrl-Shift-R) and
-   check that surfaces/cards now have visible elevation (surface contrast + borders + top-edge
-   highlight) instead of looking flat. This is the acceptance check for pass 3.
-2. **If it looks right** — UI elevation epic is closed. Pick up the open follow-ups below (Issue 160 / 161).
-3. **If it still looks flat** — do NOT assume a stale deploy (pipeline is verified green). Re-render
-   the *actual compiled CSS* in headless Chromium (recipe in the table) and compare before/after,
-   exactly as the root-cause probe did this session. The fix targets `frontend/src/index.css`.
-4. **Housekeeping:** this `LEFT_OFF.md` is the only uncommitted change. Commit it when ready
-   (`git add LEFT_OFF.md && git commit`) — it's not part of any code change, so it can land alone.
-
----
+1. **Commit Issue 162** (test tooling — does NOT touch prod, safe to land on `main`):
+   ```
+   cd /home/reese/workspace/Youtube-Video-AI-Editor
+   git add frontend/ docs/ LEFT_OFF.md
+   git commit   # message: "feat(test): Playwright E2E + visual harness for the SPA (Issue 162)"
+   ```
+   Note: pushing `main` triggers a prod deploy + is gated — get explicit user go-ahead before `git push`
+   (the commit itself is fine to make locally).
+2. **Start Issue 163** (`docs/issues.md` → "Issue 163 — SPA UI polish from the Issue 162 audit").
+   Run the harness first to regenerate the evidence: `cd frontend && npm run test:e2e` →
+   screenshots land in `frontend/e2e/__screenshots__/`. Fix in priority order:
+   - **[SEV2]** Mobile nav overflow at 390px (`Nav.tsx` / `AppChrome.tsx`) — add a responsive collapse below ~640px.
+   - **[SEV3]** Review desktop empty bottom-right quadrant (`pages/Review.tsx` grid).
+   - **[SEV3]** Analysis cards → 2×2 grid (`pages/Analysis.tsx`).
+   - **[SEV3]** Chat empty-state vertical void (`pages/Chat.tsx`).
+3. **Re-verify after each fix:** `npm run lint && npm test && npm run build && npm run test:e2e` (20/20).
 
 ## WHAT WORKS NOW (verified — don't re-investigate)
 
-- **Three UI polish passes are done, merged to main, and live on prod** (each gated: `npm run build`
-  + 44 vitest + `eslint`, all green):
-  - *Pass 1* (`04bf5d0`): reconciled `frontend/src/index.css` to `docs/UI.md` (radii, semantic type
-    scale, Geist font) + applied the design system to the shared primitives.
-  - *Pass 2* (`beca860`): per-page sweep — `FitBadge` on Review clips, accent-glow, page titles →
-    `text-h1/h2`, entrance motion, elevated remaining flat cards, fixed the "Friday Friday"
-    upload-window bug, added fit-tier + FitBadge tests.
-  - *Pass 3* (`322a0ba`): dark-mode elevation fix — **this session's deliverable, now on main/prod.**
-- **Root cause of "looks the same" is SOLVED.** Rendered the real compiled CSS in headless Chromium:
-  the card `shadow-sm`/`shadow-inset` was a **black shadow on near-black bg → invisible**. Fixed via
-  surface-contrast + brighter borders + a stronger top-edge highlight (NOT shadows).
-- **The deploy pipeline is verified working end-to-end** this session: push to `main` → "Docker
-  publish" (success) → "Deploy to production" via `workflow_run` (success, 43s). A stale deploy is
-  **not** a plausible failure mode.
-- **Merge hygiene is clean:** main fast-forwarded `beca860..322a0ba` (no merge commit); main ≡
-  staging; the feature branch is gone from both local and remote. Only `main` + `staging` remain.
-- **Token-adoption audit = 100%** — every design-system token group has consumers.
+- **Playwright harness is installed and green: `npm run test:e2e` → 20/20** (10 routes × desktop-1440
+  + mobile-390). `@playwright/test` 1.61 under `frontend/`; Chromium binary + system deps installed
+  (the WSL2 `sudo apt` step is already done — Chromium launches natively now).
+- **Backend is mocked at the network boundary** (`frontend/e2e/fixtures/mock-api.ts`, `page.route`,
+  fixtures shaped to `src/types.ts`, `authed`/`anon` seeds) — every page renders with NO live
+  backend, honoring the no-Docker constraint.
+- **No regression from the harness:** `npm run lint` clean, `npm test` 44/44, `npm run build` ok.
+  The two test runners are cleanly separated (Vitest→`src/` via `include`/`exclude`; Playwright→`e2e/`;
+  ESLint React-rules scoped to `src/` so Playwright's `use()` fixture doesn't false-positive).
+- **The overhaul renders well** (audit conclusion): honesty banner on every page, dark-mode elevation
+  holds up, FitBadge reads, pricing accent-glow works, mobile reflows to single-column. The 4 issues
+  in Issue 163 are the only real defects found.
+- **Prior elevation epic remains live on prod** (passes 1–3, last session) — unchanged this session.
 
 ## THE ARC THAT LED HERE
 
-1. User merged prior work (Issues 153–159 regression batch) to staging+main with identical history.
-2. User reviewed screenshots: UI felt "blocky / not production-grade." Found the React port was real
-   but the design system (`docs/UI.md`) had been **built and never applied**.
-3. Pass 1 (primitives) + Pass 2 (per-page sweep) — both shipped to main and auto-deployed.
-4. User: "it looks almost the exact same." Probed by rendering the actual CSS → elevation was
-   invisible on dark. Pass 3 fixed it; landed on staging, then blocked at the `main` push (the
-   auto-mode classifier denied an agent-initiated default-branch push without explicit intent).
-5. **This session:** user gave the explicit go-ahead ("merge the feature branch to staging and
-   main"). Promoted `322a0ba` to main via fast-forward, cleaned up the branch, watched the prod
-   deploy go green. Done — pending the visual confirmation above.
+1. Prior session: 3 UI polish passes (incl. dark-mode elevation fix) merged to main + deployed.
+2. **This session:** user asked if I could "poke and prod the UI/UX." Found the SPA had only
+   Vitest/jsdom tests (no rendering engine → can't see CSS/layout/elevation bugs).
+3. Ran the full issue-workflow for **Issue 162**: researched Playwright vs Cypress + the mocked-backend
+   pattern (DECISIONS 2026-06-19), built the harness, hit the expected WSL2 sudo blocker (user ran
+   `sudo npx playwright install-deps chromium`), then went 20/20 green.
+4. Reviewed all 20 screenshots → 4 findings. User asked to promote them to the next issue →
+   **Issue 163** filed, OFF_COURSE_BUGS rows marked "Promoted → Issue 163".
 
 ## KEY COORDINATES & FACTS
 
@@ -68,41 +71,40 @@ background on the live site (a bot/headless check can't do this reliably; see go
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` |
 | Prod URL | `https://autoclip.studio` (Cloudflare-fronted; SPA at `/app`, React Router basename `/app`) |
-| Live commit | `322a0ba` on `main` (= `staging`); Deploy run `27838545605` (success, 16:57 UTC) |
 | Frontend | `frontend/` — React 19 + TS + Vite 8 + Tailwind v4; build = `npm run build` (in `frontend/`) |
-| Elevation fix lives in | `frontend/src/index.css` (surface/border/top-edge tokens) |
-| SPA serving | `main.py` serves `frontend/dist` under `/app`. **`frontend/dist` is gitignored** — built in `Dockerfile` (`npm run build`) at image build |
-| Deploy | push to `main` → `docker-publish.yml` (image) → `deploy.yml` (self-hosted VM): `docker compose pull` + `alembic upgrade head` + `up -d` |
-| Prod host | SSH alias `creatorclip-vm` → `147.182.136.107` (root, keyed); compose at `/opt/autoclip/docker-compose.prod.yml` |
-| Prod image / DB | `ghcr.io/reese8272/creatorclip:latest` · container `autoclip-postgres-1`, db/user `creatorclip` |
-| CI | `.github/workflows/ci.yml` — 7 jobs incl. "Frontend (lint, test, build)"; on push/PR to `main`+`staging` |
-| Fit-tier thresholds | `frontend/src/lib/fit.ts` — strong ≥ 0.70, moderate ≥ 0.45 (clip score 0–1 from `clip_engine/scoring.py`); **tunable first-pass defaults** |
-| Headless render recipe | `npx playwright` (chromium installed) + `LD_LIBRARY_PATH=/home/linuxbrew/.linuxbrew/opt/nss/lib:/home/linuxbrew/.linuxbrew/opt/nspr/lib` (system libnss3/libnspr4 missing; brew provides them) |
-| Open follow-ups | **Issue 160** (cross-page active-tasks panel — gated by `MAX_CONCURRENT_SSE_PER_CREATOR=3`); **Issue 161** (repoint stale backend `next_action` `/static` URLs) |
+| E2E harness | `frontend/playwright.config.ts` + `frontend/e2e/` (`smoke.spec.ts`, `fixtures/mock-api.ts`). Run: `npm run test:e2e` · UI mode: `test:e2e:ui` · report: `test:e2e:report` |
+| Screenshots | `frontend/e2e/__screenshots__/{desktop,mobile}-<page>.png` — **gitignored** (audit output, not snapshot baselines) |
+| Playwright | `@playwright/test` 1.61; Chromium installed at `~/.cache/ms-playwright`; system deps installed via `sudo apt` (done) |
+| SPA routes | dashboard, insights, analysis (`?video_id=`), review (`?video_id=`), profile, chat, onboarding, walkthrough, pricing, login. Defined in `frontend/src/App.tsx` |
+| Auth plumbing | `useAuth.ts` probes `GET /auth/me` (401→null); `AuthGate.tsx` redirects to `/login`. Mock seed `anon` makes `/auth/me` 401 |
+| SPA serving | `main.py` serves `frontend/dist` under `/app`. **`frontend/dist` is gitignored** — built in `Dockerfile` at image build |
+| Deploy | push to `main` → `docker-publish.yml` (image) → `deploy.yml` (self-hosted VM) |
+| CI | `.github/workflows/ci.yml` — incl. "Frontend (lint, test, build)". **Note: CI does not yet run `test:e2e`** — Playwright is local-only for now |
+| Next issue numbers | 162 = DONE (this session); 163 = OPEN (UI polish); 160/161 still open from prior |
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Pushing to `main` triggers a prod deploy** AND is gated (auto-mode denies agent-initiated
-  default-branch pushes without clear user intent). Get explicit go-ahead before any future push.
-- **`main` and `staging` are kept byte-identical via fast-forward only** — never create merge commits
-  between them. Verify with `git diff main staging` (must be empty).
-- **Dark-mode depth = surface contrast + borders + top-edge highlight, NOT black drop-shadows** (they
-  vanish on near-black). Apply this to any future UI token work.
-- **`frontend/dist` is gitignored & built at deploy** — to view changes locally you must `npm run
-  build` then serve the backend against `frontend/dist`; viewing prod requires the deploy to have run.
-- Headless Chromium here needs the `LD_LIBRARY_PATH` brew shim (table above); no passwordless sudo to
-  `apt install` the libs.
-- Backend tests need a real Postgres (project rule: no DB mocking) — this env has **Redis only**.
-- Prod sits behind Cloudflare Bot Fight Mode — datacenter IPs may get a 403; verify via SSH/the VM
-  or a real browser, not a raw curl from CI. (This is why step 1 above is a human eyeball check.)
+- **Chromium now launches natively** — the old `LD_LIBRARY_PATH` brew shim from the previous LEFT_OFF
+  is obsolete; system libs were installed via `sudo apt` (`playwright install-deps`) this session.
+- **`npm run test:e2e` auto-starts the Vite dev server** (`webServer` in the config, port 5173) and
+  reuses an already-running one locally. No backend needed — it's fully mocked.
+- **Two runners must stay separated** — Vitest's default glob otherwise grabs `e2e/*.spec.ts` and
+  crashes on Playwright's `test` export (already fixed via `vite.config.ts` `include`/`exclude`).
+- **Pushing to `main` triggers a prod deploy** and is gated (auto-mode denies agent-initiated
+  default-branch pushes without clear user intent). Get explicit go-ahead before any `git push`.
+- **`main` and `staging` are kept byte-identical via fast-forward only** — never merge-commit between them.
+- **Dark-mode depth = surface contrast + borders + top-edge highlight, NOT black drop-shadows** — apply
+  to the Issue 163 polish work too.
+- Backend tests need a real Postgres (no DB mocking rule) — this env has **Redis only**. Frontend
+  work (Issue 163) doesn't need it.
 
 ## POINTERS (sources of truth — do not duplicate here)
 
-- `docs/UI.md` — design system (tokens, type, motion, confidence badges); status notes for passes 1–3.
-- `docs/DECISIONS.md` — **2026-06-19 entries** cover all 3 UI passes + fit-tier thresholds + the
-  dark-mode elevation correction (with render evidence).
-- `docs/issues.md` — Issues 153–161 specs/status. `docs/PROJECT_STATE.md` — progress log.
-- `docs/OFF_COURSE_BUGS.md` — incidental defects ("Friday Friday" logged + marked fixed).
-- `docs/SOT.md`, `docs/DEPLOYMENT.md`, `docs/COMPLIANCE.md` — architecture / deploy / ToS.
-- `CLAUDE.md` — project rules (read-order, Check→Approve→Build→Review, research-first).
+- `docs/issues.md` — **Issue 162** (done) + **Issue 163** (the next focus) specs. Issues 160/161 still open.
+- `docs/DECISIONS.md` — **2026-06-19, Issue 162** entry: Playwright vs Cypress, mocked-backend rationale, sources.
+- `docs/OFF_COURSE_BUGS.md` — the 4 audit findings (2026-06-19), marked "Promoted → Issue 163".
+- `docs/SOT.md` — frontend section now lists the `e2e/` harness + scripts.
+- `docs/PROJECT_STATE.md` — top "Last completed" entry covers Issue 162.
+- `docs/UI.md` — design system (tokens, type, motion); relevant for Issue 163 layout fixes.
+- `CLAUDE.md` — project rules (read-order, Check→Approve→Build→Review, research-first, off-course-bug log).
 - Memory: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (index `MEMORY.md`).

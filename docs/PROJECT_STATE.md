@@ -6,6 +6,20 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Last completed (Issue 162 — Playwright E2E + visual harness, 2026-06-19):** Stood up a real-browser
+test layer for the React SPA, the first coverage of *rendered* UI (jsdom/Vitest can't compute CSS or
+paint). `@playwright/test` 1.61 under `frontend/`; `playwright.config.ts` runs every SPA route ×
+desktop-1440 + mobile-390 (20 tests) against the Vite dev server with the FastAPI backend mocked at
+the network boundary (`e2e/fixtures/mock-api.ts`, fixtures shaped to `src/types.ts`, authed/anon
+seeds) — no Docker needed. Each test asserts no console error / uncaught JS and writes a full-page
+screenshot. Two runners cleanly separated (Vitest→`src/`, Playwright→`e2e/`; ESLint React-rules
+scoped to `src/`). **Green 20/20; no regression — lint clean, vitest 44/44, build ok.** Ran the
+UX/UI audit from the captures: overall the Issue-85 overhaul renders well (honesty banner on every
+page, dark-mode elevation holds, FitBadge reads) — 4 polish findings logged to `OFF_COURSE_BUGS.md`
+(mobile nav overflow SEV2; Review empty quadrant, Analysis card grid, Chat empty void — all SEV3).
+Follow-ups in `issues.md`: flow-based E2E, full-stack E2E, visual-regression baselines. WSL2 note:
+`playwright install --with-deps` needs `sudo apt` once. DECISIONS 2026-06-19 (Issue 162).
+
 **Last completed (Issues 153–159 — post-cutover regression audit + fixes, 2026-06-18):** A
 6-dimension behavioral-parity audit of the Issue 85 soft cutover (telemetry, tracing, API
 parity, compliance, security, UX state) — triggered by finding that live UI click telemetry had

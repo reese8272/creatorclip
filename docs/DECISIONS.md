@@ -6523,3 +6523,44 @@ falls back to manual `scripts/deploy.sh` when offline. So a "looks the same" liv
 be serving a pre-overhaul container — the deploy must actually run for any of these passes to appear.
 
 **Date:** 2026-06-19
+
+---
+
+## 2026-06-19 — Issue 162: Playwright E2E + visual harness for the React SPA
+
+**What changed:** Added `@playwright/test` (1.61) as the SPA's end-to-end / visual test layer,
+under `frontend/` alongside the existing Vitest unit suite. The ad-hoc headless-Chromium gallery
+used to diagnose the dark-mode elevation regression (DECISIONS 2026-06-19, elevation) is now a
+repeatable harness: `frontend/playwright.config.ts`, `frontend/e2e/smoke.spec.ts` (every SPA route
+× desktop 1440px + mobile 390px = 20 captures, with console-error / uncaught-exception assertions),
+and `frontend/e2e/fixtures/mock-api.ts`.
+
+**Decisions:**
+1. **Playwright over Cypress.** Current de-facto standard for new E2E in 2026; first-class
+   multi-viewport/device emulation, faster, official `webServer` integration with Vite. Cypress's
+   weaker mobile-emulation and slower runner ruled it out.
+2. **Mock the backend at the network boundary (`page.route`/`route.fulfill`), not full-stack E2E.**
+   This dev box has no Docker/Postgres/OAuth (the standing constraint), and the goal is *rendered-UI*
+   coverage that jsdom/Vitest structurally cannot provide (no layout/paint). Fixtures are shaped to
+   `frontend/src/types.ts`; two seeds (`authed` / `anon`) drive `AuthGate`. This is the documented
+   industry pattern for frontend-isolated E2E (playwright.dev/docs/network). Full-stack E2E against a
+   live FastAPI+Postgres is logged as a follow-up, not this issue.
+3. **Chromium-only to start.** Keeps the binary install lean; cross-browser (WebKit/Firefox) is a
+   cheap later add if a rendering divergence ever matters.
+4. **Two test runners, cleanly separated.** Vitest owns `src/**` component tests; Playwright owns
+   `e2e/**`. Enforced so they never collide: Vitest `include`/`exclude` scoped to `src/` (its default
+   glob otherwise picked up `e2e/smoke.spec.ts` and crashed on Playwright's `test` export); ESLint
+   split into a React-rules block (`src/`) and a Node block (`e2e/` + configs) because the
+   `react-hooks` plugin false-positives on Playwright's `use()` fixture callback.
+5. **Screenshots are gitignored, not snapshot baselines.** This issue delivers an *audit* harness
+   (full-page captures for human/agent review), not pixel-diff regression gating. Promoting select
+   pages to `toHaveScreenshot()` baselines is a follow-up once layouts settle.
+
+**Source/evidence:** Official install/`--with-deps` ([playwright.dev/docs/intro](https://playwright.dev/docs/intro)),
+`webServer` + `reuseExistingServer: !CI` ([playwright.dev/docs/test-webserver](https://playwright.dev/docs/test-webserver)),
+`page.route` mocking ([playwright.dev/docs/network](https://playwright.dev/docs/network)). Harness
+green: `npm run test:e2e` 20/20; no regression — `npm run lint` clean, `npm test` 44/44, `npm run build` ok.
+WSL2 note: `--with-deps` needs `sudo apt` (run once by the user); the browser binary alone installs
+without root.
+
+**Date:** 2026-06-19

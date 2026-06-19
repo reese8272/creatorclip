@@ -3866,6 +3866,63 @@ on every navigation).
 
 ---
 
+## Issue 162 — Playwright E2E + visual harness for the React SPA ✅ DONE (2026-06-19)
+
+**Problem:** The SPA had only Vitest/jsdom tests, which never compute real CSS or paint — so
+visual/layout/dark-mode-elevation bugs were structurally invisible and no one could drive the
+rendered UI. Added a real-browser harness with the backend mocked at the network boundary (no
+Docker needed). See DECISIONS 2026-06-19 (Issue 162).
+
+**Acceptance criteria:**
+- [x] `@playwright/test` (1.61) installed under `frontend/`, Chromium binary + system deps (WSL2 sudo)
+- [x] `playwright.config.ts`: desktop 1440 + mobile 390 projects, Vite `webServer`, `/app/` baseURL
+- [x] `e2e/fixtures/mock-api.ts`: `page.route` mocks shaped to `src/types.ts`; `authed`/`anon` seeds
+- [x] `e2e/smoke.spec.ts`: every SPA route × 2 viewports (20 tests), fail on console error / uncaught JS, full-page screenshot per page
+- [x] npm scripts `test:e2e` / `test:e2e:ui` / `test:e2e:report`; artifacts gitignored
+- [x] Two runners separated (Vitest `src/` only; ESLint React-rules scoped to `src/`)
+- [x] Harness green 20/20; no regression (lint clean, vitest 44/44, build ok)
+- [x] UX/UI audit done from captures; findings logged in `docs/OFF_COURSE_BUGS.md` (4 items)
+- [x] Docs updated: SOT, DECISIONS, PROJECT_STATE, this file
+
+**Follow-ups (not in this issue):**
+- [ ] **Flow-based E2E suites** — login→onboard→sync→build-DNA→review→feedback as real click-through
+      journeys (still mocked backend), beyond per-page smoke.
+- [ ] **Full-stack E2E** against live FastAPI+Postgres+Redis (needs Docker/CI env) — exercises real
+      OAuth/session/DB, the layer mocked-API E2E can't cover.
+- [ ] **Visual regression baselines** — promote select stable pages to `toHaveScreenshot()` pixel-diff gating.
+- [ ] UI polish from the audit (mobile nav overflow SEV2; Review empty quadrant, Analysis card grid,
+      Chat empty void — all in `OFF_COURSE_BUGS.md`, triage into issues when scheduled).
+
+---
+
+## Issue 163 — SPA UI polish from the Issue 162 screenshot audit 📋 OPEN (filed 2026-06-19)
+
+**Problem:** The Issue 162 Playwright harness produced the first rendered-UI audit of the React
+overhaul. Overall it holds up (honesty banner everywhere, dark-mode elevation reads, FitBadge works),
+but four layout/responsive issues surfaced that jsdom could never have shown. Promoted here from
+`docs/OFF_COURSE_BUGS.md` (2026-06-19 audit rows). All are reproducible from the committed harness:
+`cd frontend && npm run test:e2e` → `e2e/__screenshots__/`.
+
+**Acceptance criteria** (each fix should be re-verified against the harness screenshots):
+- [ ] **[SEV2] Mobile nav overflow (390px)** — `AppChrome`/`Nav` packs 6 links + channel + balance
+      pill + Logout into one row; the `142 min` pill wraps and the row is cramped. Add a responsive
+      collapse (menu/hamburger) below ~640px. Evidence: `mobile-dashboard.png`, `mobile-review.png`.
+- [ ] **[SEV3] Review desktop empty bottom-right quadrant (≥1024px)** — transcript panel sits
+      top-right with ~60% void below while the left column continues. Rebalance the two-column grid
+      (e.g. move why-this-clip/caption/clean panels right, or cap left-column width). Mobile is fine.
+      Evidence: `desktop-review.png` vs `mobile-review.png`.
+- [ ] **[SEV3] Analysis feature cards full-width with right gutter (desktop)** — Title/Hook/Chapters/
+      Thumbnail stack full-width on 1440px; a 2×2 grid tightens it. Evidence: `desktop-analysis.png`.
+- [ ] **[SEV3] Chat empty-state vertical void (desktop)** — large gap between intro and the
+      bottom-pinned composer; center the empty state or raise the composer until first message.
+      Evidence: `desktop-chat.png`.
+- [ ] No regression: `frontend` lint / vitest / build green; `npm run test:e2e` 20/20 still passes.
+
+**Note:** consider adding `toHaveScreenshot()` visual-regression baselines for the pages touched here
+(the visual-regression follow-up from Issue 162) so these fixes are locked in pixel-for-pixel.
+
+---
+
 ## Phase 3 Backlog (post-production)
 
 Items deferred until the product is live and stable:

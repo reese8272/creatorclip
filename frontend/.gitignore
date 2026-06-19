@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Playwright E2E artifacts (Issue 162) — all generated per run
+/test-results
+/playwright-report
+/blob-report
+/e2e/.results
+/e2e/.report
+/e2e/__screenshots__
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
