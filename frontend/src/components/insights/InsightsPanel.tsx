@@ -13,10 +13,10 @@ export function Panel({
   children: ReactNode
 }) {
   return (
-    <section className="mb-5 rounded-md border border-default bg-surface p-5">
+    <section className="mb-5 rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
       <div className="mb-4 flex items-baseline justify-between gap-3">
-        <h3 className="text-md font-medium text-fg">{title}</h3>
-        {sub && <span className="text-xs text-subtle">{sub}</span>}
+        <h3 className="text-h3 font-ui text-fg">{title}</h3>
+        {sub && <span className="text-small text-muted">{sub}</span>}
         {aside}
       </div>
       {children}
@@ -24,11 +24,12 @@ export function Panel({
   )
 }
 
-// Mono data cell used in the channel-totals and DNA grids.
+// Mono data cell used in the channel-totals and DNA grids. Recessed (bg-bg) so
+// the stat reads as inset into the panel surface above it.
 export function Cell({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-md border border-default bg-bg px-4 py-3">
-      <div className="text-xs uppercase tracking-[0.06em] text-subtle">{label}</div>
+      <div className="text-label uppercase tracking-[0.08em] text-muted">{label}</div>
       <div className="mt-1 font-mono text-lg font-semibold text-fg">{value}</div>
     </div>
   )

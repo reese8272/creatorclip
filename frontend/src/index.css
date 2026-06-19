@@ -63,6 +63,8 @@
   --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
+  /* Legacy size scale — preserved so existing text-2xs..text-2xl utilities keep
+     resolving while pages migrate to the semantic scale below. */
   --text-2xs: 0.65rem;
   --text-xs: 0.72rem;
   --text-sm: 0.82rem;
@@ -72,11 +74,40 @@
   --text-xl: 1.6rem;
   --text-2xl: 2rem;
 
-  /* Radii (existing metrics preserved; refined ladder in docs/UI.md lands per page) */
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  /* Refined semantic scale (docs/UI.md) — size + line-height + weight bundled
+     so `text-h1` etc. carry their full typographic intent. Letter-spacing is
+     applied per primitive (tracking utilities). h1/h2 pair with font-display
+     (Inter); h3/body/label with font-ui (Geist); mono with font-mono. */
+  --text-h1: 2.25rem;
+  --text-h1--line-height: 1.15;
+  --text-h1--font-weight: 650;
+  --text-h2: 1.5rem;
+  --text-h2--line-height: 1.25;
+  --text-h2--font-weight: 600;
+  --text-h3: 1.125rem;
+  --text-h3--line-height: 1.35;
+  --text-h3--font-weight: 600;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.55;
+  --text-body--font-weight: 400;
+  --text-small: 0.75rem;
+  --text-small--line-height: 1.5;
+  --text-small--font-weight: 400;
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1.4;
+  --text-label--font-weight: 500;
+  --text-mono: 0.8125rem;
+  --text-mono--line-height: 1.6;
+  --text-mono--font-weight: 400;
+
+  /* Radii — refined ladder reconciled to docs/UI.md (was 2/4/8/12; the spec's
+     4/6/8/12/16 ladder + xs/full never landed, leaving cards at a blocky 4px). */
+  --radius-xs: 4px; /* chips / badges */
+  --radius-sm: 6px; /* buttons / inputs */
+  --radius-md: 8px; /* cards / panels */
+  --radius-lg: 12px; /* modals */
+  --radius-xl: 16px; /* player */
+  --radius-full: 9999px; /* pills */
 
   /* Spacing — 8pt ladder (CSS-var tokens for custom layout; docs/UI.md) */
   --space-1: 4px;
@@ -102,6 +133,13 @@
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
+  /* Named entrance animations (generate animate-* utilities). These wire the
+     ease-enter / ease-spring tokens into real motion — modals, popovers, and
+     clip-card pops. Collapsed under prefers-reduced-motion (see @layer base). */
+  --animate-fade-in: fade-in var(--duration-base) var(--ease-enter);
+  --animate-scale-in: scale-in var(--duration-base) var(--ease-spring);
+  --animate-slide-up: slide-up var(--duration-base) var(--ease-enter);
+
   /* Shadows (dark-surface: black-alpha elevation + accent glow) */
   --shadow-sm: 0 1px 3px oklch(0% 0 0 / 0.4), 0 1px 2px oklch(0% 0 0 / 0.3);
   --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.5), 0 2px 4px oklch(0% 0 0 / 0.3);
@@ -116,7 +154,9 @@
   #root {
     background: var(--color-bg);
     color: var(--color-fg);
-    font-family: var(--font-sans);
+    /* App-shell chrome is Geist (docs/UI.md: "inside the app shell → Geist").
+       Marketing/greeting headings opt into Inter via font-display per primitive. */
+    font-family: var(--font-ui);
     font-size: var(--text-base);
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
@@ -124,10 +164,19 @@
     font-feature-settings: 'cv11', 'ss01', 'ss03';
   }
 
-  h1, h2, h3, h4 {
+  /* Page titles / hero greet the user in Inter (font-display); card-level h3/h4
+     stay in Geist (inherited) for chrome cohesion. */
+  h1, h2 {
+    font-family: var(--font-display);
     font-weight: 600;
-    letter-spacing: -0.01em;
-    line-height: 1.25;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  h3, h4 {
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
   }
 
   /* Honour reduced-motion: collapse spring/entrance animations (docs/UI.md a11y). */
@@ -138,4 +187,37 @@
       transition-duration: 0.01ms !important;
     }
   }
+}
+
+/* Named transition-duration utilities. Tailwind v4 has no theme namespace that
+   turns --duration-* into duration-* utilities (only numeric/arbitrary durations
+   resolve), so expose the design-system durations explicitly. This is what lets
+   `duration-fast` / `duration-base` in the primitives consume the motion tokens
+   instead of silently falling back to no duration. */
+@utility duration-instant {
+  transition-duration: var(--duration-instant);
+}
+@utility duration-fast {
+  transition-duration: var(--duration-fast);
+}
+@utility duration-base {
+  transition-duration: var(--duration-base);
+}
+@utility duration-slow {
+  transition-duration: var(--duration-slow);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }

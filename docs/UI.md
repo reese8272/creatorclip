@@ -2,6 +2,11 @@
 
 **Status:** Living source of truth for the React + TypeScript SPA (`frontend/`).
 **Established:** 2026-06-18 (Issue 85 — full UI/UX overhaul). See `docs/DECISIONS.md`.
+**Polish pass 1 (2026-06-19):** `index.css` reconciled to this spec (radii ladder, semantic
+type scale, Geist app-shell font) and the system applied to the shared primitives (Card, Panel,
+Button, Badge, **FitBadge**, Modal, Nav) — elevation/shadow/motion/confidence tokens now consumed.
+Remaining per-page work: `shadow-accent-glow` on the Review clip feed, `text-h1/h2` on page titles,
+mounting `FitBadge` on performer/clip rows, `animate-slide-up` list entrances. See DECISIONS 2026-06-19.
 
 This document is the **design** source of truth. The **implementation** source of
 truth is the Tailwind v4 `@theme` block in `frontend/src/index.css` — every value

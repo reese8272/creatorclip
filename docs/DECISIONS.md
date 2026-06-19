@@ -6413,3 +6413,47 @@ edits into the frontend batch.
 (via `DashboardBanners`, already overridden). `pg_isready` unavailable in-session.
 
 **Date:** 2026-06-18
+
+---
+
+## 2026-06-19 — UI polish pass 1: reconcile `index.css` to `docs/UI.md`; apply the design system to shared primitives
+
+**What changed:** The Issue 85 React overhaul shipped a complete, researched design system
+(`docs/UI.md` + the `index.css` `@theme`) but never *applied* most of it — components rendered
+flat bordered boxes, leaving the depth/motion/font/confidence tokens at **0 usages**. This pass:
+
+1. **Reconciled `index.css` to the spec** (`UI.md:9` mandates "fix the mismatch; do not fork"):
+   - **Radii** were `2/4/8/12`; spec is `4/6/8/12/16 + xs/full`. Cards sat at a blocky 4px.
+     Now `--radius-xs:4 sm:6 md:8 lg:12 xl:16 full:9999`. The single highest-leverage de-blocking.
+   - **Type scale**: the semantic `--text-h1…--text-mono` ladder (size + line-height + weight)
+     never existed in `index.css` — only the legacy `text-2xs…2xl` sizes. Added it (legacy kept
+     as aliases so nothing breaks during migration).
+   - **App-shell base font → Geist** (`--font-ui`); page titles opt into Inter (`--font-display`).
+     Both fonts were defined but 0% used.
+2. **Applied the system to the shared primitives**: Card/Panel/Cell (elevation via `shadow-sm`
+   + `shadow-inset` top-edge, `bg-raised` hover, 8px radius), Button (inset highlight, `active:scale`
+   press, standard-eased transitions, accent-border focus ring), Modal (token `shadow-lg` replacing
+   the non-token `shadow-xl`, `animate-scale-in`), Nav (sticky + backdrop-blur, no-shift accent
+   pill active state). New **`FitBadge`** consumes the orphaned `--color-fit-*` confidence tiers
+   (the honesty differentiator) with the mandatory non-virality tooltip.
+
+**Deviation needing a note:** Tailwind v4 has **no theme namespace that turns `--duration-*` into
+`duration-*` utilities** (only numeric/arbitrary durations resolve). So `duration-fast` etc. were
+silently inert. Fixed by registering explicit `@utility duration-{instant,fast,base,slow}` rules
+in `index.css` — this is what lets the primitives consume the motion-duration tokens. (`--ease-*`
+and `--animate-*` DO map to namespaces and worked as-is; `ease-enter`/`ease-spring` are consumed
+transitively via the `--animate-fade-in`/`scale-in`/`slide-up` keyframes.)
+
+**Deliberately deferred to the per-page sweep (not orphaned — page-level by nature):**
+`shadow-accent-glow` (selected/active clip card → Review feed), `animate-slide-up` (list/page
+entrance), `text-h1`/`text-h2` (page titles), `FitBadge` mounting (performer rows / clip cards).
+These are scoped to the pages that own them; flagged so they aren't forgotten.
+
+**Source/evidence:** research basis unchanged from the 2026-06-18 Issue 85 entry (Linear 2026,
+Vercel Geist, Material Design 3 motion, OKLCH-for-dark-mode, AI-confidence UX). Verification:
+`npm run build` green, `npm test` 38/38, `eslint` clean; generated-CSS grep confirms every new
+utility resolves (`duration-fast`, `text-h3`, `rounded-xs`, `bg-fit-strong-soft`, `shadow-inset`,
+`animate-scale-in`, `bg-raised:hover` all present). Token adoption audit: shadows/fit-tiers/fonts/
+motion all moved from 0 → consumed.
+
+**Date:** 2026-06-19

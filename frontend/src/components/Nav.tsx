@@ -24,7 +24,12 @@ const LINKS: NavItem[] = [
   { label: 'Pricing', href: '/pricing', external: false },
 ]
 
-const LINK_BASE = 'text-muted transition-colors hover:text-fg'
+// Pill nav: padding is identical for active/inactive so the active state never
+// shifts layout. Active = accent-soft fill + accent text (the design system's
+// selected-surface treatment); inactive hovers to an elevated surface.
+const LINK_BASE =
+  'rounded-sm px-2.5 py-1 text-muted transition-colors duration-fast ease-standard hover:bg-elevated hover:text-fg'
+const LINK_ACTIVE = 'bg-accent-soft text-accent hover:bg-accent-soft hover:text-accent'
 
 async function logout() {
   await api('/auth/logout', { method: 'POST', redirectOn401: false }).catch(() => {})
@@ -33,11 +38,11 @@ async function logout() {
 
 export function Nav({ user, balance }: { user: CurrentUser | null; balance: Balance | null }) {
   return (
-    <nav className="flex items-center gap-6 border-b border-default bg-bg px-6 py-3">
-      <a href="/" className="font-semibold tracking-tight text-fg hover:text-fg">
+    <nav className="sticky top-0 z-40 flex items-center gap-6 border-b border-default bg-bg/80 px-6 py-3 shadow-sm backdrop-blur-md">
+      <a href="/" className="font-display text-md font-semibold tracking-tight text-fg hover:text-fg">
         AutoClip
       </a>
-      <div className="flex items-center gap-4 text-sm">
+      <div className="flex items-center gap-1 text-small">
         {LINKS.map((l) =>
           l.external ? (
             <a key={l.href} href={l.href} className={LINK_BASE}>
@@ -47,7 +52,7 @@ export function Nav({ user, balance }: { user: CurrentUser | null; balance: Bala
             <NavLink
               key={l.href}
               to={l.href}
-              className={({ isActive }) => cn(LINK_BASE, isActive && 'text-fg')}
+              className={({ isActive }) => cn(LINK_BASE, isActive && LINK_ACTIVE)}
             >
               {l.label}
             </NavLink>
@@ -61,14 +66,19 @@ export function Nav({ user, balance }: { user: CurrentUser | null; balance: Bala
       {balance && (
         <span
           className={cn(
-            'rounded-sm px-2 py-0.5 text-xs',
-            balance.low_balance ? 'bg-elevated text-warning' : 'text-muted',
+            'rounded-full px-2.5 py-0.5 font-mono text-small',
+            balance.low_balance
+              ? 'bg-[color:var(--color-warning-soft)] text-warning'
+              : 'bg-elevated text-muted',
           )}
         >
           {balance.minutes_balance} min
         </span>
       )}
-      <button onClick={logout} className="text-xs text-muted hover:text-fg">
+      <button
+        onClick={logout}
+        className="rounded-sm px-2 py-1 text-small text-muted transition-colors duration-fast hover:bg-elevated hover:text-fg"
+      >
         Logout
       </button>
     </nav>
