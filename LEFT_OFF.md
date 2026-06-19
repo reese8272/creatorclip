@@ -4,26 +4,25 @@
 > truth — those live in `docs/`. Updated at the end of every session.
 
 **Last updated:** 2026-06-19
-**Branch:** `main` — Issue 162 committed (`9dcac43`), Issue 163 committed locally this session.
-**Local `main` is AHEAD of `origin/main`** by these 2 commits — both UNPUSHED (push is gated; see below).
-**Working tree:** CLEAN after the Issue 163 commit.
-**Prod:** `https://autoclip.studio` (React SPA under `/app`). Auto-deploys on push to `main`. Live
-commit is still `4d3f067` — nothing has shipped this session; Issue 162 is test tooling, Issue 163 is
-queued in the unpushed commits.
+**Branch:** `main` @ `d476860` — PUSHED. `main` and `staging` are byte-identical (both local + both
+`origin`) at `d476860` via fast-forward. Issue 162 = `9dcac43`, Issue 163 = `d476860`.
+**Working tree:** CLEAN.
+**Prod:** `https://autoclip.studio` (React SPA under `/app`). Pushed `main` @ `d476860` → a prod deploy
+was triggered. **Issue 163 IS user-facing** (Nav collapse + Review/Analysis/Chat layout) — verify it
+on prod once the `docker-publish` → `deploy` pipeline finishes.
 
 ---
 
 ## CURRENT FOCUS
 
-**Issues 162 + 163 are both DONE and green, committed locally, NOT pushed.** This session: committed
-the Playwright harness (162), then did the full Issue 163 UI-polish pass — all four audit defects
-fixed and re-verified. Nothing remains on 162/163 except the gated push.
+**Issues 162 + 163 are DONE, committed, pushed, and staging is synced.** This session: committed the
+Playwright harness (162), did the full Issue 163 UI-polish pass (all four audit defects fixed +
+re-verified), pushed `main`, and fast-forwarded `staging` to match. Nothing remains on 162/163.
 
 ### → NEXT ACTION
-1. **Push when the user gives the go-ahead** (pushing `main` triggers a prod deploy and is gated —
-   do NOT push without explicit intent). Issue 163 IS user-facing (Nav + 3 pages change), so the
-   prod deploy will reflect it. `git push origin main` lands both `9dcac43` (162) + the 163 commit.
-2. **Then pick the next issue.** Issues 160 and 161 are still open from prior sessions — check
+1. **Confirm the prod deploy landed** and spot-check the Issue 163 changes live (mobile nav hamburger
+   at narrow width; Review/Analysis/Chat layouts) once the deploy pipeline completes.
+2. **Pick the next issue.** Issues 160 and 161 are still open from prior sessions — check
    `docs/issues.md` for their specs.
 
 ### What Issue 163 changed (all verified — lint clean, vitest 45/45, build ok, test:e2e 20/20)
