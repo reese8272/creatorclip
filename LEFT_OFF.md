@@ -3,95 +3,106 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-18
-**Branch:** `feature/issue-85-overhaul-regressions` @ `afd012b` (8 commits ahead of `origin/main`, pushed, upstream in sync)
-**Working tree:** verified **pristine** — only `LEFT_OFF.md` modified (this file) + untracked `Screenshot 2026-06-17 211516.png`; all code/docs match committed. (Earlier this session a stale-editor-buffer **Save** reverted 10 code files + `docs/issues.md`; caught via `git diff HEAD` and restored with `git restore` — vitest 38/38 confirmed the fixes are back. The PR was never affected.)
-**PR #27:** OPEN · **MERGEABLE** · `mergeStateStatus: CLEAN` · all 7 CI checks green (last verified 2026-06-18).
-**Prod:** live at `https://autoclip.studio` — **does NOT have this work yet** (lands when PR #27 merges to `main`, which auto-deploys).
+**Last updated:** 2026-06-19
+**Branch:** `main` @ `322a0ba` — in sync with `origin/main`. Working tree: only `LEFT_OFF.md` modified (this file).
+**Trunk state:** `origin/main` @ `322a0ba` · `origin/staging` @ `322a0ba`. **`main` and `staging` are byte-identical** (`git diff main staging` empty). The `fix/ui-dark-mode-elevation` branch is **merged and deleted** (local + remote).
+**Prod:** `https://autoclip.studio` (React SPA under `/app`). Auto-deploys on push to `main`. **Now serving `322a0ba`** — the dark-mode elevation fix shipped this session (Deploy to production run `27838545605`, success, 16:57 UTC).
 
 ---
 
 ## CURRENT FOCUS
 
-Ship the post-cutover regression batch (Issues 153–159) to production. **All code is done, committed, pushed, and CI-green. The only thing left is the merge + a post-deploy prod verification.**
+The elevation fix is **merged to main and deployed to prod.** The merge work is done. The one
+remaining step is a **human eyeball check** — confirm the cards now visibly separate from the dark
+background on the live site (a bot/headless check can't do this reliably; see gotchas).
 
-**→ NEXT ACTION**
-1. **User merges PR #27** into `main` (https://github.com/reese8272/creatorclip/pull/27) — it is `MERGEABLE` with all 7 CI checks passing. *Claude was asked NOT to merge; the user holds the prod trigger.* Merging to `main` **auto-deploys to live prod** (`docker-publish.yml` rebuilds the image incl. `frontend/dist` → `deploy.yml` runs on the self-hosted VM: `docker compose pull` + `alembic upgrade head` (no-op this batch) + `up -d`).
-2. **Watch the deploy:** `gh run list --limit 5` — expect a "Docker publish" then "Deploy to production" run to go green after merge.
-3. **Verify on prod (closes deferred criteria for Issues 153 & 155):**
-   - SSH: `ssh creatorclip-vm` (configured host → `147.182.136.107`, root, keyed).
-   - Re-light check (Issue 155 — UI telemetry): after clicking around the live site, confirm NEW `source='ui'` rows:
-     ```
-     cd /opt/autoclip
-     docker exec autoclip-postgres-1 psql -U creatorclip -d creatorclip -c \
-       "SELECT to_char(at,'HH24:MI:SS') at, event, page, left(target,30) target FROM event_logs WHERE source='ui' ORDER BY at DESC LIMIT 10;"
-     ```
-     Before this batch, the only `ui` rows were 5 stale ones at 16:42 UTC (pre-cutover). Success = fresh `click`/`navigate` rows post-deploy.
-   - BLOCKER check (Issue 153): load `/app/onboarding` and `/app/walkthrough` on prod; confirm the **Terms + Privacy footer** renders (→ `/static/tos.html` + `/static/privacy.html`).
-
----
-
-## WHAT WORKS NOW (don't re-investigate)
-
-- **PR #27 CI is fully green:** ruff, mypy/bandit/pip-audit, unit pytest, **integration (postgres+redis)**, coverage ratchet, frontend (lint/test/build), docker smoke build.
-- **Frontend locally:** lint clean · vitest **38/38** · vite build green.
-- **Batch is frontend + docs ONLY** — zero backend code, zero alembic migrations (`alembic upgrade head` is a no-op on deploy). Low-risk.
-- **Issues 153–159 delivered** (full specs + checked acceptance criteria in `docs/issues.md`):
-  - 153 BLOCKER — ToS/Privacy footer restored on Onboarding & Walkthrough (was an OAuth-gate breach).
-  - 154 SEV1 — Walkthrough CTA + a 2nd `DashboardBanners` fallback no longer dead-end into `/static/onboarding.html`.
-  - 155 SEV2 — SPA UI telemetry restored (`lib/activity.ts` + `useActivityTelemetry` mounted via a `RootLayout` in `App.tsx`).
-  - 156 SEV3 — false "activity panel" Walkthrough copy fixed.
-  - 157 SEV2 — Insights loading state + surfaced swallowed upload-intel/saved errors.
-  - 158 SEV2 — account-deletion UI (`DELETE /auth/me`) on Profile; closed the CLAUDE.md launch item.
-  - 159 cleanup — orphaned-endpoint sweep triaged (DECISIONS 2026-06-18).
-- **Audit dimensions that came back CLEAN** (no need to re-audit): tracing/observability (middleware stack unchanged) and security (no `dangerouslySetInnerHTML`; cache-`no-store` still fires on SPA shell; server-side auth boundary intact). Honesty/"no virality" invariant intact.
-- **main and staging were synced** earlier this session (both at `8913ecb`); the 3 stale feature branches were deleted (local + remote).
+### → NEXT ACTION
+1. **Visually confirm prod** — hard-refresh `https://autoclip.studio/app` (Cmd/Ctrl-Shift-R) and
+   check that surfaces/cards now have visible elevation (surface contrast + borders + top-edge
+   highlight) instead of looking flat. This is the acceptance check for pass 3.
+2. **If it looks right** — UI elevation epic is closed. Pick up the open follow-ups below (Issue 160 / 161).
+3. **If it still looks flat** — do NOT assume a stale deploy (pipeline is verified green). Re-render
+   the *actual compiled CSS* in headless Chromium (recipe in the table) and compare before/after,
+   exactly as the root-cause probe did this session. The fix targets `frontend/src/index.css`.
+4. **Housekeeping:** this `LEFT_OFF.md` is the only uncommitted change. Commit it when ready
+   (`git add LEFT_OFF.md && git commit`) — it's not part of any code change, so it can land alone.
 
 ---
+
+## WHAT WORKS NOW (verified — don't re-investigate)
+
+- **Three UI polish passes are done, merged to main, and live on prod** (each gated: `npm run build`
+  + 44 vitest + `eslint`, all green):
+  - *Pass 1* (`04bf5d0`): reconciled `frontend/src/index.css` to `docs/UI.md` (radii, semantic type
+    scale, Geist font) + applied the design system to the shared primitives.
+  - *Pass 2* (`beca860`): per-page sweep — `FitBadge` on Review clips, accent-glow, page titles →
+    `text-h1/h2`, entrance motion, elevated remaining flat cards, fixed the "Friday Friday"
+    upload-window bug, added fit-tier + FitBadge tests.
+  - *Pass 3* (`322a0ba`): dark-mode elevation fix — **this session's deliverable, now on main/prod.**
+- **Root cause of "looks the same" is SOLVED.** Rendered the real compiled CSS in headless Chromium:
+  the card `shadow-sm`/`shadow-inset` was a **black shadow on near-black bg → invisible**. Fixed via
+  surface-contrast + brighter borders + a stronger top-edge highlight (NOT shadows).
+- **The deploy pipeline is verified working end-to-end** this session: push to `main` → "Docker
+  publish" (success) → "Deploy to production" via `workflow_run` (success, 43s). A stale deploy is
+  **not** a plausible failure mode.
+- **Merge hygiene is clean:** main fast-forwarded `beca860..322a0ba` (no merge commit); main ≡
+  staging; the feature branch is gone from both local and remote. Only `main` + `staging` remain.
+- **Token-adoption audit = 100%** — every design-system token group has consumers.
 
 ## THE ARC THAT LED HERE
 
-1. User asked to confirm live event-log ingestion → SSH'd to prod, found backend `http_request` rows flowing but **zero post-cutover `ui` rows** → root cause: the React SPA never ported `static/activity.js` (`/api/activity` had no caller).
-2. User asked to fix it AND ensure no other regression leaked, via `/issue-workflow` + an assessment.
-3. Ran a 6-dimension parallel behavioral-parity audit of the Issue 85 soft cutover → 4 dims surfaced gaps, 2 clean → filed Issues **153–161** in `docs/issues.md`.
-4. Worked the batch 153→159 (one issue-workflow each, commit per issue, frontend gates green each time). Two items bigger than a batch fix were split into tracked follow-ups (160, 161).
-
----
+1. User merged prior work (Issues 153–159 regression batch) to staging+main with identical history.
+2. User reviewed screenshots: UI felt "blocky / not production-grade." Found the React port was real
+   but the design system (`docs/UI.md`) had been **built and never applied**.
+3. Pass 1 (primitives) + Pass 2 (per-page sweep) — both shipped to main and auto-deployed.
+4. User: "it looks almost the exact same." Probed by rendering the actual CSS → elevation was
+   invisible on dark. Pass 3 fixed it; landed on staging, then blocked at the `main` push (the
+   auto-mode classifier denied an agent-initiated default-branch push without explicit intent).
+5. **This session:** user gave the explicit go-ahead ("merge the feature branch to staging and
+   main"). Promoted `322a0ba` to main via fast-forward, cleaned up the branch, watched the prod
+   deploy go green. Done — pending the visual confirmation above.
 
 ## KEY COORDINATES & FACTS
 
 | Thing | Value |
 |---|---|
-| PR | **#27** → `main`, OPEN, MERGEABLE, CI green |
-| Branch / HEAD | `feature/issue-85-overhaul-regressions` / `afd012b` |
-| Trunk | `main` (prod), `staging` (was in sync with main pre-batch) |
-| Prod URL | `https://autoclip.studio` (Cloudflare-fronted) |
-| Prod host | SSH alias `creatorclip-vm` → `147.182.136.107` (root); compose at `/opt/autoclip/docker-compose.prod.yml` |
-| Prod image | `ghcr.io/reese8272/creatorclip:latest` (frontend built into image via multi-stage Dockerfile) |
-| Prod DB | container `autoclip-postgres-1`, db/user `creatorclip` (telemetry table: `event_logs`) |
-| Deploy trigger | push/merge to `main` → `docker-publish.yml` → `deploy.yml` (self-hosted VM runner) |
+| Repo | `github.com/reese8272/creatorclip` |
+| Prod URL | `https://autoclip.studio` (Cloudflare-fronted; SPA at `/app`, React Router basename `/app`) |
+| Live commit | `322a0ba` on `main` (= `staging`); Deploy run `27838545605` (success, 16:57 UTC) |
+| Frontend | `frontend/` — React 19 + TS + Vite 8 + Tailwind v4; build = `npm run build` (in `frontend/`) |
+| Elevation fix lives in | `frontend/src/index.css` (surface/border/top-edge tokens) |
+| SPA serving | `main.py` serves `frontend/dist` under `/app`. **`frontend/dist` is gitignored** — built in `Dockerfile` (`npm run build`) at image build |
+| Deploy | push to `main` → `docker-publish.yml` (image) → `deploy.yml` (self-hosted VM): `docker compose pull` + `alembic upgrade head` + `up -d` |
+| Prod host | SSH alias `creatorclip-vm` → `147.182.136.107` (root, keyed); compose at `/opt/autoclip/docker-compose.prod.yml` |
+| Prod image / DB | `ghcr.io/reese8272/creatorclip:latest` · container `autoclip-postgres-1`, db/user `creatorclip` |
+| CI | `.github/workflows/ci.yml` — 7 jobs incl. "Frontend (lint, test, build)"; on push/PR to `main`+`staging` |
+| Fit-tier thresholds | `frontend/src/lib/fit.ts` — strong ≥ 0.70, moderate ≥ 0.45 (clip score 0–1 from `clip_engine/scoring.py`); **tunable first-pass defaults** |
+| Headless render recipe | `npx playwright` (chromium installed) + `LD_LIBRARY_PATH=/home/linuxbrew/.linuxbrew/opt/nss/lib:/home/linuxbrew/.linuxbrew/opt/nspr/lib` (system libnss3/libnspr4 missing; brew provides them) |
 | Open follow-ups | **Issue 160** (cross-page active-tasks panel — gated by `MAX_CONCURRENT_SSE_PER_CREATOR=3`); **Issue 161** (repoint stale backend `next_action` `/static` URLs) |
-| Telemetry path | `POST /api/activity` (`routers/activity.py`) → `event_log.record_event` → `event_logs` |
-
----
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Merging to `main` auto-deploys to live prod.** Don't merge casually.
-- **Backend tests need a real Postgres** (project rule: no DB mocking). This dev env has **Redis only** (`redis-cli ping` works; `pg_isready` absent). That's why **Issue 161** (backend `next_action` URL repoint — touches a tested `NextActionOut` contract across 3 routers) was deferred: validate on CI/DB, not here.
-- This batch ships **no migrations** — if a deploy log shows alembic doing work, something else changed.
-- The `LEFT_OFF.md` "modified" + the screenshot in `git status` are **pre-existing local noise**, not part of PR #27 (only committed work was pushed).
-- Issue 156 was *split*: the trivial copy-fix shipped; the **panel rebuild is Issue 160** (needs a single-EventSource-owner store + refactor of the 4 streaming sites to respect the 3-slot SSE cap — do NOT double-subscribe).
-- Prod sits behind Cloudflare Bot Fight Mode — datacenter IPs may get a 403 challenge; verify via SSH/the VM, not a raw curl from CI.
+- **Pushing to `main` triggers a prod deploy** AND is gated (auto-mode denies agent-initiated
+  default-branch pushes without clear user intent). Get explicit go-ahead before any future push.
+- **`main` and `staging` are kept byte-identical via fast-forward only** — never create merge commits
+  between them. Verify with `git diff main staging` (must be empty).
+- **Dark-mode depth = surface contrast + borders + top-edge highlight, NOT black drop-shadows** (they
+  vanish on near-black). Apply this to any future UI token work.
+- **`frontend/dist` is gitignored & built at deploy** — to view changes locally you must `npm run
+  build` then serve the backend against `frontend/dist`; viewing prod requires the deploy to have run.
+- Headless Chromium here needs the `LD_LIBRARY_PATH` brew shim (table above); no passwordless sudo to
+  `apt install` the libs.
+- Backend tests need a real Postgres (project rule: no DB mocking) — this env has **Redis only**.
+- Prod sits behind Cloudflare Bot Fight Mode — datacenter IPs may get a 403; verify via SSH/the VM
+  or a real browser, not a raw curl from CI. (This is why step 1 above is a human eyeball check.)
 
----
+## POINTERS (sources of truth — do not duplicate here)
 
-## POINTERS (source of truth — do not duplicate here)
-
-- `docs/issues.md` — Issues 153–161 full specs + acceptance criteria (canonical status).
-- `docs/PROJECT_STATE.md` — "Current Status" top entry logs this session.
-- `docs/DECISIONS.md` — 2026-06-18 entries: the 156→160 split, the 159 triage / 161 split.
-- `docs/OFF_COURSE_BUGS.md` — the original telemetry-dark finding (now ✅ Issue 155).
+- `docs/UI.md` — design system (tokens, type, motion, confidence badges); status notes for passes 1–3.
+- `docs/DECISIONS.md` — **2026-06-19 entries** cover all 3 UI passes + fit-tier thresholds + the
+  dark-mode elevation correction (with render evidence).
+- `docs/issues.md` — Issues 153–161 specs/status. `docs/PROJECT_STATE.md` — progress log.
+- `docs/OFF_COURSE_BUGS.md` — incidental defects ("Friday Friday" logged + marked fixed).
 - `docs/SOT.md`, `docs/DEPLOYMENT.md`, `docs/COMPLIANCE.md` — architecture / deploy / ToS.
-- `CLAUDE.md` — project rules (read-order, issue workflow, standards).
+- `CLAUDE.md` — project rules (read-order, Check→Approve→Build→Review, research-first).
 - Memory: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (index `MEMORY.md`).
