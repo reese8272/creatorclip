@@ -3,116 +3,113 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-19
-**Branch:** `main` — Issues 162/163 are live on `origin` @ `d476860`. **Issues 164 + 165 are committed
-LOCALLY but NOT pushed** (push is gated). `main` is ahead of `origin/main`; staging not yet re-synced.
-**Working tree:** see below (164/165 committed; verify with `git status`).
-**Prod:** `https://autoclip.studio` (React SPA under `/app`). Live is still `d476860` (Issue 163). The
-**Issue 165 contrast fix has NOT shipped yet** — it lands on the next push.
+**Last updated:** 2026-06-22
+**Branch:** `staging` (checked out). **`main`, `staging`, and `origin` are all in sync @ `2bb7a76`** —
+the backlog rebuild is committed and pushed to both branches. The feature branch
+`claude/code-research-agent-prompt-nkl3gs` was merged (fast-forward) and deleted (local + remote).
+**Working tree:** clean after the close-out commit (see NEXT ACTION step 1 if `git status` shows the
+`LEFT_OFF.md` / `OFF_COURSE_BUGS.md` edits still uncommitted).
+**Prod:** `https://autoclip.studio`. This was a **docs-only** change — no runtime behavior changed.
+
+> ⚠️ **GitHub Actions is OUT OF MINUTES (billing).** Every CI job on `2bb7a76` shows
+> *"job was not started because recent account payments have failed or your spending limit needs to be
+> increased."* — this is **NOT a code failure**. Until billing is restored, **run the gates locally**
+> (recipe in CONSTRAINTS below). They were run locally for `2bb7a76` and are green except one
+> pre-existing dependency CVE (see CURRENT FOCUS).
 
 ---
 
 ## CURRENT FOCUS
 
-**Issues 164 + 165 are DONE and verified locally, committed, awaiting a gated push.** This session
-also: live-audited the real site, found a systemic WCAG-AA contrast gap, and fixed it at the root.
+**The gap-closure research initiative (Issues 166–180) is COMPLETE and the backlog is rebuilt.**
+`docs/issues.md` now holds ~94 prioritized implementation issues (181–274) harvested from the 15
+research findings, plus carry-over open work and a deferred parking lot. This session: synthesized +
+archived finished work, rebuilt `issues.md`, logged 4 founder scope decisions, committed, promoted to
+main+staging, deleted the feature branch, and verified the gates locally (GH Actions being out of minutes).
 
 ### → NEXT ACTION
-1. **Push when the user OKs it** (gated — prod deploy). `git push origin main` then fast-forward
-   `staging` to match (`git push origin main:staging` + `git branch -f staging main`).
-2. **Re-verify on prod after the deploy rolls out:** `cd frontend && npm run test:prod` — expect the
-   axe `color-contrast` count to drop from 420 → ~0 live. Needs a fresh `cc_session` (the captured one
-   in `e2e/.auth/` expires ~1h; re-capture via `npm run test:prod:auth:cookie` after pasting a new
-   cookie into `e2e/.auth/cc_session.txt`).
-3. **Then pick the next issue** — 160 and 161 still open.
+1. **If `git status` is dirty** (the `LEFT_OFF.md` + `OFF_COURSE_BUGS.md` close-out edits): commit and
+   push to both branches —
+   `git add LEFT_OFF.md docs/OFF_COURSE_BUGS.md && git commit -m "docs: close-out — LEFT_OFF + msgpack CVE log"`,
+   then `git checkout main && git merge --ff-only staging && git push origin main && git checkout staging && git push origin staging`.
+   (Pushing `main` triggers a deploy, but it's docs-only → effectively a no-op rebuild.)
+2. **Start executing the new backlog.** Priority order is Functionality → UI → UX → Agentic/Caching →
+   Security → … Recommended first targets:
+   - **Issue 181** (loudness normalization) — cheapest functional win, single ffmpeg flag.
+   - **Issue 198** (personalization efficacy harness) — highest leverage; proves the moat.
+   - Run the full issue-workflow per `CLAUDE.md` (CHECK → APPROVE → BUILD → REVIEW). Each issue's full
+     acceptance criteria live in its `Src:` finding under `docs/research/findings/`.
+3. **Triage the open dependency CVE** (logged in `docs/OFF_COURSE_BUGS.md`, 2026-06-22): msgpack 1.1.2
+   `GHSA-6v7p-g79w-8964` → either pin `msgpack>=1.2.1` in `requirements.txt` (fix exists) or add to the
+   Issue-107 accepted-risk ignore-list (`pyproject.toml` + `run_layer0.py`) with a DECISIONS note.
 
-### What Issues 164/165 changed (all verified locally — lint, vitest 45/45, build, test:e2e smoke+a11y green)
-- **Issue 164** — live-site harness: `frontend/playwright.config.prod.ts` + `e2e/prod/` (audit.spec,
-  flows.spec, save-auth.mjs, build-auth-from-cookie.mjs). Runs vs prod with a real session. Scripts:
-  `test:prod`, `test:prod:flows`, `test:prod:auth`, `test:prod:auth:cookie`, `test:prod:report`.
-- **Issue 165** — WCAG AA contrast fix: `src/index.css` (`--color-subtle` ↑, accent split +
-  `--color-accent-text`), `src/lib/utils.ts` (**root cause:** `extendTailwindMerge` registers the
-  custom font-size scale so button text-color classes stop being dropped), 28 `text-accent`→
-  `text-accent-text` swaps, Profile `<dl>` dt/dd, Review slider `aria-label`. New gate
-  `e2e/a11y.spec.ts` (0 serious, 9 routes × 2 vp).
-- **Residual (OFF_COURSE):** paid flows `analysis`/`titles` timed out at 60s on the real account
-  (chat ✓) — slow LLM vs latency, needs investigation.
+## WHAT WORKS NOW (verified this session — don't re-investigate)
 
-### Live-site audit how-to (Issue 164 — reuse this)
-- Auth: log into `autoclip.studio` in a normal browser → DevTools → Application → Cookies → copy
-  `cc_session` → paste into `frontend/e2e/.auth/cc_session.txt` → `npm run test:prod:auth:cookie`.
-  (Headed `npm run test:prod:auth` exists but Google blocks the automated-browser OAuth.)
-- Then `npm run test:prod` (audit) / `npm run test:prod:flows` (paid, real cost). Findings →
-  `e2e/.results/prod/`, screenshots → `e2e/__screenshots__/prod/` (both gitignored).
-- `e2e/.auth/` is gitignored (holds a live session token) — never commit it.
-
-## WHAT WORKS NOW (verified — don't re-investigate)
-
-- **Playwright harness is installed and green: `npm run test:e2e` → 20/20** (10 routes × desktop-1440
-  + mobile-390). `@playwright/test` 1.61 under `frontend/`; Chromium binary + system deps installed
-  (the WSL2 `sudo apt` step is already done — Chromium launches natively now).
-- **Backend is mocked at the network boundary** (`frontend/e2e/fixtures/mock-api.ts`, `page.route`,
-  fixtures shaped to `src/types.ts`, `authed`/`anon` seeds) — every page renders with NO live
-  backend, honoring the no-Docker constraint.
-- **No regression from the harness:** `npm run lint` clean, `npm test` 44/44, `npm run build` ok.
-  The two test runners are cleanly separated (Vitest→`src/` via `include`/`exclude`; Playwright→`e2e/`;
-  ESLint React-rules scoped to `src/` so Playwright's `use()` fixture doesn't false-positive).
-- **The overhaul renders well** (audit conclusion): honesty banner on every page, dark-mode elevation
-  holds up, FitBadge reads, pricing accent-glow works, mobile reflows to single-column. The 4 issues
-  in Issue 163 are the only real defects found.
-- **Prior elevation epic remains live on prod** (passes 1–3, last session) — unchanged this session.
+- **Local CI replication is GREEN** on `2bb7a76` (run because GH Actions is out of minutes):
+  - `ruff check` ✅ · `ruff format --check` ✅ (241 files) · **unit tests ✅ 992 passed, 3 skipped** ·
+    `mypy` ✅ 0 · `bandit` ✅ 0 high/0 med · freshness ✅
+  - **Frontend** ✅ — `npm run lint` clean, `npm test` 45 passed (15 files), `npm run build` ok.
+  - `pip-audit` — 1 non-baselined CVE: **msgpack** `GHSA-6v7p-g79w-8964` (transitive via librosa;
+    pre-existing, not from this commit; low exposure). pytest CVE-2025-71176 is already ignore-listed.
+  - **Not run locally:** integration tests (need Postgres+pgvector — only Redis is available here) and
+    the coverage-floor gate. A docs-only commit cannot affect them; last green was Issue 164/165.
+- **The commit is docs-only** — `requirements.txt`, `pyproject.toml`, and all source/frontend files
+  were untouched (verified via `git show --stat`).
+- **Branches are clean & synced** — only `main` + `staging` remain, both @ `2bb7a76` = `origin`.
 
 ## THE ARC THAT LED HERE
 
-1. Prior session: 3 UI polish passes (incl. dark-mode elevation fix) merged to main + deployed.
-2. **This session:** user asked if I could "poke and prod the UI/UX." Found the SPA had only
-   Vitest/jsdom tests (no rendering engine → can't see CSS/layout/elevation bugs).
-3. Ran the full issue-workflow for **Issue 162**: researched Playwright vs Cypress + the mocked-backend
-   pattern (DECISIONS 2026-06-19), built the harness, hit the expected WSL2 sudo blocker (user ran
-   `sudo npx playwright install-deps chromium`), then went 20/20 green.
-4. Reviewed all 20 screenshots → 4 findings. User asked to promote them to the next issue →
-   **Issue 163** filed, OFF_COURSE_BUGS rows marked "Promoted → Issue 163".
+1. Prior sessions delivered the React/TS overhaul + the Playwright harness (Issues 162–165) and then
+   authored 15 read-only research-agent prompts over the conceptual gaps (Issues 166–180).
+2. **This session:** the user ran `/issue-workflow` to turn the research into a backlog. The 15 findings
+   had already been produced (`docs/research/findings/`) — each proposing concrete implementation issues.
+3. Fanned out parallel readers to extract every proposed issue + every open question; mapped the full
+   done/open status of Issues 1–180; asked the founder the 4 genuine product-scope questions.
+4. Founder decided: **stream-VOD recap = expand v1 now**; **publishing = export + YouTube publish**
+   (TikTok/Reels deferred); **multilingual = English-only v1** (i18n deferred); **editor = full timeline tool**.
+5. Archived finished work, rebuilt `issues.md` (181–274, deduped + prioritized), logged decisions,
+   committed, promoted to main+staging, deleted the feature branch, verified gates locally.
 
 ## KEY COORDINATES & FACTS
 
 | Thing | Value |
 |---|---|
 | Repo | `github.com/reese8272/creatorclip` |
-| Prod URL | `https://autoclip.studio` (Cloudflare-fronted; SPA at `/app`, React Router basename `/app`) |
-| Frontend | `frontend/` — React 19 + TS + Vite 8 + Tailwind v4; build = `npm run build` (in `frontend/`) |
-| E2E harness | `frontend/playwright.config.ts` + `frontend/e2e/` (`smoke.spec.ts`, `fixtures/mock-api.ts`). Run: `npm run test:e2e` · UI mode: `test:e2e:ui` · report: `test:e2e:report` |
-| Screenshots | `frontend/e2e/__screenshots__/{desktop,mobile}-<page>.png` — **gitignored** (audit output, not snapshot baselines) |
-| Playwright | `@playwright/test` 1.61; Chromium installed at `~/.cache/ms-playwright`; system deps installed via `sudo apt` (done) |
-| SPA routes | dashboard, insights, analysis (`?video_id=`), review (`?video_id=`), profile, chat, onboarding, walkthrough, pricing, login. Defined in `frontend/src/App.tsx` |
-| Auth plumbing | `useAuth.ts` probes `GET /auth/me` (401→null); `AuthGate.tsx` redirects to `/login`. Mock seed `anon` makes `/auth/me` 401 |
-| SPA serving | `main.py` serves `frontend/dist` under `/app`. **`frontend/dist` is gitignored** — built in `Dockerfile` at image build |
+| Prod URL | `https://autoclip.studio` (Cloudflare-fronted; React SPA at `/app`) |
+| Branches | `main` (live/deploys) + `staging` (pre-prod), kept fast-forward-identical. Both @ `2bb7a76` |
+| Backlog | `docs/issues.md` — rebuilt; Issues 181–274 (new) + carry-over open + deferred parking lot |
+| Research findings | `docs/research/findings/01–15` — full ACs + evidence + draft DECISIONS per issue (the `Src:` of each new issue) |
+| Archive | `docs/archive/issues_snapshot_2026-06-22.md` (old full backlog), `off_course_bugs_snapshot_2026-06-22.md`, `research_prompts_2026-06-22/` |
+| venv | `.venv` (Python 3.12.7) — has ruff 0.15.15, mypy, pytest, bandit, pip-audit (matches CI) |
+| Redis | local: `redis-server --daemonize yes --save '' --appendonly no` (tests fail-fast without it) |
+| Layer-0 gates | `python3 .claude/skills/production-assessment/scripts/run_layer0.py --gates ...` |
+| pip-audit ignore-list | `pyproject.toml [tool.pip-audit]` + `run_layer0.py PIP_AUDIT_IGNORES` (keep in lockstep) |
 | Deploy | push to `main` → `docker-publish.yml` (image) → `deploy.yml` (self-hosted VM) |
-| CI | `.github/workflows/ci.yml` — incl. "Frontend (lint, test, build)". **Note: CI does not yet run `test:e2e`** — Playwright is local-only for now |
-| Next issue numbers | 162 = DONE (this session); 163 = OPEN (UI polish); 160/161 still open from prior |
+| CI | `.github/workflows/ci.yml` — **currently red due to GH Actions billing, not code** |
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Chromium now launches natively** — the old `LD_LIBRARY_PATH` brew shim from the previous LEFT_OFF
-  is obsolete; system libs were installed via `sudo apt` (`playwright install-deps`) this session.
-- **`npm run test:e2e` auto-starts the Vite dev server** (`webServer` in the config, port 5173) and
-  reuses an already-running one locally. No backend needed — it's fully mocked.
-- **Two runners must stay separated** — Vitest's default glob otherwise grabs `e2e/*.spec.ts` and
-  crashes on Playwright's `test` export (already fixed via `vite.config.ts` `include`/`exclude`).
-- **Pushing to `main` triggers a prod deploy** and is gated (auto-mode denies agent-initiated
-  default-branch pushes without clear user intent). Get explicit go-ahead before any `git push`.
-- **`main` and `staging` are kept byte-identical via fast-forward only** — never merge-commit between them.
-- **Dark-mode depth = surface contrast + borders + top-edge highlight, NOT black drop-shadows** — apply
-  to the Issue 163 polish work too.
-- Backend tests need a real Postgres (no DB mocking rule) — this env has **Redis only**. Frontend
-  work (Issue 163) doesn't need it.
+- **GH Actions = out of minutes.** Red CI is a billing artifact, not a code failure. Verify locally
+  (recipe below) until the user restores billing. Don't chase the red checks.
+- **Local CI recipe** (from repo root): `source .venv/bin/activate` → start Redis (above) →
+  `ruff check . && ruff format --check .` → `pytest --tb=short -q` → `python3 .claude/skills/production-assessment/scripts/run_layer0.py --gates ruff,mypy,bandit,pip_audit,freshness` →
+  frontend: `cd frontend && npm run lint && npm test && npm run build`.
+  (The trailing `RuntimeError: Event loop is closed` after pytest is harmless redis-asyncio shutdown noise.)
+- **Integration tests need a real Postgres + pgvector** (no DB mocking rule); this env has **Redis only**.
+- **Pushing to `main` triggers a prod deploy** and is gated — get explicit user go-ahead. `main` and
+  `staging` are kept byte-identical via fast-forward only (never merge-commit between them).
+- **Every new issue's full spec is in its finding**, not in `issues.md` (which is a condensed tracker).
+  Always open the `Src:` finding before building.
+- **~40 of the new issues carry a `[DEC]` flag** — they need a `docs/DECISIONS.md` entry at build time
+  (the 4 scope expansions especially); draft entries already exist in the findings.
 
 ## POINTERS (sources of truth — do not duplicate here)
 
-- `docs/issues.md` — **Issue 162** (done) + **Issue 163** (the next focus) specs. Issues 160/161 still open.
-- `docs/DECISIONS.md` — **2026-06-19, Issue 162** entry: Playwright vs Cypress, mocked-backend rationale, sources.
-- `docs/OFF_COURSE_BUGS.md` — the 4 audit findings (2026-06-19), marked "Promoted → Issue 163".
-- `docs/SOT.md` — frontend section now lists the `e2e/` harness + scripts.
-- `docs/PROJECT_STATE.md` — top "Last completed" entry covers Issue 162.
-- `docs/UI.md` — design system (tokens, type, motion); relevant for Issue 163 layout fixes.
-- `CLAUDE.md` — project rules (read-order, Check→Approve→Build→Review, research-first, off-course-bug log).
+- `docs/issues.md` — the rebuilt backlog (priority-ordered; start at Issue 181).
+- `docs/research/findings/01–15` — full acceptance criteria + `file_path:line` evidence per new issue.
+- `docs/research/README.md` — findings → filed-issues index.
+- `docs/DECISIONS.md` — **2026-06-22** entry: the 4 scope decisions + backlog rebuild rationale.
+- `docs/OFF_COURSE_BUGS.md` — 4 open items (httpx2, dashboard N+1, flow timeout, **msgpack CVE**).
+- `docs/PROJECT_STATE.md` — top "Last completed" entry covers the rebuild; Issues 166–180 marked done.
+- `docs/SOT.md`, `docs/BRANCHING.md`, `CLAUDE.md` — stack/branch model/project rules.
 - Memory: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (index `MEMORY.md`).
