@@ -16,8 +16,10 @@ UI: Download button + aspect dropdown. **Fixed a SEV2 off-course bug** (logged):
 `<video>` to a raw `s3://` URI with no media endpoint — now served via the same endpoint
 (`disposition=inline`). Tests: +13; full suite **1024 passed, 3 skipped**; frontend lint/tsc/build +
 38 Playwright e2e green; Layer-0 ruff/mypy/bandit/freshness green. No DECISIONS entry (no scope
-change). **Not yet merged/deployed.** **Next in Batch B:** Issues 194–197 (YouTube publish — DB +
-Google-audit gated) or pause.
+change). **DEPLOYED TO PROD + VERIFIED:** promoted ff staging→main @ `af1bd14`; deploy run
+`27976728707` → `success`; `autoclip.studio/` → 302 → `/app/dashboard` (healthy). `main` == `staging`
+== `origin` @ `af1bd14`; feature branch deleted. **Next in Batch B (paused):** Issues 194–197
+(YouTube publish — `youtube.upload` scope + DB tables + Google-audit gated) or pause.
 
 **Batch A (render quality) COMPLETE + DEPLOYED TO PROD — Issues 181, 183, 184, 185 (2026-06-22).**
 First batch off the rebuilt backlog. Built on `feat/batch-a-render-quality` (4 commits), merged

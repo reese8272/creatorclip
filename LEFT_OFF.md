@@ -3,15 +3,17 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-22 (Batch A session — DEPLOYED)
-**Branch:** `main` (checked out). **`main` == `staging` == `origin` @ `7e14663`** (back in sync).
-Batch A (Issues 181/183/184/185) was built on `feat/batch-a-render-quality`, merged ff → staging,
-promoted ff → main, and **deployed to prod**. Feature branch merged + deleted.
-**Prod deploy VERIFIED:** "Deploy to production" run `27969557160` → `success` for sha `7e14663`;
-`autoclip.studio/` → 302 → `/app/dashboard` (healthy, via the self-hosted VM). Docker-publish ✅.
+**Last updated:** 2026-06-22 (Batch A + Issue 182 — all DEPLOYED)
+**Branch:** `main` (checked out). **`main` == `staging` == `origin` @ `af1bd14`** (in sync).
+Batch A (Issues 181/183/184/185) AND Batch-B Issue 182 (export presets + clip download) are all
+built, merged ff staging→main, and **deployed to prod + verified**. Feature branches merged + deleted.
+**Latest prod deploy VERIFIED:** deploy run `27976728707` → `success` for sha `af1bd14`;
+`autoclip.studio/` → 302 → `/app/dashboard` (healthy, self-hosted VM). Docker-publish ✅.
 **Working tree:** clean except this close-out edit (PROJECT_STATE + LEFT_OFF) — commit to both branches.
-**Prod:** `https://autoclip.studio`. Batch A **changed runtime render behavior** (loudnorm always-on;
-3 new opt-in style flags: caption keyword-highlight, punch-in, denoise) — now live.
+**Prod:** `https://autoclip.studio`. Now live: Batch-A render behavior (loudnorm always-on; opt-in
+caption keyword-highlight / punch-in / denoise) **and** Issue 182 (1:1 + 16:9 export presets, clip
+download endpoint, and the **clip-playback fix** — `<video>` now plays via the presigned download
+endpoint instead of a dead `s3://` URI).
 
 > ⚠️ **GitHub Actions is OUT OF MINUTES (billing).** Every CI job on `2bb7a76` shows
 > *"job was not started because recent account payments have failed or your spending limit needs to be
@@ -23,33 +25,37 @@ promoted ff → main, and **deployed to prod**. Feature branch merged + deleted.
 
 ## CURRENT FOCUS
 
-**Batch A (render quality) is COMPLETE on `staging` — Issues 181, 183, 184, 185.** Ran the full
-issue-workflow (CHECK→APPROVE→BUILD→REVIEW) per issue, each with a research-backed brief +
-`docs/DECISIONS.md` entry. Shipped: **181** always-on two-pass `loudnorm` (−14 LUFS, near-silent
-guard); **183** new `bold_pop_highlight` caption style (per-phrase salience scorer, punch-yellow);
-**184** opt-in `zoom_on_peak` punch-in (crop `t`-expression); **185** opt-in `denoise` (`afftdn`
-before loudnorm). Also fixed a latent DRY bug (worker transcript-load gate → `captions.VALID_STYLES`).
-5 commits (`8b9d6e1`→`7e14663`), now on `main`+`staging`+prod. Full suite **1011 passed, 3 skipped**;
-Layer-0 ruff/mypy/bandit/freshness green; frontend lint/tsc/build green. **Deployed + verified** (run
-`27969557160` success; prod 302→/app/dashboard).
+**Batch A (render quality) + Batch-B Issue 182 are COMPLETE, DEPLOYED, and VERIFIED in prod.** Ran
+the full issue-workflow (CHECK→APPROVE→BUILD→REVIEW) per issue, each with a research-backed brief +
+`docs/DECISIONS.md` entry where a deviation existed.
+- **Batch A:** **181** always-on two-pass `loudnorm` (−14 LUFS, near-silent guard); **183**
+  `bold_pop_highlight` caption style (per-phrase salience scorer, punch-yellow); **184** opt-in
+  `zoom_on_peak` punch-in (crop `t`-expression); **185** opt-in `denoise` (`afftdn` before loudnorm).
+- **Issue 182:** `OUTPUT_PRESETS` (9:16/1:1/16:9, render-time via `style_preset["aspect"]`, 9:16
+  byte-identical); `GET /clips/{id}/download` (presigned R2 / FileResponse, per-creator 404);
+  **clip-playback fix** (`<video>` now uses the inline download endpoint, not a dead `s3://` URI).
+- Also fixed two latent bugs: DRY worker transcript-load gate (Batch A) + the SEV2 playback bug (182).
+Full suite **1024 passed, 3 skipped**; Layer-0 ruff/mypy/bandit/freshness green; frontend lint/tsc/build
++ 38 Playwright e2e green. All on `main`==`staging`==`origin` @ `af1bd14`; latest deploy run
+`27976728707` → success.
 
 > ⚠️ **Empirical render checks STILL OWED** — this dev box has no ffmpeg CLI binary (only `libav*`
 > libs), so the audio/visual ACs (−14 LUFS via `ebur128`, no-pumping, denoise artifacts, punch-in
-> look, keyword legibility) are **verified-by-construction in unit tests only**. Now live in prod →
-> spot-check on a real rendered clip (render one with each new flag, run `ffmpeg -af ebur128`, eyeball
-> the highlight/punch-in). Not blocking, but the one untested dimension.
+> look, keyword legibility, square/16:9 framing, **playback actually plays**) are **verified-by-
+> construction in unit/e2e tests only**. Now live in prod → spot-check on a real rendered clip.
 
 ### → NEXT ACTION
 1. **Commit this close-out** (`LEFT_OFF.md` + `docs/PROJECT_STATE.md`) and keep `main`==`staging`:
    commit on `main`, push, then `git checkout staging && git merge --ff-only main && git push origin
-   staging`. (Docs-only → the main push re-triggers a no-op image rebuild + redeploy on the self-hosted
-   VM; harmless.)
-2. **Spot-check Batch A in prod** (the empirical render checks above) on a freshly rendered clip.
-3. **Next batch** (user paused after A). Candidates per priority order: **Batch B** — Issue 182
-   (1:1/16:9 export presets + clip download endpoint), then 194–197 (YouTube publish, DB + Google
-   audit gated). **Batch C** — Issue 198 (personalization efficacy harness, the moat; DB-backed →
-   needs Postgres to verify). Each issue's full ACs live in its `Src:` finding under
-   `docs/research/findings/`.
+   staging`. (Docs-only → no-op image rebuild + redeploy on the self-hosted VM; harmless.)
+2. **Spot-check the shipped work in prod** (the empirical checks above) on a freshly rendered clip —
+   incl. that a clip now **plays** in Review and the Download button works.
+3. **Next: Batch B publish cluster (paused here).** Issues **194–197** — add the `youtube.upload`
+   write scope (incremental re-consent; `[DEC]` + Google-audit launch dependency), `clip_publications`
+   table, idempotent `publish_to_youtube` Celery task (pre-audit forced `private`), scheduled publish,
+   outcome-loop wiring. DB-backed → build-only verification in this env. Full ACs in finding 13
+   (`docs/research/findings/13_*`). Alternatively **Batch C** — Issue 198 (personalization efficacy
+   harness, the moat; needs Postgres to verify).
 4. **Still open: the dependency CVE** (logged in `docs/OFF_COURSE_BUGS.md`, 2026-06-22): msgpack 1.1.2
    `GHSA-6v7p-g79w-8964` → pin `msgpack>=1.2.1` or add to the Issue-107 accepted-risk ignore-list with
    a DECISIONS note. (Untouched this session.)
