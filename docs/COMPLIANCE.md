@@ -109,6 +109,11 @@ the blast radius of a token compromise.
 - No YouTube analytics data in LLM prompts beyond what is needed for the specific analysis.
 - Account-deletion endpoint must purge: tokens, analytics, source media, rendered clips,
   DNA profile, feedback labels. Required before public launch.
+- **Deletion-log minimization (Issue 247):** the `creator.deleted` audit row must contain
+  **no PII** — no email, no channel_id, no other personal data. `audit_log` is never purged
+  and RLS-exempt, so any PII written there would survive the erasure (GDPR Art. 17 — EDPB
+  CEF 2025). Only the internal `creator_id` (pseudonymous once the creator row is gone) is
+  retained as evidence-of-erasure. Pinned by `test_delete_account_writes_audit_log`.
 - Demographics data: aggregated payloads only; no individual viewer data is stored.
 
 ---

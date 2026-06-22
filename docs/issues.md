@@ -358,9 +358,10 @@ overlapped** by research-derived issues — flagged inline.
 
 ## Priority 8 — Privacy / Compliance
 
-### Issue 247: [SEV1] Erasure leak — stop writing deleted-creator PII to `audit_log`
+### Issue 247: [SEV1] Erasure leak — stop writing deleted-creator PII to `audit_log` ✅ DONE (2026-06-22)
 **What:** `DELETE /auth/me` persists `email`+`channel_id` into the never-purged, RLS-exempt `audit_log`. Remove the PII (keep `creator_id`/entity_id, or pseudonymize).
 **AC:** deletion audit row has no email/channel_id/PII; integration test confirms; COMPLIANCE updated with the minimization rule. `[DEC]` (cite EDPB CEF 2025). **Src:** 12 / 177a.
+**Shipped:** Dropped the `before={email,channel_id}` payload from the `creator.deleted` audit call (`auth.py`); only `action`/`actor`/`entity_id=creator_id` retained (pseudonymous post-erasure). Unit test asserts `before_jsonb is None` (`test_account_deletion.py`); integration test asserts no before/after payload survives (`test_account_deletion_integration.py`). COMPLIANCE Privacy Posture + DECISIONS (EDPB CEF 2025, Art. 17) updated.
 
 ### Issue 248: [SEV1] Erasure completeness — purge `event_logs` on deletion
 **What:** `event_logs.creator_id` has no FK/CASCADE and lives on a separate engine; deleted-creator telemetry persists forever. Add an explicit cross-engine delete to the deletion path.

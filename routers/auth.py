@@ -264,14 +264,17 @@ async def delete_account(
         except Exception as exc:
             logger.warning("Storage purge failed for %s: %s", prefix, exc)
 
-    # Audit log before deletion (session still has creator in identity map)
+    # Audit the deletion WITHOUT the creator's PII (Issue 247). `audit_log` is
+    # never purged and RLS-exempt, so writing email/channel_id here would let
+    # erased personal data survive the erasure (GDPR Art. 17 — EDPB CEF 2025).
+    # The internal `creator_id` is sufficient evidence-of-erasure: once the
+    # creator row is deleted the UUID no longer maps to a person.
     await append_audit(
         session,
         action="creator.deleted",
         actor=str(creator_id),
         entity_type="creator",
         entity_id=creator_id,
-        before={"channel_id": creator.channel_id, "email": creator.email},
     )
 
     # Cascade delete — DB FKs with ON DELETE CASCADE handle all child rows

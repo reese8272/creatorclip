@@ -176,6 +176,10 @@ def test_delete_account_writes_audit_log(client):
     assert isinstance(added, AuditLog)
     assert added.action == "creator.deleted"
     assert added.entity_id == creator.id
+    # Issue 247 — the deletion audit must NOT retain PII (never-purged log):
+    # email + channel_id must be absent. creator_id (entity_id) is fine.
+    assert added.before_jsonb is None
+    assert added.after_jsonb is None
 
 
 # ── Session cookie cleared ────────────────────────────────────────────────────

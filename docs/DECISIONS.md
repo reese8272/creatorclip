@@ -5,6 +5,32 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 247 [SEV1]: deletion audit log must not retain erased PII
+
+**What changed:** `DELETE /auth/me` previously wrote `{"channel_id", "email"}` into the
+`before` payload of the `creator.deleted` `audit_log` row. Since `audit_log` is never
+purged and RLS-exempt, that PII survived the account erasure indefinitely. Removed the
+`before=` payload entirely; the audit row now carries only `action`, `actor`, and
+`entity_id` = `creator_id`.
+
+**Why:** GDPR Art. 17 (right to erasure) requires erasure to be durable — logs and
+backups must not silently retain the erased personal data. The internal `creator_id`
+UUID is acceptable evidence-of-erasure: once the creator row (and its email/channel
+mapping) is deleted, the UUID no longer identifies a person, so it is effectively
+pseudonymous. Hashing the email was rejected (still arguably personal data, no benefit).
+Time-based purging of `audit_log` is the broader Issue 250 retention work, not this fix.
+
+**Source/evidence:** EDPB **2025 Coordinated Enforcement Framework** on the right to
+erasure (Art. 17) — report adopted Feb 2026, 32 DPAs; retention/log practices that
+re-introduce erased data are a named compliance failure:
+[EDPB CEF 2025 launch](https://www.edpb.europa.eu/news/news/2025/cef-2025-launch-coordinated-enforcement-right-erasure_en),
+[EDPB CEF 2025 report (PDF)](https://www.edpb.europa.eu/system/files/2026-02/edpb_cef-report_2025_right-to-erasure_en.pdf).
+Finding: `docs/research/findings/12_data_privacy_compliance.md` (177a).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 185: opt-in noise reduction via `afftdn` (not `arnndn`)
 
 **What changed:** Added an opt-in `denoise` style flag (off by default) that

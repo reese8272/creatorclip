@@ -349,6 +349,17 @@ async def test_delete_account_cascades_all_dependent_tables(
     )
     assert audit_count >= 1, "audit_log row missing after account deletion"
 
+    # Issue 247 — the deletion audit must NOT retain the creator's PII (audit_log
+    # is never purged). Assert no email/channel_id leaked into before/after JSON.
+    leaked = await db_session.scalar(
+        select(func.count(AuditLog.id)).where(
+            AuditLog.action == "creator.deleted",
+            AuditLog.entity_id == cid,
+            text("(before_jsonb IS NOT NULL OR after_jsonb IS NOT NULL)"),
+        )
+    )
+    assert leaked == 0, "deletion audit row retained PII (before/after payload)"
+
 
 @pytest.mark.integration
 async def test_delete_account_purges_both_storage_prefixes(
