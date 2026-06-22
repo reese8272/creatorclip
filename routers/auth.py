@@ -264,6 +264,18 @@ async def delete_account(
         except Exception as exc:
             logger.warning("Storage purge failed for %s: %s", prefix, exc)
 
+    # Purge telemetry on the separate logs engine (Issue 248). event_logs has no
+    # FK to creators, so the DB cascade below can't reach it — delete explicitly.
+    # Best-effort: a failure must not abort the erasure (mirrors the media purge).
+    try:
+        from event_log import purge_creator_events
+
+        n = await purge_creator_events(creator_id)
+        if n > 0:
+            logger.info("Purged %d event_logs row(s) for creator %s", n, creator_id)
+    except Exception as exc:
+        logger.warning("event_logs purge failed for creator %s: %s", creator_id, exc)
+
     # Audit the deletion WITHOUT the creator's PII (Issue 247). `audit_log` is
     # never purged and RLS-exempt, so writing email/channel_id here would let
     # erased personal data survive the erasure (GDPR Art. 17 — EDPB CEF 2025).

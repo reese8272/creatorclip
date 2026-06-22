@@ -4,8 +4,12 @@ The load-bearing invariant: no PII / token / secret ever reaches an event_logs
 row. _redact() is a pure function, so this runs without a database.
 """
 
+import asyncio
+import uuid
+from unittest.mock import AsyncMock, MagicMock
+
 import event_log
-from event_log import _redact
+from event_log import _redact, purge_creator_events
 
 
 def test_redact_masks_sensitive_keys():
@@ -60,3 +64,47 @@ def test_record_event_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(event_log, "_sessionmaker", None)
     asyncio.run(event_log.record_event(source="ui", event="click", target="x"))
     assert event_log._sessionmaker is None  # never touched the DB
+
+
+# ── purge_creator_events (Issue 248 — erasure completeness) ────────────────────
+
+
+def test_purge_creator_events_noop_when_disabled(monkeypatch):
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", False)
+    monkeypatch.setattr(event_log, "_sessionmaker", None)
+    n = asyncio.run(purge_creator_events(uuid.uuid4()))
+    assert n == 0
+    assert event_log._sessionmaker is None  # never opened the logs pool
+
+
+def test_purge_creator_events_deletes_and_returns_rowcount(monkeypatch):
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    session = MagicMock()
+    result = MagicMock()
+    result.rowcount = 3
+    session.execute = AsyncMock(return_value=result)
+    session.commit = AsyncMock()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: (lambda: _CM()))
+    n = asyncio.run(purge_creator_events(str(uuid.uuid4())))
+    assert n == 3
+    session.execute.assert_awaited_once()  # a DELETE was issued
+
+
+def test_purge_creator_events_swallows_errors(monkeypatch):
+    """A failure on the logs engine must not abort the deletion path → returns -1."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    def _boom():
+        raise RuntimeError("logs DB down")
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", _boom)
+    assert asyncio.run(purge_creator_events(uuid.uuid4())) == -1

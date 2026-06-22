@@ -22,6 +22,7 @@ import logging
 import uuid
 from typing import Any
 
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -145,6 +146,29 @@ async def record_event(
             await session.commit()
     except Exception:  # noqa: BLE001 — telemetry must never break the request path
         logger.warning("event_log.record_event failed (swallowed)", exc_info=True)
+
+
+async def purge_creator_events(creator_id: uuid.UUID | str) -> int:
+    """Delete all telemetry rows for a creator (Issue 248 — right to erasure).
+
+    ``event_logs`` lives on a separate engine with no FK to ``creators``, so the
+    DB cascade on account deletion can't reach it — deletion must purge it
+    explicitly. Best-effort: a failure here is logged and returns ``-1`` rather
+    than aborting the account deletion (mirrors the R2-purge posture). Returns the
+    number of rows deleted, or 0 when telemetry is disabled.
+    """
+    if not settings.EVENT_LOG_DB_ENABLED:
+        return 0
+    cid = uuid.UUID(creator_id) if isinstance(creator_id, str) else creator_id
+    try:
+        sm = _get_sessionmaker()
+        async with sm() as session:
+            result = await session.execute(delete(EventLog).where(EventLog.creator_id == cid))
+            await session.commit()
+            return result.rowcount or 0
+    except Exception:  # noqa: BLE001 — erasure best-effort; never abort deletion
+        logger.warning("event_log.purge_creator_events failed (swallowed)", exc_info=True)
+        return -1
 
 
 async def dispose() -> None:

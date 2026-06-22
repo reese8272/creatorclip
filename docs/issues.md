@@ -363,9 +363,10 @@ overlapped** by research-derived issues — flagged inline.
 **AC:** deletion audit row has no email/channel_id/PII; integration test confirms; COMPLIANCE updated with the minimization rule. `[DEC]` (cite EDPB CEF 2025). **Src:** 12 / 177a.
 **Shipped:** Dropped the `before={email,channel_id}` payload from the `creator.deleted` audit call (`auth.py`); only `action`/`actor`/`entity_id=creator_id` retained (pseudonymous post-erasure). Unit test asserts `before_jsonb is None` (`test_account_deletion.py`); integration test asserts no before/after payload survives (`test_account_deletion_integration.py`). COMPLIANCE Privacy Posture + DECISIONS (EDPB CEF 2025, Art. 17) updated.
 
-### Issue 248: [SEV1] Erasure completeness — purge `event_logs` on deletion
+### Issue 248: [SEV1] Erasure completeness — purge `event_logs` on deletion ✅ DONE (2026-06-22)
 **What:** `event_logs.creator_id` has no FK/CASCADE and lives on a separate engine; deleted-creator telemetry persists forever. Add an explicit cross-engine delete to the deletion path.
 **AC:** deletion removes all `event_logs` rows for the creator; integration test (two creators, delete one); best-effort failure doesn't abort deletion; COMPLIANCE data-class table updated. **Src:** 12 / 177b.
+**Shipped:** `event_log.purge_creator_events(creator_id)` issues `DELETE FROM event_logs WHERE creator_id` on the separate logs engine; `DELETE /auth/me` calls it best-effort (logged, never aborts erasure). COMPLIANCE data-class row updated. Tests: 3 unit (`test_event_log.py`: disabled→0, deletes→rowcount, error→-1) + delete-calls-purge (`test_account_deletion.py`). *(Two-creator integration test — runs on staging Postgres.)*
 
 ### Issue 249: [SEV1] Data export endpoint (Art. 15/20)
 **What:** Isolation-safe machine-readable (JSON) export of one creator's data + presigned clip links, async (202+poll) like the improvement brief.

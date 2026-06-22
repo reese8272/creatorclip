@@ -182,6 +182,36 @@ def test_delete_account_writes_audit_log(client):
     assert added.after_jsonb is None
 
 
+def test_delete_account_purges_event_logs(client):
+    """Issue 248 — deletion explicitly purges the separate-engine event_logs
+    (no FK/cascade reaches them)."""
+    creator = _make_creator()
+    session_mock = AsyncMock()
+    session_mock.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+    session_mock.delete = AsyncMock()
+    session_mock.commit = AsyncMock()
+    session_mock.add = MagicMock()
+
+    async def _session():
+        yield session_mock
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _session
+    purge = AsyncMock(return_value=2)
+    try:
+        with (
+            patch("worker.storage.delete_prefix", return_value=0),
+            patch("routers.auth.httpx.AsyncClient"),
+            patch("event_log.purge_creator_events", purge),
+        ):
+            resp = client.delete("/auth/me", cookies=_session_cookie_for(creator))
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 204
+    purge.assert_awaited_once_with(creator.id)
+
+
 # ── Session cookie cleared ────────────────────────────────────────────────────
 
 

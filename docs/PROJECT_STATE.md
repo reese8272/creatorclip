@@ -6,12 +6,13 @@ Updated after every issue closes.
 
 ## Current Status
 
-**SEV1 privacy track — Issue 247 (erasure PII leak) DONE (2026-06-22).** On branch
-`feat/sev1-privacy` (off main; independent of the held `feat/batch-b-publish`). `DELETE /auth/me`
-no longer writes `email`/`channel_id` into the never-purged `audit_log` — the `creator.deleted`
-row keeps only `creator_id` (pseudonymous post-erasure). GDPR Art. 17 / EDPB CEF 2025. COMPLIANCE
-Privacy Posture + DECISIONS updated; unit + integration tests assert no PII payload. **Next:** 248
-(purge `event_logs` on deletion), 249 (data-export endpoint).
+**SEV1 privacy track — Issues 247 + 248 DONE (2026-06-22).** On branch `feat/sev1-privacy` (off
+main; independent of the held `feat/batch-b-publish`). **247:** `DELETE /auth/me` no longer writes
+`email`/`channel_id` into the never-purged `audit_log` (keeps only `creator_id`, pseudonymous
+post-erasure; GDPR Art. 17 / EDPB CEF 2025). **248:** deletion now also purges the separate-engine
+`event_logs` (no FK/cascade reaches it) via `event_log.purge_creator_events`, best-effort. COMPLIANCE
+(Privacy Posture + data-class table) + DECISIONS updated; unit + integration tests for both. **Next:**
+249 (Art. 15/20 data-export endpoint).
 
 **Batch B started — Issue 182 (Export presets + clip download) DONE (2026-06-22).** First issue of
 Batch B (export & publishing), on branch `feat/batch-b-export-download`. Added `OUTPUT_PRESETS`
