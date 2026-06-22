@@ -132,9 +132,10 @@ overlapped** by research-derived issues — flagged inline.
 **What:** On terminal pipeline `done`, send one transactional email (preference-gated) with the creator's own title + deep link to the per-video map / Review; in-app surface via the notification center.
 **AC:** one email per completed job; own-data only (no token/PII); idempotent on retry; unsubscribe + honesty disclaimer. **Depends:** 242 (email infra). **Src:** 01 / 184 (overlaps 11/176c).
 
-### Issue 194: Publish to YouTube — add `youtube.upload` scope + incremental consent
+### Issue 194: Publish to YouTube — add `youtube.upload` scope + incremental consent ✅ DONE (2026-06-22)
 **What:** Add the write scope to `youtube/oauth.py`; existing read-only creators re-consent only on opting into publishing; update `docs/COMPLIANCE.md` scope table.
 **AC:** scope requested only for publishing opt-ins (minimum-necessary); tokens Fernet-encrypted, read via `decrypt()`, never logged; Google OAuth verification + **YouTube API compliance audit** tracked as launch dependency. `[DEC]`. **Src:** 13 / D1a. *(D0+D1 scope per 2026-06-22 decision.)*
+**Shipped:** `PUBLISH_SCOPE` kept OUT of base login `SCOPES`; `build_authorization_url(include_publish=True)` appends it + `include_granted_scopes=true`; authed `GET /auth/connect-publishing` starts the opt-in. `can_publish` derived from `YoutubeToken.scope` (`has_publish_scope()`, no migration) → exposed on `/auth/me` + a Profile "Enable YouTube publishing" card (honest copy: pre-audit uploads are private, no virality). `COMPLIANCE.md` scope table + `[DEC]` (`docs/DECISIONS.md` 2026-06-22) done; **audit is now an explicit pre-launch gate**. Tests: +4 in `test_auth.py`. Tokens unchanged (still Fernet via `encrypt()`/`decrypt()`).
 
 ### Issue 195: `publish_to_youtube` Celery task (`videos.insert`, idempotent)
 **What:** Resumable upload of `render_uri` with `#Shorts` description; idempotent on `self.request.id`; stores returned video id before ack. **Pre-audit: forced `private`** (creator publishes manually) until the audit clears.

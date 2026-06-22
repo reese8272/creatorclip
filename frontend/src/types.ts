@@ -21,6 +21,7 @@ export interface CurrentUser {
   email?: string | null
   analysis_mode?: AnalysisMode
   onboarding_state?: string
+  can_publish?: boolean
   setup?: SetupStep | null
 }
 

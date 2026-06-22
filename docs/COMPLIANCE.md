@@ -12,8 +12,9 @@ the ToS would result in API access revocation, destroying the product.
 
 **Key obligations** (non-exhaustive — always read the current ToS at developers.google.com/youtube/terms):
 
-1. **Minimum necessary scopes**: Request only the scopes required for the feature. Do not
-   request write scopes unless directly needed (v1 is read + export only).
+1. **Minimum necessary scopes**: Request only the scopes required for the feature. The base
+   login flow is read-only; the `youtube.upload` write scope is requested **only** when a
+   creator opts into publishing, via incremental authorization (Issue 194). See OAuth Scopes below.
 
 2. **Data retention / refresh** (Wave-4 Fix 3 / Issue 75b — confirmed 2026-05-31):
    The YouTube API Services Developer Policies §III.E.4.b + §III.D.2.3.b require API
@@ -95,7 +96,16 @@ the ToS would result in API access revocation, destroying the product.
 |-------|---------|---------|
 | `https://www.googleapis.com/auth/youtube.readonly` | Read video metadata, captions | Yes |
 | `https://www.googleapis.com/auth/yt-analytics.readonly` | Retention curves, metrics, demographics, activity | Yes |
-| `https://www.googleapis.com/auth/youtube.upload` | (NOT requested in v1) Direct Shorts publishing | No — deferred to Phase 2 |
+| `https://www.googleapis.com/auth/youtube.upload` | Direct Shorts publishing (Issue 194) | **Opt-in only** — requested via incremental consent (`/auth/connect-publishing`) when a creator enables publishing; never in base login |
+
+The base login flow requests only the read scopes above. The `youtube.upload` write scope
+is added **per-creator, on publish opt-in**, via Google incremental authorization
+(`include_granted_scopes=true`) — keeping the base flow minimum-necessary and the
+verification surface small for read-only creators (Issue 194, `docs/DECISIONS.md` 2026-06-22).
+
+> **Launch dependency:** shipping uploads to the public requires Google OAuth app
+> verification **and** the YouTube API Services compliance audit. Until that clears,
+> `publish_to_youtube` (Issue 195) forces `privacyStatus=private` (creator publishes manually).
 
 Requesting only the minimum necessary scopes reduces OAuth verification friction and limits
 the blast radius of a token compromise.

@@ -6,6 +6,17 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Batch B publish cluster started — Issue 194 (youtube.upload scope + incremental consent) DONE
+(2026-06-22).** On branch `feat/batch-b-publish` (not merged). The write scope stays OUT of base
+login; requested only on opt-in via `GET /auth/connect-publishing` (incremental auth,
+`include_granted_scopes=true`). `can_publish` derived from `YoutubeToken.scope` (`has_publish_scope`,
+no migration); surfaced on `/auth/me` + a Profile "Enable YouTube publishing" card (honest copy:
+pre-audit uploads private, no virality). `COMPLIANCE.md` scope table + `[DEC]` (`docs/DECISIONS.md`
+2026-06-22) done; **YouTube API compliance audit is now an explicit pre-launch gate**. Tests: +4
+(`test_auth.py`); full suite **1028 passed, 3 skipped**; Layer-0 green; frontend lint/tsc/build +
+**e2e 38/38 (serial — parallel OOMs on this WSL2 box; see dev-env memory)**. **Next:** Issue 195
+(`publish_to_youtube` Celery task, idempotent, pre-audit forced `private`).
+
 **Batch B started — Issue 182 (Export presets + clip download) DONE (2026-06-22).** First issue of
 Batch B (export & publishing), on branch `feat/batch-b-export-download`. Added `OUTPUT_PRESETS`
 (9:16/1:1/16:9) in `render.py`, applied render-time via `style_preset["aspect"]` (no `ClipFormat`

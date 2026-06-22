@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 194: publish scope via incremental consent (opt-in only)
+
+**What changed:** Publishing requires the `youtube.upload` write scope. Rather than
+add it to the base login `SCOPES`, it is requested **only when a creator opts into
+publishing**, via Google **incremental authorization**: a new authed endpoint
+`GET /auth/connect-publishing` builds the consent URL with the upload scope appended
++ `include_granted_scopes=true`. "Publishing enabled" is **derived from the stored
+`YoutubeToken.scope` string** (`has_publish_scope()`) — no new column/migration.
+`/auth/me` now returns `can_publish`; Profile gains an "Enable YouTube publishing"
+opt-in card. `docs/COMPLIANCE.md` scope table updated.
+
+**Why:** Minimum-necessary scopes is both the Google OAuth best practice and a YouTube
+ToS obligation (`COMPLIANCE.md §1`) — read-only creators must never be asked for write
+access. Incremental authorization gives one combined grant (no second token to manage)
+and lets us disable the feature cleanly if the user declines the scope. Deriving from
+the scope string avoids a migration and keeps a single source of truth.
+
+**Launch dependency (not closeable by code):** going live with uploads requires Google
+OAuth app verification **and** the YouTube API Services compliance audit. Until that
+clears, Issue 195's `publish_to_youtube` forces `privacyStatus=private` (creator
+publishes manually). This is now an explicit pre-public-launch gate.
+
+**Source/evidence:** Google OAuth 2.0 incremental authorization + minimum-scope
+guidance verified live (2026):
+[incremental auth (web-server)](https://developers.google.com/identity/protocols/oauth2/web-server),
+[OAuth best practices](https://developers.google.com/identity/protocols/oauth2/resources/best-practices),
+[requesting additional permissions](https://developers.google.com/identity/sign-in/web/incremental-auth).
+Finding: `docs/research/findings/13_multiplatform_distribution_publishing.md` (D1a).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 185: opt-in noise reduction via `afftdn` (not `arnndn`)
 
 **What changed:** Added an opt-in `denoise` style flag (off by default) that
