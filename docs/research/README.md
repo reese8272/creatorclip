@@ -1,57 +1,41 @@
-# Gap-Closure Research Prompts
+# Gap-Closure Research Initiative — COMPLETE (2026-06-22)
 
-This directory holds **research-agent prompts** — one per known product/engineering gap. Each
-file is a ready-to-paste prompt for a read-only Claude Code research agent (Explore / Plan /
-`general-purpose`). The agent researches the current industry standard first (the One Rule in
-`CLAUDE.md`), grounds every finding in this repo with `file_path:line` citations, and returns a
-written brief + a set of proposed implementation issues. **These agents do not write product
-code** — they drive the Phase 1 (CHECK) research that precedes building.
+The gap-closure research initiative (Issues **166–180**) is **done**. Each of the 15 conceptual
+gaps got a Phase-1 (CHECK) research pass — industry-standard-first, repo-grounded with
+`file_path:line` citations — and produced a written brief plus concrete, dependency-ordered
+implementation issues.
 
-## Why this exists
+## Where everything lives now
 
-The backlog (`docs/issues.md`) closed a lot of bugs but left large *conceptual* gaps —
-visibility, capability, economics, safety, resilience. Rather than guess at solutions, each gap
-gets a disciplined research pass first. This is the Check → Approve → Build → Review workflow
-applied to the unknowns: research (here) → file concrete issues → approve → build.
+| Artifact | Location |
+|----------|----------|
+| **Research findings (briefs)** — full acceptance criteria + evidence + draft DECISIONS entries | `docs/research/findings/01–15` *(live reference)* |
+| **Filed implementation issues** (181–274, deduped + prioritized) | `docs/issues.md` |
+| **Scope decisions** (stream recap, publishing, i18n, editor) | `docs/DECISIONS.md` (2026-06-22 entry) |
+| **Spent research prompts** (the prompts that were run) | `docs/archive/research_prompts_2026-06-22/` |
 
-## How to run one
+## How to use the findings
 
-1. Open the prompt file for the gap.
-2. Spawn a research agent and paste everything below the file's `## PROMPT` line. (Optionally
-   narrow scope by trimming sections.)
-3. The agent returns a brief + proposed issues; triage those into `docs/issues.md` and capture
-   any approach changes in `docs/DECISIONS.md`.
+When you start any Issue 181–274, open its `Src:` finding in `docs/research/findings/` — the
+backlog entry is a condensed tracker; the finding holds the full acceptance criteria, the
+`file_path:line` evidence, and the draft `docs/DECISIONS.md` entry to adapt at build time.
 
-## The prompts
+## Findings index
 
-| # | Prompt | Gap | Tracked issue |
-|---|--------|-----|---------------|
-| 01 | `01_ux_product_gaps.md` | Analysis-status visibility, stream→summary, per-video clip surfacing, UX/bug sweep | Issue 166 |
-| 02 | `02_agentic_caching_cost.md` | Agentic loop, prompt caching, LLM cost & unit economics | Issue 167 |
-| 03 | `03_editorial_capabilities.md` | Editing capabilities vs. modern editorial software | Issue 168 |
-| 04 | `04_security_scalability.md` | Security posture + scaling to 10k+ creators | Issue 169 |
-| 05 | `05_logging_observability.md` | Logs, metrics, traces, alerting, product telemetry | Issue 170 |
-| 06 | `06_monetization_unit_economics.md` | Pricing, packaging, billing correctness, margin per video | Issue 171 |
-| 07 | `07_activation_onboarding_funnel.md` | Time-to-first-clip, the data-gate, funnel instrumentation | Issue 172 |
-| 08 | `08_personalization_efficacy_eval.md` | Does the DNA/preference model actually pick good clips? (the moat) | Issue 173 |
-| 09 | `09_llm_content_safety_prompt_injection.md` | Prompt injection + unsafe output from creator/YouTube content | Issue 174 |
-| 10 | `10_disaster_recovery_durability.md` | Backups, restore, failover, key/secret recoverability | Issue 175 |
-| 11 | `11_notifications_lifecycle_comms.md` | Transactional email/push, "your clips are ready", lifecycle | Issue 176 |
-| 12 | `12_data_privacy_compliance.md` | GDPR/CCPA, erasure/export completeness, retention, sub-processors | Issue 177 |
-| 13 | `13_multiplatform_distribution_publishing.md` | Publish/schedule to YouTube Shorts; cross-post TikTok/Reels (scope expansion) | Issue 178 |
-| 14 | `14_internationalization_multilingual.md` | Multilingual content handling + product i18n | Issue 179 |
-| 15 | `15_qa_eval_release_engineering.md` | Test-suite reliability, visual-regression, CI, safe deploy/rollback | Issue 180 |
-
-## Cross-references between prompts
-
-Several gaps overlap; the prompts name each other so the agents don't duplicate or contradict:
-
-- **Cost** is split: `02` (LLM token cost) feeds `06` (pricing/margin).
-- **Telemetry** is split: `05` (system observability) vs. `07` (product/funnel analytics) vs.
-  `11` (notifications) — all reuse the same event/SSE infrastructure.
-- **Eval** is split: `08` owns clip-quality/model eval; `15` owns CI reliability + how the eval
-  gates `clip_engine/` changes.
-- **Security** is split: `04` (broad posture + scale) vs. `09` (LLM-specific injection/output).
-- **Compliance** is split: `docs/COMPLIANCE.md`/`04` (YouTube ToS) vs. `12` (privacy law).
-- **Scope expansions** (`13` publishing, `01` stream-summary, parts of `03`) each require a
-  `docs/DECISIONS.md` entry before building, since they move the PRD's v1 boundary.
+| # | Finding | Filed as |
+|---|---------|----------|
+| 01 | UX / product gaps (status visibility, clips map, stream recap) | 181–193, 210–215 |
+| 02 | Agentic usage, prompt caching & LLM cost | 218–223 |
+| 03 | Editorial capabilities | 181–189 |
+| 04 | Security posture + scaling to 10k+ | 228–232, 259–264 |
+| 05 | Logging, metrics, tracing, alerting | 233–241 |
+| 06 | Monetization, pricing & unit economics | 205–209, 220, 228 |
+| 07 | Activation, onboarding & funnel | 203–204, 214–215, 235 |
+| 08 | Personalization efficacy & clip-quality eval (the moat) | 198–202, 216 |
+| 09 | LLM content safety & prompt injection | 224–227 |
+| 10 | Disaster recovery, backups & durability | 255–258 |
+| 11 | Notifications & lifecycle comms | 242–246 |
+| 12 | Data privacy & compliance | 247–254 |
+| 13 | Multi-platform distribution & publishing | 182, 194–197 (+ TikTok/Reels deferred) |
+| 14 | Internationalization & multilingual | **deferred** (English-only v1) |
+| 15 | QA, test-suite hardening & release engineering | 265–274 |

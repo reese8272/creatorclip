@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Gap-closure backlog rebuild + four v1 scope decisions
+
+**What changed:** The gap-closure research initiative (Issues 166–180) is complete — all 15
+briefs are in `docs/research/findings/`. `docs/issues.md` was rebuilt: finished work (Issues
+1–165 + the 166–180 research passes) archived verbatim to
+`docs/archive/issues_snapshot_2026-06-22.md`; the live file now carries only open work +
+~94 implementation issues (181–274) harvested from the findings, deduped and renumbered into
+the project's priority order. Resolved off-course bugs were archived to
+`docs/archive/off_course_bugs_snapshot_2026-06-22.md`; three still-open ones were promoted.
+
+Four product-scope calls were made by the founder (the only "do we want this" questions; all
+other open questions are technical defaults resolved in each issue's own CHECK phase):
+
+1. **Stream-VOD recap — EXPAND v1 NOW.** Add a second output shape: a creator-uploaded
+   past-stream VOD file → 5–10 min **16:9** narrative recap (Issues 190–192; render co-owned
+   with editorial 191). Source is `origin=upload` files only — **no live capture, no YouTube
+   download** (consistent with the Issue-139 ToS ruling). Moves the PRD's "single 9:16
+   vertical, no live-stream" boundary (`docs/PRD.md:101,129`). *Why:* strongest competitive
+   whitespace (`docs/COMPETITIVE_RESEARCH.md:39,108-113`); ~70% of the pipeline transfers.
+
+2. **Publishing — D0 export + D1 YouTube publish IN SCOPE.** Clip download + 1:1/16:9 export
+   presets (no new scope), plus `youtube.upload` scope + scheduled publish (Issues 182,
+   194–197). Pre-audit, `videos.insert` is forced `private` (creator publishes manually) until
+   the **YouTube API compliance audit** clears — that audit is now a launch dependency.
+   TikTok/Reels cross-post **deferred** to the parking lot.
+
+3. **Multilingual — ENGLISH-ONLY v1.** The entire i18n track (finding 14, 179a–g) is deferred
+   to the parking lot. We stop discarding WhisperX-detected language as a latent capability but
+   do not build non-English handling or product-UI translation for launch.
+
+4. **Editor — FULL TIMELINE TOOL.** Build the waveform+transcript timeline Editor (Issue 188)
+   as the backbone, plus real per-frame active-speaker reframe (189, build-vs-buy TBD) and
+   denoise (185) — not just the lean "AI does it, you tweak" path.
+
+**Why (process):** the One Rule — research the industry standard before building. Each of the
+15 findings did that Phase-1 CHECK pass; this rebuild files the resulting issues so each can go
+Approve → Build. The four scope expansions each carry a `[DEC]` flag in `issues.md` and will
+get a full per-issue DECISIONS entry at build time (draft entries already exist in the findings).
+
+**Source/evidence:** `docs/research/findings/01–15`; founder scope decisions captured in-session
+2026-06-22. Superseded: Issues 80/81 → 242–244 (notifications); Issue 160 → 211 (active-tasks
+panel); Issue 27 → 260; Issue 58/112-Locust → 261.
+
+---
+
 ## 2026-06-19 — Issue 164: Live-site Playwright audit (real backend + real auth)
 
 **What changed:** Added a second Playwright config (`frontend/playwright.config.prod.ts`) that runs

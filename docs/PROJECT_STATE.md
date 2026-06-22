@@ -6,7 +6,24 @@ Updated after every issue closes.
 
 ## Current Status
 
-**In progress (Issues 166–180 — Gap-Closure Research Initiative, 2026-06-22):** Opened a deliberate
+**Last completed (Issues 166–180 — Gap-Closure Research Initiative COMPLETE + backlog rebuild,
+2026-06-22):** All 15 research briefs delivered (`docs/research/findings/01–15`). Rebuilt the
+backlog: archived finished work (Issues 1–165 + the 166–180 research passes) verbatim to
+`docs/archive/issues_snapshot_2026-06-22.md`, and the resolved off-course bugs to
+`docs/archive/off_course_bugs_snapshot_2026-06-22.md`; spent prompts moved to
+`docs/archive/research_prompts_2026-06-22/`. The new `docs/issues.md` carries only open work +
+**~94 implementation issues (181–274)** harvested from the findings, deduped and renumbered into
+priority order (Functionality → UI → UX → Agentic/Caching/Cost → Security → Observability →
+Notifications → Privacy/Compliance → DR/Infra/Scale → QA/Release-eng), then carry-over open
+items, then a deferred parking lot. Four founder scope decisions (`docs/DECISIONS.md` 2026-06-22):
+**stream-VOD recap = expand v1 now** (190–192), **publishing = D0 export + D1 YouTube publish**
+(182, 194–197; TikTok/Reels deferred), **multilingual = English-only v1** (entire i18n track
+deferred), **editor = full timeline tool** (188–189). Supersessions: 80/81→242–244, 160→211,
+27→260, 58/112-Locust→261. **Next:** start the prioritized backlog — Functionality first
+(181 loudnorm is the cheapest win; 198 the moat-eval is the highest-leverage). No product code
+changed in this pass.
+
+**Earlier (Issues 166–180 — research authored, 2026-06-22):** Opened a deliberate
 research pass over the **conceptual** gaps the bug-fix backlog never addressed. Authored 15
 ready-to-paste, repo-grounded research-agent prompts in `docs/research/` (index +
 cross-references in `docs/research/README.md`), one per gap, each driving the Phase 1 (CHECK)
