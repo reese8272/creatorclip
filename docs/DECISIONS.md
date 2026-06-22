@@ -5,6 +5,40 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 249 [SEV1]: data-export endpoint (Art. 15/20) — format + scope
+
+**What changed:** Added an async data-export flow (`POST /creators/me/export` 202 →
+`GET /creators/me/export` poll → `GET /creators/me/export/download`). A Celery task
+gathers every data class for one creator into a **JSON** artifact, uploads it to R2,
+and the download endpoint serves it via a short-lived presigned link (prod) / file
+stream (dev) — reusing the Issue-182 download pattern. New `data_exports` table
+(migration 0027, RLS-gated), one row per creator, mirroring the improvement-brief
+202+poll precedent.
+
+**Decisions (`[DEC]`):**
+- **Format = JSON** — Art. 20 requires "structured, commonly used, machine-readable";
+  JSON is the de-facto standard. Tagged `format: creatorclip-export-v1`.
+- **Scope** = profile, DNA, videos+metrics, clips, feedback, outcomes, chat
+  (conversations+messages), billing (packs+deductions). Every query is single-tenant
+  (scoped by `creator_id`, or by the creator's own video/clip/conversation ids).
+- **Clips referenced by durable authed download *paths*** (`/clips/{id}/download`) inside
+  the JSON, not expiring presigned URLs — so the export stays useful after the
+  short-lived link would have lapsed. The export *artifact itself* is fetched via a
+  presigned link (it's a single small JSON, fetched once right after generation).
+- **Async over sync** — a large catalog's export can be big/slow; the 202+poll keeps it
+  off the request path (consistent with the improvement brief / DNA build).
+
+**Migration-numbering note:** this is `0027_data_exports` (privacy branch off main). The
+held `feat/batch-b-publish` branch also has a `0027` — whichever merges second renumbers
+to `0028` (see LEFT_OFF).
+
+**Source/evidence:** GDPR Art. 15 (access) + Art. 20 (portability — structured,
+machine-readable). Finding: `docs/research/findings/12_data_privacy_compliance.md` (177c).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 247 [SEV1]: deletion audit log must not retain erased PII
 
 **What changed:** `DELETE /auth/me` previously wrote `{"channel_id", "email"}` into the

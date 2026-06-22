@@ -6,13 +6,17 @@ Updated after every issue closes.
 
 ## Current Status
 
-**SEV1 privacy track — Issues 247 + 248 DONE (2026-06-22).** On branch `feat/sev1-privacy` (off
-main; independent of the held `feat/batch-b-publish`). **247:** `DELETE /auth/me` no longer writes
-`email`/`channel_id` into the never-purged `audit_log` (keeps only `creator_id`, pseudonymous
-post-erasure; GDPR Art. 17 / EDPB CEF 2025). **248:** deletion now also purges the separate-engine
-`event_logs` (no FK/cascade reaches it) via `event_log.purge_creator_events`, best-effort. COMPLIANCE
-(Privacy Posture + data-class table) + DECISIONS updated; unit + integration tests for both. **Next:**
-249 (Art. 15/20 data-export endpoint).
+**SEV1 privacy track COMPLETE — Issues 247 + 248 + 249 DONE (2026-06-22).** On branch
+`feat/sev1-privacy` (off main; independent of the held `feat/batch-b-publish`). **247:** `DELETE
+/auth/me` no longer writes PII into the never-purged `audit_log` (Art. 17 / EDPB CEF 2025). **248:**
+deletion purges the separate-engine `event_logs` via `event_log.purge_creator_events`, best-effort.
+**249:** async data-export (Art. 15/20) — `POST/GET /creators/me/export` + `/download`;
+`generate_data_export` task aggregates all data classes (single-tenant) → JSON → R2; new
+`data_exports` table (migration **0027**, RLS); clips referenced by durable authed download paths;
+Privacy Policy "Your rights" updated. COMPLIANCE + DECISIONS updated across all three; full suite
+**1033 passed, 3 skipped**; Layer-0 green; +13 tests across the three. ⚠️ All DB-heavy → mock-verified here; migrations/RLS/
+isolation run on staging Postgres. **Migration collision:** publish branch's `0027` must renumber to
+`0028` when it merges after this. **Not merged/deployed** — awaiting verification path.
 
 **Batch B started — Issue 182 (Export presets + clip download) DONE (2026-06-22).** First issue of
 Batch B (export & publishing), on branch `feat/batch-b-export-download`. Added `OUTPUT_PRESETS`
