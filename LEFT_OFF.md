@@ -3,13 +3,15 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-22
-**Branch:** `staging` (checked out). **`main`, `staging`, and `origin` are all in sync @ `2bb7a76`** —
-the backlog rebuild is committed and pushed to both branches. The feature branch
-`claude/code-research-agent-prompt-nkl3gs` was merged (fast-forward) and deleted (local + remote).
-**Working tree:** clean after the close-out commit (see NEXT ACTION step 1 if `git status` shows the
-`LEFT_OFF.md` / `OFF_COURSE_BUGS.md` edits still uncommitted).
-**Prod:** `https://autoclip.studio`. This was a **docs-only** change — no runtime behavior changed.
+**Last updated:** 2026-06-22 (Batch A session)
+**Branch:** `staging` (checked out). **`staging` = `origin/staging` @ `6aab960`** — **4 commits ahead
+of `main`** (`main` still @ `467e8cb`). Batch A (Issues 181/183/184/185) is committed + pushed to
+staging; the feature branch `feat/batch-a-render-quality` was merged (fast-forward) and deleted.
+**`main` is NOT yet promoted** — promoting staging→main triggers a **prod deploy** and is gated on
+the user's go-ahead.
+**Working tree:** clean except this `LEFT_OFF.md` edit (commit it to staging at session end).
+**Prod:** `https://autoclip.studio`. Batch A **changes runtime render behavior** (loudnorm always-on;
+3 new opt-in style flags) — so the staging→main promotion is a real deploy, not a no-op.
 
 > ⚠️ **GitHub Actions is OUT OF MINUTES (billing).** Every CI job on `2bb7a76` shows
 > *"job was not started because recent account payments have failed or your spending limit needs to be
@@ -21,27 +23,34 @@ the backlog rebuild is committed and pushed to both branches. The feature branch
 
 ## CURRENT FOCUS
 
-**The gap-closure research initiative (Issues 166–180) is COMPLETE and the backlog is rebuilt.**
-`docs/issues.md` now holds ~94 prioritized implementation issues (181–274) harvested from the 15
-research findings, plus carry-over open work and a deferred parking lot. This session: synthesized +
-archived finished work, rebuilt `issues.md`, logged 4 founder scope decisions, committed, promoted to
-main+staging, deleted the feature branch, and verified the gates locally (GH Actions being out of minutes).
+**Batch A (render quality) is COMPLETE on `staging` — Issues 181, 183, 184, 185.** Ran the full
+issue-workflow (CHECK→APPROVE→BUILD→REVIEW) per issue, each with a research-backed brief +
+`docs/DECISIONS.md` entry. Shipped: **181** always-on two-pass `loudnorm` (−14 LUFS, near-silent
+guard); **183** new `bold_pop_highlight` caption style (per-phrase salience scorer, punch-yellow);
+**184** opt-in `zoom_on_peak` punch-in (crop `t`-expression); **185** opt-in `denoise` (`afftdn`
+before loudnorm). Also fixed a latent DRY bug (worker transcript-load gate → `captions.VALID_STYLES`).
+4 commits on staging (`8b9d6e1`→`6aab960`). Full suite **1011 passed, 3 skipped**; Layer-0
+ruff/mypy/bandit/freshness green; frontend lint/tsc/build green.
+
+> ⚠️ **Empirical render checks NOT run** — this dev box has no ffmpeg CLI binary (only `libav*`
+> libs), so the audio/visual ACs (−14 LUFS via `ebur128`, no-pumping, denoise artifacts, punch-in
+> look, keyword legibility) are **verified-by-construction in unit tests only**. Run them on staging
+> (has ffmpeg + a real noisy/quiet clip) **before** promoting to main/prod.
 
 ### → NEXT ACTION
-1. **If `git status` is dirty** (the `LEFT_OFF.md` + `OFF_COURSE_BUGS.md` close-out edits): commit and
-   push to both branches —
-   `git add LEFT_OFF.md docs/OFF_COURSE_BUGS.md && git commit -m "docs: close-out — LEFT_OFF + msgpack CVE log"`,
-   then `git checkout main && git merge --ff-only staging && git push origin main && git checkout staging && git push origin staging`.
-   (Pushing `main` triggers a deploy, but it's docs-only → effectively a no-op rebuild.)
-2. **Start executing the new backlog.** Priority order is Functionality → UI → UX → Agentic/Caching →
-   Security → … Recommended first targets:
-   - **Issue 181** (loudness normalization) — cheapest functional win, single ffmpeg flag.
-   - **Issue 198** (personalization efficacy harness) — highest leverage; proves the moat.
-   - Run the full issue-workflow per `CLAUDE.md` (CHECK → APPROVE → BUILD → REVIEW). Each issue's full
-     acceptance criteria live in its `Src:` finding under `docs/research/findings/`.
-3. **Triage the open dependency CVE** (logged in `docs/OFF_COURSE_BUGS.md`, 2026-06-22): msgpack 1.1.2
-   `GHSA-6v7p-g79w-8964` → either pin `msgpack>=1.2.1` in `requirements.txt` (fix exists) or add to the
-   Issue-107 accepted-risk ignore-list (`pyproject.toml` + `run_layer0.py`) with a DECISIONS note.
+1. **Commit this `LEFT_OFF.md`** to staging: `git add LEFT_OFF.md && git commit -m "docs: Batch A
+   close-out" && git push origin staging`.
+2. **Verify Batch A on staging** (the empirical render checks above), then **promote staging→main to
+   deploy**: `git checkout main && git merge --ff-only staging && git push origin main` (this triggers
+   the prod deploy of the render changes), then back to `staging`. `main` is currently 4 commits behind.
+3. **Next batch** (user paused after A). Candidates per priority order: **Batch B** — Issue 182
+   (1:1/16:9 export presets + clip download endpoint), then 194–197 (YouTube publish, DB + Google
+   audit gated). **Batch C** — Issue 198 (personalization efficacy harness, the moat; DB-backed →
+   needs Postgres to verify). Each issue's full ACs live in its `Src:` finding under
+   `docs/research/findings/`.
+4. **Still open: the dependency CVE** (logged in `docs/OFF_COURSE_BUGS.md`, 2026-06-22): msgpack 1.1.2
+   `GHSA-6v7p-g79w-8964` → pin `msgpack>=1.2.1` or add to the Issue-107 accepted-risk ignore-list with
+   a DECISIONS note. (Untouched this session.)
 
 ## WHAT WORKS NOW (verified this session — don't re-investigate)
 
