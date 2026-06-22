@@ -6,12 +6,16 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Batch A (render quality) COMPLETE — Issues 181, 183, 184, 185 (2026-06-22).** First batch off
-the rebuilt backlog, all on branch `feat/batch-a-render-quality` (4 commits), full suite **1011
-passed, 3 skipped**, Layer-0 ruff/mypy/bandit/freshness green, frontend lint/tsc/build green.
-Empirical audio/visual checks (−14 LUFS, no-pumping, denoise-artifacts, punch-in look, keyword
-legibility) are verified-by-construction in unit tests and pending a real render env (ffmpeg CLI
-absent in this dev box). **Not yet merged to main/staging — awaiting go-ahead.**
+**Batch A (render quality) COMPLETE + DEPLOYED TO PROD — Issues 181, 183, 184, 185 (2026-06-22).**
+First batch off the rebuilt backlog. Built on `feat/batch-a-render-quality` (4 commits), merged
+ff to `staging` then promoted ff to `main` @ `7e14663`. **Prod deploy verified:** "Deploy to
+production" run `27969557160` → `success` for sha `7e14663`; `autoclip.studio/` → 302 →
+`/app/dashboard` (healthy). `main` == `staging` == `origin` @ `7e14663`. Full suite **1011 passed,
+3 skipped**, Layer-0 ruff/mypy/bandit/freshness green, frontend lint/tsc/build green. (CI on
+GitHub-hosted runners is still red on billing — the deploy path runs on the self-hosted VM and is
+unaffected.) **Empirical audio/visual checks** (−14 LUFS, no-pumping, denoise-artifacts, punch-in
+look, keyword legibility) remain verified-by-construction only — the dev box has no ffmpeg CLI;
+now live in prod, they can be spot-checked on a real rendered clip.
 
 **Last completed (Issue 185 — Noise reduction (opt-in), 2026-06-22):** Batch A, issue 4 (last).
 Opt-in `denoise` flag (default off) prepends `afftdn=nr=10:nf=-40:tn=1` before loudnorm in both

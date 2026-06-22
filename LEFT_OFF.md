@@ -3,15 +3,15 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-22 (Batch A session)
-**Branch:** `staging` (checked out). **`staging` = `origin/staging` @ `6aab960`** — **4 commits ahead
-of `main`** (`main` still @ `467e8cb`). Batch A (Issues 181/183/184/185) is committed + pushed to
-staging; the feature branch `feat/batch-a-render-quality` was merged (fast-forward) and deleted.
-**`main` is NOT yet promoted** — promoting staging→main triggers a **prod deploy** and is gated on
-the user's go-ahead.
-**Working tree:** clean except this `LEFT_OFF.md` edit (commit it to staging at session end).
-**Prod:** `https://autoclip.studio`. Batch A **changes runtime render behavior** (loudnorm always-on;
-3 new opt-in style flags) — so the staging→main promotion is a real deploy, not a no-op.
+**Last updated:** 2026-06-22 (Batch A session — DEPLOYED)
+**Branch:** `main` (checked out). **`main` == `staging` == `origin` @ `7e14663`** (back in sync).
+Batch A (Issues 181/183/184/185) was built on `feat/batch-a-render-quality`, merged ff → staging,
+promoted ff → main, and **deployed to prod**. Feature branch merged + deleted.
+**Prod deploy VERIFIED:** "Deploy to production" run `27969557160` → `success` for sha `7e14663`;
+`autoclip.studio/` → 302 → `/app/dashboard` (healthy, via the self-hosted VM). Docker-publish ✅.
+**Working tree:** clean except this close-out edit (PROJECT_STATE + LEFT_OFF) — commit to both branches.
+**Prod:** `https://autoclip.studio`. Batch A **changed runtime render behavior** (loudnorm always-on;
+3 new opt-in style flags: caption keyword-highlight, punch-in, denoise) — now live.
 
 > ⚠️ **GitHub Actions is OUT OF MINUTES (billing).** Every CI job on `2bb7a76` shows
 > *"job was not started because recent account payments have failed or your spending limit needs to be
@@ -29,20 +29,22 @@ issue-workflow (CHECK→APPROVE→BUILD→REVIEW) per issue, each with a researc
 guard); **183** new `bold_pop_highlight` caption style (per-phrase salience scorer, punch-yellow);
 **184** opt-in `zoom_on_peak` punch-in (crop `t`-expression); **185** opt-in `denoise` (`afftdn`
 before loudnorm). Also fixed a latent DRY bug (worker transcript-load gate → `captions.VALID_STYLES`).
-4 commits on staging (`8b9d6e1`→`6aab960`). Full suite **1011 passed, 3 skipped**; Layer-0
-ruff/mypy/bandit/freshness green; frontend lint/tsc/build green.
+5 commits (`8b9d6e1`→`7e14663`), now on `main`+`staging`+prod. Full suite **1011 passed, 3 skipped**;
+Layer-0 ruff/mypy/bandit/freshness green; frontend lint/tsc/build green. **Deployed + verified** (run
+`27969557160` success; prod 302→/app/dashboard).
 
-> ⚠️ **Empirical render checks NOT run** — this dev box has no ffmpeg CLI binary (only `libav*`
+> ⚠️ **Empirical render checks STILL OWED** — this dev box has no ffmpeg CLI binary (only `libav*`
 > libs), so the audio/visual ACs (−14 LUFS via `ebur128`, no-pumping, denoise artifacts, punch-in
-> look, keyword legibility) are **verified-by-construction in unit tests only**. Run them on staging
-> (has ffmpeg + a real noisy/quiet clip) **before** promoting to main/prod.
+> look, keyword legibility) are **verified-by-construction in unit tests only**. Now live in prod →
+> spot-check on a real rendered clip (render one with each new flag, run `ffmpeg -af ebur128`, eyeball
+> the highlight/punch-in). Not blocking, but the one untested dimension.
 
 ### → NEXT ACTION
-1. **Commit this `LEFT_OFF.md`** to staging: `git add LEFT_OFF.md && git commit -m "docs: Batch A
-   close-out" && git push origin staging`.
-2. **Verify Batch A on staging** (the empirical render checks above), then **promote staging→main to
-   deploy**: `git checkout main && git merge --ff-only staging && git push origin main` (this triggers
-   the prod deploy of the render changes), then back to `staging`. `main` is currently 4 commits behind.
+1. **Commit this close-out** (`LEFT_OFF.md` + `docs/PROJECT_STATE.md`) and keep `main`==`staging`:
+   commit on `main`, push, then `git checkout staging && git merge --ff-only main && git push origin
+   staging`. (Docs-only → the main push re-triggers a no-op image rebuild + redeploy on the self-hosted
+   VM; harmless.)
+2. **Spot-check Batch A in prod** (the empirical render checks above) on a freshly rendered clip.
 3. **Next batch** (user paused after A). Candidates per priority order: **Batch B** — Issue 182
    (1:1/16:9 export presets + clip download endpoint), then 194–197 (YouTube publish, DB + Google
    audit gated). **Batch C** — Issue 198 (personalization efficacy harness, the moat; DB-backed →
