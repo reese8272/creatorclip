@@ -76,6 +76,7 @@ class RenderStyleIn(BaseModel):
     subtitle: str | None = None
     background: str | None = None  # "blur" | "black" | null
     captions_enabled: bool | None = None
+    zoom_on_peak: bool | None = None  # opt-in punch-in at peak (Issue 184)
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -221,6 +222,8 @@ async def render_clip(
             merged["background"] = body.background
         if body.captions_enabled is not None:
             merged["captions_enabled"] = body.captions_enabled
+        if body.zoom_on_peak is not None:
+            merged["zoom_on_peak"] = body.zoom_on_peak
         clip.style_preset = merged or None
         await session.commit()
 

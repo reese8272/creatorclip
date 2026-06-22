@@ -11,6 +11,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const [subtitle, setSubtitle] = useState('')
   const [background, setBackground] = useState('')
   const [captionsEnabled, setCaptionsEnabled] = useState(false)
+  const [zoomOnPeak, setZoomOnPeak] = useState(false)
   const [status, setStatus] = useState('')
 
   async function apply() {
@@ -22,6 +23,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           subtitle: subtitle || null,
           background: background || null,
           captions_enabled: captionsEnabled,
+          zoom_on_peak: zoomOnPeak,
         },
       })
       setStatus('Render queued — come back in ~30s.')
@@ -60,6 +62,14 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           type="checkbox"
           checked={captionsEnabled}
           onChange={(e) => setCaptionsEnabled(e.target.checked)}
+        />
+      </label>
+      <label className="flex items-center justify-between gap-3">
+        Punch-in at peak
+        <input
+          type="checkbox"
+          checked={zoomOnPeak}
+          onChange={(e) => setZoomOnPeak(e.target.checked)}
         />
       </label>
       <Button variant="secondary" size="sm" className="mt-1 w-fit" onClick={apply}>

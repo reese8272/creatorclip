@@ -89,9 +89,10 @@ overlapped** by research-derived issues — flagged inline.
 **AC:** ≥1 new style emits ≥1 colored keyword/phrase; plain fallback when none; `VALID_STYLES` + `CaptionStylePanel.tsx` + eval/unit test updated. **Src:** 03 / A2.
 **Shipped:** New `bold_pop_highlight` style — punch-yellow (`#ffd400`) `\c` highlight on the top salient token per phrase via a dependency-free per-phrase scorer (stopwords + clip TF + casing + length); plain-Bold-Pop fallback when no salient token. Added to `VALID_STYLES` + `CaptionStylePanel.tsx` dropdown + 3 unit tests; existing styles byte-identical (regression test). DRY fix: worker transcript-load gate now keys off `captions.VALID_STYLES`. `docs/DECISIONS.md` 2026-06-22 (pure-Python over YAKE). Keyword text content (vs the `\c` mechanism) is verified in unit tests; visual review pending the render env. *(Emoji insertion + DNA-driven selection = follow-up.)*
 
-### Issue 184: Auto-zoom / punch-in at peak (opt-in)
+### Issue 184: Auto-zoom / punch-in at peak (opt-in) ✅ DONE (2026-06-22)
 **What:** `zoom_on_peak` style flag → brief ~5–10% scale punch-in centered on `peak_s`, returning to 100%. Off by default.
 **AC:** visible punch-in at peak; off by default; cites Principle 4. **Src:** 03 / A4.
+**Shipped:** `zoom_on_peak` flag (default off) → triangular punch-in (8% / ±0.6s) via ffmpeg `crop`+`scale` using crop's per-frame `t` expression (chose it over `zoompan`, which resamples — `docs/DECISIONS.md` 2026-06-22). Applied before subtitles so captions stay steady. `peak_s` plumbed `Clip.peak_s → worker → render_clip_file`; flag flows through `RenderStyleIn` + the `CaptionStylePanel` "Punch-in at peak" toggle. Cites Principle 4. Tests: +4 in `tests/test_render.py` (applied-in-window / disabled / peak-missing / peak-outside) + endpoint persistence in `tests/test_render_style.py`. Visual review pending the render env.
 
 ### Issue 185: Noise reduction (opt-in)
 **What:** Optional `arnndn`/`afftdn` denoise pass before loudnorm, off by default.

@@ -59,13 +59,21 @@ def test_render_endpoint_accepts_style_body(client):
         try:
             resp = client.post(
                 f"/clips/{clip.id}/render",
-                json={"subtitle": "white_large", "background": "blur", "captions_enabled": False},
+                json={
+                    "subtitle": "white_large",
+                    "background": "blur",
+                    "captions_enabled": False,
+                    "zoom_on_peak": True,
+                },
                 cookies={"session": "x"},
             )
         finally:
             app.dependency_overrides.clear()
 
     assert resp.status_code == 202
+    # The opt-in punch-in flag (Issue 184) must persist onto the clip's style_preset
+    # (the endpoint merges the body into clip.style_preset before enqueuing).
+    assert (clip.style_preset or {}).get("zoom_on_peak") is True
 
 
 def test_render_endpoint_no_style_body_still_works(client):

@@ -212,6 +212,26 @@ _BACKGROUND_STYLES: dict[str, str] = {
 }
 
 
+# Auto-zoom punch-in at peak (Issue 184, opt-in via style_preset["zoom_on_peak"]).
+# Principle 4 (pattern interrupt). A triangular zoom pulse centered on the clip's
+# peak ramps to (1 + _PUNCH_IN_SCALE)× over ±_PUNCH_IN_RAMP_S seconds, then back to
+# 100%. Implemented with crop's per-frame `t` variable + scale — NOT zoompan, which
+# is built for stills and resamples the stream.
+_PUNCH_IN_SCALE = 0.08
+_PUNCH_IN_RAMP_S = 0.6
+
+
+def _punch_in_filter(peak_offset_s: float) -> str:
+    """ffmpeg crop+scale chain for a brief punch-in centered at ``peak_offset_s``
+    (clip-relative seconds). Zoom ``z(t)=1+A·max(0,1−|t−p|/W)``; the centered crop
+    shrinks by ``z`` then scales back to the output resolution. Outside the pulse
+    ``z=1`` → crop is the full frame → a no-op."""
+    # `\,` escapes the comma inside max() so the filtergraph parser doesn't read
+    # it as a filter separator.
+    z = f"(1+{_PUNCH_IN_SCALE}*max(0\\,1-abs(t-{peak_offset_s:.3f})/{_PUNCH_IN_RAMP_S}))"
+    return f"crop=w=iw/{z}:h=ih/{z}:x=(iw-iw/{z})/2:y=(ih-ih/{z})/2,scale={_OUTPUT_W}:{_OUTPUT_H}"
+
+
 def render_clip_file(
     source_path: Path,
     start_s: float,
@@ -219,6 +239,7 @@ def render_clip_file(
     out_path: Path,
     style_preset: dict | None = None,
     transcript_segments: list[dict] | None = None,
+    peak_s: float | None = None,
 ) -> None:
     """
     Cut [start_s, end_s] from source, crop to 9:16 centered on detected face,
@@ -230,6 +251,13 @@ def render_clip_file(
       - ``background``: "blur" | "black" | None  (None → default black letterbox)
       - ``captions_enabled``: bool (currently informational — the subtitle key
         is the load-bearing switch)
+      - ``zoom_on_peak``: bool (Issue 184) — when set and ``peak_s`` is inside the
+        clip window, apply a brief punch-in centered on the peak (Principle 4).
+        Off by default.
+
+    ``peak_s`` is the clip's absolute peak time (source-relative seconds, from
+    ``Clip.peak_s``); the punch-in is centered at ``peak_s - start_s``. Ignored
+    when ``None`` or outside ``[start_s, end_s]``.
 
     ``transcript_segments`` is the full ``Transcript.segments_jsonb["segments"]``
     list (WhisperX shape — see ``ingestion/transcribe.py``). When a known
@@ -272,6 +300,14 @@ def render_clip_file(
     # already the ffmpeg default, but we set it explicitly so the cut stays frame-accurate
     # even if anyone introduces `-c copy` later — the clip MUST start exactly at the setup.
     vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={_OUTPUT_W}:{_OUTPUT_H}"]
+
+    # Auto-zoom punch-in (Issue 184): applied to the framed video BEFORE subtitles
+    # so the captions stay steady while the content zooms. Off unless the creator
+    # opted in and the peak actually falls inside this clip window.
+    if style_preset and style_preset.get("zoom_on_peak") and peak_s is not None:
+        peak_offset_s = peak_s - start_s
+        if 0.0 <= peak_offset_s <= duration:
+            vf_parts.append(_punch_in_filter(peak_offset_s))
 
     ass_path: Path | None = None
     if style_preset:

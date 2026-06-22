@@ -788,6 +788,7 @@ async def _render_clip_async(clip_id: str) -> None:
             setup_start_s = clip.setup_start_s
             start_s = clip.start_s
             end_s = clip.end_s
+            peak_s = clip.peak_s  # for the opt-in auto-zoom punch-in (Issue 184)
             clip_duration_s = end_s - (setup_start_s if setup_start_s is not None else start_s)
             clip.render_status = RenderStatus.running
             style_preset = clip.style_preset  # snapshot before session closes
@@ -836,6 +837,7 @@ async def _render_clip_async(clip_id: str) -> None:
                     out_path=out_path,
                     style_preset=style_preset,
                     transcript_segments=transcript_segments,
+                    peak_s=peak_s,
                 )
                 await aemit(clip_id, "step", label="upload_r2", stage="render")
                 render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")

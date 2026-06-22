@@ -430,6 +430,62 @@ def test_render_cleaned_clip_file_chains_loudnorm_into_graph(tmp_path):
     assert "[outaln]" in cmd
 
 
+# ── auto-zoom punch-in at peak (Issue 184) ────────────────────────────────────
+
+# The crop expression's escaped comma inside max() is the unique punch-in marker.
+_PUNCH_MARKER = "max(0\\,1-abs(t-"
+
+
+def _render_vf(tmp_path, *, style_preset=None, peak_s=None) -> str:
+    """Render with mocked ffmpeg/cv2 and return the -vf filter string."""
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured: list[list[str]] = []
+
+    def _fake(cmd, **kwargs):
+        captured.append(cmd)
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr="")
+
+    with (
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(
+            src, start_s=10.0, end_s=70.0, out_path=out, style_preset=style_preset, peak_s=peak_s
+        )
+    render_cmd = next((c for c in captured if "-vf" in c), None)
+    assert render_cmd is not None
+    return render_cmd[render_cmd.index("-vf") + 1]
+
+
+def test_punch_in_applied_when_enabled_and_peak_in_window(tmp_path):
+    vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=40.0)
+    assert _PUNCH_MARKER in vf
+    assert "abs(t-30.000)" in vf  # peak centered at peak_s - start_s = 30s
+
+
+def test_no_punch_in_when_disabled(tmp_path):
+    vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": False}, peak_s=40.0)
+    assert _PUNCH_MARKER not in vf
+
+
+def test_no_punch_in_when_peak_missing(tmp_path):
+    vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=None)
+    assert _PUNCH_MARKER not in vf
+
+
+def test_no_punch_in_when_peak_outside_window(tmp_path):
+    # peak_s=200 → offset 190s > 60s clip duration → skipped.
+    vf = _render_vf(tmp_path, style_preset={"zoom_on_peak": True}, peak_s=200.0)
+    assert _PUNCH_MARKER not in vf
+
+
 def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):
     """`render_clip_file` surfaces a `RuntimeError` when the render ffmpeg call stalls."""
     src = tmp_path / "v.mp4"

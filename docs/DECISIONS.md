@@ -5,6 +5,34 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 184: auto-zoom punch-in via crop's per-frame `t` (not zoompan)
+
+**What changed:** Added an opt-in `zoom_on_peak` style flag (off by default) that
+applies a brief punch-in centered on the clip's `peak_s`. Implemented as an ffmpeg
+`crop`+`scale` chain driven by **crop's per-frame `t` (timestamp) expression** — a
+triangular zoom pulse `z(t)=1+0.08·max(0,1−|t−p|/0.6)` (8% over ±0.6s, back to
+100%) — applied after the reframe-scale but before subtitles so captions stay
+steady. `peak_s` is plumbed `Clip.peak_s → worker → render_clip_file`; the flag
+flows `RenderStyleIn → style_preset`. Skipped when `peak_s` is null or outside the
+clip window.
+
+**Why:** `zoompan` is the obvious zoom filter but it is built for stills — it needs
+`d=1`/`fps` juggling and resamples the stream, risking frame-rate/judder changes on
+real video. `crop`'s w/h/x/y accept a per-frame `t` expression, which composes
+cleanly with the existing `scale` and applies a time-windowed punch-in with no
+resampling. 8%/0.6s is the mid-range of the finding's 5–10% guidance — noticeable
+but not gimmicky. Off by default and centered on data we already compute (peak),
+so it never surprises a creator. Principle 4 (pattern interrupt).
+
+**Source/evidence:** ffmpeg zoom techniques verified live (2025):
+[Creatomate: zoom images/videos with ffmpeg](https://creatomate.com/blog/how-to-zoom-images-and-videos-using-ffmpeg),
+[ffmpeg zoompan filter docs](https://ayosec.github.io/ffmpeg-filters-docs/8.0/Filters/Video/zoompan.html).
+Finding: `docs/research/findings/03_editorial_capabilities.md` (A4).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 183: keyword-highlight captions via a dependency-free per-phrase scorer
 
 **What changed:** Added a 4th caption style `bold_pop_highlight` (Bold Pop + the

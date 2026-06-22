@@ -6,7 +6,19 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Last completed (Issue 183 — Keyword highlight in captions, 2026-06-22):** Batch A, issue 2.
+**Last completed (Issue 184 — Auto-zoom punch-in at peak, 2026-06-22):** Batch A, issue 3.
+Opt-in `zoom_on_peak` style flag (default off) applies a brief triangular punch-in (8% over
+±0.6s, back to 100%) centered on the clip's `peak_s`, via an ffmpeg `crop`+`scale` chain using
+crop's per-frame `t` expression — chosen over `zoompan` (built for stills, resamples the stream),
+`docs/DECISIONS.md` 2026-06-22. Applied before subtitles so captions stay steady. `peak_s` is
+plumbed `Clip.peak_s → worker → render_clip_file`; the flag flows through `RenderStyleIn` and a
+new `CaptionStylePanel` "Punch-in at peak" toggle. Cites Principle 4 (pattern interrupt). Tests:
++4 in `tests/test_render.py` + endpoint-persistence in `tests/test_render_style.py`; full suite
+**1008 passed, 3 skipped**; frontend lint/tsc/build green; Layer-0 ruff/mypy/bandit/freshness
+green. On branch `feat/batch-a-render-quality`. **Next in Batch A (last):** Issue 185 (noise
+reduction, opt-in, depends on 181's loudnorm path).
+
+**Earlier (Issue 183 — Keyword highlight in captions, 2026-06-22):** Batch A, issue 2.
 New `bold_pop_highlight` caption style: punch-yellow (`#ffd400`) `\c` highlight on the most
 salient token per phrase, chosen by a dependency-free per-phrase salience scorer (stopwords +
 clip term-frequency + casing + token length; top-1/phrase). Plain-Bold-Pop fallback when a
