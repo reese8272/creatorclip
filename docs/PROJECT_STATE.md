@@ -7,8 +7,10 @@ Updated after every issue closes.
 ## Current Status
 
 **Batch B publish cluster — Issue 195 (`publish_to_youtube` task) DONE (2026-06-22).** On branch
-`feat/batch-b-publish` (with 194, not merged). `youtube/publish.py` resumable upload client (chunked
-PUT + resume-on-fail, raw httpx); new `clip_publications` table (model + migration **0027**, RLS-gated)
+`feat/batch-b-publish` (with 194; main merged in — privacy 247–249 now in this branch's base).
+`youtube/publish.py` resumable upload client (chunked
+PUT + resume-on-fail, raw httpx); new `clip_publications` table (model + migration **0028**, renumbered
+from 0027 after privacy's `0027_data_exports` landed on main; RLS-gated)
 with `task_id` UNIQUE = idempotency key (redelivery of a `done` row → no re-upload); returned id +
 `done` committed before ack; uploads forced `private` (`settings.YOUTUBE_PUBLISH_PRIVACY`) pre-audit.
 **videos.insert quota re-verified: 1600→100 units (2025-12-04)** → `COST_DATA_VIDEOS_INSERT=100`,
@@ -28,6 +30,19 @@ pre-audit uploads private, no virality). `COMPLIANCE.md` scope table + `[DEC]` (
 (`test_auth.py`); full suite **1028 passed, 3 skipped**; Layer-0 green; frontend lint/tsc/build +
 **e2e 38/38 (serial — parallel OOMs on this WSL2 box; see dev-env memory)**. **Next:** Issue 195
 (`publish_to_youtube` Celery task, idempotent, pre-audit forced `private`).
+
+**SEV1 privacy track COMPLETE + DEPLOYED — Issues 247 + 248 + 249 (2026-06-22).** Merged to main +
+deployed to prod @ `1718781` (migration `0027_data_exports` applied on the prod DB). On branch
+`feat/sev1-privacy` (off main; independent of the held `feat/batch-b-publish`). **247:** `DELETE
+/auth/me` no longer writes PII into the never-purged `audit_log` (Art. 17 / EDPB CEF 2025). **248:**
+deletion purges the separate-engine `event_logs` via `event_log.purge_creator_events`, best-effort.
+**249:** async data-export (Art. 15/20) — `POST/GET /creators/me/export` + `/download`;
+`generate_data_export` task aggregates all data classes (single-tenant) → JSON → R2; new
+`data_exports` table (migration **0027**, RLS); clips referenced by durable authed download paths;
+Privacy Policy "Your rights" updated. COMPLIANCE + DECISIONS updated across all three; full suite
+**1033 passed, 3 skipped**; Layer-0 green; +13 tests across the three. ⚠️ All DB-heavy → mock-verified here; migrations/RLS/
+isolation run on staging Postgres. **Migration collision:** publish branch's `0027` must renumber to
+`0028` when it merges after this. **DEPLOYED** (see above).
 
 **Batch B started — Issue 182 (Export presets + clip download) DONE (2026-06-22).** First issue of
 Batch B (export & publishing), on branch `feat/batch-b-export-download`. Added `OUTPUT_PRESETS`

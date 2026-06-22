@@ -36,6 +36,7 @@ from routers import billing as billing_router
 from routers import chat as chat_router
 from routers import clips as clips_module
 from routers import creators as creators_router
+from routers import export as export_router
 from routers import improvement as improvement_router
 from routers import insights as insights_router
 from routers import logs as logs_router
@@ -114,6 +115,7 @@ app.include_router(clips_module.clips_router)
 app.include_router(review_router.router)
 app.include_router(upload_intel_router.router)
 app.include_router(improvement_router.router)
+app.include_router(export_router.router)
 app.include_router(insights_router.router)
 app.include_router(logs_router.router)
 app.include_router(chat_router.router)

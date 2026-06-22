@@ -32,7 +32,11 @@ from models import (
     ClipPublication,
     Creator,
     CreatorDna,
+    DataExport,
+    DataExportStatus,
     IngestStatus,
+    MinuteDeduction,
+    MinutePack,
     OnboardingState,
     PreferenceModel,
     PublishStatus,
@@ -2111,6 +2115,144 @@ async def _refresh_youtube_analytics_async() -> None:
                 text("SELECT pg_advisory_unlock(hashtext(:k))"),
                 {"k": "refresh_youtube_analytics"},
             )
+
+
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.generate_data_export"
+)
+def generate_data_export(self, creator_id: str) -> str:
+    """Build a creator's GDPR Art. 15/20 data export off the request path (Issue 249).
+
+    Gathers every data class into a JSON artifact, uploads it to R2, and writes
+    the artifact URI + ``ready`` onto the creator's ``data_exports`` row, which the
+    GET endpoint polls. Mirrors the improvement-brief 202+poll precedent.
+    """
+    try:
+        run_async(_generate_data_export_async(self.request.id, creator_id))
+    except Exception as exc:
+        run_async(_set_data_export_failed(creator_id))
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+def _row_to_dict(obj) -> dict:
+    """Serialize a model instance to a plain column dict (JSON via default=str)."""
+    return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
+
+async def _collect_creator_export(session, creator) -> dict:
+    """Gather every data class for one creator into a JSON-serializable dict.
+
+    Strictly single-tenant: every query is scoped to this creator (directly via
+    ``creator_id`` or via the creator's own video/clip/conversation ids)."""
+    from sqlalchemy import select
+
+    cid = creator.id
+
+    async def _all(stmt) -> list[dict]:
+        return [_row_to_dict(r) for r in (await session.execute(stmt)).scalars().all()]
+
+    videos = (await session.execute(select(Video).where(Video.creator_id == cid))).scalars().all()
+    video_ids = [v.id for v in videos]
+    clips = (await session.execute(select(Clip).where(Clip.creator_id == cid))).scalars().all()
+    clip_ids = [c.id for c in clips]
+    convos = (
+        (await session.execute(select(ChatConversation).where(ChatConversation.creator_id == cid)))
+        .scalars()
+        .all()
+    )
+    convo_ids = [c.id for c in convos]
+
+    return {
+        "profile": _row_to_dict(creator),
+        "dna": await _all(select(CreatorDna).where(CreatorDna.creator_id == cid)),
+        "videos": [_row_to_dict(v) for v in videos],
+        "video_metrics": (
+            await _all(select(VideoMetrics).where(VideoMetrics.video_id.in_(video_ids)))
+            if video_ids
+            else []
+        ),
+        # Clips reference their downloadable media via the authed endpoint (durable,
+        # isolation-enforced) rather than an expiring presigned link.
+        "clips": [{**_row_to_dict(c), "download_path": f"/clips/{c.id}/download"} for c in clips],
+        "clip_feedback": await _all(select(ClipFeedback).where(ClipFeedback.creator_id == cid)),
+        "clip_outcomes": (
+            await _all(select(ClipOutcome).where(ClipOutcome.clip_id.in_(clip_ids)))
+            if clip_ids
+            else []
+        ),
+        "chat_conversations": [_row_to_dict(c) for c in convos],
+        "chat_messages": (
+            await _all(select(ChatMessage).where(ChatMessage.conversation_id.in_(convo_ids)))
+            if convo_ids
+            else []
+        ),
+        "billing_packs": await _all(select(MinutePack).where(MinutePack.creator_id == cid)),
+        "billing_deductions": (
+            await _all(select(MinuteDeduction).where(MinuteDeduction.video_id.in_(video_ids)))
+            if video_ids
+            else []
+        ),
+    }
+
+
+async def _set_data_export_failed(creator_id: str) -> None:
+    from sqlalchemy import select
+
+    async with db.AdminSessionLocal() as session:
+        row = (
+            await session.execute(
+                select(DataExport).where(DataExport.creator_id == uuid.UUID(creator_id))
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            row.status = DataExportStatus.failed
+            row.error = "Export failed — please try again."
+            await session.commit()
+
+
+async def _generate_data_export_async(job_id: str, creator_id: str) -> None:
+    import json
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from worker.storage import aupload_file
+
+    cid = uuid.UUID(creator_id)
+    async with db.AdminSessionLocal() as session:
+        row = (
+            await session.execute(select(DataExport).where(DataExport.creator_id == cid))
+        ).scalar_one_or_none()
+        # Idempotent: a redelivery whose artifact is already built short-circuits.
+        if row is not None and row.status == DataExportStatus.ready and row.export_uri:
+            return
+        creator = await session.get(Creator, cid)
+        if not creator:
+            raise ValueError(f"Creator {creator_id} not found for export")
+        payload = await _collect_creator_export(session, creator)
+
+    payload["exported_at"] = datetime.now(UTC).isoformat()
+    payload["format"] = "creatorclip-export-v1"
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+        json.dump(payload, tmp, default=str, ensure_ascii=False, indent=2)
+        tmp_path = Path(tmp.name)
+    try:
+        export_uri = await aupload_file(tmp_path, f"exports/{creator_id}/{job_id}.json")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    async with db.AdminSessionLocal() as session:
+        row = (
+            await session.execute(select(DataExport).where(DataExport.creator_id == cid))
+        ).scalar_one_or_none()
+        if row is not None:
+            row.export_uri = export_uri
+            row.status = DataExportStatus.ready
+            row.completed_at = datetime.now(UTC)
+            await session.commit()
+    logger.info("Data export ready for creator %s → %s", creator_id, export_uri)
 
 
 @celery.task(

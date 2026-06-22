@@ -85,7 +85,7 @@ the ToS would result in API access revocation, destroying the product.
 | Transcripts | Word-level segments | Until video deleted | Derived from source; not YouTube-origin data |
 | Creator DNA | Pattern profiles, brief text | Until creator deletes | Creator-owned derivative data |
 | Feedback labels | upvote/downvote/skip/trim | Until creator deletes | Creator-owned |
-| Event logs (telemetry) | UI + backend events: click/submit/navigate, http_request (path, method, status, duration, request_id, creator_id) | Beta-analysis telemetry; retention TBD before public launch (candidate: 90-day rolling purge) | Issue 151. **No PII / no tokens** — `event_log._redact()` masks email/token/secret-like keys at ingestion; creator is id-only. Dedicated `event_logs` table (no RLS); per-creator reads isolated at the app layer (`/api/logs/me`); operators query directly. |
+| Event logs (telemetry) | UI + backend events: click/submit/navigate, http_request (path, method, status, duration, request_id, creator_id) | Beta-analysis telemetry; retention TBD before public launch (candidate: 90-day rolling purge — Issue 250) | Issue 151. **No PII / no tokens** — `event_log._redact()` masks email/token/secret-like keys at ingestion; creator is id-only. Dedicated `event_logs` table on a **separate engine, no FK to creators** (no RLS); per-creator reads isolated at the app layer (`/api/logs/me`); operators query directly. **Account deletion (Issue 248):** the DB cascade can't reach this engine, so `DELETE /auth/me` explicitly calls `event_log.purge_creator_events(creator_id)` to remove all of a creator's telemetry rows (best-effort; logged, never aborts the erasure). |
 | Chat conversations (Issue 152) | Pro-chatbot threads: the creator's own messages + assistant replies, per-message token counts | Persisted until the creator deletes the conversation (`DELETE /api/chat/conversations/{id}`); cascades on account deletion via `creator_id` FK | Creator-authored content scoped to one creator. `chat_conversations` RLS-gated (migration 0026); `chat_messages` reaches tenant via the conversation FK; reads filtered at the app layer. Tool calls fetch ONLY the requesting creator's analytics (no cross-creator data ever enters the prompt). No virality promise (honesty constraint in the system prompt). |
 
 ---
@@ -119,6 +119,11 @@ the blast radius of a token compromise.
 - No YouTube analytics data in LLM prompts beyond what is needed for the specific analysis.
 - Account-deletion endpoint must purge: tokens, analytics, source media, rendered clips,
   DNA profile, feedback labels. Required before public launch.
+- **Deletion-log minimization (Issue 247):** the `creator.deleted` audit row must contain
+  **no PII** — no email, no channel_id, no other personal data. `audit_log` is never purged
+  and RLS-exempt, so any PII written there would survive the erasure (GDPR Art. 17 — EDPB
+  CEF 2025). Only the internal `creator_id` (pseudonymous once the creator row is gone) is
+  retained as evidence-of-erasure. Pinned by `test_delete_account_writes_audit_log`.
 - Demographics data: aggregated payloads only; no individual viewer data is stored.
 
 ---

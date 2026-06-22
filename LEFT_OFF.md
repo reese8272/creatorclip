@@ -3,17 +3,25 @@
 > **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
 > truth — those live in `docs/`. Updated at the end of every session.
 
-**Last updated:** 2026-06-22 (Batch A + Issue 182 — all DEPLOYED)
-**Branch:** `main` (checked out). **`main` == `staging` == `origin` @ `af1bd14`** (in sync).
-Batch A (Issues 181/183/184/185) AND Batch-B Issue 182 (export presets + clip download) are all
-built, merged ff staging→main, and **deployed to prod + verified**. Feature branches merged + deleted.
-**Latest prod deploy VERIFIED:** deploy run `27976728707` → `success` for sha `af1bd14`;
-`autoclip.studio/` → 302 → `/app/dashboard` (healthy, self-hosted VM). Docker-publish ✅.
-**Working tree:** clean except this close-out edit (PROJECT_STATE + LEFT_OFF) — commit to both branches.
-**Prod:** `https://autoclip.studio`. Now live: Batch-A render behavior (loudnorm always-on; opt-in
-caption keyword-highlight / punch-in / denoise) **and** Issue 182 (1:1 + 16:9 export presets, clip
-download endpoint, and the **clip-playback fix** — `<video>` now plays via the presigned download
-endpoint instead of a dead `s3://` URI).
+**Last updated:** 2026-06-22 (Batch A + 182 DEPLOYED; publish 194/195 + privacy 247–249 on branches)
+**Checked out:** `feat/sev1-privacy`.
+
+**LIVE on prod** (`main` == `staging` == `origin` @ `3aa95d7`, verified): Batch A (181/183/184/185 —
+render quality) + Issue 182 (1:1/16:9 export presets, `GET /clips/{id}/download`, clip-playback fix).
+
+**TWO FEATURE BRANCHES IN FLIGHT (committed, NOT merged, NOT deployed):**
+- **`feat/batch-b-publish`** (@ `99040a9`) — Issues **194** (`youtube.upload` opt-in incremental
+  consent) + **195** (`publish_to_youtube` resumable upload task + `clip_publications` table, migration
+  **0027**, idempotent, forced-private). **HELD off prod until verified** on a real DB + YouTube sandbox.
+- **`feat/sev1-privacy`** (@ `49df3e6`, current) — Issues **247** (audit PII leak), **248** (purge
+  `event_logs` on deletion), **249** (Art. 15/20 data-export, migration **0027**). SEV1 launch-blockers.
+
+> ⚠️ **MIGRATION COLLISION:** both branches add a `0027`. Privacy = `0027_data_exports`, publish =
+> `0027_clip_publications`. Whichever merges **second** must be renumbered to `0028` (down_revision =
+> the first one's `0027`) or alembic gets two heads.
+
+> ⚠️ **DB-heavy work is MOCK-VERIFIED ONLY** here (Redis-only box). All four issues' migrations, RLS,
+> and real upload/aggregation run for the first time on a staging/prod deploy. Verify there before trusting.
 
 > ⚠️ **GitHub Actions is OUT OF MINUTES (billing).** Every CI job on `2bb7a76` shows
 > *"job was not started because recent account payments have failed or your spending limit needs to be
@@ -25,37 +33,41 @@ endpoint instead of a dead `s3://` URI).
 
 ## CURRENT FOCUS
 
-**Batch A (render quality) + Batch-B Issue 182 are COMPLETE, DEPLOYED, and VERIFIED in prod.** Ran
-the full issue-workflow (CHECK→APPROVE→BUILD→REVIEW) per issue, each with a research-backed brief +
-`docs/DECISIONS.md` entry where a deviation existed.
-- **Batch A:** **181** always-on two-pass `loudnorm` (−14 LUFS, near-silent guard); **183**
-  `bold_pop_highlight` caption style (per-phrase salience scorer, punch-yellow); **184** opt-in
-  `zoom_on_peak` punch-in (crop `t`-expression); **185** opt-in `denoise` (`afftdn` before loudnorm).
-- **Issue 182:** `OUTPUT_PRESETS` (9:16/1:1/16:9, render-time via `style_preset["aspect"]`, 9:16
-  byte-identical); `GET /clips/{id}/download` (presigned R2 / FileResponse, per-creator 404);
-  **clip-playback fix** (`<video>` now uses the inline download endpoint, not a dead `s3://` URI).
-- Also fixed two latent bugs: DRY worker transcript-load gate (Batch A) + the SEV2 playback bug (182).
-Full suite **1024 passed, 3 skipped**; Layer-0 ruff/mypy/bandit/freshness green; frontend lint/tsc/build
-+ 38 Playwright e2e green. All on `main`==`staging`==`origin` @ `af1bd14`; latest deploy run
-`27976728707` → success.
+**Shipping push, this session.** Each issue ran the full workflow (CHECK→APPROVE→BUILD→REVIEW) with a
+research-backed brief + `docs/DECISIONS.md` entry. Status by track:
 
-> ⚠️ **Empirical render checks STILL OWED** — this dev box has no ffmpeg CLI binary (only `libav*`
-> libs), so the audio/visual ACs (−14 LUFS via `ebur128`, no-pumping, denoise artifacts, punch-in
-> look, keyword legibility, square/16:9 framing, **playback actually plays**) are **verified-by-
-> construction in unit/e2e tests only**. Now live in prod → spot-check on a real rendered clip.
+- ✅ **LIVE: Batch A (181/183/184/185)** render quality + **Issue 182** export presets/download +
+  clip-playback fix. Deployed + verified @ `3aa95d7`. Also fixed 2 latent bugs (DRY worker gate; SEV2
+  playback).
+- 🟡 **BRANCH (held): publish 194 + 195** on `feat/batch-b-publish`. Opt-in `youtube.upload` incremental
+  consent + resumable `publish_to_youtube` task + `clip_publications` (migration 0027) + idempotency +
+  forced-private. Verified-by-mocks; **needs real DB + YouTube sandbox** before prod. `videos.insert`
+  quota re-verified (1600→100, Dec 2025). **196 (scheduled publish) + 197 (outcome-loop) NOT done.**
+- 🟡 **BRANCH: SEV1 privacy 247 + 248 + 249** on `feat/sev1-privacy`. Deletion PII leak fixed; `event_logs`
+  purged on deletion; Art. 15/20 JSON data-export (migration 0027). All GDPR launch-blockers. Mock-verified.
 
-### → NEXT ACTION
-1. **Commit this close-out** (`LEFT_OFF.md` + `docs/PROJECT_STATE.md`) and keep `main`==`staging`:
-   commit on `main`, push, then `git checkout staging && git merge --ff-only main && git push origin
-   staging`. (Docs-only → no-op image rebuild + redeploy on the self-hosted VM; harmless.)
-2. **Spot-check the shipped work in prod** (the empirical checks above) on a freshly rendered clip —
-   incl. that a clip now **plays** in Review and the Download button works.
-3. **Next: Batch B publish cluster (paused here).** Issues **194–197** — add the `youtube.upload`
-   write scope (incremental re-consent; `[DEC]` + Google-audit launch dependency), `clip_publications`
-   table, idempotent `publish_to_youtube` Celery task (pre-audit forced `private`), scheduled publish,
-   outcome-loop wiring. DB-backed → build-only verification in this env. Full ACs in finding 13
-   (`docs/research/findings/13_*`). Alternatively **Batch C** — Issue 198 (personalization efficacy
-   harness, the moat; needs Postgres to verify).
+Full suite green at each step (latest **1033 passed, 3 skipped**); Layer-0 + frontend (lint/tsc/build +
+38 e2e serial) green.
+
+> ⚠️ **Empirical/real-env checks OWED** (this box is Redis-only, no ffmpeg CLI, no Postgres, no Google):
+> render audio/visual ACs (−14 LUFS/pumping/denoise/punch-in/captions); the **two 0027 migrations + RLS**;
+> a real `videos.insert` upload; the export aggregation + cross-tenant isolation. All run first on staging.
+
+### → NEXT ACTION (decisions pending — get user go-ahead)
+1. **Merge order + migration renumber.** Decide which branch lands on main first. The SECOND branch must
+   renumber its `0027_*` migration to `0028` (down_revision = the first's `0027`). Privacy is the more
+   verifiable/launch-critical set; publish is held for sandbox verification — so **privacy first** is the
+   natural order (then publish's `clip_publications` → 0028).
+2. **Verify on a DB env before prod.** Both branches' migrations/RLS/isolation + publish's upload need a
+   real Postgres (+ YouTube sandbox for publish). No live staging-verify path right now (CI billing dead;
+   staging push doesn't auto-deploy) — so verification likely = the prod deploy itself (runs `alembic
+   upgrade`) or a manual DB run. Treat the first deploy as the verification gate; watch closely.
+3. **Finish the publish cluster:** 196 (scheduled publish — extends `clip_publications` with
+   `scheduled_at`/`platform` + beat sweep + UI) and 197 (wire published clips into the outcome loop).
+4. **Follow-ups:** a Profile "Download my data" button for 249 (endpoint exists, no UI yet); publish UI
+   (the connect-publishing button exists, but no "publish this clip" action — comes with 196).
+5. **Spot-check the LIVE render work** (Batch A + 182) on a real clip in prod (empirical checks above).
+6. **Still open: msgpack CVE** (`OFF_COURSE_BUGS.md`) — pin `msgpack>=1.2.1` or ignore-list. Untouched.
 4. **Still open: the dependency CVE** (logged in `docs/OFF_COURSE_BUGS.md`, 2026-06-22): msgpack 1.1.2
    `GHSA-6v7p-g79w-8964` → pin `msgpack>=1.2.1` or add to the Issue-107 accepted-risk ignore-list with
    a DECISIONS note. (Untouched this session.)

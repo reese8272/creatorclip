@@ -360,17 +360,20 @@ overlapped** by research-derived issues — flagged inline.
 
 ## Priority 8 — Privacy / Compliance
 
-### Issue 247: [SEV1] Erasure leak — stop writing deleted-creator PII to `audit_log`
+### Issue 247: [SEV1] Erasure leak — stop writing deleted-creator PII to `audit_log` ✅ DONE (2026-06-22)
 **What:** `DELETE /auth/me` persists `email`+`channel_id` into the never-purged, RLS-exempt `audit_log`. Remove the PII (keep `creator_id`/entity_id, or pseudonymize).
 **AC:** deletion audit row has no email/channel_id/PII; integration test confirms; COMPLIANCE updated with the minimization rule. `[DEC]` (cite EDPB CEF 2025). **Src:** 12 / 177a.
+**Shipped:** Dropped the `before={email,channel_id}` payload from the `creator.deleted` audit call (`auth.py`); only `action`/`actor`/`entity_id=creator_id` retained (pseudonymous post-erasure). Unit test asserts `before_jsonb is None` (`test_account_deletion.py`); integration test asserts no before/after payload survives (`test_account_deletion_integration.py`). COMPLIANCE Privacy Posture + DECISIONS (EDPB CEF 2025, Art. 17) updated.
 
-### Issue 248: [SEV1] Erasure completeness — purge `event_logs` on deletion
+### Issue 248: [SEV1] Erasure completeness — purge `event_logs` on deletion ✅ DONE (2026-06-22)
 **What:** `event_logs.creator_id` has no FK/CASCADE and lives on a separate engine; deleted-creator telemetry persists forever. Add an explicit cross-engine delete to the deletion path.
 **AC:** deletion removes all `event_logs` rows for the creator; integration test (two creators, delete one); best-effort failure doesn't abort deletion; COMPLIANCE data-class table updated. **Src:** 12 / 177b.
+**Shipped:** `event_log.purge_creator_events(creator_id)` issues `DELETE FROM event_logs WHERE creator_id` on the separate logs engine; `DELETE /auth/me` calls it best-effort (logged, never aborts erasure). COMPLIANCE data-class row updated. Tests: 3 unit (`test_event_log.py`: disabled→0, deletes→rowcount, error→-1) + delete-calls-purge (`test_account_deletion.py`). *(Two-creator integration test — runs on staging Postgres.)*
 
-### Issue 249: [SEV1] Data export endpoint (Art. 15/20)
+### Issue 249: [SEV1] Data export endpoint (Art. 15/20) ✅ DONE (2026-06-22)
 **What:** Isolation-safe machine-readable (JSON) export of one creator's data + presigned clip links, async (202+poll) like the improvement brief.
 **AC:** authed via `get_current_creator`, single tenant; covers profile/DNA/videos+metrics/feedback/outcomes/chat/billing; clips via presigned links/zip; rate-limited; RLS + app filter (isolation test); Privacy Policy "Your rights" updated. `[DEC]` (format + scope). **Src:** 12 / 177c.
+**Shipped:** `POST /creators/me/export` (202) → `GET /creators/me/export` (poll) → `GET /creators/me/export/download` (302→presigned / FileResponse). `generate_data_export` task aggregates all data classes (single-tenant) → JSON → R2; new `data_exports` table (model + migration **0027**, RLS) one-row-per-creator. Clips referenced by durable authed `/clips/{id}/download` paths in the JSON. Rate-limited (5/hr build, 30/min download). Privacy Policy "Your rights" + DECISIONS (`[DEC]` format=JSON, scope) updated. Tests: +5 (`test_data_export.py`: poll states, 202 enqueue, download redirect/409). ⚠️ Task aggregation + RLS + true isolation are verified-by-construction (unit/mocks); real run on staging Postgres. *(Migration 0027 collides with the held publish branch's 0027 → renumber publish's to 0028 at its merge.)*
 
 ### Issue 250: [SEV2] Retention schedule + missing purge sweeps
 **What:** Define + enforce retention for `event_logs` (90d), `audit_log` (counsel-set), inactive-creator tokens/accounts; document the schedule.

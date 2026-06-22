@@ -40,6 +40,40 @@ Finding: `docs/research/findings/13_multiplatform_distribution_publishing.md` (D
 
 ---
 
+## 2026-06-22 — Issue 249 [SEV1]: data-export endpoint (Art. 15/20) — format + scope
+
+**What changed:** Added an async data-export flow (`POST /creators/me/export` 202 →
+`GET /creators/me/export` poll → `GET /creators/me/export/download`). A Celery task
+gathers every data class for one creator into a **JSON** artifact, uploads it to R2,
+and the download endpoint serves it via a short-lived presigned link (prod) / file
+stream (dev) — reusing the Issue-182 download pattern. New `data_exports` table
+(migration 0027, RLS-gated), one row per creator, mirroring the improvement-brief
+202+poll precedent.
+
+**Decisions (`[DEC]`):**
+- **Format = JSON** — Art. 20 requires "structured, commonly used, machine-readable";
+  JSON is the de-facto standard. Tagged `format: creatorclip-export-v1`.
+- **Scope** = profile, DNA, videos+metrics, clips, feedback, outcomes, chat
+  (conversations+messages), billing (packs+deductions). Every query is single-tenant
+  (scoped by `creator_id`, or by the creator's own video/clip/conversation ids).
+- **Clips referenced by durable authed download *paths*** (`/clips/{id}/download`) inside
+  the JSON, not expiring presigned URLs — so the export stays useful after the
+  short-lived link would have lapsed. The export *artifact itself* is fetched via a
+  presigned link (it's a single small JSON, fetched once right after generation).
+- **Async over sync** — a large catalog's export can be big/slow; the 202+poll keeps it
+  off the request path (consistent with the improvement brief / DNA build).
+
+**Migration-numbering note:** this is `0027_data_exports` (privacy branch off main). The
+held `feat/batch-b-publish` branch also has a `0027` — whichever merges second renumbers
+to `0028` (see LEFT_OFF).
+
+**Source/evidence:** GDPR Art. 15 (access) + Art. 20 (portability — structured,
+machine-readable). Finding: `docs/research/findings/12_data_privacy_compliance.md` (177c).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 194: publish scope via incremental consent (opt-in only)
 
 **What changed:** Publishing requires the `youtube.upload` write scope. Rather than
@@ -68,6 +102,32 @@ guidance verified live (2026):
 [OAuth best practices](https://developers.google.com/identity/protocols/oauth2/resources/best-practices),
 [requesting additional permissions](https://developers.google.com/identity/sign-in/web/incremental-auth).
 Finding: `docs/research/findings/13_multiplatform_distribution_publishing.md` (D1a).
+
+**Date:** 2026-06-22
+
+---
+
+## 2026-06-22 — Issue 247 [SEV1]: deletion audit log must not retain erased PII
+
+**What changed:** `DELETE /auth/me` previously wrote `{"channel_id", "email"}` into the
+`before` payload of the `creator.deleted` `audit_log` row. Since `audit_log` is never
+purged and RLS-exempt, that PII survived the account erasure indefinitely. Removed the
+`before=` payload entirely; the audit row now carries only `action`, `actor`, and
+`entity_id` = `creator_id`.
+
+**Why:** GDPR Art. 17 (right to erasure) requires erasure to be durable — logs and
+backups must not silently retain the erased personal data. The internal `creator_id`
+UUID is acceptable evidence-of-erasure: once the creator row (and its email/channel
+mapping) is deleted, the UUID no longer identifies a person, so it is effectively
+pseudonymous. Hashing the email was rejected (still arguably personal data, no benefit).
+Time-based purging of `audit_log` is the broader Issue 250 retention work, not this fix.
+
+**Source/evidence:** EDPB **2025 Coordinated Enforcement Framework** on the right to
+erasure (Art. 17) — report adopted Feb 2026, 32 DPAs; retention/log practices that
+re-introduce erased data are a named compliance failure:
+[EDPB CEF 2025 launch](https://www.edpb.europa.eu/news/news/2025/cef-2025-launch-coordinated-enforcement-right-erasure_en),
+[EDPB CEF 2025 report (PDF)](https://www.edpb.europa.eu/system/files/2026-02/edpb_cef-report_2025_right-to-erasure_en.pdf).
+Finding: `docs/research/findings/12_data_privacy_compliance.md` (177a).
 
 **Date:** 2026-06-22
 

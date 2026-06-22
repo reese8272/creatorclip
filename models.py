@@ -849,6 +849,45 @@ class ImprovementBrief(Base):
     )
 
 
+class DataExportStatus(enum.Enum):
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
+class DataExport(Base):
+    """Async GDPR Art. 15/20 data export for a creator (Issue 249).
+
+    One row per creator. The POST endpoint resets it to ``pending`` and enqueues
+    a Celery task; the task gathers every data class into a JSON artifact, uploads
+    it to R2, and writes ``export_uri``/``status``; the GET endpoint polls this row
+    and returns a short-lived presigned download link. Mirrors the
+    improvement-brief 202 + poll precedent.
+    """
+
+    __tablename__ = "data_exports"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[DataExportStatus] = mapped_column(
+        sa.Enum(DataExportStatus, name="data_export_status_enum"),
+        nullable=False,
+        default=DataExportStatus.pending,
+    )
+    # s3:// URI of the generated JSON artifact (None until ready).
+    export_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.String(256), nullable=True)
+    job_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (sa.UniqueConstraint("creator_id", name="uq_data_exports_creator_id"),)
+
+
 # ── Creator insights (Issue 117) ──────────────────────────────────────────────
 
 
