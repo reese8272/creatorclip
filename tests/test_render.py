@@ -537,6 +537,32 @@ def test_denoise_applied_even_when_clip_is_silent(tmp_path):
     assert "loudnorm" not in render_af
 
 
+# ── export presets (Issue 182) ────────────────────────────────────────────────
+
+
+def test_default_preset_is_byte_identical_9x16(tmp_path):
+    vf = _render_vf(tmp_path)  # no aspect → 9:16
+    assert "scale=1080:1920" in vf
+    assert "crop=607:1080" in vf  # int(1080*1080/1920)=607, unchanged from pre-182
+
+
+def test_square_preset_renders_1080x1080(tmp_path):
+    vf = _render_vf(tmp_path, style_preset={"aspect": "1:1"})
+    assert "scale=1080:1080" in vf
+    assert "crop=1080:1080" in vf  # full-height square crop, centered on face
+
+
+def test_horizontal_preset_renders_1920x1080(tmp_path):
+    vf = _render_vf(tmp_path, style_preset={"aspect": "16:9"})
+    assert "scale=1920:1080" in vf
+    assert "crop=1920:1080" in vf
+
+
+def test_unknown_aspect_falls_back_to_default(tmp_path):
+    vf = _render_vf(tmp_path, style_preset={"aspect": "bogus"})
+    assert "scale=1080:1920" in vf
+
+
 def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):
     """`render_clip_file` surfaces a `RuntimeError` when the render ffmpeg call stalls."""
     src = tmp_path / "v.mp4"

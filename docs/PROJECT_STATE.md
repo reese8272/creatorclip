@@ -6,6 +6,19 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Batch B started — Issue 182 (Export presets + clip download) DONE (2026-06-22).** First issue of
+Batch B (export & publishing), on branch `feat/batch-b-export-download`. Added `OUTPUT_PRESETS`
+(9:16/1:1/16:9) in `render.py`, applied render-time via `style_preset["aspect"]` (no `ClipFormat`
+migration; 9:16 byte-identical, crop derived from the ratio); punch-in + caption `PlayRes`/margin
+scale to the preset. New endpoint `GET /clips/{id}/download?variant=&disposition=` — per-creator 404
+isolation, 302→presigned R2 (`worker/storage.presigned_download_url`) in prod / `FileResponse` in dev.
+UI: Download button + aspect dropdown. **Fixed a SEV2 off-course bug** (logged): clip playback bound
+`<video>` to a raw `s3://` URI with no media endpoint — now served via the same endpoint
+(`disposition=inline`). Tests: +13; full suite **1024 passed, 3 skipped**; frontend lint/tsc/build +
+38 Playwright e2e green; Layer-0 ruff/mypy/bandit/freshness green. No DECISIONS entry (no scope
+change). **Not yet merged/deployed.** **Next in Batch B:** Issues 194–197 (YouTube publish — DB +
+Google-audit gated) or pause.
+
 **Batch A (render quality) COMPLETE + DEPLOYED TO PROD — Issues 181, 183, 184, 185 (2026-06-22).**
 First batch off the rebuilt backlog. Built on `feat/batch-a-render-quality` (4 commits), merged
 ff to `staging` then promoted ff to `main` @ `7e14663`. **Prod deploy verified:** "Deploy to

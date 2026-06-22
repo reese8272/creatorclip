@@ -3,8 +3,10 @@ import logging
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +19,7 @@ from db import get_session
 from limiter import creator_key, limiter
 from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcript, Video, VideoKind
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
-from worker.storage import upload_file
+from worker.storage import presigned_download_url, upload_file
 from youtube.data_api import classify_video_kind
 from youtube.ingest import probe_duration_s
 
@@ -78,6 +80,7 @@ class RenderStyleIn(BaseModel):
     captions_enabled: bool | None = None
     zoom_on_peak: bool | None = None  # opt-in punch-in at peak (Issue 184)
     denoise: bool | None = None  # opt-in noise reduction (Issue 185)
+    aspect: Literal["9:16", "1:1", "16:9"] | None = None  # export preset (Issue 182)
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -227,6 +230,8 @@ async def render_clip(
             merged["zoom_on_peak"] = body.zoom_on_peak
         if body.denoise is not None:
             merged["denoise"] = body.denoise
+        if body.aspect is not None:
+            merged["aspect"] = body.aspect
         clip.style_preset = merged or None
         await session.commit()
 
@@ -795,3 +800,49 @@ async def get_clip(
     if not clip or clip.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Clip not found")
     return _clip_response(clip)
+
+
+@clips_router.get("/{clip_id}/download", response_model=None)
+@limiter.limit("60/minute", key_func=creator_key)
+async def download_clip(
+    request: Request,
+    clip_id: uuid.UUID,
+    variant: Literal["original", "cleaned"] = "original",
+    disposition: Literal["attachment", "inline"] = "attachment",
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> RedirectResponse | FileResponse:
+    """Serve a rendered clip (Issue 182).
+
+    ``disposition=attachment`` forces a download; ``inline`` backs the in-app
+    player ``<video>`` (Issue-182 playback fix). ``variant=cleaned`` serves the
+    filler-removed re-render when present. Per-creator isolation: another
+    creator's clip — or a missing id — returns 404, never the bytes.
+
+    Prod (R2): 302-redirects to a short-lived presigned GET URL so bandwidth is
+    offloaded to object storage. Dev (local disk): streams the file directly.
+    """
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    uri = clip.cleaned_render_uri if variant == "cleaned" else clip.render_uri
+    if not uri:
+        raise HTTPException(status_code=404, detail="Clip not yet rendered")
+
+    suffix = "-cleaned" if variant == "cleaned" else ""
+    filename = f"clip-{clip_id}{suffix}.mp4"
+
+    presigned = presigned_download_url(uri, filename=filename, disposition=disposition)
+    if presigned is not None:
+        return RedirectResponse(url=presigned, status_code=302)
+    # Local-disk dev: stream the file straight from disk.
+    path = Path(uri)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Clip file not found")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=filename,
+        content_disposition_type=disposition,
+    )

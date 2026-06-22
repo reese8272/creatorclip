@@ -21,6 +21,11 @@ const DENY_TAGS = [
 
 export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: () => void }) {
   const clipDur = clip.end_s - clip.start_s
+  // Issue 182: clips are served through the authed download endpoint (presigned
+  // R2 in prod, file stream in dev) — never a raw s3:// render_uri. `inline`
+  // backs the <video>; the bare endpoint forces an attachment download.
+  const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
+  const downloadUrl = `/clips/${clip.id}/download`
   const [trimStart, setTrimStart] = useState(0)
   const [trimEnd, setTrimEnd] = useState(clipDur)
   const [panel, setPanel] = useState<'upvote' | 'downvote' | null>(null)
@@ -76,7 +81,7 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
       {clip.render_uri ? (
         <video
           key={clip.id}
-          src={clip.render_uri}
+          src={mediaSrc}
           controls
           playsInline
           autoPlay
@@ -144,6 +149,15 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
           Skip
         </Button>
         <Button onClick={() => sendFeedback('trim')}>✂ Trim</Button>
+        {clip.render_uri && (
+          <a
+            href={downloadUrl}
+            download
+            className="inline-flex items-center rounded-md border border-strong bg-bg px-3 py-1.5 text-sm text-muted hover:border-muted hover:text-fg"
+          >
+            ⬇ Download
+          </a>
+        )}
       </div>
 
       {panel && (

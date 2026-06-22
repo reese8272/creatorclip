@@ -41,9 +41,20 @@ logger = logging.getLogger(__name__)
 # Directory libass searches for custom fonts (Dockerfile installs Anton here).
 _FONTS_DIR = "/usr/share/fonts/custom"
 
-# Output resolution for 9:16 Shorts
-_OUTPUT_W = 1080
-_OUTPUT_H = 1920
+# Export presets (Issue 182). Single source of truth for output geometry, shared
+# with the editorial/recap work. The crop width is derived from the preset ratio
+# (`frame_h * out_w/out_h`) so 9:16 stays byte-identical to the pre-182 output
+# (`int(frame_h*1080/1920) == int(frame_h*9/16)`). Presets are applied at render
+# time via `style_preset["aspect"]`; no stored ClipFormat change.
+OUTPUT_PRESETS: dict[str, tuple[int, int]] = {
+    "9:16": (1080, 1920),  # default vertical Short
+    "1:1": (1080, 1080),  # square
+    "16:9": (1920, 1080),  # horizontal
+}
+_DEFAULT_FORMAT = "9:16"
+
+# Default 9:16 dimensions, kept for callers/tests that reference them directly.
+_OUTPUT_W, _OUTPUT_H = OUTPUT_PRESETS[_DEFAULT_FORMAT]
 
 
 def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
@@ -228,7 +239,7 @@ _PUNCH_IN_SCALE = 0.08
 _PUNCH_IN_RAMP_S = 0.6
 
 
-def _punch_in_filter(peak_offset_s: float) -> str:
+def _punch_in_filter(peak_offset_s: float, out_w: int, out_h: int) -> str:
     """ffmpeg crop+scale chain for a brief punch-in centered at ``peak_offset_s``
     (clip-relative seconds). Zoom ``z(t)=1+A·max(0,1−|t−p|/W)``; the centered crop
     shrinks by ``z`` then scales back to the output resolution. Outside the pulse
@@ -236,7 +247,7 @@ def _punch_in_filter(peak_offset_s: float) -> str:
     # `\,` escapes the comma inside max() so the filtergraph parser doesn't read
     # it as a filter separator.
     z = f"(1+{_PUNCH_IN_SCALE}*max(0\\,1-abs(t-{peak_offset_s:.3f})/{_PUNCH_IN_RAMP_S}))"
-    return f"crop=w=iw/{z}:h=ih/{z}:x=(iw-iw/{z})/2:y=(ih-ih/{z})/2,scale={_OUTPUT_W}:{_OUTPUT_H}"
+    return f"crop=w=iw/{z}:h=ih/{z}:x=(iw-iw/{z})/2:y=(ih-ih/{z})/2,scale={out_w}:{out_h}"
 
 
 def render_clip_file(
@@ -263,6 +274,8 @@ def render_clip_file(
         Off by default.
       - ``denoise``: bool (Issue 185) — when set, run an ``afftdn`` noise-reduction
         pass before loudnorm. Off by default.
+      - ``aspect``: str (Issue 182) — export preset, one of ``OUTPUT_PRESETS``
+        ("9:16" | "1:1" | "16:9"). Defaults to "9:16" (byte-identical to pre-182).
 
     ``peak_s`` is the clip's absolute peak time (source-relative seconds, from
     ``Clip.peak_s``); the punch-in is centered at ``peak_s - start_s``. Ignored
@@ -286,8 +299,12 @@ def render_clip_file(
 
     frame_w, frame_h = _frame_dimensions(source_path)
 
-    # Crop width for 9:16: keep full height, compute matching width
-    crop_w = int(frame_h * 9 / 16)
+    # Export preset (Issue 182): output geometry from the shared registry. Default
+    # 9:16; `style_preset["aspect"]` selects 1:1 / 16:9. Crop keeps full height and
+    # derives width from the target ratio — 9:16 is byte-identical to the old path.
+    aspect = (style_preset or {}).get("aspect") or _DEFAULT_FORMAT
+    out_w, out_h = OUTPUT_PRESETS.get(aspect, OUTPUT_PRESETS[_DEFAULT_FORMAT])
+    crop_w = int(frame_h * out_w / out_h)
     crop_w = min(crop_w, frame_w)
 
     # Find face center in a keyframe at the midpoint of the clip
@@ -308,7 +325,7 @@ def render_clip_file(
     # then decodes to the exact start frame. With re-encoding (libx264) accurate_seek is
     # already the ffmpeg default, but we set it explicitly so the cut stays frame-accurate
     # even if anyone introduces `-c copy` later — the clip MUST start exactly at the setup.
-    vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={_OUTPUT_W}:{_OUTPUT_H}"]
+    vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={out_w}:{out_h}"]
 
     # Auto-zoom punch-in (Issue 184): applied to the framed video BEFORE subtitles
     # so the captions stay steady while the content zooms. Off unless the creator
@@ -316,7 +333,7 @@ def render_clip_file(
     if style_preset and style_preset.get("zoom_on_peak") and peak_s is not None:
         peak_offset_s = peak_s - start_s
         if 0.0 <= peak_offset_s <= duration:
-            vf_parts.append(_punch_in_filter(peak_offset_s))
+            vf_parts.append(_punch_in_filter(peak_offset_s, out_w, out_h))
 
     ass_path: Path | None = None
     if style_preset:
@@ -334,6 +351,8 @@ def render_clip_file(
                 clip_start_s=start_s,
                 clip_duration_s=duration,
                 out_path=ass_path,
+                play_res_x=out_w,
+                play_res_y=out_h,
             )
             if ass_path.exists():
                 # The subtitles= filter uses `:` as arg separator; the ass path lives

@@ -13,6 +13,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const [captionsEnabled, setCaptionsEnabled] = useState(false)
   const [zoomOnPeak, setZoomOnPeak] = useState(false)
   const [denoise, setDenoise] = useState(false)
+  const [aspect, setAspect] = useState('')
   const [status, setStatus] = useState('')
 
   async function apply() {
@@ -26,6 +27,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           captions_enabled: captionsEnabled,
           zoom_on_peak: zoomOnPeak,
           denoise: denoise,
+          aspect: aspect || null,
         },
       })
       setStatus('Render queued — come back in ~30s.')
@@ -44,6 +46,14 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           <option value="bold_pop_highlight">Bold Pop Highlight — keywords in yellow</option>
           <option value="gradient_slide">Gradient Slide — indigo→white fade-in</option>
           <option value="minimal">Minimal — plain phrase captions</option>
+        </select>
+      </label>
+      <label className="flex items-center justify-between gap-3">
+        Aspect ratio
+        <select value={aspect} onChange={(e) => setAspect(e.target.value)} className={selectCls}>
+          <option value="">9:16 — vertical Short (default)</option>
+          <option value="1:1">1:1 — square</option>
+          <option value="16:9">16:9 — horizontal</option>
         </select>
       </label>
       <label className="flex items-center justify-between gap-3">

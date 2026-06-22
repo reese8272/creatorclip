@@ -174,6 +174,8 @@ def build_ass_subtitles(
     clip_start_s: float,
     clip_duration_s: float,
     out_path: Path,
+    play_res_x: int = _PLAY_RES_X,
+    play_res_y: int = _PLAY_RES_Y,
 ) -> Path | None:
     """Render an ASS subtitle file for the clip window.
 
@@ -215,14 +217,14 @@ def build_ass_subtitles(
         return None
 
     subs = pysubs2.SSAFile()
-    subs.info["PlayResX"] = str(_PLAY_RES_X)
-    subs.info["PlayResY"] = str(_PLAY_RES_Y)
+    subs.info["PlayResX"] = str(play_res_x)
+    subs.info["PlayResY"] = str(play_res_y)
     # ScaledBorderAndShadow=yes makes \bord values render the same regardless of
     # libass's internal scaling — necessary because PlayRes != output res in some
     # edge cases (e.g. someone overrides _OUTPUT_W/_OUTPUT_H later).
     subs.info["ScaledBorderAndShadow"] = "yes"
 
-    subs.styles["Default"] = _base_style(style)
+    subs.styles["Default"] = _base_style(style, play_res_y)
     subs.events = events
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -233,8 +235,11 @@ def build_ass_subtitles(
 _CENTERED_STYLES = {"bold_pop", "bold_pop_highlight"}
 
 
-def _base_style(style: str) -> pysubs2.SSAStyle:
+def _base_style(style: str, play_res_y: int = _PLAY_RES_Y) -> pysubs2.SSAStyle:
     is_animated = style in {"bold_pop", "bold_pop_highlight", "gradient_slide"}
+    # Lower-third margin scales with the canvas height so the safe-zone fraction
+    # holds across export presets (Issue 182). At 1920 this is 290 (unchanged).
+    lower_third_marginv = round(290 * play_res_y / _PLAY_RES_Y)
     return pysubs2.SSAStyle(
         fontname=_FONT_NAME,
         fontsize=_FONT_SIZE_ANIMATED if is_animated else _FONT_SIZE_MINIMAL,
@@ -254,7 +259,7 @@ def _base_style(style: str) -> pysubs2.SSAStyle:
         else pysubs2.Alignment.BOTTOM_CENTER,
         # MarginV lifts bottom-aligned text into the lower-third safe zone,
         # clear of the Shorts subscribe button overlay (~y=70% of 1920).
-        marginv=0 if style in _CENTERED_STYLES else 290,
+        marginv=0 if style in _CENTERED_STYLES else lower_third_marginv,
     )
 
 

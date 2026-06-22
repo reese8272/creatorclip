@@ -208,6 +208,40 @@ def test_bold_pop_style_is_unchanged_by_highlight_feature(tmp_path):
     assert "&H00d4ff&" not in out_path.read_text()
 
 
+def test_play_res_parameterized_for_export_presets(tmp_path):
+    """Issue 182: a square export sets PlayResX/Y to the preset and scales the
+    lower-third margin proportionally (so captions aren't distorted/misplaced)."""
+    out_path = tmp_path / "sq.ass"
+    build_ass_subtitles(
+        segments=_segments(),
+        style="minimal",  # bottom-aligned → exercises the lower-third margin
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+        play_res_x=1080,
+        play_res_y=1080,
+    )
+    subs = pysubs2.load(str(out_path))
+    assert subs.info.get("PlayResX") == "1080"
+    assert subs.info.get("PlayResY") == "1080"
+    # 290 * 1080/1920 = 163 (proportional), not the 1920-canvas 290.
+    assert subs.styles["Default"].marginv == 163
+
+
+def test_play_res_defaults_to_vertical_short(tmp_path):
+    out_path = tmp_path / "v.ass"
+    build_ass_subtitles(
+        segments=_segments(),
+        style="minimal",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+    )
+    subs = pysubs2.load(str(out_path))
+    assert subs.info.get("PlayResY") == "1920"
+    assert subs.styles["Default"].marginv == 290  # unchanged default
+
+
 def test_gradient_slide_emits_indigo_to_white_color_animation(tmp_path):
     """ASS color byte order is &HBBGGRR& — #5e6ad2 indigo becomes &Hd26a5e&.
     Confirm we did NOT accidentally write the HTML-hex byte order."""

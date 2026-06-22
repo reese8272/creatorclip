@@ -98,6 +98,32 @@ def delete_prefix(prefix: str) -> int:
         return 0
 
 
+def presigned_download_url(
+    uri: str, *, filename: str, disposition: str = "attachment", expires_s: int = 300
+) -> str | None:
+    """Return a short-lived presigned GET URL for an ``s3://`` object, carrying a
+    ``Content-Disposition`` (``attachment`` forces a download, ``inline`` allows
+    in-browser playback) and a humanized ``filename``.
+
+    Returns ``None`` for non-``s3://`` (local-disk dev) URIs — callers serve those
+    straight from disk. Presigned URLs are bearer tokens, so the expiry is kept
+    short (default 5 min). ``generate_presigned_url`` only signs locally; it makes
+    no network call, so it is safe to invoke from an async request handler.
+    """
+    if not uri.startswith("s3://"):
+        return None
+    bucket, key = uri[5:].split("/", 1)
+    return _r2().generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": bucket,
+            "Key": key,
+            "ResponseContentDisposition": f'{disposition}; filename="{filename}"',
+        },
+        ExpiresIn=expires_s,
+    )
+
+
 @contextmanager
 def local_path(uri: str) -> Generator[Path, None, None]:
     """Yield a local Path; downloads to a temp file first if the URI is remote."""
