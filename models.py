@@ -94,6 +94,15 @@ class RenderStatus(enum.Enum):
     failed = "failed"
 
 
+class PublishStatus(enum.Enum):
+    """Lifecycle of a YouTube publish attempt (Issue 195)."""
+
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
 class FeedbackAction(enum.Enum):
     upvote = "upvote"
     downvote = "downvote"
@@ -584,6 +593,42 @@ class ClipOutcome(Base):
     final: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
 
     clip: Mapped["Clip"] = relationship("Clip", back_populates="outcome")
+
+
+class ClipPublication(Base):
+    """A YouTube publish attempt for a clip (Issue 195).
+
+    Idempotency: ``task_id`` (the Celery task id) is UNIQUE — an at-least-once
+    redelivery finds the existing row instead of double-posting. The returned
+    ``youtube_video_id`` is stored before the task acks. Issue 196 extends this
+    table with scheduling fields (``scheduled_at``/``platform``); this is the base.
+    Per-creator isolation via the ``tenant_isolation`` RLS policy on ``creator_id``.
+    """
+
+    __tablename__ = "clip_publications"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    clip_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("clips.id", ondelete="CASCADE"), nullable=False
+    )
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    # Celery task id — UNIQUE so a redelivered publish task is idempotent.
+    task_id: Mapped[str] = mapped_column(sa.String(64), nullable=False, unique=True)
+    youtube_video_id: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    status: Mapped[PublishStatus] = mapped_column(
+        sa.Enum(PublishStatus, name="publish_status_enum"),
+        nullable=False,
+        default=PublishStatus.pending,
+    )
+    error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    )
 
 
 # ── Preference model ──────────────────────────────────────────────────────────

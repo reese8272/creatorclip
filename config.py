@@ -178,6 +178,10 @@ class Settings(BaseSettings):
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
     YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
+    # Privacy status for clips published via the API (Issue 195). Forced "private"
+    # until the YouTube API compliance audit clears — the creator flips each Short
+    # to public manually. Flip to "public" only post-audit.
+    YOUTUBE_PUBLISH_PRIVACY: str = "private"
 
     # Cache-busting query string appended to every `/static/*.css` and
     # `/static/*.js` reference in served HTML. Set at image-build time from

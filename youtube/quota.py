@@ -33,6 +33,11 @@ COST_DATA_CHANNELS = 1
 COST_DATA_PLAYLIST_ITEMS = 1
 COST_DATA_VIDEOS = 1
 COST_DATA_CAPTIONS = 50
+# videos.insert (Issue 195). Google cut this from ~1600 → ~100 units on
+# 2025-12-04 (verified against the Quota Calculator) — so the default 10k/day
+# quota now allows ~100 uploads/day rather than ~6, matching the anti-abuse cap.
+# Local accounting only; Google's own quotaExceeded 403 is the hard enforcer.
+COST_DATA_VIDEOS_INSERT = 100
 
 # Atomic Lua: check budget before incrementing so we never silently overshoot.
 # Returns new total on success, -1 if the call would exceed the daily limit.

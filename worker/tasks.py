@@ -29,11 +29,13 @@ from models import (
     Clip,
     ClipFeedback,
     ClipOutcome,
+    ClipPublication,
     Creator,
     CreatorDna,
     IngestStatus,
     OnboardingState,
     PreferenceModel,
+    PublishStatus,
     RenderStatus,
     RetentionCurve,
     Signals,
@@ -215,6 +217,122 @@ def clean_clip(self, clip_id: str) -> str:
     except Exception as exc:
         raise self.retry(exc=exc) from exc
     return clip_id
+
+
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=120, name="worker.tasks.publish_to_youtube"
+)
+def publish_to_youtube(self, clip_id: str) -> str:
+    """Upload a rendered clip to the creator's YouTube channel (Issue 195).
+
+    Idempotent on the Celery task id: a redelivery finds the existing
+    ``clip_publications`` row and never double-posts. Pre-audit, uploads are
+    forced ``private`` (the creator flips each Short to public manually).
+    Transient failures (quota, 5xx, network) retry; permanent failures
+    (audit/forbidden, invalid grant) are recorded and surfaced, not retried.
+    """
+    from youtube.errors import YouTubeAuthError
+    from youtube.publish import YouTubeUploadError
+    from youtube.quota import QuotaExhaustedError
+
+    try:
+        return run_async(_publish_to_youtube_async(self.request.id, clip_id))
+    except (YouTubeAuthError, YouTubeUploadError):
+        # Permanent — already recorded as failed in the async body. Surface to
+        # Celery as terminal; retrying can't fix audit/grant/forbidden.
+        raise
+    except QuotaExhaustedError as exc:
+        # Daily quota drained — retry later (the budget resets at PT midnight).
+        raise self.retry(exc=exc) from exc
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+
+
+async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
+    from sqlalchemy import select
+
+    from config import settings
+    from worker.storage import alocal_path
+    from youtube.errors import YouTubeAuthError
+    from youtube.oauth import get_valid_access_token
+    from youtube.publish import YouTubeUploadError, upload_video
+    from youtube.quota import COST_DATA_VIDEOS_INSERT, consume
+
+    cid = uuid.UUID(clip_id)
+
+    async with db.AdminSessionLocal() as session:
+        # Idempotency: a redelivery of the same task id that already succeeded is
+        # a no-op — never a second upload (at-least-once → effectively once).
+        existing = (
+            await session.execute(select(ClipPublication).where(ClipPublication.task_id == task_id))
+        ).scalar_one_or_none()
+        if (
+            existing is not None
+            and existing.status == PublishStatus.done
+            and existing.youtube_video_id
+        ):
+            logger.info(
+                "Clip %s already published (%s) — skipping", clip_id, existing.youtube_video_id
+            )
+            return existing.youtube_video_id
+
+        clip = await session.get(Clip, cid)
+        if not clip or not clip.render_uri:
+            raise ValueError(f"Clip {clip_id} has no rendered media to publish")
+        creator_id = clip.creator_id
+        render_uri = clip.render_uri
+        video = await session.get(Video, clip.video_id)
+        base_title = (video.title if video and video.title else "New Short").strip()[:90]
+
+        if existing is None:
+            pub = ClipPublication(
+                clip_id=cid,
+                creator_id=creator_id,
+                task_id=task_id,
+                status=PublishStatus.running,
+            )
+            session.add(pub)
+        else:
+            pub = existing
+            pub.status = PublishStatus.running
+        await session.flush()
+        pub_id = pub.id
+        await session.commit()
+
+        # Same open session — get_valid_access_token may refresh + commit.
+        access_token = await get_valid_access_token(creator_id, session)
+
+    # Reserve quota before the upload (raises QuotaExhaustedError → task retries).
+    await consume(COST_DATA_VIDEOS_INSERT)
+
+    try:
+        async with alocal_path(render_uri) as local_file:
+            video_id = await upload_video(
+                access_token,
+                local_file,
+                title=base_title,
+                description="#Shorts",
+                privacy_status=settings.YOUTUBE_PUBLISH_PRIVACY,
+            )
+    except (YouTubeAuthError, YouTubeUploadError) as exc:
+        async with db.AdminSessionLocal() as session:
+            row = await session.get(ClipPublication, pub_id)
+            if row is not None:
+                row.status = PublishStatus.failed
+                row.error = str(exc)[:500]
+                await session.commit()
+        logger.warning("Publish %s failed permanently: %s", clip_id, type(exc).__name__)
+        raise
+
+    # Store the returned video id + done BEFORE the task acks (idempotency point).
+    async with db.AdminSessionLocal() as session:
+        row = await session.get(ClipPublication, pub_id)
+        if row is not None:
+            row.youtube_video_id = video_id
+            row.status = PublishStatus.done
+            await session.commit()
+    logger.info("Published clip %s → youtube %s (%s)", clip_id, video_id, "private")
+    return video_id
 
 
 @celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.edit_clip")

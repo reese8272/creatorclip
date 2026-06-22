@@ -5,6 +5,41 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 195: idempotent `publish_to_youtube` task + videos.insert quota re-verified
+
+**What changed:** A `publish_to_youtube` Celery task uploads a clip's `render_uri`
+to the creator's channel via YouTube's **resumable upload protocol** (implemented
+on the existing httpx client — chunked PUT + resume-on-failure, no new dep). A new
+`clip_publications` table (migration 0027, RLS-gated) records each attempt;
+**idempotency is keyed on the Celery task id** (`task_id` UNIQUE) — a redelivery
+whose row is already `done` returns the stored video id and never re-uploads. The
+returned id + `done` are committed before the task acks. **Uploads are forced
+`privacyStatus=private`** (`settings.YOUTUBE_PUBLISH_PRIVACY`) pre-audit.
+
+**videos.insert quota — re-verified (finding 13 flagged a discrepancy):** the cost
+**dropped from ~1600 → ~100 units on 2025-12-04**. So the default 10k/day quota now
+allows ~100 uploads/day (not ~6), matching the anti-abuse cap. `COST_DATA_VIDEOS_INSERT
+= 100` (local accounting; Google's own `quotaExceeded` 403 is the hard enforcer,
+classified transient → retry).
+
+**Why these choices:** resumable upload is YouTube's recommended reliable path and
+matches the repo's raw-httpx-over-SDK convention. Task-id idempotency mirrors the
+existing render-task pattern. **Known limitation (documented):** a worker crash in
+the sub-second window between upload-success and the `done` commit could, on
+redelivery, re-upload — at-least-once semantics; the window is one commit and the
+done-row check covers every other case. Forced-private keeps us inside ToS until the
+audit clears (Issue 194's launch gate).
+
+**Source/evidence:** quota change + resumable protocol verified live (2026):
+[determine_quota_cost](https://developers.google.com/youtube/v3/determine_quota_cost),
+[YouTube API pricing 2026 (Dec-2025 reduction)](https://www.blotato.com/blog/youtube-api-pricing),
+[resumable upload protocol](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol).
+Finding: `docs/research/findings/13_multiplatform_distribution_publishing.md` (D1b).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 194: publish scope via incremental consent (opt-in only)
 
 **What changed:** Publishing requires the `youtube.upload` write scope. Rather than

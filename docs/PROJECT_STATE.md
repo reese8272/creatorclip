@@ -6,6 +6,18 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Batch B publish cluster — Issue 195 (`publish_to_youtube` task) DONE (2026-06-22).** On branch
+`feat/batch-b-publish` (with 194, not merged). `youtube/publish.py` resumable upload client (chunked
+PUT + resume-on-fail, raw httpx); new `clip_publications` table (model + migration **0027**, RLS-gated)
+with `task_id` UNIQUE = idempotency key (redelivery of a `done` row → no re-upload); returned id +
+`done` committed before ack; uploads forced `private` (`settings.YOUTUBE_PUBLISH_PRIVACY`) pre-audit.
+**videos.insert quota re-verified: 1600→100 units (2025-12-04)** → `COST_DATA_VIDEOS_INSERT=100`,
+~100/day. Transient (quota/5xx/net) retries; permanent (audit/forbidden/grant) surfaces. Tests: +5
+(`test_publish.py`); full suite **1033 passed, 3 skipped**; Layer-0 green. ⚠️ Migration/RLS + live
+upload are verified-by-construction (unit/mocks) — real Postgres + a real upload run on
+staging/integration. **Next:** Issue 196 (scheduled publish — extends `clip_publications`) or 197
+(wire to outcome loop).
+
 **Batch B publish cluster started — Issue 194 (youtube.upload scope + incremental consent) DONE
 (2026-06-22).** On branch `feat/batch-b-publish` (not merged). The write scope stays OUT of base
 login; requested only on opt-in via `GET /auth/connect-publishing` (incremental auth,
