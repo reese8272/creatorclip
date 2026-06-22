@@ -84,9 +84,10 @@ overlapped** by research-derived issues — flagged inline.
 **What:** Parameterize `render.py` W/H for a `square` (1080×1080) + `16:9` preset; add `GET /api/clips/{id}/download` (presigned R2 / attachment) + a Download button in `ClipPlayer.tsx`. Single preset registry shared with the editorial work (no duplicate).
 **AC:** creator picks preset → render produces variant → download serves it; 9:16 byte-identical when unchanged; cross-creator download → 404. **Src:** 03 / A3 + 13 / D0a + D0b.
 
-### Issue 183: Keyword / emoji highlight in captions
+### Issue 183: Keyword / emoji highlight in captions ✅ DONE (2026-06-22)
 **What:** Extend `captions.py` so selected tokens render in a highlight color (`\c` override, mechanism proven at `captions.py:213`). v1 keyword set from transcript salience.
 **AC:** ≥1 new style emits ≥1 colored keyword/phrase; plain fallback when none; `VALID_STYLES` + `CaptionStylePanel.tsx` + eval/unit test updated. **Src:** 03 / A2.
+**Shipped:** New `bold_pop_highlight` style — punch-yellow (`#ffd400`) `\c` highlight on the top salient token per phrase via a dependency-free per-phrase scorer (stopwords + clip TF + casing + length); plain-Bold-Pop fallback when no salient token. Added to `VALID_STYLES` + `CaptionStylePanel.tsx` dropdown + 3 unit tests; existing styles byte-identical (regression test). DRY fix: worker transcript-load gate now keys off `captions.VALID_STYLES`. `docs/DECISIONS.md` 2026-06-22 (pure-Python over YAKE). Keyword text content (vs the `\c` mechanism) is verified in unit tests; visual review pending the render env. *(Emoji insertion + DNA-driven selection = follow-up.)*
 
 ### Issue 184: Auto-zoom / punch-in at peak (opt-in)
 **What:** `zoom_on_peak` style flag → brief ~5–10% scale punch-in centered on `peak_s`, returning to 100%. Off by default.

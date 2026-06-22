@@ -5,6 +5,39 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 183: keyword-highlight captions via a dependency-free per-phrase scorer
+
+**What changed:** Added a 4th caption style `bold_pop_highlight` (Bold Pop + the
+most salient token per phrase rendered in a punch-yellow `\c` override). Keyword
+selection is a **pure-Python, per-phrase salience scorer** (stopword filter +
+clip term-frequency + casing/proper-noun boost + token length, top-1 per phrase),
+not a keyword-extraction library. Highlight color is punch yellow `#ffd400`
+(`&H00d4ff&` in ASS byte order). Falls back to plain Bold Pop when a phrase has
+no salient token. Also tightened a latent DRY bug: the worker's transcript-load
+gate (`worker/tasks.py`) now keys off `captions.VALID_STYLES` instead of a
+hardcoded 3-style set, so new caption styles can't silently render captionless.
+
+**Why:** YAKE is the recognized SOTA single-document keyword extractor, but it is
+a *document-level* keyphrase ranker — a poor fit for highlighting one word in a
+3–8-word caption phrase, where document statistics are too sparse, and the AC
+wants per-phrase coverage. Adding `yake`/`rake-nltk` would also pull a pinned
+dependency chain (numpy/networkx/segtok) for a cosmetic v1 feature, against KISS.
+We implement YAKE's *feature family* (casing, frequency, position/length) per
+phrase in pure Python; DNA-driven keyword selection is the planned follow-up
+(finding 03 / A2). Punch yellow is the Submagic/Hormozi convention — maximum
+legibility over white+black-outline captions in a silent-autoplay feed.
+
+**Source/evidence:** Keyword-extraction standard verified live (2025):
+[RAKE vs YAKE (ML Digest)](https://ml-digest.com/rake-and-yake-keyword-extractor/),
+[YAKE explained (Medium)](https://medium.com/@linz07m/yake-simple-and-smart-keyword-extraction-16089f235d64),
+[Unsupervised keyphrase extraction survey (Amitness)](https://amitness.com/posts/keyword-extraction);
+keyword-highlight UX convention: [Submagic](https://www.submagic.co/ai-caption).
+Finding: `docs/research/findings/03_editorial_capabilities.md` (A2).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 181: two-pass `loudnorm` (deviation from finding's single-pass)
 
 **What changed:** Loudness normalization is now applied on every render

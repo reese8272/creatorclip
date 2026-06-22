@@ -37,6 +37,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
         <select value={subtitle} onChange={(e) => setSubtitle(e.target.value)} className={selectCls}>
           <option value="">None — no captions</option>
           <option value="bold_pop">Bold Pop — one word, scale-pops</option>
+          <option value="bold_pop_highlight">Bold Pop Highlight — keywords in yellow</option>
           <option value="gradient_slide">Gradient Slide — indigo→white fade-in</option>
           <option value="minimal">Minimal — plain phrase captions</option>
         </select>

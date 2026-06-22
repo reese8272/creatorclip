@@ -1,13 +1,19 @@
 """
 clip_engine/captions.py — Generate ASS subtitle files for animated word-level captions.
 
-Three styles (Issue 133):
-  - ``bold_pop``        MrBeast/Hormozi feel — one word at a time, scale-pop on
-                        appearance, centered, white fill + black outline.
-  - ``gradient_slide``  Per-word fade-in with indigo→white color transition.
-                        Words accumulate within a phrase.
-  - ``minimal``         Plain phrase-level captions, no animation. Also the
-                        fallback when a transcript lacks word-level timestamps.
+Four styles (Issue 133 + 183):
+  - ``bold_pop``           MrBeast/Hormozi feel — one word at a time, scale-pop on
+                           appearance, centered, white fill + black outline.
+  - ``bold_pop_highlight`` Bold Pop, plus the most salient (keyword) token in each
+                           phrase rendered in a punch-yellow ``\\c`` override
+                           (Issue 183). Keyword selection is a dependency-free,
+                           per-phrase salience scorer (YAKE-inspired features:
+                           stopword filter + clip term-frequency + casing + length);
+                           DNA-driven selection is the planned follow-up.
+  - ``gradient_slide``     Per-word fade-in with indigo→white color transition.
+                           Words accumulate within a phrase.
+  - ``minimal``            Plain phrase-level captions, no animation. Also the
+                           fallback when a transcript lacks word-level timestamps.
 
 Word-level timing comes from ``Transcript.segments_jsonb[segments][i][words][j]``
 (WhisperX / Deepgram / AssemblyAI normalize to the same shape — see
@@ -29,6 +35,8 @@ References (Phase-1 research, ``docs/DECISIONS.md`` 2026-06-07):
 from __future__ import annotations
 
 import logging
+import string
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -50,18 +58,114 @@ _OUTLINE_PX = 4
 # ASS colour byte order is &HBBGGRR& — reversed from HTML hex.
 #   Brand indigo  #5e6ad2 → &Hd26a5e&
 #   White         #ffffff → &Hffffff&
+#   Punch yellow  #ffd400 → &H00d4ff&  (keyword highlight, Issue 183)
 _COLOR_WHITE_ASS = "&Hffffff&"
 _COLOR_INDIGO_ASS = "&Hd26a5e&"
+_COLOR_HIGHLIGHT_ASS = "&H00d4ff&"
 
 # Bold Pop pop-scale animation: 80ms up to 120%, then 80ms back to 100%.
 _POP_RAMP_MS = 80
 _POP_SCALE_PCT = 120
+# Built once — every Bold Pop word event carries the same scale-pop override.
+_POP_OVERRIDE = (
+    f"{{\\t(0,{_POP_RAMP_MS},\\fscx{_POP_SCALE_PCT}\\fscy{_POP_SCALE_PCT})"
+    f"\\t({_POP_RAMP_MS},{_POP_RAMP_MS * 2},\\fscx100\\fscy100)}}"
+)
 
 # Gradient Slide: 300ms colour transition + 150ms fade-in.
 _GRADIENT_COLOR_MS = 300
 _GRADIENT_FADE_IN_MS = 150
 
-VALID_STYLES = frozenset({"bold_pop", "gradient_slide", "minimal"})
+# Number of keyword tokens highlighted per phrase in bold_pop_highlight (Issue 183).
+_HIGHLIGHT_TOP_N = 1
+
+# Compact English stopword list for the v1 keyword-salience scorer (Issue 183).
+# Deliberately small — just the high-frequency function words that must never be
+# the highlighted token. A fuller list / DNA-driven selection is the follow-up.
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "get",
+        "got",
+        "had",
+        "has",
+        "have",
+        "he",
+        "her",
+        "here",
+        "him",
+        "his",
+        "how",
+        "i",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "just",
+        "me",
+        "my",
+        "no",
+        "not",
+        "now",
+        "of",
+        "on",
+        "or",
+        "our",
+        "out",
+        "she",
+        "so",
+        "than",
+        "that",
+        "the",
+        "their",
+        "them",
+        "then",
+        "there",
+        "they",
+        "this",
+        "to",
+        "too",
+        "up",
+        "us",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+        "yeah",
+        "okay",
+        "like",
+    }
+)
+
+VALID_STYLES = frozenset({"bold_pop", "bold_pop_highlight", "gradient_slide", "minimal"})
 
 
 def build_ass_subtitles(
@@ -100,6 +204,8 @@ def build_ass_subtitles(
 
     if style == "bold_pop":
         events = _build_bold_pop(clipped, clip_start_s, clip_end_s)
+    elif style == "bold_pop_highlight":
+        events = _build_bold_pop(clipped, clip_start_s, clip_end_s, highlight=True)
     elif style == "gradient_slide":
         events = _build_gradient_slide(clipped, clip_start_s, clip_end_s)
     else:
@@ -124,8 +230,11 @@ def build_ass_subtitles(
     return out_path
 
 
+_CENTERED_STYLES = {"bold_pop", "bold_pop_highlight"}
+
+
 def _base_style(style: str) -> pysubs2.SSAStyle:
-    is_animated = style in {"bold_pop", "gradient_slide"}
+    is_animated = style in {"bold_pop", "bold_pop_highlight", "gradient_slide"}
     return pysubs2.SSAStyle(
         fontname=_FONT_NAME,
         fontsize=_FONT_SIZE_ANIMATED if is_animated else _FONT_SIZE_MINIMAL,
@@ -141,11 +250,11 @@ def _base_style(style: str) -> pysubs2.SSAStyle:
         # an5 = middle-center (Bold Pop's centered-on-face placement).
         # an2 = bottom-center (Minimal / Gradient Slide — lower-third).
         alignment=pysubs2.Alignment.MIDDLE_CENTER
-        if style == "bold_pop"
+        if style in _CENTERED_STYLES
         else pysubs2.Alignment.BOTTOM_CENTER,
         # MarginV lifts bottom-aligned text into the lower-third safe zone,
         # clear of the Shorts subscribe button overlay (~y=70% of 1920).
-        marginv=290 if style != "bold_pop" else 0,
+        marginv=0 if style in _CENTERED_STYLES else 290,
     )
 
 
@@ -167,35 +276,99 @@ def _iter_clipped_words(
             yield w
 
 
+def _bold_pop_event(
+    w: dict, clip_start_s: float, clip_end_s: float, prefix: str = ""
+) -> pysubs2.SSAEvent | None:
+    """Build one scale-pop Dialogue event for a single word, or ``None`` when the
+    word is empty or zero-length in the clip window. ``prefix`` carries any extra
+    override (e.g. a keyword ``\\c`` highlight) inserted after the pop animation."""
+    text = (w.get("word") or "").strip()
+    if not text:
+        return None
+    start_ms = _to_ms(max(0.0, w["start"] - clip_start_s))
+    end_ms = _to_ms(min(clip_end_s, w["end"]) - clip_start_s)
+    if end_ms <= start_ms:
+        return None
+    return pysubs2.SSAEvent(
+        start=start_ms,
+        end=end_ms,
+        style="Default",
+        text=f"{_POP_OVERRIDE}{prefix}{text}",
+    )
+
+
+def _normalize_token(word: str) -> str:
+    """Lowercase a caption token and strip surrounding punctuation for matching."""
+    return word.strip().strip(string.punctuation).lower()
+
+
+def _salience(token_norm: str, original: str, clip_freq: Counter[str]) -> float:
+    """YAKE-inspired per-token salience (higher = more keyword-like): longer
+    content words, words repeated within the clip, and capitalized tokens (proper
+    nouns / emphasis) score higher. Applied per phrase — see ``_keyword_indices``."""
+    score = float(len(token_norm))
+    score += clip_freq.get(token_norm, 0) * 2.0
+    if original[:1].isupper():
+        score += 3.0
+    return score
+
+
+def _keyword_indices(words: list[dict], clip_freq: Counter[str], top_n: int) -> set[int]:
+    """Indices (into ``words``) of the top-``top_n`` salient, non-stopword tokens in
+    one phrase. Empty when the phrase carries no salient token → plain fallback."""
+    scored: list[tuple[float, int]] = []
+    for i, w in enumerate(words):
+        norm = _normalize_token(w.get("word") or "")
+        if not norm or norm in _STOPWORDS or not any(c.isalpha() for c in norm):
+            continue
+        scored.append((_salience(norm, (w.get("word") or "").strip(), clip_freq), i))
+    # Highest score first; ties broken by earliest position for stable output.
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return {i for _, i in scored[:top_n]}
+
+
 def _build_bold_pop(
-    segments: list[dict], clip_start_s: float, clip_end_s: float
+    segments: list[dict], clip_start_s: float, clip_end_s: float, *, highlight: bool = False
 ) -> list[pysubs2.SSAEvent]:
     """One Dialogue per word, scale-pop animation. Falls back to Minimal when
-    word-level timing is missing (per acceptance criterion)."""
+    word-level timing is missing (per acceptance criterion).
+
+    When ``highlight`` is set (``bold_pop_highlight``, Issue 183) the most salient
+    token in each phrase is rendered in a punch-yellow ``\\c`` override; phrases
+    with no salient token render as plain Bold Pop. With ``highlight=False`` the
+    output is byte-identical to the original Bold Pop."""
     if not _has_word_timing(segments):
         return _build_minimal(segments, clip_start_s, clip_end_s)
 
-    events: list[pysubs2.SSAEvent] = []
-    pop_override = (
-        f"{{\\t(0,{_POP_RAMP_MS},\\fscx{_POP_SCALE_PCT}\\fscy{_POP_SCALE_PCT})"
-        f"\\t({_POP_RAMP_MS},{_POP_RAMP_MS * 2},\\fscx100\\fscy100)}}"
+    if not highlight:
+        return [
+            ev
+            for w in _iter_clipped_words(segments, clip_start_s, clip_end_s)
+            if (ev := _bold_pop_event(w, clip_start_s, clip_end_s)) is not None
+        ]
+
+    # Highlight path: score salience per phrase, colour the top token(s).
+    clip_freq: Counter[str] = Counter(
+        norm
+        for w in _iter_clipped_words(segments, clip_start_s, clip_end_s)
+        if (norm := _normalize_token(w.get("word") or "")) and norm not in _STOPWORDS
     )
-    for w in _iter_clipped_words(segments, clip_start_s, clip_end_s):
-        text = (w.get("word") or "").strip()
-        if not text:
+    highlight_prefix = f"{{\\c{_COLOR_HIGHLIGHT_ASS}}}"
+    events: list[pysubs2.SSAEvent] = []
+    for seg in segments:
+        words_in_clip = [
+            w
+            for w in seg.get("words") or []
+            if w.get("end", 0.0) > clip_start_s and w.get("start", 0.0) < clip_end_s
+        ]
+        if not words_in_clip:
             continue
-        start_ms = _to_ms(max(0.0, w["start"] - clip_start_s))
-        end_ms = _to_ms(min(clip_end_s, w["end"]) - clip_start_s)
-        if end_ms <= start_ms:
-            continue
-        events.append(
-            pysubs2.SSAEvent(
-                start=start_ms,
-                end=end_ms,
-                style="Default",
-                text=f"{pop_override}{text}",
-            )
-        )
+        kw_idx = _keyword_indices(words_in_clip, clip_freq, _HIGHLIGHT_TOP_N)
+        for i, w in enumerate(words_in_clip):
+            prefix = highlight_prefix if i in kw_idx else ""
+            ev = _bold_pop_event(w, clip_start_s, clip_end_s, prefix)
+            if ev is not None:
+                events.append(ev)
     return events
 
 

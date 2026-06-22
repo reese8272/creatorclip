@@ -6,7 +6,20 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Last completed (Issue 181 — Loudness normalization on every render, 2026-06-22):** First
+**Last completed (Issue 183 — Keyword highlight in captions, 2026-06-22):** Batch A, issue 2.
+New `bold_pop_highlight` caption style: punch-yellow (`#ffd400`) `\c` highlight on the most
+salient token per phrase, chosen by a dependency-free per-phrase salience scorer (stopwords +
+clip term-frequency + casing + token length; top-1/phrase). Plain-Bold-Pop fallback when a
+phrase has no salient token; existing 3 styles byte-identical (regression-tested). Chose the
+pure-Python scorer over the YAKE library (document-level ranker, poor per-phrase fit + dep
+weight) — `docs/DECISIONS.md` 2026-06-22. Added to `VALID_STYLES` + `CaptionStylePanel.tsx`
+dropdown. Fixed a latent DRY bug: `worker/tasks.py` transcript-load gate now keys off
+`captions.VALID_STYLES` so new styles can't silently render captionless. Tests: +4 in
+`tests/test_captions.py`; full suite **1004 passed, 3 skipped**; frontend lint/45-tests/build
+green; Layer-0 ruff/mypy/bandit/freshness green. On branch `feat/batch-a-render-quality`.
+**Next in Batch A:** Issue 184 (auto-zoom punch-in), 185 (noise reduction — depends 181).
+
+**Earlier (Issue 181 — Loudness normalization on every render, 2026-06-22):** First
 implementation issue off the rebuilt backlog (Batch A — render quality). Both render paths
 (`render_clip_file`, `render_cleaned_clip_file`) now normalize audio to YouTube's −14 LUFS via
 **two-pass** ffmpeg `loudnorm` — measure (`print_format=json`) then apply the `measured_*` values

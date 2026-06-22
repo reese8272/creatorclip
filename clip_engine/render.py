@@ -6,7 +6,8 @@ Face detection: OpenCV Haar frontal-face cascade on a single keyframe.
 Falls back to frame center if no face is found.
 
 Animated captions (Issue 133): when ``style_preset["subtitle"]`` names a known
-caption style (``bold_pop`` / ``gradient_slide`` / ``minimal``), an ASS subtitle
+caption style (``bold_pop`` / ``bold_pop_highlight`` / ``gradient_slide`` /
+``minimal``), an ASS subtitle
 file is generated from the supplied transcript segments and burned in via
 libass. See ``clip_engine/captions.py``.
 
@@ -224,7 +225,8 @@ def render_clip_file(
     scale to OUTPUT_W×OUTPUT_H, write to out_path (mp4).
 
     ``style_preset`` is a dict with optional keys:
-      - ``subtitle``: one of "bold_pop" | "gradient_slide" | "minimal" | None
+      - ``subtitle``: one of "bold_pop" | "bold_pop_highlight" | "gradient_slide"
+        | "minimal" | None
       - ``background``: "blur" | "black" | None  (None → default black letterbox)
       - ``captions_enabled``: bool (currently informational — the subtitle key
         is the load-bearing switch)

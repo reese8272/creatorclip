@@ -50,10 +50,10 @@ def _segments(words_per_seg: int = 3) -> list[dict]:
     ]
 
 
-def test_valid_styles_set_is_the_three_documented_styles():
+def test_valid_styles_set_is_the_documented_styles():
     """VALID_STYLES is the load-bearing surface the worker checks against —
     keep it pinned so a typo in a new style entry doesn't silently slip in."""
-    assert {"bold_pop", "gradient_slide", "minimal"} == VALID_STYLES
+    assert {"bold_pop", "bold_pop_highlight", "gradient_slide", "minimal"} == VALID_STYLES
 
 
 def test_unknown_style_returns_none(tmp_path):
@@ -142,6 +142,70 @@ def test_bold_pop_emits_scale_pop_override_tag(tmp_path):
     # Bold Pop is just a plain caption.
     assert "\\fscx120\\fscy120" in raw
     assert "\\fscx100\\fscy100" in raw  # return to baseline
+
+
+def _kw_segments(words: list[tuple[str, float, float]]) -> list[dict]:
+    """One segment from explicit (text, start, end) word tuples — lets a test
+    control exactly which token should win the salience ranking."""
+    return [
+        {
+            "start": words[0][1],
+            "end": words[-1][2],
+            "text": " ".join(t for t, _, _ in words),
+            "words": [{"word": t, "start": s, "end": e} for t, s, e in words],
+        }
+    ]
+
+
+def test_bold_pop_highlight_colors_the_salient_keyword(tmp_path):
+    """The most salient content word per phrase is wrapped in the punch-yellow
+    \\c override; stopwords ('the') and shorter words ('amazing') are not."""
+    out_path = tmp_path / "hl.ass"
+    build_ass_subtitles(
+        segments=_kw_segments(
+            [("The", 0.0, 0.4), ("amazing", 0.5, 0.9), ("breakthrough", 1.0, 1.6)]
+        ),
+        style="bold_pop_highlight",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+    )
+    raw = out_path.read_text()
+    assert "&H00d4ff&" in raw  # ≥1 colored keyword for the phrase
+    assert raw.count("&H00d4ff&") == 1  # exactly the top token, not every word
+    # The highlight is attached to the keyword, not a stopword/filler.
+    assert "&H00d4ff&}breakthrough" in raw
+    assert "\\fscx120\\fscy120" in raw  # still Bold Pop underneath
+
+
+def test_bold_pop_highlight_falls_back_to_plain_when_all_stopwords(tmp_path):
+    """A phrase of only stopwords highlights nothing but still renders captions."""
+    out_path = tmp_path / "plain.ass"
+    build_ass_subtitles(
+        segments=_kw_segments([("the", 0.0, 0.4), ("and", 0.5, 0.9), ("of", 1.0, 1.4)]),
+        style="bold_pop_highlight",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+    )
+    raw = out_path.read_text()
+    assert "&H00d4ff&" not in raw  # nothing salient → no highlight
+    assert "\\fscx120\\fscy120" in raw  # but the Bold Pop events still emit
+
+
+def test_bold_pop_style_is_unchanged_by_highlight_feature(tmp_path):
+    """The original bold_pop style must never emit the highlight color."""
+    out_path = tmp_path / "plainbp.ass"
+    build_ass_subtitles(
+        segments=_kw_segments(
+            [("The", 0.0, 0.4), ("amazing", 0.5, 0.9), ("breakthrough", 1.0, 1.6)]
+        ),
+        style="bold_pop",
+        clip_start_s=0.0,
+        clip_duration_s=5.0,
+        out_path=out_path,
+    )
+    assert "&H00d4ff&" not in out_path.read_text()
 
 
 def test_gradient_slide_emits_indigo_to_white_color_animation(tmp_path):
@@ -288,7 +352,7 @@ def test_clip_start_offset_zeroes_word_timestamps(tmp_path):
     assert subs.events[0].end == 800
 
 
-@pytest.mark.parametrize("style", ["bold_pop", "gradient_slide", "minimal"])
+@pytest.mark.parametrize("style", ["bold_pop", "bold_pop_highlight", "gradient_slide", "minimal"])
 def test_each_style_produces_loadable_ass(tmp_path, style):
     """Smoke test — every documented style produces a libass-loadable file
     with at least one Dialogue event for a non-trivial transcript."""
