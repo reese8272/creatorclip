@@ -1,8 +1,11 @@
 """Add clip_publications — YouTube publish attempts (Issue 195)
 
-Revision ID: 0027
-Revises: 0026
+Revision ID: 0028
+Revises: 0027
 Create Date: 2026-06-22
+
+NB: renumbered 0027 → 0028 after the parallel privacy branch's
+0027_data_exports landed on main first (avoids two alembic heads).
 
 A tenant table tracking each YouTube publish attempt for a clip.
 
@@ -19,8 +22,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "0027"
-down_revision = "0026"
+revision = "0028"
+down_revision = "0027"
 branch_labels = None
 depends_on = None
 
