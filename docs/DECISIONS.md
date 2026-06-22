@@ -5,6 +5,41 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 181: two-pass `loudnorm` (deviation from finding's single-pass)
+
+**What changed:** Loudness normalization is now applied on every render
+(`render_clip_file` and `render_cleaned_clip_file`) via a **two-pass** ffmpeg
+`loudnorm` to `I=-14:TP=-1.5:LRA=11` — pass 1 measures (`print_format=json`),
+pass 2 applies the measured values with `linear=true`. Finding 03 / A1 proposed
+**single-pass** as "acceptable for ≤90s clips." We deviated to two-pass. A
+near-silent guard (`measured_I ≤ −50 LUFS`) skips normalization so we never
+amplify hiss, and measurement failures degrade to a flat (un-normalized) render
+rather than aborting the job. The dead `pyloudnorm==0.1.1` pin (zero imports)
+was removed and `docs/SOT.md:19` corrected (loudness is an ffmpeg render-time
+step, not a librosa/pyloudnorm analysis step).
+
+**Why:** The A1 acceptance criterion "no audible pumping on a quiet→loud test
+clip" cannot be met by single-pass `loudnorm`, which adapts gain in real time
+(dynamic mode) and audibly pumps on material whose loudness varies. Two-pass
+applies near-linear gain from the measured statistics — no pumping. The extra
+analysis pass is cheap for ≤90s clips (audio-only, `-vn`, to `null`). −14 LUFS
+is YouTube's playback-normalization target, so hitting it means YouTube leaves
+the clip untouched. Cites Principle 5 (dead-air/credibility → momentum is
+retention).
+
+**Source/evidence:** YouTube −14 LUFS target and the single-pass-pumps /
+two-pass-is-correct-for-VOD guidance verified live (2024–2026):
+[mitz17 loudnorm 2-pass guide](https://mitz17.com/en/blog/ffmpeg-loudnorm-guide/),
+[32blog loudnorm guide](https://32blog.com/en/ffmpeg/ffmpeg-audio-normalization-loudnorm),
+[DEV: two-pass the right way](https://dev.to/masonwritescode/two-pass-loudness-normalization-with-ffmpeg-loudnorm-the-right-way-1nm3),
+[LUFS targets 2025](https://clickyapps.com/creator/video/guides/lufs-targets-2025).
+Near-silent gate-floor (~−70 LUFS) behavior per the same sources. Finding:
+`docs/research/findings/03_editorial_capabilities.md` (A1).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Gap-closure backlog rebuild + four v1 scope decisions
 
 **What changed:** The gap-closure research initiative (Issues 166–180) is complete — all 15

@@ -16,7 +16,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | LLM | Anthropic SDK; `claude-sonnet-4-6` default, `claude-opus-4-7` for DNA synthesis | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
 | Embeddings | Voyage AI (`voyage-3.5`) → pgvector | Local sentence-transformers as offline fallback |
 | Transcription | WhisperX (faster-whisper + forced alignment), word-level | Hosted fallback (Deepgram/AssemblyAI) behind `TRANSCRIPTION_BACKEND` config; GPU recommended |
-| Audio analysis | librosa + pyloudnorm | Energy, silence, volume spikes, laughter/applause heuristic |
+| Audio analysis | librosa (RMS energy) | Energy, silence, volume spikes, laughter/applause heuristic. Loudness normalization is ffmpeg `loudnorm` (two-pass, −14 LUFS) at render time, not analysis (Issue 181). |
 | Vision (Phase 2) | MediaPipe / face-emotion model | Deferred |
 | DB | PostgreSQL 16 + pgvector | Relational + embeddings in one store |
 | Session / queue broker | Redis 7 | Celery broker + short-lived caches |

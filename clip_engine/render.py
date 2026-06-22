@@ -16,9 +16,19 @@ already-rendered clip via a single-pass ``filter_complex`` (``trim`` + ``atrim``
 prevention. The graph is written to a temp file and passed via
 ``-filter_complex_script`` to avoid shell-arg-length issues at scale. See
 ``clip_engine/filler.py`` for the cut-list generator.
+
+Loudness normalization (Issue 181): both render paths normalize to YouTube's
+−14 LUFS playback target via a two-pass ffmpeg ``loudnorm`` (measure, then apply
+the measured values for linear, pump-free gain). Even loudness across a feed is
+Principle 5 (dead-air/credibility — momentum is retention); single-pass was
+rejected because it adapts gain in real time and pumps on quiet→loud material.
+Near-silent clips are left un-normalized so we never amplify hiss. See
+``docs/DECISIONS.md`` (2026-06-22, Issue 181).
 """
 
+import json
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -42,6 +52,71 @@ def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
         raise RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s") from exc
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg {label} failed: {result.stderr[:500]}")
+
+
+# ── Loudness normalization (Issue 181) ────────────────────────────────────────
+# YouTube normalizes playback to −14 LUFS; targeting −14 means YouTube leaves the
+# clip untouched. TP −1.5 dBTP / LRA 11 are the standard companions for the
+# integrated target. Two-pass (measure → apply with measured_* values) gives
+# linear, pump-free gain; single-pass loudnorm adapts in real time and pumps on
+# quiet→loud clips, so it cannot meet the no-pumping bar. Principle 5.
+_LOUDNORM_TARGET = "I=-14:TP=-1.5:LRA=11"
+# Integrated loudness at/below this is effectively silence (ffmpeg's loudness
+# gate floors near −70 LUFS). Normalizing it only amplifies hiss, so we skip.
+_LOUDNORM_SILENCE_FLOOR_LUFS = -50.0
+
+
+def _parse_loudnorm_stats(stderr: str) -> dict[str, str] | None:
+    """Extract the JSON stats object printed by ``loudnorm=...:print_format=json``.
+
+    loudnorm writes a single brace-delimited JSON block (no nesting) to stderr at
+    the end of the pass. Returns the parsed dict, or ``None`` if absent/unparseable.
+    """
+    match = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", stderr)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except (ValueError, TypeError):
+        return None
+
+
+def _measure_loudnorm_filter(measure_cmd: list[str], label: str, timeout_s: float) -> str | None:
+    """Run the loudnorm analysis pass (``measure_cmd``) and build the second-pass
+    ``loudnorm`` filter string with the measured values baked in.
+
+    Returns the filter string, or ``None`` when the input is effectively silent
+    (skip normalization to avoid amplifying hiss) or measurement fails for any
+    reason — in which case the render proceeds un-normalized rather than aborting
+    (loudness is a quality nicety, not a correctness requirement).
+    """
+    try:
+        result = subprocess.run(measure_cmd, capture_output=True, text=True, timeout=timeout_s)
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("Loudness measurement failed for %s (%s) — rendering flat", label, exc)
+        return None
+    stats = _parse_loudnorm_stats(result.stderr)
+    if stats is None:
+        logger.warning("Loudness stats unparseable for %s — rendering flat", label)
+        return None
+    try:
+        measured_i = float(stats["input_i"])
+        measured_tp = float(stats["input_tp"])
+        measured_lra = float(stats["input_lra"])
+        measured_thresh = float(stats["input_thresh"])
+        offset = float(stats["target_offset"])
+    except (KeyError, ValueError, TypeError):
+        logger.warning("Loudness stats incomplete for %s — rendering flat", label)
+        return None
+    if measured_i <= _LOUDNORM_SILENCE_FLOOR_LUFS:
+        logger.info("Input near-silent (measured_I=%.1f LUFS) — skipping loudnorm", measured_i)
+        return None
+    return (
+        f"loudnorm={_LOUDNORM_TARGET}"
+        f":measured_I={measured_i}:measured_TP={measured_tp}"
+        f":measured_LRA={measured_lra}:measured_thresh={measured_thresh}"
+        f":offset={offset}:linear=true:print_format=summary"
+    )
 
 
 def _extract_keyframe(
@@ -221,37 +296,65 @@ def render_clip_file(
                 ass_path = None
 
     vf = ",".join(vf_parts)
+
+    # Two-pass loudness normalization (Issue 181): measure the clip-window audio,
+    # then apply the measured values so the gain is linear (no pumping). The
+    # measurement pass decodes audio only (`-vn`) for speed and degrades to a flat
+    # render if it fails or the clip is near-silent.
+    loudnorm_filter = _measure_loudnorm_filter(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(start_s),
+            "-accurate_seek",
+            "-i",
+            str(source_path),
+            "-t",
+            str(duration),
+            "-vn",
+            "-af",
+            f"loudnorm={_LOUDNORM_TARGET}:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        "render",
+        render_timeout_s,
+    )
+
+    render_cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        str(start_s),
+        "-accurate_seek",
+        "-i",
+        str(source_path),
+        "-t",
+        str(duration),
+        "-vf",
+        vf,
+    ]
+    if loudnorm_filter:
+        render_cmd += ["-af", loudnorm_filter]
+    render_cmd += [
+        "-c:v",
+        "libx264",
+        "-crf",
+        "23",
+        "-preset",
+        "fast",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        str(out_path),
+    ]
     try:
-        _run(
-            [
-                "ffmpeg",
-                "-y",
-                "-ss",
-                str(start_s),
-                "-accurate_seek",
-                "-i",
-                str(source_path),
-                "-t",
-                str(duration),
-                "-vf",
-                vf,
-                "-c:v",
-                "libx264",
-                "-crf",
-                "23",
-                "-preset",
-                "fast",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-movflags",
-                "+faststart",
-                str(out_path),
-            ],
-            "render",
-            timeout_s=render_timeout_s,
-        )
+        _run(render_cmd, "render", timeout_s=render_timeout_s)
     finally:
         if ass_path is not None:
             ass_path.unlink(missing_ok=True)
@@ -265,6 +368,24 @@ def render_clip_file(
 # perception threshold (~220 samples at 44.1kHz) yet large enough to bring the
 # waveform to zero on both sides of every cut. See docs/DECISIONS.md.
 _CLEAN_AFADE_S = 0.005
+
+
+def _audio_segment_filter(idx: int, start: float, end: float) -> str:
+    """Build the ``atrim``+``afade`` audio-filter line for one kept segment.
+
+    A 5ms ``afade`` in/out brackets every splice for click prevention; the fade
+    is halved for any segment shorter than ``2 × _CLEAN_AFADE_S`` so it never
+    exceeds half the segment duration (which ffmpeg rejects). Shared by the
+    measurement and apply passes so both see byte-identical audio (Issue 135/181).
+    """
+    seg_dur = end - start
+    afade_s = min(_CLEAN_AFADE_S, seg_dur / 2.0)
+    fade_out_st = max(0.0, seg_dur - afade_s)
+    return (
+        f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,"
+        f"afade=t=in:st=0:d={afade_s},"
+        f"afade=t=out:st={fade_out_st:.3f}:d={afade_s}[a{idx}];"
+    )
 
 
 def render_cleaned_clip_file(
@@ -295,29 +416,60 @@ def render_cleaned_clip_file(
         if e <= s:
             raise ValueError(f"render_cleaned_clip_file: invalid range ({s}, {e})")
 
+    # Two-pass loudness normalization (Issue 181): measure the *concatenated* kept
+    # audio (the loudnorm target is the final clip, not each segment), then apply
+    # the measured values in the real render. The measurement graph is audio-only
+    # (`concat ... v=0:a=1`) and runs to `null`; it degrades to a flat render on
+    # failure or near-silence. Segment afades are shared via ``_audio_segment_filter``.
+    measure_lines = [_audio_segment_filter(idx, s, e) for idx, (s, e) in enumerate(keep_ranges)]
+    a_inputs = "".join(f"[a{idx}]" for idx in range(len(keep_ranges)))
+    measure_lines.append(
+        f"{a_inputs}concat=n={len(keep_ranges)}:v=0:a=1[outa];"
+        f"[outa]loudnorm={_LOUDNORM_TARGET}:print_format=json[outm]"
+    )
+    measure_script_path = out_path.with_suffix(".measure.filter")
+    measure_script_path.parent.mkdir(parents=True, exist_ok=True)
+    measure_script_path.write_text("\n".join(measure_lines))
+    try:
+        loudnorm_filter = _measure_loudnorm_filter(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source_path),
+                "-filter_complex_script",
+                str(measure_script_path),
+                "-map",
+                "[outm]",
+                "-f",
+                "null",
+                "-",
+            ],
+            "clean render",
+            timeout_s,
+        )
+    finally:
+        measure_script_path.unlink(missing_ok=True)
+
     script_lines: list[str] = []
     concat_inputs: list[str] = []
     for idx, (start, end) in enumerate(keep_ranges):
-        seg_dur = end - start
         # afade=out start time is segment-relative because setpts/asetpts reset
-        # PTS to 0 at the start of each trimmed segment.
-        # Guard: a kept segment shorter than 2 × _CLEAN_AFADE_S would request
-        # a fade that exceeds half the segment's duration — ffmpeg errors.
-        # Halving the fade keeps the click-prevention character intact for
-        # any segment ≥ 0.04 s (one frame at 25 fps); ``edits.MIN_KEEP_SEGMENT_S``
-        # is the upstream floor. Found while building Issue 135.
-        afade_s = min(_CLEAN_AFADE_S, seg_dur / 2.0)
-        fade_out_st = max(0.0, seg_dur - afade_s)
+        # PTS to 0 at the start of each trimmed segment. The afade guard (halving
+        # the fade for sub-10ms segments) lives in ``_audio_segment_filter``.
         script_lines.append(
             f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{idx}];"
         )
-        script_lines.append(
-            f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,"
-            f"afade=t=in:st=0:d={afade_s},"
-            f"afade=t=out:st={fade_out_st:.3f}:d={afade_s}[a{idx}];"
-        )
+        script_lines.append(_audio_segment_filter(idx, start, end))
         concat_inputs.append(f"[v{idx}][a{idx}]")
-    script_lines.append(f"{''.join(concat_inputs)}concat=n={len(keep_ranges)}:v=1:a=1[outv][outa]")
+    # Chain loudnorm onto the concatenated audio when measurement succeeded; the
+    # concat substring stays intact either way so the cut shape is unchanged.
+    concat_line = f"{''.join(concat_inputs)}concat=n={len(keep_ranges)}:v=1:a=1[outv][outa]"
+    audio_out = "[outa]"
+    if loudnorm_filter:
+        concat_line += f";[outa]{loudnorm_filter}[outaln]"
+        audio_out = "[outaln]"
+    script_lines.append(concat_line)
     script_text = "\n".join(script_lines)
 
     # Sibling temp script — same cleanup pattern as the ASS subtitle path.
@@ -337,7 +489,7 @@ def render_cleaned_clip_file(
                 "-map",
                 "[outv]",
                 "-map",
-                "[outa]",
+                audio_out,
                 "-c:v",
                 "libx264",
                 "-crf",

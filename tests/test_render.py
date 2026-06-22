@@ -5,6 +5,7 @@ ffmpeg / ffprobe / cv2 calls are patched — no video files needed.
 """
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,9 +14,29 @@ from clip_engine.render import (
     _detect_face_center_x,
     _extract_keyframe,
     _frame_dimensions,
+    _measure_loudnorm_filter,
+    _parse_loudnorm_stats,
     _run,
+    render_cleaned_clip_file,
     render_clip_file,
 )
+
+# A representative loudnorm JSON block as printed to stderr by
+# `loudnorm=...:print_format=json`. input_i is well above the silence floor.
+_LOUDNORM_JSON = """[Parsed_loudnorm_0 @ 0x55]
+{
+\t"input_i" : "-27.85",
+\t"input_tp" : "-12.34",
+\t"input_lra" : "5.20",
+\t"input_thresh" : "-38.12",
+\t"output_i" : "-14.00",
+\t"output_tp" : "-1.50",
+\t"output_lra" : "5.00",
+\t"output_thresh" : "-24.61",
+\t"normalization_type" : "dynamic",
+\t"target_offset" : "0.30"
+}
+"""
 
 # ── _frame_dimensions ─────────────────────────────────────────────────────────
 
@@ -272,6 +293,141 @@ def test_frame_dimensions_raises_on_timeout(tmp_path):
         pytest.raises(RuntimeError, match="ffprobe timed out after 30s"),
     ):
         _frame_dimensions(fake)
+
+
+# ── loudness normalization (Issue 181) ────────────────────────────────────────
+
+
+def test_parse_loudnorm_stats_extracts_json():
+    stats = _parse_loudnorm_stats(_LOUDNORM_JSON)
+    assert stats is not None
+    assert stats["input_i"] == "-27.85"
+    assert stats["target_offset"] == "0.30"
+
+
+def test_parse_loudnorm_stats_returns_none_on_garbage():
+    assert _parse_loudnorm_stats("ffmpeg error: no such file") is None
+    assert _parse_loudnorm_stats("") is None
+
+
+def test_measure_loudnorm_filter_bakes_in_measured_values():
+    """A non-silent measurement yields a second-pass filter with measured_* + linear."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr=_LOUDNORM_JSON)
+        flt = _measure_loudnorm_filter(["ffmpeg", "..."], "render", 120.0)
+    assert flt is not None
+    assert "loudnorm=I=-14:TP=-1.5:LRA=11" in flt
+    assert "measured_I=-27.85" in flt
+    assert "linear=true" in flt
+
+
+def test_measure_loudnorm_filter_skips_near_silent():
+    """Integrated loudness at/below the floor → None (don't amplify hiss)."""
+    silent = _LOUDNORM_JSON.replace('"input_i" : "-27.85"', '"input_i" : "-65.00"')
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr=silent)
+        flt = _measure_loudnorm_filter(["ffmpeg", "..."], "render", 120.0)
+    assert flt is None
+
+
+def test_measure_loudnorm_filter_degrades_on_subprocess_failure():
+    """A measurement that can't run (e.g. ffmpeg missing) → None, never raises."""
+    with patch("subprocess.run", side_effect=OSError("ffmpeg not found")):
+        assert _measure_loudnorm_filter(["ffmpeg", "..."], "render", 120.0) is None
+
+
+def _fake_run_with_loudnorm(input_i: str = "-27.85"):
+    """subprocess.run double: ffprobe dims via stdout, loudnorm stats via stderr."""
+    stderr = _LOUDNORM_JSON.replace('"input_i" : "-27.85"', f'"input_i" : "{input_i}"')
+
+    def _fake(cmd, **kwargs):
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr=stderr)
+
+    return _fake
+
+
+def test_render_clip_file_applies_loudnorm_when_measured(tmp_path):
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured: list[list[str]] = []
+
+    def _fake(cmd, **kwargs):
+        captured.append(cmd)
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr=_LOUDNORM_JSON)
+
+    with (
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+    render_cmd = next((c for c in captured if "-vf" in c), None)
+    assert render_cmd is not None
+    assert "-af" in render_cmd
+    af_arg = render_cmd[render_cmd.index("-af") + 1]
+    assert "loudnorm=" in af_arg and "measured_I=-27.85" in af_arg
+
+
+def test_render_clip_file_skips_loudnorm_when_silent(tmp_path):
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured: list[list[str]] = []
+
+    def _fake(cmd, **kwargs):
+        captured.append(cmd)
+        stderr = _LOUDNORM_JSON.replace('"input_i" : "-27.85"', '"input_i" : "-70.00"')
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr=stderr)
+
+    with (
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+    render_cmd = next((c for c in captured if "-vf" in c), None)
+    assert render_cmd is not None
+    assert "-af" not in render_cmd  # near-silent → no normalization
+
+
+def test_render_cleaned_clip_file_chains_loudnorm_into_graph(tmp_path):
+    """When measurement succeeds the loudnorm filter is chained after concat and
+    the audio map points at the normalized output label."""
+    captured = {}
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        captured["cmd"] = cmd
+        captured["script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+
+    measured = "loudnorm=I=-14:TP=-1.5:LRA=11:measured_I=-20.0:linear=true"
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=measured),
+    ):
+        render_cleaned_clip_file(
+            source_path=Path("/fake/src.mp4"),
+            keep_ranges=[(0.0, 2.5), (3.0, 8.0)],
+            out_path=tmp_path / "out.mp4",
+        )
+
+    script = captured["script"]
+    assert f";[outa]{measured}[outaln]" in script
+    # The render must map the normalized audio, not the raw concat output.
+    cmd = captured["cmd"]
+    assert "[outaln]" in cmd
 
 
 def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):

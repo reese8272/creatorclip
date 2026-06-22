@@ -6,7 +6,23 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Last completed (Issues 166–180 — Gap-Closure Research Initiative COMPLETE + backlog rebuild,
+**Last completed (Issue 181 — Loudness normalization on every render, 2026-06-22):** First
+implementation issue off the rebuilt backlog (Batch A — render quality). Both render paths
+(`render_clip_file`, `render_cleaned_clip_file`) now normalize audio to YouTube's −14 LUFS via
+**two-pass** ffmpeg `loudnorm` — measure (`print_format=json`) then apply the `measured_*` values
+with `linear=true` for pump-free gain. Deviated from finding 03/A1's single-pass suggestion
+(single-pass pumps; can't meet the no-pumping AC) — `docs/DECISIONS.md` 2026-06-22. Added a
+near-silent guard (`measured_I ≤ −50 LUFS` → skip, don't amplify hiss) and graceful flat-render
+fallback on measurement failure. Removed the dead `pyloudnorm==0.1.1` pin (zero imports) and
+corrected `docs/SOT.md:19`. Tests: 8 new in `tests/test_render.py`; full suite **1000 passed, 3
+skipped**; Layer-0 ruff/mypy/bandit/freshness green (pip_audit's lone finding is the pre-existing
+msgpack CVE, unrelated). **Verification note:** the −14 ±1 LUFS `ebur128` AC is verified-by-
+construction (unit tests assert the exact filter); the empirical binary measurement needs the
+render env (ffmpeg CLI is absent in this dev box). On branch `feat/batch-a-render-quality`.
+**Next in Batch A:** Issue 183 (caption keyword highlight), 184 (auto-zoom punch-in), 185
+(noise reduction — depends on 181).
+
+**Earlier (Issues 166–180 — Gap-Closure Research Initiative COMPLETE + backlog rebuild,
 2026-06-22):** All 15 research briefs delivered (`docs/research/findings/01–15`). Rebuilt the
 backlog: archived finished work (Issues 1–165 + the 166–180 research passes) verbatim to
 `docs/archive/issues_snapshot_2026-06-22.md`, and the resolved off-course bugs to

@@ -75,9 +75,10 @@ overlapped** by research-derived issues — flagged inline.
 
 ## Priority 1 — Functionality
 
-### Issue 181: Loudness normalization on every render
+### Issue 181: Loudness normalization on every render ✅ DONE (2026-06-22)
 **What:** Add `-af loudnorm=I=-14:TP=-1.5:LRA=11` to `render_clip_file` + `render_cleaned_clip_file`; wire or drop the dead `pyloudnorm` pin; correct `docs/SOT.md:19`.
 **AC:** clips measure −14 ±1 LUFS; no pumping on a quiet→loud test; `pyloudnorm` used-or-removed; cites Principle 5. **Src:** 03 / A1.
+**Shipped:** Two-pass `loudnorm` (measure→apply `measured_*` with `linear=true`) — no pumping; near-silent (`≤−50 LUFS`) guard skips normalization; graceful flat-render fallback on measurement failure. `pyloudnorm` pin removed; `SOT.md:19` corrected; Principle 5 cited in `render.py` docstring. `docs/DECISIONS.md` 2026-06-22 (single→two-pass deviation). Tests: `tests/test_render.py` (parse/measure/skip-silent/apply). ⚠️ The −14 ±1 LUFS *empirical* `ebur128` check is verified-by-construction in unit tests; the binary measurement must run in the render env (ffmpeg CLI absent in this dev box).
 
 ### Issue 182: Export presets — 1:1 + 16:9 renders + clip download endpoint
 **What:** Parameterize `render.py` W/H for a `square` (1080×1080) + `16:9` preset; add `GET /api/clips/{id}/download` (presigned R2 / attachment) + a Download button in `ClipPlayer.tsx`. Single preset registry shared with the editorial work (no duplicate).

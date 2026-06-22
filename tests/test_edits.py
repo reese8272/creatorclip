@@ -156,7 +156,10 @@ def test_render_cleaned_clip_file_afade_guard_short_segment(tmp_path):
     def _fake_run(cmd, label, timeout_s=120.0):
         captured["script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
 
-    with patch("clip_engine.render._run", _fake_run):
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+    ):
         render_cleaned_clip_file(
             source_path=Path("/fake/src.mp4"),
             keep_ranges=[(0.0, 0.006), (1.0, 6.0)],  # first segment is 6ms

@@ -221,7 +221,12 @@ def test_render_cleaned_clip_file_builds_filter_complex_script(tmp_path):
         captured["script_path"] = cmd[idx + 1]
         captured["script_text"] = Path(cmd[idx + 1]).read_text()
 
-    with patch("clip_engine.render._run", _fake_run):
+    # Loudnorm measurement (Issue 181) is exercised in test_render.py; here we
+    # stub it to None so this test stays a hermetic check of the cut-graph shape.
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+    ):
         render_cleaned_clip_file(
             source_path=Path("/fake/src.mp4"),
             keep_ranges=[(0.0, 2.5), (3.0, 8.0)],
