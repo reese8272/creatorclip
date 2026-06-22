@@ -256,6 +256,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
     ├── STAGING_ACCESS.md       # Staging stack runbook + llm_harness E2E driver
     ├── SKILL_FRESHNESS.md      # Skill-freshness convention + --require-fresh gate
     ├── COMPETITIVE_RESEARCH.md # Market/pricing/UX analysis (was other_apps_research.md)
+    ├── research/               # Gap-closure research-agent prompts (Issues 166–180; see research/README.md)
     └── archive/                # Superseded docs, preserved for provenance (Issue 146)
 ```
 

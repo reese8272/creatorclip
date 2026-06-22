@@ -6,6 +6,24 @@ Updated after every issue closes.
 
 ## Current Status
 
+**In progress (Issues 166–180 — Gap-Closure Research Initiative, 2026-06-22):** Opened a deliberate
+research pass over the **conceptual** gaps the bug-fix backlog never addressed. Authored 15
+ready-to-paste, repo-grounded research-agent prompts in `docs/research/` (index +
+cross-references in `docs/research/README.md`), one per gap, each driving the Phase 1 (CHECK)
+research for a tracked issue: **166** UX/visibility/stream-summary/per-video-clips; **167** agentic
+usage + prompt caching + LLM cost; **168** editorial capabilities vs. modern editors; **169**
+security + scale-to-10k; **170** logging/observability; **171** monetization + unit economics;
+**172** activation/onboarding funnel; **173** personalization efficacy + clip-quality eval (the
+moat); **174** LLM content safety + prompt injection; **175** disaster recovery + backups + data
+durability; **176** notifications + lifecycle comms; **177** data privacy/GDPR-CCPA + erasure/export;
+**178** multi-platform distribution/publishing (scope expansion); **179** i18n + multilingual
+content handling; **180** QA + eval-hardening + release engineering. Each prompt is read-only
+(research → brief → file implementation sub-issues → approve → build); scope expansions
+(stream→summary, publishing, deeper editor) gated on a `docs/DECISIONS.md` entry. Registered as a
+new phase in `docs/issues.md`; `docs/SOT.md` doc-tree updated. **Next:** run the prompts (highest
+leverage first: 173 moat-eval, 171 unit-economics, 169/174 security) and triage the resulting
+sub-issues. No product code changed.
+
 **Last completed (Issues 164 + 165 — live-site audit + WCAG AA contrast fix, 2026-06-19):** Built a
 second Playwright harness that runs against PROD (`autoclip.studio`) with the real backend + a real
 `cc_session` (captured via storageState; Google blocks automated OAuth, so a manual-cookie fallback was

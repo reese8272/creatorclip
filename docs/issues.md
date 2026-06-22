@@ -3979,3 +3979,48 @@ Items deferred until the product is live and stable:
   "aspirations", Issue 146)
 - All-in-one direction: grow toward an editor / analyzer / video+audio management hub so
   creators keep everything together (salvaged from KICKSTART "aspirations", Issue 146)
+
+---
+
+## Gap-Closure Research Initiative (Issues 166–180)
+
+A deliberate pass over the **conceptual** gaps the bug-fix backlog never addressed — visibility,
+capability, economics, safety, resilience. Rather than build from memory, each gap gets a Phase 1
+(CHECK) **research** pass driven by a ready-to-paste research-agent prompt in `docs/research/`
+(see `docs/research/README.md` for the index + cross-references).
+
+**Workflow for every issue below:** run the linked prompt with a read-only research agent → it
+returns a brief + proposed implementation sub-issues → triage those into this backlog → APPROVE →
+BUILD. Each research issue is **done** when its brief is produced, the implementation sub-issues
+are filed, and any approach change / scope expansion is captured in `docs/DECISIONS.md`.
+
+> These are **research** issues: their deliverable is a grounded plan, not product code. Scope
+> expansions surfaced here (stream→summary, publishing, deeper editor) require a
+> `docs/DECISIONS.md` entry before any build.
+
+**Common acceptance criteria (every issue 166–180):**
+- [ ] Linked research prompt run; brief produced (industry-standard-first, repo-grounded with `file_path:line`)
+- [ ] Concrete implementation sub-issues filed in this backlog (dependency-ordered, house style)
+- [ ] `docs/DECISIONS.md` updated for any approach change or scope expansion
+- [ ] Relevant SOT files flagged for update if the plan changes stack/schema/structure/compliance
+
+| Issue | Gap | Research prompt | Status |
+|-------|-----|-----------------|--------|
+| 166 | UX: analysis-status visibility, stream→summary, per-video clip surfacing, UX/bug sweep | `docs/research/01_ux_product_gaps.md` | 🔬 Research pending |
+| 167 | Agentic usage, prompt caching & LLM cost | `docs/research/02_agentic_caching_cost.md` | 🔬 Research pending |
+| 168 | Editing capabilities vs. modern editorial software | `docs/research/03_editorial_capabilities.md` | 🔬 Research pending |
+| 169 | Security posture + scaling to 10k+ creators | `docs/research/04_security_scalability.md` | 🔬 Research pending |
+| 170 | Logging, metrics, tracing, alerting, product telemetry | `docs/research/05_logging_observability.md` | 🔬 Research pending |
+| 171 | Monetization, pricing & unit economics | `docs/research/06_monetization_unit_economics.md` | 🔬 Research pending |
+| 172 | Activation, onboarding & growth funnel | `docs/research/07_activation_onboarding_funnel.md` | 🔬 Research pending |
+| 173 | Personalization-model efficacy & clip-quality eval (the moat) | `docs/research/08_personalization_efficacy_eval.md` | 🔬 Research pending |
+| 174 | LLM content safety & prompt injection | `docs/research/09_llm_content_safety_prompt_injection.md` | 🔬 Research pending |
+| 175 | Disaster recovery, backups & data durability | `docs/research/10_disaster_recovery_durability.md` | 🔬 Research pending |
+| 176 | Notifications & lifecycle communications | `docs/research/11_notifications_lifecycle_comms.md` | 🔬 Research pending |
+| 177 | Data privacy & compliance (GDPR/CCPA, erasure/export) | `docs/research/12_data_privacy_compliance.md` | 🔬 Research pending |
+| 178 | Multi-platform distribution & publishing (scope expansion) | `docs/research/13_multiplatform_distribution_publishing.md` | 🔬 Research pending |
+| 179 | Internationalization & multilingual support | `docs/research/14_internationalization_multilingual.md` | 🔬 Research pending |
+| 180 | QA, test-suite hardening & release engineering | `docs/research/15_qa_eval_release_engineering.md` | 🔬 Research pending |
+
+Per-issue scope (what each brief must resolve) lives in the linked prompt's research questions;
+this table is the tracking surface.
