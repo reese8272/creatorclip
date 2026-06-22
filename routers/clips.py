@@ -77,6 +77,7 @@ class RenderStyleIn(BaseModel):
     background: str | None = None  # "blur" | "black" | null
     captions_enabled: bool | None = None
     zoom_on_peak: bool | None = None  # opt-in punch-in at peak (Issue 184)
+    denoise: bool | None = None  # opt-in noise reduction (Issue 185)
 
 
 def _clip_response(clip: Clip) -> dict:
@@ -224,6 +225,8 @@ async def render_clip(
             merged["captions_enabled"] = body.captions_enabled
         if body.zoom_on_peak is not None:
             merged["zoom_on_peak"] = body.zoom_on_peak
+        if body.denoise is not None:
+            merged["denoise"] = body.denoise
         clip.style_preset = merged or None
         await session.commit()
 

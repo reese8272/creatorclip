@@ -66,6 +66,13 @@ _LOUDNORM_TARGET = "I=-14:TP=-1.5:LRA=11"
 # gate floors near −70 LUFS). Normalizing it only amplifies hiss, so we skip.
 _LOUDNORM_SILENCE_FLOOR_LUFS = -50.0
 
+# Opt-in noise reduction (Issue 185, style_preset["denoise"], off by default).
+# ffmpeg's FFT denoiser — no model asset to ship (unlike arnndn's .rnnn file).
+# Conservative settings (the docs' own example): 10 dB reduction, −40 dB noise
+# floor, adaptive noise-floor tracking — cut hiss without speech artifacts.
+# Applied BEFORE loudnorm so normalization targets the denoised signal.
+_DENOISE_FILTER = "afftdn=nr=10:nf=-40:tn=1"
+
 
 def _parse_loudnorm_stats(stderr: str) -> dict[str, str] | None:
     """Extract the JSON stats object printed by ``loudnorm=...:print_format=json``.
@@ -254,6 +261,8 @@ def render_clip_file(
       - ``zoom_on_peak``: bool (Issue 184) — when set and ``peak_s`` is inside the
         clip window, apply a brief punch-in centered on the peak (Principle 4).
         Off by default.
+      - ``denoise``: bool (Issue 185) — when set, run an ``afftdn`` noise-reduction
+        pass before loudnorm. Off by default.
 
     ``peak_s`` is the clip's absolute peak time (source-relative seconds, from
     ``Clip.peak_s``); the punch-in is centered at ``peak_s - start_s``. Ignored
@@ -335,6 +344,13 @@ def render_clip_file(
 
     vf = ",".join(vf_parts)
 
+    # Opt-in denoise (Issue 185): prepend afftdn to the audio chain, before
+    # loudnorm — so loudnorm measures and targets the denoised signal.
+    denoise_on = bool(style_preset and style_preset.get("denoise"))
+    measure_af = f"loudnorm={_LOUDNORM_TARGET}:print_format=json"
+    if denoise_on:
+        measure_af = f"{_DENOISE_FILTER},{measure_af}"
+
     # Two-pass loudness normalization (Issue 181): measure the clip-window audio,
     # then apply the measured values so the gain is linear (no pumping). The
     # measurement pass decodes audio only (`-vn`) for speed and degrades to a flat
@@ -352,7 +368,7 @@ def render_clip_file(
             str(duration),
             "-vn",
             "-af",
-            f"loudnorm={_LOUDNORM_TARGET}:print_format=json",
+            measure_af,
             "-f",
             "null",
             "-",
@@ -374,8 +390,15 @@ def render_clip_file(
         "-vf",
         vf,
     ]
+    # Audio filter chain: denoise (opt-in) → loudnorm (when measured). Order
+    # matters — denoise first so normalization doesn't re-lift the noise floor.
+    audio_filters = []
+    if denoise_on:
+        audio_filters.append(_DENOISE_FILTER)
     if loudnorm_filter:
-        render_cmd += ["-af", loudnorm_filter]
+        audio_filters.append(loudnorm_filter)
+    if audio_filters:
+        render_cmd += ["-af", ",".join(audio_filters)]
     render_cmd += [
         "-c:v",
         "libx264",

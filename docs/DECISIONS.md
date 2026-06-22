@@ -5,6 +5,35 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — Issue 185: opt-in noise reduction via `afftdn` (not `arnndn`)
+
+**What changed:** Added an opt-in `denoise` style flag (off by default) that
+prepends an ffmpeg `afftdn` (FFT denoiser) pass before loudnorm in
+`render_clip_file` — in both the measurement and apply passes, so loudnorm
+targets the denoised signal. Settings: `afftdn=nr=10:nf=-40:tn=1` (10 dB
+reduction, −40 dB noise floor, adaptive noise-floor tracking). Flows
+`RenderStyleIn → style_preset` + a `CaptionStylePanel` "Reduce background noise"
+toggle. The clean-pass re-render inherits already-denoised audio (it renders from
+the rendered clip), so no separate plumbing there.
+
+**Why:** `arnndn` (RNN denoiser) is stronger but requires shipping an `.rnnn`
+model file and choosing/maintaining a model — too much weight for an opt-in v1
+nicety. `afftdn` is built into ffmpeg (zero asset) and, at conservative settings,
+reduces background hiss without obvious speech artifacts. `nr=10/nf=-40` is the
+ffmpeg docs' own conservative example; `tn=1` lets it adapt. Denoise must run
+*before* loudnorm or normalization would re-lift the noise floor. Off by default
+so it never degrades already-clean audio.
+
+**Source/evidence:** `afftdn` vs `arnndn` + option names/defaults + the
+conservative recipe verified live (2025) against the ffmpeg 8.0 docs:
+[afftdn docs](https://ayosec.github.io/ffmpeg-filters-docs/8.0/Filters/Audio/afftdn.html),
+[arnndn example](https://ffmpegbyexample.com/examples/97155ill/audio_noise_reduction_using_arnndn/).
+Finding: `docs/research/findings/03_editorial_capabilities.md` (A5 / C4).
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 184: auto-zoom punch-in via crop's per-frame `t` (not zoompan)
 
 **What changed:** Added an opt-in `zoom_on_peak` style flag (off by default) that

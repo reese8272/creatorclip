@@ -94,9 +94,10 @@ overlapped** by research-derived issues — flagged inline.
 **AC:** visible punch-in at peak; off by default; cites Principle 4. **Src:** 03 / A4.
 **Shipped:** `zoom_on_peak` flag (default off) → triangular punch-in (8% / ±0.6s) via ffmpeg `crop`+`scale` using crop's per-frame `t` expression (chose it over `zoompan`, which resamples — `docs/DECISIONS.md` 2026-06-22). Applied before subtitles so captions stay steady. `peak_s` plumbed `Clip.peak_s → worker → render_clip_file`; flag flows through `RenderStyleIn` + the `CaptionStylePanel` "Punch-in at peak" toggle. Cites Principle 4. Tests: +4 in `tests/test_render.py` (applied-in-window / disabled / peak-missing / peak-outside) + endpoint persistence in `tests/test_render_style.py`. Visual review pending the render env.
 
-### Issue 185: Noise reduction (opt-in)
+### Issue 185: Noise reduction (opt-in) ✅ DONE (2026-06-22)
 **What:** Optional `arnndn`/`afftdn` denoise pass before loudnorm, off by default.
 **AC:** opt-in toggle reduces hiss on a noisy clip without speech artifacts; off by default. **Depends:** 181. **Src:** 03 / C4.
+**Shipped:** Opt-in `denoise` flag (default off) → `afftdn=nr=10:nf=-40:tn=1` prepended before loudnorm in both render passes (chose `afftdn` over `arnndn` to avoid shipping a model asset — `docs/DECISIONS.md` 2026-06-22). Flows through `RenderStyleIn` + a `CaptionStylePanel` "Reduce background noise" toggle. Tests: +3 in `tests/test_render.py` (denoise-before-loudnorm / disabled / applies-when-silent). The "without speech artifacts" quality check needs a real noisy clip in the render env — verified-by-construction here (filter chain + ordering).
 
 ### Issue 186: Creator Brand Kit — saved style applied by default
 **What:** Persist a creator-level style (caption style, highlight color, font, background); new renders default from it instead of empty dropdowns; surface in Profile + Editor rail.

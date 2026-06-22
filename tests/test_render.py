@@ -486,6 +486,57 @@ def test_no_punch_in_when_peak_outside_window(tmp_path):
     assert _PUNCH_MARKER not in vf
 
 
+# ── opt-in noise reduction (Issue 185) ────────────────────────────────────────
+
+
+def _render_capture_afs(tmp_path, *, style_preset=None, input_i="-27.85") -> list[str]:
+    """Render with mocked ffmpeg/cv2 and return every -af filter string used
+    (measurement pass, then render pass)."""
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    stderr = _LOUDNORM_JSON.replace('"input_i" : "-27.85"', f'"input_i" : "{input_i}"')
+    captured: list[list[str]] = []
+
+    def _fake(cmd, **kwargs):
+        captured.append(cmd)
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr=stderr)
+
+    with (
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out, style_preset=style_preset)
+    return [c[c.index("-af") + 1] for c in captured if "-af" in c]
+
+
+def test_denoise_prepends_afftdn_before_loudnorm(tmp_path):
+    afs = _render_capture_afs(tmp_path, style_preset={"denoise": True})
+    assert afs  # both measurement and render carry an audio chain
+    for af in afs:
+        assert af.startswith("afftdn=nr=10")  # denoise leads every pass
+    render_af = afs[-1]
+    assert render_af.index("afftdn") < render_af.index("loudnorm")  # denoise before normalize
+
+
+def test_no_denoise_when_disabled(tmp_path):
+    afs = _render_capture_afs(tmp_path, style_preset={"denoise": False})
+    assert afs and all("afftdn" not in af for af in afs)
+
+
+def test_denoise_applied_even_when_clip_is_silent(tmp_path):
+    # Near-silent → loudnorm skipped, but the opt-in denoise still runs.
+    afs = _render_capture_afs(tmp_path, style_preset={"denoise": True}, input_i="-70.00")
+    render_af = afs[-1]
+    assert "afftdn=nr=10" in render_af
+    assert "loudnorm" not in render_af
+
+
 def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):
     """`render_clip_file` surfaces a `RuntimeError` when the render ffmpeg call stalls."""
     src = tmp_path / "v.mp4"

@@ -6,7 +6,21 @@ Updated after every issue closes.
 
 ## Current Status
 
-**Last completed (Issue 184 — Auto-zoom punch-in at peak, 2026-06-22):** Batch A, issue 3.
+**Batch A (render quality) COMPLETE — Issues 181, 183, 184, 185 (2026-06-22).** First batch off
+the rebuilt backlog, all on branch `feat/batch-a-render-quality` (4 commits), full suite **1011
+passed, 3 skipped**, Layer-0 ruff/mypy/bandit/freshness green, frontend lint/tsc/build green.
+Empirical audio/visual checks (−14 LUFS, no-pumping, denoise-artifacts, punch-in look, keyword
+legibility) are verified-by-construction in unit tests and pending a real render env (ffmpeg CLI
+absent in this dev box). **Not yet merged to main/staging — awaiting go-ahead.**
+
+**Last completed (Issue 185 — Noise reduction (opt-in), 2026-06-22):** Batch A, issue 4 (last).
+Opt-in `denoise` flag (default off) prepends `afftdn=nr=10:nf=-40:tn=1` before loudnorm in both
+render passes so normalization targets the denoised signal. Chose `afftdn` (built-in FFT) over
+`arnndn` to avoid shipping an `.rnnn` model asset — `docs/DECISIONS.md` 2026-06-22. Flows through
+`RenderStyleIn` + a `CaptionStylePanel` "Reduce background noise" toggle. Depends on 181's
+loudnorm path. Tests: +3 in `tests/test_render.py`.
+
+**Earlier (Issue 184 — Auto-zoom punch-in at peak, 2026-06-22):** Batch A, issue 3.
 Opt-in `zoom_on_peak` style flag (default off) applies a brief triangular punch-in (8% over
 ±0.6s, back to 100%) centered on the clip's `peak_s`, via an ffmpeg `crop`+`scale` chain using
 crop's per-frame `t` expression — chosen over `zoompan` (built for stills, resamples the stream),
