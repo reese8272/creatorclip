@@ -432,3 +432,119 @@ def test_brand_kit_render_request_body_overrides_kit(client):
     assert (clip.style_preset or {}).get("subtitle") == "minimal", (
         "request body subtitle must override the kit's bold_pop"
     )
+
+
+# ── Issue 187: style-learning endpoints ──────────────────────────────────────
+
+
+def test_brand_kit_suggestion_returns_204_when_history_sparse(client):
+    """GET /creators/me/brand-kit/suggestion returns 204 when no dominant is found."""
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+
+    # Two entries — below the default threshold of 5.
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ({"subtitle": "bold_pop"},),
+        ({"subtitle": "bold_pop"},),
+    ]
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=mock_result)
+
+    async def _fake_session():
+        yield session
+
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_creator] = _override_creator(creator)
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        resp = client.get("/creators/me/brand-kit/suggestion")
+        assert resp.status_code == 204, resp.text
+    finally:
+        app.dependency_overrides = original
+
+
+def test_brand_kit_suggestion_returns_suggestion_when_dominant(client):
+    """GET /creators/me/brand-kit/suggestion returns field/value/count/message
+    when a dominant is found."""
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+
+    # 6 rows all with subtitle=bold_pop — exceeds threshold=5.
+    mock_result = MagicMock()
+    mock_result.all.return_value = [({"subtitle": "bold_pop"},)] * 6
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=mock_result)
+
+    async def _fake_session():
+        yield session
+
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_creator] = _override_creator(creator)
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        resp = client.get("/creators/me/brand-kit/suggestion")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["field"] == "subtitle"
+        assert data["value"] == "bold_pop"
+        assert data["count"] == 6
+        # Honest framing: message must not promise virality.
+        assert "virality" not in data["message"].lower()
+        assert "bold_pop" in data["message"]
+        assert "6" in data["message"]
+    finally:
+        app.dependency_overrides = original
+
+
+def test_brand_kit_suggestion_accept_writes_to_kit(client):
+    """POST /creators/me/brand-kit/suggestion/accept upserts the field into creator_style."""
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import CreatorStyle
+
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+
+    # Simulate no existing row — _upsert_style_field should create one.
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=mock_result)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    added_rows: list = []
+    session.add.side_effect = lambda row: added_rows.append(row)
+
+    async def _fake_session():
+        yield session
+
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_creator] = _override_creator(creator)
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        resp = client.post(
+            "/creators/me/brand-kit/suggestion/accept",
+            json={"field": "subtitle", "value": "bold_pop"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["subtitle"] == "bold_pop"
+        # A new CreatorStyle row must have been added.
+        assert any(isinstance(r, CreatorStyle) for r in added_rows)
+        session.commit.assert_awaited_once()
+    finally:
+        app.dependency_overrides = original

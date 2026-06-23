@@ -181,6 +181,15 @@ class Settings(BaseSettings):
     # first-sync (~4 min), leaving the rest to the hourly Beat task. (Issue 120)
     DNA_LONGS_CAP: int = 50
     DNA_SHORTS_CAP: int = 75
+    # ── Style learning (Issue 187) ─────────────────────────────────────────────
+    # Minimum number of times a creator must have chosen the same value for a
+    # kit field (in the last 20 renders) before the product surfaces a
+    # 'make it your default?' suggestion.  Cold-start safe: below this count
+    # no suggestion is shown.  5 is the standard smart-default threshold
+    # documented in the USPTO 10860981 patent art and NNG default-effect
+    # literature.  Lower = noisier; higher = too conservative for small channels.
+    STYLE_LEARN_THRESHOLD: int = 5
+
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
     # Max weight the preference model gets in the rerank blend once mature. Below
     # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);

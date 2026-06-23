@@ -7622,5 +7622,36 @@ GitHub's documented behavior: a **skipped** required job reports `success` — s
 **Alternatives ruled out:** React Context + useReducer (re-renders all consumers on every SSE event, too noisy); TanStack Query for SSE (explicitly ruled out in useTaskStream.ts:25 comment — queries are promise-based); Zustand (would work, adds dep).
 
 **Source/evidence:** https://react.dev/reference/react/useSyncExternalStore; routers/tasks.py MAX_CONCURRENT_SSE_PER_CREATOR constant.
+## Issue 187 — Style becomes a learned Creator-DNA dimension
+
+**What was decided:**
+
+1. **Signal source = `clips.style_preset` (render choices), not `ClipFeedback.chosen_format` (a loose tag).**
+   Render choices are the strongest implicit-feedback signal because they reflect the style actually applied, not a loose format tag that may be absent on many feedback rows. This aligns with the 'implicit feedback from completed actions' best practice in recommender systems.
+
+2. **Threshold = 5 occurrences in the last 20 clips (config-driven as `STYLE_LEARN_THRESHOLD`).**
+   5 matches the smart-default threshold documented in USPTO 10860981 ('capturing, predicting and suggesting user preferences in a digital huddle environment') and NNG default-effect literature. Cold-start safe: below this count no suggestion is shown. Config-driven so it can be tuned without a code deploy.
+
+3. **Stored in `creator_style` (brand kit), not in `creator_dna`.**
+   Style defaults are independent of DNA versioning. Mixing render style choices into `creator_dna` would couple DNA rebuild cycles to style preference accumulation — they are different dimensions on different cadences. Same rationale as Issue 186's table-vs-dna-field decision.
+
+4. **One field at a time surfaced to avoid UI overwhelm.**
+   The first kit field in `_KIT_FIELDS` order whose dominant count meets the threshold wins. All diverging fields shown simultaneously would present too many decisions to the creator at once (NNG: progressive disclosure).
+
+5. **No server-side dismissal state in v1.**
+   Dismiss hides the banner in component state only. Adding a new DB column or table for a trivial UX affordance is over-engineered for v1; component state is sufficient. A server-side dismissal table can be added in v2 if retention metrics show repeated re-dismissals.
+
+6. **Algorithm = mode detection over a sliding window (no ML model).**
+   Mode/frequency detection over a 20-clip window is simpler, interpretable, and fully testable without a GPU or training pipeline. The arxiv 2605.10042 statistical framework confirms frequency-of-past-choices is a well-grounded predictor; an ML classifier would be over-engineered for this signal at v1 scale.
+
+7. **Honest framing everywhere.**
+   Message template: 'You have used [value] for [field] [count] times — make it your default?' — no virality language.
+
+**Source/evidence:**
+- NNG recommendation guidelines: https://www.nngroup.com/articles/recommendation-guidelines/
+- USPTO 10860981 (smart defaults via behavior threshold): https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/10860981
+- UX Bulletin default-effect research: https://www.ux-bulletin.com/default-effect-in-ux/
+- Arxiv 2605.10042 (statistical preferences from past choices): https://arxiv.org/abs/2605.10042
+- Implicit feedback from completed actions (recsys best practice): https://blog.reachsumit.com/posts/2024/01/user-behavior-modeling-recsys/
 
 **Date:** 2026-06-23
