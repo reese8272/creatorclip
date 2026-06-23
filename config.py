@@ -77,6 +77,32 @@ class Settings(BaseSettings):
     COST_PER_MTOK_OUT_SONNET: float = 15.0  # Sonnet 4.6 output: $15/MTok standard
     COST_PER_MTOK_IN_HAIKU: float = 1.0    # Haiku 4.5 input: $1/MTok standard
     COST_PER_MTOK_OUT_HAIKU: float = 5.0   # Haiku 4.5 output: $5/MTok standard
+    # Cache-read multiplier: prompt-cache hits are billed at 10% of the base input rate.
+    # Source: platform.claude.com/docs/en/about-claude/pricing (fetched 2026-06-23).
+    COST_CACHE_READ_MULTIPLIER: float = 0.1
+    # Deepgram Nova-2 pre-recorded transcription cost per minute (pay-as-you-go).
+    # Source: deepgram.com/pricing (fetched 2026-06-23).
+    COST_PER_MIN_DEEPGRAM: float = 0.0043
+    # Voyage AI voyage-3.5 embedding cost per million tokens.
+    # Source: docs.voyageai.com/docs/pricing (fetched 2026-06-23).
+    COST_PER_MTOK_VOYAGE: float = 0.06
+    # Cloudflare R2 standard storage cost per GB per month.
+    # Source: developers.cloudflare.com/r2/pricing (fetched 2026-06-23).
+    COST_PER_GB_MO_R2: float = 0.015
+    # Cloudflare R2 Class A operations (PUT/DELETE) cost per million operations.
+    # Source: developers.cloudflare.com/r2/pricing (fetched 2026-06-23).
+    COST_PER_M_R2_CLASS_A: float = 4.50
+    # Cloudflare R2 Class B operations (GET/HEAD) cost per million operations.
+    # Source: developers.cloudflare.com/r2/pricing (fetched 2026-06-23).
+    COST_PER_M_R2_CLASS_B: float = 0.36
+    # Estimated cost per CPU-second for ffmpeg render on Kubernetes node.
+    # Based on K8s node cost estimate; tune from real billing data once GKE staging runs.
+    # (Issue 275 — K8s staging cluster is the linchpin for empirical validation)
+    COST_PER_RENDER_CPU_S: float = 0.000025
+    # Version stamp for the price book. Update this string whenever any rate changes —
+    # a version mismatch between a stored cost_estimate and this stamp signals a
+    # rate-change event (FinOps Foundation cost-per-unit standard; finops.org/framework/phases/).
+    PRICE_BOOK_VERSION: str = "2026-06-23"
     # --- Pro chatbot (Issue 152) ---
     # Per-creator daily message cap — the load-bearing margin guard. Bounds
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per
