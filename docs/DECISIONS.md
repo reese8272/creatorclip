@@ -67,6 +67,53 @@ protection. Financial routes (billing checkout, DELETE /auth/me) are the primary
 **Source/evidence:**
 - https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 - https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF
+## 2026-06-23 — Issue 242: Transactional email provider (Resend), templating (Jinja2), dev sink (console backend)
+
+**What was decided:**
+
+1. **Provider: Resend** over Postmark and Amazon SES direct.
+2. **Templating: Jinja2** (paired `.txt` + `.html` files) over f-strings or MJML.
+3. **Dev sink: `NOTIFY_BACKEND=console`** logs rendered emails via `logging`; no external call.
+4. **Module-level singleton pattern** (matching `dna/brief.py:21`) over a central `clients.py` file
+   (which SOT.md lists but which does not exist on disk — the actual live convention is per-module
+   singletons).
+
+**Why Resend:**
+- 3 000 emails/month free tier vs Postmark's 100; ~20% cheaper at 1 M emails/month.
+- Native idempotency-key API (`resend.Emails.send(params, {'idempotency_key': key})`) maps directly
+  onto the project's existing Celery at-least-once retry pattern, enabling two-layer dedup (DB row +
+  provider) that Issue 243 builds on.
+- Postmark has better deliverability isolation (transactional/marketing separate via Message Streams)
+  and stronger p99 (195 ms vs 410 ms), but that tradeoff is wrong at beta scale with almost entirely
+  transactional mail.
+- Postmark documented as fallback if inbox placement data disappoints.
+
+**Why Resend over SES-direct:**
+- SES has no managed reputation, no free tier for prototyping, raw DKIM/bounce ops overhead not
+  worth taking pre-scale.
+
+**Why Jinja2 over f-strings:**
+- Auto-escaping prevents XSS in HTML bodies.
+- Templates testable in isolation; f-strings are not.
+- Jinja2 was already a transitive dep (v3.1.2 confirmed via `pip show`); pinning it explicit makes
+  it load-bearing without adding a new package weight.
+
+**Why Jinja2 over MJML:**
+- MJML requires a Node.js build step or hosted render API — unnecessary complexity for a
+  Python-native stack.
+
+**Why console backend:**
+- Dev / CI must never call an external email API. The console sink renders and logs the full email
+  including idempotency key so integration tests can assert on the output without a live provider.
+
+**Source/evidence:**
+- https://www.buildmvpfast.com/blog/resend-vs-ses-vs-postmark-transactional-email-deliverability-saas-2026
+- https://resend.com/docs/send-with-python
+- https://resend.com/docs/dashboard/emails/idempotency-keys
+- https://pypi.org/project/resend/ (v2.32.2, released 2026-06-17)
+- https://dev.to/carola99/send-an-html-email-template-with-python-and-jinja2-1hd0
+- `dna/brief.py:21` — confirmed module-level singleton is the live convention (clients.py does not
+  exist on disk despite SOT.md:93 listing it)
 
 **Date:** 2026-06-23
 

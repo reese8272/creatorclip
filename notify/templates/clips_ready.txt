@@ -1,0 +1,12 @@
+Subject: Your clips are ready — {{ video_title }}
+
+Hi {{ creator_name }},
+
+Your {{ clip_count }} clip{{ "s" if clip_count != 1 else "" }} from "{{ video_title }}" are ready for review.
+
+Review your clips: {{ review_url }}
+
+These recommendations are based on your channel's style and audience data. AutoClip predicts fit with your content — it does not promise virality.
+
+—
+CreatorClip
