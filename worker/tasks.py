@@ -275,6 +275,22 @@ def expire_trials() -> None:
     run_async(_expire_trials_async())
 
 
+@celery.task(name="worker.tasks.reconcile_stripe_ledger")
+def reconcile_stripe_ledger() -> None:
+    """Issue 205 — daily Stripe↔ledger reconciliation sweep.
+
+    Catches paid Checkout sessions that the webhook never delivered (Stripe
+    outage, endpoint down past the retry window). Grants minutes idempotently
+    for any paid session whose stripe_session_id has no matching MinutePack row.
+    Persistent mismatches emit a PII-free alert log.
+
+    Idempotency relies on UNIQUE(stripe_session_id) in MinutePack — the same
+    guarantee that makes the webhook fulfillment path safe for at-least-once
+    Stripe delivery. The grant is therefore a clean no-op on duplicates.
+    """
+    run_async(_reconcile_stripe_ledger_async())
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """
@@ -1709,6 +1725,112 @@ async def _expire_trials_async() -> None:
                     cid,
                     trial_ends_at.isoformat() if trial_ends_at else None,
                 )
+
+
+async def _reconcile_stripe_ledger_async() -> None:
+    """Issue 205 — compare recent paid Stripe sessions against the MinutePack ledger.
+
+    Uses ``AdminSessionLocal`` (BYPASSRLS) — same pattern as ``refund_for_video``
+    and ``_retrain_preference_async``. This is a cross-tenant system sweep with no
+    per-creator request context.
+
+    For each paid Stripe session that lacks a matching MinutePack row, calls
+    ``grant_minutes`` (idempotent via UNIQUE(stripe_session_id) + SAVEPOINT) to
+    fulfill it. Metadata validity gaps (missing creator_id / pack_id / unknown
+    pack) emit a PII-free alert log for manual follow-up.
+    """
+    import uuid
+
+    from sqlalchemy import select
+
+    from billing.ledger import grant_minutes
+    from billing.packs import PURCHASABLE_PACKS
+    from billing.stripe_client import list_recent_paid_sessions
+    from config import settings
+
+    paid_sessions = await asyncio.get_event_loop().run_in_executor(
+        None,
+        list_recent_paid_sessions,
+        settings.STRIPE_RECONCILE_LOOKBACK_HOURS,
+    )
+
+    granted = 0
+    skipped = 0
+    errors = 0
+
+    async with db.AdminSessionLocal() as session:
+        for cs in paid_sessions:
+            stripe_session_id: str = cs["id"]
+
+            # Fast-path: already in the ledger → skip without opening a SAVEPOINT.
+            existing = await session.scalar(
+                select(MinutePack.id).where(MinutePack.stripe_session_id == stripe_session_id)
+            )
+            if existing is not None:
+                skipped += 1
+                continue
+
+            meta = cs.get("metadata") or {}
+            creator_id_str = meta.get("creator_id")
+            pack_id = meta.get("pack_id")
+
+            if not creator_id_str or not pack_id:
+                logger.error(
+                    "billing reconcile missing metadata stripe_session=%s",
+                    stripe_session_id,
+                )
+                errors += 1
+                continue
+
+            pack = PURCHASABLE_PACKS.get(pack_id)
+            if pack is None:
+                logger.error(
+                    "billing reconcile unknown pack_id=%s stripe_session=%s",
+                    pack_id,
+                    stripe_session_id,
+                )
+                errors += 1
+                continue
+
+            try:
+                creator_id = uuid.UUID(creator_id_str)
+            except ValueError:
+                logger.error(
+                    "billing reconcile malformed creator_id stripe_session=%s",
+                    stripe_session_id,
+                )
+                errors += 1
+                continue
+
+            await grant_minutes(
+                creator_id=creator_id,
+                minutes=pack.minutes,
+                reason="reconcile",
+                session=session,
+                pack_id=pack_id,
+                stripe_session_id=stripe_session_id,
+                price_cents=pack.price_cents,
+            )
+            await session.commit()
+            granted += 1
+            logger.info(
+                "billing reconcile granted pack=%s creator=%s stripe_session=%s",
+                pack_id,
+                creator_id,
+                stripe_session_id,
+            )
+
+    logger.info(
+        "billing reconcile complete granted=%d skipped=%d errors=%d",
+        granted,
+        skipped,
+        errors,
+    )
+    if errors:
+        logger.error(
+            "billing reconcile alert: %d sessions could not be fulfilled — check logs above",
+            errors,
+        )
 
 
 async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = None) -> None:

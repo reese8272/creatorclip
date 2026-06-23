@@ -112,6 +112,21 @@ No clipping tool today truly *learns an individual creator’s style*. Adjacent 
 - Ship the table stakes competently: 9:16 reframe with speaker tracking, word-by-word captions with a few premium styles, one-click export/schedule to YouTube Shorts.
 - **Pricing**: avoid per-input-minute credits (they punish 3–8hr streams). Use per-output-clip or flat-subscription tiers with generous stream-hour allowances. Benchmark entry at **$12–15/mo** (match Opus Starter / quso Lite) with a free watermarked tier as the growth loop.
 
+  > **Reconciliation note (Issue 209, 2026-06-23):** CreatorClip ships **per-input-minute** credit
+  > packs — not per-output-clip or flat-subscription. This recommendation was written for an
+  > earlier competitive snapshot and does not account for the ledger architecture locked during
+  > Issue 125 (`UNIQUE(video_id)` on `MinuteDeduction`, per-minute deduction at ingest time).
+  > Reversing to per-output-clip would require a fundamental ledger redesign; a flat-subscription
+  > model is explicitly rejected in the Issue 152 DECISIONS entry.
+  >
+  > The per-minute "punishes long streams" critique is valid and is directly mitigated by the
+  > **Stream pack** (Issue 209: 10,000 min / $400 = 4.0 ¢/min, below Studio's 4.5 ¢/min).
+  > Per-input-minute is the 2026 category standard — OpusClip, Vizard, and Klap all use it.
+  > See `docs/DECISIONS.md` (Issue 209) for the full rationale.
+  > The subscriptions/watermarked-free-tier GTM remains valid advice independent of the billing
+  > primitive; the $12–15/mo entry benchmark can be revisited for a future subscription tier
+  > if the credit model shows conversion drop-off at the Starter level.
+
 **Stage 2 — Make it feel magical (2–5 months):**
 
 - **One-step hero**: paste a YouTube URL → live processing progress → scored, sorted clip grid (visualize the AI’s reasoning, but make any score *honest/explainable*, not decorative).

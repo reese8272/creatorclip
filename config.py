@@ -256,6 +256,21 @@ class Settings(BaseSettings):
     # Scale-checklist E (backpressure): every external call needs a bounded
     # timeout. (Issue 106)
     STRIPE_TIMEOUT_S: int = 10
+    # Issue 205 — Stripe ledger reconciliation sweep. The daily Beat task looks
+    # back this many hours for paid Checkout sessions and grants minutes to any
+    # that are missing a MinutePack row. 48h default: covers one missed Beat run
+    # plus a Stripe retry window. Stripe keeps events/sessions for 30 days via
+    # the API so this can be raised further if needed.
+    STRIPE_RECONCILE_LOOKBACK_HOURS: int = 48
+    # Issue 207 — Stripe Tax via automatic_tax[enabled]=true.
+    # DEFAULT FALSE. Flip to true ONLY after ≥1 active Stripe tax registration
+    # has been created in Tax > Registrations (dashboard.stripe.com/tax/registrations).
+    # Enabling without a registration causes Stripe to collect $0 tax (documented
+    # safe — no error), but the flag should still track the real business decision.
+    # Prerequisite: first US sales-tax nexus or equivalent registration is
+    # confirmed. See docs/DECISIONS.md (Issue 207) for when to flip.
+    # Source: https://docs.stripe.com/tax/checkout/page
+    STRIPE_TAX_ENABLED: bool = False
 
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:

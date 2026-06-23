@@ -14,6 +14,16 @@ concurrent duplicate refund attempt loses the UNIQUE race and surfaces as an
 no-op. The previous read-then-write SELECT guard was a TOCTOU race
 (``task_acks_late=True`` + worker preemption could deliver two ``on_failure``
 callbacks concurrently); the partial UNIQUE closes it structurally.
+
+Issue 208 — Money refund convention (manual, admin-initiated):
+When a creator requests a money refund, a compensating row is inserted with
+``reason='money_refund'`` and ``pack_id='money_refund:{stripe_session_id}'``.
+The minutes value is negative (reversal). This follows the same immutable-
+ledger pattern as ingest-failure refunds — never mutate the original row.
+See ``docs/RUNBOOKS.md`` (Money Refund section) for the step-by-step procedure.
+An admin HTTP endpoint for money refunds is deferred; the manual runbook covers
+the launch window. ``pack_id`` namespace ``money_refund:*`` is distinct from
+``refund:{video_id}`` to avoid any UNIQUE constraint collision.
 """
 
 import logging

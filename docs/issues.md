@@ -986,7 +986,7 @@ Stripe reconciliation, payment guards, packaging, refunds (`routers/billing.py`,
 
 ### Issue 205: Stripe ↔ ledger reconciliation Beat task
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `M` · **Verify** `staging`  
 **Src** `06 / 171b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/06_monetization_unit_economics.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `billing/ledger.py`, `billing/stripe_client.py`, `worker/schedule.py`, `worker/tasks.py`  
 
@@ -1022,7 +1022,7 @@ Stripe reconciliation, payment guards, packaging, refunds (`routers/billing.py`,
 
 ### Issue 206: Verify `payment_status` before granting in the webhook
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `S` · **Verify** `local`  
 **Src** `06 / 171c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/06_monetization_unit_economics.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `routers/billing.py`  
 
@@ -1051,7 +1051,7 @@ Stripe reconciliation, payment guards, packaging, refunds (`routers/billing.py`,
 
 ### Issue 207: Stripe Tax on checkout
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `S` · **Verify** `local`  
 **Src** `06 / 171d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/06_monetization_unit_economics.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `billing/stripe_client.py`  
 
@@ -1086,7 +1086,7 @@ Stripe reconciliation, payment guards, packaging, refunds (`routers/billing.py`,
 
 ### Issue 208: Money-refund runbook + truthful ledger entry
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `S` · **Verify** `local`  
 **Src** `06 / 171e` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/06_monetization_unit_economics.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `frontend/src/pages/Pricing.tsx`  
 
@@ -1119,7 +1119,7 @@ Stripe reconciliation, payment guards, packaging, refunds (`routers/billing.py`,
 
 ### Issue 209: Packaging — per-minute taper rationale + Stream pack
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `M` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Billing & Monetization · **Size** `M` · **Verify** `local`  
 **Src** `06 / 171f` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/06_monetization_unit_economics.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `frontend/src/pages/Pricing.tsx`  
 
