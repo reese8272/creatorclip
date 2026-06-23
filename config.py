@@ -361,6 +361,14 @@ class Settings(BaseSettings):
     # Source: https://docs.stripe.com/tax/checkout/page
     STRIPE_TAX_ENABLED: bool = False
 
+    # ── Clickwrap consent versions (Issue 299) ────────────────────────────────
+    # Bump TOS_VERSION or PRIVACY_VERSION (ISO-8601 date) whenever a material
+    # change is published to /static/tos.html or /static/privacy.html.  The
+    # recorded version string on each Creator row lets a future re-prompt path
+    # compare the stored version against the current one and gate the OAuth CTA.
+    TOS_VERSION: str = "2026-06-23"
+    PRIVACY_VERSION: str = "2026-06-23"
+
     # ── Error tracking — Sentry / GlitchTip (Issue 281) ───────────────────────
     # Set SENTRY_DSN to a Sentry project DSN or a GlitchTip DSN (identical
     # protocol — only the URL differs). Empty string disables the SDK entirely,

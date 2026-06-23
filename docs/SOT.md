@@ -284,6 +284,9 @@ creators
   onboarding_state (connected/awaiting_data/dna_pending/active),
   analysis_mode (auto/selective/manual; default auto — Issue 125),
   trial_ends_at (TIMESTAMPTZ NULL — set on first OAuth login, Issue 126),
+  terms_accepted_at (TIMESTAMPTZ NULL — clickwrap acceptance timestamp, Issue 299),
+  terms_version (VARCHAR 32 NULL — ToS version shown at acceptance, Issue 299),
+  privacy_version (VARCHAR 32 NULL — Privacy Policy version shown at acceptance, Issue 299),
   plan_tier, subscription_status, created_at
 
 youtube_tokens
