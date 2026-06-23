@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
 from starlette.responses import Response as _StarletteResponse
 
 import event_log
+from auth import check_not_cross_site
 from config import settings
 from db import engine
 from limiter import limiter
@@ -103,6 +104,12 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
 app.add_middleware(SlowAPIMiddleware)
 
+# ── CSRF Fetch-Metadata dependency (Issue 230) ───────────────────────────────
+# Applied globally — check_not_cross_site() no-ops on safe methods (GET/HEAD),
+# API-key (Authorization: Bearer) paths, non-browser clients (absent header),
+# and when CSRF_FETCH_METADATA_ENABLED=False (test/dev default).
+app.router.dependencies.append(Depends(check_not_cross_site))
+
 app.include_router(activity_router.router)
 app.include_router(auth_router.router)
 app.include_router(api_keys_router.router)
@@ -146,7 +153,10 @@ _SPA_BUILT = _SPA_INDEX.is_file()
 async def index() -> Response:
     if _SPA_BUILT:
         return RedirectResponse(url="/app/dashboard", status_code=302)
-    return FileResponse(_STATIC / "index.html")
+    # Legacy static/index.html has been retired (Issue 226: XSS surface removal).
+    # When the SPA bundle is not built (dev/CI without a Node build), return 404
+    # rather than serving the now-absent legacy page.
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 if _SPA_BUILT:
@@ -209,6 +219,59 @@ class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
         )
 
 
+# ── Security-headers middleware (Issue 229 — OWASP Secure Headers Project) ───
+#
+# Appends baseline security headers to every response. Registered BEFORE
+# StaticCacheBustMiddleware so it runs as the inner layer — its headers are set
+# first on the response, then CacheBust (outer) only pops content-length/etag/
+# last-modified, leaving the security headers intact.
+#
+# CSP uses frame-ancestors 'none' for structural clickjacking defence (supersedes
+# X-Frame-Options for supporting browsers; both are set for defence-in-depth per
+# OWASP). HSTS is only emitted in production to avoid breaking non-TLS dev hosts.
+# CSP_EXTRA_SOURCES appends additional allowed origins for CDN fonts/analytics.
+#
+# Source: https://owasp.org/www-project-secure-headers/
+
+_CSP_BASE = (
+    "default-src 'self'; "
+    "form-action 'self'; "
+    "base-uri 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "upgrade-insecure-requests"
+)
+
+
+def _build_csp() -> str:
+    """Return the Content-Security-Policy value, optionally extended with CSP_EXTRA_SOURCES."""
+    extra = settings.CSP_EXTRA_SOURCES.strip()
+    if extra:
+        return f"{_CSP_BASE}; {extra}"
+    return _CSP_BASE
+
+
+class SecurityHeadersMiddleware(_BaseHTTPMiddleware):
+    """Appends OWASP Secure Headers Project baseline to every response.
+
+    HSTS is only emitted in production (ENV=production) to avoid breaking
+    non-TLS dev/staging hosts.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = _build_csp()
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if settings.ENV == "production":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains"
+            )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(StaticCacheBustMiddleware)
 
 

@@ -1,6 +1,6 @@
 # CreatorClip — Compliance & YouTube API ToS
 
-**Last updated**: 2026-05-25
+**Last updated**: 2026-06-23
 Update this file any time data classes, retention policy, API scopes, or privacy posture changes.
 
 ---
@@ -210,3 +210,27 @@ legal need, or aggregation/anonymization.
 **Verification**: `tests/test_static.py::test_privacy_page_has_limited_use_disclosure` pins
 the required language ("Limited Use", "Google API Services User Data Policy", "information
 received from Google APIs", and the no-advertising commitment) so it cannot silently regress.
+
+---
+
+## Authentication — Session JWT and Revocation Window (Issue 232)
+
+**Mechanism:** Session cookies carry a stateless HS256 JWT signed with `JWT_SECRET_KEY`. The
+token is validated on every authenticated request by verifying the signature and `exp` claim.
+
+**Non-revocability (deliberate tradeoff):** Logout deletes the browser cookie but does NOT
+invalidate the token server-side. A stolen session cookie remains valid until the `exp` claim
+fires. This is intentional:
+
+- **Exposure window:** `JWT_EXPIRY_MINUTES` (default 60 minutes). Reduce this setting for
+  higher-assurance environments.
+- **Why not a Redis jti deny-list:** Adding revocation via Redis makes every auth check
+  hard-depend on Redis. If Redis is unavailable, all sessions become invalid — the Issue-76
+  class of availability failure. For a B2C SaaS with no admin-privilege escalation path, the
+  60-minute window is the accepted posture.
+- **Deferral:** The jti Redis deny-list is documented as optional and deferred. If implemented,
+  it must be fail-open (Redis down → accept) to avoid the availability risk.
+
+**Source:** https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
+
+**Logged:** Issue 232 (2026-06-23).

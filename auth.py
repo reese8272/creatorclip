@@ -11,11 +11,71 @@ from config import settings
 from db import get_session
 from models import Creator
 
+# ── CSRF Fetch-Metadata defence (Issue 230) ───────────────────────────────────
+# Sec-Fetch-Site check on state-changing routes. Browser-sent header values:
+#   cross-site: definitely from a different origin — reject.
+#   same-origin / same-site: from our own origin — allow.
+#   none: direct navigation (typed URL, bookmark) — allow.
+#   absent: non-browser client (curl, SDK) — allow (API-key callers lack header).
+#
+# Additionally, requests authenticated via Authorization: Bearer (API-key path)
+# are exempted — CSRF is only a risk for cookie-based session auth.
+#
+# Source: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+
+_CSRF_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def check_not_cross_site(request: Request) -> None:
+    """FastAPI dependency: reject cross-site requests on mutating cookie-authed routes.
+
+    Safe to add as a global dependency — it no-ops on:
+    - GET / HEAD / OPTIONS (not state-changing)
+    - Requests with an Authorization: Bearer header (API-key path, not cookie auth)
+    - Absent Sec-Fetch-Site header (non-browser clients such as curl or SDKs)
+
+    When CSRF_FETCH_METADATA_ENABLED is False (default in tests — TestClient does
+    not send Sec-Fetch-* headers), the check is skipped entirely.
+    """
+    if not settings.CSRF_FETCH_METADATA_ENABLED:
+        return
+    if request.method not in _CSRF_MUTATING_METHODS:
+        return
+    # API-key authenticated paths send Authorization: Bearer — not cookie auth.
+    # CSRF is only a risk when session cookies are the credential.
+    if request.headers.get("authorization", "").startswith("Bearer "):
+        return
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is None:
+        # Non-browser client (curl, httpx without explicit header) — allow.
+        return
+    if fetch_site == "cross-site":
+        raise HTTPException(
+            status_code=403,
+            detail="Cross-site request blocked (Fetch-Metadata policy, Issue 230).",
+        )
+
 SESSION_COOKIE = "cc_session"
 _ALGORITHM = "HS256"
 
 
 def create_session_token(creator_id: uuid.UUID) -> str:
+    # WHY stateless + non-revocable (Issue 232):
+    # This HS256 token is intentionally stateless. Logout deletes the browser
+    # cookie (routers/auth.py) but does NOT invalidate the token server-side —
+    # a stolen cookie remains valid until the `exp` claim fires.
+    #
+    # The accepted exposure window is JWT_EXPIRY_MINUTES (default 60 minutes).
+    # This tradeoff was made deliberately:
+    #   - Adding a Redis jti deny-list for revocation would make every auth
+    #     check hard-depend on Redis; if Redis goes down, all sessions are
+    #     invalid (the Issue-76 class of failure). The 60-min window is
+    #     acceptable for a B2C SaaS with no admin-privilege escalation path.
+    #   - For higher-assurance revocation, issue a shorter-lived token
+    #     (reduce JWT_EXPIRY_MINUTES) rather than adding the Redis dependency.
+    #
+    # See docs/COMPLIANCE.md → Auth section for the documented exposure window.
+    # Source: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
     now = datetime.now(UTC)
     payload = {
         "sub": str(creator_id),

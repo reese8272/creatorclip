@@ -66,16 +66,17 @@ def test_configure_logging_is_idempotent():
 
 # ── HTTP middleware (against the real app) ───────────────────────────────────
 def test_middleware_mints_and_echoes_request_id(client: TestClient):
-    resp = client.get("/")
+    # Use /health (stable GET 200) — Issue 226 retired the legacy static pages so
+    # GET / now returns 404, making /health the most reliable probe route.
+    resp = client.get("/health")
     assert resp.status_code == 200
     rid = resp.headers.get("X-Request-ID")
     assert rid and len(rid) == 32
 
 
 def test_middleware_respects_inbound_request_id(client: TestClient):
-    # Target a non-redirecting route: `/` 302s to the SPA once built (Issue 85g),
-    # and following it would drop the inbound header on the second hop.
-    resp = client.get("/static/login.html", headers={"X-Request-ID": "upstream-trace-001"})
+    # Use /health — legacy /static/login.html was retired by Issue 226.
+    resp = client.get("/health", headers={"X-Request-ID": "upstream-trace-001"})
     assert resp.headers.get("X-Request-ID") == "upstream-trace-001"
 
 

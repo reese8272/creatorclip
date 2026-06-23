@@ -190,6 +190,20 @@ class Settings(BaseSettings):
     UPLOAD_MAX_MB: int = 500
     LOCAL_MEDIA_DIR: str = "./media"
 
+    # ── Security headers (Issue 229) ───────────────────────────────────────────
+    # Additional CSP source expressions appended to the baseline CSP (Issue 229).
+    # E.g. "style-src 'self' https://fonts.googleapis.com;
+    # font-src 'self' https://fonts.gstatic.com" for Google Fonts usage.
+    # Leave empty for the strict baseline (only 'self' + secure directives).
+    CSP_EXTRA_SOURCES: str = ""
+
+    # ── CSRF Fetch-Metadata defence (Issue 230) ────────────────────────────────
+    # Enable the Sec-Fetch-Site check on mutating (POST/PUT/PATCH/DELETE) routes.
+    # Defaults to False in development/test so TestClient (which does not send
+    # Sec-Fetch-* headers) does not produce false-positive 403s. Set to True in
+    # production where real browsers always send Sec-Fetch-Site.
+    CSRF_FETCH_METADATA_ENABLED: bool = False
+
     # Celery soft-time-limit as a config value so the transcription-timeout
     # validator below can assert the 30s cleanup-breathing-room invariant
     # without importing celery_app (which would create a circular import).
