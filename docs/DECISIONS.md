@@ -7532,3 +7532,23 @@ GitHub's documented behavior: a **skipped** required job reports `success` — s
 **Source/evidence:** Smoke-test-your-Docker-image-in-GH-Actions guide; GitHub community discussions/175488.
 
 **Date:** 2026-06-23
+
+---
+
+## Issue 211 — Global active-tasks panel: plain ES-module singleton store over Zustand
+
+**What was decided:**
+- `frontend/src/stores/activeTasks.ts` is a plain ES-module singleton (Map + Set of subscriber callbacks) exposing `subscribe()`/`getSnapshot()` so it satisfies the `useSyncExternalStore` contract directly — no Zustand, no Context.
+- `ActivityPanel.tsx` uses `useSyncExternalStore(subscribe, getSnapshot)` (React 18+ built-in) to read the store with automatic bailout.
+- The panel mounts inside `AppChrome.tsx` (alongside the Outlet) so it persists across all SPA routes.
+- SSE cap compliance: `isCapExhausted()` is checked before opening each EventSource; slots beyond the server cap (MAX_CONCURRENT_SSE_PER_CREATOR = 3, routers/tasks.py) are shown as "waiting — cap reached" with no 4th connection opened.
+- Terminal entries (done/error) auto-remove after 3 s; `_reset()` is test-only.
+- `window.matchMedia` stub added to `src/test/setup.ts` (jsdom does not implement it) — affects all component tests as a global setup change.
+
+**Why:** Zustand would work but adds a new ~1 KB dependency not in package.json. A plain singleton with `useSyncExternalStore` is the React team's recommended pattern for external stores (React docs 2024-2025) and achieves identical semantics.
+
+**Alternatives ruled out:** React Context + useReducer (re-renders all consumers on every SSE event, too noisy); TanStack Query for SSE (explicitly ruled out in useTaskStream.ts:25 comment — queries are promise-based); Zustand (would work, adds dep).
+
+**Source/evidence:** https://react.dev/reference/react/useSyncExternalStore; routers/tasks.py MAX_CONCURRENT_SSE_PER_CREATOR constant.
+
+**Date:** 2026-06-23
