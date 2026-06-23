@@ -15,6 +15,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -74,25 +75,35 @@ def _build_request(
     )
 
     # Per the 2026 prompt-caching standard: stable content first, variable last,
-    # cache breakpoint at the end of the stable prefix. Two stability tiers:
-    # (1) global instructions are identical across all creators; (2) the stated
-    # identity is stable per creator. Both go BEFORE the breakpoint so a
-    # creator's repeated calls in one session share the longer prefix; the
-    # volatile performance corpus stays after.
-    system: list[dict] = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
+    # cache breakpoint at the end of the stable prefix.
+    # Issue 224: stated_identity is creator-authored (attacker-influenceable) and
+    # must NOT go in the system role. Moved to the user turn, JSON-wrapped via
+    # wrap_untrusted. The system blocks are now two stable items:
+    #   (1) global instructions — identical across all creators,
+    #   (2) volatile performance corpus — uncached, changes each call.
+    # The cache breakpoint stays on the instructions block (only stable block).
+    system: list[dict] = [
+        {
+            "type": "text",
+            "text": _SYSTEM_INSTRUCTIONS,
+            "cache_control": {"type": "ephemeral"},
+        },
+        # Volatile per-creator data — AFTER the breakpoint, never cached.
+        {"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"},
+    ]
+
+    # stated_identity goes in the user turn so the model receives it from the
+    # user role, not as trusted operator instructions. Structurally separated
+    # from the instruction text by the XML label + JSON-encoded value.
+    user_content = ""
     if stated_identity:
-        system.append({"type": "text", "text": stated_identity})
-    # Mark the LAST stable block as the cache breakpoint. anthropic 0.40's
-    # TextBlockParam stub predates cache_control (Issue 78c) — the cast is
-    # what suppresses the typed-dict complaint at the call site below.
-    system[-1]["cache_control"] = {"type": "ephemeral"}
-    # Volatile per-creator data — AFTER the breakpoint, never cached.
-    system.append({"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"})
+        user_content = wrap_untrusted("creator_stated_identity", stated_identity)
+    user_content += f"Generate the Creator Brief for '{channel_title}'."
 
     messages: list[dict] = [
         {
             "role": "user",
-            "content": f"Generate the Creator Brief for '{channel_title}'.",
+            "content": user_content,
         }
     ]
     return system, messages

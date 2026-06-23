@@ -22,6 +22,7 @@ from anthropic import Anthropic
 
 from config import settings
 from knowledge.util import extract_transcript_text as _extract_transcript_text
+from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -108,13 +109,14 @@ def _build_request(
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
+    # Issue 224: stated_identity is attacker-influenceable creator free-text and
+    # must not go in the system role. Build video context without it; it moves to
+    # the user turn, JSON-wrapped via wrap_untrusted.
     video_context_parts: list[str] = []
     if video_title:
         video_context_parts.append(f"Video title: {video_title}")
     if transcript_summary:
         video_context_parts.append(f"Transcript excerpt:\n{transcript_summary}")
-    if stated_identity:
-        video_context_parts.append(stated_identity)
     video_context_parts.append(f"Channel: {channel_title}")
     video_context = "\n\n".join(video_context_parts)
 
@@ -130,15 +132,23 @@ def _build_request(
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
         },
-        # Block 3: per-video context — changes with each video.
+        # Block 3: per-video factual context — no creator free-text.
         {"type": "text", "text": f"VIDEO TO TITLE:\n{video_context}"},
     ]
     tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+
+    # stated_identity travels in the user turn so the model receives it from the
+    # user role, not as trusted operator instructions. JSON-wrapped to prevent
+    # quote/bracket break-out (OWASP LLM01; Anthropic prompt-injection guide).
+    user_preamble = ""
+    if stated_identity:
+        user_preamble = wrap_untrusted("creator_stated_identity", stated_identity)
     messages = [
         {
             "role": "user",
             "content": (
-                f"Generate 10 title candidates for this video from '{channel_title}'. "
+                user_preamble
+                + f"Generate 10 title candidates for this video from '{channel_title}'. "
                 "Search for trending titles in this niche first, then produce the ranked JSON."
             ),
         }
