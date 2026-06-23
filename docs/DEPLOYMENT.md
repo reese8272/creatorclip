@@ -298,14 +298,20 @@ docker compose -f docker-compose.prod.yml run --rm app alembic downgrade -1
 
 ### Expand/contract PR checklist
 
+> **Full policy, copy-paste templates, and the sequencing rule (separate deploys) are in
+> [`docs/MIGRATIONS.md`](MIGRATIONS.md).** The checklist below is a quick-reference
+> summary; `MIGRATIONS.md` is the authoritative source.
+
 For every migration that adds a NOT NULL column or changes a constraint:
 
 - [ ] Phase 1 (expand): add column nullable with default — backward-compatible.
 - [ ] Phase 2 (backfill): populate existing rows in a data migration or job.
 - [ ] Phase 3 (contract): add NOT NULL constraint (with NOT VALID to avoid full scan),
-  then validate in a separate migration.
-- [ ] Any `CREATE INDEX` must use `CONCURRENTLY` (not in a transaction block).
+  then validate in a **separate migration in a separate deploy**.
+- [ ] Any `CREATE INDEX` must use `CONCURRENTLY` inside `autocommit_block()`.
+- [ ] Backfills use bounded UPDATE loops (never one giant UPDATE).
 - [ ] All migrations pass `squawk` lint (enforced in CI via the `migration-lint` job).
+- [ ] See `docs/MIGRATIONS.md` for copy-paste snippet templates.
 
 ---
 

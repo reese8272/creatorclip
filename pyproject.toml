@@ -1,3 +1,12 @@
+# Issue 297: CalVer (YYYY.MM.patch) — chronological, readable, no arbitrary major/minor
+# decisions. importlib.metadata.version('creatorclip') reads this at runtime.
+# Increment the patch when shipping a hotfix in the same month; reset to 0 on month roll.
+[project]
+name = "creatorclip"
+version = "2026.6.0"
+description = "The only AI editor that truly knows your channel."
+requires-python = ">=3.12"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

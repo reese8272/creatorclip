@@ -65,12 +65,36 @@ jobs:
       - name: Roll out
         run: docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-      - name: Smoke test (auto-rollback on failure — Issue 271)
-        # On failure: if a PREV_IMAGE was captured, re-pull and restart on the
-        # previous image before exiting non-zero so alerting fires. If no previous
-        # image exists (first deploy), skip rollback. Image pruning is deferred until
-        # AFTER this step so the rollback target is available during the smoke window.
+      - name: Smoke test (auto-rollback on failure — Issue 271, Issue 295)
+        # Phase 1: /health liveness gate (fast, no auth required).
+        # Phase 2: critical journey — llm_harness --flow core (auth_me, videos_list,
+        #   dna, insights, billing_balance, videos_envelope_shape). On failure in
+        #   either phase: auto-rollback to PREV_IMAGE if available, then exit 1
+        #   so alerting fires (rollback is a safety net, not a success signal).
+        #
+        # Required secrets/env (set in production .env or as GitHub Actions secrets):
+        #   CC_BASE_URL    — defaults to http://localhost:8000
+        #   CC_JWT_SECRET  — the running app's JWT_SECRET_KEY
+        #   CC_CREATOR_ID  — a seeded test-creator UUID (from tests/perf/seed_staging.py)
+        env:
+          CC_BASE_URL: ${{ vars.CC_BASE_URL || 'http://localhost:8000' }}
+          CC_JWT_SECRET: ${{ secrets.CC_JWT_SECRET }}
+          CC_CREATOR_ID: ${{ vars.CC_CREATOR_ID }}
         run: |
+          _rollback_and_fail() {
+            echo "Auto-rolling back to previous image: ${PREV_IMAGE}"
+            if [ -n "${PREV_IMAGE}" ]; then
+              docker pull "${PREV_IMAGE}" || true
+              docker compose -f docker-compose.prod.yml down --timeout 30 || true
+              IMAGE_TAG="${PREV_IMAGE}" docker compose -f docker-compose.prod.yml up -d || true
+              echo "Rollback complete. Verify with: curl http://localhost:8000/health"
+            else
+              echo "No previous image captured (first deploy?) — manual recovery required."
+            fi
+            exit 1
+          }
+
+          # ── Phase 1: /health liveness ─────────────────────────────────────
           STATUS=""
           for i in 1 2 3 4 5; do
             BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
@@ -79,24 +103,33 @@ jobs:
             echo "Attempt $i: $BODY"
             STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
             if [ "$STATUS" = "ok" ]; then
-              echo "Deploy healthy: $BODY"
+              echo "Deploy healthy (health): $BODY"
               break
             fi
             [ $i -lt 5 ] && sleep 10
           done
           if [ "$STATUS" != "ok" ]; then
-            echo "Smoke test FAILED after 5 attempts."
-            if [ -n "${PREV_IMAGE}" ]; then
-              echo "Auto-rolling back to previous image: ${PREV_IMAGE}"
-              docker pull "${PREV_IMAGE}" || true
-              # Override the image tag in the compose file temporarily and restart.
-              docker compose -f docker-compose.prod.yml down --timeout 30 || true
-              IMAGE_TAG="${PREV_IMAGE}" docker compose -f docker-compose.prod.yml up -d || true
-              echo "Rollback complete. Verify with: curl http://localhost:8000/health"
-            else
-              echo "No previous image captured (first deploy?) — manual recovery required."
-            fi
-            exit 1
+            echo "Smoke test /health FAILED after 5 attempts."
+            _rollback_and_fail
+          fi
+
+          # ── Phase 2: critical journey (Issue 295) ─────────────────────────
+          # llm_harness --flow core: health + auth_me + videos_list + dna +
+          # insights + billing_balance + videos_envelope_shape.
+          # Exits non-zero on any REQUIRED step failure.
+          # CC_JWT_SECRET and CC_CREATOR_ID must be set (see env block above).
+          if [ -z "${CC_JWT_SECRET:-}" ]; then
+            echo "WARNING: CC_JWT_SECRET not set — skipping critical journey smoke."
+            echo "Set the CC_JWT_SECRET secret and CC_CREATOR_ID variable in GitHub Actions."
+          else
+            echo "Running critical journey smoke (llm_harness --flow core)..."
+            docker compose -f docker-compose.prod.yml exec -T \
+              -e CC_BASE_URL="${CC_BASE_URL}" \
+              -e CC_JWT_SECRET="${CC_JWT_SECRET}" \
+              -e CC_CREATOR_ID="${CC_CREATOR_ID}" \
+              app python3 scripts/llm_harness.py --flow core \
+              || { echo "Critical journey smoke FAILED."; _rollback_and_fail; }
+            echo "Critical journey smoke passed."
           fi
 
       - name: Clean up old images (after successful smoke test — Issue 271)

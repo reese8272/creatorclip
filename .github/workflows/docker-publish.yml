@@ -16,7 +16,7 @@ jobs:
     # 101 (2026-05-31) — eliminate GH-hosted billing as a deploy blocker.
     runs-on: self-hosted
     permissions:
-      contents: read
+      contents: write   # Issue 297: needs write to create Git tags + GitHub Releases
       packages: write
 
     steps:
@@ -64,3 +64,43 @@ jobs:
           # of the same commit, fresh on every push.
           build-args: |
             GIT_SHA=sha-${{ github.sha }}
+
+      # Issue 297: Auto-create a CalVer Git tag + GitHub Release on every push to
+      # main. This fires the `type=semver` rule already present in docker/metadata-
+      # action above, so the Docker image automatically carries the CalVer tag.
+      # The tag is idempotent: if the same version already exists (same-month hotfix
+      # with patch=0), the step will fail with "already exists" — bump the patch in
+      # pyproject.toml [project].version before merging a second release in a month.
+      - name: Read CalVer from pyproject.toml
+        id: calver
+        run: |
+          VERSION=$(python3 -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              print(tomllib.load(f)['project']['version'])
+          ")
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "CalVer tag: v${VERSION}"
+
+      - name: Create CalVer Git tag + GitHub Release
+        # Only fires on push to main (not on release: triggers — those already have a tag).
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.calver.outputs.version }}"
+          # Create the annotated Git tag (idempotent-ish: exit 0 if already exists).
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a "${TAG}" -m "Release ${TAG}" "${{ github.sha }}" 2>/dev/null \
+            || echo "Tag ${TAG} already exists — skipping tag creation."
+          git push origin "${TAG}" 2>/dev/null \
+            || echo "Tag ${TAG} already on remote — skipping push."
+          # Create a GitHub Release so the semver type=semver metadata-action
+          # rule fires on the next docker-publish triggered by the release event,
+          # and the Docker image carries the CalVer tag automatically.
+          gh release create "${TAG}" \
+            --title "Release ${TAG}" \
+            --notes "Automated CalVer release for commit ${{ github.sha }}." \
+            --target "${{ github.sha }}" \
+            2>/dev/null || echo "Release ${TAG} already exists — skipping."

@@ -127,6 +127,23 @@ class Harness:
         except Exception as exc:  # noqa: BLE001
             self._record("videos_envelope_shape", False, f"error: {exc}")
 
+        # Issue 295: SOFT write-path assertion — link a fixed idempotent test video.
+        # This exercises the write path (POST /videos/link) without polluting real
+        # creator data. 200 = first link, 409 = already linked (re-run) — both are
+        # acceptable. Failure is WARN-only (required=False) so a missing OAuth token
+        # or metadata-lookup degradation does not roll back a healthy deploy.
+        try:
+            r = self._post("/videos/link", data={"youtube_video_id": _HARNESS_YT_ID})
+            ok = r.status_code in (200, 409)
+            self._record(
+                "write_path_link_video",
+                ok,
+                f"{r.status_code} (200=linked 409=already-linked)",
+                required=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._record("write_path_link_video", False, f"error: {exc}", required=False)
+
     def flow_issue_139(self) -> None:
         """Live regression for the linked-video SEV1 + the source-less queue guard."""
         # 1. Link a video (idempotent). With no real OAuth tokens on the seeded
