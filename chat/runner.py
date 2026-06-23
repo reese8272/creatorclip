@@ -99,8 +99,18 @@ async def run_chat_turn(
             if getattr(block, "type", None) != "tool_use":
                 continue
             await aemit(task_id, "step", label=f"tool:{block.name}", stage="chat")
-            result = await execute_tool(block.name, block.input, creator_id, session)
-            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
+            result_str, failed = await execute_tool(block.name, block.input, creator_id, session)
+            # is_error: true gives Claude a documented semantic signal to recover
+            # gracefully rather than treating the error JSON as successful data.
+            # (Anthropic tool-use handle-tool-calls docs, fetched 2026-06-23; Issue 222)
+            tool_result: dict = {
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result_str,
+            }
+            if failed:
+                tool_result["is_error"] = True
+            tool_results.append(tool_result)
         messages.append({"role": "user", "content": tool_results})
 
     logger.info(
@@ -110,4 +120,26 @@ async def run_chat_turn(
         total["cache_read"],
         total["output_tokens"],
     )
+
+    from billing.ledger import increment_usage, _estimate_cost_usd
+    from datetime import UTC, datetime
+
+    try:
+        cost = _estimate_cost_usd(
+            total["input_tokens"],
+            total["output_tokens"],
+            settings.COST_PER_MTOK_IN_SONNET,
+            settings.COST_PER_MTOK_OUT_SONNET,
+        )
+        await increment_usage(
+            session,
+            creator_id,
+            datetime.now(UTC).strftime("%Y-%m"),
+            total["input_tokens"],
+            total["output_tokens"],
+            cost,
+        )
+    except Exception as _exc:  # noqa: BLE001 — best-effort; never block chat
+        logger.warning("chat usage ledger write failed creator=%s: %s", creator_id, _exc)
+
     return final_text, total

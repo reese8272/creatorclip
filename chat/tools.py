@@ -58,6 +58,8 @@ TOOLS: list[dict[str, Any]] = [
                 "limit": {
                     "type": "integer",
                     "description": f"How many recent videos to return (1–{_MAX_VIDEOS}).",
+                    "minimum": 1,
+                    "maximum": _MAX_VIDEOS,
                 }
             },
             "additionalProperties": False,
@@ -289,20 +291,23 @@ _EXECUTORS = {
 
 async def execute_tool(
     name: str, tool_input: dict, creator_id: uuid.UUID, session: AsyncSession
-) -> str:
-    """Run one creator-scoped tool and return its result as a JSON string.
+) -> tuple[str, bool]:
+    """Run one creator-scoped tool and return ``(result_json, failed)``.
 
-    Unknown tools and executor failures return an ``is_error``-style payload as
-    text rather than raising, so the agentic loop can surface the problem to the
-    model and recover instead of crashing the whole turn.
+    ``failed`` is True when the tool could not execute successfully — an unknown
+    tool name or an executor exception. The caller must set ``is_error: true`` on
+    the tool_result block in that case so Claude receives the documented semantic
+    signal to recover gracefully (Anthropic tool-use handle-tool-calls docs,
+    fetched 2026-06-23). Never raises — errors are surfaced to the model, not
+    propagated to the agentic loop. (Issue 222)
     """
     executor = _EXECUTORS.get(name)
     if executor is None:
         logger.warning("chat tool unknown name=%s creator=%s", name, creator_id)
-        return json.dumps({"error": f"Unknown tool: {name}"})
+        return json.dumps({"error": f"Unknown tool: {name}"}), True
     try:
         result = await executor(creator_id, session, tool_input or {})
     except Exception as exc:  # noqa: BLE001 — surface to the model, never crash the turn
         logger.warning("chat tool failed name=%s creator=%s err=%s", name, creator_id, exc)
-        return json.dumps({"error": "Tool failed to fetch data; try a different question."})
-    return json.dumps(result, default=str)
+        return json.dumps({"error": "Tool failed to fetch data; try a different question."}), True
+    return json.dumps(result, default=str), False

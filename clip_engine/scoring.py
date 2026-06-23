@@ -11,10 +11,14 @@ Every returned candidate includes a named principle from CLIPPING_PRINCIPLES.md.
 import asyncio
 import json
 import logging
+import uuid
+from datetime import UTC, datetime
 
 import httpx
 from anthropic import AsyncAnthropic
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
 
@@ -177,6 +181,8 @@ async def score_candidates(
     timeline: dict,
     dna_brief: str | None = None,
     transcript_segments: list | None = None,
+    creator_id: uuid.UUID | None = None,
+    session: AsyncSession | None = None,
 ) -> list[dict]:
     """
     Score and annotate candidates in-place. Returns the enriched list.
@@ -253,14 +259,35 @@ async def score_candidates(
     # the 1-hour tier (not the default 5-min one). Defensive getattrs keep the
     # line working if usage.cache_creation is None (no write this call).
     _cache_creation = getattr(response.usage, "cache_creation", None)
+    _tokens_in = response.usage.input_tokens
+    _tokens_out = response.usage.output_tokens
     logger.info(
         "clip_scoring tokens: in=%d cached_read=%d cached_write=%d cached_write_1h=%d out=%d",
-        response.usage.input_tokens,
+        _tokens_in,
         getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
         getattr(_cache_creation, "ephemeral_1h_input_tokens", 0) or 0,
-        response.usage.output_tokens,
+        _tokens_out,
     )
+
+    if creator_id is not None and session is not None:
+        try:
+            cost = _estimate_cost_usd(
+                _tokens_in,
+                _tokens_out,
+                settings.COST_PER_MTOK_IN_SONNET,
+                settings.COST_PER_MTOK_OUT_SONNET,
+            )
+            await increment_usage(
+                session,
+                creator_id,
+                datetime.now(UTC).strftime("%Y-%m"),
+                _tokens_in,
+                _tokens_out,
+                cost,
+            )
+        except Exception as _exc:  # noqa: BLE001 — best-effort; never block scoring
+            logger.warning("clip_scoring usage ledger write failed: %s", _exc)
 
     text = next((b.text for b in response.content if b.type == "text"), "[]")
     try:

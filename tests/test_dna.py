@@ -191,7 +191,7 @@ def test_generate_brief_calls_claude_and_appends_disclaimer(monkeypatch):
     mock_response = _mock_anthropic_response("Channel insight text here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
-        result = generate_brief({"top_videos": []}, "TestChannel")
+        result, _usage = generate_brief({"top_videos": []}, "TestChannel")
 
     assert "Channel insight text here." in result
     assert _DISCLAIMER in result
@@ -202,7 +202,7 @@ def test_generate_brief_disclaimer_always_present(monkeypatch):
     mock_response = _mock_anthropic_response("Some brief content.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
-        result = generate_brief({}, "AnyChannel")
+        result, _usage = generate_brief({}, "AnyChannel")
 
     assert "does not promise virality" in result
 
@@ -217,9 +217,11 @@ def test_generate_brief_raises_on_empty_response():
             generate_brief({}, "BadChannel")
 
 
-def test_generate_brief_uses_prompt_caching():
-    """System is split (Issue 69): a static cached prefix + a volatile uncached
-    block carrying the per-creator corpus."""
+def test_generate_brief_no_cache_markers():
+    """Issue 223 spike: the DNA-build call has NO cache_control markers.
+    The static prefix is below Sonnet 4.6's 1024-token floor and the 5-min
+    default TTL expires before scoring.py runs, so the marker was a pure
+    write-premium with zero expected reads. See docs/DECISIONS.md."""
     mock_response = _mock_anthropic_response("Brief here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
@@ -227,11 +229,10 @@ def test_generate_brief_uses_prompt_caching():
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
-    assert len(system) == 2
-    # Static prefix carries the breakpoint and holds no per-creator data.
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    assert len(system) == 2  # static instructions + per-creator corpus
+    # No cache_control on any block — Issue 223 removed the inert marker.
+    assert "cache_control" not in system[0]
     assert "TestChannel" not in system[0]["text"]
-    # Volatile block carries the corpus and is NOT cached.
     assert "cache_control" not in system[1]
     assert "TestChannel" in system[1]["text"]
 

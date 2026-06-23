@@ -121,7 +121,7 @@ def test_improvement_brief_disclaimer_always_present():
     mock_resp = _mock_brief_response("Here are 3 improvements.")
     with patch("improvement.brief._ANTHROPIC") as mock_client:
         mock_client.with_options.return_value.messages.create.return_value = mock_resp
-        result = generate_improvement_brief("TestChannel", {})
+        result, _usage = generate_improvement_brief("TestChannel", {})
 
     assert _DISCLAIMER in result
     assert "does not promise virality" in result

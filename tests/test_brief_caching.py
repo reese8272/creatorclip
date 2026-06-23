@@ -29,6 +29,10 @@ class _Resp:
 
 
 def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
+    """Issue 223: DNA-build call has NO cache_control markers.
+    Static prefix is below Sonnet 4.6's 1024-token floor; the 5-min TTL
+    expires before scoring.py runs. Marker was a pure write-premium — removed.
+    See docs/DECISIONS.md."""
     import dna.brief as b
 
     captured: dict = {}
@@ -39,12 +43,12 @@ def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
 
     mocker.patch.object(b._ANTHROPIC.messages, "create", side_effect=_create)
 
-    out = b.generate_brief({"top_videos": [{"title": "T", "hook_text": "H"}]}, "Acme Channel")
+    out, _usage = b.generate_brief({"top_videos": [{"title": "T", "hook_text": "H"}]}, "Acme Channel")
 
     system = captured["system"]
     assert len(system) == 2
-    # Block 0: static, cached, contains NO per-creator data.
-    assert system[0]["cache_control"] == {"type": "ephemeral"}
+    # Block 0: static, NO cache_control (Issue 223 — inert marker removed).
+    assert "cache_control" not in system[0]
     assert "Acme Channel" not in system[0]["text"]
     assert "CREATOR PERFORMANCE DATA" not in system[0]["text"]
     # Block 1: volatile, NOT cached, carries the creator data.
@@ -73,7 +77,7 @@ def test_improvement_brief_returns_final_text_block_not_preamble(mocker):
     mock_client.messages.create.side_effect = _create
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
-    out = b.generate_improvement_brief(channel_title="Ch", analytics={"avg_views": 100})
+    out, _usage = b.generate_improvement_brief(channel_title="Ch", analytics={"avg_views": 100})
 
     system = captured["system"]
     assert len(system) == 2
@@ -182,7 +186,7 @@ def test_improvement_brief_streaming_path_passes_tools_to_stream_and_emit(mocker
     # with_options(...) returns the client we pass into stream_and_emit; just
     # let the real Anthropic singleton return its real with_options output —
     # stream_and_emit itself is fully mocked so no actual SDK call fires.
-    result = b.generate_improvement_brief(
+    result, _usage = b.generate_improvement_brief(
         channel_title="Ch",
         analytics={"avg_views": 100},
         task_id="task-w3-fix-a",

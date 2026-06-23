@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     # shape as the prior _20250305 (`name: "web_search"`); no call-site
     # changes required to swap. (Issue 84)
     ANTHROPIC_WEB_SEARCH_TOOL: str = "web_search_20260209"
+    # LLM cost constants (USD per million tokens, standard tier).
+    # Source: Anthropic pricing page (platform.claude.com, fetched 2026-06-23).
+    # Override via env var to pick up price changes without a code deploy.
+    # (Issue 220 — Usage cost ledger)
+    COST_PER_MTOK_IN_SONNET: float = 3.0   # Sonnet 4.6 input: $3/MTok standard
+    COST_PER_MTOK_OUT_SONNET: float = 15.0  # Sonnet 4.6 output: $15/MTok standard
+    COST_PER_MTOK_IN_HAIKU: float = 1.0    # Haiku 4.5 input: $1/MTok standard
+    COST_PER_MTOK_OUT_HAIKU: float = 5.0   # Haiku 4.5 output: $5/MTok standard
     # --- Pro chatbot (Issue 152) ---
     # Per-creator daily message cap — the load-bearing margin guard. Bounds
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per

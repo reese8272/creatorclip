@@ -339,11 +339,12 @@ def test_get_identity_no_conflict_when_no_identity(monkeypatch):
 # ── brief.py wiring ─────────────────────────────────────────────────────────
 
 
-def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatch):
+def test_generate_brief_includes_identity_block_with_no_cache_markers(monkeypatch):
     """The identity block must land BEFORE the volatile performance corpus
-    and AFTER the static instructions, with the cache_control breakpoint
-    moved to the identity block (the LAST stable block) — matches the 2026
-    prompt-caching standard."""
+    and AFTER the static instructions. Issue 223 removed all cache_control markers
+    from dna/brief.py: the static prefix is below Sonnet 4.6's 1024-token floor
+    and the 5-min TTL expires before scoring.py runs — the marker was a pure
+    write-premium (1.25×) with zero expected reads. See docs/DECISIONS.md."""
     from dna import brief as brief_module
 
     captured: dict = {}
@@ -375,22 +376,22 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
     )
 
     system = captured["system"]
-    # Three blocks: instructions, identity, corpus.
+    # Three blocks: instructions, identity, corpus — no cache_control on any. (Issue 223)
     assert len(system) == 3
     assert "CreatorClip" not in system[0]["text"]  # static instructions doesn't mention brand here
     assert "expert YouTube channel analyst" in system[0]["text"]
     assert system[1]["text"] == identity_block
-    # Cache breakpoint moves from instructions → identity (the last stable block).
+    # No cache_control markers in the DNA build call.
     assert "cache_control" not in system[0]
-    assert system[1].get("cache_control") == {"type": "ephemeral"}
+    assert "cache_control" not in system[1]
     # Corpus is last and uncached.
     assert system[2]["text"].startswith("CREATOR PERFORMANCE DATA:")
     assert "cache_control" not in system[2]
 
 
 def test_generate_brief_skips_identity_block_when_none(monkeypatch):
-    """No identity → just 2 system blocks (instructions + corpus), instructions
-    keeps the cache breakpoint."""
+    """No identity → just 2 system blocks (instructions + corpus). No cache_control
+    on either block (Issue 223 — inert markers removed from dna/brief.py)."""
     from dna import brief as brief_module
 
     captured: dict = {}
@@ -422,5 +423,6 @@ def test_generate_brief_skips_identity_block_when_none(monkeypatch):
 
     system = captured["system"]
     assert len(system) == 2
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    # No cache_control markers in the DNA build call. (Issue 223)
+    assert "cache_control" not in system[0]
     assert system[1]["text"].startswith("CREATOR PERFORMANCE DATA:")

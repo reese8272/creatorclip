@@ -13,7 +13,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 |-------|-----------|-------|
 | Backend | FastAPI (Python 3.12+) | Async-first |
 | Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → signals → DNA → clip → render |
-| LLM | Anthropic SDK; `claude-sonnet-4-6` default, `claude-opus-4-7` for DNA synthesis | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
+| LLM | Anthropic SDK; **`claude-sonnet-4-6`** default (DNA brief, titles, thumbnails, scoring, analysis, improvement, chat); **`claude-haiku-4-5-20251001`** for high-frequency/lower-stakes paths (chapters, hook analysis, analyze-performer); **no Opus** — see docs/DECISIONS.md (Issue 221). Sonnet 4.6 cacheable-prefix floor = 1024 tokens (confirmed 2026-06-23). | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
 | Embeddings | Voyage AI (`voyage-3.5`) → pgvector | Local sentence-transformers as offline fallback |
 | Transcription | WhisperX (faster-whisper + forced alignment), word-level | Hosted fallback (Deepgram/AssemblyAI) behind `TRANSCRIPTION_BACKEND` config; GPU recommended |
 | Audio analysis | librosa (RMS energy) | Energy, silence, volume spikes, laughter/applause heuristic. Loudness normalization is ffmpeg `loudnorm` (two-pass, −14 LUFS) at render time, not analysis (Issue 181). |

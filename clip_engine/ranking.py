@@ -123,7 +123,9 @@ async def generate_and_rank_clips(
         logger.info("No candidates found for video %s", video_id)
         return []
 
-    scored = await score_candidates(candidates, timeline, dna_brief, transcript_segments)
+    scored = await score_candidates(
+        candidates, timeline, dna_brief, transcript_segments, creator_id=creator_id, session=session
+    )
     ranked = rank_candidates(scored)
 
     # The top-of-function early-return already short-circuits when ANY clip exists

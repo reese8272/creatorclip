@@ -164,10 +164,11 @@ def generate_chapters(
     segments: list[dict],
     video_duration_s: float,
     task_id: str,
-) -> str:
+) -> tuple[str, dict]:
     """Call Claude to generate chapter titles; stream tokens to the SSE consumer.
 
-    Returns the raw JSON string from Claude's final text block.
+    Returns ``(raw_json, usage)`` where usage is the token-count dict from
+    ``stream_and_emit``. Callers should pass usage to ``billing.ledger.record_llm_usage``.
     Raises on network / API errors so the Celery task can retry.
     """
     # Build segment blocks for the user message
@@ -221,4 +222,4 @@ def generate_chapters(
         usage["cache_creation"],
         usage["output_tokens"],
     )
-    return final_text
+    return final_text, usage

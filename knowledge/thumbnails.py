@@ -173,10 +173,12 @@ def _build_concepts_request(
 ) -> tuple:
     """Assemble (system, tools, messages) for concept generation.
 
-    No cache_control breakpoint — same reasoning as knowledge/titles.py: the
-    static instructions + DNA brief prefix (~1,550 tokens) is below Sonnet 4.6's
-    2048-token cacheable-prefix floor, so a marker would be inert (SEV1 #6).
-    Per-video patterns and context are in block 3.
+    Block 2 carries the cache breakpoint (ttl=1h): static instructions + DNA brief
+    prefix totals ~1,550 tokens, which clears Sonnet 4.6's 1024-token cacheable-
+    prefix floor (confirmed 2026-06-23). Cross-call sharing: if a titles call already
+    wrote the cache, a subsequent thumbnail call within the 1h window will read it
+    for free (same block 1 + block 2 byte-identical prefix). (Issue 218)
+    Per-video patterns and context are in the uncached block 3.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
@@ -201,14 +203,16 @@ def _build_concepts_request(
     system: list[dict] = [
         # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — stable per-creator. NO cache_control: block 1 +
-        # block 2 (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-prefix
-        # floor, so a marker is inert (1.25x write premium, zero reads). SEV1 #6.
+        # Block 2: DNA brief — stable per-creator. cache_control with 1h TTL so
+        # all brief calls (titles → hooks → thumbnails) within a creator session
+        # share the cached prefix. ~1,550-token prefix clears Sonnet 4.6's 1024-
+        # token cacheable-prefix floor (confirmed 2026-06-23). (Issue 218)
         {
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
         },
-        # Block 3: per-video context — changes per request.
+        # Block 3: per-video context — changes per request. Uncached.
         {
             "type": "text",
             "text": f"CHANNEL THUMBNAIL PATTERNS:\n{pattern_text}\n\nVIDEO CONTEXT:\n{video_context}",
@@ -264,11 +268,12 @@ def generate_thumbnail_concepts(
     transcript_hook: str,
     stated_identity: str | None,
     task_id: str,
-) -> str:
+) -> tuple[str, dict]:
     """Call Claude with web_search; stream tokens to the SSE consumer.
 
-    Returns the raw JSON string from Claude's final text block. Raises on
-    network / API errors so the Celery task can retry.
+    Returns ``(raw_json, usage)`` where usage is the token-count dict from
+    ``stream_and_emit``. Callers should pass usage to ``billing.ledger.increment_usage``.
+    Raises on network / API errors so the Celery task can retry.
     Intended to be called via asyncio.to_thread.
     """
     system, tools, messages = _build_concepts_request(
@@ -294,4 +299,4 @@ def generate_thumbnail_concepts(
         usage["cache_creation"],
         usage["output_tokens"],
     )
-    return final_text
+    return final_text, usage

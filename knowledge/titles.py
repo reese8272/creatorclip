@@ -2,10 +2,12 @@
 
 Prompt structure (three system blocks):
   Block 1 — static instructions: role, task, CTR principles, neutral-band definition.
-  Block 2 — DNA brief: per-creator, stable across calls. No cache_control — the
-            block 1 + block 2 prefix (~1,550 tokens) is below Sonnet 4.6's
-            2048-token cacheable-prefix floor, so a marker would be inert (SEV1 #6).
-  Block 3 — per-video context: video title + transcript summary.
+  Block 2 — DNA brief (cache_control breakpoint, ttl=1h): per-creator, stable across
+            calls. The block 1 + block 2 prefix (~1,550 tokens) exceeds Sonnet 4.6's
+            1024-token cacheable-prefix floor, so the marker is live (Issue 218).
+            Note: earlier code comments cited a 2048-token floor — this was incorrect;
+            the live Anthropic docs (fetched 2026-06-23) show 1024 for Sonnet 4.6.
+  Block 3 — per-video context: video title + transcript summary. Uncached.
 
 Claude generates 10 ranked candidates; the caller surfaces the top 5.
 Results stream via stream_and_emit and are returned as a JSON string for the
@@ -102,9 +104,11 @@ def _build_request(
 ) -> tuple:
     """Assemble (system, tools, messages) for both .create and streaming paths.
 
-    No cache_control breakpoint: the static instructions + DNA brief prefix
-    (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-prefix floor, so
-    a marker would be inert (SEV1 #6). Per-video context is block 3.
+    Block 2 carries the cache breakpoint (ttl=1h): static instructions + DNA brief
+    prefix totals ~1,550 tokens, which clears Sonnet 4.6's 1024-token cacheable-
+    prefix floor. Within a 1h window a creator's title/thumbnail/hook calls all
+    benefit from the cached prefix (10x cost reduction on the cached portion).
+    Per-video context is in the uncached block 3. (Issue 218)
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
@@ -121,16 +125,16 @@ def _build_request(
     system: list[dict] = [
         # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — stable per-creator. NO cache_control: the static
-        # instructions + DNA brief together run ~1,550 tokens, BELOW Sonnet 4.6's
-        # 2048-token cacheable-prefix floor, so a marker here is inert — it only
-        # pays the 1.25x write premium for zero reads. (SEV1 #6; same precedent
-        # as knowledge/hooks.py / improvement/brief.py — see docs/DECISIONS.md.)
+        # Block 2: DNA brief — stable per-creator. cache_control with 1h TTL so
+        # all brief calls (titles → hooks → thumbnails) within the same session
+        # window share the cached prefix. The ~1,550-token prefix clears Sonnet
+        # 4.6's 1024-token cacheable-prefix floor (confirmed 2026-06-23). (Issue 218)
         {
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
         },
-        # Block 3: per-video context — changes with each video.
+        # Block 3: per-video context — changes with each video. Uncached.
         {"type": "text", "text": f"VIDEO TO TITLE:\n{video_context}"},
     ]
     tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
@@ -186,14 +190,15 @@ def generate_title_suggestions(
     video_title: str | None,
     transcript_summary: str,
     task_id: str,
-) -> str:
+) -> tuple[str, dict]:
     """Call Claude with web_search; stream tokens to the SSE consumer.
 
     Always uses the streaming path (task_id is mandatory for this feature —
     the caller emits the result event from the returned JSON string).
 
-    Returns the raw JSON string from Claude's final text block. Raises on
-    network / API errors so the Celery task can retry.
+    Returns ``(raw_json, usage)`` where usage is the token-count dict from
+    ``stream_and_emit``. Callers should pass usage to ``billing.ledger.increment_usage``
+    to populate the aggregate cost ledger. Raises on network / API errors.
     """
     system, tools, messages = _build_request(
         channel_title, dna_brief, stated_identity, video_title, transcript_summary
@@ -218,4 +223,4 @@ def generate_title_suggestions(
         usage["cache_creation"],
         usage["output_tokens"],
     )
-    return final_text
+    return final_text, usage
