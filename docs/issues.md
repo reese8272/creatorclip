@@ -3554,7 +3554,7 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 ### Issue 235: Funnel instrumentation + resolver/state-machine cleanup
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Activation & Onboarding · **Size** `L` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W0 · **Lane** Activation & Onboarding · **Size** `L` · **Verify** `staging`  
 **Src** `07 / 188 + 193 + 06 / 171g` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/07_activation_onboarding_funnel.md`  
 **Blocked by** nothing — **ready now** · **Enables** #161, #203, #204 · **Coordinate (hot files)** `dna/onboarding.py`, `event_log.py`, `routers/auth.py`, `routers/creators.py`, `worker/tasks.py`  
 
@@ -3596,7 +3596,7 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 ### Issue 161: Backend next_action envelope URLs point at dead /static/* pages — FOLDS into Issue 235
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `S` · **Verify** `local`  
 **Src** pre-existing 161 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #235 · **Coordinate (hot files)** `dna/onboarding.py`, `routers/insights.py`, `routers/videos.py`  
 
