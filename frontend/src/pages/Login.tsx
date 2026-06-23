@@ -9,6 +9,11 @@
 // 2025 9th Circuit (Chabolla v. ClassPass) held NOT binding.  The checkbox
 // being affirmative and gating the CTA is the minimal defensible clickwrap
 // pattern per FTC/CFPB 2025 guidance and the Ninth Circuit standard.
+//
+// Issue 300: A second "I confirm I am 13 or older" checkbox is composed with the
+// above.  Both must be checked before the CTA is active.  Age-neutral phrasing
+// ("13 or older") is the FTC COPPA Rule (16 CFR Part 312, effective 2025-06-23)
+// recommended pattern: a neutral affirmation, not a yes/no that nudges the answer.
 import { useState } from 'react'
 
 export function Login() {
@@ -16,6 +21,9 @@ export function Login() {
   const signInHref = yt ? `/auth/login?yt=${encodeURIComponent(yt)}` : '/auth/login'
 
   const [agreed, setAgreed] = useState(false)
+  const [ageConfirmed, setAgeConfirmed] = useState(false)
+
+  const canSignIn = agreed && ageConfirmed
 
   return (
     <div className="flex min-h-screen flex-col bg-bg">
@@ -36,7 +44,7 @@ export function Login() {
               Must be checked before the OAuth CTA becomes active.  This is the
               defensible consent artifact per Chabolla v. ClassPass (9th Cir. 2025)
               and GDPR Art. 7 recorded-consent requirement. */}
-          <label className="mb-5 flex cursor-pointer items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
+          <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
             <input
               type="checkbox"
               checked={agreed}
@@ -69,7 +77,22 @@ export function Login() {
             </span>
           </label>
 
-          {agreed ? (
+          {/* Issue 300 — COPPA 13+ minimum-age attestation (unchecked by default).
+              Age-neutral phrasing per FTC COPPA Rule (16 CFR Part 312, 2025-06-23):
+              "I confirm I am 13 or older" avoids a leading yes/no question.
+              Both this and the consent checkbox above must be checked before sign-in. */}
+          <label className="mb-5 flex cursor-pointer items-start gap-3 rounded-md border border-default bg-surface px-3.5 py-3 text-left text-xs leading-relaxed text-muted">
+            <input
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(e) => setAgeConfirmed(e.target.checked)}
+              aria-label="I confirm I am 13 or older"
+              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-current"
+            />
+            <span>I confirm I am 13 or older.</span>
+          </label>
+
+          {canSignIn ? (
             <a
               href={signInHref}
               className="inline-flex w-full items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg transition-opacity hover:opacity-90"
@@ -89,7 +112,7 @@ export function Login() {
               disabled
               aria-disabled="true"
               className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg opacity-40"
-              aria-label="Sign in with Google (please agree to Terms first)"
+              aria-label="Sign in with Google (please agree to Terms and confirm your age first)"
             >
               <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" />

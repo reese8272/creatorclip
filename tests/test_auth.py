@@ -343,6 +343,73 @@ def test_callback_returning_creator_redirects_to_dashboard(client, monkeypatch):
     assert SESSION_COOKIE in resp.cookies, "Session cookie must be set on successful callback"
 
 
+# ── Issue 300: COPPA minimum-age column + recording path ─────────────────────
+
+
+def test_creator_model_has_minimum_age_confirmed_at_column():
+    """Creator ORM model must declare the minimum_age_confirmed_at column (Issue 300)."""
+    from models import Creator
+
+    col = Creator.__table__.columns.get("minimum_age_confirmed_at")
+    assert col is not None, "minimum_age_confirmed_at column missing from creators table"
+    assert col.nullable, "minimum_age_confirmed_at must be nullable (backward-compat)"
+
+
+def test_callback_new_creator_records_age_attestation(client, monkeypatch):
+    """Issue 300: minimum_age_confirmed_at is stamped in the is_new block.
+
+    Uses the same _oauth_callback_mocks helper as the Issue 215 redirect tests.
+    After a successful callback for a new creator, the fake_creator MagicMock
+    should have had minimum_age_confirmed_at set to a non-None datetime value.
+    MagicMock records attribute writes transparently; we assert via getattr.
+    """
+    import datetime
+
+    from db import get_session
+    from main import app
+
+    _oauth_callback_mocks(monkeypatch, is_new=True)
+    # Reach into the patched upsert_creator to get the fake_creator reference
+    # so we can inspect what was set on it.  We do this by replacing the mock
+    # with one that also captures the creator object it returns.
+    from unittest.mock import AsyncMock, MagicMock
+
+    captured: dict = {}
+
+    real_fake_creator = MagicMock()
+    real_fake_creator.id = uuid.uuid4()
+    real_fake_creator.trial_ends_at = None
+    captured["creator"] = real_fake_creator
+
+    monkeypatch.setattr(
+        "routers.auth.upsert_creator",
+        AsyncMock(return_value=(real_fake_creator, True)),
+    )
+
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302, got {resp.status_code}: {resp.text}"
+    # MagicMock records attribute assignments; minimum_age_confirmed_at must
+    # have been set (not simply accessed, which MagicMock auto-creates as a new mock).
+    creator = captured["creator"]
+    ts = creator.minimum_age_confirmed_at
+    # If the attribute was set to a real datetime, it will not be a MagicMock child.
+    assert not isinstance(ts, MagicMock), (
+        "minimum_age_confirmed_at was never assigned — still a MagicMock child"
+    )
+    assert isinstance(ts, datetime.datetime), (
+        f"minimum_age_confirmed_at must be a datetime, got {type(ts)}"
+    )
+
+
 # ── Integration tests (require running DB) ────────────────────────────────────
 
 

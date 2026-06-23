@@ -5,6 +5,55 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 300: COPPA 13+ minimum-age gate + age-neutral screening
+
+**What changed / decided:**
+
+1. **Age-neutral self-attestation checkbox composed with the Issue 299 consent checkbox.**
+   - FTC's amended COPPA Rule (16 CFR Part 312, effective 2025-06-23) makes clear that a
+     bare "13+" ToS clause does not exempt a general-audience SaaS operator; COPPA requires
+     "reasonable measures" to avoid collecting PII from children under 13.  The FTC-recommended
+     pattern for general-audience services is a **neutral affirmative attestation** at signup —
+     "I confirm I am 13 or older" — rather than a yes/no question that nudges the answer.
+   - A second unchecked checkbox was added to `frontend/src/pages/Login.tsx` below the
+     Issue 299 consent checkbox.  **Both** must be checked before the `canSignIn` gate allows
+     the OAuth CTA to become an active `<a>` link.  This composes with Issue 299 without
+     altering its logic: the `agreed` state variable still drives the consent checkbox; a new
+     `ageConfirmed` state variable drives the age checkbox; `canSignIn = agreed && ageConfirmed`.
+   - **Alternatives ruled out:** Single combined checkbox ("I agree to the Terms and I am 13+")
+     was considered but rejected: the FTC and GDPR Art. 7 treat consent to data terms and the
+     age attestation as distinct legal acts; conflating them into one click weakens both.
+     Age gating via a date-of-birth field was ruled out: DOB is PII the COPPA Rule explicitly
+     prohibits collecting from under-13s, creating a catch-22; a neutral attestation is the
+     FTC-approved workaround.
+
+2. **`minimum_age_confirmed_at` TIMESTAMPTZ column added to `creators` (migration 0034).**
+   - A TIMESTAMPTZ column (nullable, backward-compatible) stores the UTC timestamp of the
+     age attestation, mirroring the Issue 299 `terms_accepted_at` pattern.
+   - `minimum_age_confirmed_at` is recorded in `routers/auth.py` inside the same `is_new`
+     block as consent — same `now_utc` value so the two timestamps are always consistent.
+   - Boolean `age_confirmed` was considered but ruled out: a timestamp is the stronger audit
+     artifact (records WHEN the attestation occurred, not just WHETHER it occurred) and is
+     consistent with `terms_accepted_at`.
+
+3. **13+ minimum-age clause added to `static/tos.html` (§4a) and `static/privacy.html`
+   ("Children's privacy (COPPA)" section).**
+   - The ToS clause states 13+ (US) with an acknowledgement that GDPR Art. 8 member states
+     may apply a higher age (up to 16).  The privacy policy adds the COPPA notice, the
+     screening mechanism description, and the deletion path for under-age accounts.
+
+**Source / evidence:**
+- FTC: 16 CFR Part 312 (COPPA Rule as amended, effective 2025-06-23):
+  https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312
+- FTC COPPA guidance for operators of general-audience services:
+  https://www.ftc.gov/tips-advice/business-center/guidance/complying-coppa-frequently-asked-questions
+- GDPR Art. 8 (child consent digital services): https://gdpr-info.eu/art-8-gdpr/
+- Issue 299 DECISIONS.md entry (same file, directly below) — this entry builds on it.
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-23 — Issue 299: Enforceable clickwrap ToS/Privacy acceptance + versioned consent record
 
 **What changed / decided:**

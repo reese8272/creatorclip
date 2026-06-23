@@ -287,6 +287,7 @@ creators
   terms_accepted_at (TIMESTAMPTZ NULL — clickwrap acceptance timestamp, Issue 299),
   terms_version (VARCHAR 32 NULL — ToS version shown at acceptance, Issue 299),
   privacy_version (VARCHAR 32 NULL — Privacy Policy version shown at acceptance, Issue 299),
+  minimum_age_confirmed_at (TIMESTAMPTZ NULL — COPPA 13+ attestation timestamp, Issue 300),
   plan_tier, subscription_status, created_at
 
 youtube_tokens
