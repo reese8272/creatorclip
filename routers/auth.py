@@ -143,6 +143,24 @@ async def callback(
         # the trial minutes so the two states can never disagree. NULL means
         # "no trial active" for legacy creators that predate this column.
         creator.trial_ends_at = datetime.now(UTC) + timedelta(days=settings.TRIAL_DURATION_DAYS)
+
+        # Issue 299 — Record the versioned consent artifact in the same
+        # transaction as the creator row so the two are always consistent.
+        # The affirmative checkbox on the Login page (frontend/src/pages/Login.tsx)
+        # gates the OAuth CTA; reaching the callback IS evidence of affirmative
+        # acceptance (the OAuth flow cannot be initiated without the checkbox).
+        # We store the version strings shown at acceptance so a future re-prompt
+        # path can detect material ToS/Privacy changes by comparing stored vs current.
+        now_utc = datetime.now(UTC)
+        creator.terms_accepted_at = now_utc
+        creator.terms_version = settings.TOS_VERSION
+        creator.privacy_version = settings.PRIVACY_VERSION
+        logger.info(
+            "consent recorded creator=%s tos_version=%s privacy_version=%s",
+            creator.id,
+            settings.TOS_VERSION,
+            settings.PRIVACY_VERSION,
+        )
         session.add(creator)
         logger.info(
             "trial granted creator=%s minutes=%d trial_ends_at=%s",

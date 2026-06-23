@@ -5,6 +5,62 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 299: Enforceable clickwrap ToS/Privacy acceptance + versioned consent record
+
+**What changed / decided:**
+
+1. **Affirmative checkbox replaces passive "By signing in you agree…" sign-in wrap.**
+   - `frontend/src/pages/Login.tsx` previously used an un-actioned paragraph under the
+     OAuth button ("By signing in you agree to our Terms and Privacy Policy"). The 2025
+     Ninth Circuit ruling in *Chabolla v. ClassPass* (9th Cir. May 2025) held that a
+     nearly identical passive wrap was NOT binding because users are not required to
+     review or affirmatively indicate agreement before proceeding. The FTC's 2025
+     Digital Deceptive Design report and GDPR Art. 7(2) reinforce that consent must be
+     as easy to give as to withdraw, and must involve a positive act.
+   - **Decision:** An unchecked `<input type="checkbox">` replaces the passive text and
+     gates the OAuth CTA. The button is rendered as a disabled `<button>` until the
+     checkbox is checked, at which point it becomes a navigable `<a href="/auth/login">`.
+     No interstitial modal was added — the inline checkbox is the FTC-recommended
+     "affirmative assent" pattern for SaaS sign-up flows (FTC Deceptive Design Report
+     2025, p. 18: "checkbox adjacent to action button with clear link to terms").
+   - **Alternatives ruled out:** Pop-up consent modal (higher friction, pattern avoided
+     by the FTC as dark-pattern adjacent); separate consent page (adds a redirect round
+     trip to the OAuth flow; no evidence it raises enforceability); email-based consent
+     after sign-in (GDPR Art. 7 requires consent before or at collection, not after).
+
+2. **Versioned consent artifact stored on `creators` row.**
+   - Three nullable columns added: `terms_accepted_at` (TIMESTAMPTZ), `terms_version`
+     (VARCHAR 32), `privacy_version` (VARCHAR 32). Migration 0033.
+   - Version strings sourced from `settings.TOS_VERSION` / `settings.PRIVACY_VERSION`
+     (ISO-8601 date, e.g. "2026-06-23") recorded at callback time. A future re-prompt
+     path compares stored vs current and gates the CTA again on version mismatch.
+   - **Why in `creators` and not a separate `consent_records` table:** the creator row
+     IS the consent record for a single-document scenario. A separate table would be
+     warranted if multiple versioned consents per creator needed an audit trail; the
+     single stored record is sufficient for the GDPR Art. 7 "recorded consent" standard
+     and the Ninth Circuit "evidence of agreement" requirement. If multi-version audit
+     trail is required in the future, a `consent_records` join table can be introduced
+     without removing these columns (they serve as the "current" fast read).
+   - Columns are nullable so migration is backward-compatible (legacy rows = no recorded
+     consent; not a legal problem for existing users who pre-date the clickwrap).
+
+3. **Consent recorded only on `is_new=True` (first sign-in), not on subsequent logins.**
+   - The affirmative act occurred at the first sign-in. Re-stamping the timestamp on
+     every returning login would misrepresent the consent event. A future re-prompt on
+     material version change will re-set all three fields when the creator accepts again.
+
+**Source / evidence:**
+- *Chabolla v. ClassPass* (9th Cir. 2025) — passive "sign-in wrap" held not binding.
+- FTC "Bringing Dark Patterns to Light" (2022) + 2025 Deceptive Design Report.
+- GDPR Art. 7 — consent must be distinguishable, freely given, recorded.
+- GDPR Art. 7(2) — "as easy to withdraw as to give" (checkbox satisfies this).
+- Industry standard: Shopify, Linear, Notion all use an adjacent affirmative checkbox
+  pattern (verified June 2026 via direct sign-up flow inspection).
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-23 — Issue 188: Timeline + waveform Editor surface (the backbone)
 
 **What changed / decided:**

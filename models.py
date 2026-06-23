@@ -181,6 +181,19 @@ class Creator(Base):
         nullable=True,
     )
 
+    # Issue 299 — Clickwrap consent record.
+    # Affirmative ToS/Privacy checkbox on the Login page gates the OAuth CTA.
+    # The timestamp + version strings recorded here are the defensible consent
+    # artifact (Chabolla v. ClassPass 9th Cir. 2025; GDPR Art. 7).
+    # NULL on legacy rows that predate migration 0033 — treated as "no recorded
+    # consent" for audit purposes; re-prompt logic can check for NULL.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    terms_version: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    privacy_version: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+
     tokens: Mapped["YoutubeToken | None"] = relationship(
         "YoutubeToken", back_populates="creator", uselist=False, cascade="all, delete-orphan"
     )
