@@ -20,6 +20,17 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { outputFolder: 'e2e/.report', open: 'never' }]],
+  // Issue 272: visual regression baselines live in __snapshots__/ (separate from
+  // the __screenshots__/ artifact dir). Baselines MUST be generated on the Linux
+  // CI runner (ubuntu-latest) — WSL2/macOS font anti-aliasing differs and causes
+  // constant false positives. Update with: npm run test:e2e -- --update-snapshots
+  snapshotPathTemplate: '{testDir}/__snapshots__/{testFileName}/{arg}-{projectName}{ext}',
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.01,
+      animations: 'disabled',
+    },
+  },
   use: {
     baseURL: BASE_URL,
     screenshot: 'only-on-failure',

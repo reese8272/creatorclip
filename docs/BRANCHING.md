@@ -89,3 +89,34 @@ Notes:
 - `required_linear_history: true` + `allow_force_pushes: false` — clean, non-rewritable history.
 - GitHub's modern equivalent is **Rulesets** (Settings → Rules → Rulesets); the same
   contexts/linear-history/force-push settings apply.
+
+---
+
+## Flake Policy (Issue 268)
+
+A flaky test is an intermittent failure — it passes on re-run but fails on the first attempt.
+Mishandling flakes caused the Issue 143 9-day red where nobody could distinguish flake from
+real regression.
+
+### Detection vs. gating
+
+| Job | Purpose | Gating? |
+|-----|---------|---------|
+| `Flake detection (non-gating)` | Runs unit suite with `--reruns 1`; summarises candidates | **No** (`continue-on-error: true`) |
+| `Unit tests (pytest)` | Single-pass honest gate | **Yes** |
+
+**Blanket `--reruns N` as a merge gate is explicitly prohibited.** It converts a real
+intermittent regression into a false green — the exact mechanism that hid the 9-day red.
+
+### Quarantine lifecycle
+
+When a flake is detected:
+
+1. Add `@pytest.mark.quarantine` to the test (excluding it from the gating lane).
+2. Open an issue tracking the root cause.
+3. Fix the root cause.
+4. Remove the `quarantine` marker and verify the test passes consistently.
+
+**Never `@skip` or delete a flaky test** — skipping loses the signal that the flake is
+still broken. The `quarantine` marker keeps the test collected and running in a non-blocking
+lane, so the fix is verifiable without blocking CI.

@@ -431,6 +431,130 @@ jobs:
         # reuseExistingServer: !CI — all CI behavour is pre-configured.
         run: npm run test:e2e
 
+  visual:
+    # Issue 272: visual regression baselines on stable routes (login, pricing,
+    # empty-dashboard). Non-gating initially (continue-on-error: true) until
+    # baselines are committed from a Linux CI --update-snapshots run.
+    # CRITICAL: Baselines must be generated on this ubuntu-latest runner —
+    # local WSL2/macOS font anti-aliasing differs from Linux and causes false
+    # positives. Update workflow: run with --update-snapshots, commit the
+    # __snapshots__ PNGs in a dedicated PR.
+    name: Visual regression (non-gating until baselines committed)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # becomes gating once baselines are committed
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: playwright-chromium-
+      - name: Run visual regression tests
+        # Runs only tests tagged @visual. On first run (no baselines committed),
+        # this will fail because there are no reference snapshots — that is expected.
+        # Run with --update-snapshots once to generate baselines, then commit them.
+        run: npx playwright test --grep "@visual"
+      - name: Upload snapshot diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diffs-${{ github.sha }}
+          path: frontend/e2e/.results/
+          retention-days: 7
+
+  detect-flakes:
+    # Issue 268: flake DETECTION — non-gating, never a merge gate.
+    # Runs the unit suite with --reruns 1 and surfaces any test that failed on
+    # attempt 1 but passed on attempt 2 as a job-summary annotation. A flake
+    # that surfaces here gets @pytest.mark.quarantine (excluded from gating run)
+    # until the root cause is fixed. Blanket rerun-as-gate is EXPLICITLY PROHIBITED
+    # (see docs/BRANCHING.md and docs/DECISIONS.md — Issue 268).
+    name: Flake detection (non-gating)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # NEVER gating — flake detection is informational only
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system deps (ffmpeg + libpq)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+      - name: Install Python deps (including pytest-rerunfailures)
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run flake detection (reruns=1, not quarantine, not integration)
+        # --reruns 1 and --report-log surface tests that passed only on retry.
+        # NEVER add --reruns to the gating unit job; this job alone uses reruns.
+        run: |
+          pytest -m "not integration and not quarantine" \
+            --reruns 1 \
+            --report-log=flake-report.jsonl \
+            --tb=no -q || true
+      - name: Surface flake candidates as job summary
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib, collections
+          log = pathlib.Path("flake-report.jsonl")
+          if not log.exists():
+              print("No flake report found.")
+              exit(0)
+          # Build a map: nodeid → list of outcomes across attempts
+          attempts: dict[str, list[str]] = collections.defaultdict(list)
+          for line in log.read_text().splitlines():
+              try:
+                  ev = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if ev.get("$report_type") == "TestReport" and ev.get("when") == "call":
+                  attempts[ev["nodeid"]].append(ev.get("outcome", "unknown"))
+          # A flake = failed on first attempt, passed on a later attempt
+          flakes = [
+              nid for nid, outcomes in attempts.items()
+              if len(outcomes) >= 2 and outcomes[0] == "failed" and "passed" in outcomes[1:]
+          ]
+          summary_file = pathlib.Path(
+              __import__("os").environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
+          )
+          with summary_file.open("a") as fh:
+              if flakes:
+                  fh.write("## Flake candidates detected\n\n")
+                  fh.write("These tests failed on attempt 1 and passed on attempt 2.\n")
+                  fh.write("Add `@pytest.mark.quarantine` while the root cause is investigated.\n\n")
+                  for nid in flakes:
+                      fh.write(f"- `{nid}`\n")
+                  print(f"FLAKE CANDIDATES ({len(flakes)}):")
+                  for nid in flakes:
+                      print(f"  {nid}")
+              else:
+                  fh.write("## Flake detection: no flakes found\n")
+                  print("No flake candidates detected.")
+          EOF
+
   docker-build:
     name: Docker build (smoke test)
     runs-on: ubuntu-latest

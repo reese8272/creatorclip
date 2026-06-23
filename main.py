@@ -1,4 +1,5 @@
 import asyncio
+import importlib.metadata
 import logging
 import re as _re
 import secrets
@@ -57,6 +58,15 @@ init_sentry(
     release=settings.IMAGE_SHA,
 )
 logger = logging.getLogger(__name__)
+
+# Issue 297: CalVer version from pyproject.toml [project].version via stdlib
+# importlib.metadata — no new dependency, available since Python 3.8+.
+# Falls back to "dev" in environments where the package is not installed
+# (e.g. running `python main.py` directly without `pip install -e .`).
+try:
+    __version__ = importlib.metadata.version("creatorclip")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "dev"
 
 # Module-level singleton for /health Redis probes. Initialized in lifespan so
 # every probe reuses the same connection pool instead of calling from_url() and
@@ -272,9 +282,7 @@ class SecurityHeadersMiddleware(_BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         if settings.ENV == "production":
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=63072000; includeSubDomains"
-            )
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
 
 
@@ -405,4 +413,8 @@ async def health() -> dict:
         "status": "ok" if (postgres_ok and redis_ok) else "degraded",
         "postgres": "ok" if postgres_ok else "error",
         "redis": "ok" if redis_ok else "error",
+        # Issue 297: expose the running CalVer so `curl /health` answers
+        # "what version is live" — the standard observability touchpoint for
+        # incident triage and rollback targeting.
+        "version": __version__,
     }

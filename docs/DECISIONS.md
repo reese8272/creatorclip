@@ -7802,6 +7802,23 @@ Redis `INFO memory` / `used_memory` is the standard Redis memory-saturation read
 - Prometheus docs: Gauge metric type for instantaneous values
 - SQLAlchemy pool API: `engine.pool.checkedout()` (no query)
 - Celery Redis broker: queue stored as Redis list at key matching the queue name
+## Issue 268 — Flake detection + quarantine signal
+
+**What was decided:**
+1. `pytest-rerunfailures==14.0` added to `requirements-dev.txt` with an explicit comment: FOR DETECTION ONLY, never as a merge gate.
+2. A non-gating `detect-flakes` CI job added to `ci.yml` (`continue-on-error: true`). It runs the unit suite with `--reruns 1 --report-log=flake-report.jsonl`, parses the log for tests that failed on attempt 1 and passed on attempt 2, and surfaces them as a job-summary annotation.
+3. The primary unit and integration CI jobs remain single-pass and honest (no `--reruns` applied).
+4. `quarantine` marker registered in `pytest.ini` alongside `integration`. A known-flaky test gets `@pytest.mark.quarantine` — collected and run but excluded from the gating lane (`-m "not integration and not quarantine"`). Never `@skip` or delete.
+5. Flake policy documented in `docs/BRANCHING.md` under "Flake Policy".
+
+**Why blanket `--reruns N` as a merge gate is prohibited:**
+This is the exact mechanism that caused the Issue 143 9-day red — a real intermittent regression converted to a false green because re-runs hid the first-attempt failure. Detection (reruns=1, non-gating, report-only) gives the signal without masking the regression.
+
+**Quarantine lifecycle:** quarantine → investigate root cause → fix → remove marker → re-gate.
+
+**Alternatives ruled out:** `pytest.mark.xfail(strict=False)` — official pytest docs call this "rather dangerous to use permanently as quarantine" because it masks failures. Skipping/deleting flaky tests — loses the visibility that the flake is still broken.
+
+**Sources:** pytest docs (https://docs.pytest.org/en/stable/explanation/flaky.html); pytest-rerunfailures 14.0 docs; Trunk.io (2026) and Mergify (2026) flake guides.
 
 **Date:** 2026-06-23
 
@@ -7843,5 +7860,44 @@ with no benefit. The standard Sentry FastAPI docs show the import inside the ini
 - Sentry Celery integration docs: https://docs.sentry.io/platforms/python/integrations/celery/
 - GlitchTip docs: https://glitchtip.com/documentation/python (same SDK, different DSN)
 - OWASP Logging Cheat Sheet — layered PII scrubbing (scrub_dict in before_send = defense-in-depth)
+## Issue 272 — Visual regression baselines on stable routes
+
+**What was decided:**
+1. Three stable, data-free routes promoted from `page.screenshot()` artifact capture to `toHaveScreenshot()` pixel-diff: **login**, **pricing**, **empty-dashboard**. High-churn pages (analysis, review) excluded from initial baseline set.
+2. `playwright.config.ts` updated with `snapshotPathTemplate` (`e2e/__snapshots__/{testFileName}/{arg}-{projectName}{ext}`) so baselines live separately from the artifact `__screenshots__/` dir, and `expect.toHaveScreenshot` defaults (`maxDiffPixelRatio: 0.01`, `animations: 'disabled'`).
+3. Dynamic regions on empty-dashboard (balance display, trial countdown) masked via `page.locator()` to prevent fixture-drift false positives.
+4. A non-gating `visual` CI job added to `ci.yml` (`continue-on-error: true`). Becomes gating once baselines are committed from a Linux `--update-snapshots` run.
+
+**Baseline-in-CI policy:**
+Baselines MUST be generated on the `ubuntu-latest` CI runner — not locally on WSL2/macOS. Font anti-aliasing differences between Linux and WSL2/macOS cause constant false positives. Workflow: run `npx playwright test --grep "@visual" --update-snapshots` in CI, download the artifact, commit in a dedicated "chore: update visual baselines" PR.
+
+**Route selection rationale:** login/pricing/empty-dashboard are static-layout pages where a visual diff means a real regression (not churn). The mocked backend is already deterministic for these routes via `mock-api.ts` constants.
+
+**Alternatives ruled out:** Third-party visual services (Percy, Chromatic) — external dependency cost for 3 routes. Local baseline generation — rejected due to WSL2/macOS font rendering divergence (the central gotcha per Playwright docs). Expanding to all 9 routes immediately — high-churn pages need more aggressive masking or are excluded until stable.
+
+**Sources:** Playwright toHaveScreenshot docs; TestDino 2026; TestQuality 2026.
+
+**Date:** 2026-06-23
+
+---
+
+## Issue 297 — CalVer release versioning + auto Git tag/image tag on every main push
+
+**What was decided:**
+1. `pyproject.toml` gains a `[project]` block with `version = "2026.6.0"` — CalVer `YYYY.MM.patch`.
+2. `main.py` reads the version via `importlib.metadata.version('creatorclip')` (stdlib, no new dep) and exposes it at `/health` as `"version"`. Falls back to `"dev"` when the package is not installed (direct `python main.py` invocation).
+3. `docker-publish.yml` auto-creates a CalVer Git tag (`v2026.6.0`) and GitHub Release on every push to main. The existing `type=semver` metadata-action rule then fires on the release event and tags the Docker image with the CalVer string automatically.
+4. `deploy.yml` smoke test already captures `PREV_IMAGE` (the digest) — the CalVer version tag makes rollback targets human-readable alongside the digest.
+
+**Why CalVer (not SemVer):**
+SemVer with manual bumps requires a human decision on major/minor on every deploy — nobody has done it (the repo stayed at `version = "0.1.0"` since inception with no manual releases). CalVer (`YYYY.MM.patch`) is chronological, readable, and self-bumping on month roll. For a continuously-deployed single-product SaaS, chronology matters more than backward-compatibility signaling.
+
+**importlib.metadata.version() rationale:**
+stdlib since Python 3.8+, no new dependency, reads directly from the installed `pyproject.toml [project].version`. The Python standard — preferred over a separate `VERSION` file or a hardcoded string.
+
+**Idempotency note:**
+If two hotfixes ship in the same month, the patch must be bumped (2026.6.0 → 2026.6.1) before the second merge, or the tag-creation step will log "already exists" and skip. This is a documented constraint, not a silent failure.
+
+**Sources:** calver.org; packetoverwatch.com/posts/github-actions-calver/; docker/metadata-action `type=semver` docs.
 
 **Date:** 2026-06-23

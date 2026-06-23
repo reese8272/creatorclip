@@ -54,7 +54,7 @@ echo "  Rolling out..."
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 docker image prune -f
 
-echo "  Smoke test..."
+echo "  Smoke test — /health gate..."
 STATUS=""
 for i in 1 2 3 4 5; do
   BODY=$(docker compose -f docker-compose.prod.yml exec -T app \
@@ -63,12 +63,19 @@ for i in 1 2 3 4 5; do
   echo "  Attempt $i: $BODY"
   STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
   if [ "$STATUS" = "ok" ]; then
-    echo "  Deploy healthy."
+    echo "  /health healthy."
     break
   fi
   [ $i -lt 5 ] && sleep 10
 done
-[ "$STATUS" = "ok" ] || { echo "Smoke test failed after 5 attempts"; exit 1; }
+[ "$STATUS" = "ok" ] || { echo "Smoke test /health FAILED after 5 attempts"; exit 1; }
+
+echo "  Smoke test — critical journey (llm_harness --flow core)..."
+# Requires CC_BASE_URL, CC_JWT_SECRET, CC_CREATOR_ID to be set in the deploy .env.
+# On a non-zero exit the harness prints which REQUIRED step failed; the caller exits 1.
+docker compose -f docker-compose.prod.yml exec -T app \
+  python3 scripts/llm_harness.py --flow core \
+  || { echo "Critical journey smoke FAILED — see harness output above"; exit 1; }
 REMOTE
 
-echo "==> Wave 5 is live at https://autoclip.studio"
+echo "==> CreatorClip is live at https://autoclip.studio"
