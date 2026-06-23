@@ -39,25 +39,33 @@ test('flow: channel chat (spends LLM tokens, writes a conversation)', async ({ p
 })
 
 test('flow: video analysis (spends LLM tokens)', async ({ page }) => {
+  // Issue 274 (OCB-3): assert on HTTP response status rather than rendered output.
+  // The endpoint can take >60s for LLM generation — asserting on the 200 response
+  // header is deterministic and catches endpoint failures without coupling to render
+  // timing. The screenshot captures whatever the UI shows at that point.
   const videoId = await discoverVideoId(page)
   await page.goto('analysis', { waitUntil: 'domcontentloaded' })
   await page.getByPlaceholder(/youtu\.be/).fill(videoId ?? 'dQw4w9WgXcQ')
   await page.getByPlaceholder(/underperform/).fill('What made this video perform the way it did?')
-  const resp = page.waitForResponse((r) => r.url().includes('/video-analysis'))
+  const respPromise = page.waitForResponse((r) => r.url().includes('/video-analysis'), { timeout: 120_000 })
   await page.getByRole('button', { name: /Analyze/ }).click()
-  expect.soft((await resp).status(), 'analysis endpoint should accept the request').toBeLessThan(400)
-  await page.waitForTimeout(8000)
+  const resp = await respPromise
+  expect.soft(resp.status(), 'analysis endpoint should return 200').toBe(200)
+  // Brief wait for the UI to begin rendering (not full LLM generation).
+  await page.waitForTimeout(3000)
   await page.screenshot({ path: shot('analysis'), fullPage: true })
 })
 
 test('flow: title optimizer (spends LLM tokens)', async ({ page }) => {
+  // Issue 274 (OCB-3): assert on HTTP 200, not rendered content — same rationale as above.
   const videoId = await discoverVideoId(page)
   test.skip(!videoId, 'no video available on this account to optimize titles for')
   await page.goto(`analysis?video_id=${videoId}`, { waitUntil: 'domcontentloaded' })
-  const resp = page.waitForResponse((r) => r.url().includes('/titles'))
+  const respPromise = page.waitForResponse((r) => r.url().includes('/titles'), { timeout: 120_000 })
   await page.getByRole('button', { name: 'Generate titles' }).click()
-  expect.soft((await resp).status(), 'titles endpoint should accept the request').toBeLessThan(400)
-  await page.waitForTimeout(8000)
+  const resp = await respPromise
+  expect.soft(resp.status(), 'titles endpoint should return 200').toBe(200)
+  await page.waitForTimeout(3000)
   await page.screenshot({ path: shot('titles'), fullPage: true })
 })
 

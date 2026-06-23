@@ -31,6 +31,15 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
+    # Issue 270: set lock_timeout and statement_timeout on the migration connection
+    # so a blocking ALTER or unsafe ADD COLUMN NOT NULL DEFAULT cannot lock prod
+    # indefinitely. lock_timeout = 5s matches Squawk's recommendation; statement_timeout
+    # = 120s is enough for the largest expected migration (index build on non-empty table).
+    # Both are session-level — they apply only to this migration connection.
+    from sqlalchemy import text
+
+    connection.execute(text("SET lock_timeout = '5s'"))
+    connection.execute(text("SET statement_timeout = '120s'"))
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()

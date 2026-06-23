@@ -6883,3 +6883,96 @@ WSL2 note: `--with-deps` needs `sudo apt` (run once by the user); the browser bi
 without root.
 
 **Date:** 2026-06-19
+
+---
+
+## Issue 265 — Eval gate: required commit-status pattern for clip_engine/ CI enforcement
+
+**What was decided:**
+1. The clip-quality eval (YAML scenario harness) is gated as a **GitHub commit status** (`eval/clip-quality`), NOT as a required GitHub Actions job.
+2. A new dedicated `eval` job in `ci.yml` uses `dorny/paths-filter@v3` to detect changes under `clip_engine/`, `tests/eval/`, or `tests/test_clip_engine.py`, runs the eval scenarios only when those paths change, and posts the commit-status result unconditionally (pass / fail / skipped-with-success) via `actions/github-script@v7`.
+3. Two guard tests were added to `tests/test_clip_engine.py`: `test_eval_scenario_count_floor` (floor=6) and `test_eval_scenario_no_unapproved_skip_markers` (SKIP_ALLOWLIST empty by default).
+
+**Why commit-status over required job:**
+GitHub's documented behavior: a **skipped** required job reports `success` — so if the eval job is only-conditionally-triggered via paths-filter and we made it a required job, a PR touching only unrelated files would report the eval job as "passed" (skipped = success), which is a no-op gate. A commit-status always reflects the real outcome (pending → success / failure), so branch protection can truthfully require it.
+
+**Issue 199 / 265 seam:** Issue 199 owns scenario *content* (what is in the YAML files); Issue 265 owns *CI enforcement* (that the files exist, are not skip-marked, and pass). Both are required for the eval gate to be meaningful.
+
+**Alternatives ruled out:** Required job (no paths-filter) — wastes CI minutes on unrelated PRs. Required job with paths-filter — skipped-required-job GitHub quirk makes it a no-op gate. pytest markers/xfail as the guard — markers don't prevent scenario deletion; the count floor is required.
+
+**Source/evidence:** dorny/paths-filter v3 (Node 20) README; GitHub Actions documented skip-vs-success behavior for required checks.
+
+**Date:** 2026-06-23
+
+---
+
+## Issue 267 — Test isolation: pytest-randomly + DECISIONS entry
+
+**What was decided:**
+1. `pytest-randomly==4.1.0` added to `requirements-dev.txt` — test order is shuffled on every run, seed printed for reproduction.
+2. A `creator_session` autouse fixture added to `conftest.py` generates a unique per-test `creator.id` and session cookie, eliminating the shared `testclient` slowapi rate-limit bucket. The manual `cookies=session_cookie` workarounds in `tests/test_progress_emit_wiring.py` are kept (they already use per-test UUIDs; the fixture offers an alternative path for new tests).
+3. Postgres fail-fast added to `conftest.py:pytest_configure`, gated on the `integration` marker or `DATABASE_URL` being explicitly set, so it does not break the unit lane.
+
+**Why pytest-randomly:** pytest-dev–maintained; the community standard for surfacing hidden test-order dependencies. Seed-on-failure reproduction: `pytest --randomly-seed=<N>`.
+
+**Alternatives ruled out:** pytest-random-order (separate package, different strategy; pytest-randomly is the community standard). Manual-only per-known-case patching (does not surface latent order coupling).
+
+**Source/evidence:** pytest-randomly 4.1.0 (2026-04-20) on PyPI; 2026 pytest best-practices guides.
+
+**Date:** 2026-06-23
+
+---
+
+## Issue 269 — Diff/patch-coverage gate + per-module floors
+
+**What was decided:**
+1. `diff-cover==10.3.0` added to `requirements-dev.txt`.
+2. `run_layer0.py` extended with: (a) `gate_module_coverage()` — parses `_coverage.xml` and asserts per-module floor for `clip_engine`, `preference`, `crypto.py`, `limiter.py`, `auth.py`; (b) `gate_diff_cover()` — shells out to `diff-cover` with `--fail-under=80` against `origin/main`.
+3. `ci.yml` coverage job gains `fetch-depth: 0` (shallow clone produces incorrect diffs) and calls both new gates.
+
+**Why diff-cover (not Codecov):** runs locally with no external service — CI and local `/assess` measure identically, matching the project principle. `--fail-under=80` gates changed-line coverage without red-walling legacy code.
+
+**Per-module floor values:** set at 0.0 on first introduction (to avoid red-walling the existing codebase); operators should run `python3 .claude/skills/production-assessment/scripts/run_layer0.py --update-baseline` after a full green coverage run to capture actual rates, then tighten the floors in `MODULE_COVERAGE_FLOORS` in `run_layer0.py`.
+
+**Alternatives ruled out:** Codecov (third-party service dependency); covguard (newer, less battle-tested); aggregate floor only (misses "add untested logic to scoring engine" class of regression).
+
+**Source/evidence:** diff-cover 10.3.0 (2026-05-30) on PyPI.
+
+**Date:** 2026-06-23
+
+---
+
+## Issue 270 — Migration safety: Squawk lint + lock/statement timeouts + rollback runbook
+
+**What was decided:**
+1. Squawk migration linter added as a CI step in `ci.yml` using `dorny/paths-filter@v3` to detect changed `alembic/versions/*.py` files; renders SQL via `alembic upgrade <rev>:+1 --sql` and pipes to `squawk`.
+2. `alembic/env.py` extended with `lock_timeout = 5000ms` and `statement_timeout = 120000ms` on the migration connection in `do_run_migrations`.
+3. `docs/DEPLOYMENT.md` extended with a rollback runbook (image rollback + expand/contract policy).
+
+**Roll-forward policy:** expand/contract migrations are forward-compatible with the prior image, so image rollback (revert image, keep schema) is the safe default. True schema downgrade (`alembic downgrade`) is a break-glass-only operation.
+
+**lock_timeout rationale:** 5s matches Squawk's own recommendation — long enough for a short lock wait, short enough to fail loudly before blocking a live multi-user product for meaningful time.
+
+**Alternatives ruled out:** pgmigrate lint (less active, fewer rules). Statement-timeout only (lock starvation is a distinct failure mode). Blue-green migration rollback (requires infra not present at single-VM stage).
+
+**Source/evidence:** squawkhq.com/docs/safe_migrations; squawkhq.com/docs/rules.
+
+**Date:** 2026-06-23
+
+---
+
+## Issue 271 — Single-VM auto-rollback on failed deploy smoke test
+
+**What was decided:**
+1. `deploy.yml` captures the pre-pull image digest before pulling (`PREV_IMAGE`).
+2. The `docker image prune` step moved to *after* the smoke test, so the previous image remains available during the smoke window.
+3. The smoke test step rolls back to `PREV_IMAGE` on failure (re-pull + restart), then still `exit 1` so alerting fires.
+4. First-deploy guard: skip rollback when `PREV_IMAGE` is empty.
+
+**Why not blue-green:** traffic-splitting infra (two Compose service sets on one host) adds meaningful complexity for a solo-VM beta stage. Deferred to K8s track (Issue 275+).
+
+**Rollback still exits non-zero:** auto-rollback without `exit 1` would hide the deployment failure from alerting/GitHub Actions. The rollback is a safety net, not a success signal.
+
+**Source/evidence:** Smoke-test-your-Docker-image-in-GH-Actions guide; GitHub community discussions/175488.
+
+**Date:** 2026-06-23

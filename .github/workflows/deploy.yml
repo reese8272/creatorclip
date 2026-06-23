@@ -41,6 +41,18 @@ jobs:
       - name: Authenticate with GHCR
         run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
 
+      - name: Capture pre-pull image for rollback (Issue 271)
+        # Record the digest of the CURRENT running image before pulling the new one,
+        # so we have an immutable rollback target if the smoke test fails.
+        # Falls back to empty string on first-ever deploy (no container running yet).
+        run: |
+          PREV_IMAGE=$(docker inspect \
+            --format='{{index .RepoDigests 0}}' \
+            $(docker compose -f docker-compose.prod.yml ps -q app 2>/dev/null || true) \
+            2>/dev/null || true)
+          echo "PREV_IMAGE=${PREV_IMAGE}" >> "$GITHUB_ENV"
+          echo "Previous image: ${PREV_IMAGE:-<none — first deploy>}"
+
       - name: Pull latest image
         run: docker compose -f docker-compose.prod.yml pull
 
@@ -53,10 +65,11 @@ jobs:
       - name: Roll out
         run: docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-      - name: Clean up old images
-        run: docker image prune -f
-
-      - name: Smoke test
+      - name: Smoke test (auto-rollback on failure — Issue 271)
+        # On failure: if a PREV_IMAGE was captured, re-pull and restart on the
+        # previous image before exiting non-zero so alerting fires. If no previous
+        # image exists (first deploy), skip rollback. Image pruning is deferred until
+        # AFTER this step so the rollback target is available during the smoke window.
         run: |
           STATUS=""
           for i in 1 2 3 4 5; do
@@ -71,4 +84,23 @@ jobs:
             fi
             [ $i -lt 5 ] && sleep 10
           done
-          [ "$STATUS" = "ok" ] || { echo "Smoke test failed after 5 attempts"; exit 1; }
+          if [ "$STATUS" != "ok" ]; then
+            echo "Smoke test FAILED after 5 attempts."
+            if [ -n "${PREV_IMAGE}" ]; then
+              echo "Auto-rolling back to previous image: ${PREV_IMAGE}"
+              docker pull "${PREV_IMAGE}" || true
+              # Override the image tag in the compose file temporarily and restart.
+              docker compose -f docker-compose.prod.yml down --timeout 30 || true
+              IMAGE_TAG="${PREV_IMAGE}" docker compose -f docker-compose.prod.yml up -d || true
+              echo "Rollback complete. Verify with: curl http://localhost:8000/health"
+            else
+              echo "No previous image captured (first deploy?) — manual recovery required."
+            fi
+            exit 1
+          fi
+
+      - name: Clean up old images (after successful smoke test — Issue 271)
+        # Moved AFTER the smoke test so the previous image is available for rollback
+        # during the smoke window. Only runs on successful deploys; failures exit
+        # before this step, preserving the rollback target.
+        run: docker image prune -f

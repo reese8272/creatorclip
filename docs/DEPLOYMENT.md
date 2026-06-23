@@ -199,6 +199,79 @@ deploy pgbouncer in statement pooling mode with this stack.
 
 ---
 
+## Auto-Rollback on Failed Smoke Test (Issue 271)
+
+**Mechanism (single-VM stopgap):** `deploy.yml` captures the running image digest
+before pulling the new image (`PREV_IMAGE`). The `docker image prune` step runs AFTER
+the smoke test. If the smoke test fails:
+
+1. The deploy step re-pulls `PREV_IMAGE` and restarts the previous container.
+2. The step still exits non-zero, so GitHub Actions reports the deploy as failed and
+   alerting fires — the auto-rollback does NOT hide the failure.
+3. First-deploy guard: if `PREV_IMAGE` is empty, rollback is skipped and manual
+   recovery is required.
+
+**Limitations:** This is a single-VM image-rollback, not a zero-downtime blue-green
+deploy. There is a brief window (smoke test loop, up to ~50s) during which the broken
+image is running. Blue-green / canary deployment with zero-downtime failover is the
+target state at the Kubernetes tier (Issue 275+).
+
+**Target state:** Progressive delivery via K8s (Issue 275+) — Argo Rollouts or Flux
+progressive promotion with automated canary analysis. The single-VM pattern here is a
+safe stopgap until the GKE cluster is stood up.
+
+---
+
+## Migration Rollback Runbook (Issue 270)
+
+**Policy: roll-forward-first.** Expand/contract migrations are forward-compatible with
+the prior image, so the standard recovery is to roll the image back (not the schema).
+True `alembic downgrade` is a break-glass operation and must not be used without an
+explicit expand/contract audit.
+
+### Step 1 — Image rollback (safe, always try first)
+
+```bash
+# 1. Find the previous image tag from GHCR (or from the prior deploy.yml run log).
+PREV_TAG=<previous-sha-or-tag>
+
+# 2. Pull the previous image.
+docker pull ghcr.io/reese8272/creatorclip:${PREV_TAG}
+
+# 3. Update the image pin in docker-compose.prod.yml (or set IMAGE_TAG env var).
+sed -i "s|ghcr.io/reese8272/creatorclip:.*|ghcr.io/reese8272/creatorclip:${PREV_TAG}|" \
+  /opt/autoclip/docker-compose.prod.yml
+
+# 4. Restart on the previous image (schema unchanged).
+cd /opt/autoclip && docker compose -f docker-compose.prod.yml up -d
+
+# 5. Verify the smoke test passes.
+curl -s http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin))"
+```
+
+### Step 2 — Schema downgrade (break-glass only)
+
+Only run if the migration added a column/constraint that is **incompatible** with the
+prior image AND the prior image is already running (rare; avoid with expand/contract).
+
+```bash
+# Run ONLY if Step 1 is insufficient.
+docker compose -f docker-compose.prod.yml run --rm app alembic downgrade -1
+```
+
+### Expand/contract PR checklist
+
+For every migration that adds a NOT NULL column or changes a constraint:
+
+- [ ] Phase 1 (expand): add column nullable with default — backward-compatible.
+- [ ] Phase 2 (backfill): populate existing rows in a data migration or job.
+- [ ] Phase 3 (contract): add NOT NULL constraint (with NOT VALID to avoid full scan),
+  then validate in a separate migration.
+- [ ] Any `CREATE INDEX` must use `CONCURRENTLY` (not in a transaction block).
+- [ ] All migrations pass `squawk` lint (enforced in CI via the `migration-lint` job).
+
+---
+
 ## TOKEN_ENCRYPTION_KEY rotation runbook
 
 → **Canonical procedure: [`docs/RUNBOOKS.md`](RUNBOOKS.md) → "TOKEN_ENCRYPTION_KEY
