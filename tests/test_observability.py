@@ -1,20 +1,25 @@
-"""Tests for the observability layer (Issue 75f): correlation ids, structured
-logs, golden-signal metrics, and Celery propagation. DB-free."""
+"""Tests for the observability layer (Issue 75f, 233, 237, 239): correlation ids,
+structured logs, golden-signal metrics, redaction backstop, LLM token counters,
+and Celery propagation. DB-free."""
 
 import json
 import logging
+from pathlib import Path
 
+import pytest
 from celery import signals
 from fastapi.testclient import TestClient
 
 from observability import (
     _CELERY_HEADER,
     CELERY_TASKS_TOTAL,
+    LLM_TOKENS_TOTAL,
     JsonLogFormatter,
     RequestIDLogFilter,
     _valid_request_id,
     configure_logging,
     install_celery_observability,
+    record_llm_tokens,
     request_id_ctx,
 )
 
@@ -135,3 +140,158 @@ def test_metrics_requires_bearer_token_when_set(client: TestClient, monkeypatch)
     assert client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code == 401
     ok = client.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
     assert ok.status_code == 200
+
+
+# ── Issue 233: JsonLogFormatter redaction backstop ───────────────────────────
+_SENSITIVE_KEYS = [
+    "email",
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "cookie",
+    "session",
+    "jwt",
+    "bearer",
+    "api_key",
+    "refresh",
+    "credential",
+]
+
+
+@pytest.mark.parametrize("key", _SENSITIVE_KEYS)
+def test_json_formatter_redacts_sensitive_key(key: str) -> None:
+    """JsonLogFormatter must replace blocklisted key values with '[redacted]'."""
+    record = logging.LogRecord("t", logging.INFO, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    setattr(record, key, "super-secret-value")
+    out = json.loads(JsonLogFormatter().format(record))
+    assert out[key] == "[redacted]", f"key '{key}' must be redacted in formatter output"
+
+
+def test_json_formatter_passes_benign_keys_through() -> None:
+    """Safe keys (creator_id, task_id, bool flag) must not be redacted."""
+    record = logging.LogRecord("t", logging.INFO, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    record.creator_id = "uuid-abc"  # type: ignore[attr-defined]
+    record.task_id = "tid-123"  # type: ignore[attr-defined]
+    record.is_retry = True  # type: ignore[attr-defined]
+    out = json.loads(JsonLogFormatter().format(record))
+    assert out["creator_id"] == "uuid-abc"
+    assert out["task_id"] == "tid-123"
+    assert out["is_retry"] is True
+
+
+# ── Issue 237: LLM token counters ────────────────────────────────────────────
+def test_record_llm_tokens_increments_input_and_output() -> None:
+    before_in = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="test-model", kind="input"
+    )._value.get()
+    before_out = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="test-model", kind="output"
+    )._value.get()
+
+    record_llm_tokens(
+        provider="anthropic",
+        model="test-model",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="test-model", kind="input"
+        )._value.get()
+        == before_in + 100
+    )
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="test-model", kind="output"
+        )._value.get()
+        == before_out + 50
+    )
+
+
+def test_record_llm_tokens_increments_cache_kinds() -> None:
+    before_read = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="cache-model", kind="cache_read"
+    )._value.get()
+    before_create = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="cache-model", kind="cache_creation"
+    )._value.get()
+
+    record_llm_tokens(
+        provider="anthropic",
+        model="cache-model",
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_tokens=200,
+        cache_creation_tokens=300,
+    )
+
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="cache-model", kind="cache_read"
+        )._value.get()
+        == before_read + 200
+    )
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="cache-model", kind="cache_creation"
+        )._value.get()
+        == before_create + 300
+    )
+
+
+def test_record_llm_tokens_skips_zero_cache_kinds() -> None:
+    """Zero cache values must not create label combinations (no cardinality pollution)."""
+    before_read = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="zero-cache-model", kind="cache_read"
+    )._value.get()
+
+    record_llm_tokens(
+        provider="anthropic",
+        model="zero-cache-model",
+        input_tokens=1,
+        output_tokens=1,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+    )
+
+    # The label was already created by the _value.get() call above (prometheus-client
+    # creates labels on first access); what matters is it did NOT increment.
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="zero-cache-model", kind="cache_read"
+        )._value.get()
+        == before_read
+    )
+
+
+# ── Issue 239: worker durable log sink ───────────────────────────────────────
+def test_configure_logging_writes_rotating_file(tmp_path: Path) -> None:
+    """configure_logging with log_dir creates a rotating JSON file with request_id."""
+    configure_logging(json_logs=True, log_dir=str(tmp_path))
+    token = request_id_ctx.set("test-rid-239")
+    try:
+        logging.getLogger("test.file").info("hello from file sink")
+    finally:
+        request_id_ctx.reset(token)
+
+    log_file = tmp_path / "app.log"
+    assert log_file.exists(), "app.log must be created when log_dir is set"
+    line = log_file.read_text(encoding="utf-8").strip().splitlines()[-1]
+    data = json.loads(line)
+    assert data["request_id"] == "test-rid-239"
+    assert data["message"] == "hello from file sink"
+    configure_logging(json_logs=False)  # restore for remaining tests
+
+
+def test_configure_logging_respects_filename(tmp_path: Path) -> None:
+    """filename='worker.log' must create worker.log, not app.log — proves no interleave."""
+    configure_logging(json_logs=True, log_dir=str(tmp_path), filename="worker.log")
+    logging.getLogger("test.worker").info("worker line")
+    configure_logging(json_logs=False)
+
+    assert (tmp_path / "worker.log").exists(), "worker.log must be created when filename is set"
+    assert not (tmp_path / "app.log").exists(), "app.log must NOT be created when filename differs"

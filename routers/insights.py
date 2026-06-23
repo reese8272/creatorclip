@@ -37,6 +37,7 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
+from observability import record_llm_tokens
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 
 router = APIRouter(prefix="/creators/me/insights", tags=["insights"])
@@ -588,6 +589,14 @@ async def analyze_performer(
             _pa_tokens_in,
             getattr(msg.usage, "cache_read_input_tokens", 0),
             _pa_tokens_out,
+        )
+        record_llm_tokens(
+            provider="anthropic",
+            model=_HAIKU_MODEL,
+            input_tokens=msg.usage.input_tokens,
+            output_tokens=msg.usage.output_tokens,
+            cache_read_tokens=getattr(msg.usage, "cache_read_input_tokens", 0),
+            cache_creation_tokens=getattr(msg.usage, "cache_creation_input_tokens", 0),
         )
         raw_block = msg.content[0] if msg.content else None
         content = (

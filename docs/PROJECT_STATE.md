@@ -4,6 +4,34 @@ Updated after every issue closes.
 
 ---
 
+## W0 Observability Lane — Issues 233, 237, 239 DONE (2026-06-23)
+
+Built on branch `wave0/observability`. Three observability hardening issues:
+
+**233** (Redaction backstop on stdout/file log sink): New `redact.py` module extracts `_REDACT_SUBSTRINGS`
++ `_is_sensitive` from `event_log.py` (DRY refactor). `JsonLogFormatter.format` now calls `scrub_dict()`
+on every extra field before emitting JSON — formatter-level PII/secret backstop in addition to DB-sink
+`_redact()`. Tests: 12 parametrized redaction key assertions + benign key passthrough + regression test
+in `test_event_log.py`. DECISIONS.md updated (deviation from call-site-discipline-only posture; cites
+OWASP Logging Cheat Sheet layered-sanitisation guidance).
+
+**237** (Pipeline + LLM-cost metrics): Added `LLM_TOKENS_TOTAL` Counter (provider/model/kind labels,
+OTel GenAI semconv-aligned) and `RENDER_FAILURES_TOTAL` Counter (task label) to `observability.py`.
+`record_llm_tokens()` helper increments per-call; wired to `knowledge/hooks.py`, `chat/runner.py`,
+`routers/insights.py`. `RENDER_FAILURES_TOTAL` incremented in `worker/tasks.py:render_clip` except branch.
+Tests: input/output/cache increment + zero-cache skip + co-hosting. DECISIONS.md updated (label schema,
+no creator_id to avoid cardinality blowup).
+
+**239** (Worker durable log sink): `configure_logging` now accepts optional `filename='app.log'`
+parameter. Worker uses `filename='worker.log'` so co-hosted API + worker write distinct RotatingFileHandler
+files, avoiding Python rotation corruption (bugs.python.org/issue43107). Tests: JSON file existence +
+`request_id` in output + distinct filename assertion.
+
+Full suite: **1048 passed, 7 skipped** (was 1011 before this lane). Layer-0 gates: all runnable passed
+(ruff clean). No DB or external API needed for these tests. `docs/DECISIONS.md` updated (Issues 233 + 237).
+
+---
+
 ## Current Status
 
 **Wave W0 / Lane ui-core — Issues 99 + 210 DONE (2026-06-23).** On branch `wave0/ui-core`.

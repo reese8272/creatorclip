@@ -19,6 +19,7 @@ import numpy as np
 from anthropic import Anthropic
 
 from config import settings
+from observability import record_llm_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -222,5 +223,13 @@ def analyze_hook(
         usage["cache_read"],
         usage["cache_creation"],
         usage["output_tokens"],
+    )
+    record_llm_tokens(
+        provider="anthropic",
+        model=_HAIKU_MODEL,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        cache_read_tokens=usage["cache_read"],
+        cache_creation_tokens=usage["cache_creation"],
     )
     return final_text, usage

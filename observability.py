@@ -33,6 +33,8 @@ from typing import Any
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from redact import scrub_dict
+
 # The originating request/correlation id for the current context. "-" until a
 # middleware or Celery signal binds a real value, so a log line is never missing
 # the field.
@@ -83,6 +85,57 @@ CELERY_TASKS_TOTAL = Counter(
     "Celery tasks by terminal state",
     labelnames=("task", "state"),
 )
+# LLM token usage counter — labels aligned to OTel GenAI semconv
+# gen_ai.usage.input_tokens / gen_ai.usage.output_tokens (provider/model/kind).
+# Labels are intentionally low-cardinality: provider and model are a small finite
+# set; kind is 'input' | 'output' | 'cache_read' | 'cache_creation'. creator_id is
+# deliberately excluded to prevent cardinality blowup at 10k creators.
+LLM_TOKENS_TOTAL = Counter(
+    "llm_tokens_total",
+    "LLM tokens by provider/model/kind",
+    labelnames=("provider", "model", "kind"),
+)
+RENDER_FAILURES_TOTAL = Counter(
+    "render_failures_total",
+    "Render pipeline failures",
+    labelnames=("task",),
+)
+
+
+def record_llm_tokens(
+    provider: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> None:
+    """Increment LLM_TOKENS_TOTAL for a single LLM call.
+
+    Each token kind (input, output, cache_read, cache_creation) is a separate
+    label value so Prometheus can sum or filter by kind in PromQL. Never put
+    prompt text or creator_id in labels — only low-cardinality identifiers.
+
+    Token counts are coerced to int. Callers may safely pass the result of
+    `getattr(usage, "cache_read_input_tokens", 0)` — the coercion silently
+    drops non-integer values (e.g. None) to 0.
+    """
+    def _to_int(v: Any) -> int:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
+    _in = _to_int(input_tokens)
+    _out = _to_int(output_tokens)
+    _cr = _to_int(cache_read_tokens)
+    _cc = _to_int(cache_creation_tokens)
+    LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="input").inc(_in)
+    LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="output").inc(_out)
+    if _cr:
+        LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_read").inc(_cr)
+    if _cc:
+        LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_creation").inc(_cc)
 
 
 # ── Structured logging ───────────────────────────────────────────────────────
@@ -105,9 +158,12 @@ class JsonLogFormatter(logging.Formatter):
             "request_id": getattr(record, "request_id", "-"),
             "message": record.getMessage(),
         }
-        for key, value in record.__dict__.items():
-            if key not in _RESERVED_LOGRECORD and not key.startswith("_"):
-                payload[key] = value
+        extra: dict[str, Any] = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _RESERVED_LOGRECORD and not key.startswith("_")
+        }
+        payload.update(scrub_dict(extra))
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
@@ -143,13 +199,24 @@ def log_event(event: str, **fields: Any) -> None:
         _event_logger.info(" ".join(msg_parts), extra=extra)
 
 
-def configure_logging(*, json_logs: bool, level: int = logging.INFO, log_dir: str = "") -> None:
+def configure_logging(
+    *,
+    json_logs: bool,
+    level: int = logging.INFO,
+    log_dir: str = "",
+    filename: str = "app.log",
+) -> None:
     """Install the request-id filter + (optionally) JSON formatting on the root logger.
 
     When log_dir is non-empty, also writes a rotating JSON file at
-    <log_dir>/app.log (10 MB × 5 files) so logs survive container restarts.
+    <log_dir>/<filename> (10 MB × 5 files) so logs survive container restarts.
     The .:/app Docker volume makes <log_dir>/app.log readable on the host as
     ./logs/app.log without any extra mount configuration.
+
+    The *filename* parameter lets co-hosted processes write distinct files so
+    Python's RotatingFileHandler rotation does not corrupt a shared file
+    (bugs.python.org/issue43107). The API process uses the default 'app.log';
+    the Celery worker uses 'worker.log' (Issue 239).
 
     Idempotent: re-running replaces the root handler rather than stacking duplicates.
     """
@@ -174,7 +241,7 @@ def configure_logging(*, json_logs: bool, level: int = logging.INFO, log_dir: st
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
         file_handler = logging.handlers.RotatingFileHandler(
-            log_path / "app.log",
+            log_path / filename,
             maxBytes=10 * 1024 * 1024,
             backupCount=5,
             encoding="utf-8",

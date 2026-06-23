@@ -1,9 +1,12 @@
-"""Unit tests for the event-log sink redaction guard (Issue 151).
+"""Unit tests for the event-log sink redaction guard (Issue 151, 233).
 
 The load-bearing invariant: no PII / token / secret ever reaches an event_logs
 row. _redact() is a pure function, so this runs without a database.
 
 Also covers purge_stale_events (Issue 250 — GDPR Art. 5(1)(e) storage-limitation).
+
+Issue 233 regression: _redact() behaviour must be byte-identical after the
+blocklist was extracted into redact.py (DRY refactor).
 """
 
 import asyncio
@@ -230,3 +233,20 @@ def test_purge_stale_event_logs_task_calls_async_impl():
 
         purge_stale_event_logs()
         mock_run.assert_called_once()
+
+
+# ── Issue 233 regression: _redact() byte-identical after blocklist extraction ──
+def test_redact_regression_after_extraction():
+    """_redact() output must be unchanged after _REDACT_SUBSTRINGS moved to redact.py."""
+    data = {
+        "email": "creator@example.com",
+        "api_key": "sk-live-abc",
+        "creator_id": "uuid-123",
+        "count": 42,
+    }
+    out = _redact(data)
+    assert out is not None
+    assert out["email"] == "[redacted]"
+    assert out["api_key"] == "[redacted]"
+    assert out["creator_id"] == "uuid-123"
+    assert out["count"] == 42
