@@ -128,12 +128,22 @@ export interface DnaStats {
   optimal_upload_gap_h: number | null
 }
 
+// performance_score_components mirrors _compute_virality_score in routers/insights.py:
+// { retention: number|null, engagement: number|null, views: number|null }
+// Each sub-score is 0–100 where 50 = channel average.
+export interface PerformanceComponents {
+  retention: number | null
+  engagement: number | null
+  views: number | null
+}
+
 export interface Performer {
   video_id: string
   youtube_video_id: string
   title: string | null
   kind: string
   performance_score: number | null
+  performance_score_components?: PerformanceComponents | null
 }
 
 export interface InsightsResponse {

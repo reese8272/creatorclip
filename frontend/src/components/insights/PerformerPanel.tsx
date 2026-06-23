@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { Panel } from '@/components/insights/InsightsPanel'
+import { deriveWhyNarrative } from '@/components/insights/InsightsNarrative'
 import type { Performer, PerformerInsight } from '@/types'
 
 type SortMode = 'score-desc' | 'score-asc' | 'title'
@@ -61,10 +62,31 @@ function PerformerRow({ p, kind }: { p: Performer; kind: 'top' | 'bottom' }) {
   }
 
   const score = p.performance_score != null ? p.performance_score.toFixed(0) : '—'
+  // Static one-line "why" derived from backend-computed score components — no LLM call.
+  // On-demand deep AI analysis is still available via the Analyze button below.
+  const whyNarrative = deriveWhyNarrative(kind, p.performance_score_components)
+  const videoTitle = p.title || p.youtube_video_id
+
   return (
     <div className="grid grid-cols-[1fr_auto_auto_auto] items-start gap-3 border-b border-default py-3 last:border-b-0">
       <div className="min-w-0">
-        <div className="truncate text-sm text-fg">{p.title || p.youtube_video_id}</div>
+        {/* Title + deep-link to video timeline (Issue 213) */}
+        <a
+          href={`/app/video/${p.video_id}`}
+          className="truncate block text-sm text-fg hover:text-accent-text hover:underline"
+          aria-label={`View timeline for ${videoTitle}`}
+        >
+          {videoTitle}
+        </a>
+        {/* Static per-row "why" — always visible, sourced from DNA score components */}
+        {p.performance_score != null && (
+          <div
+            className="mt-1 text-xs text-muted"
+            data-testid="performer-why"
+          >
+            {whyNarrative}
+          </div>
+        )}
         {error && <div className="mt-2 text-xs text-danger">{error}</div>}
         {analysis && (
           <div className="mt-2 text-xs leading-relaxed text-muted">

@@ -58,6 +58,46 @@ injection/DoS guard cannot be forgotten or bypassed.
 - OWASP LLM01 (prompt injection via untrusted data in context window).
 
 **Date:** 2026-06-23
+## 2026-06-23 — Issue 212: Insights page rebuild — information architecture + scope boundary
+
+**What changed:**
+
+1. **IA boundary with Issue 213**: Insights page = channel-level synthesis only. The per-video clip
+   timeline (Issue 213's VideoClipsMap at `/app/video/:id`) is not duplicated on the Insights page.
+   Performer rows deep-link to `/app/video/:videoId` but do not embed a timeline.
+
+2. **Week-over-week diff without a snapshot store**: The "[DEC]" in the issue warned this could
+   require a historical snapshot store. Resolved without one: we compare the 7d analytics total
+   against `28d ÷ 4` (the per-week average of the past 4 weeks) using the two existing endpoints
+   `/insights/analytics?period=7d` and `/insights/analytics?period=28d`. This is "vs your typical
+   week" not "vs last week specifically" — communicated honestly in the UI copy. No new backend
+   field or schema change needed.
+
+3. **Per-row "why" sourced from existing payload**: The issue said "per-row static 'why' sourced
+   from DNA patterns". Implemented via `performance_score_components` (retention/engagement/views
+   sub-scores, 0–100, channel-relative) already returned in the `InsightsResponse` payload from
+   `routers/insights.py`. No new LLM call; no new backend endpoint. On-demand deep AI analysis
+   remains available via the Analyze button (Issue 117). The `PerformanceComponents` type is
+   added to `types.ts` (additive; backend already emits the field).
+
+4. **Framing section**: A new `InsightsFraming` panel sits at the top of the page answering "what
+   this is showing + why it matters". Copy is data-grounded, names specific panels, and closes
+   with an explicit "does not predict future performance" honesty note (no virality promise).
+
+**Why:**
+- Snapshot store would balloon scope (as the issue warned) and is unnecessary given the
+  existing analytics endpoints.
+- Existing `performance_score_components` payload makes static "why" copy feasible without a
+  new API call — maintains the Pareto principle (ship the 80% value from existing data first;
+  on-demand LLM for the remaining 20%).
+- Clear IA boundary prevents duplication with Issue 213 as the issue.md explicitly required.
+
+**Source/evidence:**
+- TubeBuddy/VidIQ UX patterns (UX research findings `docs/research/findings/01_ux_product_gaps.md`):
+  analytics tools that explain why each video over/under-performs against the creator's own
+  channel average outperform tools that show generic virality benchmarks.
+- `routers/insights.py` lines 59, 304: `performance_score_components` already in the payload.
+- **Date:** 2026-06-23
 
 ---
 
