@@ -11,10 +11,7 @@ SQLAlchemy queries the routers build.
 
 import uuid
 
-import pytest
-
-from models import AudienceActivity, Clip, Creator, Video, VideoOrigin
-
+from models import AudienceActivity, Clip, Video, VideoOrigin
 
 # ── Videos list cap ───────────────────────────────────────────────────────────
 

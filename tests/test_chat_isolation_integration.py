@@ -201,7 +201,7 @@ async def test_execute_tool_executor_failure_returns_is_error() -> None:
 async def test_get_recent_videos_limit_schema_has_maximum() -> None:
     """The get_recent_videos schema must advertise a 'maximum' on the limit param
     so Claude self-corrects its parameter before calling the tool. (Issue 222)"""
-    from chat.tools import TOOLS, _MAX_VIDEOS
+    from chat.tools import _MAX_VIDEOS, TOOLS
 
     recent_videos_tool = next(t for t in TOOLS if t["name"] == "get_recent_videos")
     limit_schema = recent_videos_tool["input_schema"]["properties"]["limit"]

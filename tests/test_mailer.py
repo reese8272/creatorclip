@@ -12,9 +12,7 @@ external service, no Docker, no Postgres required.
 - Invalid/oversized idempotency keys raise ValueError immediately
 """
 
-import importlib
 import logging
-import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -273,9 +271,7 @@ def test_missing_resend_api_key_fails_at_settings_load() -> None:
     This verifies the @model_validator in config.py catches the misconfiguration
     at startup rather than at first send.
     """
-    import os
     from pydantic import ValidationError
-    from pydantic_settings import BaseSettings
 
     # Build a minimal settings class that mirrors only the relevant fields
     # so we can test the validator in isolation without needing all required vars.

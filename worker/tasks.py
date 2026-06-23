@@ -1150,6 +1150,7 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     from sqlalchemy import select, text
     from sqlalchemy.exc import IntegrityError
 
+    from config import settings
     from dna.brief import generate_brief
     from dna.builder import build_patterns
     from dna.embeddings import embed_brief, embed_patterns
@@ -2343,6 +2344,7 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     """
     from sqlalchemy import select
 
+    from config import settings
     from dna.profile import get_active
     from improvement.brief import generate_improvement_brief as build_brief
     from models import ImprovementBrief, ImprovementBriefStatus
@@ -2547,6 +2549,7 @@ async def _generate_video_analysis_async(
     from sqlalchemy import select
 
     from analysis.brief import generate_video_analysis as build_analysis
+    from config import settings
     from dna.profile import get_active
     from models import RetentionCurve, Video, VideoMetrics
     from worker.progress import aemit
@@ -2723,6 +2726,7 @@ async def _generate_title_suggestions_async(
 
     from sqlalchemy import select
 
+    from config import settings
     from dna.identity import format_for_prompt
     from dna.identity import get_current as get_identity
     from dna.profile import get_active
@@ -2864,6 +2868,7 @@ async def _generate_thumbnail_concepts_async(
 
     from sqlalchemy import select
 
+    from config import settings
     from dna.identity import format_for_prompt
     from dna.identity import get_current as get_identity
     from dna.profile import get_active
@@ -3065,6 +3070,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
 
     from sqlalchemy import select
 
+    from config import settings
     from dna.profile import get_active
     from knowledge.hooks import analyze_hook as build_hook_report
     from knowledge.hooks import compute_retention_drop, parse_hook_report
@@ -3244,6 +3250,7 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
 
     from sqlalchemy import select
 
+    from config import settings
     from knowledge.chapters import (
         find_chapter_boundaries,
         parse_chapters,

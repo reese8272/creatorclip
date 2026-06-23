@@ -148,12 +148,12 @@ def test_pyproject_pip_audit_ignores_have_comments() -> None:
 
 # ── Issue 230: CSRF Fetch-Metadata defence ───────────────────────────────────
 
-from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 import uuid as _uuid  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from auth import check_not_cross_site, get_current_creator  # noqa: E402
+from auth import get_current_creator  # noqa: E402
 from db import get_session  # noqa: E402
 from main import app  # noqa: E402
 

@@ -122,8 +122,9 @@ async def run_chat_turn(
         total["output_tokens"],
     )
 
-    from billing.ledger import increment_usage, _estimate_cost_usd
     from datetime import UTC, datetime
+
+    from billing.ledger import _estimate_cost_usd, increment_usage
 
     try:
         cost = _estimate_cost_usd(

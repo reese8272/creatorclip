@@ -1704,7 +1704,6 @@ def test_react_spa_has_zero_dangerouslysetinnerhtml():
     This CI grep runs on every test run to catch accidental regressions.
     """
     import pathlib
-    import re
 
     frontend_src = pathlib.Path(__file__).parent.parent / "frontend" / "src"
     if not frontend_src.is_dir():
