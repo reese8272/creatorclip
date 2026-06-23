@@ -5,6 +5,56 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 188: Timeline + waveform Editor surface (the backbone)
+
+**What changed / decided:**
+
+1. **Waveform rendering: client-side WebAudio decode (Canvas) chosen as the MVP path;
+   ffmpeg showwavespic is available as the server-side upgrade path.**
+   - The issue brief listed two options: (a) `ffmpeg showwavespic` at ingest — server-generates
+     a PNG stored with the clip, served via a new waveform endpoint; (b) WebAudio client-side
+     decode — the browser fetches the clip media (already served through `/clips/{id}/download`),
+     decodes it via `AudioContext.decodeAudioData`, and draws amplitude data on a Canvas.
+   - WebAudio was chosen for the MVP because: the browser already downloads the clip video for
+     the `<video>` player — decoding it client-side adds no extra HTTP request; it requires zero
+     backend infrastructure (no ffmpeg CLI in the test/build environment); and it produces a
+     pixel-accurate waveform from the actual audio PCM, not a scaled image.
+   - `generate_waveform_image` (ffmpeg showwavespic) was added to `ingestion/audio.py` so the
+     server-side path is available without a further backend change when staging/render environments
+     confirm ffmpeg is present. The `Timeline` component accepts an optional `waveformImageUrl`
+     prop that overrides the client-side Canvas when supplied.
+   - **Source/evidence:** Descript, Riverside, Opus Clip all use a server-rendered waveform image
+     for performance at scale (no re-decode per view); WebAudio decode is the standard for
+     browser-only or no-server-storage implementations (MDN AudioContext.decodeAudioData, 2026).
+
+2. **Editor scope: full transcript↔waveform↔playhead tool, NOT a lean tweak surface.**
+   - The 2026-06-22 scope decision (documented in the Issue 188 brief) approved a focused
+     single-clip editing surface: preview player + Timeline (waveform + synced playhead + cut
+     overlays) + transcript (word highlighting synced to playhead; drag-select → cut) + right
+     rail (caption style + clean pass). This is deliberately NOT a full multi-track NLE.
+   - Anti-bloat guard: no real-time GPU preview, no transitions library, no generative B-roll.
+     The edit surface is "AI does the first pass, you tweak a little" (research brief §1, anti-bloat).
+
+3. **Panel relocation: transcript/caption/clean tools moved from Review → Editor.**
+   - Review.tsx previously stacked TranscriptEditor + CaptionStylePanel + CleanPassPanel in a
+     second column beside the player (the "editing-tools-beside-player conflation" logged in
+     OFF_COURSE_BUGS). These panels are now exclusively in the Editor page.
+   - Review gains a "Refine →" button that navigates to `/editor?video_id=…&clip_id=…`.
+   - The `TranscriptEditor` component remains in `frontend/src/components/review/` but its logic
+     is now also implemented inline in Editor.tsx (shared localStorage cut key ensures both
+     surfaces see the same cuts). A future refactor could extract a shared `useCuts` hook.
+
+4. **Editor route is a child of AuthGate+AppChrome (protected + chrome).**
+   - Consistent with all other creator-facing pages (Dashboard, Review, Insights); no new layout
+     context needed.
+
+**Why:** Issue 188 brief; research brief `03_editorial_capabilities.md` §2 (waveform gap ●);
+the "editing-tools-beside-player conflation" entry in `docs/OFF_COURSE_BUGS.md`.
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-23 — Issue 197: Wire published clips into the outcome loop
 
 **What changed:**

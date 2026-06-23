@@ -3,9 +3,15 @@ Audio signal extraction using librosa.
 
 Extracts energy spikes, silence, and a laughter/applause heuristic from a WAV file.
 All thresholds are tunable constants; no ML required at this fidelity.
+
+Issue 188: also provides ``generate_waveform_image`` — an ffmpeg showwavespic wrapper
+that produces a waveform PNG alongside the existing RMS extraction.  Callers must have
+the ffmpeg CLI available; the function raises RuntimeError if it is absent so that the
+ingestion pipeline can degrade gracefully (skip waveform, log warning) without crashing.
 """
 
 import logging
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -65,6 +71,72 @@ def extract_audio_events(audio_path: str | Path) -> dict:
         "silences": silences,
         "laughter": laughter,
     }
+
+
+def generate_waveform_image(
+    audio_path: str | Path,
+    output_path: str | Path,
+    *,
+    width: int = 1200,
+    height: int = 200,
+    fg_color: str = "0x6699cc",
+    bg_color: str = "0x1a1a1a",
+) -> Path:
+    """Generate a waveform PNG via ffmpeg ``showwavespic`` (Issue 188).
+
+    Uses ffmpeg's ``showwavespic`` filter which draws a static waveform image
+    — the industry-standard approach for server-side waveform generation
+    (Descript, Riverside, Opus Clip all use a server-rendered waveform image
+    served alongside the media).  The image is written to ``output_path`` and
+    its resolved Path is returned.
+
+    Args:
+        audio_path: Path to the source audio or video file.
+        output_path: Destination PNG path.  Parent directory must already exist.
+        width: Output image width in pixels.
+        height: Output image height in pixels.
+        fg_color: ffmpeg color string for the waveform (hex ``0xRRGGBB``).
+        bg_color: ffmpeg color string for the background.
+
+    Raises:
+        RuntimeError: When ffmpeg is not found on PATH or the showwavespic
+            command exits non-zero.  Caller should catch and log, then skip
+            the waveform asset — the rest of the pipeline continues.
+    """
+    import shutil
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found on PATH — waveform image skipped")
+
+    output_path = Path(output_path)
+    audio_path = Path(audio_path)
+
+    cmd = [
+        "ffmpeg",
+        "-y",  # overwrite without prompting
+        "-i", str(audio_path),
+        "-filter_complex",
+        (
+            f"showwavespic=s={width}x{height}"
+            f":colors={fg_color}:bg_color={bg_color}"
+        ),
+        "-frames:v", "1",
+        str(output_path),
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg showwavespic failed (exit {result.returncode}): {result.stderr[:400]}"
+        )
+
+    logger.info("waveform image written to %s", output_path)
+    return output_path
 
 
 def _merge_runs(

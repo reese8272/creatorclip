@@ -5,10 +5,8 @@ import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { ClipPlayer } from '@/components/review/ClipPlayer'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
-import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
-import { CleanPassPanel } from '@/components/review/CleanPassPanel'
-import { TranscriptEditor } from '@/components/review/TranscriptEditor'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
+import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClipListResponse } from '@/types'
 
 // Issue 216: Honest personalization-status band — shown below the virality disclaimer.
@@ -86,30 +84,32 @@ export function Review() {
       {personalization && <PersonalizationBand status={personalization} />}
 
       <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
-        {/* Left: the clip itself + why it was picked. Right: the editing tools
-            (transcript + caption + clean). Splitting the secondary panels across
-            both columns keeps them balanced — otherwise the player-heavy left
-            column dwarfs a lone transcript and leaves the bottom-right empty. */}
+        {/* Left: the clip player + triage actions.
+            Editorial tools (transcript / caption / clean) have moved to the
+            Editor page (Issue 188) so triage and refinement are separate
+            surfaces — the "editing-tools-beside-player conflation" bug
+            (OFF_COURSE_BUGS) is resolved by giving editing its own page. */}
         <div className="flex flex-col gap-4">
           <ClipPlayer key={clip.id} clip={clip} onAdvance={() => setIndex((i) => i + 1)} />
+        </div>
+
+        {/* Right: Why this clip + Refine entry point. */}
+        <div className="flex flex-col gap-4">
           <CollapsibleTool title="Why this clip" defaultOpen>
             <WhyThisClip clip={clip} />
           </CollapsibleTool>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <div>
-            <h2 className="mb-3 text-sm font-medium uppercase tracking-[0.06em] text-muted">
-              Transcript
-            </h2>
-            <TranscriptEditor key={clip.id} clip={clip} />
+          <div className="rounded-md border border-default bg-surface p-4">
+            <p className="mb-3 text-xs text-muted">
+              Want to cut words, adjust captions, or remove filler? Open the full editor.
+            </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate(`/editor?video_id=${videoId}&clip_id=${clip.id}`)}
+            >
+              Refine →
+            </Button>
           </div>
-          <CollapsibleTool title="Caption style">
-            <CaptionStylePanel clip={clip} />
-          </CollapsibleTool>
-          <CollapsibleTool title="Clean filler + silence">
-            <CleanPassPanel clip={clip} />
-          </CollapsibleTool>
         </div>
       </main>
     </>

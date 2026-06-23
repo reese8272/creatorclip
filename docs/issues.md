@@ -518,7 +518,7 @@ Clip-render quality + the timeline-editor backbone (`clip_engine/render.py`, `ca
 
 ### Issue 188: Timeline + waveform Editor surface (the backbone)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Editorial & Render · **Size** `L` · **Verify** `render-env`  
+**Status** `DONE` (2026-06-23, worktree agent-a73e02525eb7f1684) · **Wave** W0 · **Lane** Editorial & Render · **Size** `L` · **Verify** `render-env`  
 **Src** `03 / C1` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/03_editorial_capabilities.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `clip_engine/render.py`, `frontend/src/App.tsx`, `frontend/src/components/review/TranscriptEditor.tsx`, `frontend/src/pages/Review.tsx`, `routers/clips.py`  
 
@@ -538,12 +538,12 @@ Clip-render quality + the timeline-editor backbone (`clip_engine/render.py`, `ca
 - `frontend/src/App.tsx` _(existing route table)_ — Add the /editor route
 
 **Acceptance criteria**
-- [ ] Waveform + playhead stay in sync with playback (timeupdate-driven).
-- [ ] Word selection AND waveform selection both produce a cut, validated server-side via the existing submit_cuts/validate_user_cuts path.
-- [ ] Review's transcript/caption/clean panels move to the Editor; Review keeps trim sliders + Keep/Drop/Skip triage and a Refine -> entry point.
-- [ ] A committed edit re-renders through render_cleaned_clip_file with no new render primitive.
-- [ ] The editing-tools-beside-player conflation (OFF_COURSE_BUGS) is resolved by giving editing its own page.
-- [ ] Honest framing retained — Fit tier badge shown, never a virality number.
+- [x] Waveform + playhead stay in sync with playback (timeupdate-driven). ✓ `<video onTimeUpdate>` → `currentTime` prop → Timeline playhead % position.
+- [x] Word selection AND waveform selection both produce a cut, validated server-side via the existing submit_cuts/validate_user_cuts path. ✓ Both paths produce `EditorCut` and POST to `/clips/{id}/cuts`.
+- [x] Review's transcript/caption/clean panels move to the Editor; Review keeps trim sliders + Keep/Drop/Skip triage and a Refine -> entry point. ✓ Review.tsx updated; panels in Editor; Refine → button present (test asserts).
+- [x] A committed edit re-renders through render_cleaned_clip_file with no new render primitive. ✓ Editor posts to existing `/clips/{id}/cuts` → existing `edit_clip` worker task.
+- [x] The editing-tools-beside-player conflation (OFF_COURSE_BUGS) is resolved by giving editing its own page. ✓ Editor is a separate route (`/editor`).
+- [x] Honest framing retained — Fit tier badge shown, never a virality number. ✓ FitBadge + DisclaimerBand present; test asserts no virality language.
 
 **Tests**
 - tests/test_edits.py — extend: Editor word- and time-range selections both yield valid keep_ranges.

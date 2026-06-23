@@ -57,13 +57,24 @@ describe('Review', () => {
     expect(screen.getByText(/No video selected/)).toBeInTheDocument()
   })
 
-  it('loads the clip: player meta, why-this-clip reasoning, transcript words, honesty disclaimer', async () => {
+  it('loads the clip: player meta, why-this-clip reasoning, honesty disclaimer, and Refine button', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderReview('/app/review?video_id=v1')
     expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
     expect(screen.getByText('Strong hook in 3s.')).toBeInTheDocument() // Why-this-clip is default-open
-    expect(await screen.findByText('Hello')).toBeInTheDocument() // transcript word span (async load)
     expect(screen.getByText(/does not promise virality/i)).toBeInTheDocument()
+    // Issue 188: Refine button opens Editor; transcript/caption/clean panels are NOT on Review
+    expect(screen.getByRole('button', { name: /Refine/i })).toBeInTheDocument()
+  })
+
+  it('does NOT render transcript editor, caption style, or clean pass panels (Issue 188 — moved to Editor)', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    // These panels were relocated to Editor.tsx
+    expect(screen.queryByText(/Transcript/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Caption style/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Clean filler/i)).not.toBeInTheDocument()
   })
 
   it('opens the tag-feedback panel when Keep is clicked', async () => {
