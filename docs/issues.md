@@ -3444,7 +3444,7 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 196: Scheduled publish from the upload-timing window
 
-**Status** `OPEN` · **Wave** W2 · **Lane** Publish to YouTube · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W2 · **Lane** Publish to YouTube · **Size** `M` · **Verify** `staging`  
 **Src** `13 / D1c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/13_multiplatform_distribution_publishing.md`  
 **Blocked by** #194, #195 · **Enables** #197 · **Coordinate (hot files)** Alembic revision chain, `routers/clips.py`, `worker/schedule.py`, `worker/tasks.py`  
 
