@@ -4005,7 +4005,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 217: Clip-engine transparency — what's NOT clipped and why (carry-over Issue 94 remainder)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** UI Core · **Size** `M` · **Verify** `local`  
+**Status** `DONE` · **Wave** W1 · **Lane** UI Core · **Size** `M` · **Verify** `local`  
 **Src** carry-over 94 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #213 · **Coordinate (hot files)** `clip_engine/candidates.py`, `clip_engine/scoring.py`, `frontend/src/pages/Dashboard.tsx`, `routers/clips.py`  
 

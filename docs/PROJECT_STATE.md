@@ -29,6 +29,37 @@ Updated after every issue closes.
 **Static gates GREEN:** ruff (0 errors), mypy (0 errors), py_compile (all files). 8/8 tests pass.
 **Staging-pending (Issue 275):** full end-to-end publish → outcome row → poll_clip_outcomes
 48h/7d cycle with real Postgres + worker.
+## ✅ Issue 217 — Clip-engine transparency: "what's NOT clipped and why" (2026-06-23)
+
+**Issue #217 DONE (static-verified, behavioral-staging-pending for real pipeline).**
+
+- `clip_engine/candidates.py` — NEW: `derive_skip_reason(timeline, source_available)` function
+  derives the dominant reason a video produced zero clips (4 named codes). NEW:
+  `skip_reason_label(reason)` maps each code to a human-readable, principle-grounded string
+  (CLIPPING_PRINCIPLES.md principles #2, #6, #9). NEW: 4 module-level constants
+  (`SKIP_REASON_*`) that callers and tests use directly.
+- `routers/clips.py` — `ClipListOut` gains `skip_reason: str | None` + `skip_reason_label:
+  str | None`. `list_clips` populates both when `state == "empty_initial"` + `ingest_status ==
+  done` via a session.get(Signals) call (zero extra DB round-trips since Signals is already
+  fetched by the generate path; here it's fetched lazily only on the empty-state branch).
+- `frontend/src/types.ts` — `ReviewClipListResponse` gains `skip_reason?` + `skip_reason_label?`.
+- `frontend/src/components/dashboard/VideoTable.tsx` — ActionCell (done + 0 clips) gains a
+  "Why no clips?" text link navigating to `/video/{id}` (Issue 213's per-video map).
+- `frontend/src/pages/VideoClipsMap.tsx` — `EmptyState` component gains `skipReasonLabel` prop;
+  for `origin=upload` with a non-null label renders the principled explanation + honesty
+  disclaimer ("grounded in your own data — not a guarantee of performance").
+- `tests/test_skip_reason.py` — NEW: 21 unit + integration tests. Covers all 4 reason branches,
+  human-readable labels, honesty (no virality terms), API field presence, per-creator isolation.
+- `frontend/src/pages/Dashboard.test.tsx` — +2 tests: "Why no clips?" link present for 0-clip
+  done videos, absent when clips exist.
+- `frontend/src/pages/VideoClipsMap.test.tsx` — +4 tests: skip_reason_label shown, honesty
+  disclaimer present, no virality language, heading absent when clips exist.
+- `docs/DECISIONS.md` — entry for skip-reason taxonomy + surface design choices.
+
+**Static gates:** ruff GREEN · mypy GREEN · py_compile GREEN. 21/21 new backend tests pass;
+76/76 related tests pass. `tsc -b && vite build` GREEN; 124/124 vitest tests pass.
+**Staging-pending (Issue 275):** real-pipeline spot-check (signal → derive_skip_reason on an
+actual ingested video), RLS on Signals access.
 
 ---
 

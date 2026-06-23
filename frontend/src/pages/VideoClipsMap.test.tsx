@@ -1,5 +1,6 @@
 /**
  * Tests for Issue 213 — VideoClipsMap page.
+ * Tests for Issue 217 — "why not clipped" skip_reason surface.
  *
  * Covers:
  *  - One marker per clip rendered
@@ -9,6 +10,8 @@
  *  - Per-origin empty-states (upload / link / catalog)
  *  - "Review in order" link href
  *  - Deep-link href per marker (review?video_id=…&clip_id=…)
+ *  - skip_reason_label shown for zero-clip upload videos (Issue 217)
+ *  - No virality language in skip_reason_label surface
  */
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -53,7 +56,11 @@ function makeClip(over: Partial<ReviewClip> = {}): ReviewClip {
   }
 }
 
-function mockFetch(video: Video | null, clips: ReviewClip[]) {
+function mockFetch(
+  video: Video | null,
+  clips: ReviewClip[],
+  skipReasonLabel: string | null = null,
+) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
@@ -64,7 +71,12 @@ function mockFetch(video: Video | null, clips: ReviewClip[]) {
     if (url.endsWith('/videos'))
       return json({ videos: video ? [video] : [], state: 'populated' })
     if (url.match(/\/videos\/[^/]+\/clips$/))
-      return json({ clips, state: clips.length ? 'populated' : 'empty_initial' })
+      return json({
+        clips,
+        state: clips.length ? 'populated' : 'empty_initial',
+        skip_reason: skipReasonLabel ? 'no_signal_above_threshold' : null,
+        skip_reason_label: skipReasonLabel,
+      })
     return json({})
   })
 }
@@ -131,8 +143,8 @@ describe('VideoClipsMap', () => {
     expect(text).not.toMatch(/promise/i)
   })
 
-  it('shows upload empty-state when origin=upload and no clips', async () => {
-    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'upload' }), []))
+  it('shows upload empty-state when origin=upload and no clips and no skip_reason_label', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'upload' }), [], null))
     renderMap()
     expect(await screen.findByText(/Generate clips to see your timeline/i)).toBeInTheDocument()
   })
@@ -167,5 +179,48 @@ describe('VideoClipsMap', () => {
     // which overrides the visible "Review →" text for role-name queries.
     const link = await screen.findByRole('link', { name: /Review this clip in order/i })
     expect(link).toHaveAttribute('href', '/app/review?video_id=v1&clip_id=c1')
+  })
+
+  // ── Issue 217: skip_reason_label surface ──────────────────────────────────
+
+  it('shows skip_reason_label when origin=upload, no clips, and label is provided', async () => {
+    const label =
+      'No engagement signal reached the detection threshold ' +
+      '(Principle #6: Retention curve is ground truth — ' +
+      'this video lacks the data density needed to locate a setup).'
+    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'upload' }), [], label))
+    renderMap()
+    expect(await screen.findByText(/No clips were generated/i)).toBeInTheDocument()
+    expect(await screen.findByText(/No engagement signal reached the detection threshold/i)).toBeInTheDocument()
+  })
+
+  it('skip_reason surface shows the honesty disclaimer (not a guarantee)', async () => {
+    const label = 'No engagement signal reached the detection threshold (Principle #6).'
+    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'upload' }), [], label))
+    const { baseElement } = renderMap()
+    await screen.findByText(/No clips were generated/i)
+    expect(baseElement.textContent).toMatch(/grounded in your own data/i)
+  })
+
+  it('skip_reason_label surface contains no virality language (Issue 217 honesty constraint)', async () => {
+    // Honesty constraint: never promise virality. "not a guarantee" is correct
+    // honest framing (not a virality promise); only prohibit positive virality claims.
+    const label = 'No engagement signal reached the detection threshold (Principle #6).'
+    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'upload' }), [], label))
+    const { baseElement } = renderMap()
+    await screen.findByText(/No clips were generated/i)
+    const text = baseElement.textContent ?? ''
+    // Forbidden: positive virality promises
+    expect(text).not.toMatch(/\bviral\b/i)
+    expect(text).not.toMatch(/\bvirality\b/i)
+    expect(text).not.toMatch(/\bpromises virality\b/i)
+    expect(text).not.toMatch(/\bguaranteed to go viral\b/i)
+  })
+
+  it('does not show "No clips were generated" heading when clips exist', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeVideo(), [makeClip()]))
+    renderMap()
+    await screen.findByRole('button', { name: /Clip at/i })
+    expect(screen.queryByText(/No clips were generated/i)).toBeNull()
   })
 })

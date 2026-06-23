@@ -98,6 +98,52 @@ injection/DoS guard cannot be forgotten or bypassed.
   channel average outperform tools that show generic virality benchmarks.
 - `routers/insights.py` lines 59, 304: `performance_score_components` already in the payload.
 - **Date:** 2026-06-23
+## 2026-06-23 — Issue 217: "What's NOT clipped and why" — skip_reason design
+
+**What changed:**
+
+1. **Skip-reason taxonomy** — four named reason codes (in `clip_engine/candidates.py`) derive
+   from the signal pipeline rather than from a separate heuristic layer:
+   - `no_signal_above_threshold` — empty/zero-duration timeline (no signal array)
+   - `insufficient_retention_data` — non-zero duration but no peaks and no `retention_spike`
+     events (audio/silence only)
+   - `source_unavailable` — `Video.source_uri` is null (origin=link with no upload)
+   - `all_candidates_suppressed_by_nms` — peaks detected by `find_peaks` but zero candidates
+     survive (NMS overlap or min-clip floor)
+   Each code maps to a human-readable label that cites the responsible named principle from
+   `CLIPPING_PRINCIPLES.md` (no virality language).
+
+2. **API surface** — `GET /videos/{id}/clips` (ClipListOut) gains `skip_reason: str | None`
+   and `skip_reason_label: str | None`. Both are populated only when `state == "empty_initial"`
+   AND `ingest_status == done` AND `clips == []`. The Signals row is fetched via session.get
+   (same session as the video row) — no extra network round-trip.
+
+3. **Dashboard badge** — `VideoTable` action cell (done + 0 clips) gains a "Why no clips?"
+   link navigating to `/video/{id}` (Issue 213's per-video map). The full explanation is
+   rendered in `VideoClipsMap`'s empty state, not inline in the dashboard row — avoids
+   duplicating the timeline surface and keeps the dashboard row compact.
+
+4. **Per-video map empty state** — `VideoClipsMap` passes `skip_reason_label` from the clips
+   API response to `EmptyState`. For `origin=upload` with a non-null label the component
+   renders the principle-grounded explanation and the standard honesty disclaimer
+   ("grounded in your own data — not a guarantee of performance").
+
+**Why these decisions:**
+- Derive reason from the existing signal pipeline (not a new DB column) because no migration is
+  in scope (Issue 217 brief: "NO migration"). The Signals row and the Video row are already
+  fetched in `list_clips`; adding a `session.get(Signals, video_id)` there is zero new I/O
+  beyond what the generate path already does.
+- Dashboard badge links to the timeline map (not an inline tooltip with full text) because the
+  Issue 213 map is the canonical per-video surface; inline text on every zero-clip row would
+  duplicate that surface and add visual noise to the dashboard.
+- Honesty disclaimer uses "not a guarantee of performance" (not forbidden) per
+  CLAUDE.md: the constraint bans positive virality *promises*, not the negative framing.
+
+**Source/evidence:**
+- `CLIPPING_PRINCIPLES.md` — principles #2, #6, #9 cited in the skip-reason labels
+- `find_peaks` prominence=0.5 threshold: `clip_engine/candidates.py:_NMS_IOU_THRESHOLD`
+- Industry pattern for empty-state explanations: "why not" explanatory copy with principle
+  citation (Descript, Opus Clip) rather than raw scores
 
 ---
 

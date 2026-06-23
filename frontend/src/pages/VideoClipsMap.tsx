@@ -69,7 +69,13 @@ function TimelineMarker({
   )
 }
 
-function EmptyState({ origin }: { origin: string }) {
+function EmptyState({
+  origin,
+  skipReasonLabel,
+}: {
+  origin: string
+  skipReasonLabel: string | null | undefined
+}) {
   if (origin === 'catalog') {
     return (
       <p className="py-8 text-center text-sm text-subtle">
@@ -88,6 +94,17 @@ function EmptyState({ origin }: { origin: string }) {
     )
   }
   // origin === 'upload' or unknown
+  if (skipReasonLabel) {
+    return (
+      <div className="py-8 text-center max-w-md mx-auto">
+        <p className="text-sm font-medium text-fg mb-2">No clips were generated</p>
+        <p className="text-xs text-subtle leading-relaxed">{skipReasonLabel}</p>
+        <p className="mt-3 text-xs text-muted">
+          These estimates are grounded in your own data — not a guarantee of performance.
+        </p>
+      </div>
+    )
+  }
   return (
     <p className="py-8 text-center text-sm text-subtle">
       Generate clips to see your timeline.
@@ -116,6 +133,7 @@ export function VideoClipsMap() {
   const clips: ReviewClip[] = clipsQuery.data?.clips ?? []
   const durationS: number = video?.duration_s ?? 0
   const origin: string = video?.origin ?? 'upload'
+  const skipReasonLabel: string | null | undefined = clipsQuery.data?.skip_reason_label
 
   const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null
 
@@ -150,7 +168,7 @@ export function VideoClipsMap() {
 
       {clips.length === 0 ? (
         <div className="flex justify-center">
-          <EmptyState origin={origin} />
+          <EmptyState origin={origin} skipReasonLabel={skipReasonLabel} />
         </div>
       ) : (
         <>

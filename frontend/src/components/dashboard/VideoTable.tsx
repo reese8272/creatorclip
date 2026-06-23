@@ -184,11 +184,23 @@ function ActionCell({
         </div>
       )
     }
+    // Done + 0 clips: offer Generate CTA and an honest "Why?" link.
+    // The "Why?" link navigates to the per-video timeline map where skip_reason_label
+    // is rendered in the empty state (Issue 217). The label is grounded in named
+    // CLIPPING_PRINCIPLES — no virality language.
     return (
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={busy} onClick={onGenerate}>
           {label ?? 'Generate clips'}
         </Button>
+        <Link
+          to={`/video/${video.id}`}
+          title="See why no clips were generated for this video"
+          className="text-xs text-subtle hover:text-accent-text"
+          aria-label="Why weren't clips generated? See explanation"
+        >
+          Why no clips?
+        </Link>
         {titlesLink}
       </div>
     )
