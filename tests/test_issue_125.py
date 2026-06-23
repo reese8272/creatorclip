@@ -347,6 +347,7 @@ def test_issue_125_analysis_route_populates_analytics_available_identically():
 # ── Static: UI surface pins ─────────────────────────────────────────────────
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — profile.html deleted")
 def test_issue_125_profile_html_intake_mode_form_with_three_radios():
     """The profile page must offer all three modes as radios + wire to the
     PATCH endpoint via saveAnalysisMode()."""
@@ -360,6 +361,7 @@ def test_issue_125_profile_html_intake_mode_form_with_three_radios():
     assert "saveAnalysisMode" in src
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_issue_125_index_html_has_what_costs_minutes_tooltip():
     """The dashboard nav must expose the 'what costs minutes' explainer
     via the existing tooltip system so the user can answer the question
@@ -377,6 +379,7 @@ def test_issue_125_index_html_has_what_costs_minutes_tooltip():
     )
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_issue_125_index_html_queue_button_wired_to_endpoint():
     """The dashboard must surface a Queue CTA for pending videos — and that
     CTA must hit /videos/{id}/queue, not silently call generate-clips."""
@@ -388,6 +391,7 @@ def test_issue_125_index_html_queue_button_wired_to_endpoint():
     )
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — analysis.html deleted")
 def test_issue_125_analysis_html_has_explicit_unavailable_surface():
     """The analysis page must carry a dedicated element for the analytics-
     unavailable copy (with an Ingest CTA), not bury it inline."""

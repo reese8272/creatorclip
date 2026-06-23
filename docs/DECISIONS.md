@@ -5,6 +5,73 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 226: Retire legacy static HTML pages (XSS attack surface removal)
+
+**What changed:** Deleted all legacy static HTML pages from `static/` except `tos.html` and
+`privacy.html` (required for Google OAuth verification and legal compliance):
+- Deleted: `analysis.html`, `index.html`, `insights.html`, `login.html`, `onboarding.html`,
+  `pricing.html`, `profile.html`, `review.html`, `walkthrough.html`
+- Retained: `tos.html`, `privacy.html`
+- `main.py`: the `GET /` fallback now returns 404 when the SPA bundle is not built (previously
+  served the now-deleted legacy `index.html`).
+- `tests/test_static.py`: ~30 tests that asserted 200 for retired pages → updated to assert 404
+  or skipped (for file-content tests that are now moot). Added
+  `test_react_spa_has_zero_dangerouslySetInnerHTML` CI grep.
+
+**Choice made:** Retirement (not keep-and-lock). Both paths were evaluated:
+- **Retirement (chosen):** Deletion of the HTML files eliminates the XSS risk class structurally.
+  No runtime risk; no opt-in escapeHtml call-site discipline required.
+- **Keep-and-lock (ruled out):** Adding a sweep test to assert every innerHTML assignment is
+  wrapped in escapeHtml mitigates future regressions but does not remove the existing latent
+  risk on already-present sinks. The failure mode that produced Issues 138 and 149 remains.
+
+**Why:** The React SPA (`frontend/src/`) is the canonical authenticated surface and already
+deployed. Legacy pages existed only as rollback insurance that was never invoked. OWASP
+LLM05:2025 classifies LLM output as an untrusted source equal to user input; every innerHTML
+sink touching model-returned text is a structurally latent XSS. Retirement is the structurally
+correct fix: a code deletion eliminates the risk class permanently.
+
+**Source/evidence:**
+- https://genai.owasp.org/llmrisk/llm052025-improper-output-handling/
+- https://cheatsheetseries.owasp.org/cheatsheets/DOM_based_XSS_Prevention_Cheat_Sheet.html
+- Issues 138 and 149 — two confirmed stored-XSS incidents via YouTube titles in legacy HTML
+
+**Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 230: CSRF defence — Fetch-Metadata (Sec-Fetch-Site) chosen over double-submit
+
+**What changed:** Added Fetch-Metadata policy as the primary CSRF mechanism. A FastAPI
+dependency `check_not_cross_site(request: Request)` in `auth.py` inspects `Sec-Fetch-Site`
+on POST/PUT/PATCH/DELETE requests and returns 403 when the value is `cross-site`. Applied
+globally via `app.router.dependencies`. Passes when the header is absent (non-browser API
+clients), `same-origin`, `same-site`, or `none`. Exempts `Authorization: Bearer` paths
+(API-key auth, not cookie-based CSRF risk). Gated by `CSRF_FETCH_METADATA_ENABLED` (default
+False in dev/test — TestClient does not send Sec-Fetch-* headers).
+
+**Alternatives ruled out:**
+- **Double-submit cookie (cookie-to-header CSRF token):** requires a non-HttpOnly CSRF cookie
+  separate from the session cookie, broadening the XSS token-theft surface. The OWASP cheat
+  sheet recommends this for SPAs, but notes Fetch-Metadata as a valid SPA defence.
+- **SameSite=Strict on session cookie:** breaks legitimate cross-site navigations from external
+  links; overkill. SameSite=Lax is the current posture.
+- **Synchronizer token (server-side state):** requires per-session server state; heavier.
+
+**Why Fetch-Metadata:** Lower friction for the SPA than double-submit (no second cookie, no
+token forwarding in every fetch call). Covers all mutating routes globally without per-route
+boilerplate. Mandatory Sec-Fetch-Site fallback to origin/referer is acceptable for legacy
+browsers — they lack Sec-Fetch-* but are subject to SameSite=Lax which provides baseline CSRF
+protection. Financial routes (billing checkout, DELETE /auth/me) are the primary threat surface.
+
+**Source/evidence:**
+- https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+- https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
 
 **What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a

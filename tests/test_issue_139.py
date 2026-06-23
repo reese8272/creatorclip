@@ -16,6 +16,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from auth import get_current_creator
@@ -164,6 +165,7 @@ def test_migration_0024_backfills_from_source_uri():
     assert "WHERE source_uri IS NULL" in src
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_dashboard_offers_upload_affordance_for_linked_videos():
     html = (_REPO / "static/index.html").read_text()
     assert "Upload source file to clip" in html

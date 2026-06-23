@@ -7,6 +7,8 @@ dashboard includes polling JS, video status endpoint.
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from auth import get_current_creator
 from db import get_session
 from main import app
@@ -106,6 +108,7 @@ def test_video_status_404_wrong_creator(client):
 # ── Dashboard includes polling JS ─────────────────────────────────────────────
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_dashboard_includes_polling(client):
     # Legacy-dashboard content; `/` redirects to the SPA once built (Issue 85g).
     content = client.get("/static/index.html").text
@@ -117,12 +120,14 @@ def test_dashboard_includes_polling(client):
     assert "ingest_status" in content or "data-status" in content
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_dashboard_polling_calls_status_endpoint(client):
     content = client.get("/static/index.html").text
     assert "/videos/" in content
     assert "/status" in content
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_dashboard_starts_polling_after_load(client):
     content = client.get("/static/index.html").text
     assert "startPolling" in content

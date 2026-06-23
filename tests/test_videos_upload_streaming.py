@@ -322,6 +322,59 @@ def test_upload_returns_stream_url_none_when_aset_owner_redis_down(monkeypatch):
     aset_owner_mock.assert_awaited_once_with(body["video_id"], str(creator.id))
 
 
+# ── Issue 232: Early Content-Length rejection ─────────────────────────────────
+
+
+def test_413_on_honest_content_length_above_limit(upload_client, monkeypatch):
+    """Issue 232: a request with Content-Length header exceeding UPLOAD_MAX_MB must
+    be rejected 413 BEFORE streaming begins — before the temp file is opened.
+    This prevents wasted I/O for obviously-oversize uploads from honest clients.
+    """
+    monkeypatch.setattr("routers.videos.check_positive_balance", AsyncMock())
+
+    # Tiny payload but a Content-Length header claiming to exceed the limit.
+    # (TestClient may override the content-length for multipart; use a header dict
+    # to pass a fake oversized value for the early-reject path.)
+    one_byte_over = str((_TEST_MAX_MB * _MB) + 1)
+
+    with patch("routers.videos.tempfile.NamedTemporaryFile") as mock_ntf:
+        resp = upload_client.post(
+            "/videos/upload",
+            data={"youtube_video_id": "cl232test01"},
+            files={"file": ("video.mp4", b"x", "video/mp4")},
+            headers={"content-length": one_byte_over},
+        )
+        # The temp file must NOT have been opened (early rejection before streaming).
+        mock_ntf.assert_not_called()
+
+    assert resp.status_code == 413, (
+        f"Issue 232: Content-Length > UPLOAD_MAX_MB must return 413 early. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+
+
+def test_413_regression_no_content_length_still_rejects(upload_client, monkeypatch):
+    """Issue 232 regression guard: an oversized upload with NO Content-Length header
+    must still be rejected via the chunk-loop guard (existing behaviour).
+    The early-reject is a belt; the chunk loop is the suspenders.
+    """
+    monkeypatch.setattr("routers.videos.check_positive_balance", AsyncMock())
+
+    oversized = b"x" * (_TEST_MAX_MB * _MB + 1)
+
+    with patch("worker.tasks.start_pipeline"):
+        resp = upload_client.post(
+            "/videos/upload",
+            data={"youtube_video_id": "cl232regres"},
+            files={"file": ("video.mp4", io.BytesIO(oversized), "video/mp4")},
+        )
+
+    assert resp.status_code == 413, (
+        f"Issue 232 regression: chunk-loop guard must still reject oversized upload "
+        f"without Content-Length header. Got {resp.status_code}: {resp.text}"
+    )
+
+
 @pytest.mark.skip(
     reason="TestClient runs in-process — the test-side 100 MB payload allocation "
     "dominates ru_maxrss and overwhelms whatever the server route allocates. "

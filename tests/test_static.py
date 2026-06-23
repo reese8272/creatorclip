@@ -18,13 +18,11 @@ from models import IngestStatus, OnboardingState, VideoKind, VideoOrigin
 
 
 @pytest.mark.skipif(_SPA_BUILT, reason="SPA bundle built — `/` redirects instead (see below)")
-def test_root_serves_legacy_index_without_spa_bundle(client):
-    # Fresh checkout / CI stage with no frontend build: `/` still boots the
-    # legacy index so the app is usable without a Node build step.
+def test_root_returns_404_without_spa_bundle(client):
+    # Issue 226: legacy static/index.html retired (XSS surface removal).
+    # Without the SPA build, `/` returns 404 instead of a legacy HTML page.
     resp = client.get("/")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    assert b"AutoClip" in resp.content
+    assert resp.status_code == 404
 
 
 @pytest.mark.skipif(not _SPA_BUILT, reason="no SPA bundle — `/` serves the legacy index")
@@ -35,25 +33,35 @@ def test_root_redirects_to_spa_when_built(client):
     assert resp.headers["location"] == "/app/dashboard"
 
 
-def test_static_onboarding_served(client):
-    resp = client.get("/static/onboarding.html")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
+# ── Issue 226: retired legacy HTML pages must return 404 ─────────────────────
+# The React SPA is canonical. Legacy pages removed to eliminate XSS attack
+# surface (stored-XSS via innerHTML of LLM/YouTube output — Issues 138, 149).
+# Only tos.html and privacy.html are retained (legal/OAuth verification gates).
+
+_RETIRED_LEGACY_PAGES = [
+    "analysis.html",
+    "index.html",
+    "insights.html",
+    "login.html",
+    "onboarding.html",
+    "pricing.html",
+    "profile.html",
+    "review.html",
+    "walkthrough.html",
+]
 
 
-def test_static_review_served(client):
-    resp = client.get("/static/review.html")
-    assert resp.status_code == 200
-
-
-def test_static_profile_served(client):
-    resp = client.get("/static/profile.html")
-    assert resp.status_code == 200
-
-
-def test_static_insights_served(client):
-    resp = client.get("/static/insights.html")
-    assert resp.status_code == 200
+def test_retired_legacy_html_pages_return_404(client):
+    """Issue 226: every retired legacy HTML page must return 404.
+    These pages were removed to eliminate the XSS attack surface (OWASP LLM05:2025).
+    tos.html and privacy.html are NOT retired (legal/OAuth requirements).
+    """
+    for page in _RETIRED_LEGACY_PAGES:
+        resp = client.get(f"/static/{page}")
+        assert resp.status_code == 404, (
+            f"/static/{page} must return 404 — the page was retired in Issue 226 "
+            f"to close the XSS attack surface (OWASP LLM05:2025, Issues 138/149)."
+        )
 
 
 def test_static_tos_served(client):
@@ -230,6 +238,10 @@ def test_list_videos_response_has_required_keys(client):
 # ── Issue 91: clips-ready counter filters render_status=done ─────────────────
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — XSS surface removed. "
+    "The React SPA (frontend/src/) is now the canonical surface."
+)
 def test_dashboard_clips_counter_filters_by_render_status():
     """Static-page guard: the dashboard JS must filter clips by render_status,
     not just count them all. Previously the counter showed total clips, but
@@ -281,6 +293,10 @@ def test_activity_panel_library_exists_with_canonical_position():
     assert "cc-hidden" in src, "activityPanel.js must hide itself when no tasks are active."
 
 
+@pytest.mark.skip(
+    reason="Issue 226: all authenticated legacy HTML templates retired — "
+    "React SPA (frontend/src/) is now the canonical surface."
+)
 def test_all_authenticated_templates_include_active_tasks_and_panel():
     """Wave-5 Fix 3: every authenticated static template includes BOTH
     activeTasks.js and activityPanel.js so the cross-page task panel
@@ -317,6 +333,9 @@ def test_all_authenticated_templates_include_active_tasks_and_panel():
 # ── Wave 5: activeTasks.js library exists + exposes documented API ──────────
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — React SPA is canonical."
+)
 def test_link_video_input_accepts_full_urls():
     """The Link-a-video input must accept full YouTube URLs, not just bare IDs.
     Users naturally paste share URLs; the extractYouTubeId() helper must strip
@@ -402,6 +421,9 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/review.html retired — React SPA is canonical."
+)
 def test_review_page_exposes_why_this_clip_panel():
     """Issue 94 — clip transparency. review.html must surface the
     Claude-authored reasoning + cited principle + score + timing
@@ -433,6 +455,9 @@ def test_review_page_exposes_why_this_clip_panel():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/insights.html retired — React SPA is canonical."
+)
 def test_insights_page_consumes_new_insights_endpoint():
     """Issue 93 — rebuilt insights.html surfaces channel totals, DNA
     snapshot, top + bottom performers, upload windows, improvement
@@ -457,6 +482,9 @@ def test_insights_page_consumes_new_insights_endpoint():
     assert "/creators/me/improvement-brief" in src
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/insights.html retired — React SPA is canonical."
+)
 def test_insights_performers_have_sort_control():
     """Issue 149 — the Top/Underperformers panels expose a Sort control
     (default score high→low; flip to low→high or A–Z) and render via the
@@ -482,6 +510,9 @@ def test_insights_performers_have_sort_control():
     assert "escapeHtml(p.kind)" in src
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/walkthrough.html retired — React SPA is canonical."
+)
 def test_walkthrough_page_exists_with_five_panels():
     """Issue 100 — first-run walkthrough has exactly 5 panels (the
     user-locked structure: what-this-is / DNA / what-a-clip-is /
@@ -516,6 +547,10 @@ def test_walkthrough_page_exists_with_five_panels():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/walkthrough.html retired — React SPA is canonical. "
+    "auth.js walkthrough redirect to legacy page is obsolete."
+)
 def test_auth_js_redirects_new_creators_to_walkthrough():
     """Issue 100 — auth.js's first-run gate. New creators
     (onboarding_state = 'connected', walkthrough not yet seen, not
@@ -552,6 +587,9 @@ def test_auth_js_redirects_new_creators_to_walkthrough():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/onboarding.html retired — React SPA is canonical."
+)
 def test_onboarding_intake_is_mandatory():
     """Issue 100 — intake step on onboarding.html is no longer skippable.
     The 'Skip for now' button was removed (Issue 83's optional decision
@@ -584,23 +622,18 @@ def test_onboarding_intake_is_mandatory():
 
 
 def test_all_templates_use_design_tokens():
-    """Issue 99 Phase B (full rollout): every static template must link
+    """Issue 99 Phase B (full rollout): every remaining static template must link
     the shared `_design-tokens.css` and consume at least one `--color-*`
-    semantic token. Pinning per-template avoids a future "let me restyle
-    this one page" PR silently regressing back to inline hex values.
+    semantic token.
 
-    pricing.html is also covered by `test_pricing_page_uses_design_tokens`
-    below (which additionally asserts the broken-Wave-7 link is gone)."""
+    Issue 226: legacy HTML templates (index, onboarding, insights, profile,
+    review, pricing, walkthrough, analysis, login) have been retired. This test
+    now only covers the retained legal pages (tos.html, privacy.html)."""
     import pathlib
 
     static_dir = pathlib.Path(__file__).parent.parent / "static"
+    # Only tos.html and privacy.html remain after Issue 226 retirement.
     templates = [
-        "index.html",
-        "onboarding.html",
-        "insights.html",
-        "profile.html",
-        "review.html",
-        "pricing.html",
         "tos.html",
         "privacy.html",
     ]
@@ -619,6 +652,9 @@ def test_all_templates_use_design_tokens():
         )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/pricing.html retired — React SPA is canonical."
+)
 def test_pricing_page_uses_design_tokens():
     """Issue 99 Phase A: pricing.html is the proof retrofit. It must
     consume the shared _design-tokens.css (not redefine its own palette
@@ -648,6 +684,9 @@ def test_pricing_page_uses_design_tokens():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — React SPA is canonical."
+)
 def test_dashboard_registers_in_flight_ingests_with_active_tasks():
     """Wave 6 Fix D: the dashboard's loadVideos() must call into
     window.activeTasks.registerTask for any video in pending/running
@@ -687,6 +726,10 @@ def test_dashboard_registers_in_flight_ingests_with_active_tasks():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html, insights.html, profile.html, review.html "
+    "all retired — React SPA is canonical."
+)
 def test_authenticated_templates_link_to_pricing_in_nav():
     """Wave 6 Fix B: index/insights/profile/review must expose Pricing in the
     main nav so creators can reach the billing surface. Pricing.html is fully
@@ -711,24 +754,19 @@ def test_authenticated_templates_link_to_pricing_in_nav():
         )
 
 
-def test_every_template_has_legal_footer():
-    """Wave 6 Fix B: every static template — authenticated, marketing, AND
-    legal — must link to both /static/tos.html and /static/privacy.html in a
-    footer. TOS + Privacy must be reachable from every page, which is a
-    documented Google OAuth app-verification gate (Issue 29) and the
-    canonical SaaS pattern (Stripe, Linear, Vercel, Notion). Pre-Wave-6 the
-    Privacy and TOS pages had zero inbound links from anywhere.
+def test_every_retained_template_has_legal_footer():
+    """Wave 6 Fix B: retained static templates (tos.html, privacy.html) must
+    link to both /static/tos.html and /static/privacy.html in a footer.
+
+    Issue 226: legacy authenticated templates retired. Only tos.html and
+    privacy.html are retained. They are the TOS/privacy pages themselves —
+    they must still cross-link each other (industry-standard SaaS pattern).
     """
     import pathlib
 
     static_dir = pathlib.Path(__file__).parent.parent / "static"
+    # Only the two retained legal pages remain after Issue 226 retirement.
     templates = [
-        "index.html",
-        "onboarding.html",
-        "insights.html",
-        "profile.html",
-        "review.html",
-        "pricing.html",
         "tos.html",
         "privacy.html",
     ]
@@ -795,6 +833,9 @@ def test_active_tasks_library_exists_and_exports_api():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/profile.html retired — React SPA is canonical."
+)
 def test_profile_page_exposes_api_keys_section():
     """Issue 95 frontend — profile.html surfaces the API-key management
     card for the OBS companion app. Pins:
@@ -968,6 +1009,10 @@ def test_all_router_limit_decorators_use_creator_key():
 # ── Issues 113–119: new UI surfaces ──────────────────────────────────────────
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html, profile.html, review.html, insights.html "
+    "retired — React SPA is canonical."
+)
 def test_nav_balance_and_help_in_all_main_pages():
     """Issue 113: every main authenticated page must expose:
     - id="nav-balance" for the minutes-remaining chip
@@ -999,6 +1044,9 @@ def test_auth_js_populates_nav_elements():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/profile.html retired — React SPA is canonical."
+)
 def test_profile_dna_section_is_collapsible():
     """Issue 114: the Creator DNA section must be wrapped in a <details> element
     so it doesn't dominate the profile page by default."""
@@ -1016,6 +1064,9 @@ def test_profile_dna_section_is_collapsible():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/profile.html retired — React SPA is canonical."
+)
 def test_profile_rebuild_wires_streaming():
     """Issue 116: profile.html must load progressStream.js and wire rebuildDna()
     to subscribe to the SSE task stream from the build_dna endpoint."""
@@ -1033,6 +1084,9 @@ def test_profile_rebuild_wires_streaming():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — React SPA is canonical."
+)
 def test_dashboard_has_analytics_panel_with_period_select():
     """Issue 115: the dashboard must show a YouTube Analytics panel with a
     period dropdown (7d / 28d / 90d / all) fetching /creators/me/insights/analytics."""
@@ -1050,6 +1104,9 @@ def test_dashboard_has_analytics_panel_with_period_select():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/review.html retired — React SPA is canonical."
+)
 def test_review_page_has_structured_feedback_panel():
     """Issue 118: review.html must include the multi-select structured feedback
     panel for approve and deny actions."""
@@ -1066,6 +1123,9 @@ def test_review_page_has_structured_feedback_panel():
     assert "feedback_tags" in src, "Issue 118: feedback payload must include feedback_tags field."
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/review.html retired — React SPA is canonical."
+)
 def test_review_page_has_style_picker():
     """Issue 119: review.html must include the clip style picker with subtitle
     and background controls, and an applyStyle() function."""
@@ -1081,6 +1141,9 @@ def test_review_page_has_style_picker():
     assert "applyStyle" in src, "Issue 119: review.html must include applyStyle() function."
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/insights.html retired — React SPA is canonical."
+)
 def test_insights_page_has_ai_analysis_and_saved_panels():
     """Issue 117: insights.html must support per-performer AI analysis
     (analyze button + /analyze-performer endpoint) and a saved insights panel."""
@@ -1143,6 +1206,9 @@ def test_issue_136_editor_layout_css_exists_with_editor_tokens():
     assert "transition: transform" in layout
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/review.html retired — React SPA is canonical."
+)
 def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
     """review.html opts into editor mode + uses ONLY --editor-* tokens —
     no hardcoded hex in the new layout markup (Issue 136 acceptance)."""
@@ -1183,6 +1249,9 @@ def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
         )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — React SPA is canonical."
+)
 def test_issue_136_index_html_pre_auth_hero_block():
     """Issue 136: index.html carries a hero block + opts into anonymous
     rendering so the pre-auth landing shows up for logged-out visitors."""
@@ -1244,21 +1313,20 @@ def test_static_cachebust_middleware_appends_version_to_css(client):
     """`StaticCacheBustMiddleware` rewrites text/html responses so every
     /static/X.css and /static/X.js reference picks up ?v=<STATIC_VERSION>.
     Each deploy bumps STATIC_VERSION (built from the git SHA) so Cloudflare
-    treats the asset URL as new and stops serving the old cached copy."""
+    treats the asset URL as new and stops serving the old cached copy.
+
+    Issue 226: static/index.html retired. Now verified against tos.html, which
+    also includes /static/_design-tokens.css and is a retained legal page.
+    """
     from config import settings
 
-    # Legacy HTML carries /static/* refs; `/` redirects to the SPA once built
-    # (Issue 85g), so verify the rewrite against the legacy file directly.
-    resp = client.get("/static/index.html")
+    # Use the retained tos.html which also has static CSS refs.
+    resp = client.get("/static/tos.html")
     assert resp.status_code == 200
     body = resp.text
     expected_suffix = f"?v={settings.STATIC_VERSION}"
     assert f"/static/_design-tokens.css{expected_suffix}" in body, (
         "CSS link must carry the cache-busting query string."
-    )
-    assert f"/static/hero.css{expected_suffix}" in body
-    assert f"/static/auth.js{expected_suffix}" in body, (
-        "JS src must also get the cache-bust suffix — Cloudflare caches both."
     )
 
 
@@ -1293,8 +1361,13 @@ def test_static_cachebust_middleware_sets_no_store_on_html(client):
     """HTML responses must carry Cache-Control: no-store so browsers never
     cache them via ETag/Last-Modified.  Stale browser-cached HTML retains old
     ?v= strings that point at CDN-cached old CSS — the only safe fix is to
-    prevent browser caching of HTML entirely."""
-    for path in ("/", "/static/index.html", "/static/insights.html"):
+    prevent browser caching of HTML entirely.
+
+    Issue 226: /static/index.html and /static/insights.html retired.
+    Now verified against retained legal pages (tos.html, privacy.html).
+    Note: / returns 404 when SPA is not built (Issue 226 — legacy index retired).
+    """
+    for path in ("/static/tos.html", "/static/privacy.html"):
         resp = client.get(path)
         assert resp.status_code == 200
         cc = resp.headers.get("cache-control", "")
@@ -1304,8 +1377,12 @@ def test_static_cachebust_middleware_sets_no_store_on_html(client):
 def test_static_cachebust_middleware_strips_etag_from_html(client):
     """ETag and Last-Modified must be absent from rewritten HTML responses.
     Keeping them allows browsers to send If-None-Match and receive a 304 that
-    bypasses the middleware, leaving the browser stuck on stale HTML."""
-    resp = client.get("/")
+    bypasses the middleware, leaving the browser stuck on stale HTML.
+
+    Issue 226: / returns 404 when SPA not built (legacy index.html retired).
+    Verify against retained tos.html instead.
+    """
+    resp = client.get("/static/tos.html")
     assert resp.status_code == 200
     assert "etag" not in resp.headers, (
         "ETag must be stripped from HTML responses to prevent conditional-GET bypass."
@@ -1374,6 +1451,10 @@ def test_issue_137_page_shell_css_exists_with_overflow_and_aurora_rules():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: all legacy authenticated HTML templates retired — "
+    "React SPA (frontend/src/) is the canonical surface."
+)
 def test_issue_137_authenticated_pages_link_page_shell_and_opt_in():
     """Every authenticated template must link page-shell.css AND carry
     `app-page` on <body>. Without both, the page won't pick up the unified
@@ -1393,6 +1474,9 @@ def test_issue_137_authenticated_pages_link_page_shell_and_opt_in():
         )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — React SPA is canonical."
+)
 def test_issue_137_index_video_table_wrapped_for_overflow():
     """Issue 137: the dashboard's video table was the load-bearing source of
     horizontal scroll (4 columns + 2-button action cell). It must be wrapped
@@ -1429,6 +1513,10 @@ def test_issue_137_decisions_md_logs_issue99_reversal():
     )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — React SPA is canonical. "
+    "Cache-bust middleware behavior covered by test_static_cachebust_middleware_appends_version_to_css."
+)
 def test_issue_137_page_shell_loaded_via_html_route_and_cachebust_applied(client):
     """The page-shell stylesheet must actually load on the rendered HTML —
     not just exist on disk — and the cache-bust middleware must append a
@@ -1464,6 +1552,10 @@ def test_shared_escape_util_exists_and_is_complete():
         assert needle in src, f"escapeHtml must map {needle!r}"
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/index.html retired — XSS risk eliminated structurally "
+    "(Issue 226). The React SPA uses JSX with encoding by default."
+)
 def test_index_escapes_third_party_video_title():
     """SEV1 #1: YouTube titles (third-party via /videos/link) must be escaped
     before reaching tbody.innerHTML — otherwise a hostile title is stored XSS
@@ -1478,6 +1570,9 @@ def test_index_escapes_third_party_video_title():
     assert "${v.title || '—'}" not in src
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/insights.html retired — XSS risk eliminated structurally."
+)
 def test_insights_escapes_llm_and_persisted_content():
     """SEV1 #1: LLM analysis output (reflected) and persisted saved-insights
     (stored XSS on every page load) must be escaped before innerHTML."""
@@ -1493,6 +1588,9 @@ def test_insights_escapes_llm_and_persisted_content():
     assert "${data.content} <button" not in src
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/analysis.html retired — XSS risk eliminated structurally."
+)
 def test_analysis_escape_includes_apostrophe_via_shared_util():
     """SEV1 #1: analysis.html must use the shared escaper (which escapes the
     apostrophe), not the old local `_esc` that missed it."""
@@ -1503,6 +1601,9 @@ def test_analysis_escape_includes_apostrophe_via_shared_util():
     assert "_esc = window.escapeHtml" in src
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/analysis.html retired — XSS risk eliminated structurally."
+)
 def test_analysis_ingest_cta_uses_urlraw_not_dead_id():
     """SEV1 #2: the 'Ingest this video' CTA built the URL from a non-existent
     element id ('youtube_url'; the real input is 'url-input'), throwing a
@@ -1519,11 +1620,11 @@ def test_analysis_ingest_cta_uses_urlraw_not_dead_id():
 
 def test_shared_components_layer_exists_and_is_linked():
     """Issue 147 — the cohesion layer. static/components.css is the canonical
-    shared component set (built only on _design-tokens.css), and every core
-    authenticated template must link it after page-shell.css. The audit found
-    the same components (stat cells, status pills, eyebrow labels, callouts,
-    log streams) redefined locally per page; this pins the shared layer + its
-    adoption so a page can't silently re-fork them.
+    shared component set (built only on _design-tokens.css).
+
+    Issue 226: all legacy authenticated HTML templates retired. This test now
+    only checks that components.css itself defines the canonical components.
+    Per-template consumption is enforced in the React SPA (frontend/src/).
     """
     import pathlib
 
@@ -1551,31 +1652,13 @@ def test_shared_components_layer_exists_and_is_linked():
         "colors — that is the whole point of the cohesion layer."
     )
 
-    # Every core authenticated template links it, after page-shell.css.
-    for page in (
-        "index",
-        "insights",
-        "profile",
-        "onboarding",
-        "analysis",
-        "walkthrough",
-        "pricing",
-    ):
-        src = (static / f"{page}.html").read_text()
-        assert "/static/components.css" in src, (
-            f"{page}.html must link components.css (Issue 147 cohesion layer)."
-        )
-        assert src.index("page-shell.css") < src.index("components.css"), (
-            f"{page}.html must load components.css AFTER page-shell.css so the "
-            f"shared component layer can build on the shell."
-        )
-
 
 def test_eyebrow_label_tracking_is_tokenized():
-    """Issue 147 — the uppercase eyebrow/label pattern had drifted to three
-    different letter-spacings (0.04/0.06/0.08em) across pages. Pin the single
-    --tracking-eyebrow token and that the core templates no longer carry the
-    divergent literals."""
+    """Issue 147 — the --tracking-eyebrow token must exist in _design-tokens.css.
+
+    Issue 226: legacy HTML templates retired. Per-template assertion removed.
+    Token existence is still pinned here; React SPA enforces usage via Tailwind/CSS.
+    """
     import pathlib
 
     static = pathlib.Path(__file__).parent.parent / "static"
@@ -1584,22 +1667,12 @@ def test_eyebrow_label_tracking_is_tokenized():
         "_design-tokens.css must define --tracking-eyebrow (one canonical "
         "label letter-spacing) — Issue 147."
     )
-    for page in (
-        "index",
-        "insights",
-        "profile",
-        "onboarding",
-        "analysis",
-        "walkthrough",
-        "pricing",
-    ):
-        src = (static / f"{page}.html").read_text()
-        assert "letter-spacing: 0.04em" not in src and "letter-spacing: 0.08em" not in src, (
-            f"{page}.html must not carry a divergent eyebrow letter-spacing "
-            f"(use var(--tracking-eyebrow)) — Issue 147 cohesion."
-        )
 
 
+@pytest.mark.skip(
+    reason="Issue 226: static/analysis.html and pricing.html retired — "
+    "React SPA is canonical. Type scale enforcement happens in frontend/src/."
+)
 def test_page_title_scale_is_unified():
     """Issue 148 — page-opener titles had drifted across the type scale
     (analysis at --text-lg, pricing at --text-2xl, others at --text-xl), so
@@ -1616,4 +1689,115 @@ def test_page_title_scale_is_unified():
     pricing = (static / "pricing.html").read_text()
     assert "var(--text-2xl)" not in pricing, (
         "pricing.html page title must use the unified --text-xl scale (Issue 148)."
+    )
+
+
+# ── Issue 226: CI grep — dangerouslySetInnerHTML in frontend/src/ ─────────────
+
+
+def test_react_spa_has_zero_dangerouslysetinnerhtml():
+    """Issue 226 (OWASP LLM05:2025): the React SPA must have zero
+    dangerouslySetInnerHTML usages. JSX encodes by default; any opt-in via
+    dangerouslySetInnerHTML re-introduces a DOM XSS sink structurally equivalent
+    to the innerHTML pattern that produced Issues 138 and 149 in the legacy UI.
+
+    This CI grep runs on every test run to catch accidental regressions.
+    """
+    import pathlib
+    import re
+
+    frontend_src = pathlib.Path(__file__).parent.parent / "frontend" / "src"
+    if not frontend_src.is_dir():
+        # No frontend checkout in this environment — skip gracefully.
+        return
+
+    violations: list[str] = []
+    for ts_file in sorted(frontend_src.rglob("*.tsx")) + sorted(frontend_src.rglob("*.ts")):
+        content = ts_file.read_text()
+        if "dangerouslySetInnerHTML" in content:
+            # Find line numbers for clarity.
+            for lineno, line in enumerate(content.splitlines(), start=1):
+                if "dangerouslySetInnerHTML" in line:
+                    violations.append(f"{ts_file.relative_to(frontend_src)}:{lineno}: {line.strip()}")
+
+    assert not violations, (
+        "Issue 226 (OWASP LLM05:2025): zero dangerouslySetInnerHTML allowed in "
+        "frontend/src/. Found:\n" + "\n".join(f"  {v}" for v in violations)
+    )
+
+
+# ── Issue 229: HTTP security-headers middleware ───────────────────────────────
+
+
+def test_security_headers_present_on_every_response(client):
+    """Issue 229 (OWASP Secure Headers Project): every response must carry the
+    OWASP baseline security headers. Verified on two surfaces: a JSON API
+    endpoint and a retained static HTML page.
+
+    HSTS is only emitted in production (ENV=production); absence in development
+    is correct behaviour, separately asserted in test_hsts_absent_in_development.
+    """
+    for path in ("/health", "/static/tos.html"):
+        resp = client.get(path)
+        assert resp.status_code in (200, 404)
+        assert resp.headers.get("content-security-policy"), (
+            f"{path}: Content-Security-Policy must be present (Issue 229)."
+        )
+        csp = resp.headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in csp, (
+            f"{path}: CSP must include frame-ancestors 'none' — clickjacking defence."
+        )
+        assert "default-src" in csp, (
+            f"{path}: CSP must include default-src directive."
+        )
+        assert resp.headers.get("x-frame-options") == "DENY", (
+            f"{path}: X-Frame-Options must be DENY (defence-in-depth for legacy browsers)."
+        )
+        assert resp.headers.get("x-content-type-options") == "nosniff", (
+            f"{path}: X-Content-Type-Options must be nosniff."
+        )
+        assert resp.headers.get("referrer-policy") == "no-referrer", (
+            f"{path}: Referrer-Policy must be no-referrer."
+        )
+
+
+def test_hsts_absent_in_development(client):
+    """Issue 229: HSTS must NOT be emitted in development (ENV=development).
+    Emitting HSTS on a non-TLS dev host causes browsers to refuse HTTP
+    connections to localhost — HSTS is gated on ENV='production'."""
+    from config import settings
+
+    assert settings.ENV != "production", (
+        "This test assumes ENV=development. If running in production, skip."
+    )
+    resp = client.get("/health")
+    assert "strict-transport-security" not in resp.headers, (
+        "HSTS must be absent in development (ENV != 'production'). "
+        "It is only emitted in production to avoid breaking non-TLS dev hosts."
+    )
+
+
+def test_hsts_emitted_in_production(client, monkeypatch):
+    """Issue 229: Strict-Transport-Security must be present when ENV=production."""
+    monkeypatch.setattr("config.settings.ENV", "production")
+    resp = client.get("/health")
+    hsts = resp.headers.get("strict-transport-security", "")
+    assert "max-age=63072000" in hsts, (
+        "HSTS max-age must be 63072000 (2 years) — OWASP Secure Headers recommendation."
+    )
+    assert "includeSubDomains" in hsts, (
+        "HSTS must include includeSubDomains — protects all subdomains."
+    )
+
+
+def test_csp_contains_frame_ancestors_none(client):
+    """Issue 229: frame-ancestors 'none' is the structural clickjacking defence.
+    Previously absent — a CSP with this directive would have been the backstop
+    in the two prior XSS incidents (Issues 138, 149).
+    """
+    resp = client.get("/health")
+    csp = resp.headers.get("content-security-policy", "")
+    assert "frame-ancestors 'none'" in csp, (
+        "CSP must include frame-ancestors 'none' — prevents clickjacking of the "
+        "OAuth flow and the SPA. OWASP Secure Headers Project 2025."
     )

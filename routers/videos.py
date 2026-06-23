@@ -232,6 +232,24 @@ async def upload_video(
     await check_positive_balance(creator.id, session)
 
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
+
+    # Issue 232 — early Content-Length rejection: clients that send an honest
+    # Content-Length header above the limit are rejected here, before the temp
+    # file is opened and streaming begins. Saves I/O and temp-file creation for
+    # obviously-oversize uploads. The chunk-loop 413 (below) remains the
+    # authoritative guard for clients that omit or lie about Content-Length.
+    cl_header = request.headers.get("content-length")
+    if cl_header is not None:
+        try:
+            cl_bytes = int(cl_header)
+        except ValueError:
+            cl_bytes = 0
+        if cl_bytes > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds {settings.UPLOAD_MAX_MB} MB limit",
+            )
+
     # 1 MB read chunks — balances syscall overhead against per-request heap cost.
     chunk_size = 1 * 1024 * 1024
 

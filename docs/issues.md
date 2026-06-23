@@ -377,7 +377,7 @@ Two tracks run *alongside* the lane waves rather than inside them:
 | 302 🧪 | Honor & document the Global Privacy Control (GPC) opt-out signal | W2 | Privacy & Compliance | S | local |
 | 303 🧪 | Consolidated go/no-go launch checklist (docs/GO_LIVE.md) — CAPST… | W4 | QA & Release Engineering | M | local |
 
-*🧪 research-derived/proposed · ⛔ blocked. Done issues: 181–185, 247–249 (see Completed).*
+*🧪 research-derived/proposed · ⛔ blocked. Done issues: 181–185, 226, 229, 230, 232, 247–249 (see Completed).*
 
 ## Index — by original priority tier
 
@@ -443,6 +443,18 @@ Two tracks run *alongside* the lane waves rather than inside them:
 
 ### Issue 249: [SEV1] Data export endpoint (Art. 15/20)
 **Status** `DONE` (2026-06-22). [SEV1] Async data export (Art. 15/20): `POST/GET /creators/me/export` + `/download`; `data_exports` table (migration 0027, RLS). Clips via durable authed links.
+
+### Issue 226: Retire or lock down the legacy static UI output sink
+**Status** `DONE` (2026-06-23). Deleted all `/static/*.html` except `tos.html`+`privacy.html` (OWASP LLM05:2025 XSS sink removal). `GET /` returns 404. 9 retired pages assert 404 in tests; ~30 legacy-page tests marked `skip` across 6 test files. Branch: `wave0/security-platform`.
+
+### Issue 229: HTTP security-headers middleware (OWASP baseline)
+**Status** `DONE` (2026-06-23). `SecurityHeadersMiddleware` in `main.py`: CSP (`default-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`), X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy no-referrer, HSTS (production only). `CSP_EXTRA_SOURCES` env var. 5 new tests. Branch: `wave0/security-platform`.
+
+### Issue 230: CSRF defense via Fetch-Metadata
+**Status** `DONE` (2026-06-23). `check_not_cross_site` global FastAPI dependency in `auth.py`; rejects `sec-fetch-site: cross-site` on mutating methods; bypasses Bearer auth + safe methods + absent header. `CSRF_FETCH_METADATA_ENABLED` flag. 7 new tests in `test_security_baselines.py`. DECISIONS.md entry. Branch: `wave0/security-platform`.
+
+### Issue 232: Early Content-Length upload rejection + session-revocation documentation
+**Status** `DONE` (2026-06-23). Early Content-Length header check in `upload_video` before temp file created (rejects > UPLOAD_MAX_MB before streaming). WHY comment in `create_session_token` documenting 60-min exposure window + Redis jti deny-list deferral rationale. `COMPLIANCE.md` Auth section updated. 2 new tests. Branch: `wave0/security-platform`.
 
 ---
 

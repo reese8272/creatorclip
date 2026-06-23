@@ -1,4 +1,4 @@
-"""Security baseline regression guards (Issue 107).
+"""Security baseline regression guards (Issues 107, 229, 230).
 
 Enforces two invariants that prevent silent drift in the pip-audit ignore lists:
 
@@ -144,3 +144,152 @@ def test_pyproject_pip_audit_ignores_have_comments() -> None:
             f"# comment explaining why it is accepted-risk. "
             f"Context seen:\n{context}"
         )
+
+
+# ── Issue 230: CSRF Fetch-Metadata defence ───────────────────────────────────
+
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+import uuid as _uuid  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from auth import check_not_cross_site, get_current_creator  # noqa: E402
+from db import get_session  # noqa: E402
+from main import app  # noqa: E402
+
+
+def _csrf_client(monkeypatch) -> TestClient:
+    """TestClient with CSRF_FETCH_METADATA_ENABLED=True and a mocked creator."""
+    monkeypatch.setattr("config.settings.CSRF_FETCH_METADATA_ENABLED", True)
+
+    creator = MagicMock()
+    creator.id = _uuid.uuid4()
+
+    async def _fake_session():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalars.return_value = []
+        session.execute = AsyncMock(return_value=result)
+        yield session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        with TestClient(app, raise_server_exceptions=False) as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+
+def test_csrf_cross_site_post_returns_403(monkeypatch):
+    """Issue 230: POST with Sec-Fetch-Site: cross-site must return 403.
+    This is the primary CSRF rejection case — a cross-site form/fetch attack.
+    """
+    for c in _csrf_client(monkeypatch):
+        resp = c.post(
+            "/videos/link",
+            json={"youtube_video_id": "abc12345678"},
+            headers={"sec-fetch-site": "cross-site"},
+        )
+    assert resp.status_code == 403, (
+        f"Issue 230: cross-site POST must be rejected with 403. Got {resp.status_code}."
+    )
+
+
+def test_csrf_same_origin_post_passes(monkeypatch):
+    """Issue 230: POST with Sec-Fetch-Site: same-origin must not be blocked.
+    SPA API calls from the same origin are the normal operating path.
+    """
+    for c in _csrf_client(monkeypatch):
+        resp = c.post(
+            "/videos/link",
+            json={"youtube_video_id": "abc12345678"},
+            headers={"sec-fetch-site": "same-origin"},
+        )
+    # 4xx/5xx is fine for auth/validation reasons — the CSRF check must not be the cause.
+    assert resp.status_code != 403, (
+        f"Issue 230: same-origin POST must NOT be CSRF-blocked. Got {resp.status_code}."
+    )
+
+
+def test_csrf_absent_header_passes(monkeypatch):
+    """Issue 230: POST with no Sec-Fetch-Site header must not be blocked.
+    Non-browser API clients (curl, SDK) do not send this header; blocking them
+    would break the API-key path.
+    """
+    for c in _csrf_client(monkeypatch):
+        resp = c.post(
+            "/videos/link",
+            json={"youtube_video_id": "abc12345678"},
+        )
+    assert resp.status_code != 403, (
+        f"Issue 230: absent Sec-Fetch-Site must NOT be CSRF-blocked. Got {resp.status_code}."
+    )
+
+
+def test_csrf_bearer_auth_passes(monkeypatch):
+    """Issue 230: POST with Authorization: Bearer must not be CSRF-blocked.
+    API-key callers authenticate via Bearer, not session cookies — CSRF is
+    only a risk for cookie-authed routes.
+    """
+    for c in _csrf_client(monkeypatch):
+        resp = c.post(
+            "/videos/link",
+            json={"youtube_video_id": "abc12345678"},
+            headers={"sec-fetch-site": "cross-site", "authorization": "Bearer test-key"},
+        )
+    assert resp.status_code != 403, (
+        f"Issue 230: Authorization: Bearer cross-site POST must NOT be CSRF-blocked. "
+        f"Got {resp.status_code}."
+    )
+
+
+def test_csrf_get_routes_not_blocked(monkeypatch):
+    """Issue 230: GET requests must never be blocked by the CSRF check.
+    Safe methods (GET, HEAD, OPTIONS) are never state-changing.
+    """
+    for c in _csrf_client(monkeypatch):
+        resp = c.get(
+            "/videos",
+            headers={"sec-fetch-site": "cross-site"},
+        )
+    assert resp.status_code != 403, (
+        f"Issue 230: GET with cross-site header must NOT be CSRF-blocked. "
+        f"Got {resp.status_code}."
+    )
+
+
+def test_csrf_disabled_in_dev(monkeypatch):
+    """Issue 230: CSRF_FETCH_METADATA_ENABLED=False (default dev/test value) means
+    cross-site POST must pass through. TestClient does not send Sec-Fetch-* headers,
+    so tests that don't explicitly enable the feature must not be affected.
+    """
+    # Explicitly leave CSRF_FETCH_METADATA_ENABLED=False (default).
+    creator = MagicMock()
+    creator.id = _uuid.uuid4()
+
+    async def _fake_session():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalars.return_value = []
+        session.execute = AsyncMock(return_value=result)
+        yield session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        with TestClient(app, raise_server_exceptions=False) as c:
+            resp = c.post(
+                "/videos/link",
+                json={"youtube_video_id": "abc12345678"},
+                headers={"sec-fetch-site": "cross-site"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code != 403, (
+        f"Issue 230: with CSRF_FETCH_METADATA_ENABLED=False, cross-site POST must "
+        f"NOT be blocked. Got {resp.status_code}."
+    )

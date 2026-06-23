@@ -289,6 +289,7 @@ def test_issue_126_check_positive_balance_keeps_generic_copy_for_legacy():
 # ── Static: UI surface pins ─────────────────────────────────────────────────
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_issue_126_dashboard_has_trial_banner_with_dismiss_and_pricing_cta():
     src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
     assert 'id="trial-banner"' in src, "dashboard must carry a #trial-banner element"
@@ -302,6 +303,7 @@ def test_issue_126_dashboard_has_trial_banner_with_dismiss_and_pricing_cta():
     assert "is-final-day" in src
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — index.html deleted")
 def test_issue_126_dashboard_has_low_balance_warning_above_actions():
     src = (pathlib.Path(__file__).parent.parent / "static" / "index.html").read_text()
     assert 'id="low-balance-warning"' in src
@@ -310,6 +312,7 @@ def test_issue_126_dashboard_has_low_balance_warning_above_actions():
     assert 'href="/static/pricing.html">Add minutes</a>' in src or "Add minutes" in src
 
 
+@pytest.mark.skip("Issue 226: legacy static pages retired — analysis.html deleted")
 def test_issue_126_analysis_html_carries_pre_action_low_balance_warning():
     src = (pathlib.Path(__file__).parent.parent / "static" / "analysis.html").read_text()
     assert 'id="low-balance-warning"' in src, (
