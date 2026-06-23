@@ -84,7 +84,8 @@ the ToS would result in API access revocation, destroying the product.
 | Transcripts | Word-level segments | Until video deleted | Derived from source; not YouTube-origin data |
 | Creator DNA | Pattern profiles, brief text | Until creator deletes | Creator-owned derivative data |
 | Feedback labels | upvote/downvote/skip/trim | Until creator deletes | Creator-owned |
-| Event logs (telemetry) | UI + backend events: click/submit/navigate, http_request (path, method, status, duration, request_id, creator_id) | Beta-analysis telemetry; retention TBD before public launch (candidate: 90-day rolling purge — Issue 250) | Issue 151. **No PII / no tokens** — `event_log._redact()` masks email/token/secret-like keys at ingestion; creator is id-only. Dedicated `event_logs` table on a **separate engine, no FK to creators** (no RLS); per-creator reads isolated at the app layer (`/api/logs/me`); operators query directly. **Account deletion (Issue 248):** the DB cascade can't reach this engine, so `DELETE /auth/me` explicitly calls `event_log.purge_creator_events(creator_id)` to remove all of a creator's telemetry rows (best-effort; logged, never aborts the erasure). |
+| Event logs (telemetry) | UI + backend events: click/submit/navigate, http_request (path, method, status, duration, request_id, creator_id) | **90-day rolling purge** — rows with `at < now() - 90 days` are deleted daily by the `purge-stale-event-logs-daily` Celery Beat task (Issue 250). Configured via `EVENT_LOG_RETENTION_DAYS` (default 90). | Issue 151. **No PII / no tokens** — `event_log._redact()` masks email/token/secret-like keys at ingestion; creator is id-only. Dedicated `event_logs` table on a **separate engine, no FK to creators** (no RLS); per-creator reads isolated at the app layer (`/api/logs/me`); operators query directly. **Account deletion (Issue 248):** the DB cascade can't reach this engine, so `DELETE /auth/me` explicitly calls `event_log.purge_creator_events(creator_id)` to remove all of a creator's telemetry rows (best-effort; logged, never aborts the erasure). GDPR Art. 5(1)(e): 90 days is within the industry-standard range (60–180 days) for SaaS behavioral telemetry; justified by analytical utility, not a legal minimum. |
+| Audit log | `creator.deleted` entries (creator_id UUID only — no email, no channel_id) | **Indefinite** — retained as evidence-of-erasure per Art. 5(1)(e) justified by security/breach investigation need. Legal counsel standard: 1–3 years for compliance audit logs. No PII stored (Issue 247 + EDPB CEF 2025 constraint). | CCPA disclosure: audit_log stores only pseudonymous UUIDs; retention is indefinite for compliance evidence. No personal information retained. |
 | Chat conversations (Issue 152) | Pro-chatbot threads: the creator's own messages + assistant replies, per-message token counts | Persisted until the creator deletes the conversation (`DELETE /api/chat/conversations/{id}`); cascades on account deletion via `creator_id` FK | Creator-authored content scoped to one creator. `chat_conversations` RLS-gated (migration 0026); `chat_messages` reaches tenant via the conversation FK; reads filtered at the app layer. Tool calls fetch ONLY the requesting creator's analytics (no cross-creator data ever enters the prompt). No virality promise (honesty constraint in the system prompt). |
 
 ---
@@ -115,6 +116,12 @@ the blast radius of a token compromise.
   CEF 2025). Only the internal `creator_id` (pseudonymous once the creator row is gone) is
   retained as evidence-of-erasure. Pinned by `test_delete_account_writes_audit_log`.
 - Demographics data: aggregated payloads only; no individual viewer data is stored.
+- **Sub-processors and Art. 30 record (Issue 251):** see `docs/SUBPROCESSORS.md` for the
+  full sub-processor list (Anthropic, Voyage AI, Deepgram, Cloudflare R2, Stripe, Google),
+  the personal data categories each processes, transfer mechanisms, and the DPA runbook.
+  Deepgram `mip_opt_out=True` is enforced in code on every transcription call; Google
+  YouTube analytics data must be deleted within 30 days if auth cannot be re-verified
+  (Wave-4 Fix 3 — enforced by `purge-stale-youtube-analytics-daily` Beat task).
 
 ---
 

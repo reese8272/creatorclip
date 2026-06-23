@@ -48,4 +48,14 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.expire_trials",
         "schedule": timedelta(hours=24),
     },
+    # Issue 250 — GDPR Art. 5(1)(e) storage-limitation: 90-day rolling purge
+    # of behavioral telemetry in the event_logs table. event_logs has no FK to
+    # creators, so per-creator erasure (Issue 248) is handled separately by
+    # event_log.purge_creator_events(); this task sweeps time-expired rows
+    # across all creators. Best-effort: failures are logged and swallowed
+    # inside event_log.purge_stale_events().
+    "purge-stale-event-logs-daily": {
+        "task": "worker.tasks.purge_stale_event_logs",
+        "schedule": timedelta(hours=24),
+    },
 }

@@ -5,6 +5,47 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 250: Event-log retention (90 days) + inactive-account policy [DEC]
+
+**What changed:**
+1. `EVENT_LOG_RETENTION_DAYS = 90` added to `config.py` and `.env.example`. A new
+   Celery Beat task `purge-stale-event-logs-daily` calls `event_log.purge_stale_events(cutoff)`
+   to enforce the rolling window.
+2. `event_log.purge_stale_events(cutoff: datetime) -> int` added alongside
+   `purge_creator_events` — same engine, same best-effort error posture.
+3. `erase_creator(session, creator)` refactored out of `routers/auth.py::delete_account`
+   into a reusable async helper (DRY — eliminates future duplication for any new erasure
+   path, e.g. inactive-account sweep).
+4. `docs/COMPLIANCE.md` updated: event_logs row now shows "90-day rolling purge" (was
+   "retention TBD"); audit_log row added with "indefinite — no PII" rationale.
+
+**[DEC] — Inactive-account sweep policy:** DEFERRED. Two options were evaluated:
+- (a) Retain-until-explicit-deletion (status quo): simpler; no schema change; compliant
+  as long as a deletion mechanism exists (which it does — `DELETE /auth/me`).
+- (b) Notice-then-delete after N months inactive: GDPR-aligned for 2025 enforcement
+  priorities; requires `last_active_at` column + Alembic migration 0028 + Beat sweep
+  using the new `erase_creator()` helper.
+
+**Decision:** Option (a) is the chosen posture for now. The `erase_creator()` refactor
+ships unconditionally so option (b) requires only the migration + Beat registration when
+legal decides to flip. The `last_active_at` column and inactive-account sweep are NOT
+implemented in this pass — they require an explicit [DEC] sign-off from legal/founder.
+
+**Why:** GDPR Art. 5(1)(e) does not prescribe a mandatory inactive-account deletion window;
+the key obligation is that retention is limited to what is necessary for the purpose.
+90-day event_log purge closes the Art. 5(1)(e) gap for behavioral telemetry without
+irreversible data destruction decisions that only the business can make.
+
+**Source/evidence:**
+- https://usercentrics.com/knowledge-hub/gdpr-data-retention/ (2025–2026)
+- https://www.legiscope.com/blog/storage-limitation.html (2026)
+- https://claudiasop.com/blog/compliance-log-retention-requirements.html (audit log 1–3yr)
+- https://getaround.tech/gdpr-account-deletion/ (notice-then-delete pattern)
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
 
 **What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a

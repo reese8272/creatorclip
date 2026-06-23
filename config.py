@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     R2_SECRET_ACCESS_KEY: str = ""
     R2_BUCKET: str = ""
     SOURCE_MEDIA_RETENTION_HOURS: int = 72
+    # Issue 250 — GDPR Art. 5(1)(e) storage-limitation for behavioral telemetry.
+    # 90-day rolling window is the industry-standard default for SaaS event logs
+    # (common range: 60–180 days). No PII is stored in event_logs (_redact() at
+    # ingestion), so the window is defined by analytical utility rather than a
+    # legal minimum. Raising above 180 days should be justified in DECISIONS.md.
+    EVENT_LOG_RETENTION_DAYS: int = 90
     # Wave-4 Fix 3 (Issue 75b) — YouTube API Services Developer Policies
     # Sections III.E.4.b + III.D.2.3.b require API clients to verify
     # authorization every 30 calendar days OR delete the stored API data.
