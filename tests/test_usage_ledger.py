@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from billing.ledger import _estimate_cost_usd, record_llm_usage
+from config import settings
 
 # ── Unit: cost estimation math ─────────────────────────────────────────────────
 
@@ -38,6 +39,56 @@ def test_estimate_cost_usd_combined() -> None:
 
 def test_estimate_cost_usd_zero_tokens() -> None:
     assert _estimate_cost_usd(0, 0, 3.0, 15.0) == 0.0
+
+
+# ── Unit: extended price-book math (Issue 289) ────────────────────────────────
+
+
+def test_estimate_cost_deepgram_minutes() -> None:
+    """A known Deepgram-minutes figure yields the expected USD amount.
+
+    Formula: minutes * COST_PER_MIN_DEEPGRAM
+    60 minutes of Nova-2 pre-recorded audio at $0.0043/min = $0.258 exactly.
+    This test is a pure-math assertion — no DB, no network.
+    """
+    minutes = 60.0
+    expected_usd = minutes * settings.COST_PER_MIN_DEEPGRAM  # 60 * 0.0043 = 0.258
+    assert abs(expected_usd - 0.258) < 1e-9, (
+        f"Expected $0.258 for 60 min at ${settings.COST_PER_MIN_DEEPGRAM}/min, got ${expected_usd}"
+    )
+
+
+def test_estimate_cost_mixed_llm_and_deepgram() -> None:
+    """A mixed token+Deepgram-minutes cost calculation against the config constants.
+
+    Simulates a job that uses both LLM tokens (Sonnet) and Deepgram transcription:
+    - 500k Sonnet input tokens at $3/MTok  = $1.50
+    - 200k Sonnet output tokens at $15/MTok = $3.00
+    - 30 min Deepgram Nova-2 at $0.0043/min = $0.129
+    Total expected: $4.629
+    """
+    tokens_in = 500_000
+    tokens_out = 200_000
+    deepgram_minutes = 30.0
+
+    llm_cost = _estimate_cost_usd(
+        tokens_in, tokens_out,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+    transcription_cost = deepgram_minutes * settings.COST_PER_MIN_DEEPGRAM
+    total_cost = llm_cost + transcription_cost
+
+    expected = 1.50 + 3.00 + 0.129
+    assert abs(total_cost - expected) < 1e-9, (
+        f"Expected ${expected:.9f} for mixed LLM+Deepgram job, got ${total_cost:.9f}"
+    )
+
+
+def test_price_book_version_is_set() -> None:
+    """PRICE_BOOK_VERSION must be a non-empty string (rate-change tracking sentinel)."""
+    assert settings.PRICE_BOOK_VERSION, "PRICE_BOOK_VERSION must not be empty"
+    assert isinstance(settings.PRICE_BOOK_VERSION, str)
 
 
 # ── Unit: record_llm_usage (mocked DB) ────────────────────────────────────────

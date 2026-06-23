@@ -61,6 +61,39 @@ Both are pre-launch compliance gates.
 - www.dataprivacyframework.gov (vendor DPF status check, 2026-06-23)
 - cppa.ca.gov/regulations/ (CCPA notice-at-collection rules, eff. 2026-01-01)
 - gdpr.eu/cookies/ (strictly-necessary cookies exemption)
+## 2026-06-23 — Issue 289: Extended price book in config.py (cost ledger completeness)
+
+**What changed:** Added 8 new env-overridable price-book constants to `config.py` (Settings class)
+and `.env.example`:
+- `COST_CACHE_READ_MULTIPLIER = 0.1` — Anthropic prompt-cache read is 10% of base input rate
+- `COST_PER_MIN_DEEPGRAM = 0.0043` — Deepgram Nova-2 pre-recorded, pay-as-you-go
+- `COST_PER_MTOK_VOYAGE = 0.06` — Voyage AI voyage-3.5 per million tokens
+- `COST_PER_GB_MO_R2 = 0.015` — Cloudflare R2 standard storage per GB/month
+- `COST_PER_M_R2_CLASS_A = 4.50` — R2 Class A ops (PUT/DELETE) per million
+- `COST_PER_M_R2_CLASS_B = 0.36` — R2 Class B ops (GET/HEAD) per million
+- `COST_PER_RENDER_CPU_S = 0.000025` — estimated $/CPU-second for ffmpeg render (K8s node estimate)
+- `PRICE_BOOK_VERSION = "2026-06-23"` — version stamp; update when any vendor rate changes
+
+**Why:** Issues #290 (spend caps), #291, #292, and #293 all require a queryable USD figure
+on the Usage ledger. Without Deepgram/Voyage/R2 rates, `cost_estimate` only covered Anthropic
+LLM spend, leaving transcription and embedding costs invisible. The version stamp enables a
+zero-deploy rate update when vendors reprice (FinOps Foundation cost-per-unit standard).
+
+**Alternatives ruled out:**
+1. Separate YAML/JSON price-book file — rejected; pydantic-settings env override is the
+   established config pattern; a separate file creates a second config surface with no benefit.
+2. USD cost computed at query time via price-book join — rejected; existing Issue 220
+   implementation stores `cost_estimate` at write time so downstream spend-cap issues can read
+   USD without a join.
+3. Prometheus USD counter in this issue — approach text mentioned it, but ACs do not require it;
+   deferred to issues #290/#291 that consume the metric.
+
+**Source/evidence:**
+- https://platform.claude.com/docs/en/about-claude/pricing (Anthropic, 2026-06-23)
+- https://deepgram.com/pricing (Deepgram, 2026-06-23)
+- https://docs.voyageai.com/docs/pricing (Voyage AI, 2026-06-23)
+- https://developers.cloudflare.com/r2/pricing/ (Cloudflare, 2026-06-23)
+- https://www.finops.org/framework/phases/ (FinOps Foundation — cost-per-unit standard)
 
 **Date:** 2026-06-23
 
