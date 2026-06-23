@@ -23,7 +23,8 @@ from tests._helpers import override_current_creator
 
 
 def test_all_packs_present():
-    assert set(PACKS.keys()) == {"trial", "starter", "regular", "creator", "pro", "studio"}
+    # Issue 209: Stream pack added
+    assert set(PACKS.keys()) == {"trial", "starter", "regular", "creator", "pro", "studio", "stream"}
 
 
 def test_trial_is_not_purchasable():
@@ -36,7 +37,8 @@ def test_purchasable_packs_have_nonzero_price():
 
 
 def test_pack_per_minute_rate_decreases_with_volume():
-    """Larger packs must be cheaper per minute than smaller ones."""
+    """Larger packs must be cheaper per minute than smaller ones (taper invariant).
+    Applies to all purchasable packs including the Issue 209 Stream pack."""
     purchasable = sorted(PURCHASABLE_PACKS.values(), key=lambda p: p.minutes)
     rates = [p.per_minute_cents for p in purchasable]
     for i in range(len(rates) - 1):
@@ -49,6 +51,51 @@ def test_pack_per_minute_rate_decreases_with_volume():
 def test_pack_price_usd():
     creator = PACKS["creator"]
     assert creator.price_usd == 70.00
+
+
+# ── Issue 209: Stream pack + margin floor assertions ─────────────────────────
+
+
+def test_stream_pack_present_in_purchasable_packs():
+    """The Stream pack must appear in PURCHASABLE_PACKS (Issue 209)."""
+    assert "stream" in PURCHASABLE_PACKS
+
+
+def test_stream_pack_cheaper_per_minute_than_studio():
+    """Stream (4.0 ¢/min) must be cheaper than Studio (4.5 ¢/min) — taper invariant."""
+    stream = PURCHASABLE_PACKS["stream"]
+    studio = PURCHASABLE_PACKS["studio"]
+    assert stream.per_minute_cents < studio.per_minute_cents, (
+        f"Stream ({stream.per_minute_cents:.3f} ¢/min) must be cheaper than "
+        f"Studio ({studio.per_minute_cents:.3f} ¢/min)"
+    )
+
+
+def test_stream_pack_minutes_and_price():
+    """Stream pack is 10,000 min at $400 (Issue 209 decision)."""
+    stream = PURCHASABLE_PACKS["stream"]
+    assert stream.minutes == 10000
+    assert stream.price_cents == 40000
+
+
+def test_margin_floor_at_cheapest_pack():
+    """Gross margin floor: the cheapest pack (most discounted ¢/min) must price
+    above the estimated compute floor. Per research finding §2.3 (06_monetization_
+    unit_economics.md), gross margin >80% confirmed at Studio (4.5 ¢/min); Stream
+    (4.0 ¢/min) carries identical compute cost.
+
+    Compute floor from research: ~0.5–0.8 ¢/min (transcription + LLM + render).
+    Using 0.8 ¢/min as the conservative ceiling; margin = 1 - 0.8/4.0 = 80% — borderline.
+    The intent of this test is to catch any future pack addition that drops below cost.
+    """
+    # Conservative compute cost upper bound in cents per minute
+    COMPUTE_COST_FLOOR_CENTS = 0.8
+    cheapest = min(PURCHASABLE_PACKS.values(), key=lambda p: p.per_minute_cents)
+    assert cheapest.per_minute_cents > COMPUTE_COST_FLOOR_CENTS, (
+        f"Cheapest pack '{cheapest.id}' at {cheapest.per_minute_cents:.3f} ¢/min is at or "
+        f"below estimated compute cost floor of {COMPUTE_COST_FLOOR_CENTS} ¢/min — "
+        f"gross margin would be negative"
+    )
 
 
 # ── video_minutes helper ──────────────────────────────────────────────────────
@@ -190,7 +237,7 @@ def client():
 
 
 def test_get_packs_unauthenticated(client):
-    """Pack listing is public — no auth required."""
+    """Pack listing is public — no auth required. Issue 209: includes Stream pack."""
     response = client.get("/billing/packs")
     assert response.status_code == 200
     data = response.json()
@@ -198,6 +245,7 @@ def test_get_packs_unauthenticated(client):
     ids = {p["id"] for p in data}
     assert "trial" not in ids
     assert "creator" in ids
+    assert "stream" in ids  # Issue 209
 
 
 def test_balance_requires_auth(client):
@@ -541,3 +589,196 @@ def test_create_checkout_session_raises_when_session_url_is_none():
                 cancel_url="http://x/no",
                 intent_id="11111111-1111-4111-8111-111111111111",
             )
+
+
+# ── Issue 206: payment_status guard in the webhook ────────────────────────────
+
+
+def _make_checkout_completed_event(payment_status: str | None, *, session_id: str = "cs_test_xxx") -> dict:
+    """Build a synthetic checkout.session.completed event dict."""
+    obj: dict = {
+        "id": session_id,
+        "customer": None,
+        "metadata": {"creator_id": str(uuid.uuid4()), "pack_id": "creator"},
+    }
+    if payment_status is not None:
+        obj["payment_status"] = payment_status
+    return {
+        "type": "checkout.session.completed",
+        "data": {"object": obj},
+    }
+
+
+def test_webhook_payment_status_paid_grants_minutes(client):
+    """payment_status='paid' must proceed to the grant path (status=ok)."""
+    from db import get_session as _get_session
+    from main import app
+
+    fake_event = _make_checkout_completed_event("paid", session_id="cs_test_paid_001")
+
+    async def _gen():
+        session = AsyncMock()
+        # No existing fulfillment; grant_minutes commit succeeds
+        session.scalar = AsyncMock(return_value=None)
+        session.execute = AsyncMock()
+        session.commit = AsyncMock()
+        session.info = {}
+        yield session
+
+    app.dependency_overrides[_get_session] = _gen
+    try:
+        with (
+            patch("routers.billing.construct_webhook_event", return_value=fake_event),
+            patch("routers.billing.grant_minutes", new_callable=AsyncMock),
+        ):
+            response = client.post(
+                "/billing/webhook",
+                content=json.dumps(fake_event).encode(),
+                headers={"stripe-signature": "sig"},
+            )
+    finally:
+        app.dependency_overrides.pop(_get_session, None)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_webhook_payment_status_unpaid_is_ignored(client):
+    """payment_status='unpaid' (async/delayed payment not yet collected) must be ignored."""
+    fake_event = _make_checkout_completed_event("unpaid")
+
+    with (
+        patch("routers.billing.construct_webhook_event", return_value=fake_event),
+        patch("routers.billing.get_session"),
+    ):
+        response = client.post(
+            "/billing/webhook",
+            content=json.dumps(fake_event).encode(),
+            headers={"stripe-signature": "sig"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
+def test_webhook_payment_status_absent_is_ignored(client):
+    """Missing payment_status field (malformed payload) must be ignored defensively."""
+    fake_event = _make_checkout_completed_event(None)  # no payment_status key
+
+    with (
+        patch("routers.billing.construct_webhook_event", return_value=fake_event),
+        patch("routers.billing.get_session"),
+    ):
+        response = client.post(
+            "/billing/webhook",
+            content=json.dumps(fake_event).encode(),
+            headers={"stripe-signature": "sig"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
+# ── Issue 207: Stripe Tax — flag-guarded automatic_tax injection ──────────────
+
+
+def test_create_checkout_session_no_tax_when_flag_off(monkeypatch):
+    """With STRIPE_TAX_ENABLED=False (default), params must not contain automatic_tax
+    or billing_address_collection — byte-identical to the pre-207 behaviour."""
+    from billing import stripe_client as _sc
+    from billing.stripe_client import create_checkout_session
+    from config import settings
+
+    monkeypatch.setattr(settings, "STRIPE_TAX_ENABLED", False)
+
+    captured: dict = {}
+    fake_session = MagicMock()
+    fake_session.url = "https://checkout.stripe.com/pay/abc"
+    fake_session.id = "cs_test_notax"
+
+    def _capture(params, **kwargs):
+        captured["params"] = params
+        return fake_session
+
+    with patch.object(_sc, "_STRIPE") as stripe_mock:
+        stripe_mock.checkout.sessions.create.side_effect = _capture
+        create_checkout_session(
+            pack_id="creator",
+            creator_id=str(uuid.uuid4()),
+            stripe_customer_id=None,
+            success_url="http://x/ok",
+            cancel_url="http://x/no",
+            intent_id="11111111-1111-4111-8111-111111111111",
+        )
+
+    assert "automatic_tax" not in captured["params"], (
+        "automatic_tax must NOT be injected when STRIPE_TAX_ENABLED=False"
+    )
+    assert "billing_address_collection" not in captured["params"]
+
+
+def test_create_checkout_session_injects_tax_when_flag_on(monkeypatch):
+    """With STRIPE_TAX_ENABLED=True, params must include automatic_tax[enabled]=True
+    and billing_address_collection=required."""
+    from billing import stripe_client as _sc
+    from billing.stripe_client import create_checkout_session
+    from config import settings
+
+    monkeypatch.setattr(settings, "STRIPE_TAX_ENABLED", True)
+
+    captured: dict = {}
+    fake_session = MagicMock()
+    fake_session.url = "https://checkout.stripe.com/pay/xyz"
+    fake_session.id = "cs_test_tax"
+
+    def _capture(params, **kwargs):
+        captured["params"] = params
+        return fake_session
+
+    with patch.object(_sc, "_STRIPE") as stripe_mock:
+        stripe_mock.checkout.sessions.create.side_effect = _capture
+        create_checkout_session(
+            pack_id="creator",
+            creator_id=str(uuid.uuid4()),
+            stripe_customer_id=None,
+            success_url="http://x/ok",
+            cancel_url="http://x/no",
+            intent_id="22222222-2222-4222-9222-222222222222",
+        )
+
+    assert captured["params"].get("automatic_tax") == {"enabled": True}, (
+        "automatic_tax[enabled]=True must be injected when STRIPE_TAX_ENABLED=True"
+    )
+    assert captured["params"].get("billing_address_collection") == "required"
+
+
+def test_create_checkout_session_tax_with_existing_customer_adds_customer_update(monkeypatch):
+    """When STRIPE_TAX_ENABLED=True and a stripe_customer_id exists, customer_update[address]=auto
+    must be included to persist the collected address for future sessions."""
+    from billing import stripe_client as _sc
+    from billing.stripe_client import create_checkout_session
+    from config import settings
+
+    monkeypatch.setattr(settings, "STRIPE_TAX_ENABLED", True)
+
+    captured: dict = {}
+    fake_session = MagicMock()
+    fake_session.url = "https://checkout.stripe.com/pay/zzz"
+    fake_session.id = "cs_test_tax_cust"
+
+    def _capture(params, **kwargs):
+        captured["params"] = params
+        return fake_session
+
+    with patch.object(_sc, "_STRIPE") as stripe_mock:
+        stripe_mock.checkout.sessions.create.side_effect = _capture
+        create_checkout_session(
+            pack_id="creator",
+            creator_id=str(uuid.uuid4()),
+            stripe_customer_id="cus_existing_123",
+            success_url="http://x/ok",
+            cancel_url="http://x/no",
+            intent_id="33333333-3333-4333-a333-333333333333",
+        )
+
+    assert captured["params"].get("customer_update") == {"address": "auto"}

@@ -16,12 +16,16 @@ interface Pack {
   featured: boolean
 }
 
+// Issue 209 — keep in sync with billing/packs.py ALL_PACKS (purchasable only).
+// TODO: drive from /billing/packs API to eliminate DRY drift (follow-up issue).
 const PACKS: Pack[] = [
   { id: 'starter', label: 'Starter', minutes: 200, price_cents: 1800, per_min: 0.09, featured: false },
   { id: 'regular', label: 'Regular', minutes: 500, price_cents: 4000, per_min: 0.08, featured: false },
   { id: 'creator', label: 'Creator', minutes: 1000, price_cents: 7000, per_min: 0.07, featured: true },
   { id: 'pro', label: 'Pro', minutes: 2000, price_cents: 11000, per_min: 0.055, featured: false },
   { id: 'studio', label: 'Studio', minutes: 5000, price_cents: 22500, per_min: 0.045, featured: false },
+  // Issue 209 — Stream pack for long-form/multi-hour VOD creators (4.0 ¢/min < Studio 4.5 ¢/min)
+  { id: 'stream', label: 'Stream', minutes: 10000, price_cents: 40000, per_min: 0.04, featured: false },
 ]
 
 const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`
@@ -146,9 +150,16 @@ export function Pricing() {
         ))}
       </section>
 
-      <p className="mx-auto mb-10 max-w-2xl px-4 text-center text-xs leading-relaxed text-subtle">
+      <p className="mx-auto mb-4 max-w-2xl px-4 text-center text-xs leading-relaxed text-subtle">
         Minutes cover source video processing time (transcription + AI analysis + render). One
         minute of source video = one minute deducted.
+      </p>
+
+      <p className="mx-auto mb-10 max-w-2xl px-4 text-center text-xs leading-relaxed text-subtle">
+        {/* Issue 208 — refund policy copy */}
+        Refund policy: if you are unsatisfied with your purchase, contact us and we will review
+        your request on a case-by-case basis. Minutes consumed before a refund request are not
+        eligible for refund.
       </p>
 
       {toast && (

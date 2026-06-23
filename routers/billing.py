@@ -184,6 +184,19 @@ async def stripe_webhook(
         return {"status": "ignored"}
 
     cs = event["data"]["object"]
+
+    # Issue 206 — payment_status guard.
+    # Stripe's fulfillment docs explicitly require checking payment_status before
+    # granting fulfillment. For one-time purchasable packs 'no_payment_required'
+    # is not a valid outcome (price_cents > 0 for all PURCHASABLE_PACKS), so the
+    # narrower guard `== 'paid'` is correct here — async/delayed methods (ACH,
+    # bank transfer, BNPL) complete the session flow but defer collection;
+    # checkout.session.async_payment_succeeded fires later when payment actually
+    # lands. Absent payment_status (malformed/unknown payload) is also rejected.
+    # Source: https://docs.stripe.com/checkout/fulfillment
+    if cs.get("payment_status") != "paid":
+        return {"status": "ignored"}
+
     meta = cs.get("metadata") or {}
     creator_id_str = meta.get("creator_id")
     pack_id = meta.get("pack_id")

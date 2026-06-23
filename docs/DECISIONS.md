@@ -5,6 +5,88 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 209: keep per-input-minute billing, add Stream pack, taper rationale captured
+
+**What changed:** Confirmed the per-input-minute billing primitive as the long-term model
+(not reverted to per-output-clip or flat subscription). Added a "Stream" pack to
+`billing/packs.py` at 10,000 minutes / $400 (4.0 ¢/min) as the mitigation for the
+long-form critique documented in `docs/COMPETITIVE_RESEARCH.md` line 113. Taper rationale
+documented inline (Starter 9¢ → Regular 8¢ → Creator 7¢ → Pro 5.5¢ → Studio 4.5¢ → Stream
+4.0¢). Reconciliation note added to `docs/COMPETITIVE_RESEARCH.md` below line 113 to resolve
+the live contradiction between the research recommendation and the shipped model.
+
+**Why:** Per-input-minute is the 2026 category standard (OpusClip, Vizard, Klap all use it).
+The original research recommendation (Stage 1, line 113) was written for an earlier competitive
+snapshot and did not account for the existing ledger architecture (UNIQUE(video_id) on
+MinuteDeduction, per-minute deduction at ingest) locked in during Issue 125. The Stream pack
+directly addresses the one valid critique (per-minute punishes 3–8hr streams) by offering a
+price point (4.0¢/min) below Studio (4.5¢/min) that rewards long-form commitment. Revenue-per-
+compute-unit alignment remains correct at all pack sizes.
+
+**Margin floor:** Research finding §2.3
+(`docs/research/findings/06_monetization_unit_economics.md`) confirms gross margin >80% at
+Studio (4.5¢/min). Stream (4.0¢/min) carries the same compute cost; asserted in
+`tests/test_billing.py` that `per_minute_cents > COMPUTE_COST_FLOOR` at the cheapest pack.
+
+**Source/evidence:** `docs/research/findings/06_monetization_unit_economics.md` §2.3;
+Stripe AI SaaS pricing guide (stripe.com/resources/more/ai-saas-pricing-models, 2026);
+existing Issue 125 DECISIONS.md entry (per-input-minute + ledger architecture locked).
+
+**Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 208: money-refund policy — discretionary, ledger-append-only, no admin endpoint at launch
+
+**What changed:** Established the money-refund policy for paying creators:
+(1) Money refunds are issued manually via the Stripe Dashboard; they are not automated.
+(2) The compensating ledger entry is a new negative-minutes `MinutePack` row with
+`reason='money_refund'` and `pack_id='money_refund:{stripe_session_id}'` — never a
+mutation of the original row (immutable-ledger invariant).
+(3) An admin HTTP endpoint for money refunds is **deferred** — the manual runbook in
+`docs/RUNBOOKS.md` covers the launch window without a new attack surface.
+(4) Negative minutes are allowed in the ledger for full audit trail; the UI clamps
+display at 0. No hard `max(0, ...)` clamp in `grant_minutes` — the ledger records truth.
+(5) Refund window: discretionary (no SLA at launch — business decision TBD post-launch).
+
+**Why:** The immutable-ledger pattern is already established in `billing/refund.py` (ingest-
+failure refund). Extending the same convention to money refunds is architecturally consistent.
+A manual runbook minimizes blast radius at launch (no new endpoint, no new attack surface).
+Negative balance is the correct ledger representation of an outstanding credit.
+
+**Source/evidence:** Stripe credits article (stripe.com/resources/more/credits-pricing-
+models-for-scaling-businesses-explained, 2026) recommends documenting a clear refund/expiry
+policy for one-time credit packs; append-only ledger is standard SaaS billing invariant.
+
+**Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 207: Stripe Tax — flag-guarded, off by default until first tax registration
+
+**What changed:** Added `STRIPE_TAX_ENABLED: bool = False` to `config.py`. When flipped to
+`True`, `billing/stripe_client.py` injects `automatic_tax[enabled]=True` and
+`billing_address_collection='required'` into the Checkout session params. When
+`STRIPE_TAX_ENABLED=False` (default), params are byte-identical to pre-207.
+
+**When to flip:** Set `STRIPE_TAX_ENABLED=true` in production `.env` only after ≥1 active
+Stripe tax registration exists in Tax > Registrations
+(dashboard.stripe.com/tax/registrations). A registration is required for Stripe to compute
+and collect tax; enabling without one causes $0 tax collection (documented safe per Stripe
+docs) but the flag should track the real business decision.
+
+**Why:** Stripe Tax is the recommended approach for automatic sales-tax compliance
+(`automatic_tax[enabled]=true` is the minimum required field per Stripe docs). The default-
+False flag ensures dev/staging stay tax-free and the flag flip in prod is a deliberate
+business decision tied to a confirmed nexus/registration event.
+
+**Source/evidence:** https://docs.stripe.com/tax/checkout/page — "minimum required addition
+is automatic_tax[enabled]=true"; enabling without a registration → $0 tax, no error.
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
 
 **What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a

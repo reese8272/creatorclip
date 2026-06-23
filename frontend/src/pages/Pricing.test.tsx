@@ -30,6 +30,25 @@ describe('Pricing', () => {
     )
     renderPricing()
     expect(screen.getByText('Buy the minutes you need.')).toBeInTheDocument()
-    expect(await screen.findAllByText('Sign in to buy')).toHaveLength(5)
+    // Issue 209: Stream pack added → 6 purchasable packs (was 5)
+    expect(await screen.findAllByText('Sign in to buy')).toHaveLength(6)
+  })
+
+  it('renders the Stream pack (Issue 209)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ status: 401, ok: false, json: async () => ({}) }),
+    )
+    renderPricing()
+    expect(await screen.findByText('Stream')).toBeInTheDocument()
+  })
+
+  it('renders the refund policy copy (Issue 208)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ status: 401, ok: false, json: async () => ({}) }),
+    )
+    renderPricing()
+    expect(await screen.findByText(/Refund policy/i)).toBeInTheDocument()
   })
 })

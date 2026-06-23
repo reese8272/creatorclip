@@ -6,6 +6,29 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Lane `billing-monetization` COMPLETE — Issues 205–209 DONE (2026-06-23).** W0 Billing & Monetization
+lane. Branch `wave0/billing-monetization`. **205:** `reconcile_stripe_ledger` daily Celery Beat task —
+sweeps Stripe Sessions list API for paid sessions with no MinutePack row; grants idempotently via existing
+`UNIQUE(stripe_session_id)` + SAVEPOINT; paginates cursor-based until `has_more=False`; `STRIPE_RECONCILE_
+LOOKBACK_HOURS=48` config. **206:** `payment_status == 'paid'` guard in `stripe_webhook` before metadata
+extraction — completed-but-unpaid events (ACH/BNPL) return `status=ignored`; absent `payment_status` also
+ignored defensively. **207:** `STRIPE_TAX_ENABLED: bool = False` flag in `config.py`; when True injects
+`automatic_tax[enabled]=True` + `billing_address_collection=required` + `customer_update[address]=auto`
+(for returning customers) into `create_checkout_session` params; flag-off is byte-identical to pre-207.
+**208:** Full + partial money-refund runbook in `docs/RUNBOOKS.md` (Stripe Dashboard → compensating
+negative-minutes `MinutePack` row `reason='money_refund'`, pack_id=`money_refund:{session_id}`; never
+mutate original row; negative balance allowed for audit trail). Refund-policy copy added to `Pricing.tsx`.
+DECISIONS.md entry. **209:** `stream` pack added to `billing/packs.py` (10,000 min / $400 = 4.0 ¢/min,
+below Studio 4.5 ¢/min); taper rationale in module docstring; `Pricing.tsx` PACKS const synced (+Stream);
+`COMPETITIVE_RESEARCH.md:113` contradiction reconciled with a note explaining the per-input-minute
+decision and the Stream pack as mitigation. DECISIONS.md entry. Tests: **48 billing tests passed** (+18 net
+new: 3 payment_status-guard, 3 Stripe Tax param, 4 Stream/margin-floor pack, 6 reconciliation, 2 webhook
+payment_status); full suite **1045 passed, 7 skipped**; ruff green. Staging-deferred: reconcile task
+idempotency/SAVEPOINT race (real Postgres), Beat scheduling (Celery+Redis), Stripe Tax computation (live
+test mode with registration).
+
+
+
 **`docs/issues.md` REBUILT into the Master Roadmap to Production (2026-06-22).** Planning-only pass (no
 product code). The priority-tier backlog was replaced by a dependency-ordered execution plan: every open
 issue (181–303 + carry-over, 138 open) carries three coordinates — **Wave** (W0–W5 dependency round),

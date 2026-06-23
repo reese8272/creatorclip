@@ -48,4 +48,15 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.expire_trials",
         "schedule": timedelta(hours=24),
     },
+    # Issue 205 — daily Stripe↔ledger reconciliation. Catches paid Checkout
+    # sessions whose webhook was never delivered (Stripe outage / endpoint down
+    # past the retry window) by sweeping the Sessions list API and granting
+    # minutes for any paid session missing a MinutePack row. Idempotent: the
+    # existing UNIQUE(stripe_session_id) + SAVEPOINT dedup in grant_minutes()
+    # makes re-runs and concurrent deliveries safe. Runs 12h offset from the
+    # daily analytics refresh to spread DB load.
+    "reconcile-stripe-ledger-daily": {
+        "task": "worker.tasks.reconcile_stripe_ledger",
+        "schedule": timedelta(hours=24),
+    },
 }
