@@ -339,12 +339,13 @@ def test_get_identity_no_conflict_when_no_identity(monkeypatch):
 # ── brief.py wiring ─────────────────────────────────────────────────────────
 
 
-def test_generate_brief_includes_identity_block_with_no_cache_markers(monkeypatch):
-    """The identity block must land BEFORE the volatile performance corpus
-    and AFTER the static instructions. Issue 223 removed all cache_control markers
-    from dna/brief.py: the static prefix is below Sonnet 4.6's 1024-token floor
-    and the 5-min TTL expires before scoring.py runs — the marker was a pure
-    write-premium (1.25×) with zero expected reads. See docs/DECISIONS.md."""
+def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatch):
+    """Issue 224 update: stated_identity is now in the user turn (not a system block)
+    so the model receives it from the user role, not as trusted operator instructions.
+    System blocks are now: (0) instructions with cache_control, (1) volatile corpus.
+    stated_identity must appear JSON-encoded in the user message content."""
+    import json
+
     from dna import brief as brief_module
 
     captured: dict = {}
@@ -364,6 +365,7 @@ def test_generate_brief_includes_identity_block_with_no_cache_markers(monkeypatc
 
     def fake_create(**kwargs):
         captured["system"] = kwargs["system"]
+        captured["messages"] = kwargs["messages"]
         return _FakeResponse()
 
     monkeypatch.setattr(brief_module._ANTHROPIC.messages, "create", fake_create)
@@ -376,17 +378,33 @@ def test_generate_brief_includes_identity_block_with_no_cache_markers(monkeypatc
     )
 
     system = captured["system"]
-    # Three blocks: instructions, identity, corpus — no cache_control on any. (Issue 223)
-    assert len(system) == 3
-    assert "CreatorClip" not in system[0]["text"]  # static instructions doesn't mention brand here
+    messages = captured["messages"]
+
+    # Issue 224: system has exactly 2 blocks — instructions (cached) and corpus.
+    assert len(system) == 2, (
+        "Issue 224: stated_identity was moved to the user turn. "
+        "System must have exactly 2 blocks (instructions + corpus)."
+    )
     assert "expert YouTube channel analyst" in system[0]["text"]
-    assert system[1]["text"] == identity_block
-    # No cache_control markers in the DNA build call.
-    assert "cache_control" not in system[0]
-    assert "cache_control" not in system[1]
+    # Cache breakpoint is on the static instructions block (the only stable block).
+    assert system[0].get("cache_control") == {"type": "ephemeral"}
     # Corpus is last and uncached.
-    assert system[2]["text"].startswith("CREATOR PERFORMANCE DATA:")
-    assert "cache_control" not in system[2]
+    assert system[1]["text"].startswith("CREATOR PERFORMANCE DATA:")
+    assert "cache_control" not in system[1]
+
+    # stated_identity must appear JSON-encoded in the user turn, not in any system block.
+    user_content = messages[0]["content"]
+    assert "creator_stated_identity" in user_content, (
+        "Issue 224: user turn must contain the wrap_untrusted label for stated_identity."
+    )
+    assert json.dumps(identity_block) in user_content, (
+        "Issue 224: stated_identity must be JSON-encoded in the user turn."
+    )
+    # Must NOT appear raw in any system block.
+    for block in system:
+        assert identity_block not in block["text"], (
+            "Issue 224: stated_identity must not appear in any system block."
+        )
 
 
 def test_generate_brief_skips_identity_block_when_none(monkeypatch):

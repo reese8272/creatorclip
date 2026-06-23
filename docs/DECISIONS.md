@@ -508,6 +508,54 @@ Redis is already the SPOF backbone; HA Redis (Memorystore/Upstash) is the needed
 - https://pypi.org/project/celery-redbeat/ (2.3.3, Python 3.12, Production/Stable)
 - https://redbeat.readthedocs.io/en/latest/intro.html
 - https://github.com/sibson/redbeat
+## 2026-06-23 — Issue 224: Trust-boundary hardening — untrusted content moved out of `system` role
+
+**What changed:** `stated_identity` (creator-authored free-text, 600 chars) was previously appended
+as a `system` block in `dna/brief.py`, `knowledge/titles.py`, and `knowledge/thumbnails.py`. The
+YouTube-sourced `video_title` was raw-concatenated inside surrounding double-quotes in an f-string in
+`routers/insights.py`. Both placement patterns are wrong per the trust boundary: the model is trained
+to treat `system` blocks as fully trusted operator instructions.
+
+Changes made:
+1. Added `wrap_untrusted(name, value)` helper in `knowledge/util.py`: JSON-encodes `value` inside
+   an XML-attribute-style labeled wrapper (`<untrusted name="…">…</untrusted>`). JSON-encoding
+   prevents quote/bracket break-out; the XML label makes provenance explicit.
+2. `dna/brief.py._build_request`: moved `stated_identity` to the user turn, JSON-wrapped.
+   Cache breakpoint stays on the static instructions block (now the only stable system block).
+   System now has exactly 2 blocks: instructions (cached) + volatile corpus.
+3. `knowledge/titles.py._build_request`: `stated_identity` removed from `video_context_parts`
+   (Block 3) and prepended to the user message as `wrap_untrusted(...)`.
+4. `knowledge/thumbnails.py._build_concepts_request`: same — `stated_identity` moved to the user turn.
+5. `routers/insights.py._build_analysis_prompt`: `video_title` is now wrapped via `wrap_untrusted`
+   instead of concatenated inside `f'Analyse why "{video_title}"...'`.
+6. `clip_engine/scoring.py._transcript_context`: `[BEFORE]`/`[CLIP]`/`[AFTER]` plain labels replaced
+   with `wrap_untrusted('transcript_before', ...)` etc. (incremental hardening — primary risk is low
+   since the outer payload is already `json.dumps`'d).
+
+**Why:** OWASP LLM01:2025 classifies placing attacker-influenceable content in the system role as a
+structural prompt-injection vulnerability. The Anthropic platform docs are unambiguous: untrusted
+content must never go in `system` because the model treats that role as fully trusted operator
+instructions. The fix is cheap (a single shared helper + 5 call-site relocations) and the trust
+boundary is structurally enforced rather than relying on model compliance.
+
+**Cache neutrality:** Moving `stated_identity` from the system role to the user turn is cache-neutral
+for `dna/brief.py`. The system blocks are now (0) global instructions (identical across all creators,
+`cache_control: ephemeral`) and (1) volatile corpus (uncached). The previous design had 3 system
+blocks with the breakpoint on the identity block; the new design has the breakpoint on block 0 which
+is the only stable block. Per-creator repeated calls still benefit from the cache prefix if the
+instructions block meets the 2048-token floor.
+
+**Alternatives ruled out:**
+- Tool-result wrapping (Anthropic-preferred for agentic flows): not applicable — these are single-shot
+  generation calls with no tool_result in the conversation.
+- Sanitize/strip injection characters: rejected — mutation of creator-supplied content is wrong
+  (legitimate content may contain angle brackets or quotes). Structural separation is the correct defense.
+- Per-site ad-hoc JSON wrapping without a shared helper: rejected per DRY principle.
+
+**Source/evidence:**
+- https://platform.claude.com/docs/en/docs/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+- https://genai.owasp.org/llmrisk/llm01-prompt-injection/
+- `docs/research/findings/09_llm_content_safety_prompt_injection.md`
 
 **Date:** 2026-06-23
 

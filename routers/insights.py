@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from config import settings
 from db import get_session
+from knowledge.util import wrap_untrusted
 from limiter import creator_key, limiter
 from models import (
     Creator,
@@ -477,8 +478,14 @@ def _build_analysis_prompt(
     eng_str = f"{(engagement_rate * 100):.1f}%" if engagement_rate is not None else "unknown"
     perf_label = "top performer" if performer_kind == "top" else "underperformer"
     dna_context = f"\n\nCreator DNA summary:\n{dna_brief[:800]}" if dna_brief else ""
+    # Issue 224: video_title is YouTube-sourced (attacker-influenceable). Wrapping
+    # it with wrap_untrusted JSON-encodes the title so an adversarially-crafted
+    # title cannot break out of the surrounding prompt text via quote injection
+    # (OWASP LLM01:2025 — classic f-string quote-break-out vector).
+    title_preamble = wrap_untrusted("video_title", video_title)
     return (
-        f'Analyse why "{video_title}" ({kind}) is a {perf_label} for this creator. '
+        title_preamble
+        + f"Analyse why the video above ({kind}) is a {perf_label} for this creator. "
         f"It has {views_str} views and {eng_str} engagement rate.{dna_context}\n\n"
         "In 2-4 sentences: explain the specific factors that made it over- or under-perform "
         "relative to this creator's audience and style. Be concrete and cite the numbers. "

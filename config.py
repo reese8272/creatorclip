@@ -158,6 +158,14 @@ class Settings(BaseSettings):
     # speech rather than disfluency and skipped.
     FILLER_TIER2_MAX_DURATION_MS: int = 600
 
+    # Issue 227 — ingest length clamp for YouTube video titles.
+    # YouTube's published title limit is 100 characters (developers.google.com/youtube/v3/docs/videos).
+    # 200 chars is a 2× safety margin that only truncates pathological/synthetic inputs — no
+    # legitimate YouTube title can exceed 100 chars per the API contract. This prevents
+    # adversarially-crafted titles from acting as injection-payload carriers (OWASP LLM01) or
+    # creating a token-cost / DoS vector when the title enters the prompt corpus.
+    MAX_INGESTED_TITLE_CHARS: int = 200
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5

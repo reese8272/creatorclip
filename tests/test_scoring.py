@@ -126,28 +126,32 @@ def test_signal_score_never_exceeds_one():
 
 
 def test_transcript_context_three_sections():
+    """Issue 224: transcript sections are now wrapped via wrap_untrusted to prevent
+    transcript content from spoofing the section labels. The old [BEFORE]/[CLIP]/[AFTER]
+    labels are replaced by XML-labeled JSON-encoded wrappers."""
     segs = [
         {"start": 0.0, "end": 5.0, "text": "lead in text"},  # before
         {"start": 10.0, "end": 15.0, "text": "the clip here"},  # clip
         {"start": 20.0, "end": 25.0, "text": "payoff after"},  # after
     ]
     result = _transcript_context(10.0, 20.0, segs)
-    assert "[BEFORE]" in result
+    # Issue 224: sections are now wrap_untrusted wrappers, not raw [LABEL] strings.
+    assert 'name="transcript_before"' in result
     assert "lead in text" in result
-    assert "[CLIP]" in result
+    assert 'name="transcript_clip"' in result
     assert "the clip here" in result
-    assert "[AFTER]" in result
+    assert 'name="transcript_after"' in result
     assert "payoff after" in result
 
 
 def test_transcript_context_clip_window_only():
-    # Only segments inside the clip window; no before/after → only [CLIP] section
+    """Only segments inside the clip window; no before/after → only clip section."""
     segs = [{"start": 10.0, "end": 15.0, "text": "only in clip"}]
     result = _transcript_context(10.0, 20.0, segs)
-    assert "[CLIP]" in result
+    assert 'name="transcript_clip"' in result
     assert "only in clip" in result
-    assert "[BEFORE]" not in result
-    assert "[AFTER]" not in result
+    assert 'name="transcript_before"' not in result
+    assert 'name="transcript_after"' not in result
 
 
 def test_transcript_context_empty_segments():
@@ -156,12 +160,18 @@ def test_transcript_context_empty_segments():
 
 
 def test_transcript_context_before_excludes_clip_text():
+    """The before-section must not contain text from the clip window."""
     segs = [
         {"start": 5.0, "end": 8.0, "text": "before only"},
         {"start": 12.0, "end": 18.0, "text": "clip only"},
     ]
     result = _transcript_context(10.0, 20.0, segs)
-    before_section = result.split("[CLIP]")[0] if "[CLIP]" in result else result
+    # Split on the clip section wrapper to isolate the before section.
+    before_section = (
+        result.split('<untrusted name="transcript_clip">')[0]
+        if 'name="transcript_clip"' in result
+        else result
+    )
     assert "before only" in before_section
     assert "clip only" not in before_section
 

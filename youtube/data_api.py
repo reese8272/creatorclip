@@ -53,6 +53,39 @@ def classify_video_kind(duration_s: float) -> VideoKind:
     return VideoKind.short if duration_s <= settings.SHORTS_MAX_DURATION_S else VideoKind.long
 
 
+def clamp_ingest_field(value: str | None, max_chars: int) -> str | None:
+    """Truncate and normalize a raw ingest string to at most max_chars characters.
+
+    Applies the same safe-truncation pattern as dna/identity.py (word-boundary
+    rsplit + whitespace normalization) so multi-byte characters are never split
+    mid-sequence.  Returns None unchanged.
+
+    Designed for ingest-side clamping of YouTube-sourced strings (Issue 227).
+    Prevents adversarially-crafted or pathologically-long values from acting as
+    injection-payload carriers (OWASP LLM01) or creating a token-cost / DoS vector
+    when the value later enters the prompt corpus.
+
+    Args:
+        value: The raw string from the YouTube API response (or None).
+        max_chars: Maximum character length.  Values at or below this length are
+                   whitespace-normalized but NOT truncated.
+
+    Returns:
+        Whitespace-normalized string truncated to at most max_chars characters,
+        or None if value is None.
+    """
+    if value is None:
+        return None
+    # Normalize whitespace first — collapse runs, strip leading/trailing.
+    normalized = " ".join(value.split())
+    if len(normalized) <= max_chars:
+        return normalized
+    # Truncate at a word boundary: rsplit at the first space from max_chars
+    # backward so we never cut in the middle of a multi-byte sequence or word.
+    truncated = normalized[:max_chars].rsplit(" ", 1)[0]
+    return truncated or normalized[:max_chars]
+
+
 def _classify_error(resp: httpx.Response) -> tuple[str, bool]:
     """Return (reason, is_transient) for a non-2xx YouTube API response.
 
@@ -180,7 +213,14 @@ async def list_channel_videos(access_token: str) -> list[dict]:
                 results.append(
                     {
                         "video_id": resource_id["videoId"],
-                        "title": snippet.get("title"),
+                        # Issue 227: clamp title at ingest to prevent adversarially-
+                        # crafted titles acting as injection carriers or token-cost
+                        # vectors when they enter the prompt corpus. YouTube's own
+                        # published limit is 100 chars; the 2× margin only truncates
+                        # pathological/synthetic inputs (OWASP LLM01).
+                        "title": clamp_ingest_field(
+                            snippet.get("title"), settings.MAX_INGESTED_TITLE_CHARS
+                        ),
                         "published_at": snippet.get("publishedAt"),
                     }
                 )

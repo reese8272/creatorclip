@@ -24,6 +24,7 @@ from anthropic import Anthropic
 
 from config import settings
 from knowledge.util import extract_transcript_text as _extract_transcript_text
+from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +193,12 @@ def _build_concepts_request(
     ]
     pattern_text = "\n".join(pattern_lines)
 
+    # Issue 224: stated_identity is attacker-influenceable creator free-text and
+    # must not go in the system role. Build video context without it; it moves to
+    # the user turn, JSON-wrapped via wrap_untrusted.
     video_context_parts: list[str] = []
     if transcript_hook:
         video_context_parts.append(f"Video opening (hook):\n{transcript_hook}")
-    if stated_identity:
-        video_context_parts.append(stated_identity)
     video_context_parts.append(f"Channel: {channel_title}")
     video_context = "\n\n".join(video_context_parts)
 
@@ -212,18 +214,26 @@ def _build_concepts_request(
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
             "cache_control": {"type": "ephemeral", "ttl": "1h"},
         },
-        # Block 3: per-video context — changes per request. Uncached.
+        # Block 3: per-video factual context — no creator free-text.
         {
             "type": "text",
             "text": f"CHANNEL THUMBNAIL PATTERNS:\n{pattern_text}\n\nVIDEO CONTEXT:\n{video_context}",
         },
     ]
     tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+
+    # stated_identity travels in the user turn so the model receives it from the
+    # user role, not as trusted operator instructions. JSON-wrapped to prevent
+    # quote/bracket break-out (OWASP LLM01; Anthropic prompt-injection guide).
+    user_preamble = ""
+    if stated_identity:
+        user_preamble = wrap_untrusted("creator_stated_identity", stated_identity)
     messages = [
         {
             "role": "user",
             "content": (
-                f"Generate 5 thumbnail concepts for this video from '{channel_title}'. "
+                user_preamble
+                + f"Generate 5 thumbnail concepts for this video from '{channel_title}'. "
                 "Search for current thumbnail trends in this niche, then produce the ranked JSON."
             ),
         }

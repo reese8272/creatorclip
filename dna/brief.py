@@ -19,6 +19,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -77,25 +78,36 @@ def _build_request(
         default=str,
     )
 
-    # Two stability tiers: (1) global instructions are identical across all
-    # creators; (2) the stated identity is stable per creator. Both go before
-    # the volatile corpus. No cache_control marker: the DNA-build call is
-    # low-frequency (once per DNA rebuild) and the pipeline steps between it
-    # and scoring.py (transcription, signal extraction, candidates) make the
-    # default 5-min TTL effectively useless. The marker was a pure write-premium
-    # (1.25×) with zero expected reads. (Issue 223 spike — removed.)
-    # Note: scoring.py's 1h marker on the *synthesised* DNA brief is correct and
-    # remains — it operates in a different cache namespace (different first block).
-    system: list[dict] = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
+    # Per the 2026 prompt-caching standard: stable content first, variable last,
+    # cache breakpoint at the end of the stable prefix.
+    # Issue 224: stated_identity is creator-authored (attacker-influenceable) and
+    # must NOT go in the system role. Moved to the user turn, JSON-wrapped via
+    # wrap_untrusted. The system blocks are now two stable items:
+    #   (1) global instructions — identical across all creators,
+    #   (2) volatile performance corpus — uncached, changes each call.
+    # The cache breakpoint stays on the instructions block (only stable block).
+    system: list[dict] = [
+        {
+            "type": "text",
+            "text": _SYSTEM_INSTRUCTIONS,
+            "cache_control": {"type": "ephemeral"},
+        },
+        # Volatile per-creator data — AFTER the breakpoint, never cached.
+        {"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"},
+    ]
+
+    # stated_identity goes in the user turn so the model receives it from the
+    # user role, not as trusted operator instructions. Structurally separated
+    # from the instruction text by the XML label + JSON-encoded value.
+    user_content = ""
     if stated_identity:
-        system.append({"type": "text", "text": stated_identity})
-    # Volatile per-creator data — always the final block, never cached.
-    system.append({"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"})
+        user_content = wrap_untrusted("creator_stated_identity", stated_identity)
+    user_content += f"Generate the Creator Brief for '{channel_title}'."
 
     messages: list[dict] = [
         {
             "role": "user",
-            "content": f"Generate the Creator Brief for '{channel_title}'.",
+            "content": user_content,
         }
     ]
     return system, messages

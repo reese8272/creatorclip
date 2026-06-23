@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
+from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -165,13 +166,19 @@ def _transcript_context(setup_s: float, end_s: float, segments: list | None) -> 
     clip = _gather(setup_s, end_s, 250)
     after = _gather(end_s, after_end, 150)
 
+    # Issue 224: route each section through wrap_untrusted so label tokens cannot
+    # be spoofed by transcript content. The outer candidates payload is already
+    # json.dumps'd at build time, but the inner text values are still raw strings
+    # inside that JSON — wrap_untrusted JSON-encodes each section so a transcript
+    # that contains "[CLIP]:" cannot inject a fake section label (incremental
+    # hardening; primary risk is low since payload is already JSON-serialized).
     sections = []
     if before:
-        sections.append(f"[BEFORE]: {before}")
+        sections.append(wrap_untrusted("transcript_before", before).rstrip())
     if clip:
-        sections.append(f"[CLIP]: {clip}")
+        sections.append(wrap_untrusted("transcript_clip", clip).rstrip())
     if after:
-        sections.append(f"[AFTER]: {after}")
+        sections.append(wrap_untrusted("transcript_after", after).rstrip())
 
     return "\n".join(sections)
 

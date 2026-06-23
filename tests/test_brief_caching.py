@@ -47,14 +47,59 @@ def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
 
     system = captured["system"]
     assert len(system) == 2
-    # Block 0: static, NO cache_control (Issue 223 — inert marker removed).
-    assert "cache_control" not in system[0]
+    # Block 0: static instructions, cached. Contains NO per-creator data.
+    # Issue 224: cache_control is now on block 0 (the only stable block).
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
     assert "Acme Channel" not in system[0]["text"]
     assert "CREATOR PERFORMANCE DATA" not in system[0]["text"]
-    # Block 1: volatile, NOT cached, carries the creator data.
+    # Block 1: volatile performance corpus, NOT cached.
     assert "cache_control" not in system[1]
-    assert "Acme Channel" in system[1]["text"]
+    assert "CREATOR PERFORMANCE DATA" in system[1]["text"]
     assert out.startswith("BRIEF BODY")
+
+
+def test_dna_brief_stated_identity_in_user_turn_not_system(mocker):
+    """Issue 224: stated_identity must appear in the user message content, not in
+    any system block. The model must receive it from the user role so it is treated
+    as untrusted user content, not as trusted operator instructions."""
+    import dna.brief as b
+
+    captured: dict = {}
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _Resp([_Block("text", "BRIEF BODY")])
+
+    mocker.patch.object(b._ANTHROPIC.messages, "create", side_effect=_create)
+
+    identity = "I make educational Python tutorials for beginners."
+    b.generate_brief(
+        {"top_videos": [{"title": "T", "hook_text": "H"}]},
+        "Acme Channel",
+        stated_identity=identity,
+    )
+
+    system = captured["system"]
+    messages = captured["messages"]
+
+    # stated_identity must NOT appear in any system block.
+    for block in system:
+        assert identity not in block["text"], (
+            "Issue 224: stated_identity must not appear in any system block — "
+            "system blocks are treated as trusted operator instructions."
+        )
+
+    # stated_identity must appear JSON-encoded in the user turn.
+    user_content = messages[0]["content"]
+    assert "creator_stated_identity" in user_content, (
+        "Issue 224: user turn must contain the wrap_untrusted label for stated_identity."
+    )
+    # The identity text must be JSON-encoded (not raw) in the user message.
+    import json
+
+    assert json.dumps(identity) in user_content, (
+        "Issue 224: stated_identity must be JSON-encoded inside wrap_untrusted."
+    )
 
 
 def test_improvement_brief_returns_final_text_block_not_preamble(mocker):
