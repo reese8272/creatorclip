@@ -145,7 +145,7 @@ async def list_videos(
             next_action = NextActionOut(
                 label="Link a video",
                 action_type="open_form",
-                url="/static/index.html#link-form",
+                url="/app/dashboard",  # Issue 235/161: was /static/index.html#link-form
             )
         else:
             message = (

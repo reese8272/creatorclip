@@ -9,6 +9,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
@@ -18,6 +19,13 @@ from models import Clip, ClipFeedback, Creator, FeedbackAction
 
 router = APIRouter(prefix="/clips", tags=["review"])
 logger = logging.getLogger(__name__)
+
+# Issue 235 — the three actions that constitute a "keep" (the activation event).
+# upvote = explicit approval; trim = editorial keep; format = deliberate render.
+# downvote and skip are rejections; they are not activation signals.
+_KEEP_ACTIONS: frozenset[FeedbackAction] = frozenset(
+    {FeedbackAction.upvote, FeedbackAction.trim, FeedbackAction.format}
+)
 
 
 class FeedbackOut(BaseModel):
@@ -43,6 +51,26 @@ class FeedbackRequest(BaseModel):
         return FeedbackAction(v)
 
 
+async def _is_first_keep(session: AsyncSession, creator_id: uuid.UUID) -> bool:
+    """Return True if this creator has never previously submitted a keep action.
+
+    A "keep" is any of {upvote, trim, format} — the three actions that signal
+    "this clip is good enough to use."  The check is idempotent: if a prior
+    keep already exists in clip_feedback, we do not fire clip_kept again.
+
+    Issue 235 — activation event idempotency guard.
+    """
+    result = await session.execute(
+        select(
+            exists().where(
+                ClipFeedback.creator_id == creator_id,
+                ClipFeedback.action.in_(list(_KEEP_ACTIONS)),
+            )
+        )
+    )
+    return not result.scalar()
+
+
 @router.post("/{clip_id}/feedback", status_code=201, response_model=FeedbackOut)
 @limiter.limit("120/minute", key_func=creator_key)
 async def submit_feedback(
@@ -56,6 +84,12 @@ async def submit_feedback(
     clip = await session.get(Clip, clip_id)
     if not clip or clip.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Issue 235 — check idempotency BEFORE the commit so the new row is not
+    # included in the existence query (the session hasn't flushed yet).
+    is_activation = body.action in _KEEP_ACTIONS and await _is_first_keep(
+        session, creator.id
+    )
 
     feedback = ClipFeedback(
         clip_id=clip_id,
@@ -79,6 +113,27 @@ async def submit_feedback(
         clip_id=str(clip_id),
         action=body.action.value,
     )
+
+    # Issue 235 — emit clip_kept (ACTIVATION EVENT) on first keep per creator.
+    # Best-effort: record_event never raises; a telemetry failure must not block
+    # the response.  Scheduled on the running event loop via ensure_future.
+    if is_activation:
+        from event_log import record_event
+
+        asyncio.ensure_future(
+            record_event(
+                source="backend",
+                event="clip_kept",
+                creator_id=creator.id,
+                extra={"action": body.action.value},
+            )
+        )
+        logger.info(
+            "clip_kept activation event: creator=%s clip=%s action=%s",
+            creator.id,
+            clip_id,
+            body.action.value,
+        )
 
     # Retrain the creator's preference model so ranking adapts to this feedback.
     # The task self-debounces (no-op without new trainable labels), so enqueuing
