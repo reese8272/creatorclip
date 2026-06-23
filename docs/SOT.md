@@ -102,7 +102,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 ├── ingestion/
 │   ├── transcribe.py           # WhisperX or hosted; word-level segments
-│   ├── audio.py                # Energy, silence, laughter, volume spikes
+│   ├── audio.py                # Energy, silence, laughter, volume spikes; generate_waveform_image (ffmpeg showwavespic, Issue 188)
 │   ├── vision.py               # (Phase 2) facial expression / scene detection
 │   └── signals.py              # Unified multimodal signal timeline
 │
@@ -224,8 +224,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
 │       ├── components/insights/ # InsightsPanel · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e)
 │       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)
+│       ├── components/editor/   # Timeline (+test) — waveform + synced playhead + cut overlays (Issue 188)
 │       ├── components/review/   # ClipPlayer · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (Issue 85f)
-│       └── pages/              # Dashboard (+test, 85c) · Onboarding (+test, 85d) · Insights (+test, 85e) · Analysis (+test, 85e) · Review (+test, 85f) · Profile · Chat · Pricing (+test) · Login · Walkthrough (+test)
+│       └── pages/              # Dashboard (+test, 85c) · Onboarding (+test, 85d) · Insights (+test, 85e) · Analysis (+test, 85e) · Review (+test, 85f; Refine→ button added 188) · Editor (+test, 188 — timeline+waveform+transcript editor) · Profile · Chat · Pricing (+test) · Login · Walkthrough (+test)
 │
 ├── tests/
 │   ├── conftest.py

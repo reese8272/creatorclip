@@ -162,8 +162,15 @@ scoring-eval-preference (216) · agentic-caching-cost (218, 220, 221, 222, 223) 
 billing-monetization (205–209) · carry-over-cleanup (73, 75, 76) · privacy-compliance (250, 251) ·
 observability (233, 237, 239) · scale-quota-load (260, 264) · security-prompt-trust-boundary (224, 227).
 
-**Triaged not-built (correct):** L-spikes 188/189/190/198 (editor/reframe/recap/eval-harness, plan-only)
+**Triaged not-built (correct):** L-spikes 189/190/198 (reframe/recap/eval-harness, plan-only)
 and the `external` runbook lanes (`docs/runbooks/`).
+
+**Issue 188 — Timeline + waveform Editor surface (built 2026-06-23, worktree agent-a73e02525eb7f1684):**
+Editor page (`frontend/src/pages/Editor.tsx`) + Timeline component (`frontend/src/components/editor/Timeline.tsx`)
+built and tested. `generate_waveform_image` (ffmpeg showwavespic) added to `ingestion/audio.py`. Review.tsx
+updated: transcript/caption/clean panels relocated to Editor; "Refine →" button added. Route `/editor` wired.
+Vitest: 134/134 pass. Build: green (tsc + Vite). ruff/mypy/py_compile: clean. Waveform-at-real-ingest
+(ffmpeg + media) is render-env/staging-pending per the issue's Verify gate.
 
 **Verification status:**
 - **Green (static/structural, verified on dev box):** ruff (production clean; 9 known `SIM117` test-only
