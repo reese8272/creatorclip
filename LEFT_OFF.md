@@ -4,32 +4,34 @@
 > Source-of-truth docs live in `docs/`; this file orients and points to them.
 
 **Last updated:** 2026-06-23
-**Checked out:** `main` @ **`e89574f`** · working tree clean
-**`main` == `staging` == `e89574f`**, both **31 commits AHEAD of `origin/main` (`65a1d4f`) — UNPUSHED, UNDEPLOYED.**
-`origin/main` == `origin/staging` == `65a1d4f` (untouched on the remote).
+**Checked out:** `main` @ **`ac1a4b6`** · working tree clean
+**SHIPPED:** `main` == `staging` == `origin/main` == `origin/staging` == **`ac1a4b6`** — W0 is **DEPLOYED to prod**.
+Prod health: `autoclip.studio/` → 302 → `/app/dashboard` (green). `Deploy to production` for `ac1a4b6` = success.
 
 ---
 
-## ⚠️ THE ONE DECISION PENDING (start here)
+## ✅ DEPLOYED — what's live + what's next (start here)
 
-All of roadmap **Wave W0** is built, integrated, and merged into **local** `main` + `staging`. It is **not
-pushed**. The previous session deliberately held the `git push` because:
+All of roadmap **Wave W0** (14 code-bearing lanes) is **built, integrated, merged, pushed, and DEPLOYED to
+prod** at `ac1a4b6`. The deploy ran migrations `0028` + `0029` on the prod DB and the app came up green
+(302 → `/app/dashboard`). One build break was caught + fixed mid-deploy: `BrandKitSection.tsx` used
+`<CardHeader>` with children instead of `title`/`description` props (TS2741) — the **image-build gate blocked
+it, prod stayed safe**, fixed in `ac1a4b6`. (Lesson: that lane agent's "frontend builds" claim was false; it
+never ran `tsc`. Run `cd frontend && npm run build` locally before trusting a UI lane.)
 
-- **Pushing `main` auto-deploys to prod (`autoclip.studio`)** via the self-hosted GitHub Actions runner, and
-- it runs migrations **`0028_usage_cost_estimate`** + **`0029_creator_brand_kit`** on the **prod database**, and
-- **none of this 14-lane batch has been verified on real Postgres/Redis** (this dev box has neither — see
-  "Verification reality" below). The code only has: ruff-clean + `py_compile`-clean + conflict-free merge.
+**→ NEXT ACTION (post-deploy):**
+1. **Spot-check prod** beyond the redirect: log in; open Profile→Brand Kit, Review, the Dashboard pipeline
+   stepper; tail `docker compose logs --tail 200 app worker` on the VM for errors; confirm the new Beat tasks
+   (`reconcile-stripe-ledger-daily`, `purge-stale-event-logs-daily`) registered and the app starts clean.
+2. **Reconcile the doc debts** (below): the 223-vs-224 `DECISIONS.md` contradiction + the union-merged
+   `PROJECT_STATE.md`/`.env.example`; then write a real PROJECT_STATE "W0 shipped" entry.
+3. **Behavioral verification** of the ACs that never ran here (migrations DID apply on prod now, but RLS
+   isolation, SSE round-trips, Stripe reconcile race) — watch prod or do Issue 275 staging.
+4. **Start W1** with the harness (see KEY COORDINATES).
 
-**→ NEXT ACTION — choose one:**
-- **Ship it:** `git push origin main staging` (this triggers the prod deploy + prod migrations). Then watch:
-  `gh run watch` / `gh run list --limit 3`, and health-check `curl -sI https://autoclip.studio/ ` (expect 302 → `/app/dashboard`).
-  Migrations are **additive only** (one new column + one new table) — low risk, but unverified.
-- **Verify first (safer):** push `staging` only (does NOT deploy — deploy triggers on `main`), bring up a real
-  Postgres 16 + Redis, `alembic upgrade head`, run the full suite, then push `main` to deploy.
-- **Reconcile the two doc items below before either** (5 min, recommended regardless).
-
-If a deploy goes bad: `git push -f origin 65a1d4f:main` reverts the trunk (then redeploy), or use the image
-rollback in `scripts/deploy.sh`. Migrations are additive so a code rollback leaves a harmless unused column/table.
+**Rollback if needed:** `git push -f origin <prev-good-sha>:main` (last known-good is `65a1d4f`) then let it
+redeploy, or image-rollback via `scripts/deploy.sh`. Migrations are additive (new column + new table) — a
+code rollback leaves them as harmless unused schema.
 
 ---
 
@@ -112,8 +114,8 @@ rollback in `scripts/deploy.sh`. Migrations are additive so a code rollback leav
 
 | Item | Value |
 |------|-------|
-| Trunk now | local `main`==`staging` @ `e89574f`; `origin/main`==`origin/staging` @ `65a1d4f` (behind 31) |
-| Backup ref | `wave0-integration` @ `e89574f` (identical to main; delete after push) |
+| Trunk now | `main`==`staging`==`origin/main`==`origin/staging` @ `ac1a4b6` (DEPLOYED to prod) |
+| Prod | `autoclip.studio` live on `ac1a4b6`; `CI` (GitHub-hosted) red = known billing, ignore; deploy path is self-hosted |
 | Held separate | `feat/batch-b-publish` (your YouTube-publish work — its 0027 migration may collide; renumber if it lands after this) |
 | Remote | `origin` = github.com/reese8272/creatorclip.git (no `wave0/*` ever pushed) |
 | Migrations added | `alembic/versions/0028_usage_cost_estimate.py`, `0029_creator_brand_kit.py` |
