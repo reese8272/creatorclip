@@ -100,6 +100,37 @@ Full suite: **1048 passed, 7 skipped** (was 1011 before this lane). Layer-0 gate
 
 ---
 
+## W1 Carry-over & Cleanup Lane — Issue 151 DONE (2026-06-23)
+
+**Issue 151 (Beta logging — finish retention + admin/query surface) CLOSED.**
+
+The three deliverables that were genuinely open are now satisfied:
+
+- **AC 1 (redaction test):** Already met — `tests/test_event_log.py` has 12 tests covering
+  `_redact()` / `purge_creator_events` / noop-when-disabled / error-swallowed / beat-schedule
+  registration / Issue-233 regression. The shared `redact.py` helper (Issue 233) was merged,
+  making the blocklist DRY across the DB sink and `JsonLogFormatter`.
+
+- **AC 2 (retention policy documented + enforced):** Already met — `EVENT_LOG_RETENTION_DAYS=90`
+  in `config.py`; `purge_stale_event_logs` beat task registered in `worker/schedule.py:68-71`;
+  `COMPLIANCE.md:87` documents the 90-day rolling purge. Issue 250 (the delegated retention
+  issue) is DONE.
+
+- **AC 3 (admin/query surface OR recorded decision):** Formally closed by a new `docs/DECISIONS.md`
+  entry (2026-06-23, Issue 151). The cross-creator HTTP query plane is deferred to Issue 240
+  (Loki aggregator — the canonical log-query surface at K8s scale). Beta operators query
+  `event_logs` directly via psql; no PII is in any row; no RLS on this table (per the
+  2026-06-17 entry). No code change needed.
+
+- **ACs 4 + 5:** Already met — per-creator isolation enforced in `/api/logs/me`; `event_logs`
+  is the single queryable sink fed by both the UI activity endpoint and backend events; no
+  parallel sink exists (Issues 233-241 observability cluster builds on top of it).
+
+No new code. `docs/DECISIONS.md` and `docs/issues.md` (all five ACs flipped to `[x]`,
+status set to `DONE`) updated.
+
+---
+
 ## Current Status
 
 **Wave W0 / Lane ui-core — Issues 99 + 210 DONE (2026-06-23).** On branch `wave0/ui-core`.
