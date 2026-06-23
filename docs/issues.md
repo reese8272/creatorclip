@@ -1470,7 +1470,7 @@ Move untrusted creator content out of `system`, JSON-delimit, untrusted-content 
 
 ### Issue 227: Honesty guard on generation bodies + ingest length clamp
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Prompt Trust Boundary · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Security — Prompt Trust Boundary · **Size** `S` · **Verify** `local`  
 **Src** `09 / 174d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/09_llm_content_safety_prompt_injection.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `dna/brief.py`, `dna/identity.py`, `knowledge/hooks.py`, `knowledge/titles.py`, `youtube/data_api.py`  
 
@@ -3697,7 +3697,7 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 ### Issue 215: Route new creators to onboarding after OAuth
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `S` · **Verify** `external`  
+**Status** `DONE` · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `S` · **Verify** `external`  
 **Src** `07 / 190` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/07_activation_onboarding_funnel.md`  
 **Blocked by** #214 · **Enables** #100 · **Coordinate (hot files)** `frontend/src/App.tsx`, `main.py`, `routers/auth.py`  
 
@@ -3969,7 +3969,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 212: Insights page rebuild — clear "what this is showing + why it matters" (carry-over Issue 93)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** UI Core · **Size** `L` · **Verify** `local`  
+**Status** `DONE` · **Wave** W1 · **Lane** UI Core · **Size** `L` · **Verify** `local`  
 **Src** carry-over 93 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #213 · **Coordinate (hot files)** `routers/insights.py`  
 
