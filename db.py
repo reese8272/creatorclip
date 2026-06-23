@@ -53,11 +53,18 @@ def _make_engine() -> AsyncEngine:
 
 
 def _make_admin_engine() -> AsyncEngine:
+    # Worker concurrency is --concurrency=2; each process opens at most
+    # pool_size + max_overflow admin connections.  pool_size=2, max_overflow=2
+    # (=4 max) is sufficient for two in-flight tasks and avoids the 750-direct-
+    # connection budget violation documented in docs/DEPLOYMENT.md (Issue 259).
+    # The worker pods route through the PgBouncer sidecar added in Issue 259, so
+    # this value feeds into the worker.pgbouncer.defaultPoolSize budget inequality.
     return create_async_engine(
         settings.database_migration_url,
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=2,
+        max_overflow=2,
+        pool_recycle=_POOL_RECYCLE_S,
         connect_args=_CONNECT_ARGS,
     )
 

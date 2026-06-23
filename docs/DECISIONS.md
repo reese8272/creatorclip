@@ -326,6 +326,62 @@ call sites. One future careless `log_event('x', email=...)` would have leaked si
 
 **Source/evidence:** OWASP Logging Cheat Sheet (https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html);
 BetterStack 2026 sensitive data guide; DSOMM Activity 613a73dc.
+## 2026-06-23 — Issue 259: PgBouncer sidecar added to worker Deployment; admin_engine pool shrunk
+
+**What changed:**
+1. Added a `worker.pgbouncer` sidecar to `deploy/charts/creatorclip/templates/worker/deployment.yaml`,
+   mirroring the existing app sidecar pattern. Workers now route through `localhost:5432` (the sidecar)
+   instead of connecting directly to Cloud SQL.
+2. `db._make_admin_engine()` `pool_size` reduced from 5 to 2 and `max_overflow` from 10 to 2 (max 4
+   connections), sized for `--concurrency=2`. The old values (15 effective) were over-provisioned and
+   contributed to the unpooled direct-connection budget violation.
+3. `values.yaml` added `worker.pgbouncer` block (enabled=true, edoburu image, poolMode=transaction,
+   maxClientConn=200, defaultPoolSize=5).
+4. `values.prod.yaml` added `worker.pgbouncer.defaultPoolSize=5`; KEDA maxReplicas kept at 50.
+5. `docs/DEPLOYMENT.md` updated with the re-derived connection budget table and the ⚠️ open question
+   about confirming the Cloud SQL instance tier before scaling to prod maxReplicas.
+
+**Why:** At prod ceilings without pooling: 50 worker pods × admin_engine (pool_size=5+max_overflow=10=15)
+= 750 **direct** Cloud SQL connections; combined with app tier (20 pods × 25 = 500) = 1,250 direct conns
+vs Cloud SQL `max_connections` of ~100–800 depending on instance tier — a 2–15× budget violation that
+would cause QueuePool-timeout errors on every video ingestion/render job (the core product value).
+
+**Connection budget (prod, after this change):**
+- App: HPA_max(20) × defaultPoolSize(50) = 1,000 server conns
+- Worker: KEDA_max(50) × defaultPoolSize(5) = 250 server conns
+- Total: 1,250. Requires a Cloud SQL instance with `max_connections` ≥ 1,260.
+- `db-custom-2-8192` (2vCPU/8GB) yields ~1,000 → budget exceeded. Needs `db-custom-4-16384`
+  (4vCPU/16GB, ~2,500 max_connections) or lower pool sizes. **OPEN QUESTION: confirm tier at launch.**
+
+**Source/evidence:** PgBouncer sidecar as the K8s connection-pooling industry standard:
+- https://oneuptime.com/blog/post/2026-02-09-pgbouncer-sidecar-postgresql-kubernetes/view
+- https://oneuptime.com/blog/post/2026-02-17-how-to-set-up-pgbouncer-connection-pooling-for-cloud-sql-postgresql/view
+
+**Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 264: PgBouncer image switched to edoburu/pgbouncer; digest-pinned
+
+**What changed:**
+1. Both the app sidecar (`values.yaml pgbouncer.image`) and the worker sidecar (`values.yaml
+   worker.pgbouncer.image`) now reference `edoburu/pgbouncer:v1.25.2-p0@sha256:...` — a single
+   pinned digest across both.
+2. `docker-compose.staging.yml` pgbouncer service image updated to the same pinned digest.
+3. `docs/SOT.md` contradiction about `TOKEN_ENCRYPTION_KEY` rotation runbook corrected (the
+   runbook has existed in `docs/RUNBOOKS.md` since Issue 146; the SOT line was stale).
+4. `CLAUDE.md` Pre-Public-Launch Requirements token-rotation entry updated to reflect
+   the runbook's completion.
+
+**Why:** `bitnami/pgbouncer` is now commercial-only on Docker Hub (requires a paid Bitnami Secure
+Images subscription), making the Helm chart undeployable for an open-source project. `edoburu/pgbouncer`
+is the de-facto standard free alternative (10M+ pulls, actively maintained, open-source at
+github.com/edoburu/docker-pgbouncer). Digest pinning prevents tag-mutation supply-chain risk —
+the same failure mode that caused the `edoburu:1.23.1-p3` incident in OFF_COURSE_BUGS Issue-76.
+
+**Source/evidence:**
+- https://hub.docker.com/r/edoburu/pgbouncer/
+- https://github.com/edoburu/docker-pgbouncer
 
 **Date:** 2026-06-23
 
@@ -429,6 +485,29 @@ from labels to prevent cardinality blowup at 10k+ creators.
 **Source/evidence:** OTel GenAI Semantic Conventions (https://opentelemetry.io/blog/2026/genai-observability/);
 OpenObserve LLM observability guide; alternatives considered: free-text logs only (not alertable),
 full OTel histogram (requires adding opentelemetry-sdk dep), creator_id label (cardinality blowup).
+## 2026-06-23 — Issue 263: RedBeat adopted as Celery beat scheduler; beat liveness probe added
+
+**What changed:**
+1. `worker/celery_app.py` configures `beat_scheduler = "redbeat.RedBeatScheduler"` and
+   `redbeat_redis_url` pointing at `settings.REDIS_URL`.
+2. `deploy/charts/creatorclip/templates/beat/deployment.yaml`: `--schedule=` file path
+   argument removed (RedBeat uses Redis as the store); liveness probe added (file-mtime
+   check on `/tmp/celerybeat-schedule` — heartbeat file RedBeat still updates).
+3. `values.yaml` and `values.prod.yaml` updated with `redis.haUrl` (prod HA Redis URL
+   placeholder) and `beat.redbeat` config.
+4. `requirements.txt` pins `celery-redbeat==2.3.3`.
+
+**Why:** Beat runs as 1 replica (Recreate strategy) with no liveness probe — a crash silently
+halts the `purge_stale_youtube_analytics` task, a YouTube ToS §III.E.4.b compliance obligation,
+and the `refresh_youtube_analytics` / `purge_stale_source_media` operational tasks. Multiple beat
+replicas without a distributed lock cause duplicate scheduling, making simple scaling unsafe.
+RedBeat uses a Redis distributed lock (TTL 1500s) to allow safe failover without duplicates.
+Redis is already the SPOF backbone; HA Redis (Memorystore/Upstash) is the needed complement.
+
+**Source/evidence:**
+- https://pypi.org/project/celery-redbeat/ (2.3.3, Python 3.12, Production/Stable)
+- https://redbeat.readthedocs.io/en/latest/intro.html
+- https://github.com/sibson/redbeat
 
 **Date:** 2026-06-23
 

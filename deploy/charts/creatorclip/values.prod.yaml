@@ -15,6 +15,10 @@ hpa:
   maxReplicas: 20
 
 keda:
+  # KEDA maxReplicas 50 stays within the connection budget (Issue 259):
+  # 50 workers × defaultPoolSize 5 = 250 worker server conns; combined fleet
+  # HPA_max(20)×25 + KEDA_max(50)×5 = 750 ≤ Cloud SQL max_connections − reserved.
+  # See docs/DEPLOYMENT.md for the full inequality and the Cloud SQL tier open question.
   maxReplicas: 50
 
 ingress:
@@ -23,6 +27,13 @@ ingress:
     enabled: true
     secretName: "creatorclip-tls"
 
+redis:
+  # HA Redis for production (Issue 263): replace with managed Memorystore or
+  # Upstash endpoint. RedBeat stores the distributed lock here; if Redis is
+  # unavailable beat falls back to the dev single-instance redis.url above.
+  # Set REDBEAT_REDIS_URL in the K8s Secret to this value for beat + worker.
+  haUrl: "redis://YOUR_MEMORYSTORE_OR_UPSTASH_HOST:6379/0"
+
 externalSecret:
   enabled: true
   provider: "gcpsm"
@@ -30,4 +41,13 @@ externalSecret:
   secretName: "creatorclip-prod-env"
 
 pgbouncer:
+  # 50 conns/pod × HPA_max 20 pods = 1,000 app server conns.
+  # Full budget: 1,000 (app) + 250 (worker, see keda.maxReplicas) = 1,250 — ensure
+  # Cloud SQL instance provides max_connections ≥ 1,260 (with 10 superuser-reserved).
+  # NOTE: values.yaml defaultPoolSize=25 is tuned for dev; prod override to 50 here.
   defaultPoolSize: 50
+
+worker:
+  pgbouncer:
+    # 5 server conns/pod × KEDA maxReplicas 50 = 250 worker server conns (Issue 259).
+    defaultPoolSize: 5

@@ -472,5 +472,8 @@ Research Mode (parallel):
 - **Review-UI framework**: ✅ Resolved — React + TS + Tailwind v4 adopted (2026-06-17) with a documented design system (2026-06-18, Issue 85a; `docs/UI.md`). Strangler-fig migration in progress (Issues 85a–85g); the player-first "feels like scrolling" review surface lands in the review-page port (85f).
 - **YouTube quota ceilings**: Analytics/Data API quotas may throttle large catalogs — needs backoff + caching, sized once real quota is known.
 - **Preference cold-start**: below threshold, ranking leans on DNA + signals only; communicate honestly.
-- **`TOKEN_ENCRYPTION_KEY` rotation/escrow** — off-box escrow is **Issue 255**; verifying the RUNBOOKS rotation procedure is folded into **Issue 264**. Both are pre-public-launch gates.
+- **`TOKEN_ENCRYPTION_KEY` rotation/escrow** — ✅ rotation procedure documented in `docs/RUNBOOKS.md`
+  ("TOKEN_ENCRYPTION_KEY Rotation") and re-encryption script at `scripts/rotate_token_key.py`
+  (zero-downtime via `MultiFernet([primary, previous])`). Off-box escrow is **Issue 255** (still open,
+  pre-public-launch gate). The "runbook not yet written" framing was stale — fixed in Issue 264.
 - **Vision signals deferred**: cam-on reaction detection is Phase 2.
