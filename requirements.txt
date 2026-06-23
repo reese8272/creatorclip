@@ -23,6 +23,10 @@ pgvector==0.3.2
 # ── Cache / Queue ────────────────────────────────────────────────────────────
 redis[hiredis]==5.2.0
 celery[redis]==5.4.0
+# RedBeat: Redis-backed Celery beat scheduler with distributed lock (Issue 263).
+# Prevents duplicate scheduling when beat restarts; required for Beat HA.
+# 2.3.3 — Python 3.12 compatible, Production/Stable (July 2025).
+celery-redbeat==2.3.3
 
 # ── Config / Security ────────────────────────────────────────────────────────
 pydantic-settings==2.6.1

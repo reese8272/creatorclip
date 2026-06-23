@@ -50,17 +50,54 @@ Docker Compose is **dev/test only**. Production at 10k+ scale requires Kubernete
 - [x] **Database**: Cloud SQL for PostgreSQL 16; pgvector extension enabled post-provision.
 - [x] **Helm charts**: Written in `deploy/charts/creatorclip/`. See `deploy/README.md`.
 - [x] **Secrets management**: GCP Secret Manager + External Secrets Operator syncs to K8s.
-- [x] **Connection pooling**: PgBouncer sidecar in the app pod, transaction mode, 25 conns/pod.
+- [x] **Beat HA (Issue 263)**: RedBeat (`celery-redbeat==2.3.3`) replaces the file-backed
+  `PersistentScheduler`. Beat stores its schedule and a distributed lock (key `redbeat::lock`,
+  TTL 1500s) in Redis, preventing duplicate task scheduling across restarts. Beat liveness
+  probe checks the heartbeat file mtime (300s threshold) — a crashed beat pod is detected
+  and restarted by the kubelet within 60–180s. Beat still runs as 1 replica + Recreate
+  strategy; RedBeat makes the restart safe. The 30-day YouTube ToS purge
+  (`purge_stale_youtube_analytics`) cannot silently halt without the liveness probe.
+  - **Redis HA (Issue 263):** beat HA requires Redis to survive pod-level restarts (the
+    distributed lock TTL must remain live). Production must use a managed HA Redis endpoint
+    (GCP Memorystore for Redis with failover, or Upstash Redis). Set `REDBEAT_REDIS_URL` in
+    the K8s Secret to the HA endpoint (falls back to `REDIS_URL` in dev). Set
+    `redis.haUrl` in `values.prod.yaml` to the prod managed endpoint.
+  - **Chaos-test verification (deferred to staging):** `kill -9 <beat-pod>` → confirm no
+    duplicate scheduled tasks + pod restarts within liveness threshold (Issue 263 verify path).
+- [x] **Connection pooling**: PgBouncer sidecar in **both** the app pod and the worker pod
+  (Issue 259), transaction mode.
   - **psycopg3 + transaction pooling (Issue 58):** the SQLAlchemy engine sets
     `connect_args={"prepare_threshold": None}` (`db.py`) — psycopg3 server-side
     prepared statements are incompatible with transaction-mode pooling and would
     raise `prepared statement "_pg3_…" does not exist` in production.
-  - **Connection budget (must hold before raising replica counts):**
-    `app_pool_per_pod (pool_size 15 + max_overflow 5 = 20) ≤ PgBouncer sidecar (25)`.
-    Across the fleet, the PgBouncer→Postgres server pool must satisfy:
-    `Σ(PgBouncer default_pool_size) + Σ(celery_pool × worker_concurrency × worker_replicas)
-    ≤ Postgres max_connections − superuser_reserved`. Re-check this inequality and
-    record the chosen numbers whenever API/worker replica counts change.
+  - **App pool per pod**: `pool_size 15 + max_overflow 5 = 20` client conns ≤ PgBouncer
+    sidecar `defaultPoolSize` 25. The prod override raises `defaultPoolSize` to 50
+    (`values.prod.yaml`), which is safely below the sidecar's `max_client_conn` 1000.
+  - **Worker pool per pod**: `admin_engine pool_size 2 + max_overflow 2 = 4` client conns
+    ≤ PgBouncer sidecar `defaultPoolSize` 5 (sized for `--concurrency=2`). Worker's
+    `DATABASE_URL` and `DATABASE_MIGRATION_URL` both point to `localhost:5432` (the sidecar).
+  - **Fleet connection budget inequality (Issue 259 — must hold before raising replica counts):**
+
+    ```
+    Σ(app_pods × app_defaultPoolSize) + Σ(worker_pods × worker_defaultPoolSize)
+      ≤ Cloud SQL max_connections − superuser_reserved(10)
+    ```
+
+    **Prod ceiling (values.prod.yaml):**
+
+    | Tier | Max replicas | defaultPoolSize | Server conns |
+    |------|-------------|-----------------|-------------|
+    | App (HPA max) | 20 | 50 | 1,000 |
+    | Worker (KEDA max) | 50 | 5 | 250 |
+    | **Total** | | | **1,250** |
+
+    Cloud SQL `max_connections` is set automatically from instance RAM. A
+    `db-custom-2-8192` (2 vCPU / 8 GB) instance yields ~1,000 connections — **the
+    prod ceiling of 1,250 exceeds this**. Either (a) use a larger instance tier
+    (4 vCPU / 16 GB → ~2,500 max_connections), or (b) reduce `defaultPoolSize` values.
+    **⚠️ OPEN QUESTION (Issue 259):** confirm the Cloud SQL instance tier and its actual
+    `max_connections` before scaling to prod maxReplicas. Record the confirmed numbers in
+    `docs/DECISIONS.md`.
 
 ### Preliminary Production Architecture (subject to research)
 
@@ -71,8 +108,8 @@ Cloudflare (CDN + DDoS) → Cloudflare Tunnel / Load Balancer
     → Celery worker pods (KEDA on Redis queue depth)
     → Celery beat pod (1 replica)
 
-Managed PostgreSQL (pgvector enabled) — PgBouncer for connection pooling
-Redis 7 (managed or self-hosted in K8s)
+Managed PostgreSQL (pgvector enabled) — PgBouncer sidecars (app + worker pods)
+Redis 7 (managed HA — Memorystore or Upstash, Issue 263)
 Cloudflare R2 (object storage, zero egress)
 ```
 

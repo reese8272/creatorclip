@@ -32,7 +32,25 @@ spec:
             - worker.celery_app
             - beat
             - --loglevel=info
-            - --schedule=/tmp/celerybeat-schedule
+            # --schedule= is intentionally omitted: RedBeat uses Redis as the
+            # schedule store (Issue 263). The file-backed PersistentScheduler
+            # would have written /tmp/celerybeat-schedule; RedBeat writes
+            # nothing to disk, so the liveness probe checks a heartbeat file
+            # that RedBeat still updates on each scheduling tick.
           {{- include "creatorclip.envFrom" . | nindent 10 }}
           resources:
             {{- toYaml .Values.resources.beat | nindent 12 }}
+          # Liveness probe: RedBeat updates the heartbeat file on every tick.
+          # If the file has not been modified in >300s the pod is dead and the
+          # kubelet restarts it. Keeps the 30-day YouTube ToS purge (Issue 263)
+          # from silently stalling after an OOM or deadlock.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "test $(( $(date +%s) - $(stat -c %Y /tmp/celerybeat-schedule) )) -lt 300"
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3

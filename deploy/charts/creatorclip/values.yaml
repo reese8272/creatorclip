@@ -70,8 +70,15 @@ service:
 
 # Redis — use a managed service in production (Upstash / Cloud Memorystore).
 # Set this to the Redis connection URL from your managed provider.
+# For HA (Issue 263): production must use a managed Redis endpoint
+# (GCP Memorystore with read replica, or Upstash Redis). Beat HA via
+# RedBeat requires Redis to survive a restart so the distributed lock TTL
+# (1500s) remains live, preventing duplicate task scheduling.
 redis:
   url: "redis://redis-service:6379/0"
+  # haUrl: override in values.prod.yaml with the managed HA Redis endpoint.
+  # When set, REDBEAT_REDIS_URL in the beat/worker pods is populated from this.
+  haUrl: ""
 
 # External secrets — reference your GCP Secret Manager / Doppler project.
 # The secret named here must contain all required env vars as key/value pairs.
@@ -88,9 +95,33 @@ externalSecret:
 envSecretName: "creatorclip-env"
 
 # PgBouncer connection pooler sidecar for the app deployment.
+# Image: edoburu/pgbouncer v1.25.2-p0 — the actively-maintained, freely-available
+# open-source image; bitnami/pgbouncer is now commercial-only (Issue 264).
+# Pinned by digest to prevent supply-chain tag-mutation (Issue 264).
 pgbouncer:
   enabled: true
-  image: "bitnami/pgbouncer:1.22.0"
+  image: "edoburu/pgbouncer:v1.25.2-p0@sha256:37a605d6f06ed3c7e04fd96af01f8e8374e77c73d2b3a8d77bef527f9e83fc34"
   poolMode: "transaction"
   maxClientConn: 1000
+  # defaultPoolSize per-pod: app pool_size+max_overflow = 20 (db.py), sidecar
+  # must be ≥ that. 25 leaves 5-conn headroom for probe connections.
   defaultPoolSize: 25
+
+# PgBouncer sidecar for the worker deployment (Issue 259).
+# Workers connect to localhost:5432 (the sidecar) which proxies to Cloud SQL.
+# Budget: KEDA maxReplicas(50) × defaultPoolSize(5) = 250 worker server conns.
+# Combined fleet inequality (docs/DEPLOYMENT.md):
+#   app_server_conns + worker_server_conns ≤ Cloud SQL max_connections − reserved
+#   HPA_max(20) × 25 + KEDA_max(50) × 5 = 500 + 250 = 750
+# Cloud SQL max_connections depends on instance RAM; must satisfy 750 ≤ max_conns − 10.
+# A db-custom-2-8192 (2vCPU/8GB) instance yields ~1,000 max_connections — budget satisfied.
+# OPEN QUESTION: confirm Cloud SQL instance tier in docs/DECISIONS.md before prod launch.
+worker:
+  pgbouncer:
+    enabled: true
+    image: "edoburu/pgbouncer:v1.25.2-p0@sha256:37a605d6f06ed3c7e04fd96af01f8e8374e77c73d2b3a8d77bef527f9e83fc34"
+    poolMode: "transaction"
+    maxClientConn: 200
+    # 5 server-side connections per worker pod: sized for --concurrency=2
+    # (admin_engine pool_size=2, max_overflow=2 = 4 max; +1 headroom).
+    defaultPoolSize: 5

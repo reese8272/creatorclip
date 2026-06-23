@@ -50,3 +50,27 @@ spec:
             periodSeconds: 60
             timeoutSeconds: 10
             failureThreshold: 3
+        {{- if .Values.worker.pgbouncer.enabled }}
+        - name: pgbouncer
+          image: {{ .Values.worker.pgbouncer.image }}
+          ports:
+            - name: pgbouncer
+              containerPort: 5432
+          env:
+            - name: PGBOUNCER_POOL_MODE
+              value: {{ .Values.worker.pgbouncer.poolMode | quote }}
+            - name: PGBOUNCER_MAX_CLIENT_CONN
+              value: {{ .Values.worker.pgbouncer.maxClientConn | quote }}
+            - name: PGBOUNCER_DEFAULT_POOL_SIZE
+              value: {{ .Values.worker.pgbouncer.defaultPoolSize | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.envSecretName }}
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+        {{- end }}

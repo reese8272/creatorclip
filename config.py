@@ -197,6 +197,18 @@ class Settings(BaseSettings):
     # (Issue 105 — Fix 5)
     CELERY_SOFT_TIME_LIMIT_S: int = 3000
 
+    # RedBeat distributed beat scheduler (Issue 263).
+    # Must point to the same Redis as REDIS_URL in dev/staging; in production use
+    # the HA Redis URL (Memorystore/Upstash). RedBeat stores the schedule and a
+    # distributed lock in Redis (key prefix 'redbeat::'), preventing duplicate task
+    # scheduling across beat restarts without multiple-replica coordination.
+    # Falls back to REDIS_URL when unset so dev/test need no extra config.
+    REDBEAT_REDIS_URL: str | None = None
+
+    @property
+    def redbeat_redis_url(self) -> str:
+        return self.REDBEAT_REDIS_URL or self.REDIS_URL
+
     # ── Observability (Issue 75f / Issue 122) ──────────────────────────────────
     # JSON structured logs (one object per line) for log aggregators. Defaults on;
     # set false for human-readable text in local dev.

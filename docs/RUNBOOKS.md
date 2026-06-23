@@ -98,3 +98,66 @@ There is no gradual transition option for JWTs without adding a key-id header to
 For zero-logout rotation, maintain both old and new keys temporarily in a `try/except` decode
 chain in `auth.py` before removing the old key after one session expiry window
 (`JWT_EXPIRY_MINUTES`).
+
+---
+
+## Beat HA — RedBeat Recovery (Issue 263)
+
+### Background
+
+Celery Beat uses **RedBeat** (`celery-redbeat==2.3.3`) as its scheduler backend. Beat stores
+the schedule and a distributed lock (`redbeat::lock`, TTL 1500s) in Redis. Beat runs as 1
+replica with a Recreate strategy; the liveness probe restarts the pod if the heartbeat file
+(`/tmp/celerybeat-schedule`) has not been updated in >300s.
+
+The 30-day YouTube ToS purge (`purge_stale_youtube_analytics`, 6:00 UTC daily) is a compliance
+obligation — a silent beat outage is a ToS risk, not just an operational issue.
+
+### Symptoms of a beat outage
+
+- `purge_stale_youtube_analytics`, `purge_stale_source_media`, `poll_clip_outcomes` stop
+  appearing in Celery Flower / task logs.
+- `kubectl get pod -l app.kubernetes.io/component=beat` shows a CrashLoopBackOff or the
+  beat pod has been restarting at the liveness probe interval.
+
+### Recovery steps
+
+1. **Check beat pod status:**
+   ```bash
+   kubectl get pod -l app.kubernetes.io/component=beat
+   kubectl logs -l app.kubernetes.io/component=beat --tail=100
+   ```
+
+2. **Confirm RedBeat schedule in Redis (optional diagnostic):**
+   ```bash
+   redis-cli -u "$REDIS_URL" keys "redbeat::*"
+   ```
+   You should see `redbeat::lock` (if a beat is running) and one key per schedule entry.
+
+3. **Force a pod restart** (kubelet will pick up the Recreate rolling restart):
+   ```bash
+   kubectl rollout restart deployment/creatorclip-beat
+   ```
+
+4. **Verify liveness probe is passing:**
+   ```bash
+   kubectl describe pod -l app.kubernetes.io/component=beat | grep -A10 Liveness
+   ```
+   The probe checks that `stat -c %Y /tmp/celerybeat-schedule` is within 300s.
+
+5. **If Redis is the SPOF:** a full Redis outage causes beat to fail at startup (cannot acquire
+   lock). Restore the managed HA Redis instance first; beat will recover automatically on
+   restart once Redis is available.
+
+### After restoring beat — verify compliance tasks ran
+
+```bash
+# Confirm the ToS purge ran since the outage (look for purge_stale_youtube_analytics):
+kubectl logs -l app.kubernetes.io/component=worker --since=24h | grep purge_stale_youtube
+```
+
+If the purge window was missed, trigger it manually:
+```bash
+kubectl exec -it deployment/creatorclip-worker -- \
+  celery -A worker.celery_app call worker.tasks.purge_stale_youtube_analytics
+```

@@ -48,6 +48,15 @@ celery.conf.update(
     task_soft_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S,
     task_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S + 300,
     broker_transport_options={"visibility_timeout": 3600},
+    # RedBeat distributed beat scheduler (Issue 263).
+    # Replaces the file-backed PersistentScheduler. RedBeat stores the schedule in
+    # Redis (key prefix "redbeat::") and acquires a distributed lock (TTL 1500s)
+    # so a restarting beat pod cannot produce duplicate scheduled tasks while the
+    # old pod's lock TTL is still live. Required companion for the HA Redis migration
+    # (docs/DEPLOYMENT.md) and for Beat liveness-probe recovery.
+    # Falls back to REDIS_URL in dev (REDBEAT_REDIS_URL unset → config property).
+    beat_scheduler="redbeat.RedBeatScheduler",
+    redbeat_redis_url=settings.redbeat_redis_url,
 )
 
 
