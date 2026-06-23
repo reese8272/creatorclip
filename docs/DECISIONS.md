@@ -267,6 +267,17 @@ PostgreSQL upsert best practice: INSERT … ON CONFLICT DO UPDATE (atomic, avoid
 
 ## 2026-06-23 — DNA-build cache marker removed; cross-call sharing infeasible (Issue 223)
 
+> **⚠️ SUPERSEDED by Issue 224 (2026-06-23, see below).** The marker-removal in change (1) did
+> **not** ship. During W0 integration the 223 and 224 branches collided on `dna/brief.py`: 224's
+> trust-boundary restructure moved `stated_identity` to the user turn and kept a single
+> `cache_control: ephemeral` breakpoint on the now-only stable **global-instructions** block. A
+> prompt-injection boundary outranks a caching micro-opt, so **224 won**. Final deployed state
+> (verified `dna/brief.py:93`): the ephemeral marker **is present** on the global-instructions
+> block. The spike *findings* below remain valid and are why the marker now sits on the global
+> instructions (identical across creators) rather than the old identity block — the cross-call
+> `dna/brief.py`↔`scoring.py` sharing analysis is unaffected. Change (2)'s restructure follow-up
+> still stands as a future issue.
+
 **What changed:**
 1. `dna/brief.py`: the `cache_control: {type: ephemeral}` (5-min TTL) marker removed from the
    stable instruction block.

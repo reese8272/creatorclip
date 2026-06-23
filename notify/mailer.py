@@ -24,6 +24,7 @@ when NOTIFY_BACKEND='console'.
 import logging
 import re
 from pathlib import Path
+from typing import cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -57,7 +58,7 @@ def _init_resend() -> None:
     if _resend_initialised:
         return
     try:
-        import resend  # type: ignore[import-untyped]
+        import resend
 
         resend.api_key = settings.RESEND_API_KEY
         _resend_initialised = True
@@ -169,16 +170,19 @@ def _send_resend(
     from https://resend.com/docs/dashboard/emails/idempotency-keys .
     """
     _init_resend()
-    import resend  # type: ignore[import-untyped]  # already guaranteed importable by _init_resend
+    import resend  # already guaranteed importable by _init_resend
 
-    params: dict = {
-        "from": settings.EMAIL_FROM,
-        "to": [to],
-        "subject": _extract_subject(text_body),
-        "text": text_body,
-        "html": html_body,
-    }
-    options: dict = {"idempotency_key": idempotency_key}
+    params = cast(
+        resend.Emails.SendParams,
+        {
+            "from": settings.EMAIL_FROM,
+            "to": [to],
+            "subject": _extract_subject(text_body),
+            "text": text_body,
+            "html": html_body,
+        },
+    )
+    options = cast(resend.Emails.SendOptions, {"idempotency_key": idempotency_key})
     response = resend.Emails.send(params, options)
     logger.info(
         "notify.mailer [resend] to=%s resend_id=%s idempotency_key=%s",

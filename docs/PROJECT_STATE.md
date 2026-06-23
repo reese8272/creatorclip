@@ -4,6 +4,42 @@ Updated after every issue closes.
 
 ---
 
+## ✅ WAVE W0 — SHIPPED & DEPLOYED TO PROD (2026-06-23) @ `ac1a4b6`
+
+All 14 code-bearing W0 lanes (~30 issues) are built, integrated, merged, pushed, and **deployed to
+production** (`autoclip.studio`). `main` == `staging` == `origin/main` == `origin/staging` == `ac1a4b6`.
+Deploy applied migrations `0028_usage_cost_estimate` + `0029_creator_brand_kit` on the prod DB (linear
+chain `0027→0028→0029`) and the app came up green (`/` → 302 → `/app/dashboard`, dashboard → 200).
+
+**Lanes shipped:** ui-core (99, 210) · qa-release-engineering (265–267, 269–271, 273, 274) ·
+activation-onboarding (214) · security-platform (226, 229, 230, 232) · notifications-lifecycle (242) ·
+scoring-eval-preference (216) · agentic-caching-cost (218, 220, 221, 222, 223) · editorial-render (186) ·
+billing-monetization (205–209) · carry-over-cleanup (73, 75, 76) · privacy-compliance (250, 251) ·
+observability (233, 237, 239) · scale-quota-load (260, 264) · security-prompt-trust-boundary (224, 227).
+
+**Triaged not-built (correct):** L-spikes 188/189/190/198 (editor/reframe/recap/eval-harness, plan-only)
+and the `external` runbook lanes (`docs/runbooks/`).
+
+**Verification status:**
+- **Green (static/structural, verified on dev box):** ruff (production clean; 9 known `SIM117` test-only
+  nits), bandit (0 production issues), mypy on changed modules (clean after the `notify/mailer.py`
+  `SendParams`/`SendOptions` typing fix), `py_compile` all 163 changed files, linear migration chain,
+  semantic merges confirmed in code (F821 deferred-settings fix in `worker/tasks.py`; Issue-224
+  trust-boundary won in `dna/brief.py`), prod health endpoints.
+- **Staging-pending (infra-gated → Issue 275):** full pytest suite (dev box has no Postgres/Redis/Docker),
+  behavioral ACs — RLS per-creator isolation, SSE round-trips, Stripe↔ledger reconcile race, migration
+  data effects on real PG16. Lane agents' "N tests passed" claims could not have run on the dev box.
+
+**Rollback:** `git push -f origin 65a1d4f:main` (last known-good) then redeploy; migrations are additive
+(new column + new table) so a code rollback leaves them as harmless unused schema.
+
+**Post-deploy cleanup done (2026-06-23):** `notify/mailer.py` typing fix (mypy-clean); DECISIONS.md
+223-vs-224 caching contradiction reconciled (223 marked superseded-by-224; deployed code keeps the
+ephemeral marker on the global-instructions block). Remaining nit: 9 `SIM117` nested-`with` in
+`tests/test_mailer.py` (cosmetic, not auto-fixable, non-blocking).
+
+---
+
 ## W0 Observability Lane — Issues 233, 237, 239 DONE (2026-06-23)
 
 Built on branch `wave0/observability`. Three observability hardening issues:
