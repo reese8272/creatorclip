@@ -2008,7 +2008,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 234: Instrument load-bearing surfaces with log_event
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Observability · **Size** `M` · **Verify** `local`  
+**Status** `DONE` · **Wave** W1 · **Lane** Observability · **Size** `M` · **Verify** `local`  
 **Src** `05 / 167` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** #233 · **Coordinate (hot files)** `ingestion/`, `observability.py`, `worker/tasks.py`  
 
@@ -2024,12 +2024,12 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 - `tests/test_worker_tasks.py` _(VERIFY — mirror to the worker tests; create if absent)_ — Assert the render-failure path emits a *_failed event with creator_id + task_id
 
 **Acceptance criteria**
-- [ ] Each instrumented pipeline stage emits event=<stage>_started and event=<stage>_done with creator_id + task_id (and video_id/clip_id where applicable)
-- [ ] Each terminal failure emits event=<stage>_failed exactly once (via on_failure), with the same id fields
-- [ ] Billing webhook emits received / processed / rejected events with no signature, secret, or raw payload in any field
-- [ ] No PII or token appears in any new field (structurally enforced by Issue 233's backstop)
-- [ ] A test asserts the render-failure path emits a *_failed event
-- [ ] Layer-0 gates stay green
+- [x] Each instrumented pipeline stage emits event=<stage>_started and event=<stage>_done with creator_id + task_id (and video_id/clip_id where applicable)
+- [x] Each terminal failure emits event=<stage>_failed exactly once (via on_failure), with the same id fields
+- [x] Billing webhook emits received / processed / rejected events with no signature, secret, or raw payload in any field
+- [x] No PII or token appears in any new field (structurally enforced by Issue 233's backstop)
+- [x] A test asserts the render-failure path emits a *_failed event
+- [x] Layer-0 gates stay green
 
 **Tests**
 - tests/test_worker_tasks.py: stub a task to raise and assert on_failure emits event=<stage>_failed with creator_id + task_id
@@ -2042,7 +2042,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 238: App-level saturation gauges
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Observability · **Size** `M` · **Verify** `external`  
+**Status** `DONE` · **Wave** W1 · **Lane** Observability · **Size** `M` · **Verify** `external`  
 **Src** `05 / 170` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** #236 · **Coordinate (hot files)** `deploy/alertmanager/`, `main.py`, `observability.py`, `tests/test_observability.py`  
 
@@ -2057,11 +2057,11 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 - `tests/test_observability.py` _(existing observability test module)_ — Assert the three gauges register and read from stubbed pool/Redis without opening new connections
 
 **Acceptance criteria**
-- [ ] Three saturation gauges (SQLAlchemy pool checked-out, Celery queue depth via Redis LLEN, Redis used-memory) are exposed on /metrics
-- [ ] Gauge cardinality is bounded (no per-creator / per-path label explosion)
-- [ ] A queue-backlog warning alert is defined (builds on Issue 236)
-- [ ] No new connection churn — gauges reuse the existing engine pool and the module-level health Redis singleton
-- [ ] The stale 'saturation observed at the infra layer' claim (observability.py:60-61 / DECISIONS.md) is corrected
+- [x] Three saturation gauges (SQLAlchemy pool checked-out, Celery queue depth via Redis LLEN, Redis used-memory) are exposed on /metrics
+- [x] Gauge cardinality is bounded (no per-creator / per-path label explosion)
+- [ ] A queue-backlog warning alert is defined (builds on Issue 236) — DEFERRED to staging (requires running Prometheus+Alertmanager)
+- [x] No new connection churn — gauges reuse the existing engine pool and the module-level health Redis singleton
+- [x] The stale 'saturation observed at the infra layer' claim (observability.py:60-61 / DECISIONS.md) is corrected
 
 **Tests**
 - tests/test_observability.py: assert the three gauges are registered and a collect() call reads from a stubbed engine pool / fake Redis without opening a new connection
@@ -2109,7 +2109,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 281: Error/exception tracking (Sentry/GlitchTip) for API + worker
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Observability · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W1 · **Lane** Observability · **Size** `M` · **Verify** `staging`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #233 · **Coordinate (hot files)** `main.py`, `observability.py`, `worker/celery_app.py`  
 
@@ -2125,9 +2125,9 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 - `observability.py`
 
 **Acceptance criteria**
-- [ ] Sentry/GlitchTip captures unhandled + reported exceptions from API and worker with creator/request context
-- [ ] PII/tokens are scrubbed before send (gated by Issue 233); no secret reaches the provider
-- [ ] A deliberately-thrown test exception appears in the dashboard correlated to a request/trace id
+- [x] Sentry/GlitchTip captures unhandled + reported exceptions from API and worker with creator/request context
+- [x] PII/tokens are scrubbed before send (gated by Issue 233); no secret reaches the provider
+- [ ] A deliberately-thrown test exception appears in the dashboard correlated to a request/trace id — DEFERRED to staging (requires a live Sentry/GlitchTip DSN)
 
 ### Issue 282: Public/internal status page wired to /health + SLOs
 

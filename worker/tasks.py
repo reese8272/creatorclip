@@ -46,7 +46,7 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
-from observability import RENDER_FAILURES_TOTAL
+from observability import RENDER_FAILURES_TOTAL, log_event
 from worker.celery_app import celery, run_async
 from youtube.errors import YouTubeAuthError
 from youtube.quota import QuotaExhaustedError, remaining
@@ -101,6 +101,19 @@ class RefundOnFailureTask(Task):
     ) -> None:
         from billing.refund import refund_for_video
 
+        # on_failure fires only on TERMINAL failure (after all retries are
+        # exhausted). Celery does NOT call it for intermediate Retry exceptions.
+        # We emit the structured event here rather than inside the task body so
+        # every task that inherits this base class gets *_failed instrumentation
+        # for free. creator_id is intentionally omitted on this hot-path because
+        # it would require a DB call on a potentially-degraded connection.
+        task_name = self.name or "unknown"
+        log_event(
+            f"{task_name.rsplit('.', 1)[-1]}_failed",
+            task_id=task_id,
+            exc_type=type(exc).__name__,
+        )
+
         video_id_raw = args[0] if args else kwargs.get("video_id")
         if not video_id_raw:
             return
@@ -133,6 +146,8 @@ class RefundOnFailureTask(Task):
     name="worker.tasks.ingest_video",
 )
 def ingest_video(self, video_id: str) -> str:
+    creator_id = run_async(_creator_id_for_video(video_id))
+    log_event("ingest_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     try:
         run_async(_ingest_async(video_id))
     except SoftTimeLimitExceeded:
@@ -143,6 +158,7 @@ def ingest_video(self, video_id: str) -> str:
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
+    log_event("ingest_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     return video_id
 
 
@@ -154,6 +170,8 @@ def ingest_video(self, video_id: str) -> str:
     name="worker.tasks.transcribe_video",
 )
 def transcribe_video(self, video_id: str) -> str:
+    creator_id = run_async(_creator_id_for_video(video_id))
+    log_event("transcribe_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     try:
         run_async(_transcribe_async(video_id))
     except SoftTimeLimitExceeded:
@@ -162,6 +180,7 @@ def transcribe_video(self, video_id: str) -> str:
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
+    log_event("transcribe_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     return video_id
 
 
@@ -173,6 +192,8 @@ def transcribe_video(self, video_id: str) -> str:
     name="worker.tasks.build_signals",
 )
 def build_signals(self, video_id: str) -> str:
+    creator_id = run_async(_creator_id_for_video(video_id))
+    log_event("build_signals_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     try:
         run_async(_signals_async(video_id))
     except SoftTimeLimitExceeded:
@@ -182,6 +203,7 @@ def build_signals(self, video_id: str) -> str:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
     generate_clips.delay(video_id)
+    log_event("build_signals_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     return video_id
 
 
@@ -194,22 +216,28 @@ def build_signals(self, video_id: str) -> str:
 )
 def generate_clips(self, video_id: str) -> str:
     """Score and rank clip candidates for a fully-ingested video."""
+    creator_id = run_async(_creator_id_for_video(video_id))
+    log_event("generate_clips_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     try:
         run_async(_generate_clips_async(video_id))
     except Exception as exc:
         raise self.retry(exc=exc) from exc
+    log_event("generate_clips_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
     return video_id
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_clip")
 def render_clip(self, clip_id: str) -> str:
     """Render a clip to 9:16 and upload to storage."""
+    creator_id = run_async(_creator_id_for_clip(clip_id))
+    log_event("render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id)
     try:
         run_async(_render_clip_async(clip_id))
     except Exception as exc:
         run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
         RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
         raise self.retry(exc=exc) from exc
+    log_event("render_clip_done", creator_id=creator_id, task_id=self.request.id, video_id=clip_id)
     return clip_id
 
 
@@ -328,6 +356,7 @@ def sync_channel_catalog(self, creator_id: str) -> str:
     Issue 92: passes ``self.request.id`` as the SSE stream key so the
     catalog-sync UI can subscribe to per-video metric progress.
     """
+    log_event("sync_channel_catalog_started", creator_id=creator_id, task_id=self.request.id)
     try:
         run_async(_sync_channel_catalog_async(creator_id, task_id=self.request.id))
     except YouTubeAuthError:
@@ -336,6 +365,7 @@ def sync_channel_catalog(self, creator_id: str) -> str:
         raise
     except Exception as exc:
         raise self.retry(exc=exc) from exc
+    log_event("sync_channel_catalog_done", creator_id=creator_id, task_id=self.request.id)
     return creator_id
 
 
@@ -355,6 +385,7 @@ def build_dna(self, creator_id: str) -> str:
     Build creator DNA patterns, generate brief, store draft profile + embeddings.
     ValueError (data gate failure) is re-raised without retry — it is a permanent error.
     """
+    log_event("build_dna_started", creator_id=creator_id, task_id=self.request.id)
     try:
         # self.request.id is the stable idempotency key across at-least-once
         # redelivery of THIS task; a new user-triggered build gets a new id. (Issue 63)
@@ -363,6 +394,7 @@ def build_dna(self, creator_id: str) -> str:
         raise
     except Exception as exc:
         raise self.retry(exc=exc) from exc
+    log_event("build_dna_done", creator_id=creator_id, task_id=self.request.id)
     return creator_id
 
 
@@ -450,6 +482,31 @@ async def _retrain_preference_async(creator_id: str) -> None:
                 logger.info("retrain_preference: version race for creator %s, skip", cid)
         finally:
             await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+
+
+async def _creator_id_for_video(video_id: str) -> str | None:
+    """Return creator_id string for a video, or None on any error.
+
+    Used at task-started time for structured event context. Tolerates missing
+    rows (e.g. a race between task dispatch and DB commit) by returning None so
+    the log_event still fires — just without the creator dimension.
+    """
+    try:
+        async with db.AdminSessionLocal() as session:
+            video = await session.get(Video, uuid.UUID(video_id))
+            return str(video.creator_id) if video else None
+    except Exception:
+        return None
+
+
+async def _creator_id_for_clip(clip_id: str) -> str | None:
+    """Return creator_id string for a clip, or None on any error."""
+    try:
+        async with db.AdminSessionLocal() as session:
+            clip = await session.get(Clip, uuid.UUID(clip_id))
+            return str(clip.creator_id) if clip else None
+    except Exception:
+        return None
 
 
 async def _set_status(video_id: str, status: IngestStatus) -> None:

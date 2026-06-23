@@ -30,7 +30,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from redact import scrub_dict
@@ -68,8 +68,8 @@ _RESERVED_LOGRECORD = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__
 
 # ── Metrics (golden signals) ─────────────────────────────────────────────────
 # Latency (histogram) + traffic/errors (the histogram's _count, labelled by
-# status) cover request latency, traffic, and error rate. Saturation is observed
-# at the infra layer (pool/queue depth) and via Celery task metrics below.
+# status) cover request latency, traffic, and error rate. Saturation is covered
+# by app-level Gauges below (Issue 238) and by Celery task metrics below.
 HTTP_REQUEST_DURATION = Histogram(
     "http_request_duration_seconds",
     "HTTP request latency in seconds",
@@ -100,6 +100,55 @@ RENDER_FAILURES_TOTAL = Counter(
     "Render pipeline failures",
     labelnames=("task",),
 )
+
+# ── Saturation gauges (Issue 238) ────────────────────────────────────────────
+# The fourth golden signal — instantaneous resource depth at the app layer.
+# These are collected on demand during the /metrics scrape via
+# collect_saturation_gauges(engine, redis_client); no new connections are opened.
+DB_POOL_CHECKED_OUT = Gauge(
+    "db_pool_checked_out_connections",
+    "SQLAlchemy pool checked-out connections",
+)
+CELERY_QUEUE_DEPTH = Gauge(
+    "celery_queue_depth",
+    "Celery broker queue depth",
+    labelnames=("queue",),
+)
+REDIS_USED_MEMORY_BYTES = Gauge(
+    "redis_used_memory_bytes",
+    "Redis used memory in bytes",
+)
+
+
+async def collect_saturation_gauges(engine: Any, redis_client: Any) -> None:
+    """Read pool/queue/memory depth and update the saturation Gauges.
+
+    Reuses the existing module-level SQLAlchemy engine and Redis singleton —
+    zero new connections. On any exception the gauge retains its last value
+    so a transient failure never 500s the Prometheus scrape.
+
+    Called from the /metrics route in main.py (Issue 238).
+    """
+    # SQLAlchemy pool depth — synchronous attribute, no network call.
+    try:
+        DB_POOL_CHECKED_OUT.set(engine.pool.checkedout())
+    except Exception:
+        logging.getLogger(__name__).warning("collect_saturation_gauges: pool stat unavailable")
+
+    # Celery queue depth (default queue) — one async LLEN.
+    try:
+        depth = await redis_client.llen("celery")
+        CELERY_QUEUE_DEPTH.labels(queue="celery").set(depth)
+    except Exception:
+        logging.getLogger(__name__).warning("collect_saturation_gauges: queue LLEN unavailable")
+
+    # Redis used memory — one async INFO memory call.
+    try:
+        info = await redis_client.info("memory")
+        used = info.get("used_memory", 0)
+        REDIS_USED_MEMORY_BYTES.set(used)
+    except Exception:
+        logging.getLogger(__name__).warning("collect_saturation_gauges: Redis INFO unavailable")
 
 
 def record_llm_tokens(
@@ -337,6 +386,69 @@ def _record_task_and_clear(task: Any = None, state: str | None = None, **_: Any)
     CELERY_TASKS_TOTAL.labels(task=name, state=label_state).inc()
     request_id_ctx.set("-")
     _task_start_ctx.set(0.0)
+
+
+def _sentry_before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
+    """Scrub PII / secrets from Sentry events before they leave the process.
+
+    Applies scrub_dict (from redact.py, the project's single source of truth for
+    the blocklist) to the event's extra dict and request body. This is a
+    structural backstop — it catches any field that slips past call-site
+    discipline, which is the same pattern JsonLogFormatter uses.
+    """
+    if "extra" in event:
+        event["extra"] = scrub_dict(event["extra"])
+    try:
+        req_data = event.get("request", {}).get("data")
+        if isinstance(req_data, dict):
+            event["request"]["data"] = scrub_dict(req_data)
+    except Exception:
+        pass
+    return event
+
+
+def init_sentry(
+    dsn: str,
+    environment: str,
+    release: str,
+    traces_sample_rate: float = 0.05,
+) -> None:
+    """Initialise the Sentry SDK with FastAPI + Celery + SQLAlchemy + Redis integrations.
+
+    Call once at process startup — in main.py for the API process and in
+    worker/celery_app.py for the Celery worker. When dsn is empty the function
+    is a no-op so dev/CI run without any Sentry configuration.
+
+    send_default_pii=False is unconditional — PII must never leave the process.
+    before_send applies scrub_dict as a structural backstop.
+
+    GlitchTip (v6, Sentry-protocol compatible) works as a drop-in: set SENTRY_DSN
+    to the GlitchTip project DSN URL and this function needs no changes.
+    (Issue 281; sources: docs.sentry.io/platforms/python/integrations/fastapi/,
+    docs.sentry.io/platforms/python/integrations/celery/)
+    """
+    if not dsn:
+        return
+    import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.redis import RedisIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+    sentry_sdk.init(
+        dsn=dsn,
+        integrations=[
+            FastApiIntegration(),
+            CeleryIntegration(),
+            SqlalchemyIntegration(),
+            RedisIntegration(),
+        ],
+        traces_sample_rate=traces_sample_rate,
+        send_default_pii=False,
+        environment=environment,
+        release=release or None,
+        before_send=_sentry_before_send,
+    )
 
 
 def install_celery_observability() -> None:

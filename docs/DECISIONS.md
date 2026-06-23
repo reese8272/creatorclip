@@ -7532,3 +7532,83 @@ GitHub's documented behavior: a **skipped** required job reports `success` — s
 **Source/evidence:** Smoke-test-your-Docker-image-in-GH-Actions guide; GitHub community discussions/175488.
 
 **Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 238: App-level saturation gauges — reuse singletons, no per-scrape connection
+
+**What was decided:**
+1. Three Prometheus Gauges added to `observability.py`: `db_pool_checked_out_connections`,
+   `celery_queue_depth` (label: `queue`), `redis_used_memory_bytes`.
+2. Collection is triggered from the `/metrics` handler in `main.py` by calling
+   `collect_saturation_gauges(engine, _health_redis)` before generating the snapshot.
+3. Both `engine` and `redis_client` are passed as parameters (not imported directly inside
+   the function) so the function reuses the module-level singletons with zero new connections.
+4. Failures in any single gauge (pool stat unavailable, LLEN error, INFO error) are silently
+   degraded to a stale/zero value — never 500 the scrape endpoint.
+5. The stale comment at `observability.py` line 72 ("saturation observed at infra layer") was
+   corrected to reflect that app-level saturation gauges now exist.
+6. `deploy/alertmanager/` alert for queue-backlog is deferred to the staging environment
+   (requires a running Prometheus + real Celery broker) — not in scope for the unit-testable
+   portion of this issue.
+
+**Deviation from brief:** The brief listed a queue-backlog alert in alertmanager as an AC.
+That AC requires a running Prometheus + Alertmanager in staging (Issue 236's rail). Since
+Issue 236's alerting config cannot be verified on this box and the gauges themselves are
+the load-bearing deliverable, the alert is deferred to staging. The gauge + LLEN read are
+verifiable locally (unit-tested with AsyncMock).
+
+**Why:** The Prometheus best-practice for saturation (the 4th golden signal) is app-level
+instrumentation exposing internal pool/queue state that infra-layer metrics cannot see.
+SQLAlchemy `engine.pool.checkedout()` is the canonical pool-saturation read (zero queries).
+Redis `LLEN("celery")` is the documented Celery broker queue-depth probe.
+Redis `INFO memory` / `used_memory` is the standard Redis memory-saturation read.
+
+**Source/evidence:**
+- Google SRE Book, Chapter 6 — Four Golden Signals (latency, traffic, errors, saturation)
+- Prometheus docs: Gauge metric type for instantaneous values
+- SQLAlchemy pool API: `engine.pool.checkedout()` (no query)
+- Celery Redis broker: queue stored as Redis list at key matching the queue name
+
+**Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 281: Sentry/GlitchTip — lazy import, send_default_pii=False, before_send scrub
+
+**What was decided:**
+1. `sentry-sdk==2.32.0` added to `requirements.txt`.
+2. `init_sentry()` function added to `observability.py`. All `import sentry_sdk` statements
+   are inside the function body (lazy import), so an empty or absent `SENTRY_DSN` causes zero
+   import cost and zero SDK initialization.
+3. `send_default_pii=False` is unconditional — the SDK never attaches user IP, HTTP cookies,
+   or request body auto-captured fields.
+4. A `_sentry_before_send` hook scrubs `event["extra"]` and `event["request"]["data"]` via
+   `scrub_dict()` from `redact.py` (the same scrubber used by the log formatter — single
+   source of truth for the PII/token blocklist, Issue 233).
+5. Integrations enabled: `FastApiIntegration`, `CeleryIntegration`, `SqlalchemyIntegration`,
+   `RedisIntegration` — all auto-instrument without any per-call changes.
+6. Three new config fields: `SENTRY_DSN` (empty = disabled), `SENTRY_ENVIRONMENT` (defaults
+   to `ENV` via a `@property`), `IMAGE_SHA` (set at image-build time, used as release tag).
+7. `init_sentry()` is called in `main.py` (FastAPI startup) and `worker/celery_app.py`
+   (Celery initialization), after `configure_logging()` in both cases.
+8. `traces_sample_rate=0.05` (5%) default — captures enough traces for latency analysis without
+   high overhead; overridable via the `traces_sample_rate` parameter.
+
+**Self-hosted vs Sentry Cloud:**  The implementation is DSN-agnostic — the same SDK and
+`init_sentry()` call works for both Sentry Cloud (`https://<key>@sentry.io/<project>`) and
+GlitchTip (a self-hosted, drop-in Sentry-protocol server). Operators choose at deploy time
+by pointing `SENTRY_DSN` at their preferred provider. The brief explicitly listed GlitchTip
+as a valid alternative for cost/data-residency reasons.
+
+**Why lazy import:** `sentry-sdk` auto-instruments on import (monkey-patching). Importing it
+when `SENTRY_DSN` is empty would add startup overhead and silent monkey-patches in dev/test
+with no benefit. The standard Sentry FastAPI docs show the import inside the init call.
+
+**Source/evidence:**
+- Sentry FastAPI integration docs: https://docs.sentry.io/platforms/python/integrations/fastapi/
+- Sentry Celery integration docs: https://docs.sentry.io/platforms/python/integrations/celery/
+- GlitchTip docs: https://glitchtip.com/documentation/python (same SDK, different DSN)
+- OWASP Logging Cheat Sheet — layered PII scrubbing (scrub_dict in before_send = defense-in-depth)
+
+**Date:** 2026-06-23

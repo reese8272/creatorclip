@@ -25,7 +25,9 @@ from db import engine
 from limiter import limiter
 from observability import (
     RequestIDMiddleware,
+    collect_saturation_gauges,
     configure_logging,
+    init_sentry,
     metrics_response,
     request_id_ctx,
 )
@@ -49,6 +51,11 @@ from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
 configure_logging(json_logs=settings.LOG_JSON, log_dir=settings.LOG_DIR)
+init_sentry(
+    dsn=settings.SENTRY_DSN,
+    environment=settings.sentry_environment,
+    release=settings.IMAGE_SHA,
+)
 logger = logging.getLogger(__name__)
 
 # Module-level singleton for /health Redis probes. Initialized in lifespan so
@@ -353,6 +360,11 @@ if settings.METRICS_ENABLED:
             auth = request.headers.get("authorization", "")
             if not secrets.compare_digest(auth, f"Bearer {token}"):
                 raise HTTPException(status_code=401, detail="Unauthorized")
+        # Collect saturation gauges before rendering the scrape payload (Issue 238).
+        # Reuses the existing module-level engine + _health_redis singleton — zero
+        # new connections. On any error the gauge retains its last value.
+        if _health_redis is not None:
+            await collect_saturation_gauges(engine, _health_redis)
         payload, content_type = metrics_response()
         return Response(content=payload, media_type=content_type)
 

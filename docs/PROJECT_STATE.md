@@ -4,6 +4,41 @@ Updated after every issue closes.
 
 ---
 
+## W1 Observability Lane — Issues 234, 238, 281 DONE (2026-06-23)
+
+Built on branch `wave1/observability`. Three observability hardening issues:
+
+**234** (Instrument load-bearing surfaces with log_event): Added `log_event` `_started`/`_done`
+calls to all 7 pipeline tasks in `worker/tasks.py` (ingest_video, transcribe_video, build_signals,
+generate_clips, render_clip, build_dna, sync_channel_catalog). Extended `RefundOnFailureTask.on_failure`
+to emit `*_failed` event (terminal failure only; creator_id intentionally absent to avoid DB call on a
+degraded connection). Added `log_event` to `routers/billing.py` stripe webhook: received, rejected
+(bad_signature/parse_error), processed. Helper functions `_creator_id_for_video` and
+`_creator_id_for_clip` added for cheap DB lookups on the started/done path. Tests: 5 new unit tests in
+`tests/test_worker_log_events.py`; 2 new tests in `tests/test_billing.py`.
+
+**238** (App-level saturation gauges): Added three Prometheus Gauge metrics to `observability.py`:
+`DB_POOL_CHECKED_OUT`, `CELERY_QUEUE_DEPTH` (labeled by queue), `REDIS_USED_MEMORY_BYTES`. Added
+`collect_saturation_gauges(engine, redis_client)` async function — reuses existing module-level
+singletons, no new connections. Wired into `/metrics` handler in `main.py`. Fixed stale "saturation
+observed at infra layer" comment. Tests: 3 new gauge tests in `tests/test_observability.py`.
+Queue-backlog alertmanager rule deferred to staging (requires running Prometheus+Alertmanager).
+
+**281** (Error/exception tracking — Sentry/GlitchTip): Added `sentry-sdk==2.32.0` to `requirements.txt`.
+Added `_sentry_before_send` scrub hook (via `scrub_dict()` from `redact.py`) and `init_sentry()` function
+to `observability.py` with lazy imports (empty DSN = zero SDK cost). Wired `init_sentry()` into `main.py`
+and `worker/celery_app.py`. Added `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `IMAGE_SHA` to `config.py` and
+`.env.example`. Tests: 4 new Sentry tests in `tests/test_observability.py` (uses sys.modules patching
+since sentry-sdk not installed in venv). `send_default_pii=False` unconditional; DSN-agnostic — works
+with Sentry Cloud or self-hosted GlitchTip. DECISIONS.md updated for Issues 238 and 281.
+
+Full unit suite (non-integration): **84 passed, 0 failed** across changed test files. Ruff clean.
+Integration failures (117) are pre-existing Postgres-dependent tests — not regressions.
+Off-course bug logged: conftest.py substring-match guard for "integration" in marker_expr
+(fires for `-m "not integration"`; workaround `--override-ini="addopts="`).
+
+---
+
 ## W0 Observability Lane — Issues 233, 237, 239 DONE (2026-06-23)
 
 Built on branch `wave0/observability`. Three observability hardening issues:

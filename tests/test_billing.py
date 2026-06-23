@@ -752,6 +752,95 @@ def test_create_checkout_session_injects_tax_when_flag_on(monkeypatch):
     assert captured["params"].get("billing_address_collection") == "required"
 
 
+# ── Issue 234: billing webhook log_event instrumentation ─────────────────────
+
+
+def test_webhook_bad_signature_emits_received_then_rejected(client):
+    """Stripe webhook bad signature must emit billing_webhook_received then
+    billing_webhook_rejected with reason='bad_signature'.
+    No secret, raw body, or signature value may appear in any field.
+    """
+    from unittest.mock import patch
+
+    with patch("routers.billing.log_event") as mock_log:
+        response = client.post(
+            "/billing/webhook",
+            content=b'{"type":"checkout.session.completed"}',
+            headers={"stripe-signature": "bad"},
+        )
+
+    assert response.status_code == 400
+    event_names = [c.args[0] for c in mock_log.call_args_list]
+    assert "billing_webhook_received" in event_names, (
+        "billing_webhook_received must be emitted on every POST"
+    )
+    assert "billing_webhook_rejected" in event_names, (
+        "billing_webhook_rejected must be emitted on bad signature"
+    )
+    # Verify reason field and absence of secret values.
+    rejected_call = next(c for c in mock_log.call_args_list if c.args[0] == "billing_webhook_rejected")
+    assert rejected_call.kwargs.get("reason") == "bad_signature", (
+        "billing_webhook_rejected must carry reason='bad_signature'"
+    )
+    # The signature string "bad" must never appear in any kwarg value.
+    for v in rejected_call.kwargs.values():
+        assert v != "bad", "Stripe signature value must not appear in any log_event field"
+
+
+def test_webhook_payment_status_paid_emits_processed(client):
+    """A fulfilled webhook must emit billing_webhook_processed with pack_id and creator_id."""
+    import json
+    import uuid
+    from unittest.mock import AsyncMock, patch
+
+    from db import get_session as _get_session
+    from main import app
+
+    creator_id = str(uuid.uuid4())
+    fake_event = {
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_test_log_event_ok",
+                "customer": None,
+                "payment_status": "paid",
+                "metadata": {"creator_id": creator_id, "pack_id": "creator"},
+            }
+        },
+    }
+
+    async def _gen():
+        session = AsyncMock()
+        session.scalar = AsyncMock(return_value=None)
+        session.execute = AsyncMock()
+        session.commit = AsyncMock()
+        session.info = {}
+        yield session
+
+    app.dependency_overrides[_get_session] = _gen
+    try:
+        with (
+            patch("routers.billing.construct_webhook_event", return_value=fake_event),
+            patch("routers.billing.grant_minutes", new_callable=AsyncMock),
+            patch("routers.billing.log_event") as mock_log,
+        ):
+            response = client.post(
+                "/billing/webhook",
+                content=json.dumps(fake_event).encode(),
+                headers={"stripe-signature": "sig"},
+            )
+    finally:
+        app.dependency_overrides.pop(_get_session, None)
+
+    assert response.status_code == 200
+    event_names = [c.args[0] for c in mock_log.call_args_list]
+    assert "billing_webhook_received" in event_names
+    assert "billing_webhook_processed" in event_names
+    processed_call = next(c for c in mock_log.call_args_list if c.args[0] == "billing_webhook_processed")
+    assert processed_call.kwargs.get("pack_id") == "creator"
+    assert processed_call.kwargs.get("creator_id") == creator_id
+
+
 def test_create_checkout_session_tax_with_existing_customer_adds_customer_update(monkeypatch):
     """When STRIPE_TAX_ENABLED=True and a stripe_customer_id exists, customer_update[address]=auto
     must be included to persist the collected address for future sessions."""
