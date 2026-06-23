@@ -4,6 +4,32 @@ Updated after every issue closes.
 
 ---
 
+## ✅ W2 BATCH 1 — Publish loop landed + tracking reconciled (2026-06-23)
+
+Branch `w2-batch1`, deployed to prod. Substantive net-new: **#194** (`youtube.upload` incremental
+consent) + **#195** (`publish_to_youtube` idempotent resumable-upload task + `clip_publications`
+table). Landed the held `feat/batch-b-publish` branch; **migration renumbered `0028`→`0030`**
+(`down_revision 0029`) to clear a duplicate-revision collision with W1's `0028_usage_cost_estimate` /
+`0029_creator_brand_kit`. Chain now linear `0026←0027←0028←0029←0030`.
+
+**Tracking reconciliation (W1 mis-tracked-OPEN debt):** an audit of 26 candidate issues against main
+found a large block already implemented but left `Status: OPEN`. Flipped to `DONE` after `file:line`
+verification: **#242** (Resend mailer), **#233** (log-sink redaction), **#216** (personalization
+surface), **#220** (LLM cost ledger), **#239** (worker durable log sink), **#237** (pipeline/LLM
+metrics — minor: lacks a `RENDER_FAILURES_TOTAL`-increments-on-failure assertion), **#250** (retention
+purge sweeps), **#222** (chat tool `is_error` + schema `maximum`). The agents added test coverage
+(`test_mailer.py` honesty test — rewired to the canonical `assert_no_virality_promise` helper after a
+false-positive defect; `Review.test.tsx` +3 → vitest 118).
+
+**Static GREEN (dev box):** ruff/mypy/py_compile; `test_mailer` 11 passed; frontend tsc+vite build;
+vitest 118/118. **Staging-pending (Issue 275):** publish OAuth round-trip, live `videos.insert`, RLS on
+`clip_publications`, full pytest suite.
+
+**Next (decided):** complete the core create→publish→notified loop — Publish **#196/#197** +
+Notifications **#243→#244→#193** (the notification stack is genuinely NET-NEW; only #242 mailer exists).
+
+---
+
 ## ✅ WAVE W1 — SHIPPED & DEPLOYED TO PROD (2026-06-23) @ `01afa46`
 
 **17 issues built across 9 lanes**, integrated, merged to `main`/`staging`, pushed, and **deployed to

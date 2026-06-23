@@ -799,7 +799,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 216: Honest personalization-status surface
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `S` · **Verify** `local`  
 **Src** `08 / 173c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `frontend/src/components/review/WhyThisClip.tsx`, `frontend/src/pages/Review.tsx`, `preference/model.py`, `routers/clips.py`  
 
@@ -1243,7 +1243,7 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 220: Populate the `Usage` cost ledger from every LLM call
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `M` · **Verify** `staging`  
 **Src** `02 / 167c + 05 / 169 + 06` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/02_agentic_caching_cost.md`  
 **Blocked by** nothing — **ready now** · **Enables** #289 · **Coordinate (hot files)** Alembic revision chain, `analysis/brief.py`, `billing/ledger.py`, `chat/runner.py`, `clip_engine/scoring.py`, `dna/brief.py`, `improvement/brief.py`, `knowledge/chapters.py`, `knowledge/hooks.py`, `knowledge/thumbnails.py`, `knowledge/titles.py`, `routers/insights.py`  
 
@@ -1320,7 +1320,7 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 222: Tool-result `is_error` flag + chat tool schema `maximum`
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `local`  
 **Src** `02 / 167e` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/02_agentic_caching_cost.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `chat/runner.py`  
 
@@ -1818,7 +1818,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 233: Redaction backstop on the stdout/file log sink
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Observability · **Size** `S` · **Verify** `local`  
 **Src** `05 / 166` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** nothing — **ready now** · **Enables** #151, #234, #240, #281 · **Coordinate (hot files)** `event_log.py`, `observability.py`, `tests/test_observability.py`  
 
@@ -1890,7 +1890,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 237: Pipeline + LLM-cost metrics
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `M` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Observability · **Size** `M` · **Verify** `local`  
 **Src** `05 / 169` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** nothing — **ready now** · **Enables** #289, #291, #292 · **Coordinate (hot files)** `chat/runner.py`, `knowledge/hooks.py`, `observability.py`, `routers/insights.py`, `tests/test_observability.py`, `worker/tasks.py`  
 
@@ -1927,7 +1927,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 239: Worker durable log sink
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Observability · **Size** `S` · **Verify** `local`  
 **Src** `05 / 171` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `observability.py`, `tests/test_observability.py`, `worker/celery_app.py`  
 
@@ -2229,7 +2229,7 @@ Resend mailer, notification data model + idempotent send, triggers, in-app cente
 
 ### Issue 242: Transactional email infrastructure (Resend) + deliverability
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `local`  
+**Status** `DONE` · **Wave** W0 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `local`  
 **Src** `11 / 176a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/11_notifications_lifecycle_comms.md`  
 **Blocked by** nothing — **ready now** · **Enables** #193, #243 · **Coordinate (hot files)** `notify/mailer.py`, `notify/templates/`  
 
@@ -2450,7 +2450,7 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 
 ### Issue 250: [SEV2] Retention schedule + missing purge sweeps
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Privacy & Compliance · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W0 · **Lane** Privacy & Compliance · **Size** `M` · **Verify** `staging`  
 **Src** `12 / 177d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/12_data_privacy_compliance.md`  
 **Blocked by** nothing — **ready now** · **Enables** #151 · **Coordinate (hot files)** Alembic revision chain, `event_log.py`, `routers/auth.py`, `worker/schedule.py`, `worker/tasks.py`  
 
