@@ -166,14 +166,23 @@ def test_saved_insights_populated(client):
 
 
 def _clips_session(video, clips):
-    """list_clips calls session.get(Video, ...) first then session.execute()."""
+    """list_clips calls session.get(Video, ...) first, then session.execute() twice:
+    once for the Clip query and once for the PreferenceModel query (Issue 216).
+    Return the clips result for the first execute and a no-model result for the second.
+    """
 
     async def _session():
         session = AsyncMock()
         session.get = AsyncMock(return_value=video)
-        result = MagicMock()
-        result.scalars.return_value = clips
-        session.execute = AsyncMock(return_value=result)
+
+        clips_result = MagicMock()
+        clips_result.scalars.return_value = clips
+
+        # PreferenceModel query returns no rows — simulates no model yet.
+        pref_result = MagicMock()
+        pref_result.first.return_value = None
+
+        session.execute = AsyncMock(side_effect=[clips_result, pref_result])
         yield session
 
     return _session

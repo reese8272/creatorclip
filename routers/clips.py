@@ -3,7 +3,10 @@ import logging
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from preference.model import PreferenceScorer
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -45,6 +48,26 @@ class ClipOut(BaseModel):
     cleaned_render_uri: str | None = None
 
 
+class PersonalizationStatus(BaseModel):
+    """Honest personalization-status surface (Issue 216).
+
+    Communicates to the creator whether the preference model is active for their
+    account, how many training labels they have, and the current threshold. Below
+    ``PERSONALIZATION_THRESHOLD_LABELS`` the reranker falls back to DNA + signals
+    and ``active`` is ``False``; at/above the threshold ``active`` is ``True`` and
+    ``weight`` is the current ramp value.
+
+    Placed on the list envelope (not per-ClipOut) to avoid O(N) scorer reads per
+    request. The float ``weight`` is retained for API consumers; the UI surfaces
+    only ``labels`` / ``threshold`` (human-readable progress).
+    """
+
+    active: bool
+    labels: int
+    threshold: int
+    weight: float
+
+
 class ClipListOut(BaseModel):
     """Clip-list envelope. ``state`` / ``message`` / ``next_action`` were added
     2026-06-08 (DECISIONS) so GET ``/videos/{id}/clips`` matches the empty-
@@ -53,12 +76,17 @@ class ClipListOut(BaseModel):
     POST ``/videos/{id}/clips/generate`` returns the same shape — clips it
     just produced are always ``populated`` and the empty-state fields stay
     ``None``.
+
+    ``personalization`` was added in Issue 216 to surface honest cold-start status
+    so creators know whether ranking is personalized to their feedback or still
+    using DNA + signals.
     """
 
     clips: list[ClipOut]
     state: EmptyState = "populated"
     message: str | None = None
     next_action: NextActionOut | None = None
+    personalization: PersonalizationStatus | None = None
 
 
 class RenderQueuedOut(TaskQueuedOut):
@@ -144,6 +172,28 @@ async def generate_clips(
     return {"clips": [_clip_response(c) for c in clips]}
 
 
+def _build_personalization_status(scorer: "PreferenceScorer | None") -> PersonalizationStatus:
+    """Compute PersonalizationStatus from a loaded scorer (or None).
+
+    Called once per list_clips request — a single scorer read, not N reads.
+    None → active=False, labels=0; scorer present → read label_count and compute
+    preference_weight to determine whether the threshold has been crossed.
+    """
+    from preference.model import preference_weight
+
+    threshold = settings.PERSONALIZATION_THRESHOLD_LABELS
+    if scorer is None:
+        return PersonalizationStatus(active=False, labels=0, threshold=threshold, weight=0.0)
+    label_count = scorer.label_count
+    weight = preference_weight(label_count)
+    return PersonalizationStatus(
+        active=label_count >= threshold,
+        labels=label_count,
+        threshold=threshold,
+        weight=weight,
+    )
+
+
 @router.get("/{video_id}/clips", response_model=ClipListOut)
 @limiter.limit("120/minute", key_func=creator_key)
 async def list_clips(
@@ -157,6 +207,10 @@ async def list_clips(
     Empty-state copy distinguishes "video still ingesting → wait" from
     "ingest done but no clips generated yet → run /generate". This is
     information the frontend would otherwise have to fetch separately.
+
+    The ``personalization`` envelope field (Issue 216) surfaces honest cold-start
+    status so creators know whether ranking reflects their feedback or falls back
+    to DNA + signals.
     """
     video = await session.get(Video, video_id)
     if not video or video.creator_id != creator.id:
@@ -182,11 +236,18 @@ async def list_clips(
                 "action_type": "navigate",
                 "url": f"/videos/{video_id}/clips/generate",
             }
+
+    from preference.train import load_latest
+
+    scorer = await load_latest(session, creator.id)
+    personalization = _build_personalization_status(scorer)
+
     return {
         "clips": items,
         "state": state,
         "message": message,
         "next_action": next_action,
+        "personalization": personalization.model_dump(),
     }
 
 
