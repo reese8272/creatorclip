@@ -45,12 +45,10 @@ export function BrandKitSection() {
 
   return (
     <Card>
-      <CardHeader>
-        <h2 className="text-base font-semibold text-fg">Brand Kit</h2>
-        <p className="text-sm text-subtle">
-          Default render style applied to every new clip — save time re-picking settings.
-        </p>
-      </CardHeader>
+      <CardHeader
+        title="Brand Kit"
+        description="Default render style applied to every new clip — save time re-picking settings."
+      />
       <CardBody>
         <div className="flex flex-col gap-4">
           <label className="flex items-center justify-between gap-3 text-sm text-fg">
