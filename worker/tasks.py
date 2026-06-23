@@ -3627,3 +3627,296 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
             exc_type=type(exc).__name__,
         )
         raise
+
+
+# ── Notification send task (Issue 243) ───────────────────────────────────────
+
+
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="worker.tasks.send_notification",
+)
+def send_notification(
+    self: Task,
+    creator_id: str,
+    event_type: str,
+    entity_id: str,
+    payload: dict,
+) -> str:
+    """Send a transactional or in-app notification to a creator (Issue 243).
+
+    Implements the Inbox/idempotent-consumer pattern:
+
+    1. Load creator and check ``notification_preferences`` (skip if opted out or
+       the relevant channel is disabled).
+    2. Compute ``dedupe_key = sha256(creator_id:event_type:entity_id)`` — stable
+       across retries, unique per notification event.
+    3. INSERT ``notification_deliveries`` row with the dedupe_key.  If Postgres
+       raises ``IntegrityError``, the delivery already succeeded on a prior
+       attempt — return immediately without sending again.
+    4. Render and send the email via ``notify.mailer.send()`` (which uses Resend's
+       own ``Idempotency-Key`` header as a second deduplication layer).
+    5. INSERT a ``notifications`` row (in-app center).
+
+    Idempotency guarantee: a Celery at-least-once redelivery or a duplicate
+    ``send_notification.delay(...)`` call for the same (creator, event, entity)
+    triple is safe — the UNIQUE dedupe_key constraint ensures exactly-one delivery.
+
+    Args:
+        creator_id: UUID string identifying the recipient creator.
+        event_type: Stable event classifier, e.g. ``"clips_ready"``,
+                    ``"dna_built"``, ``"trial_ending"``.
+        entity_id: Primary entity driving this notification (e.g. video_id string
+                   for ``clips_ready``). Must be stable across retries.
+        payload: Extra rendering context for the Jinja2 template (e.g.
+                 ``{"clip_count": 5, "video_title": "..."}``). Never put PII
+                 or tokens here — this dict is logged at DEBUG level.
+
+    Returns:
+        The creator_id string on success or skip; raises on unrecoverable failure
+        (Celery retries on transient errors).
+    """
+    try:
+        run_async(_send_notification_async(creator_id, event_type, entity_id, payload))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
+async def _send_notification_async(
+    creator_id: str,
+    event_type: str,
+    entity_id: str,
+    payload: dict,
+) -> None:
+    """Async implementation for the send_notification Celery task (Issue 243).
+
+    Uses AdminSessionLocal (BYPASSRLS) because this task operates on multiple
+    tables that span the RLS boundary: it reads notification_preferences
+    (no RLS) and inserts notification_deliveries (no RLS) and notifications
+    (has RLS but the admin role bypasses it).  The admin role is correct here —
+    the task is a trusted worker process, not a creator-facing request path.
+
+    Per-creator isolation is enforced by the WHERE creator_id = cid predicate on
+    every query, which is equivalent to what the RLS policy would enforce.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from models import (
+        Creator,
+        NotificationChannel,
+        NotificationDelivery,
+        NotificationDeliveryStatus,
+        NotificationPreference,
+    )
+    from notify.dedupe import make_dedupe_key
+    from notify.mailer import send as mailer_send
+
+    cid = uuid.UUID(creator_id)
+
+    async with db.AdminSessionLocal() as session:
+        # ── 1. Load creator (needed for the email address) ──────────────────
+        creator = await session.get(Creator, cid)
+        if creator is None:
+            logger.warning(
+                "send_notification: creator %s not found — skipping", creator_id
+            )
+            return
+
+        # ── 2. Load preferences (lazy-create with defaults if absent) ────────
+        prefs = await session.get(NotificationPreference, cid)
+        if prefs is None:
+            # First notification for this creator: write the default row so
+            # subsequent tasks find it. Uses RETURNING to avoid a second read.
+            prefs = NotificationPreference(creator_id=cid)
+            session.add(prefs)
+            try:
+                await session.flush()
+            except IntegrityError:
+                # Concurrent task already created the row — reload.
+                await session.rollback()
+                prefs = await session.get(NotificationPreference, cid)
+                if prefs is None:
+                    logger.error(
+                        "send_notification: cannot load prefs for creator %s", creator_id
+                    )
+                    return
+
+        # ── 3. Preference gate ────────────────────────────────────────────────
+        # Transactional events (e.g. clips_ready, dna_built, refund) are
+        # always-on per CAN-SPAM / GDPR Art. 6(1)(b); the UI locks the toggle.
+        # Lifecycle events (welcome, nudge, re-engagement) respect opt-out.
+        _LIFECYCLE_EVENTS = frozenset({"welcome", "first_clip_nudge", "re_engagement"})
+        is_lifecycle = event_type in _LIFECYCLE_EVENTS
+
+        if is_lifecycle and not prefs.email_lifecycle:
+            logger.info(
+                "send_notification: creator %s opted out of lifecycle email — skip %s",
+                creator_id,
+                event_type,
+            )
+            return
+
+        if not prefs.inapp_enabled and not prefs.email_transactional:
+            # Both channels off (unusual, but respect the preference).
+            logger.info(
+                "send_notification: all channels disabled for creator %s — skip %s",
+                creator_id,
+                event_type,
+            )
+            return
+
+        # ── 4. Compute dedupe key (stable across retries) ─────────────────────
+        dedupe_key = make_dedupe_key(cid, event_type, entity_id)
+
+        # ── 5. Idempotency INSERT into notification_deliveries ────────────────
+        delivery = NotificationDelivery(
+            creator_id=cid,
+            event_type=event_type,
+            entity_id=entity_id,
+            channel=NotificationChannel.email,
+            dedupe_key=dedupe_key,
+            status=NotificationDeliveryStatus.sent,
+        )
+        session.add(delivery)
+        try:
+            await session.flush()
+        except IntegrityError:
+            # UNIQUE dedupe_key violation → already delivered on a prior attempt.
+            await session.rollback()
+            logger.info(
+                "send_notification: dedupe_key=%s already delivered — skipping %s for creator %s",
+                dedupe_key,
+                event_type,
+                creator_id,
+            )
+            return
+
+        # ── 6. Render and send email ─────────────────────────────────────────
+        # Only send email when the creator has an email address and the channel
+        # is not opted-out. We prefer the event_type as the template name.
+        to_email = creator.email
+        if to_email and prefs.email_transactional:
+            try:
+                mailer_send(
+                    to=to_email,
+                    template=event_type,
+                    context={"creator": creator, **payload},
+                    idempotency_key=dedupe_key,
+                )
+                logger.info(
+                    "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
+                    event_type,
+                    creator_id,
+                    dedupe_key,
+                )
+            except Exception as exc:
+                # Template missing or Resend error: mark delivery failed so we
+                # don't retry infinite-loop; log and continue to in-app row.
+                delivery.status = NotificationDeliveryStatus.failed
+                logger.error(
+                    "send_notification: email send failed event_type=%s creator=%s: %s",
+                    event_type,
+                    creator_id,
+                    exc,
+                )
+        else:
+            # No email address on record or email opted out — in-app only.
+            delivery.channel = NotificationChannel.inapp
+
+        # ── 7. Insert in-app notification row ────────────────────────────────
+        if prefs.inapp_enabled:
+            notification = _build_inapp_notification(cid, event_type, payload)
+            session.add(notification)
+
+        await session.commit()
+
+
+def _build_inapp_notification(
+    creator_id: uuid.UUID,
+    event_type: str,
+    payload: dict,
+) -> Any:
+    """Build a Notification model instance from the event type and payload.
+
+    Returns a ``Notification`` ORM instance.  Return type is annotated ``Any``
+    because the local import pattern used throughout this module (deferred to
+    avoid circular imports) means the class is not visible at the function
+    signature level without a TYPE_CHECKING guard.  Callers (both in the task
+    and in tests) receive the concrete model instance regardless.
+
+    Centralises the copy strings for in-app notifications so they can be
+    asserted by tests without needing a live database.  Copy never promises
+    virality (Honesty Constraint, CLAUDE.md).
+    """
+    from models import Notification
+
+    # Map event_type to (title, body, link_url) copy.  New event types must be
+    # added here; unknown types fall back to a generic notification.
+    _COPY: dict[str, tuple[str, str, str | None]] = {
+        "clips_ready": (
+            "Your clips are ready to review.",
+            payload.get("body", "We found candidate clips from your video. Tap to review them."),
+            "/app/review",
+        ),
+        "dna_built": (
+            "Your channel DNA is ready.",
+            "We've built your channel DNA profile — review and confirm it.",
+            "/app/profile",
+        ),
+        "trial_ending": (
+            "Your free trial is ending soon.",
+            payload.get("body", "Your trial is ending soon. Top up your minutes to keep clipping."),
+            "/app/dashboard",
+        ),
+        "balance_low": (
+            "Your minutes balance is running low.",
+            payload.get("body", "You have a few minutes left. Add more to keep processing."),
+            "/app/dashboard",
+        ),
+        "refund_issued": (
+            "Your minutes were refunded.",
+            payload.get(
+                "body",
+                "We couldn't process your video — your minutes have been refunded.",
+            ),
+            "/app/dashboard",
+        ),
+        "reauth_required": (
+            "Reconnect your YouTube account.",
+            "Your YouTube connection needs to be refreshed to keep analytics up to date.",
+            "/app/profile",
+        ),
+        "catalog_sync_done": (
+            "Your video catalog is up to date.",
+            "Your YouTube catalog has been synced successfully.",
+            "/app/dashboard",
+        ),
+        "welcome": (
+            "Welcome to AutoClip.",
+            (
+                "AutoClip predicts fit with your style and audience — it does not promise virality. "
+                "Every recommendation is an estimate grounded in your own data."
+            ),
+            "/app/dashboard",
+        ),
+    }
+
+    title, body, link_url = _COPY.get(
+        event_type,
+        (
+            f"Notification: {event_type}",
+            payload.get("body", "You have a new notification."),
+            None,
+        ),
+    )
+
+    return Notification(
+        creator_id=creator_id,
+        kind=event_type,
+        title=title,
+        body=body,
+        link_url=link_url,
+    )

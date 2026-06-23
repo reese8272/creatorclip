@@ -174,9 +174,10 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── titles.py               # POST video title suggestions (Issue 128)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
 │
-├── notify/                     # Transactional email (Issue 242)
+├── notify/                     # Transactional email + notification helpers (Issues 242-243)
 │   ├── __init__.py
 │   ├── mailer.py               # send(to, template, context, idempotency_key); NOTIFY_BACKEND dispatch
+│   ├── dedupe.py               # make_dedupe_key(creator_id, event_type, entity_id) → sha256 hex (Issue 243)
 │   └── templates/              # Jinja2 paired .txt + .html per email type
 │       ├── clips_ready.txt     # Placeholder — populated by Issues 243+
 │       └── clips_ready.html
@@ -396,6 +397,27 @@ chat_messages                         -- one user/assistant turn (Issue 152)
   id, conversation_id (FK), role (user|assistant), content,
   tokens_in, tokens_out, cache_read (assistant rows only — per-message cost log), created_at
   -- reaches tenant via conversation FK (child-table pattern; no own RLS policy)
+
+notification_preferences              -- per-creator consent + channel opt-out (Issue 243)
+  creator_id (PK, FK), email_transactional bool default true,
+  email_lifecycle bool default true,   -- unsubscribable (welcome/nudge/re-engagement)
+  inapp_enabled bool default true, push_enabled bool default false,
+  unsubscribe_token (uuid, unique),    -- one-click unsubscribe link, no auth required
+  updated_at
+  -- No RLS (PK = creator_id; single-row-per-creator, no cross-tenant read possible)
+  -- email_transactional is always-on (CAN-SPAM / GDPR Art. 6(1)(b)); UI locks toggle
+
+notification_deliveries               -- idempotency ledger; Inbox pattern (Issue 243)
+  id, creator_id (FK), event_type, entity_id, channel (email|inapp|push),
+  dedupe_key (UNIQUE),                 -- sha256(creator_id:event_type:entity_id)
+  provider_message_id,                 -- Resend opaque id, no PII
+  status (sent|skipped|failed), created_at
+  -- No RLS (internal audit table, not exposed via creator-facing API)
+
+notifications                         -- durable in-app notification center (Issue 243, Issue 81)
+  id, creator_id (FK), kind, title, body, link_url,
+  seen_at (NULL = unread), dismissed_at, created_at
+  -- RLS tenant_isolation policy (ENABLE + FORCE), migration 0031 — mirrors chat_conversations
 ```
 
 ---

@@ -25,8 +25,29 @@ false-positive defect; `Review.test.tsx` +3 → vitest 118).
 vitest 118/118. **Staging-pending (Issue 275):** publish OAuth round-trip, live `videos.insert`, RLS on
 `clip_publications`, full pytest suite.
 
+---
+
+## ✅ Issue 243 — Notification data model + idempotent send task DONE (2026-06-23)
+
+**Built in worktree `agent-ae69a4e1e105041a6`.**
+
+**Files changed:**
+- `notify/dedupe.py` — NEW: `make_dedupe_key(creator_id, event_type, entity_id)` SHA-256 helper
+- `alembic/versions/0031_notifications.py` — NEW: migration for 3 notification tables (0031, down_revision=0030)
+- `models.py` — NEW: `NotificationPreference`, `NotificationDelivery`, `Notification` models + 2 enums
+- `worker/tasks.py` — NEW: `send_notification` Celery task + `_send_notification_async` + `_build_inapp_notification`
+- `docs/DECISIONS.md` — DECISIONS entry for Issue 243 (3 tables, dedupe scheme, RLS rationale)
+- `docs/COMPLIANCE.md` — Data class table rows for 3 notification tables
+- `docs/SOT.md` — Data model + file structure updated
+
+**Tests added:** `tests/test_notifications.py` — 23 passed, 3 skipped (staging-pending: RLS + UNIQUE constraint + double-enqueue integration)
+
+**Static gates:** ruff GREEN · mypy GREEN · py_compile GREEN
+
+**Staging-pending (Issue 275):** UNIQUE `dedupe_key` constraint enforcement; RLS `tenant_isolation` on `notifications` (cross-creator block); full end-to-end double-enqueue = one delivery.
+
 **Next (decided):** complete the core create→publish→notified loop — Publish **#196/#197** +
-Notifications **#243→#244→#193** (the notification stack is genuinely NET-NEW; only #242 mailer exists).
+Notifications **#244→#193** (triggers that wire into the send_notification task built here).
 
 ---
 
