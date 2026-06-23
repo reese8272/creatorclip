@@ -1,6 +1,6 @@
-"""Tests for the observability layer (Issue 75f, 233, 237, 239): correlation ids,
-structured logs, golden-signal metrics, redaction backstop, LLM token counters,
-and Celery propagation. DB-free."""
+"""Tests for the observability layer (Issue 75f, 233, 237, 238, 239, 281): correlation ids,
+structured logs, golden-signal metrics, saturation gauges, redaction backstop, LLM token
+counters, Sentry before_send scrub, and Celery propagation. DB-free."""
 
 import json
 import logging
@@ -12,11 +12,16 @@ from fastapi.testclient import TestClient
 
 from observability import (
     _CELERY_HEADER,
+    CELERY_QUEUE_DEPTH,
     CELERY_TASKS_TOTAL,
+    DB_POOL_CHECKED_OUT,
     LLM_TOKENS_TOTAL,
+    REDIS_USED_MEMORY_BYTES,
     JsonLogFormatter,
     RequestIDLogFilter,
+    _sentry_before_send,
     _valid_request_id,
+    collect_saturation_gauges,
     configure_logging,
     install_celery_observability,
     record_llm_tokens,
@@ -295,3 +300,114 @@ def test_configure_logging_respects_filename(tmp_path: Path) -> None:
 
     assert (tmp_path / "worker.log").exists(), "worker.log must be created when filename is set"
     assert not (tmp_path / "app.log").exists(), "app.log must NOT be created when filename differs"
+
+
+# ── Issue 238: saturation gauges ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_collect_saturation_gauges_sets_non_negative_values() -> None:
+    """collect_saturation_gauges must update all three Gauges to non-negative values
+    using only the injected engine/redis objects — no real connections opened.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    # Fake engine: pool.checkedout() returns 2.
+    fake_pool = MagicMock()
+    fake_pool.checkedout.return_value = 2
+    fake_engine = MagicMock()
+    fake_engine.pool = fake_pool
+
+    # Fake async Redis: llen=5, info returns used_memory=1024.
+    fake_redis = AsyncMock()
+    fake_redis.llen.return_value = 5
+    fake_redis.info.return_value = {"used_memory": 1024}
+
+    await collect_saturation_gauges(fake_engine, fake_redis)
+
+    assert DB_POOL_CHECKED_OUT._value.get() >= 0
+    assert CELERY_QUEUE_DEPTH.labels(queue="celery")._value.get() >= 0
+    assert REDIS_USED_MEMORY_BYTES._value.get() >= 0
+
+    # Exact values from the mock.
+    assert DB_POOL_CHECKED_OUT._value.get() == 2
+    assert CELERY_QUEUE_DEPTH.labels(queue="celery")._value.get() == 5
+    assert REDIS_USED_MEMORY_BYTES._value.get() == 1024
+
+
+@pytest.mark.asyncio
+async def test_collect_saturation_gauges_tolerates_redis_failure() -> None:
+    """If Redis raises, the gauge retains its last value and no exception propagates."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    fake_pool = MagicMock()
+    fake_pool.checkedout.return_value = 1
+    fake_engine = MagicMock()
+    fake_engine.pool = fake_pool
+
+    fake_redis = AsyncMock()
+    fake_redis.llen.side_effect = ConnectionError("Redis down")
+    fake_redis.info.side_effect = ConnectionError("Redis down")
+
+    # Must not raise.
+    await collect_saturation_gauges(fake_engine, fake_redis)
+
+
+# ── Issue 281: Sentry before_send scrub ──────────────────────────────────────
+
+
+def test_sentry_before_send_scrubs_token_in_extra() -> None:
+    """_sentry_before_send must scrub token fields from event['extra'] before
+    the event leaves the process. This is the structural PII-safety backstop.
+    """
+    event: dict = {
+        "extra": {"token": "super-secret-token-xyz", "creator_id": "abc-123"},
+        "request": {"data": {}},
+    }
+    result = _sentry_before_send(event, {})
+    assert result is not None
+    assert result["extra"]["token"] == "[redacted]", "token must be redacted in extra"
+    assert result["extra"]["creator_id"] == "abc-123", "safe key must pass through"
+
+
+def test_sentry_before_send_scrubs_request_data() -> None:
+    """_sentry_before_send must scrub request body data (e.g. password in a POST)."""
+    event: dict = {
+        "extra": {},
+        "request": {"data": {"password": "hunter2", "username": "alice"}},
+    }
+    result = _sentry_before_send(event, {})
+    assert result is not None
+    assert result["request"]["data"]["password"] == "[redacted]"
+    assert result["request"]["data"]["username"] == "alice"
+
+
+def test_sentry_before_send_passes_event_with_no_sensitive_fields() -> None:
+    """Events with no sensitive fields must be passed through unchanged."""
+    event: dict = {
+        "extra": {"creator_id": "uuid-abc", "task_id": "tid-123"},
+        "request": {"data": {"action": "build_dna"}},
+    }
+    result = _sentry_before_send(event, {})
+    assert result is not None
+    assert result["extra"]["creator_id"] == "uuid-abc"
+    assert result["request"]["data"]["action"] == "build_dna"
+
+
+def test_sentry_init_is_noop_when_dsn_empty() -> None:
+    """init_sentry must be a no-op when SENTRY_DSN is empty — no SDK initialization."""
+    import sys
+    import types
+    import unittest.mock as _mock
+
+    from observability import init_sentry
+
+    # When dsn is empty, init_sentry must return immediately without touching sentry_sdk.
+    # We verify this by patching the lazy import inside init_sentry using sys.modules so
+    # it works even when sentry-sdk is not installed in the current environment.
+    fake_sdk = types.ModuleType("sentry_sdk")
+    fake_sdk.init = _mock.MagicMock()
+    # Patch all sub-integration modules sentry_sdk imports.
+    with _mock.patch.dict(sys.modules, {"sentry_sdk": fake_sdk}):
+        init_sentry(dsn="", environment="test", release="abc123")
+    fake_sdk.init.assert_not_called()

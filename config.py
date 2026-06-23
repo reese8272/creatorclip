@@ -333,6 +333,21 @@ class Settings(BaseSettings):
     # Source: https://docs.stripe.com/tax/checkout/page
     STRIPE_TAX_ENABLED: bool = False
 
+    # ── Error tracking — Sentry / GlitchTip (Issue 281) ───────────────────────
+    # Set SENTRY_DSN to a Sentry project DSN or a GlitchTip DSN (identical
+    # protocol — only the URL differs). Empty string disables the SDK entirely,
+    # which is the correct default in dev/CI. Never log or commit a real DSN.
+    SENTRY_DSN: str = ""
+    # Short name used as the Sentry "environment" tag (e.g. "staging", "production").
+    # Defaults to ENV so no extra config is needed in most cases.
+    SENTRY_ENVIRONMENT: str = ""
+    @property
+    def sentry_environment(self) -> str:
+        return self.SENTRY_ENVIRONMENT or self.ENV
+    # Git SHA / image tag for Sentry release tracking. Set via IMAGE_SHA env var
+    # at container build time (e.g. short git SHA). Empty → not sent.
+    IMAGE_SHA: str = ""
+
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:
     #   'console' — renders + logs; no external call (default in dev / CI)

@@ -67,6 +67,12 @@ scipy==1.14.1
 # Golden-signal metrics (Prometheus exposition at /metrics). Official client; the
 # correlation-id + structured-logging layer is hand-rolled in observability.py.
 prometheus-client==0.25.0
+# Error tracking — Sentry SDK with FastAPI + Celery auto-integrations (Issue 281).
+# GlitchTip (self-hosted, GDPR-friendly) is a drop-in: only the DSN URL changes.
+# send_default_pii=False + before_send scrub prevent PII/token leakage (structural).
+# Pin to the stable 2.x series; 2.x ships FastApiIntegration as a first-class part
+# of the package. Disabled in dev/CI when SENTRY_DSN is empty.
+sentry-sdk==2.32.0
 
 # ── Storage (S3-compatible / Cloudflare R2) ──────────────────────────────────
 boto3==1.35.54

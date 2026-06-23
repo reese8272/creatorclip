@@ -21,6 +21,7 @@ from config import settings
 from db import get_session
 from limiter import creator_key, limiter
 from models import Creator, MinutePack
+from observability import log_event
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
@@ -171,12 +172,14 @@ async def stripe_webhook(
     """
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
+    log_event("billing_webhook_received")
     try:
         event = construct_webhook_event(payload, sig)
     except stripe.SignatureVerificationError as exc:
-        logger.warning("Stripe webhook bad signature: %s", exc)
+        log_event("billing_webhook_rejected", reason="bad_signature")
         raise HTTPException(status_code=400, detail="Invalid signature") from exc
     except Exception as exc:
+        log_event("billing_webhook_rejected", reason="parse_error")
         logger.warning("Stripe webhook parse error: %s", exc)
         raise HTTPException(status_code=400, detail="Bad webhook payload") from exc
 
@@ -251,6 +254,7 @@ async def stripe_webhook(
         price_cents=pack.price_cents,
     )
     await session.commit()
+    log_event("billing_webhook_processed", pack_id=pack_id, creator_id=str(creator_id))
     logger.info(
         "billing fulfilled pack=%s creator=%s minutes=%d", pack_id, creator_id, pack.minutes
     )
