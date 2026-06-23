@@ -194,6 +194,19 @@ class Creator(Base):
     terms_version: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
     privacy_version: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
 
+    # Issue 300 — COPPA 13+ minimum-age attestation.
+    # A separate affirmative "I confirm I am 13 or older" checkbox is shown
+    # alongside the Issue 299 consent checkbox and must be checked before the
+    # OAuth CTA becomes active.  The timestamp here is the audit record.
+    # Age-neutral phrasing ("13 or older") is the FTC-recommended pattern per the
+    # amended COPPA Rule (16 CFR Part 312, effective 2025-06-23) — it avoids a
+    # yes/no question that nudges the answer.  NULL on legacy rows that predate
+    # migration 0034; a future flag can check for NULL to re-prompt.
+    minimum_age_confirmed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+
     tokens: Mapped["YoutubeToken | None"] = relationship(
         "YoutubeToken", back_populates="creator", uselist=False, cascade="all, delete-orphan"
     )

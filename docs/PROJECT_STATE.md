@@ -4,6 +4,26 @@ Updated after every issue closes.
 
 ---
 
+## ✅ W3 — Issue 300: COPPA 13+ minimum-age gate + age-neutral screening (2026-06-23)
+
+**Issue #300 DONE (static-verified, staging-pending for DB migration).**
+
+- **`frontend/src/pages/Login.tsx`** — Added a second `ageConfirmed` state checkbox ("I confirm I am 13 or older") composed with the existing Issue 299 consent checkbox. `canSignIn = agreed && ageConfirmed` — both must be checked before the OAuth CTA becomes an active `<a>` link. Age-neutral phrasing per FTC amended COPPA Rule (16 CFR Part 312, effective 2025-06-23).
+- **`models.py`** — Added `minimum_age_confirmed_at: Mapped[datetime | None]` (TIMESTAMPTZ, nullable) to `Creator`. Nullable for backward compatibility with pre-0034 rows.
+- **`alembic/versions/0034_age_confirmation.py`** — Migration `revision="0034"`, `down_revision="0033"`. Adds `minimum_age_confirmed_at` TIMESTAMPTZ nullable column to `creators`. DB-backed verification: staging-pending (Issue 275).
+- **`routers/auth.py`** — In the `is_new` block, `creator.minimum_age_confirmed_at = now_utc` recorded alongside the Issue 299 consent fields. Same `now_utc` value — timestamps are always consistent.
+- **`static/tos.html`** — Added §4a "Minimum age requirement": 13+ US, 16+ for EU GDPR Art. 8 jurisdictions; deletion path for under-age accounts. Updated "Last updated" date.
+- **`static/privacy.html`** — Added "Children's privacy (COPPA)" section: general-audience statement, no knowingly-collected data from under-13s, attestation screening mechanism, deletion path, COPPA 16 CFR Part 312 notice.
+- **`docs/DECISIONS.md`** — Issue 300 entry: age-neutral attestation vs. DOB field (DOB ruled out — it is PII COPPA prohibits collecting from under-13s); TIMESTAMPTZ vs. boolean (TIMESTAMPTZ is the stronger audit artifact); dual-checkbox vs. single combined checkbox (distinct legal acts per GDPR Art. 7 + FTC).
+- **`docs/COMPLIANCE.md`** — COPPA attestation row added to Data Classes & Retention Policy table.
+- **`docs/SOT.md`** — `minimum_age_confirmed_at` added to the `creators` data model schema.
+- **Tests added:**
+  - Backend (DB-free): `test_creator_model_has_minimum_age_confirmed_at_column` — column present + nullable. `test_callback_new_creator_records_age_attestation` — datetime set on `is_new` path. Both pass (30/30 non-integration auth tests green).
+  - Frontend (vitest): `Login.test.tsx` extended with 4 new tests covering the dual-checkbox gate: CTA disabled with only consent checked, CTA disabled with only age checked, CTA enabled when both checked, unchecking either reverts to disabled. 157/157 vitest tests pass (24 files).
+- **Gate results:** `npm run build` ✅ clean; `npx vitest run` 157/157 ✅; `ruff` 0 issues ✅; `mypy` 0 issues ✅; `py_compile` ✅. DB migration: staging-pending.
+
+---
+
 ## ✅ W3 BATCH 1 — Issue 197: Wire published clips into the outcome loop (2026-06-23)
 
 **Issue #197 DONE (static-verified, staging-pending).**

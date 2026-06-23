@@ -2680,7 +2680,7 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 
 ### Issue 300: COPPA 13+ minimum-age gate + age-neutral screening
 
-**Status** `OPEN` · **Wave** W3 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
+**Status** `DONE` · **Wave** W3 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #299 · **Coordinate (hot files)** `frontend/src/pages/Login.tsx`, `static/privacy.html`, `static/tos.html`  
 
@@ -2696,8 +2696,8 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 - `static/privacy.html`
 
 **Acceptance criteria**
-- [ ] A minimum-age statement (13+ US; consider 16+ for EU GDPR Art. 8) is present in tos.html + the privacy policy
-- [ ] An age-neutral self-attestation ("I am 13 or older") is collected at signup, co-located with the 299 clickwrap
+- [x] A minimum-age statement (13+ US; consider 16+ for EU GDPR Art. 8) is present in tos.html + the privacy policy
+- [x] An age-neutral self-attestation ("I am 13 or older") is collected at signup, co-located with the 299 clickwrap
 
 ---
 

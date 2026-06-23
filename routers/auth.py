@@ -161,6 +161,15 @@ async def callback(
             settings.TOS_VERSION,
             settings.PRIVACY_VERSION,
         )
+
+        # Issue 300 — Record the COPPA 13+ minimum-age attestation in the same
+        # transaction.  The "I confirm I am 13 or older" checkbox on the Login
+        # page is a second affirmative gate that must be checked alongside the
+        # Issue 299 consent checkbox before the OAuth CTA is active.  Reaching
+        # this callback is therefore evidence that the attestation was given.
+        creator.minimum_age_confirmed_at = now_utc
+        logger.info("age_attestation recorded creator=%s", creator.id)
+
         session.add(creator)
         logger.info(
             "trial granted creator=%s minutes=%d trial_ends_at=%s",
