@@ -32,6 +32,13 @@ pytest -m integration
 
 Docker Compose is **dev/test only**. Production at 10k+ scale requires Kubernetes.
 
+> **Status (2026-06-22): the architecture is decided and the Helm chart is written, but it has NEVER
+> run on a real cluster.** "Staging" today is a Docker-Compose project on the prod VM
+> (`docs/STAGING_ACCESS.md`), so the connection-budget and load `[DEC]`s below are written against the
+> GKE/Cloud SQL topology but verified only by construction. Closing this is **Issue 275** (GKE staging +
+> first Helm deploy) — the linchpin — with the remaining chart gaps tracked as **Issues 276–280, 287**
+> (Lane L12_K8S_DEPLOY) and the transcription-compute decision as **Issue 293**. See `docs/issues.md`.
+
 ### Decisions Made (see `docs/DECISIONS.md` for full rationale)
 
 - [x] **Managed K8s provider**: GKE Autopilot — lowest-ops, no node management, Cloud SQL

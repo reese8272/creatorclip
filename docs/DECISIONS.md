@@ -5,6 +5,45 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
+
+**What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a
+dependency-ordered execution plan. Every open issue (181–303 + carry-over, 138 open) now carries three
+coordinates — **Wave** (W0–W5 hard-dependency round), **Lane** (one of 19 file-disjoint subsystem owners
+that run in parallel), **Batch** (per-wave parallel deployment unit) — plus an execution-ready brief
+(source-verified files-to-touch, testable ACs, Blocked-by/Enables, `[DEC]` flag, verification path, tests,
+risks). Issue numbers are stable and `### Issue N:` headings preserved (the `/issue-workflow` + `/close-out`
+contract). The prior backlog is archived at `docs/archive/issues_pre_roadmap_2026-06-22.md`.
+
+**Two sub-decisions:**
+1. **29 research-derived issues (275–303) added and KEPT** (founder-approved 2026-06-22), tagged
+   🧪 RESEARCH-DERIVED in the file. They close production gaps the backlog missed: container supply-chain
+   signing (cosign/SBOM/SLSA), K8s pod resilience (PDBs, graceful drain, split probes), error tracking,
+   feature flags/kill-switches, edge WAF/rate-limit/CDN, Redis persistence, LLM/cloud spend caps +
+   cost-velocity breaker + margin dashboard, expand/contract migration policy, critical-journey smoke,
+   release versioning, clickwrap ToS + versioned consent, COPPA age gate, accessibility statement, GPC,
+   and a consolidated `docs/GO_LIVE.md` checklist.
+2. **"Kubernetes — research pending" framing corrected as STALE.** The Helm chart already exists at
+   `deploy/charts/creatorclip/` with the architecture locked (GKE Autopilot + Cloud SQL PG16 + KEDA +
+   External Secrets). The real gap is that it has **never run on a real cluster** — "staging" is
+   Docker-Compose on the prod VM, which makes the 259 pool-math / 261 load-test `[DEC]`s unfalsifiable.
+   The deploy track is therefore "validate the chart on real GKE" (**Issue 275** = linchpin), not "design
+   K8s." `CLAUDE.md`, `docs/SOT.md`, and `docs/README.md` updated to match.
+
+**Why:** the founder asked for one execution-ready source of truth so independent agents can be deployed
+in conflict-minimized parallel batches all the way to launch. The roadmap was built from a 16-agent
+source-verified extraction + a 6-dimension industry-standard-first production-gap research pass, then
+adversarially validated (zero dependency-order violations; 513/524 cited file paths confirmed to exist).
+
+**Source/evidence:** `docs/research/findings/01–15`; the 2026-06-22 production-gap research (deploy-arch,
+open `[DEC]`s, SRE completeness, launch sequence, legal/compliance, cost-at-scale) with live-sourced
+recommendations folded into the briefs; `deploy/charts/creatorclip/` + `docs/STAGING_ACCESS.md` confirming
+the chart-exists/never-run-on-K8s finding. Planning-only pass — no product code changed.
+
+**Date:** 2026-06-22
+
+---
+
 ## 2026-06-22 — Issue 249 [SEV1]: data-export endpoint (Art. 15/20) — format + scope
 
 **What changed:** Added an async data-export flow (`POST /creators/me/export` 202 →

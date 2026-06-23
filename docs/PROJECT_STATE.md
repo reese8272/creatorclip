@@ -6,8 +6,25 @@ Updated after every issue closes.
 
 ## Current Status
 
+**`docs/issues.md` REBUILT into the Master Roadmap to Production (2026-06-22).** Planning-only pass (no
+product code). The priority-tier backlog was replaced by a dependency-ordered execution plan: every open
+issue (181–303 + carry-over, 138 open) carries three coordinates — **Wave** (W0–W5 dependency round),
+**Lane** (one of 19 file-disjoint subsystem owners), **Batch** (per-wave parallel deployment unit) — plus
+an execution-ready brief (source-verified files-to-touch, testable ACs, Blocked-by/Enables, `[DEC]` flag,
+verification path local/staging/render-env/external, tests, risks). Built by: 16-agent source-verified
+extraction + a 6-dimension production-gap research pass that added **29 proposed issues (275–303, tagged
+🧪 RESEARCH-DERIVED — veto-able)** and **13 sourced decision recommendations** (folded into briefs).
+Issue numbers are stable and `### Issue N:` headings preserved so `/issue-workflow` + `/close-out` still
+work. Adversarially validated (zero dep-order violations; 513/524 cited paths confirmed real). Key finding:
+**K8s is NOT "research pending"** — a working Helm chart exists at `deploy/charts/creatorclip/`; the real
+gap is it has never run on K8s (staging = Docker-Compose on the prod VM), so **Issue 275 (GKE staging +
+first Helm deploy) is the linchpin**. → `CLAUDE.md`'s "Kubernetes (production — research pending)" line is
+stale. Prior backlog archived at `docs/archive/issues_pre_roadmap_2026-06-22.md`. **Not committed.**
+
 **SEV1 privacy track COMPLETE — Issues 247 + 248 + 249 DONE (2026-06-22).** On branch
 `feat/sev1-privacy` (off main; independent of the held `feat/batch-b-publish`). **247:** `DELETE
+/auth/me` no longer writes PII into the never-purged `audit_log` (Art. 17 / EDPB CEF 2025). **248:**
+deletion purges the separate-engine `event_logs` via `event_log.purge_creator_events`, best-effort.
 /auth/me` no longer writes PII into the never-purged `audit_log` (Art. 17 / EDPB CEF 2025). **248:**
 deletion purges the separate-engine `event_logs` via `event_log.purge_creator_events`, best-effort.
 **249:** async data-export (Art. 15/20) — `POST/GET /creators/me/export` + `/download`;

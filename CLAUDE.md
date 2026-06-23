@@ -225,7 +225,7 @@ split.
 - Auth: Google OAuth 2.0 (YouTube scopes) + session JWT; tokens Fernet-encrypted
 - Preference model: recency-decayed reranker (LightGBM/logistic), not a fine-tuned LLM
 - Frontend: vanilla HTML/CSS/JS (review-UI framework is a flagged DECISIONS candidate)
-- Containerization: Docker Compose (dev) / Kubernetes (production — research pending)
+- Containerization: Docker Compose (dev) / Kubernetes (production — **architecture chosen + Helm chart written** at `deploy/charts/creatorclip/`: GKE Autopilot + Cloud SQL PG16 + KEDA, locked in `docs/DECISIONS.md`. Not yet validated on a real cluster — that is **Issue 275**, the deploy-track linchpin.)
 
 Deviations require a `docs/DECISIONS.md` entry before implementation.
 
@@ -245,7 +245,12 @@ Deviations require a `docs/DECISIONS.md` entry before implementation.
 ## Production Deployment
 
 Target: Kubernetes at 10k+ scale. Docker Compose = dev only.
-See `docs/DEPLOYMENT.md` for architecture, pre-deploy checklists, and open research items.
+The Helm chart exists (`deploy/charts/creatorclip/`) and the architecture is locked (GKE Autopilot +
+Cloud SQL PG16 + KEDA). It has **never run on K8s** yet — "staging" is currently Docker-Compose on the
+prod VM, which makes the scale/pool `[DEC]`s unfalsifiable. **Standing up a real GKE staging cluster +
+first Helm deploy is Issue 275** (the linchpin that unblocks Issues 259/261/276–280 verification).
+See `docs/issues.md` (Lane **L12_K8S_DEPLOY**) for the deploy roadmap and `docs/DEPLOYMENT.md` for the
+chart + pre-deploy checklists.
 
 Dev:
 ```bash

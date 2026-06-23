@@ -15,7 +15,7 @@ issues → DECISIONS → COMPLIANCE → CLIPPING_PRINCIPLES, before writing any 
 | [PRD.md](PRD.md) | Product requirements, north star, scope | Formal scope change only |
 | [SOT.md](SOT.md) | Architecture: stack, schema, file structure, API surface | Stack/schema/structure changes |
 | [PROJECT_STATE.md](PROJECT_STATE.md) | What's done / in-flight / blocked + session log | Every issue close |
-| [issues.md](issues.md) | Work queue + acceptance criteria (+ Phase-3 backlog) | Issue opened/closed |
+| [issues.md](issues.md) | **Master Roadmap to Production** — every open issue (181–303 + carry-over) with Wave / Lane / Batch coordinates + execution-ready briefs; deploy agents per lane in wave order | Issue opened/closed; roadmap re-synthesized |
 | [DECISIONS.md](DECISIONS.md) | Every decision that diverged from the PRD/industry standard | Any deviation |
 | [COMPLIANCE.md](COMPLIANCE.md) | YouTube ToS, data retention, privacy posture | Data classes/retention/scopes change |
 | [CLIPPING_PRINCIPLES.md](CLIPPING_PRINCIPLES.md) | Named principles the clip engine cites | A new principle is cited |
