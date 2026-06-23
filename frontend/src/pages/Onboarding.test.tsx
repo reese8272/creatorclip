@@ -1,8 +1,23 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Onboarding } from './Onboarding'
+
+// Minimal EventSource stub — the same pattern used in useTaskStream.test.ts. The
+// page uses EventSource only when a stream URL is already set (e.g. from
+// sessionStorage), so tests that never set a URL don't need the stub.
+class FakeEventSource {
+  static instances: FakeEventSource[] = []
+  url: string
+  closed = false
+  constructor(url: string) {
+    this.url = url
+    FakeEventSource.instances.push(this)
+  }
+  addEventListener(_type: string, _cb: unknown) {}
+  close() { this.closed = true }
+}
 
 // Route the page's several reads by URL. `identity` is the load-bearing knob:
 // the Build-DNA step stays locked until an identity row exists (Issue 100).
@@ -40,6 +55,11 @@ function renderOnboarding() {
   )
 }
 
+beforeEach(() => {
+  // Wipe sessionStorage between tests so re-attach tests start clean.
+  sessionStorage.clear()
+  FakeEventSource.instances = []
+})
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Onboarding', () => {
@@ -51,7 +71,7 @@ describe('Onboarding', () => {
     expect(await screen.findByText('Ready to build your Creator DNA.')).toBeInTheDocument()
   })
 
-  // OAuth-verification gate (Issue 153): this first-run page sits outside AppChrome,
+  // OAuth-verification gate (Issue 153): this first-run flow sits outside AppChrome,
   // so it must carry the ToS/Privacy footer links itself.
   it('exposes the ToS and Privacy footer links', async () => {
     vi.stubGlobal('fetch', mockFetch())
@@ -83,5 +103,27 @@ describe('Onboarding', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Build Creator DNA' })).toBeEnabled(),
     )
+  })
+
+  // Issue 214: TaskStepper replaces StreamConsole; re-attach via sessionStorage.
+  it('re-attaches to a previously started catalog stream from sessionStorage on remount', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    vi.stubGlobal('EventSource', FakeEventSource)
+    // Simulate a URL written by a previous session.
+    sessionStorage.setItem('onboarding:catalogUrl', '/tasks/123/events')
+    renderOnboarding()
+    // The page initialises catalogUrl from sessionStorage, so useTaskStream opens an
+    // EventSource for /tasks/123/events on mount. Assert the connection was created.
+    expect(FakeEventSource.instances).toHaveLength(1)
+    expect(FakeEventSource.instances[0].url).toBe('/tasks/123/events')
+  })
+
+  it('does not render a countdown or fabricated ETA during streaming', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderOnboarding()
+    // There should never be any text like "ETA", "minutes remaining", or a countdown pattern.
+    expect(screen.queryByText(/ETA/i)).toBeNull()
+    expect(screen.queryByText(/remaining/i)).toBeNull()
+    expect(screen.queryByText(/\d+:\d{2}/)).toBeNull()
   })
 })

@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 
-// Terminal-style live progress view for an SSE task stream (catalog sync, DNA
-// build). Renders nothing until there's a buffer; auto-scrolls to the latest
-// line as the worker emits. The buffer is produced by useTaskStream.
+// RETIRED — Issue 214 replaced this raw terminal log with TaskStepper for
+// the two long-running onboarding waits (Steps 2 and 4). No current callers
+// remain in the codebase. Kept as a shell so import references in tests or
+// storybook snapshots do not break until they are explicitly cleaned up.
 export function StreamConsole({ buffer }: { buffer: string }) {
   const ref = useRef<HTMLPreElement>(null)
 

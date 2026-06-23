@@ -6,6 +6,8 @@ export type TaskStatus = 'idle' | 'streaming' | 'done' | 'error'
 export interface TaskStreamState {
   /** Rolling, human-readable progress buffer (steps + streamed tokens). */
   buffer: string
+  /** Ordered list of step labels emitted by the worker via SSE `step` events. */
+  steps: string[]
   status: TaskStatus
   error: string | null
 }
@@ -23,6 +25,7 @@ export interface TaskStreamState {
 // queryClient.setQueryData — kept out of this generic hook on purpose.
 const initialState = (url: string | null): TaskStreamState => ({
   buffer: '',
+  steps: [],
   status: url ? 'streaming' : 'idle',
   error: null,
 })
@@ -44,6 +47,8 @@ export function useTaskStream(url: string | null): TaskStreamState {
     if (!url) return
     const sub = subscribeToTaskStream(url, {
       onRender: (buffer) => setState((s) => ({ ...s, buffer })),
+      onStep: (label) =>
+        setState((s) => ({ ...s, steps: label ? [...s.steps, label] : s.steps })),
       onDone: () => setState((s) => ({ ...s, status: 'done' })),
       onError: (message) => setState((s) => ({ ...s, status: 'error', error: message })),
     })
