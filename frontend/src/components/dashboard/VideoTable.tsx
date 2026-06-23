@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { StageStepper } from '@/components/dashboard/StageStepper'
+import { useStageStream } from '@/hooks/useStageStream'
 import type { AnalysisMode, IngestStatus, Video } from '@/types'
 
 export interface ClipInfo {
@@ -57,6 +59,16 @@ function VideoRow({
     }
   }
 
+  const streamState = useStageStream(
+    video.clippable ? video.id : null,
+    video.ingest_status,
+  )
+
+  // Show the live StageStepper only while actively in-flight and the SSE hook
+  // has opened a connection (streaming). Otherwise fall back to the static Badge
+  // so done/failed rows never hold an SSE slot.
+  const showStepper = streamState.status === 'streaming'
+
   return (
     <tr className="border-b border-default hover:bg-elevated">
       <td className="px-3 py-3 align-middle">
@@ -65,7 +77,17 @@ function VideoRow({
       </td>
       <td className="px-3 py-3 align-middle">{video.kind}</td>
       <td className="px-3 py-3 align-middle">
-        <Badge variant={STATUS_VARIANT[video.ingest_status]}>{video.ingest_status}</Badge>
+        {showStepper ? (
+          <StageStepper
+            stage={streamState.stage}
+            label={streamState.label}
+            status={streamState.status}
+            isStale={streamState.isStale}
+            failureReason={streamState.failureReason}
+          />
+        ) : (
+          <Badge variant={STATUS_VARIANT[video.ingest_status]}>{video.ingest_status}</Badge>
+        )}
       </td>
       <td className="px-3 py-3 align-middle">
         <ActionCell

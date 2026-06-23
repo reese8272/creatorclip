@@ -3782,7 +3782,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 99: UI redesign — monospace data-register polish remnant (mostly superseded by Issue 85)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** UI Core · **Size** `S` · **Verify** `local`  
+**Status** `DONE 2026-06-23` · **Wave** W0 · **Lane** UI Core · **Size** `S` · **Verify** `local`  
 **Src** pre-existing 99 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `frontend/src/components/review/TranscriptEditor.tsx`, `frontend/src/components/review/WhyThisClip.tsx`, `frontend/src/pages/Dashboard.tsx`  
 
@@ -3797,10 +3797,10 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 - `frontend/src/index.css` _(frontend/src/index.css:76 --font-mono (Geist Mono); :111 --text-mono)_ — The mono token already exists — confirm it's the single source, no new tokens
 
 **Acceptance criteria**
-- [ ] The static-template redesign portion of 99 is closed as superseded by Issue 85 (recorded in PROJECT_STATE)
-- [ ] The mono data-register (font-mono/text-mono) is applied to clip metadata, transcript timestamps, video-table IDs, and DNA stats in the React SPA
-- [ ] No new design tokens or build steps introduced; uses the existing index.css tokens
-- [ ] frontend lint/tsc/build + vitest green; no a11y contrast regression (Issue-165 lesson)
+- [x] The static-template redesign portion of 99 is closed as superseded by Issue 85 (recorded in PROJECT_STATE)
+- [x] The mono data-register (font-mono/text-mono) is applied to clip metadata, transcript timestamps, video-table IDs, and DNA stats in the React SPA
+- [x] No new design tokens or build steps introduced; uses the existing index.css tokens
+- [x] frontend lint/tsc/build + vitest green; no a11y contrast regression (Issue-165 lesson)
 
 **Tests**
 - Visual: clip metadata / transcript timestamps / video IDs / DNA stats render in Geist Mono
@@ -3813,7 +3813,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 210: Per-video pipeline status stepper on the dashboard
 
-**Status** `OPEN` · **Wave** W0 · **Lane** UI Core · **Size** `M` · **Verify** `local`  
+**Status** `DONE 2026-06-23` · **Wave** W0 · **Lane** UI Core · **Size** `M` · **Verify** `local`  
 **Src** `01 / 181` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** nothing — **ready now** · **Enables** #211 · **Coordinate (hot files)** `frontend/src/components/dashboard/VideoTable.tsx`, `frontend/src/hooks/useTaskStream.ts`, `frontend/src/lib/activity.ts`, `frontend/src/pages/Dashboard.tsx`  
 
@@ -3830,12 +3830,12 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 - `frontend/src/pages/Dashboard.tsx` _(videosQuery refetchInterval at lines 36-41; videosRefetchInterval gate)_ — Wire the per-row stepper into the table; coordinate with the gated 5s poll so the stepper is the live path and poll is the fallback.
 
 **Acceptance criteria**
-- [ ] Row stepper subscribes to the video_id SSE via useTaskStream/useTaskResult; falls back to the badge if no stream (observational, never load-bearing)
-- [ ] Stage labels reflect the worker's emitted `stage` fields (ingest/transcribe/signals/render/clean); no fabricated stages
-- [ ] Coarse ETA copy only; no precise countdown
-- [ ] Stale stream -> 'taking longer than usual'; failure -> safe one-line reason (no stack trace)
-- [ ] No virality language anywhere on the surface (structural test stays green)
-- [ ] source='ui' telemetry emitted for stepper interactions
+- [x] Row stepper subscribes to the video_id SSE via useStageStream; falls back to the badge if no stream (observational, never load-bearing)
+- [x] Stage labels reflect the worker's emitted `stage` fields (ingest/transcribe/signals/render/clean); no fabricated stages
+- [x] Coarse ETA copy only; no precise countdown
+- [x] Stale stream -> 'taking longer than usual'; failure -> safe one-line reason (no stack trace)
+- [x] No virality language anywhere on the surface (structural test stays green)
+- [ ] source='ui' telemetry emitted for stepper interactions (deferred — no UI affordance to instrument yet; the stepper is passive/observational)
 
 **Tests**
 - frontend/src/components/dashboard/StageStepper.test.tsx — stage label mapping, X-of-N, coarse ETA (no countdown), stale->'taking longer than usual', failed->safe reason, no-virality copy

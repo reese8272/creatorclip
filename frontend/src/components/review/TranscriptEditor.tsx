@@ -198,7 +198,7 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
             <div key={idx} className="flex items-center justify-between border-b border-default py-1 last:border-b-0">
               <span className="text-subtle line-through">
                 {words.slice(c.indices[0], c.indices[1] + 1).map((w) => w.word).join(' ').slice(0, 60)}{' '}
-                <small>· {(c.end_s - c.start_s).toFixed(2)}s</small>
+                <span className="font-mono text-xs">· {(c.end_s - c.start_s).toFixed(2)}s</span>
               </span>
               <button
                 onClick={() => removeCut(idx)}

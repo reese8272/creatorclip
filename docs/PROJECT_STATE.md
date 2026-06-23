@@ -6,6 +6,18 @@ Updated after every issue closes.
 
 ## Current Status
 
+**Wave W0 / Lane ui-core — Issues 99 + 210 DONE (2026-06-23).** On branch `wave0/ui-core`.
+Issue 99: Closed the stale-template redesign portion as superseded by Issue 85; applied
+`font-mono text-xs` to the cut-list timing span in `TranscriptEditor.tsx` (the only remaining
+gap — WhyThisClip, DnaCard, VideoTable IDs already mono). Issue 210: Per-video pipeline status
+stepper: extended `taskStream.ts` `StreamEvent` + `StreamHandlers` to expose the `stage` field
+from worker step events; created `StageStepper.tsx` (pure presentational — stage label, coarse
+ETA copy, stale detection, error reason, Badge fallback); created `useStageStream` hook (opens
+SSE only for in-flight rows; slot-exhaustion guard: 10 done + 1 in-flight → 1 connection);
+wired into `VideoTable.tsx` `VideoRow`. Tests: `StageStepper.test.tsx` (8 tests), `VideoTable.
+test.tsx` (6 tests); `Dashboard.test.tsx` updated with NoopEventSource stub. Full 60-test
+suite passes; tsc clean; Layer-0 skips (no Python toolchain in worktree).
+
 **`docs/issues.md` REBUILT into the Master Roadmap to Production (2026-06-22).** Planning-only pass (no
 product code). The priority-tier backlog was replaced by a dependency-ordered execution plan: every open
 issue (181–303 + carry-over, 138 open) carries three coordinates — **Wave** (W0–W5 dependency round),
