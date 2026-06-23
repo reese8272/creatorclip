@@ -8,8 +8,16 @@ across ``/auth/me`` + ``/creators/me/data-gate`` + ``/creators/me/dna``
 
 The Creator's ``onboarding_state`` enum is the fast-path; the resolver
 issues at most ONE extra query to disambiguate ambiguous states
-(``connected``/``awaiting_data`` need a data-gate readiness check;
-``active`` needs to know whether any clip-track videos exist).
+(``connected`` needs a data-gate readiness check; ``active`` needs to
+know whether any clip-track videos exist).
+
+``awaiting_data`` is RESERVED — it was never written by any code path
+(``youtube/oauth.py:179`` sets ``connected``; advances go
+``connected → dna_pending`` via ``dna/profile.py:83`` and
+``dna_pending → active`` via ``dna/profile.py:135``). The enum value is
+kept in ``models.OnboardingState`` to avoid a Postgres enum migration;
+any creator row with this state is treated identically to ``connected``
+in the resolver. Issue 235, DECISIONS 2026-06-23.
 
 DECISIONS 2026-06-08 — Onboarding state aggregation.
 """
@@ -106,9 +114,16 @@ async def resolve_setup_step(creator: Creator, session: AsyncSession) -> SetupSt
     Reads ``creator.onboarding_state`` first and issues at most one
     follow-up query. Total per-call cost on the hot path (``active``
     creators) is one ``COUNT(*)`` against ``videos`` — indexed, cheap.
+
+    ``awaiting_data`` is treated as ``connected`` — it is a reserved enum
+    value that is never written by any current code path (Issue 235).
     """
     state = creator.onboarding_state
 
+    # ``awaiting_data`` is RESERVED (never written; see module docstring).
+    # Treat it identically to ``connected`` so any legacy row that somehow
+    # carries the value resolves correctly instead of falling through to the
+    # active-state branch.
     if state in (OnboardingState.connected, OnboardingState.awaiting_data):
         gate = await check_data_gate(session, creator.id)
         if not gate["ready"]:
@@ -116,13 +131,13 @@ async def resolve_setup_step(creator: Creator, session: AsyncSession) -> SetupSt
                 "sync_catalog",
                 "Sync your channel so AutoClip can learn your style",
                 "navigate",
-                "/static/onboarding.html",
+                "/app/onboarding",
             )
         return _step(
             "build_dna",
             "Build your Creator DNA from your channel history",
             "navigate",
-            "/static/onboarding.html",
+            "/app/onboarding",
         )
 
     if state == OnboardingState.dna_pending:
@@ -130,7 +145,7 @@ async def resolve_setup_step(creator: Creator, session: AsyncSession) -> SetupSt
             "confirm_dna",
             "Review and confirm your Creator DNA brief",
             "navigate",
-            "/static/profile.html#dna-brief",
+            "/app/profile",
         )
 
     # state == OnboardingState.active
@@ -139,11 +154,11 @@ async def resolve_setup_step(creator: Creator, session: AsyncSession) -> SetupSt
             "link_first_video",
             "Link your first video to generate clips",
             "open_form",
-            "/static/index.html#link-form",
+            "/app/dashboard",
         )
     return _step(
         "complete",
         "You're set — link a video to make new clips.",
         "navigate",
-        "/static/index.html",
+        "/app/dashboard",
     )

@@ -50,6 +50,72 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 **Why:** Issue 188 brief; research brief `03_editorial_capabilities.md` §2 (waveform gap ●);
 the "editing-tools-beside-player conflation" entry in `docs/OFF_COURSE_BUGS.md`.
+## 2026-06-23 — Issue 235: Activation event definition + funnel taxonomy + awaiting_data reserved
+
+**What changed:**
+
+1. **Activation event defined:** `clip_kept` = first `upvote`, `trim`, or `format` action per
+   creator in `clip_feedback`. This is the first irreversible "good enough to use" act after
+   the product delivers its differentiated value (a clip scored against the creator's own DNA).
+   This is a new product KPI not in the PRD.
+
+2. **Funnel event taxonomy:** Fixed `object_action` snake_case naming (no interpolated names),
+   `creator_id` as the sole pseudonymous identifier, no PII or channel content in event names
+   or properties. Events route to `event_log.record_event(source="backend", ...)` in addition
+   to the existing `observability.log_event()` file sink — the DB sink is queryable for cohort
+   funnels and TTV computation.
+
+3. **Events wired in this issue (router-layer only; worker-layer deferred — see below):**
+   - `oauth_started` — at login redirect; no creator_id (pre-auth)
+   - `oauth_completed` — at callback completion; properties: `{is_new: bool}`
+   - `catalog_sync_started` — at POST /creators/me/catalog/sync; no extra properties
+   - `dna_build_started` — at POST /creators/me/dna/build; no extra properties
+   - `dna_confirmed` — at POST /creators/me/dna/confirm; properties: `{version: int}`
+   - `identity_saved` — at POST /creators/me/identity; properties: `{niche_count: int}`
+   - `clip_kept` (ACTIVATION) — at POST /clips/:id/feedback; first keep per creator only;
+     properties: `{action: str}`; idempotency enforced via EXISTS query before commit.
+
+4. **`awaiting_data` documented as RESERVED:** The `OnboardingState.awaiting_data` enum value
+   is never written by any code path. `youtube/oauth.py:179` sets `connected`; state advances
+   are `connected → dna_pending` (dna/profile.py:83) and `dna_pending → active`
+   (dna/profile.py:135). The enum value is KEPT in `models.py` and the Postgres schema to
+   avoid an enum-type migration (collision risk with concurrent migrations per Issue 235 Risk 1).
+   The resolver's `awaiting_data` branch is kept but now documented as a reserved-state fallback,
+   not live code. Worker branch at `tasks.py:1541` is in the off-limits worker/tasks.py file —
+   documented here as dead code; removal deferred (see DEFERRED SCOPE).
+
+5. **Resolver URLs repointed:** `resolve_setup_step` in `dna/onboarding.py` now returns `/app/*`
+   SPA routes instead of the retired `/static/*.html` pages:
+   - `sync_catalog` → `/app/onboarding` (was `/static/onboarding.html`)
+   - `build_dna` → `/app/onboarding` (was `/static/onboarding.html`)
+   - `confirm_dna` → `/app/profile` (was `/static/profile.html#dna-brief`)
+   - `link_first_video` → `/app/dashboard` (was `/static/index.html#link-form`)
+   - `complete` → `/app/dashboard` (was `/static/index.html`)
+   Folds carry-over Issue 161.
+
+**Why:**
+- `clip_kept` passes the measurable-proxy test (first irreversible positive act); it is
+  downstream of every step the product exists to do. Source: Brief 07 §2.0 + digitalapplied
+  TTV framework 2026. Until retention-divergence / segment-stability validation is possible
+  (requires the queryable funnel now being wired), treat as the hypothesis activation event.
+- Fixed taxonomy prevents per-session event-name drift — industry standard per Segment naming
+  conventions and Google PII guidance.
+- Routing to `event_log` DB sink (not just file) is required so cohort funnels and TTV
+  (`oauth_completed → clip_kept` elapsed) can be computed via SQL. The file sink alone is not
+  queryable.
+- `awaiting_data` kept in schema: removing a Postgres enum value requires `ALTER TYPE ... DROP
+  VALUE` (Postgres 14+), which can fail if any live row holds the value and is risky adjacent
+  to other concurrent migrations. Documentation-as-reserved is safer.
+- SPA URL repointing: the `/static/*.html` pages are unlinked after Issue 85g's cutover. The
+  DashboardBanners client map is belt-and-suspenders; the server contract should not depend on
+  client-side overrides for routing correctness.
+
+**Source/evidence:**
+- `docs/research/findings/07_activation_onboarding_funnel.md` §2.0, §3, §4
+- digitalapplied TTV framework 2026: https://www.digitalapplied.com/blog/customer-onboarding-time-to-value-2026-saas-metrics-framework
+- Amplitude pirate metrics: https://amplitude.com/blog/pirate-metrics-framework
+- Segment naming conventions: https://segment.com/academy/collecting-data/naming-conventions-for-clean-data/
+- `docs/SOT.md:29` — "backend `next_action` URL repointing is a staging-verified follow-up"
 
 **Date:** 2026-06-23
 

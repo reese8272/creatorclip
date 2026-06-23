@@ -461,6 +461,16 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
         creator_id=str(creator.id),
         task_id=task.id,
     )
+    # Issue 235 — route to queryable DB sink alongside the file-only log_event.
+    from event_log import record_event
+
+    asyncio.ensure_future(
+        record_event(
+            source="backend",
+            event="catalog_sync_started",
+            creator_id=creator.id,
+        )
+    )
     return {
         "task_id": task.id,
         "status": "queued",
@@ -501,6 +511,16 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
         "dna_build_requested",
         creator_id=str(creator.id),
         task_id=task.id,
+    )
+    # Issue 235 — route to queryable DB sink alongside the file-only log_event.
+    from event_log import record_event
+
+    asyncio.ensure_future(
+        record_event(
+            source="backend",
+            event="dna_build_started",
+            creator_id=creator.id,
+        )
     )
     return {
         "task_id": task.id,
@@ -561,6 +581,17 @@ async def confirm_dna(
         creator_id=str(creator.id),
         dna_id=str(profile.id),
         version=profile.version,
+    )
+    # Issue 235 — route to queryable DB sink alongside the file-only log_event.
+    from event_log import record_event
+
+    asyncio.ensure_future(
+        record_event(
+            source="backend",
+            event="dna_confirmed",
+            creator_id=creator.id,
+            extra={"version": profile.version},
+        )
     )
     return {"id": str(profile.id), "version": profile.version, "status": profile.status.value}
 
@@ -654,6 +685,18 @@ async def upsert_identity(
         hard_nos=nos,
         mission=mission,
         style_sample=style_sample,
+    )
+    # Issue 235 — funnel event: creator provided their stated identity, enabling
+    # the DNA build step.  niche_count is the only signal — no PII, no content.
+    from event_log import record_event
+
+    asyncio.ensure_future(
+        record_event(
+            source="backend",
+            event="identity_saved",
+            creator_id=creator.id,
+            extra={"niche_count": len(niches)},
+        )
     )
     return _identity_to_dict(row)
 

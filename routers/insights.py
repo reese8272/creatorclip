@@ -697,7 +697,7 @@ async def list_saved_insights(
         next_action = NextActionOut(
             label="Open Insights",
             action_type="navigate",
-            url="/static/insights.html",
+            url="/app/insights",  # Issue 235/161: was /static/insights.html
         )
     return {
         "insights": items,

@@ -398,14 +398,132 @@ as an enhancer (the original Issue-83 intent, already promised by `OnboardingIde
 - **`onboarding_state = 'awaiting_data'` is unreachable** (never written; `youtube/oauth.py:179` sets
   `connected`, the only advances are in `dna/profile.py`). The SOT lists it as a live state
   (`docs/SOT.md:270`) and `worker/tasks.py:1223` branches on it — dead code (Issue 193).
+  **RESOLVED in Issue 235:** documented as reserved; resolver handles gracefully; DECISIONS.md entry
+  written. Worker branch in off-limits `worker/tasks.py` deferred.
 - **`next_action_url` points at retired `/static/*.html` pages** (`dna/onboarding.py:117-149`) after
   the SPA cutover; SOT already flags backend URL repointing as an unfinished follow-up
   (`docs/SOT.md:29`) (Issue 193).
+  **RESOLVED in Issue 235:** all resolver URLs repointed to `/app/*` SPA routes.
 - **Step-3 "optional" vs. step-4 required gate** (`Onboarding.tsx:152` vs `:166`) — a live honesty
-  defect and a documented Issue-100-vs-Issue-83 tension (Issue 192).
+  defect and a documented Issue-100-vs-Issue-83 tension (Issue 192). **Remains open — Issue 192.**
 - **Backend funnel events are write-only to a log file** while the DB sink exists and is used for UI
   events only — the activation funnel is unmeasurable today (§3, Issue 188).
+  **RESOLVED (router-layer) in Issue 235.** Worker-layer events (`dna_build_started/completed/failed`,
+  `first_clip_generated`, `catalog_sync_completed`) are staging-pending (deferred, see below).
 - The supervisor brief and prompt reference a `DnaCta` *component file*; the CTA lives inside
   `DashboardBanners.tsx` (the `DnaCta` export, `:21`), and the DNA *card* is
   `components/profile/DnaCard.tsx` — no standalone `DnaCta.tsx` exists. Noted so the next reader
   doesn't hunt for a missing file.
+
+---
+
+## 6. Time-to-Value (TTV) SQL queries — Issue 235 (added 2026-06-23)
+
+These queries run against the `event_logs` table once Issue 235's `record_event` calls are live in
+production (staging-pending until Issue 275's GKE deploy). All events carry `creator_id` and `at`
+(timestamp); `extra` is JSONB.
+
+### 6.1 Activation rate per signup cohort (weekly)
+
+```sql
+-- Activation rate: % of creators who reached clip_kept within 14 days of oauth_completed,
+-- grouped by the calendar week they signed up.
+WITH cohorts AS (
+    SELECT
+        creator_id,
+        DATE_TRUNC('week', at) AS signup_week,
+        at AS oauth_at
+    FROM event_logs
+    WHERE event = 'oauth_completed'
+      AND source = 'backend'
+),
+activations AS (
+    SELECT DISTINCT creator_id
+    FROM event_logs
+    WHERE event = 'clip_kept'
+      AND source = 'backend'
+)
+SELECT
+    c.signup_week,
+    COUNT(DISTINCT c.creator_id)                                AS signups,
+    COUNT(DISTINCT a.creator_id)                                AS activated,
+    ROUND(
+        100.0 * COUNT(DISTINCT a.creator_id) / NULLIF(COUNT(DISTINCT c.creator_id), 0),
+        1
+    )                                                           AS activation_rate_pct
+FROM cohorts c
+LEFT JOIN activations a ON a.creator_id = c.creator_id
+GROUP BY c.signup_week
+ORDER BY c.signup_week DESC;
+```
+
+### 6.2 Median time-to-value (TTV) — oauth_completed → clip_kept
+
+```sql
+-- Median TTV in hours for activated creators.
+-- Only includes creators who completed the full funnel (both events present).
+WITH oauth AS (
+    SELECT creator_id, MIN(at) AS oauth_at
+    FROM event_logs
+    WHERE event = 'oauth_completed'
+      AND source = 'backend'
+    GROUP BY creator_id
+),
+kept AS (
+    SELECT creator_id, MIN(at) AS kept_at
+    FROM event_logs
+    WHERE event = 'clip_kept'
+      AND source = 'backend'
+    GROUP BY creator_id
+)
+SELECT
+    PERCENTILE_CONT(0.5) WITHIN GROUP (
+        ORDER BY EXTRACT(EPOCH FROM (k.kept_at - o.oauth_at)) / 3600.0
+    )                         AS median_ttv_hours,
+    AVG(
+        EXTRACT(EPOCH FROM (k.kept_at - o.oauth_at)) / 3600.0
+    )                         AS mean_ttv_hours,
+    COUNT(*)                  AS activated_creator_count
+FROM oauth o
+JOIN kept k USING (creator_id)
+WHERE k.kept_at > o.oauth_at;
+```
+
+### 6.3 Per-stage funnel drop-off (cohort view)
+
+```sql
+-- For a given signup cohort, how many creators reached each funnel stage?
+-- Useful for identifying the highest-leverage drop-off point.
+-- Adjust the signup_week filter as needed.
+WITH base AS (
+    SELECT creator_id
+    FROM event_logs
+    WHERE event = 'oauth_completed'
+      AND source = 'backend'
+      AND DATE_TRUNC('week', at) = '2026-06-16'  -- replace with target week
+)
+SELECT
+    stage,
+    COUNT(DISTINCT el.creator_id) AS creator_count
+FROM (
+    VALUES
+        ('1_oauth_completed',    'oauth_completed'),
+        ('2_catalog_sync',       'catalog_sync_started'),
+        ('3_dna_build',          'dna_build_started'),
+        ('4_dna_confirmed',      'dna_confirmed'),
+        ('5_clip_kept',          'clip_kept')
+) AS stages(stage, event_name)
+LEFT JOIN event_logs el
+    ON el.event = stages.event_name
+    AND el.source = 'backend'
+    AND el.creator_id IN (SELECT creator_id FROM base)
+GROUP BY stage
+ORDER BY stage;
+```
+
+### Notes on query validity
+- All queries assume `event_logs.at` is indexed (it is — the table was designed for this).
+- `creator_id` is a UUID column; the queries use it directly without casting.
+- `extra` JSONB is not queried in 6.1/6.2 (activation rate/TTV are purely event-presence based).
+  For breakdown by `action` type, add `WHERE extra->>'action' = 'upvote'` on the `clip_kept` CTE.
+- These queries are staging-pending (Issue 275) — no rows exist until Issue 235 ships to production.
