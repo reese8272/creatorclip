@@ -96,12 +96,33 @@ class RenderStatus(enum.Enum):
 
 
 class PublishStatus(enum.Enum):
-    """Lifecycle of a YouTube publish attempt (Issue 195)."""
+    """Lifecycle of a YouTube publish attempt (Issue 195 / 196).
 
+    ``scheduled`` — row created but not yet confirmed by the creator.
+    ``confirmed`` — creator approved; the Beat sweep will enqueue the upload.
+    ``pending``   — enqueued to Celery but not yet picked up.
+    ``running``   — the upload is in flight.
+    ``done``      — youtube_video_id returned and stored.
+    ``failed``    — permanent error recorded in ``error`` column.
+    """
+
+    scheduled = "scheduled"
+    confirmed = "confirmed"
     pending = "pending"
     running = "running"
     done = "done"
     failed = "failed"
+
+
+class PublishPlatform(enum.Enum):
+    """Distribution platform for a scheduled ClipPublication (Issue 196).
+
+    Only YouTube is supported in this release. Additional platforms (TikTok,
+    Instagram Reels, etc.) are deferred — tracked in docs/issues.md research
+    finding 13.
+    """
+
+    youtube = "youtube"
 
 
 class FeedbackAction(enum.Enum):
@@ -643,12 +664,21 @@ class ClipOutcome(Base):
 
 
 class ClipPublication(Base):
-    """A YouTube publish attempt for a clip (Issue 195).
+    """A YouTube publish attempt or scheduled publication for a clip (Issues 195/196).
 
     Idempotency: ``task_id`` (the Celery task id) is UNIQUE — an at-least-once
     redelivery finds the existing row instead of double-posting. The returned
-    ``youtube_video_id`` is stored before the task acks. Issue 196 extends this
-    table with scheduling fields (``scheduled_at``/``platform``); this is the base.
+    ``youtube_video_id`` is stored before the task acks.
+
+    Scheduling fields (Issue 196):
+    - ``scheduled_at``  — target publish datetime (UTC); NULL = immediate on enqueue.
+    - ``platform``      — target distribution platform (default: youtube).
+    - ``confirmed_at``  — when the creator confirmed the schedule; NULL until confirmed.
+
+    Status lifecycle:
+      scheduled → confirmed (creator approves) → pending (enqueued by Beat sweep)
+      → running → done | failed
+
     Per-creator isolation via the ``tenant_isolation`` RLS policy on ``creator_id``.
     """
 
@@ -662,14 +692,30 @@ class ClipPublication(Base):
         sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
     )
     # Celery task id — UNIQUE so a redelivered publish task is idempotent.
-    task_id: Mapped[str] = mapped_column(sa.String(64), nullable=False, unique=True)
+    # NULL until the Beat sweep enqueues the upload (status moves pending→running).
+    task_id: Mapped[str | None] = mapped_column(sa.String(64), nullable=True, unique=True)
     youtube_video_id: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
     status: Mapped[PublishStatus] = mapped_column(
         sa.Enum(PublishStatus, name="publish_status_enum"),
         nullable=False,
-        default=PublishStatus.pending,
+        default=PublishStatus.scheduled,
     )
     error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # ── Scheduling fields (Issue 196) ─────────────────────────────────────────
+    # scheduled_at: the creator's chosen publish time (UTC). The Beat sweep
+    # enqueues the upload when scheduled_at <= now() AND status=confirmed.
+    # NULL is valid for rows created directly as pending (immediate publish).
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    platform: Mapped[PublishPlatform] = mapped_column(
+        sa.Enum(PublishPlatform, name="publish_platform_enum"),
+        nullable=False,
+        default=PublishPlatform.youtube,
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
     )

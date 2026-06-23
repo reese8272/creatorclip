@@ -23,6 +23,15 @@ from datetime import timedelta
 from worker.celery_app import celery  # noqa: F401
 
 celery.conf.beat_schedule = {
+    # Issue 196 — sweep due confirmed scheduled publications every 5 minutes and
+    # enqueue publish_to_youtube for each. Advisory lock inside the task body
+    # ensures only one sweep runs at a time across multi-worker deploys.
+    # 5-minute granularity matches the practical precision of upload-timing
+    # windows (reported as hour-of-day, not sub-minute).
+    "sweep-scheduled-publications": {
+        "task": "worker.tasks.sweep_scheduled_publications",
+        "schedule": timedelta(minutes=5),
+    },
     "poll-clip-outcomes-hourly": {
         "task": "worker.tasks.poll_clip_outcomes",
         "schedule": timedelta(hours=1),

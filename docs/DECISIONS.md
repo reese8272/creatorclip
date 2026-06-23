@@ -8028,5 +8028,53 @@ task signature.
 - Resend idempotency keys: resend.com/blog/engineering-idempotency-keys
 - CAN-SPAM always-on for transactional mail: ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business
 - GDPR Art. 6(1)(b) — legitimate interest for relationship mail: gdpr-info.eu/art-6-gdpr/
+## Issue 196 — Scheduled publish: design decisions
+
+**What was decided (2026-06-23):**
+
+1. **Migration numbering**: `0032_clip_publication_schedule` (down_revision = `0031`). Chains off the
+   notifications sibling's 0031, not directly off 0030, to keep the revision history linear after
+   parallel-lane integration. Issue brief mandated this explicitly.
+
+2. **task_id made nullable in 0032**: The 0030 migration created `task_id NOT NULL`. Scheduled rows are
+   created before a Celery task id exists (the sweep assigns it at enqueue time). Making the column
+   nullable is the correct model; the UNIQUE constraint is retained and Postgres correctly allows
+   multiple NULL values (NULLs are never considered equal), so the idempotency guarantee for
+   non-NULL task_ids is preserved unchanged.
+
+3. **Two-step schedule → confirm flow**: The API creates rows as `scheduled`, not `confirmed`. The Beat
+   sweep only enqueues rows in `confirmed` status. This prevents the sweep from immediately firing on a
+   newly-created row before the creator has reviewed the scheduled time — and matches the industry
+   standard two-step pattern for scheduled social posts (Buffer, Hootsuite, YouTube Studio all require
+   explicit confirmation or "approve" before a queued post fires).
+   Alternatives ruled out: single-step immediate-confirm on POST — too aggressive; a scheduled post
+   created accidentally can't be intercepted before the upload fires.
+
+4. **Cancel → `failed` (not a soft-delete)**: Cancellation sets `status=failed, error='Cancelled by
+   creator'` rather than deleting the row. Preserves the audit trail; matches the existing pattern
+   where `ClipPublication` rows are append-only (Issue 195 idempotency model).
+
+5. **5-minute Beat interval for the sweep**: upload-timing windows are reported at hour-of-day
+   granularity (not sub-minute). 5 minutes is precise enough for practical purposes, and matches
+   the industry-standard "check every few minutes" pattern for scheduled-post sweeps (Buffer
+   publishes within 5 minutes of scheduled time). Shorter intervals (1 min) would burn more DB
+   cycles for no user-visible benefit.
+
+6. **Platform enum: only `youtube` in 0032**: The PRD's research finding 13 identifies multi-platform
+   distribution (TikTok, Instagram Reels) as a future capability. Introducing the `PublishPlatform`
+   enum now (with only `youtube`) sets the schema extension point without building the unprioritised
+   platforms. Adding a value to the enum later is a cheap `ALTER TYPE … ADD VALUE` migration.
+
+7. **Commit-before-enqueue in the sweep**: The sweep writes `task_id` and transitions rows to
+   `pending` in a single commit, then calls `apply_async`. This order is intentional:
+   - The UNIQUE constraint on `task_id` prevents a double-enqueue if the sweep fires twice
+     before the first task runs (because the second sweep tick sees the row already as `pending`
+     and excludes it via the `WHERE status=confirmed` filter).
+   - A Celery broker outage after commit leaves the row stuck in `pending` — acceptable; a
+     subsequent sweep tick sees `status != confirmed` and skips it; manual ops can reset.
+   Alternatives ruled out: enqueue-before-commit — the task could run before the DB row exists.
+
+**Sources:** Buffer scheduling precision docs; Hootsuite scheduled publishing docs; Postgres NULL
+uniqueness semantics (PG docs §11.6); standard Celery at-least-once idempotency patterns.
 
 **Date:** 2026-06-23

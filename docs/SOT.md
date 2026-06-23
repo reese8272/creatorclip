@@ -172,6 +172,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── analysis.py             # POST video-analysis (Issue 121) + hook-analysis (Issue 130) + chapters (Issue 131)
 │   ├── thumbnails.py           # GET thumbnail-patterns + POST thumbnail-concepts (Issue 129)
 │   ├── titles.py               # POST video title suggestions (Issue 128)
+│   ├── publications.py         # Scheduled publish: POST/GET/confirm/cancel ClipPublication (Issue 196)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
 │
 ├── notify/                     # Transactional email + notification helpers (Issues 242-243)
@@ -418,6 +419,17 @@ notifications                         -- durable in-app notification center (Iss
   id, creator_id (FK), kind, title, body, link_url,
   seen_at (NULL = unread), dismissed_at, created_at
   -- RLS tenant_isolation policy (ENABLE + FORCE), migration 0031 — mirrors chat_conversations
+
+clip_publications                     -- YouTube publish attempts + scheduled publishes (Issues 195/196)
+  id, clip_id (FK CASCADE), creator_id (FK CASCADE, RLS tenant_isolation)
+  task_id (nullable, UNIQUE — Celery task id; assigned by Beat sweep or direct enqueue; idempotency guard)
+  youtube_video_id, status (publish_status_enum), error
+  scheduled_at (TIMESTAMPTZ nullable — target publish time; Beat sweep selects WHERE <= now() AND status=confirmed)
+  platform (publish_platform_enum, default youtube)
+  confirmed_at (TIMESTAMPTZ nullable — when creator confirmed the schedule)
+  created_at, updated_at
+  -- Status lifecycle: scheduled → confirmed → pending → running → done|failed
+  -- cancel sets status=failed, error='Cancelled by creator' (audit-trail preservation)
 ```
 
 ---

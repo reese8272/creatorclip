@@ -39,6 +39,7 @@ from models import (
     MinutePack,
     OnboardingState,
     PreferenceModel,
+    PublishPlatform,
     PublishStatus,
     RenderStatus,
     RetentionCurve,
@@ -495,6 +496,24 @@ def poll_clip_outcomes() -> None:
     in preference model retraining.
     """
     run_async(_poll_clip_outcomes_async())
+
+
+@celery.task(name="worker.tasks.sweep_scheduled_publications")
+def sweep_scheduled_publications() -> None:
+    """Celery Beat task: enqueue publish_to_youtube for due scheduled publications.
+
+    Runs every 5 minutes. Selects ClipPublication rows whose ``scheduled_at`` has
+    passed AND ``status == confirmed``, then enqueues ``publish_to_youtube`` for
+    each. An ``pg_try_advisory_lock`` guard ensures only one Beat/worker instance
+    runs this sweep concurrently — mirrors the pattern used in ``_poll_clip_outcomes``
+    and ``_retrain_preference``.
+
+    Idempotency: the task_id written here becomes the Celery task id for the
+    enqueued ``publish_to_youtube`` call. The UNIQUE constraint on
+    ``clip_publications.task_id`` ensures a second sweep tick for the same row
+    (before the first finishes) produces a no-op in the upload task body.
+    """
+    run_async(_sweep_scheduled_publications_async())
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.build_dna")
@@ -1489,6 +1508,93 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
         await _emit("error", message="DNA build failed; retrying")
         logger.error("DNA build for job %s failed: %s", job_id, exc)
         raise
+
+
+async def _sweep_scheduled_publications_async() -> None:
+    """Find due confirmed scheduled publications and enqueue publish_to_youtube.
+
+    Selection criteria:
+    - ``status == confirmed``  — creator explicitly approved the schedule.
+    - ``scheduled_at <= now()`` — the target time has arrived.
+    - ``platform == youtube``  — only YouTube is supported in this release.
+
+    For each matching row the function:
+    1. Acquires the global session-level advisory lock (non-blocking). A concurrent
+       sweep tick or a redelivered Beat message returns immediately.
+    2. Re-reads qualifying rows inside the lock so any rows already transitioned
+       by a concurrent pick are excluded.
+    3. Transitions ``status → pending`` and sets ``task_id`` to the newly
+       enqueued Celery task id BEFORE committing — the UNIQUE constraint on
+       task_id is the idempotency guard that prevents double-posting if this
+       sweep fires twice before the upload task runs.
+    4. Commits, then enqueues ``publish_to_youtube``. Commit-before-enqueue
+       is intentional: the row persists even if the Celery broker is temporarily
+       unavailable.
+    """
+    from sqlalchemy import select, text
+
+    now = datetime.now(UTC)
+    lock_key = "sweep_scheduled_publications"
+
+    async with db.AdminSessionLocal() as session:
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
+            )
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping sweep_scheduled_publications")
+            return
+
+        try:
+            rows = (
+                await session.execute(
+                    select(ClipPublication).where(
+                        ClipPublication.status == PublishStatus.confirmed,
+                        ClipPublication.scheduled_at.isnot(None),
+                        ClipPublication.scheduled_at <= now,
+                        ClipPublication.platform == PublishPlatform.youtube,
+                    )
+                )
+            ).scalars().all()
+
+            if not rows:
+                return
+
+            # Transition rows to pending and assign a task_id before committing.
+            # Using Celery's apply_async(task_id=…) lets us set the task_id upfront
+            # so the UNIQUE constraint guards against a double-enqueue race.
+            to_enqueue: list[tuple[uuid.UUID, str]] = []
+            for pub in rows:
+                new_task_id = str(uuid.uuid4())
+                pub.status = PublishStatus.pending
+                pub.task_id = new_task_id
+                pub.updated_at = now
+                to_enqueue.append((pub.clip_id, new_task_id))
+                logger.info(
+                    "sweep_scheduled_publications: enqueuing clip=%s task_id=%s",
+                    pub.clip_id,
+                    new_task_id,
+                )
+
+            await session.commit()
+
+            # Enqueue after commit so the UNIQUE task_id row already exists — a
+            # race where the task runs before this loop finishes is impossible
+            # because Celery picks up the task from the broker after the apply_async
+            # call, which happens after the commit.
+            for clip_id, task_id in to_enqueue:
+                publish_to_youtube.apply_async(
+                    args=[str(clip_id)],
+                    task_id=task_id,
+                )
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
+            )
 
 
 async def _poll_clip_outcomes_async() -> None:
