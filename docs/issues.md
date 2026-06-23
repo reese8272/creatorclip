@@ -4711,7 +4711,7 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 
 ### Issue 73: Pydantic response_model + input validation — close the response-model long tail
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `S` · **Verify** `local`  
+**Status** `CLOSED (2026-06-23)` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `S` · **Verify** `local`  
 **Src** pre-existing 73 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `routers/insights.py`, `routers/videos.py`  
 
@@ -4742,7 +4742,7 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 
 ### Issue 75: SEV-2 / cleanup long tail + dependency CVEs + compliance (tracking issue)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `M` · **Verify** `local`  
+**Status** `CLOSED` (2026-06-23) · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `M` · **Verify** `local`  
 **Src** pre-existing 75 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `.claude/skills/production-assessment/scripts/run_layer0.py`  
 
@@ -4775,7 +4775,7 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 
 ### Issue 76: Post-hardening /assess re-run findings — close the residual SEV-2 cluster
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `M` · **Verify** `local`  
+**Status** `CLOSED (2026-06-23)` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `M` · **Verify** `local`  
 **Src** pre-existing 76 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `observability.py`, `routers/clips.py`, `routers/videos.py`, `worker/tasks.py`  
 

@@ -8,6 +8,7 @@ event_logs table directly; the per-creator endpoint is what ships behind auth.
 """
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +19,23 @@ from models import Creator, EventLog
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 
-@router.get("/me")
+class EventLogItemOut(BaseModel):
+    at: str
+    source: str
+    event: str
+    level: str
+    page: str | None = None
+    target: str | None = None
+    status_code: int | None = None
+    duration_ms: int | None = None
+    extra: dict | None = None
+
+
+class EventLogListOut(BaseModel):
+    events: list[EventLogItemOut]
+
+
+@router.get("/me", response_model=EventLogListOut)
 async def my_events(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),

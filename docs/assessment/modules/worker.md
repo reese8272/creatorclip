@@ -143,3 +143,21 @@ YouTube API loops + unbounded refresh sweep, ffmpeg orphan (now timeout-bounded)
 clean/edit lacking ownership re-check. A single `pg_advisory_unlock_all` pool-reset
 listener in db.py (or migrating the six to `pg_advisory_xact_lock`) plus the
 soft-timeout `failed`-status fix would close the highest-risk half of the list.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] SoftTimeLimitExceeded leaves ingest_status=running (worker/tasks.py:130-134) | → tracked in Issue 82 (async migration wave 2 — worker correctness cluster) |
+| [SEV2] advisory lock leak across 6 session-scoped sites | → tracked in Issue 82 |
+| [SEV2] purge lock released before R2 sweep (worker/tasks.py:1496-1548) | → tracked in Issue 82 |
+| [SEV2] session held across YouTube API loops (worker/tasks.py:1328-1375, 1930-1985) | → tracked in Issue 82 |
+| [SEV2] ffmpeg orphan on SoftTimeLimitExceeded (worker/tasks.py:828,973,1060) | → tracked in Issue 82 |
+| [SEV2] clean/edit tasks lack ownership re-check (worker/tasks.py:207-214) | → tracked in Issue 231 (worker tenant tasks under RLS) |
+| [SEV2] re-renders invisible to billing (worker/tasks.py:196-204) | → wont-fix: free-by-design decision logged in docs/DECISIONS.md (re-renders charged at ingest; per Issue 208 rationale) |
+| [SEV2] _thumb_redis() no loop-binding guard (worker/tasks.py:50-64) | → tracked in Issue 82 |
+| [cleanup] duplicate imports in tasks.py | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] 2976-line tasks.py (_brief_runner extraction) | → tracked in Issue 82 |
+| [cleanup] storage DRY/typing (worker/storage.py) | → tracked in Issue 109 |
+| [cleanup] shutdown not closing Redis singletons | → tracked in Issue 82 |
+| [cleanup] hook N+1 (worker/tasks.py:2762-2764) | → tracked in Issue 109 |

@@ -52,3 +52,13 @@ NEEDS-WORK — one one-line SEV2 (pin `joblib==1.5.3`; its private internals are
 the RCE-allowlist enforcement point and are currently version-floating), plus
 four pre-existing non-blocking cleanups. All Issue 60/71/78a/102 mitigations
 re-verified in place and correct; per-creator isolation holds on every query.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] joblib not pinned (preference/model.py:25-26) | → tracked in Issue 109 (deferred design cleanups — requirements.txt hygiene) |
+| [cleanup] model: Any on PreferenceScorer (preference/model.py:88) | → tracked in Issue 109 |
+| [cleanup] cold-start log collapse (preference/train.py:79-86) | → tracked in Issue 109 |
+| [cleanup] no FEATURE_NAMES length assert (preference/features.py:20-29) | → tracked in Issue 109 |
+| [cleanup] _LAMBDA 30-day half-life hardcoded (preference/decay.py:11) | → tracked in Issue 200 (recency-decay half-life calibration + parameterize) |

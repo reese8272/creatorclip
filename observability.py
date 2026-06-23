@@ -36,13 +36,22 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 # The originating request/correlation id for the current context. "-" until a
 # middleware or Celery signal binds a real value, so a log line is never missing
 # the field.
+# NOTE (Issue 76): safe under the Celery prefork pool — see _task_start_ctx note below.
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
 
 # Header used to carry the id between Celery's publish and run signals.
 _CELERY_HEADER = "x_request_id"
 
 # Per-task start timestamp, set in task_prerun and read in task_postrun to derive
-# task duration (each worker process runs one task at a time → a ContextVar is safe).
+# task duration.
+#
+# NOTE (Issue 76): ContextVars are safe here ONLY under the Celery prefork pool
+# (each forked worker process runs exactly one task at a time; its ContextVar state
+# is isolated from other processes). This assumption is currently enforced by the
+# Celery config — see celery_app.py: worker_pool="prefork", worker_concurrency
+# derived from settings. If the pool is ever changed to gevent/eventlet/threads,
+# ContextVar isolation no longer holds and a per-task threading.local or explicit
+# task-argument passing must replace these module-level vars.
 _task_start_ctx: ContextVar[float] = ContextVar("task_start", default=0.0)
 
 # Reserved LogRecord attribute names — anything not in here is emitted as an

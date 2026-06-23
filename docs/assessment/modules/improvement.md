@@ -80,3 +80,13 @@ plus four cleanups. The 2026-06-08 streaming empty-text SEV2 is invalid (guard
 exists in the callee) and the inert cache marker is a tracked DECISIONS
 follow-up. Security, isolation, disclaimer handling, and web_search wiring are
 sound; the module is one `or 0` and a typing pass away from clean.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] nullable cache-token fields can drop token-usage log (improvement/brief.py:171-174) | → tracked in Issue 218 (re-enable prompt caching on repeated-prefix brief endpoints — fixes SDK and token logging) |
+| [cleanup] bare tuple return (improvement/brief.py:67) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] dead constructor timeout (improvement/brief.py:25-29) | → tracked in Issue 82 (async migration wave 2) |
+| [cleanup] loose list[dict] annotations (improvement/brief.py:80,93) | → tracked in Issue 109 |
+| [cleanup] undocumented lazy import (improvement/brief.py:134) | → tracked in Issue 109 |

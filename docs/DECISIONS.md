@@ -5,6 +5,40 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 75 assessment-module reconciliation + starlette CVE closure
+
+**What changed:** Issue 75 (SEV-2 / cleanup long tail + dependency CVEs + compliance tracking
+issue) is formally closed. All ~23 SEV-2 and ~24 cleanup findings from `docs/assessment/modules/*.md`
+have been annotated with their owning backlog issue (or explicitly wont-fixed) in a "Issue 75
+Reconciliation" table appended to each module file. No finding is left untracked.
+
+Two sub-decisions:
+
+1. **Starlette CVE residual (PYSEC-2026-161) confirmed CLOSED.** The starlette 1.x migration
+   shipped as Issue 143 (2026-06-17): `requirements.txt` now pins `fastapi==0.137.1` +
+   `starlette==1.3.1`. The `PIP_AUDIT_IGNORES` set in `run_layer0.py` (line 178 comment) confirms
+   PYSEC-2026-161 was already lifted from the ignore list when Issue 143 was delivered. The
+   remaining pip-audit ignores are GHSA-6w46 (pytest/CI-only), and four pip supply-chain CVEs
+   (dev/build-time only, pip is not a runtime dep). Issue 143 is the authoritative delivery record.
+
+2. **Re-renders free-by-design (billing/worker finding).** The finding that "re-renders
+   (render/clean/edit) are invisible to the billing ledger" is explicitly wont-fixed as a
+   design choice: minutes are charged at ingest per Issue 89 and the original billing
+   architecture. Free re-renders (as many clean/edit passes as needed) are intentional
+   product behaviour — a differentiator over hosted tools that charge per output. No
+   ledger debit will be added for re-renders. If this changes, update this entry and Issue 208.
+
+**Why:** Tracking issues that stay open indefinitely inflate the apparent backlog and obscure
+the true outstanding work. Reconciliation converts "open tracking" into concrete, numbered,
+owner-assigned work items that actually progress toward closure.
+
+**Source/evidence:** `docs/assessment/modules/*.md` findings cross-referenced against
+`docs/issues.md` issue numbers 181-274, `requirements.txt` pins, and `run_layer0.py:178` comment.
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
 
 **What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a

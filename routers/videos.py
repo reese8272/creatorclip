@@ -73,6 +73,12 @@ class VideoStatusOut(BaseModel):
     captions_available: bool
 
 
+class QueuedOut(BaseModel):
+    video_id: str
+    status: str
+    queued: bool
+
+
 # YouTube video IDs are exactly 11 chars of [A-Za-z0-9_-]. Validate before the value
 # is interpolated into a storage key, so `../` or `/` can't reshape the object path. (Issue 73)
 _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -106,10 +112,13 @@ async def list_videos(
     creator's ``onboarding_state`` so the dashboard can render a guided
     empty hero instead of a blank table.
     """
+    # Hard cap to prevent unbounded scans as creator libraries grow. (Issue 76)
+    _LIST_LIMIT = 100
     result = await session.execute(
         select(Video)
         .where(Video.creator_id == creator.id, Video.origin != VideoOrigin.catalog)
         .order_by(Video.created_at.desc())
+        .limit(_LIST_LIMIT)
     )
     videos = list(result.scalars())
     items = [
@@ -129,24 +138,24 @@ async def list_videos(
     ]
     state = build_envelope_state(len(items))
     message: str | None = None
-    next_action: dict | None = None
+    next_action: NextActionOut | None = None
     if state == "empty_initial":
         if creator.onboarding_state == OnboardingState.connected:
             message = "Link your first video to see AutoClip work — it learns your style from your own content, not a generic virality score."
-            next_action = {
-                "label": "Link a video",
-                "action_type": "open_form",
-                "url": "/static/index.html#link-form",
-            }
+            next_action = NextActionOut(
+                label="Link a video",
+                action_type="open_form",
+                url="/static/index.html#link-form",
+            )
         else:
             message = (
                 "Connect your YouTube channel so AutoClip can analyse your style and audience."
             )
-            next_action = {
-                "label": "Connect YouTube",
-                "action_type": "navigate",
-                "url": "/auth/login",
-            }
+            next_action = NextActionOut(
+                label="Connect YouTube",
+                action_type="navigate",
+                url="/auth/login",
+            )
     return {
         "videos": items,
         "state": state,
@@ -354,7 +363,7 @@ async def upload_video(
     }
 
 
-@router.post("/{video_id}/queue", status_code=202)
+@router.post("/{video_id}/queue", status_code=202, response_model=QueuedOut)
 @limiter.limit("60/hour", key_func=creator_key)
 async def queue_video_for_analysis(
     request: Request,

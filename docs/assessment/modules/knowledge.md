@@ -111,3 +111,16 @@ docs/DECISIONS.md (2048 Sonnet 4.6 floor) corrected. No BLOCKER or SEV1 remains.
 SEV2 (hardcoded `_HAIKU_MODEL` in hooks.py/chapters.py bypasses config) and seven
 cleanups (dead `_DISCLAIMER` + false docstring, dead constants, wrapper shims, bare
 return types, connect-timeout-loosening `with_options`, hooks median guard) are open.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] _HAIKU_MODEL hardcoded (knowledge/hooks.py:25, knowledge/chapters.py:22) | → tracked in Issue 221 (model-per-task — correct SOT + log the decision) |
+| [cleanup] dead _DISCLAIMER constants + false docstring (titles.py, thumbnails.py) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] dead constants _GENERATE_N, TRANSCRIPT_EXCERPT_S | → tracked in Issue 109 |
+| [cleanup] one-line wrapper shims | → tracked in Issue 109 |
+| [cleanup] bare tuple/dict returns | → tracked in Issue 109 |
+| [cleanup] connect-timeout-loosening with_options (all 4 knowledge modules) | → tracked in Issue 82 (async migration wave 2) |
+| [cleanup] hooks median-delta guard | → tracked in Issue 109 |
+| [cleanup] ChannelThumbnailPatterns TypedDict + cache log comment | → tracked in Issue 109 |

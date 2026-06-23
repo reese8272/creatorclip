@@ -36,3 +36,16 @@ Slice: `analysis/__init__.py` (empty), `analysis/brief.py` (Issue 121 video-anal
 ## Module verdict
 
 NEEDS-WORK — no security or cross-tenant defects; the new SEV2 (streamed channel never carries the honesty disclaimer — currently masked by the static page's own copy) and the connect-timeout-degrading `.with_options` wrap are the two items worth fixing before launch, plus typing/DRY cleanup carried over unfixed from the 2026-06-08 run.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] Streaming path never carries _DISCLAIMER (analysis/brief.py:151) | → tracked in Issue 227 (honesty guard on generation bodies) |
+| [SEV2] bare tuple return (analysis/brief.py:69) | → tracked in Issue 109 (deferred design cleanups) |
+| [SEV2] under-typed system list (analysis/brief.py:95) | → tracked in Issue 109 |
+| [SEV2] with_options timeout degradation (analysis/brief.py:135/153) | → tracked in Issue 82 (AsyncAnthropic migration + async wave 2) |
+| [SEV2] deferred local import (analysis/brief.py:133) | → tracked in Issue 109 |
+| [cleanup] oversized top-level function | → tracked in Issue 109 |
+| [cleanup] positional token-log formatting | → tracked in Issue 220 (populate Usage cost ledger) |
+| [cleanup] text_blocks[-1] vs single-block docstring | → tracked in Issue 109 |

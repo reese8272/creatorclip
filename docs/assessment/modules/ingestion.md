@@ -78,3 +78,16 @@ thresholds, trailing-run `end_s` overshoot) are confirmed unfixed, and one new �
 AssemblyAI error-status is never checked, so a failed hosted transcription can
 silently become an empty "successful" transcript, bypassing both the retry chain
 and the terminal-failure refund.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] audio size/duration cap missing (ingestion/audio.py:41) | → tracked in Issue 228 (per-creator pre-job quota + config hardening) |
+| [SEV2] per-file-peak relative normalisation (ingestion/audio.py:46,49) | → tracked in Issue 76 (post-hardening residual SEV-2 cluster) |
+| [SEV2] trailing-run end_s overshoot (ingestion/audio.py:106) | → tracked in Issue 76 |
+| [SEV2] AssemblyAI error-status not checked (ingestion/transcribe.py:200-201) | → tracked in Issue 76 |
+| [cleanup] rrp or 0.0 truthiness (ingestion/signals.py:54) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] per-call aai.Transcriber() (ingestion/transcribe.py:200) | → tracked in Issue 109 |
+| [cleanup] bare dict returns (ingestion/audio.py, signals.py) | → tracked in Issue 109 |
+| [cleanup] docstring rationale drift (ingestion/transcribe.py:38-57) | → tracked in Issue 109 |

@@ -161,3 +161,20 @@ prior SEV2s persist unchanged: broken telemetry attribution (always "anonymous")
 unauthenticated log-injection 500s on `/api/activity`, the Google refresh token in a
 query string, the link/upload double-submit 500 race, and the last in-request LLM call
 on `/clips/generate`. Fix these before launch.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] activity attribution always "anonymous" (routers/activity.py:38-44) | → tracked in Issue 234 (instrument load-bearing surfaces with log_event) |
+| [SEV2] unauthenticated log-injection + 500s (routers/activity.py:46-59) | → tracked in Issue 229 (HTTP security-headers middleware + input hardening) |
+| [SEV2] Google refresh token in query param (routers/auth.py:232-236) | → tracked in Issue 229 |
+| [SEV2] link/upload IntegrityError → 500 (routers/videos.py:157-189, 250-293) | → tracked in Issue 76 (post-hardening residual SEV-2 cluster) |
+| [SEV2] /clips/generate in-request LLM (routers/clips.py:100-139) | → tracked in Issue 82 (async migration wave 2) |
+| [cleanup] generate endpoint empty state bug (routers/clips.py:139) | → tracked in Issue 76 |
+| [cleanup] task_events untyped + get_event_loop deprecated (routers/tasks.py:117-123) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] _HAIKU_MODEL hardcoded (routers/insights.py:456) | → tracked in Issue 221 (model-per-task decision log) |
+| [cleanup] internal virality naming _compute_virality_score (routers/insights.py:118-165) | → tracked in Issue 109 |
+| [cleanup] inert cache_control on analyze-performer (routers/insights.py:563-571) | → wont-fix: already logged in docs/OFF_COURSE_BUGS.md (2026-06-16); confirmed inert, benign premium only |
+| [cleanup] /auth no rate limit (routers/auth.py:50-62) | → tracked in Issue 228 (per-creator pre-job quota + rate limiting) |
+| [cleanup] aset_owner duplication ~12× | → tracked in Issue 109 |

@@ -94,3 +94,14 @@ mutations under verified UNIQUE constraints), but the Stripe client's retry
 hardening is provably inert, the idempotency key is still not tenant-scoped,
 and an out-of-balance race in the worker burns three full reprocess retries
 before failing with the actionable message lost.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] Stripe max_network_retries NO-OP (billing/stripe_client.py:34) | → tracked in Issue 206 (verify payment_status + Stripe robustness) |
+| [SEV2] Idempotency-Key not tenant-scoped (billing/stripe_client.py:101) | → tracked in Issue 206 |
+| [SEV2] HTTPException(402) from Celery worker (billing/ledger.py:152) | → tracked in Issue 205 (Stripe ↔ ledger reconciliation Beat task) |
+| [cleanup] fast-path creator_id filter (billing/ledger.py:64) | → tracked in Issue 205 |
+| [cleanup] illusory v4 UUID check (billing/stripe_client.py:65) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] per_minute_cents DRY (billing/stripe_client.py:69) | → tracked in Issue 109 |

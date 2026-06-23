@@ -132,3 +132,24 @@ verified), but 7 SEV2s stand: two carried over unfixed from 2026-06-07
 (per-call MultiFernet, recreate_engine race) plus five new — most importantly
 the `ENV == "production"` free-string gate, which lets a one-character env
 typo silently switch off every production fail-fast safeguard at once.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+Every finding below is promoted into a numbered backlog issue or explicitly wont-fixed.
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] ENV free-string gate (config.py:237) | → tracked in Issue 228 (per-creator pre-job quota + config hardening) |
+| [SEV2] backend-conditional secrets unchecked (config.py:232-268) | → tracked in Issue 228 |
+| [SEV2] JWT_SECRET_KEY no min-length validation | → tracked in Issue 229 (HTTP security-headers middleware + config guards) |
+| [SEV2] slowapi sync Redis call on event loop (limiter.py:80-83) | → tracked in Issue 82 (async migration wave 2) |
+| [SEV2] StaticCacheBustMiddleware Set-Cookie collapse (main.py:155) | → tracked in Issue 109 (deferred design cleanups) |
+| [SEV2] per-call MultiFernet rebuild (crypto.py:13-29) | → tracked in Issue 233 (redaction backstop / observability cleanup) |
+| [SEV2] recreate_engine race (db.py:80-116) | → tracked in Issue 82 |
+| [cleanup] SESSION_COOKIE duplication (limiter.py:30) | → tracked in Issue 109 |
+| [cleanup] print() on startup (config.py:276-281) | → tracked in Issue 109 |
+| [cleanup] _set_app_creator_id untyped (db.py:132-133) | → tracked in Issue 109 |
+| [cleanup] get_session no docstring (db.py:167-169) | → tracked in Issue 109 |
+| [cleanup] append_audit spuriously async (models.py:680-698) | → tracked in Issue 109 |
+| [cleanup] dispatch untyped (main.py:144) | → tracked in Issue 109 |
+| [cleanup] auth.py except drops exception class (auth.py:42-43) | → tracked in Issue 233 |

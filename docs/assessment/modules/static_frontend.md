@@ -162,3 +162,25 @@ innerHTML unescaped, and onboarding does not link util.js), and the prior SEV2/c
 backlog — JS-in-attribute escape bug, broken activity-panel registration, signed-in
 pricing telling users to "Sign in to buy", missing account-deletion UI the policies
 promise, unused htmx CDN — is still entirely open.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] onboarding.html:461 channel_title innerHTML unescaped (NEW) | → tracked in Issue 229 (HTTP security-headers middleware — frontend XSS hardening) |
+| [SEV2] profile.html:881 JS-in-attribute escape bug | → tracked in Issue 229 |
+| [SEV2] review.html + editor.js camelCase registerTask (activity panel) | → tracked in Issue 211 (global active-tasks panel) |
+| [SEV2] pricing.html authed check always false | → tracked in Issue 109 (deferred design cleanups) |
+| [SEV2] pricing.html data-allow-anonymous missing | → tracked in Issue 109 |
+| [SEV2] htmx CDN no SRI on 5 pages | → tracked in Issue 229 |
+| [SEV2] privacy.html + tos.html promise deletion UI that doesn't exist | → CLOSED: account deletion UI (DELETE /auth/me + profile Danger zone) shipped in Issue 158 |
+| [SEV2] early-access.html contradictory pricing + no disclaimer | → tracked in Issue 226 (retire or lock down legacy static UI output sink) |
+| [SEV2] sendFeedback silent 4xx/5xx | → tracked in Issue 213 (per-video clips map — feedback UI) |
+| [SEV2] queueVideo/generateClips no error display | → tracked in Issue 210 (per-video pipeline status stepper) |
+| [cleanup] duplicate onEvent key (analysis.html) | → tracked in Issue 109 |
+| [cleanup] escape helpers partially consolidated | → tracked in Issue 109 |
+| [cleanup] logout() defined 6× across pages | → tracked in Issue 109 |
+| [cleanup] dead meta suffix (review.html:592) | → tracked in Issue 109 |
+| [cleanup] unpopulated #nav-auth (pricing.html:196) | → tracked in Issue 109 |
+| [cleanup] Google Fonts render-blocking CDN @import | → tracked in Issue 109 |
+| [cleanup] loadVideos() client-side N+1 (index.html:654) | → tracked in Issue 210 (per-video pipeline status stepper / dashboard refactor) |

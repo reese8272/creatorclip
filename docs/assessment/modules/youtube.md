@@ -125,3 +125,17 @@ fetch), and two new SEV2s landed this pass: the Redis fail-open path self-destru
 in its own `finally`, and catalog pagination is uncapped against the shared daily
 quota. The quota undercount and fail-open fixes should ship before the Beat
 refresh runs at production scale.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] quota undercount per retry (youtube/data_api.py:84, analytics.py:42) | → tracked in Issue 260 (YouTube Data API quota at scale — extension + fairness + caching) |
+| [SEV2] Redis fail-open broken in finally (youtube/oauth.py:312-332) | → tracked in Issue 82 (async migration wave 2 — OAuth correctness) |
+| [SEV2] sync_video_analytics ownership guard missing (youtube/analytics.py:252-286) | → tracked in Issue 231 (worker tenant tasks under RLS) |
+| [SEV2] get_videos_metadata silent 50-id truncation (youtube/data_api.py:202) | → tracked in Issue 260 |
+| [SEV2] sequential awaits in fetch_creator_identity (youtube/oauth.py:144-156) | → tracked in Issue 82 |
+| [SEV2] uncapped catalog pagination (youtube/data_api.py:158-192) | → tracked in Issue 260 |
+| [cleanup] duplicated retry loop (youtube/analytics.py, data_api.py) | → tracked in Issue 82 |
+| [cleanup] HTTPException raised from domain layer (youtube/oauth.py) | → tracked in Issue 82 |
+| [cleanup] ffmpeg stderr buffering (youtube/ingest.py:36,63-65) | → tracked in Issue 109 (deferred design cleanups) |
