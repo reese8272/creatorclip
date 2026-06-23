@@ -8138,3 +8138,103 @@ task signature.
 uniqueness semantics (PG docs §11.6); standard Celery at-least-once idempotency patterns.
 
 **Date:** 2026-06-23
+
+## 2026-06-23 — Issue 189: Per-frame active-speaker reframe — build-vs-buy decision
+
+**What was decided:**
+
+BUILD (self-hosted per-frame tracking). Do NOT buy a hosted reframe API.
+
+**Why:**
+
+Three dimensions were evaluated — cost, ToS/data-residency, and latency:
+
+1. **Cost**: Hosted reframe APIs (Vizard, Sieve eye-contact) are priced per upload-minute
+   (Sieve eye-contact at $0.10/min; Vizard at per-upload-hour). For a 60–90s clip library, that is
+   $0.10–$0.15/clip for the reframe step alone — a recurring variable cost on top of worker compute
+   we already pay. The self-hosted path costs only worker CPU (already budgeted in `COST_PER_RENDER_CPU_S`).
+
+2. **ToS / data-residency**: A hosted reframe API is a new video-data sub-processor. Under GDPR Art. 28
+   and YouTube API Services ToS §VII (data handling), every new sub-processor requires a DPA and an
+   assessment of where source video is sent. Source video contains creator PII and may contain
+   third-party faces. Adding a sub-processor for a feature we can self-host is unnecessary risk.
+
+3. **Latency**: Sieve and Vizard add 3–6 min/clip (upload → remote processing → download).
+   Our render pipeline already runs in-process in the Celery worker; the per-frame tracking adds
+   at most `clip_duration_s / sample_fps` × `face_detection_ms_per_frame` of CPU (e.g. 60s clip
+   at 5 fps × ~30 ms/frame = ~9 s overhead). We beat the hosted latency by ≥10×.
+
+**Why NOT AutoFlip (the "obvious" OSS answer):**
+
+AutoFlip (Google's open-source reframe framework, github.com/google/mediapipe/.../autoflip.md) was
+EOL'd in March 2023 with no maintained successor in MediaPipe. It depends on abandoned MediaPipe
+graph APIs that have been removed from the current mediapipe Python package. Do NOT attempt to
+revive it.
+
+**Chosen implementation stack:**
+
+The research-confirmed recommendation (docs/issues.md Issue 189 brief) is:
+1. **Face detection per frame:** MediaPipe BlazeFace (Tasks API, `mediapipe >= 0.10.x`) — the
+   current 2026 successor to AutoFlip's face detector. Fast (~30 ms/frame on CPU), no GPU required,
+   bundled model file, Apache 2.0 licence. Lazy import so the app and test suite import cleanly
+   without mediapipe installed (the package is ~200 MB native; only needed in the render worker).
+2. **Shot boundaries (future enhancement):** PySceneDetect 0.7 (released 2026-05-03) when per-shot
+   speaker switching is needed. Not included in this first cut — per-frame EMA smoothing is
+   sufficient for the initial quality bar. Add shot-aware speaker selection in a follow-up.
+3. **TalkNet ASD:** The issues.md brief cites Sieve's open-source fast-asd
+   (github.com/sieve-community/fast-asd) as the recommended audio-visual active speaker detector.
+   Deferred from this first cut (it requires audio–video synchronisation and a separate inference
+   pass) — MediaPipe BlazeFace face-largest heuristic is a valid first approximation for
+   single-presenter and two-person clips, which cover the dominant CreatorClip use case. TalkNet
+   ASD is the natural next upgrade once the render-env smoke test is green.
+4. **EMA smoothing + pan clamp:** Exponential Moving Average (α = 0.2) + 300 px/s pan-speed clamp,
+   applied to the raw frame detections. Removes per-frame jitter without the full one-euro filter
+   implementation complexity; sufficient for offline post-processing on pre-recorded clips.
+5. **ffmpeg time-varying crop via sendcmd:** The sendcmd filter injects parameter changes into the
+   filtergraph at specified timestamps. Format per ffmpeg docs: `<ts> [enter] crop x <val>;`.
+   The x-offset is updated once per detection sample; ffmpeg holds the last value between updates.
+   This is the documented production approach used by auto-vertical-reframe reference pipelines
+   (github.com/KazKozDev/auto-vertical-reframe).
+
+**Deploy-safety gate (CRITICAL):**
+
+The new path is placed behind `ACTIVE_SPEAKER_REFRAME_ENABLED: bool = False` in config.py.
+The flag DEFAULTS TO FALSE. The legacy single-keyframe Haar crop in `render.py` remains the
+production default until the new path is verified on a real render environment (ffmpeg + MediaPipe
++ real multi-speaker media). This follows the feature-flag / strangler-fig pattern used throughout
+the codebase (cf. `YTDLP_ENABLED`, `STRIPE_TAX_ENABLED`).
+
+The flag must NOT be flipped to True until:
+  - [ ] MediaPipe BlazeFace runs successfully in the render Docker image
+  - [ ] A real multi-speaker clip produces a crop that visually follows the speaker
+  - [ ] The render task timeout/retry budget is measured with the detection overhead
+  - [ ] The sendcmd temp file is confirmed cleaned up in the worker after render
+
+**Verification scope:**
+
+- LOCAL (unit-tested here): crop-center geometry, EMA smoothing, pan clamp, sendcmd formatting,
+  fallback to frame-center, lazy import guard, flag-gated render.py integration.
+- RENDER-ENV / STAGING-PENDING (Issue 275 linchpin): actual MediaPipe detection on real frames,
+  actual ffmpeg sendcmd crop output, render task timing with detection overhead.
+
+**Alternatives ruled out:**
+
+- Hosted reframe APIs (Vizard, Sieve eye-contact): cost/ToS/latency all favour build. See above.
+- YOLO + ByteTrack (used by github.com/KazKozDev/auto-vertical-reframe): overkill for talking-head
+  clips; adds a heavy object-detection dep. Face-specific detector (BlazeFace) is more accurate for
+  the primary CreatorClip persona (single/dual presenter, no complex scenes).
+- AutoFlip: EOL March 2023, abandoned in current mediapipe.
+- zoompan ffmpeg filter: designed for stills/slideshow, not real-time crop panning on video. The
+  crop filter's per-frame `t` variable + sendcmd is the documented production approach.
+
+**Sources:**
+- AutoFlip EOL: https://github.com/google/mediapipe/blob/master/docs/solutions/autoflip.md
+- MediaPipe Tasks API face detector (2026): https://ai.google.dev/edge/mediapipe/solutions/vision/face_detector/python
+- MediaPipe 0.10.35 PyPI: https://pypi.org/project/mediapipe/
+- fast-asd (Sieve, open-source TalkNet): https://github.com/sieve-community/fast-asd
+- auto-vertical-reframe (PySceneDetect+MediaPipe+ffmpeg reference): https://github.com/KazKozDev/auto-vertical-reframe
+- PySceneDetect 0.7 (2026-05-03): https://www.scenedetect.com/
+- ffmpeg sendcmd filter: https://ffmpeg.org/ffmpeg-filters.html (search "sendcmd")
+- Sieve eye-contact pricing ($0.10/min): https://www.sievedata.com/pricing (fetched 2026-06-23)
+
+**Date:** 2026-06-23

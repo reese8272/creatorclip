@@ -61,6 +61,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `SHORTS_MAX_DURATION_S` | No | Default `180`. YouTube's official Shorts maximum (raised from 60s in Oct 2024). Issue 87. |
 | `PERSONALIZATION_THRESHOLD_LABELS` | No | Default `20` |
 | `LLM_TIMEOUT_SECONDS` | No | Default `120` |
+| `ACTIVE_SPEAKER_REFRAME_ENABLED` | No | Default `False`. Gates the per-frame MediaPipe reframe path in render.py (Issue 189). Keep False until render-env smoke test passes. |
+| `REFRAME_SAMPLE_FPS` | No | Default `5.0`. Frames/second to sample for face detection in the per-frame reframe path. Ignored when `ACTIVE_SPEAKER_REFRAME_ENABLED=false`. |
 | `ENV` | No | `development` \| `production`; gates `/docs`, error verbosity |
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated origins; never `*` in production |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Yes (prod) | Token for the `cloudflared` service in `docker-compose.prod.yml`; routes `autoclip.studio` → `app:8000` with no open inbound ports |
@@ -119,7 +121,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── candidates.py           # Peak detection + backward look for setup start
 │   ├── scoring.py              # Multi-signal + DNA-weighted scoring (Claude + features)
 │   ├── ranking.py              # DNA-weighted + preference-model rerank
-│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex
+│   ├── render.py               # ffmpeg cut + 9:16 active-speaker reframe + ASS burn-in + clean-pass filter_complex; flag-gated per-frame reframe path (Issue 189, ACTIVE_SPEAKER_REFRAME_ENABLED)
+│   ├── reframe.py              # (NEW Issue 189) per-frame MediaPipe BlazeFace face tracking → EMA-smoothed crop-center timeline → ffmpeg sendcmd script; lazy import; gated by ACTIVE_SPEAKER_REFRAME_ENABLED (default False — render-env pending)
 │   ├── captions.py             # Animated word-level ASS subtitles (Issue 133 — bold_pop / gradient_slide / minimal via pysubs2 + libass)
 │   ├── filler.py               # Filler-word + silence cut-list generator (Issue 134 — Tier1 unconditional + Tier2 pause-flanked + 800ms silence w/150ms tail)
 │   └── edits.py                # User-supplied cut-list validator (Issue 135 — bounds, overlap, 5s/85% caps, sub-frame floor) for text-based editor
