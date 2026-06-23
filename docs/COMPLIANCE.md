@@ -159,6 +159,8 @@ canonical user-facing disclosure of refund behavior.
 - [ ] Account-deletion endpoint implemented (right-to-erasure: tokens + media + data)
 - [ ] Token revocation handler implemented
 - [ ] Scope review: no unnecessary scopes requested
+- [x] Accessibility Statement published at `/static/accessibility.html` (Issue 301 — EAA enforceable since 2025-06-28, WCAG 2.1 AA target, EN 301 549 v3.2.1 conformance standard, 'Partially conforms' posture)
+- [x] Privacy Policy GDPR Art. 13-14 / CCPA rewrite complete (Issue 252 — sub-processors named, SCCs disclosed, CCPA notice-at-collection, demographics aggregation, breach contact, cookies clause; Draft marker retained pending counsel sign-off)
 
 ---
 

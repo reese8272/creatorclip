@@ -28,6 +28,12 @@
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }
+    h3 {
+      font-size: var(--text-sm);
+      color: var(--color-text);
+      margin: var(--space-4) 0 var(--space-2);
+      font-weight: 600;
+    }
     p, li {
       color: var(--color-text);
       font-size: var(--text-sm);
@@ -37,6 +43,25 @@
     p a:hover, li a:hover { color: var(--color-accent-hover); }
     ul { padding-left: var(--space-5); margin-bottom: var(--space-3); }
     li strong { color: var(--color-text); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-4);
+    }
+    th {
+      text-align: left;
+      color: var(--color-text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--color-border);
+      padding: var(--space-2) var(--space-3);
+    }
+    td {
+      color: var(--color-text);
+      border-bottom: 1px solid var(--color-border);
+      padding: var(--space-2) var(--space-3);
+      vertical-align: top;
+    }
     .contact {
       margin-top: var(--space-8);
       color: var(--color-text-subtle);
@@ -48,12 +73,13 @@
   <nav class="top-nav"><a href="/">← Back to AutoClip</a></nav>
 
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: 2026-05-25 — <em>Draft. Legal review pending before public launch.</em></p>
+  <p class="updated">Last updated: 2026-06-23 — <em>Draft. Legal review pending before public launch. The clauses below are implementation-complete pending counsel sign-off.</em></p>
 
   <h2>What we collect</h2>
   <ul>
     <li>Your Google account identifier (sub), email address, and YouTube channel ID/title</li>
     <li>YouTube Analytics data: per-video metrics, retention curves, audience activity windows, demographics (aggregated)</li>
+    <li><strong>Audience demographics:</strong> YouTube audience-demographics data (age ranges, country distributions, device types) is aggregated and anonymised by YouTube before delivery via the YouTube Analytics API. CreatorClip stores only the aggregated figures returned by the API — no individual viewer personally identifiable information (PII) is received, stored, or processed.</li>
     <li>Video source files you upload (deleted within 72 hours of processing)</li>
     <li>Your interactions with clip candidates (upvote/downvote/skip/trim) to improve personalisation</li>
   </ul>
@@ -73,28 +99,97 @@
     <li>does not allow humans to read your YouTube API data unless you have given consent, it is necessary for security or to comply with applicable law, or the data has been aggregated and anonymised.</li>
   </ul>
 
+  <h2>Sub-processors</h2>
+  <p>AutoClip uses the following third-party sub-processors to deliver the service. Each sub-processor is bound by a Data Processing Agreement (DPA) or equivalent contractual instrument. For the full sub-processor record including transfer mechanisms and DPA details, see <a href="/docs/SUBPROCESSORS.md">docs/SUBPROCESSORS.md</a>.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Vendor</th>
+        <th>Purpose</th>
+        <th>Data categories</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Anthropic</strong></td>
+        <td>LLM inference (DNA synthesis, clip scoring, AI chat)</td>
+        <td>Creator analytics summaries and behavioural patterns (no raw PII, no email, no OAuth tokens enter prompts)</td>
+      </tr>
+      <tr>
+        <td><strong>Voyage AI</strong></td>
+        <td>Text embeddings for semantic search and DNA similarity</td>
+        <td>Anonymised transcript segments, creator DNA profile text</td>
+      </tr>
+      <tr>
+        <td><strong>Deepgram</strong></td>
+        <td>Speech-to-text transcription</td>
+        <td>Creator audio (spoken word only; no video frames uploaded)</td>
+      </tr>
+      <tr>
+        <td><strong>Cloudflare R2</strong></td>
+        <td>Object storage (source video files and rendered clips)</td>
+        <td>Uploaded video bytes, rendered Shorts clips (creator-owned content)</td>
+      </tr>
+      <tr>
+        <td><strong>Stripe</strong></td>
+        <td>Payment processing</td>
+        <td>Name, email, payment card data (Stripe-tokenized; AutoClip never sees raw card numbers)</td>
+      </tr>
+      <tr>
+        <td><strong>Google / YouTube</strong></td>
+        <td>OAuth identity and YouTube Data API (channel metadata, analytics)</td>
+        <td>YouTube channel ID, channel title, video metadata, aggregated analytics</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>International transfers</h2>
+  <p>All sub-processors listed above are US-based. Personal data transferred from the European Economic Area (EEA) or United Kingdom to these processors is governed by <strong>Standard Contractual Clauses (SCCs)</strong> in accordance with GDPR Art. 46(2)(c), as recorded in <a href="/docs/SUBPROCESSORS.md">docs/SUBPROCESSORS.md</a>.</p>
+  <p>None of the sub-processors listed above are currently self-certified under the EU–US Data Privacy Framework (DPF) for this account relationship. SCCs are therefore the operative transfer mechanism for all vendors. This will be updated if any vendor becomes DPF-certified and that certification is confirmed at <a href="https://www.dataprivacyframework.gov" target="_blank">dataprivacyframework.gov</a>.</p>
+
   <h2>Data retention</h2>
   <ul>
     <li><strong>Source video files:</strong> deleted within 72 hours of processing</li>
     <li><strong>Rendered clip files:</strong> retained until you delete them or your account</li>
-    <li><strong>Analytics data:</strong> refreshed periodically; deleted on account deletion</li>
+    <li><strong>Analytics data:</strong> refreshed periodically; deleted on account deletion or if authorisation cannot be re-verified within 30 days (per YouTube API Services Terms §III.E.4.b)</li>
     <li><strong>OAuth tokens:</strong> stored encrypted; deleted on account deletion or token revocation</li>
   </ul>
 
   <h2>Your rights</h2>
   <p>You may request deletion of all your data at any time via the account deletion option in your profile settings. This revokes our OAuth access, deletes all stored data (including telemetry logs), and purges all media files. The deletion record we retain contains no personal data &mdash; only an internal identifier as evidence the erasure occurred.</p>
   <p><strong>Access &amp; portability:</strong> you may request a copy of your data at any time. AutoClip generates a machine-readable JSON export of your profile, channel DNA, videos and metrics, clips, feedback, outcomes, chat history, and billing records, with download links for your rendered clips. The export is prepared on request and made available as a download from your account.</p>
+  <p><strong>EU/UK residents:</strong> you have additional rights under the GDPR / UK GDPR, including the right to access, rectification, restriction of processing, and the right to lodge a complaint with your national supervisory authority. To exercise these rights, contact us at <a href="mailto:reesepludwick@gmail.com">reesepludwick@gmail.com</a>.</p>
+
+  <h2>California residents (CCPA)</h2>
+  <p>This section applies to California residents under the California Consumer Privacy Act (CCPA) as amended by the California Privacy Rights Act (CPRA).</p>
+  <p><strong>Categories of personal information collected:</strong> identifiers (Google account ID, email, YouTube channel ID); internet or other electronic network activity (clip interactions, session data); commercial information (billing records); inferences drawn from this information (channel DNA, content style profile).</p>
+  <p><strong>Purposes of collection:</strong> to provide and improve the AutoClip service as described in this policy.</p>
+  <p><strong>We do not sell or share your personal information.</strong> AutoClip does not sell personal information to third parties, and does not share personal information for cross-context behavioural advertising purposes.</p>
+  <p><strong>Your CCPA rights:</strong> you have the right to know about personal information collected, the right to delete personal information, the right to correct inaccurate personal information, and the right to opt out of sale or sharing (not applicable — we do not sell or share). To exercise these rights, contact <a href="mailto:reesepludwick@gmail.com">reesepludwick@gmail.com</a>.</p>
+
+  <h2>Cookies</h2>
+  <p>AutoClip uses strictly necessary cookies only:</p>
+  <ul>
+    <li><strong>Session JWT cookie</strong> — authenticates your session; HttpOnly, SameSite=Lax, Secure in production.</li>
+    <li><strong>OAuth state cookie</strong> — prevents CSRF during the Google OAuth flow; short-lived, deleted after authentication completes; HttpOnly, SameSite=Lax.</li>
+  </ul>
+  <p>No analytics trackers, advertising pixels, or third-party cookies are set. Because only strictly-necessary cookies are used, no consent banner is required under the ePrivacy Directive.</p>
 
   <h2>Security</h2>
   <p>OAuth tokens are encrypted at rest using industry-standard symmetric encryption. All data is transmitted over TLS. We minimise stored PII to what is strictly necessary for the service.</p>
+
+  <h2>Breach contact</h2>
+  <p>In the event of a personal data breach, you may be notified at the email address registered with your account. Data breach queries and reports can be directed to <a href="mailto:reesepludwick@gmail.com">reesepludwick@gmail.com</a>. Once a Data Protection Officer (DPO) is designated, this section will be updated with the DPO contact and the relevant supervisory authority referral.</p>
 
   <p class="contact">For questions or data requests: <a href="mailto:reesepludwick@gmail.com">reesepludwick@gmail.com</a></p>
 
   <footer class="footer">
     <a href="/static/tos.html">Terms</a>
     <a href="/static/privacy.html">Privacy</a>
+    <a href="/static/accessibility.html">Accessibility</a>
     <span>© AutoClip 2026</span>
   </footer>
 </body>
-<!-- cache-bust: 2026-06-08 -->
+<!-- cache-bust: 2026-06-23 -->
 </html>

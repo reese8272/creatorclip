@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoClip — Accessibility Statement</title>
+  <link rel="stylesheet" href="/static/_design-tokens.css">
+  <style>
+    body {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: var(--space-12) var(--space-6);
+      line-height: var(--leading-relaxed);
+    }
+    .top-nav { margin-bottom: var(--space-8); }
+    .top-nav a { color: var(--color-text-muted); font-size: var(--text-sm); }
+    .top-nav a:hover { color: var(--color-text); }
+    h1 { font-size: var(--text-xl); margin-bottom: var(--space-2); }
+    .updated {
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-8);
+    }
+    h2 {
+      font-size: var(--text-md);
+      color: var(--color-text-muted);
+      margin: var(--space-6) 0 var(--space-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    p, li {
+      color: var(--color-text);
+      font-size: var(--text-sm);
+      margin-bottom: var(--space-3);
+    }
+    p a, li a { color: var(--color-accent); }
+    p a:hover, li a:hover { color: var(--color-accent-hover); }
+    ul { padding-left: var(--space-5); margin-bottom: var(--space-3); }
+    li strong { color: var(--color-text); }
+    .contact {
+      margin-top: var(--space-8);
+      color: var(--color-text-subtle);
+      font-size: var(--text-xs);
+    }
+  </style>
+</head>
+<body>
+  <nav class="top-nav"><a href="/">← Back to AutoClip</a></nav>
+
+  <h1>Accessibility Statement</h1>
+  <p class="updated">Last assessed: 2026-06-23</p>
+
+  <h2>Service description</h2>
+  <p>AutoClip (autoclip.studio) is an AI-assisted video editing web application that analyses YouTube channel data to suggest short-form clip candidates. This statement covers the web application and all publicly accessible static pages.</p>
+
+  <h2>Conformance standard</h2>
+  <p>AutoClip targets conformance with <strong>EN 301 549 v3.2.1</strong>, which incorporates <strong>Web Content Accessibility Guidelines (WCAG) 2.1 Level AA</strong> as its operative web accessibility benchmark. EN 301 549 is the harmonised standard under the European Accessibility Act (Directive (EU) 2019/882), enforceable since 28 June 2025.</p>
+
+  <h2>Conformance status</h2>
+  <p><strong>Partially conforms</strong> with WCAG 2.1 Level AA. The application meets many Level AA criteria; known limitations are documented below. We use automated axe-core tooling in CI (Issue 266) to catch critical and serious violations on every pull request.</p>
+
+  <h2>Known limitations</h2>
+  <p>The following are known areas that do not fully meet WCAG 2.1 Level AA at this time:</p>
+  <ul>
+    <li><strong>Complex interactive components</strong> — The clip review editor (three-pane layout with video player, transcript, and tool panel) has keyboard navigation patterns that may not be fully operable for keyboard-only users on all browsers. We are tracking this as a remediation item.</li>
+    <li><strong>Colour contrast on muted text</strong> — Some secondary/muted text elements use colour combinations that may fall below the 4.5:1 contrast ratio required by WCAG 1.4.3. Primary interactive elements and heading text meet the contrast requirement.</li>
+    <li><strong>Dynamic content announcements</strong> — Live task progress notifications (background jobs such as DNA build and clip generation) may not be consistently announced to screen-reader users. ARIA live regions are partially implemented.</li>
+    <li><strong>Video player controls</strong> — The embedded video player for clip review does not currently expose full keyboard-accessible controls for all playback operations.</li>
+  </ul>
+  <p>We are committed to addressing these limitations in upcoming releases. Priority is given to the core clip-review workflow.</p>
+
+  <h2>Assessment approach</h2>
+  <p>AutoClip assesses accessibility through:</p>
+  <ul>
+    <li>Automated axe-core testing integrated into the CI pipeline (Issue 266 — runs on every pull request against critical and serious violations).</li>
+    <li>Manual keyboard-navigation testing during development of new interactive components.</li>
+    <li>Periodic review against the WCAG 2.1 checklist.</li>
+  </ul>
+
+  <h2>Feedback and contact</h2>
+  <p>We welcome feedback on the accessibility of AutoClip. If you experience a barrier or find content that is not accessible, please contact us:</p>
+  <ul>
+    <li><strong>Email:</strong> <a href="mailto:reesepludwick@gmail.com">reesepludwick@gmail.com</a></li>
+    <li><strong>Response commitment:</strong> We aim to respond to accessibility feedback within 5 business days and to resolve or provide a workaround within 30 days where technically feasible.</li>
+  </ul>
+
+  <h2>Enforcement</h2>
+  <p>If you are not satisfied with our response to your accessibility concern, you may contact your national body responsible for enforcing the European Accessibility Act or applicable national legislation. In the United States, complaints regarding web accessibility for public accommodations may be directed to the U.S. Department of Justice under ADA Title III.</p>
+
+  <p class="contact">For accessibility questions: <a href="mailto:reesepludwick@gmail.com">reesepludwick@gmail.com</a></p>
+
+  <footer class="footer">
+    <a href="/static/tos.html">Terms</a>
+    <a href="/static/privacy.html">Privacy</a>
+    <a href="/static/accessibility.html">Accessibility</a>
+    <span>© AutoClip 2026</span>
+  </footer>
+</body>
+<!-- cache-bust: 2026-06-23 -->
+</html>
