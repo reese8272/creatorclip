@@ -4,11 +4,16 @@ Updated after every issue closes.
 
 ---
 
-## 🔵 WAVE W1 — BUILT + INTEGRATED on `wave1-integration` (2026-06-23) — DEPLOY PENDING
+## ✅ WAVE W1 — SHIPPED & DEPLOYED TO PROD (2026-06-23) @ `01afa46`
 
-**17 issues built across 9 lanes**, integrated on branch `wave1-integration` (off `main` @ `74acea7`).
+**17 issues built across 9 lanes**, integrated, merged to `main`/`staging`, pushed, and **deployed to
+production** (`autoclip.studio`). `main` == `staging` == `origin/main` == `origin/staging` == `01afa46`.
 Built via the `issue-wave` harness (Sonnet sub-agents, isolated worktrees) in 4 batches + a W0.5
-unblock batch. Not yet merged to `main` / deployed.
+unblock batch. Deploy `28055342409` = success (migrations no-op — no new W1 migrations; rollout +
+**smoke test passed**, auto-rollback armed but not triggered). Prod health: `/` → 302 → `/app/dashboard`
+(200); rewritten `/static/privacy.html` (200); new `/app/video/:id` clips-map route (200). The
+GitHub-hosted `CI` check is red on this commit — that is the **known billing-disabled runner** (deploy
+path is the self-hosted runner), same signature as the W0 deploy commit; not a real test failure.
 
 **Issues shipped (DONE):** ui-core #211 (global active-tasks panel) · #213 (per-video clips map —
 a W0 leftover unblocked here) · security-prompt-trust-boundary #225 (`<untrusted_content_policy>`
