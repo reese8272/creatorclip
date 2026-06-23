@@ -7193,6 +7193,57 @@ Strangler Fig Application pattern; exemplars Cal.com / Resend / Linear / Stripe 
 (SPA-static + API-server topology). OWASP DOM-XSS Cheat Sheet (2024) for the
 `.textContent`-safe brief renderer carried into the React port.
 
+## 2026-06-23 — Issue 151: event_logs admin/query surface deferred to Issue 240 (Loki aggregator)
+
+**What was decided:** The cross-creator HTTP query surface for `event_logs` is explicitly
+deferred to **Issue 240** (self-hosted Grafana Loki + GCS). No `/api/logs/admin` endpoint
+will be built as part of Issue 151.
+
+**Rationale (three points):**
+
+1. **Beta operators can query `event_logs` directly** via `psql` or a DB admin tool (e.g.
+   pgAdmin, DBeaver). No PII is present in any row (`_redact()` masks email/token/secret
+   fields at ingestion — see 2026-06-17 entry below). The table carries no RLS (mirrors the
+   `audit_log` exemption; per the 2026-06-17 entry, operators need cross-creator reads for
+   beta analysis). Direct DB access is an established beta-phase posture and is sufficient
+   until the aggregator lands.
+
+2. **The canonical long-term query plane is Issue 240's Loki setup.** At K8s scale (10k+
+   creators) cross-creator log queries belong in a purpose-built log-aggregation layer
+   (Loki + label routing on `creator_id`) rather than an HTTP wrapper over a Postgres table.
+   Building an `/api/logs/admin` endpoint now would be pre-mature infrastructure that gets
+   retired as soon as Issue 240 ships.
+
+3. **No code change needed to `routers/logs.py`.** The existing docstring comment
+   ("for beta, operators query the event_logs table directly — cross-creator view is a
+   deliberate follow-up") is correct; this DECISIONS entry supplies the formal record that
+   the AC language ("OR the query plane is explicitly deferred ... with a recorded decision")
+   requires.
+
+**Alternatives ruled out:**
+
+- **Ship `/api/logs/admin` now:** Requires an admin-role guard (`Depends`), new tests, and
+  a cross-creator isolation policy (which contradicts the deliberate no-RLS posture for this
+  table). All of that gets thrown away when Issue 240 ships. Rejected.
+- **Wait for Issue 240 before closing 151:** The AC explicitly offers a "recorded decision"
+  path. The deliverables of the blocking issues (#233 redact.py, #250 purge_stale_event_logs,
+  beat task) are all merged. Keeping Issue 151 open is a wasted triage cycle.
+
+**Industry standard:** Documenting a retention-and-query policy in a design-decision log is
+the standard way to close a "policy OR recorded decision" AC without shipping premature infra
+(OWASP Logging Cheat Sheet §Storage; GDPR Art. 5(1)(e) storage-limitation). Deferring a
+centralized log aggregator to a later infrastructure issue while using direct DB queries for
+beta is an established SaaS pattern (Grafana Labs Loki docs).
+
+**Source/evidence:**
+- https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html
+- https://grafana.com/docs/loki/latest/
+- GDPR Art. 5(1)(e) — storage limitation principle
+
+**Date:** 2026-06-23
+
+---
+
 ### 2026-06-17 — Beta event logging: dedicated `event_logs` table, not a separate physical DB or log-shipping stack (Issue 151)
 
 **What changed**: Added a queryable telemetry sink — a single `event_logs` Postgres table

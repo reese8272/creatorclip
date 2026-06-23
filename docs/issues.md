@@ -4926,9 +4926,9 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 
 ### Issue 151: Beta logging to a dedicated logs database — finish retention + admin/query surface
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Carry-over & Cleanup · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (2026-06-23) · **Wave** W1 · **Lane** Carry-over & Cleanup · **Size** `M` · **Verify** `local`  
 **Src** pre-existing 151 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
-**Blocked by** #233, #250 · **Coordinate (hot files)** `event_log.py`, `worker/tasks.py`  
+**Blocked by** #233 ✅, #250 ✅ · **Coordinate (hot files)** `event_log.py`, `worker/tasks.py`  
 
 **Problem.** Carry-over Issue 151 (◐ in progress): persist UI + backend events to a dedicated append-only logs store so every click/submit/navigation and key backend process is a queryable row for beta analysis, with the hard invariant of no PII/token/secret in any row. The core infra is substantially built (verified): event_log.py persists to an event_logs table on its OWN engine (create_async_engine at :91, separate DSN), with redaction (_REDACT_SUBSTRINGS at :40, applied in record_event at :103) and a purge path (purge_creator_events at :151 — added by Issue 248); models.py:699 EventLog / :711 __tablename__='event_logs'; migration 0025_event_logs; and a per-creator read surface routers/logs.py (/api/logs/me). The remaining 151 ACs are the retention policy documentation/enforcement and the admin/query surface beyond the per-creator endpoint, plus a redaction test that proves the invariant.
 
@@ -4941,11 +4941,11 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 - `worker/tasks.py` _(worker/tasks.py existing purge beat tasks (purge_stale_source_media at :241))_ — A daily purge_stale_event_logs beat task enforces retention (this is Issue 250's scope — point 151 there)
 
 **Acceptance criteria**
-- [ ] Redaction guard proven by a test: log_event with email/token emits [redacted] (coordinated with Issue 233's backstop)
-- [ ] event_logs retention policy documented in COMPLIANCE and enforced by a daily purge (delegated to/aligned with Issue 250's purge_stale_event_logs, 90d default)
-- [ ] An admin/query surface beyond /api/logs/me exists, OR the query plane is explicitly deferred to the Issue-240 aggregator with a recorded decision
-- [ ] Per-creator isolation on reads (already in /api/logs/me); the logs DB is the single sink fed by both the UI activity endpoint and backend events
-- [ ] 151 reconciled with the 233-241 observability cluster (no parallel sink)
+- [x] Redaction guard proven by a test: log_event with email/token emits [redacted] (coordinated with Issue 233's backstop) — tests/test_event_log.py 12 tests green; redact.py shared helper merged (Issue 233)
+- [x] event_logs retention policy documented in COMPLIANCE and enforced by a daily purge (delegated to/aligned with Issue 250's purge_stale_event_logs, 90d default) — EVENT_LOG_RETENTION_DAYS=90 in config.py; purge_stale_event_logs beat task in worker/schedule.py:68-71; COMPLIANCE.md:87 documents 90-day rolling purge (Issue 250 DONE)
+- [x] An admin/query surface beyond /api/logs/me exists, OR the query plane is explicitly deferred to the Issue-240 aggregator with a recorded decision — DEFERRED: recorded in docs/DECISIONS.md 2026-06-23 (Issue 151 entry); beta operators query event_logs directly via psql; canonical HTTP query plane is Issue 240's Loki aggregator
+- [x] Per-creator isolation on reads (already in /api/logs/me); the logs DB is the single sink fed by both the UI activity endpoint and backend events — /api/logs/me WHERE creator_id=:me enforced; activity endpoint + http_request middleware both route through event_log.record_event
+- [x] 151 reconciled with the 233-241 observability cluster (no parallel sink) — event_logs IS the queryable sink; Issues 233 (redact.py) + 250 (purge) + 240 (Loki) build on it; no duplicate sink
 
 **Tests**
 - Unit: record_event with email=/token= keys emits [redacted] for each _REDACT substring
