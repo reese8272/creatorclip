@@ -27,6 +27,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Token encryption at rest | `cryptography` MultiFernet on token columns | Primary key from `TOKEN_ENCRYPTION_KEY`; optional previous key for zero-downtime rotation |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
 | Frontend | **Migrating: vanilla HTML/CSS/JS → React + TypeScript (Vite, Tailwind v4, shadcn-style)**. Data layer **TanStack Query v5**; routing **React Router v7 Data Mode**; tests **Vitest + React Testing Library** (unit/component) and **Playwright** (E2E/visual harness, `frontend/e2e/`, backend mocked — Issue 162). | Framework resolved 2026-06-17; foundation + design system 2026-06-18 (Issue 85a, DECISIONS.md). Incremental strangler-fig: SPA served under `/app/*`, legacy `static/` pages unchanged. Layouts = `AuthGate` (protects routes) + `AppChrome` (Nav/Footer shell); four route contexts (protected/public × chrome/bare). Ported: Dashboard (`/app/dashboard`, live status via gated TanStack refetch — Issue 85c), Onboarding (`/app/onboarding`, protected+bare 5-step flow w/ dual SSE consoles — Issue 85d), Insights + Analysis (`/app/insights`, `/app/analysis` — LLM-streaming via new `useTaskResult` hook — Issue 85e), Review/Editor (`/app/review` — player-first redesign + transcript editor — Issue 85f), Profile, Chat, Pricing (public-or-authed), Login, Walkthrough. **Cutover (85g, soft): `/` now redirects to `/app/dashboard` when the SPA bundle is built (`main.py` `_SPA_BUILT` gate; legacy index still boots without a build). `static/*.html` pages remain served (unlinked) as rollback insurance — full retirement + backend `next_action` URL repointing is a staging-verified follow-up; `early-access.html` deleted.** Build: `npm --prefix frontend run build` → `frontend/dist/`. Design system in `docs/UI.md` (warmer OKLCH dark-Linear palette in the SPA `@theme`); legacy pages keep `static/_design-tokens.css`. |
+| Transactional email | Resend (Python SDK v2.32.2) | `NOTIFY_BACKEND=console` in dev/CI (logs only); `NOTIFY_BACKEND=resend` in production. Jinja2 paired `.txt`/`.html` templates in `notify/templates/`. Native idempotency-key API maps onto Celery at-least-once retry. SPF/2048-bit DKIM/DMARC DNS runbook in `docs/RUNBOOKS.md`. Issue 242. |
 | Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
 | Production deployment | Kubernetes — **chart written, GKE deploy unvalidated** | Architecture locked (DECISIONS): **GKE Autopilot + Cloud SQL PG16 + KEDA + External Secrets**; Helm chart at `deploy/charts/creatorclip/` (rolling-update + probes, KEDA-on-Redis-depth, PgBouncer sidecar). It has **never run on K8s** — "staging" is still Docker-Compose on the prod VM, so the scale/pool `[DEC]`s are unverified. **Issue 275** (GKE staging + first Helm deploy) is the linchpin; gaps tracked as Issues 275–280 (Lane L12). Docker Compose = dev/test only. See `docs/DEPLOYMENT.md` + `docs/issues.md`. |
 
@@ -172,6 +173,13 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── thumbnails.py           # GET thumbnail-patterns + POST thumbnail-concepts (Issue 129)
 │   ├── titles.py               # POST video title suggestions (Issue 128)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
+│
+├── notify/                     # Transactional email (Issue 242)
+│   ├── __init__.py
+│   ├── mailer.py               # send(to, template, context, idempotency_key); NOTIFY_BACKEND dispatch
+│   └── templates/              # Jinja2 paired .txt + .html per email type
+│       ├── clips_ready.txt     # Placeholder — populated by Issues 243+
+│       └── clips_ready.html
 │
 ├── worker/
 │   ├── celery_app.py           # Celery + Redis broker

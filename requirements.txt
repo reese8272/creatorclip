@@ -67,6 +67,14 @@ prometheus-client==0.25.0
 # ── Storage (S3-compatible / Cloudflare R2) ──────────────────────────────────
 boto3==1.35.54
 
+# ── Transactional email (Issue 242) ─────────────────────────────────────────
+# Jinja2 was already a transitive dep (via markupsafe/starlette templating)
+# but is now load-bearing for notify/mailer.py — pin it explicitly.
+jinja2==3.1.2
+# Resend Python SDK v2 — native idempotency key support, 3k/month free tier.
+# https://resend.com/docs/send-with-python ; https://pypi.org/project/resend/
+resend==2.32.2
+
 # ── Testing ──────────────────────────────────────────────────────────────────
 pytest==8.3.3
 pytest-asyncio==0.24.0

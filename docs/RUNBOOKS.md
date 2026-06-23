@@ -2,6 +2,139 @@
 
 ---
 
+## Email Deliverability — SPF / DKIM / DMARC DNS Rollout (autoclip.studio)
+
+**When to run:** Before setting `NOTIFY_BACKEND=resend` in production. All three
+DNS records must resolve and pass DMARC alignment before sending any email from
+`@autoclip.studio`. Google / Yahoo / Microsoft reject non-compliant mail at SMTP
+level as of 2026 for bulk senders.
+
+**Estimated time:** 30 min DNS setup + up to 48 hours propagation; DMARC tighten
+happens over weeks as reports confirm no false positives.
+
+**Sources:**
+- https://resend.com/docs/dashboard/domains/introduction (Resend domain setup)
+- https://inboxstack.com/blog/dmarc-dkim-spf-email-authentication-guide-2026
+- https://dmarcbusta.com/blog/complete-guide-to-dmarc-implementation-2026
+
+---
+
+### Step 1 — Verify the sending domain in Resend
+
+1. Resend dashboard → Domains → Add Domain → enter `autoclip.studio`.
+2. Resend will display the DNS records that must be added (SPF, DKIM, DMARC).
+3. Do **not** click "Verify" until the records are live and propagated.
+
+---
+
+### Step 2 — Add SPF record
+
+Add a TXT record to `autoclip.studio`:
+
+```
+Type:    TXT
+Host:    @  (or autoclip.studio)
+Value:   v=spf1 include:amazonses.com ~all
+```
+
+Notes:
+- Resend routes email through Amazon SES infrastructure; `include:amazonses.com`
+  is the correct SPF mechanism as of 2026.
+- Use `~all` (softfail) not `-all` (hardfail) until DMARC is stable.
+- SPF has a hard 10-DNS-lookup limit; do not daisy-chain more than needed.
+- If you already have an SPF record, merge the `include:` — only one TXT SPF
+  record is allowed per hostname.
+
+---
+
+### Step 3 — Add DKIM record (2048-bit RSA)
+
+Resend generates the DKIM keypair and provides the public key as a TXT record:
+
+```
+Type:    TXT
+Host:    resend._domainkey.autoclip.studio
+Value:   v=DKIM1; k=rsa; p=<Resend-provided 2048-bit public key>
+```
+
+Notes:
+- 2048-bit RSA is the current standard; 1024-bit is phased out and rejected by
+  major inbox providers as of 2025. 4096-bit causes DNS size issues (UDP packet
+  fragmentation). Do not manually generate keypairs — use Resend's generated key.
+- Resend rotates DKIM keys periodically; check the dashboard after any key
+  rotation notice and update the DNS record.
+
+---
+
+### Step 4 — Add DMARC record (start p=none with reporting)
+
+Add a TXT record to `_dmarc.autoclip.studio`:
+
+```
+Type:    TXT
+Host:    _dmarc.autoclip.studio
+Value:   v=DMARC1; p=none; rua=mailto:dmarc-reports@autoclip.studio; sp=none; adkim=r; aspf=r
+```
+
+Notes:
+- **Start with `p=none`** — this reports failures without rejecting mail.
+  Setting `p=reject` on day 1 can silently blackhole legitimate transactional
+  mail if alignment is off.
+- `rua=mailto:dmarc-reports@autoclip.studio` sends aggregate reports to that
+  address; create it or use a free DMARC reporting service (e.g. dmarc.postmarkapp.com).
+- Review reports after 1–2 weeks of real traffic.
+
+---
+
+### Step 5 — Verify in Resend and test
+
+After DNS propagates (check with `dig TXT autoclip.studio`, `dig TXT resend._domainkey.autoclip.studio`,
+`dig TXT _dmarc.autoclip.studio`):
+
+1. Resend dashboard → Domains → click "Verify". All three records should show green.
+2. Send a test email from the Resend dashboard to a Gmail address.
+3. In Gmail, open the email → three-dot menu → "Show original" → confirm:
+   - `SPF: PASS`
+   - `DKIM: PASS`
+   - `DMARC: PASS`
+
+---
+
+### Step 6 — Tighten DMARC over time
+
+**Do not rush this.** Only tighten after DMARC aggregate reports show zero
+unexplained failures for 1–2 weeks of live traffic.
+
+```
+# Week 1-2: p=none (monitoring)
+v=DMARC1; p=none; rua=mailto:dmarc-reports@autoclip.studio; sp=none
+
+# Week 2-4: p=quarantine (spam-folder suspicious mail)
+v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@autoclip.studio; pct=10
+
+# Once clean at pct=100 quarantine: p=reject
+v=DMARC1; p=reject; rua=mailto:dmarc-reports@autoclip.studio
+```
+
+Log each policy change in `docs/DECISIONS.md`.
+
+---
+
+### Step 7 — Set production env vars
+
+After verified green:
+
+```bash
+# .env (VM, /opt/autoclip/.env):
+NOTIFY_BACKEND=resend
+RESEND_API_KEY=re_...     # from Resend dashboard → API Keys
+EMAIL_FROM=noreply@autoclip.studio
+```
+
+Restart: `docker compose up -d`
+
+---
+
 ## TOKEN_ENCRYPTION_KEY Rotation
 
 ### Background

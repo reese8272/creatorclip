@@ -235,6 +235,34 @@ class Settings(BaseSettings):
     # timeout. (Issue 106)
     STRIPE_TIMEOUT_S: int = 10
 
+    # ── Transactional email (Issue 242) ────────────────────────────────────────
+    # NOTIFY_BACKEND controls where send() dispatches:
+    #   'console' — renders + logs; no external call (default in dev / CI)
+    #   'resend'  — sends via Resend SDK; RESEND_API_KEY must be set
+    NOTIFY_BACKEND: str = "console"
+    # Resend API key (https://resend.com — 3k/month free). Required when
+    # NOTIFY_BACKEND='resend'. Never log or expose.
+    RESEND_API_KEY: str = ""
+    # From-address used for all outbound transactional emails. Must match a
+    # domain verified in the Resend dashboard (e.g. noreply@autoclip.studio).
+    EMAIL_FROM: str = ""
+
+    @model_validator(mode="after")
+    def _validate_notify_backend(self) -> "Settings":
+        """Fail fast when Resend is selected but the API key is absent.
+
+        A missing key would surface only at first send (silently dropped
+        or runtime error). Catching it at startup prevents silent activation
+        leaks in production where NOTIFY_BACKEND is set but the secret is
+        forgotten. (Issue 242)
+        """
+        if self.NOTIFY_BACKEND == "resend" and not self.RESEND_API_KEY:
+            raise ValueError(
+                "NOTIFY_BACKEND='resend' requires RESEND_API_KEY to be set. "
+                "Generate a key at https://resend.com and add it to .env."
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_transcription_timeout(self) -> "Settings":
         """Assert TRANSCRIPTION_TIMEOUT_S leaves a 30 s cleanup window before soft kill.

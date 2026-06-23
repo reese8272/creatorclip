@@ -105,6 +105,19 @@ These are read by `config.py` (pydantic-settings). **Required** vars have no def
 | `APP_BASE_URL` | – | – (`localhost`) | Public base for Stripe redirect/cancel URLs. **Prod: `https://autoclip.studio`** | n/a |
 | `FREE_TRIAL_MINUTES` | – | – (`60`) | Minutes granted on first login | n/a |
 
+### Transactional email (Issue 242)
+
+| Var | Secret? | Required | What it does | Where to get it |
+|-----|:------:|:--------:|--------------|-----------------|
+| `NOTIFY_BACKEND` | – | – (`console`) | `console` logs emails (dev/CI); `resend` sends via Resend API | n/a |
+| `RESEND_API_KEY` | 🔑 | ⚠️ | Resend API key (`re_…`). Required when `NOTIFY_BACKEND=resend`. Never log. | resend.com/api-keys |
+| `EMAIL_FROM` | – | ⚠️ | Verified sender address (e.g. `noreply@autoclip.studio`). Must match a Resend-verified domain. | Resend dashboard → Domains |
+
+> **Security note:** `RESEND_API_KEY` must never appear in any log line or error message.
+> The key is read via `settings.RESEND_API_KEY` (pydantic-settings) and assigned to `resend.api_key`
+> at first send. It is never included in Jinja2 template context, never passed to `logger.*`, and
+> never present in any diagnostic output. Treat it with the same handling as `ANTHROPIC_API_KEY`.
+
 ### Google / YouTube OAuth
 
 | Var | Secret? | Required | What it does | Where to get it |
