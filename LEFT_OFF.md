@@ -1,111 +1,65 @@
-# LEFT_OFF — session handoff
+# LEFT_OFF — Wave-0 integration
 
-> **Read this first.** Living "where we are right now" file. Not a changelog, not a source of
-> truth — those live in `docs/`. Updated at the end of every session.
-
-**Last updated:** 2026-06-23 · **Checked out:** `main` @ `333461c` · **Working tree:** clean.
-`main` == `staging` == `origin/main` == `origin/staging` @ `333461c`.
-
-**This session (planning-only, no product code):** rebuilt `docs/issues.md` into the **Master Roadmap
-to Production** and committed + **DEPLOYED** it (docs-only; deploy run `27996005160` → success).
+**Last updated:** 2026-06-23 · **Branch:** `wave0-integration` (off `main` @ `65a1d4f`) · **Working tree:** clean
+(this branch only; `main` untouched, nothing pushed, nothing deployed).
 
 ---
 
 ## CURRENT FOCUS
 
-**The roadmap is live; the next job is to START EXECUTING it.** `docs/issues.md` is now a
-dependency-ordered execution plan: every open issue (181–303 + carry-over, **138 open**) has three
-coordinates — **Wave** (W0–W5 dependency round), **Lane** (one of 19 file-disjoint subsystem owners that
-run in parallel), **Batch** (per-wave parallel deployment unit) — plus an execution-ready brief
-(source-verified files-to-touch, testable ACs, Blocked-by/Enables, `[DEC]`, verify-path, tests, risks).
-**29 research-derived issues (275–303)** were added (founder-approved, tagged 🧪 in the file) and **13
-sourced `[DEC]` recommendations** folded into briefs.
+All 14 code-bearing lanes of roadmap **Wave W0** were built autonomously (per-lane `wave0/*` branches via
+`.claude/workflows/issue-wave.js`) and **integrated onto `wave0-integration`** with a conflict-aware merge.
+The 4 pure-runbook lanes were hand-drafted to `docs/runbooks/`. Nothing is merged to `main` or deployed —
+W0's load-bearing ACs (migrations, RLS, SSE round-trips, Stripe races) are staging-gated.
 
-### → NEXT ACTION
-1. **Pick the first wave to execute.** Open `docs/issues.md` → "Master plan — Lane × Wave matrix".
-   **Wave 0 is startable today.** Deploy one agent per lane that has W0 issues; hand it that lane's
-   brief(s); run lanes in parallel; respect each issue's **Blocked by** line + the **Hot-file
-   coordination protocol** (esp. `worker/tasks.py` — 22 issues / 13 lanes; and the Alembic chain).
-2. **Highest-leverage early picks:** **Issue 275** (GKE staging + first Helm deploy) — the linchpin that
-   makes ~40 `staging`/`external` issues verifiable; **Issue 198** (personalization-efficacy harness —
-   the moat, unblocks 199–202); **Track A** env gates 24/25/26 in parallel.
-3. **Per issue, run `/issue-workflow N`** (CHECK→APPROVE→BUILD→REVIEW). The brief is condensed; open the
-   `Src:` finding in `docs/research/findings/` for full ACs/evidence. `[DEC]` issues need a
-   `docs/DECISIONS.md` entry at build (draft entries already exist in the findings/research).
-4. **Held, separate from the roadmap:** merge `feat/batch-b-publish` (Issues 194/195) when a real DB +
-   YouTube sandbox verification path exists — see KEY COORDINATES.
+**→ NEXT ACTION**
+1. **Review the diff:** `git diff main..wave0-integration` (162 files). Per-lane: `git log --oneline main..wave0-integration`.
+2. **Reconcile two known items** before merge (see CONSTRAINTS): the 223-vs-224 caching contradiction in
+   `docs/DECISIONS.md`, and the union-merged `docs/PROJECT_STATE.md` lane entries.
+3. **Verify on staging (Issue 275):** stand up GKE staging (or any real Postgres 16 + Redis), then
+   `alembic upgrade head` (chain `0027 → 0028_usage_cost_estimate → 0029_creator_brand_kit`) and run the
+   FULL suite there — `.venv/bin/pytest`. This dev box has no Postgres, so DB/RLS/migration/integration
+   tests have NOT run; production code is ruff-clean + `py_compile`-clean only.
+4. **Then** merge `wave0-integration → staging → main` (pushing `main` auto-deploys via the self-hosted runner).
 
-## WHAT WORKS NOW (verified — don't re-investigate)
+## WHAT WORKS NOW (verified on this box)
 
-- **Master roadmap committed + deployed** @ `333461c`. Deploy run `27996005160` → **success** (36s);
-  Docker publish `27995964548` → success (1m2s). `autoclip.studio` was healthy after the prior deploy.
-- **Roadmap adversarially validated:** zero dependency-order violations; **513/524 cited file paths
-  confirmed real** (the 11 others are files-to-create); all 138 open issues reachable as `### Issue N:`;
-  all carry acceptance criteria (the `/issue-workflow` + `/close-out` contract holds).
-- **LIVE on prod (`main`):** Batch A (181/183/184/185 render quality), Issue 182 (1:1/16:9 export +
-  `GET /clips/{id}/download` + clip-playback fix), and the **SEV1 privacy track 247/248/249** (audit PII
-  leak fix, `event_logs` purge on deletion, Art. 15/20 data export — migration `0027_data_exports`).
-- **Doc-set corrected for the "K8s research pending" staleness** — `CLAUDE.md`, `docs/SOT.md`,
-  `docs/README.md`, `docs/DEPLOYMENT.md`, `docs/DECISIONS.md`, `docs/PROJECT_STATE.md` all updated.
-
-## THE ARC THAT LED HERE
-
-1. Prior sessions: React/TS overhaul + Playwright harness (162–165); 15 gap-closure research findings
-   (166–180); a first backlog rebuild (181–274); Batch A + 182 + privacy 247–249 shipped to prod.
-2. **This session:** founder asked for ONE execution-ready source of truth so agents can be deployed in
-   conflict-minimized parallel batches all the way to prod, and to "research further" for gaps.
-3. Ran a 16-agent **source-verified extraction** of every open issue + a 6-dimension **production-gap
-   research** pass (deploy-arch, open `[DEC]`s, SRE completeness, launch sequence, legal/compliance,
-   cost-at-scale) → +29 issues, +13 decisions, and the "K8s chart already exists" finding.
-4. Synthesized dependency **waves + file-disjoint lanes + batches**, deterministically generated the
-   verbose `issues.md`, adversarially validated, fixed the findings, corrected the docs, committed +
-   pushed to main+staging, and verified the deploy succeeded.
+- 14 lanes merged in dependency order; **0 conflict markers**; all changed Python `py_compile`s.
+- **Production code is ruff-clean.** Migration chain is linear (no fork).
+- Conflict resolutions done + reasoned: privacy↔billing (Beat tasks/schedule — both kept), agentic↔observability
+  (cost-ledger + LLM metric both kept; `hooks.py` keeps agentic's `(text, usage)` tuple return), and the
+  **semantic** agentic↔security clash in `dna/brief.py` → **security (Issue 224 trust boundary) won**.
+- Fixed a real latent lane bug: 7 LLM-task fns used `settings.COST_*` with no local `from config import settings`
+  (F821) — added the local imports (module-level is deliberately avoided to keep config-load deferred).
 
 ## KEY COORDINATES & FACTS
 
-| Thing | Value |
-|---|---|
-| Repo | `github.com/reese8272/creatorclip` |
-| Prod URL | `https://autoclip.studio` (Cloudflare-fronted; React SPA at `/app`) |
-| Branches | `main` (live/deploys) + `staging` (pre-prod), kept fast-forward-identical. Both @ `333461c` |
-| **Backlog / roadmap** | `docs/issues.md` — **Master Roadmap** (Wave/Lane/Batch + briefs). Prior backlog archived `docs/archive/issues_pre_roadmap_2026-06-22.md` |
-| Held publish branch | `feat/batch-b-publish` @ `79a5562` (Issues 194/195; migration already renumbered `0027`→`0028_clip_publications`). NOT merged; needs real DB + YouTube sandbox. |
-| Alembic head on main | `0027_data_exports` — next migration is `0028`; **publish branch + roadmap Issue 190 both want `0028`** → assign at merge (hot-file protocol) |
-| Research findings | `docs/research/findings/01–15` — full ACs + `file_path:line` evidence (the `Src:` of each issue) |
-| New issues | 275–303 (🧪 RESEARCH-DERIVED, founder-approved) — supply-chain, pod resilience, error-tracking, feature flags, WAF/edge, Redis persistence, spend caps, GO_LIVE checklist, clickwrap/COPPA/a11y/GPC |
-| K8s artifacts | Helm chart `deploy/charts/creatorclip/` (GKE Autopilot + Cloud SQL PG16 + KEDA) — **written, never run on a real cluster** (Issue 275) |
-| venv | `.venv` (Python 3.12.7) — ruff/mypy/pytest/bandit/pip-audit (matches CI) |
-| Redis (local tests) | `redis-server --daemonize yes --save '' --appendonly no` (tests fail-fast without it) |
-| Deploy | push to `main` → `docker-publish.yml` (image) → `deploy.yml` (self-hosted VM) |
+| Item | Value |
+|------|-------|
+| Integration branch | `wave0-integration` (off `main` @ `65a1d4f`) |
+| Lane branches | `wave0/{ui-core, qa-release-engineering, activation-onboarding, security-platform, notifications-lifecycle, scoring-eval-preference, agentic-caching-cost, editorial-render, billing-monetization, carry-over-cleanup, privacy-compliance, observability, scale-quota-load, security-prompt-trust-boundary}` |
+| New migrations | `0028_usage_cost_estimate` (agentic), `0029_creator_brand_kit` (editorial, renumbered from a colliding 0028) |
+| Runbooks (external lanes) | `docs/runbooks/{24-25-26-beta-deploy-gates, 255-258-dr-durability, 275-279-k8s-deploy, 194-youtube-publish}.md` |
+| Test env | `.venv/bin/pytest` (8.3.3); needs live **Redis** always + **Postgres** (conftest gate). Memory: python3.12 + brew redis. |
+| Reusable harness | `.claude/workflows/issue-wave.js` — `Workflow({scriptPath, args:{wave, mode, model:'sonnet', lanes:[...]}})` |
 
 ## CONSTRAINTS & GOTCHAS
 
-- **GH Actions CI is RED on billing, not code.** Every push shows a 5–6s fast-fail ("recent account
-  payments have failed / spending limit"). The same red appears on prior commits. The real deploy runs
-  on the self-hosted VM (Docker-publish → Deploy-to-production) and is **unaffected** — it succeeded this
-  session. Don't chase the red checks; verify locally until billing is restored.
-- **Pushing to `main` triggers a prod deploy** (gated — get explicit user go-ahead). `main` and `staging`
-  are kept byte-identical via fast-forward only.
-- **This dev box is Redis-only** — no Docker, Postgres, ffmpeg CLI, or live APIs. ~40 issues are
-  `staging`/`render-env`/`external` verify-only; their code is unit-tested here but load-bearing ACs run
-  first on staging. **Issue 275 (GKE staging) is what makes those verifiable.**
-- **Hot-file coordination:** `worker/tasks.py` is the #1 contention point (22 issues / 13 lanes); see the
-  protocol table in `issues.md`. Alembic migrations share one linear chain — assign revision numbers at
-  merge, never author two in parallel against the same head.
-- **`worker/tasks.py` early refactor** (split per-stage) would reduce churn before the heavy L02/L08/L09
-  waves — flagged in the roadmap, not yet an issue.
-- **Open `[DEC]` to settle at build:** whether prompt caching stacks inside Anthropic Batch mode (Issue
-  219) — research split; confirm via the spike.
-- **Still open (`docs/OFF_COURSE_BUGS.md`):** msgpack CVE `GHSA-6v7p-g79w-8964` (pin `>=1.2.1` or
-  ignore-list); TestClient httpx2 deprecation (Issue 274); dashboard N+1 (Issue 213); flow-test timeout.
+- **Pushing `main` auto-deploys to prod** — do NOT merge to `main` until staging-verified (Issue 275).
+- **`docs/DECISIONS.md` has a contradiction to resolve:** Issue 223 removed the `dna/brief` cache marker
+  (cost spike); Issue 224 re-added it while moving identity to the user turn. The merge kept **224**
+  (security). Decide whether to re-strip the marker on top of 224's structure, and remove the stale 223 entry.
+- **`docs/PROJECT_STATE.md` + `.env.example`** were union-merged across 14 lanes — entries are all present
+  but may be unordered/duplicated; do a cleanup pass.
+- **9 `SIM117`** (nested-`with`) ruff nits remain in `tests/test_mailer.py` (notifications lane, pre-existing,
+  test-only, not auto-fixable) — trivial cleanup, non-blocking.
+- **`stream-vod-recap` (Issue 190)** lane was NOT run — an L-spike that triages to plan-only; run it
+  research-only or hand-plan when scheduled.
+- Per-lane "passed N tests" claims from the build agents could NOT have run here (no Postgres) — treat as
+  staging-pending until re-run on Issue-275 staging.
 
-## POINTERS (sources of truth — do not duplicate here)
+## POINTERS
 
-- `docs/issues.md` — the Master Roadmap. Start at the "How to use this file" + Lane×Wave matrix.
-- `docs/research/findings/01–15` — full ACs + evidence per issue (the `Src:` link).
-- `docs/DECISIONS.md` — **2026-06-22** top entry: roadmap rebuild + 29 new issues + K8s-stale correction.
-- `docs/PROJECT_STATE.md` — top entry covers this session's rebuild.
-- `docs/SOT.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` — stack / deploy model / project rules (now K8s-current).
-- `docs/OFF_COURSE_BUGS.md` — open incidental defects.
-- Memory: `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (index
-  `MEMORY.md`; see `project_master_roadmap.md`).
+- Roadmap + per-issue briefs: `docs/issues.md` (Master Roadmap; W0 lanes/issues).
+- Architecture / compliance / decisions: `docs/SOT.md`, `docs/COMPLIANCE.md`, `docs/DECISIONS.md`.
+- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (see `project_wave_execution_workflow.md`).
