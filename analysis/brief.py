@@ -26,6 +26,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,8 @@ _DISCLAIMER = (
 
 # Static instruction block — carries the cache breakpoint (same pattern as
 # improvement/brief.py and dna/brief.py).
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are a YouTube content strategist who deeply understands why videos succeed or fail.
 
 The creator's DNA profile (their channel patterns, audience, and style) and available

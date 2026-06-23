@@ -19,7 +19,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
-from knowledge.util import wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,8 @@ _DISCLAIMER = (
 
 # Static instruction block — no per-creator data, so it is identical across all
 # calls and carries the cache_control breakpoint. (Issue 69)
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are an expert YouTube channel analyst helping a creator understand their channel's performance patterns.
 
 Analyse the creator's performance data (provided in the next block) and write a concise, actionable Creator Brief in plain Markdown.

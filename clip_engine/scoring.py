@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
-from knowledge.util import wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,9 @@ _PRINCIPLES = [
 # BEFORE the per-creator DNA so the stable bytes lead the prefix (prompt-caching best
 # practice: stable content first, volatile content after the last breakpoint). The DNA
 # block below carries the cache breakpoint. (Issue 78b)
-_SYSTEM_STATIC = """\
+_SYSTEM_STATIC = (
+    UNTRUSTED_CONTENT_POLICY
+    + """\
 You are a clip-selection expert for YouTube content creation.
 
 Evaluate the candidate clips against the creator's DNA profile (provided below) to find
@@ -58,6 +60,7 @@ the best fits for their audience and proven style.
 NAMED SCORING PRINCIPLES (cite exactly one per clip):
 {principles}
 """
+)
 
 _USER_TEMPLATE = """\
 Score each clip candidate from 0.0 (poor fit) to 1.0 (excellent fit) for this creator.

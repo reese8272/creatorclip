@@ -23,8 +23,8 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
-from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,8 @@ _DISCLAIMER = (
 
 # Static block — never contains per-creator data. The "neutral" CTR band is
 # defined here to avoid label drift.
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are a YouTube title strategist with access to real-time web search.
 
 Your task: generate exactly 10 title candidates for a YouTube video, ranked from highest
@@ -70,16 +71,16 @@ Use the web_search tool to research (3 searches maximum):
   3. Active YouTube algorithm signals affecting title performance in this category
 
 After searching, generate 10 title candidates. Return ONLY a valid JSON object with this schema:
-{
+{{
   "candidates": [
-    {
+    {{
       "title": "<string, max 100 chars>",
       "rationale": "<one sentence, must use hedged language: likely / estimated / suggests>",
       "ctr_signal": "up" | "neutral" | "down",
       "search_grounded": true | false
-    }
+    }}
   ]
-}
+}}
 
 RULES:
   - Every title must be at most 100 characters

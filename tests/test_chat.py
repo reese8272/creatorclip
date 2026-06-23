@@ -17,6 +17,7 @@ import pytest
 
 from chat.prompt import HONESTY_CONSTRAINT, build_system
 from chat.tools import _EXECUTORS, TOOLS
+from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
 
 def test_system_prompt_carries_honesty_constraint():
@@ -41,6 +42,16 @@ def test_system_prompt_caches_stable_prefix():
 def test_system_prompt_without_channel_is_single_block():
     blocks = build_system(None)
     assert len(blocks) == 1
+
+
+def test_system_prompt_carries_untrusted_content_policy():
+    """Issue 225 AC: UNTRUSTED_CONTENT_POLICY must appear in build_system output."""
+    blocks = build_system("My Channel")
+    text = " ".join(b["text"] for b in blocks)
+    assert UNTRUSTED_CONTENT_POLICY in text, (
+        "chat/prompt.py build_system output must contain UNTRUSTED_CONTENT_POLICY. "
+        "(Issue 225)"
+    )
 
 
 def test_tools_expose_no_creator_id_and_match_executors():
