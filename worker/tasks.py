@@ -136,6 +136,47 @@ class RefundOnFailureTask(Task):
                 task_id,
                 refund_exc,
             )
+            return
+        # Fire the refund notification after a successful refund. Runs in a
+        # separate async call so a notification failure never affects the
+        # already-completed refund. Best-effort: log and continue.
+        try:
+            run_async(_fire_refund_notification_async(video_uuid))
+        except Exception as notify_exc:
+            logger.warning(
+                "Refund notification failed for video %s (task %s): %s",
+                video_uuid,
+                task_id,
+                notify_exc,
+            )
+
+
+async def _fire_refund_notification_async(video_uuid: uuid.UUID) -> None:
+    """Look up creator_id from the MinuteDeduction row and enqueue refund_issued.
+
+    Runs after refund_for_video() succeeds.  Best-effort — callers must catch
+    any exception so a notification failure never blocks the failure-handling path.
+
+    entity_id = str(video_uuid): the UNIQUE dedupe_key on this triple means
+    exactly one refund notification fires per video per creator, even if
+    on_failure is invoked more than once (at-least-once Celery semantics).
+    """
+    from sqlalchemy import select
+
+    from models import MinuteDeduction
+
+    async with db.AdminSessionLocal() as session:
+        row = await session.scalar(
+            select(MinuteDeduction.creator_id).where(MinuteDeduction.video_id == video_uuid)
+        )
+        if row is None:
+            logger.info(
+                "_fire_refund_notification: no deduction row for video %s — skip",
+                video_uuid,
+            )
+            return
+
+    send_notification.delay(str(row), "refund_issued", str(video_uuid), {})
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -481,6 +522,16 @@ def sync_channel_catalog(self, creator_id: str) -> str:
     except YouTubeAuthError:
         # Permanent — the token is dead. Don't retry; the next refresh tick
         # will delete the YoutubeToken row via the existing handler.
+        # Trigger 4: re-auth-needed notification (Issue 244). entity_id = creator_id
+        # so the dedupe key scopes to one notification per creator per auth error.
+        try:
+            send_notification.delay(creator_id, "reauth_required", creator_id, {})
+        except Exception as notify_exc:
+            logger.warning(
+                "reauth_required notification failed for creator %s: %s",
+                creator_id,
+                notify_exc,
+            )
         raise
     except Exception as exc:
         raise self.retry(exc=exc) from exc
@@ -1495,6 +1546,18 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
                 channel_title,
             )
             await _emit("done", version=dna.version, brief_chars=len(brief_text or ""))
+            # Trigger 2: DNA-built notification (Issue 244).
+            # entity_id = creator_id (one notification per creator per DNA build;
+            # the job_id would differ on every build, so use creator_id to bound to
+            # one notification per creator per day at most via the daily beat cadence).
+            try:
+                send_notification.delay(creator_id, "dna_built", creator_id, {})
+            except Exception as notify_exc:
+                logger.warning(
+                    "dna_built notification failed for creator %s: %s",
+                    creator_id,
+                    notify_exc,
+                )
     except ValueError as exc:
         # Data-gate failures (e.g. "0 long videos") are permanent — emit a
         # human-safe error and re-raise so the caller's data-gate handling
@@ -1740,10 +1803,16 @@ async def _generate_clips_async(video_id: str) -> None:
 
         video_uuid = uuid.UUID(video_id)
 
+        # Capture creator_id outside the session context so it is available for
+        # the notification enqueue after the session closes.
+        clip_creator_id: uuid.UUID | None = None
+
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, video_uuid)
             if not video:
                 raise ValueError(f"Video {video_id} not found")
+
+            clip_creator_id = video.creator_id
 
             # Idempotency guard (Issue 46): a late retry on a video whose clips are
             # already rendered is a no-op. Without this, generate_and_rank_clips would
@@ -1802,6 +1871,24 @@ async def _generate_clips_async(video_id: str) -> None:
             message=f"Generated {len(clips)} clip(s).",
             clip_count=len(clips),
         )
+
+        # Trigger 1: clips-ready notification (Issue 244 / delivers #193).
+        # entity_id = video_id so dedupe prevents duplicate notifications on retry.
+        if clip_creator_id is not None:
+            try:
+                send_notification.delay(
+                    str(clip_creator_id),
+                    "clips_ready",
+                    video_id,
+                    {"clip_count": len(clips)},
+                )
+            except Exception as notify_exc:
+                logger.warning(
+                    "clips_ready notification failed for video %s creator %s: %s",
+                    video_id,
+                    clip_creator_id,
+                    notify_exc,
+                )
     except Exception as exc:
         await aemit(
             video_id,
@@ -2023,6 +2110,20 @@ async def _expire_trials_async() -> None:
                     "trial_expired_zero_balance creator=%s trial_ends_at=%s",
                     cid,
                     trial_ends_at.isoformat() if trial_ends_at else None,
+                )
+            # Trigger 5: trial-ending notification (Issue 244).
+            # entity_id = ISO date of expiry so one notification fires per creator
+            # per trial-ending day regardless of how many beat ticks run.
+            entity_id = (
+                trial_ends_at.date().isoformat() if trial_ends_at else now.date().isoformat()
+            )
+            try:
+                send_notification.delay(str(cid), "trial_ending", entity_id, {})
+            except Exception as notify_exc:
+                logger.warning(
+                    "trial_ending notification failed for creator %s: %s",
+                    cid,
+                    notify_exc,
                 )
 
 

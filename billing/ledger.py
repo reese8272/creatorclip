@@ -256,13 +256,35 @@ async def deduct_for_video(
         # Concurrent retry won the UNIQUE(video_id) race — idempotent skip.
         return 0
 
+    remaining = row[0]
     logger.info(
         "billing deduct video=%s creator=%s minutes=%d remaining=%d",
         video_id,
         creator_id,
         minutes,
-        row[0],
+        remaining,
     )
+
+    # Trigger 6: balance-low notification (Issue 244).
+    # Fires only when the post-deduct balance is at or below the threshold.
+    # entity_id = str(video_id) so the dedupe key prevents duplicate notifications
+    # for the same video (at-least-once Celery delivery), while still allowing a
+    # new notification on the next video that crosses the threshold.
+    from config import settings
+
+    if remaining <= settings.LOW_BALANCE_THRESHOLD_MINUTES:
+        try:
+            from worker.tasks import send_notification
+
+            send_notification.delay(str(creator_id), "balance_low", str(video_id), {})
+        except Exception as notify_exc:
+            logger.warning(
+                "balance_low notification failed for creator %s video %s: %s",
+                creator_id,
+                video_id,
+                notify_exc,
+            )
+
     return minutes
 
 

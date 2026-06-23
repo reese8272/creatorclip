@@ -1,0 +1,12 @@
+Subject: Reconnect your YouTube account
+
+Hi {{ creator.channel_title or "there" }},
+
+Your YouTube connection needs to be refreshed. Reconnect your account so AutoClip can keep your analytics and catalog up to date.
+
+Reconnect here: {{ app_url }}/app/profile
+
+AutoClip predicts fit with your style and audience — it does not promise virality.
+
+—
+CreatorClip

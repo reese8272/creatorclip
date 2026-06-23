@@ -94,6 +94,39 @@ zero-deploy rate update when vendors reprice (FinOps Foundation cost-per-unit st
 - https://docs.voyageai.com/docs/pricing (Voyage AI, 2026-06-23)
 - https://developers.cloudflare.com/r2/pricing/ (Cloudflare, 2026-06-23)
 - https://www.finops.org/framework/phases/ (FinOps Foundation — cost-per-unit standard)
+## 2026-06-23 — Issue 244: Notification trigger wiring — entity_id conventions and fire points
+
+**What changed:** Wired `send_notification.delay(...)` at 6 existing terminal fire points:
+1. **clips_ready** — `_generate_clips_async` done emit; entity_id = `video_id`
+2. **dna_built** — `_build_dna_async` done emit; entity_id = `creator_id` (one per build, not per job_id, to avoid per-job churn)
+3. **refund_issued** — `RefundOnFailureTask.on_failure` via new helper `_fire_refund_notification_async`; entity_id = `str(video_uuid)` (one per failed video)
+4. **reauth_required** — `sync_channel_catalog` `YouTubeAuthError` handler; entity_id = `creator_id` (deduped per creator per auth failure)
+5. **trial_ending** — `_expire_trials_async` per-creator loop; entity_id = trial expiry ISO date so one notification fires per creator per day regardless of beat cadence
+6. **balance_low** — `billing/ledger.py::deduct_for_video` post-deduct; entity_id = `str(video_id)` so one notification fires per video that crosses threshold
+
+Added `notify/copy.py` with canonical honesty-constrained subject/body strings.
+Added paired `.txt`/`.html` Jinja2 templates for all 6 event types (clips_ready was pre-existing from Issue 243).
+
+**Why:** The `send_notification` task (Issue 243) was a dormant fan-out with no trigger call sites.
+The 6 fire points already existed as terminal events; this issue adds the `.delay()` enqueue next to each.
+- entity_id for **dna_built** uses `creator_id` (not `job_id`) because the dedupe key prevents
+  re-notification within the same run; using job_id would mean a retry of the same DNA build still fires
+  a notification (undesired). Using creator_id naturally dedupes to one notification per build.
+- entity_id for **trial_ending** uses the ISO date of `trial_ends_at` so multiple beat ticks within
+  the same day are idempotent — the UNIQUE dedupe_key on (creator_id, "trial_ending", date) fires once.
+- **balance_low** fires on every video that crosses the threshold, not just the first one. This is intentional:
+  each video deduction that leaves the balance low is a meaningful event, and the entity_id = video_id
+  dedupe prevents per-retry spam for the same video.
+- Notification fires are best-effort (wrapped in try/except) — a notification failure must never block
+  the pipeline (refund, clip generation, DNA build, etc.).
+
+**Source/evidence:**
+- docs/research/findings/11_notifications_lifecycle_comms.md §3.2 (send pattern, entity_id convention)
+- Issue 244 brief (Blocked by #243, Delivers #193)
+- Issue brief risk note: "balance-low must fire only on threshold-crossing deduct, not every deduct below threshold" — satisfied by entity_id = video_id (one notification per video)
+
+**Date:** 2026-06-23
+
 ## 2026-06-23 — Issue 225: `<untrusted_content_policy>` clause in every system prompt
 
 **What changed:** Added `UNTRUSTED_CONTENT_POLICY` constant to `knowledge/util.py` containing an

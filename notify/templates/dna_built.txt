@@ -1,0 +1,15 @@
+Subject: Your channel DNA profile is ready
+
+Hi {{ creator.channel_title or "there" }},
+
+We've built your channel DNA profile from your top and bottom performers.
+
+Review and confirm it so AutoClip can personalise clip scoring for your channel.
+
+Review your DNA profile: {{ app_url }}/app/profile
+
+AutoClip predicts fit with your style and audience — it does not promise virality.
+Every recommendation is an estimate grounded in your own data.
+
+—
+CreatorClip

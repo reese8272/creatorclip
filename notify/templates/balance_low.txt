@@ -1,0 +1,12 @@
+Subject: Your minutes balance is running low
+
+Hi {{ creator.channel_title or "there" }},
+
+You have a few minutes left in your balance. Add more to keep processing videos.
+
+Add minutes: {{ app_url }}/pricing
+
+AutoClip predicts fit with your style and audience — it does not promise virality.
+
+—
+CreatorClip

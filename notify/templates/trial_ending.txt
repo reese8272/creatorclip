@@ -1,0 +1,12 @@
+Subject: Your free trial is ending soon
+
+Hi {{ creator.channel_title or "there" }},
+
+Your free trial is ending soon. Top up your minutes at /pricing to keep processing videos and reviewing clips.
+
+Add minutes: {{ app_url }}/pricing
+
+AutoClip predicts fit with your style and audience — it does not promise virality.
+
+—
+CreatorClip
