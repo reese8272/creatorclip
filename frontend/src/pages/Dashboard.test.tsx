@@ -1,9 +1,18 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Dashboard } from './Dashboard'
 import type { Video } from '@/types'
+
+// Minimal EventSource stub so VideoRow's useStageStream hook doesn't throw in
+// jsdom. The hook opens a connection for in-flight videos; Dashboard tests don't
+// need to assert on SSE events — they just need the render not to crash.
+class NoopEventSource {
+  closed = false
+  addEventListener() {}
+  close() { this.closed = true }
+}
 
 // Route the SPA fetch by URL so one mock serves the dashboard's several calls.
 // `videos` is supplied per-test; everything else returns a benign default.
@@ -51,6 +60,7 @@ const baseVideo = (over: Partial<Video>): Video => ({
   ...over,
 })
 
+beforeEach(() => vi.stubGlobal('EventSource', NoopEventSource))
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Dashboard', () => {
