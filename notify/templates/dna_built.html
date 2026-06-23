@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your channel DNA is ready</title>
+</head>
+<body style="font-family: sans-serif; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="font-size: 20px; margin-bottom: 8px;">Your channel DNA profile is ready</h2>
+  <p>Hi {{ creator.channel_title or "there" }},</p>
+  <p>
+    We&rsquo;ve built your channel DNA profile from your top and bottom performers.
+    Review and confirm it so AutoClip can personalise clip scoring for your channel.
+  </p>
+  <p style="margin: 24px 0;">
+    <a href="{{ app_url }}/app/profile"
+       style="background: #4f46e5; color: #fff; text-decoration: none;
+              padding: 12px 24px; border-radius: 6px; font-weight: 600;">
+      Review your DNA profile
+    </a>
+  </p>
+  <p style="font-size: 13px; color: #666;">
+    AutoClip predicts fit with your style and audience &mdash; it does not promise virality.
+    Every recommendation is an estimate grounded in your own data.
+  </p>
+  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;">
+  <p style="font-size: 12px; color: #999;">CreatorClip &mdash; autoclip.studio</p>
+</body>
+</html>

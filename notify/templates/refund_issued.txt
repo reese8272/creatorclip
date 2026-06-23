@@ -1,0 +1,14 @@
+Subject: Your minutes have been refunded
+
+Hi {{ creator.channel_title or "there" }},
+
+We could not process your video. Your minutes have been automatically refunded to your balance.
+
+No action is required on your part. You can try processing the video again at any time.
+
+Go to your dashboard: {{ app_url }}/app/dashboard
+
+AutoClip predicts fit with your style and audience — it does not promise virality.
+
+—
+CreatorClip

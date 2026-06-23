@@ -178,3 +178,54 @@ def test_no_virality_in_openapi_schema_descriptions() -> None:
             violations.append(f"Schema string: found {match.group()!r} — ...{context}...")
 
     assert not violations, "Virality phrases in OpenAPI schema strings:\n" + "\n".join(violations)
+
+
+# ── Test 4: Notification templates and copy strings (Issue 244) ───────────────
+
+
+def test_no_virality_in_notification_templates() -> None:
+    """
+    Walk every .txt and .html file under notify/templates/ and assert none
+    contain a forbidden virality-promise phrase.
+    """
+    templates_dir = Path(__file__).parent.parent / "notify" / "templates"
+    if not templates_dir.is_dir():
+        pytest.skip("notify/templates/ not found — nothing to scan")
+
+    violations: list[str] = []
+    for ext in ("*.txt", "*.html"):
+        for path in templates_dir.glob(ext):
+            content = path.read_text(encoding="utf-8", errors="replace")
+            cleaned = _scrub(content)
+            match = FORBIDDEN.search(cleaned)
+            if match:
+                start = max(0, match.start() - 40)
+                end = min(len(cleaned), match.end() + 40)
+                context = cleaned[start:end].replace("\n", " ")
+                violations.append(
+                    f"notify/templates/{path.name}: "
+                    f"found {match.group()!r} — ...{context}..."
+                )
+
+    assert not violations, "Virality phrases in notification templates:\n" + "\n".join(violations)
+
+
+def test_no_virality_in_notification_copy_module() -> None:
+    """Assert that every string in notify/copy.py COPY dict is honesty-constrained."""
+    from notify.copy import COPY
+
+    violations: list[str] = []
+    for event_type, strings in COPY.items():
+        for key, value in strings.items():
+            cleaned = _scrub(value)
+            match = FORBIDDEN.search(cleaned)
+            if match:
+                start = max(0, match.start() - 40)
+                end = min(len(cleaned), match.end() + 40)
+                context = cleaned[start:end].replace("\n", " ")
+                violations.append(
+                    f"notify.copy.COPY[{event_type!r}][{key!r}]: "
+                    f"found {match.group()!r} — ...{context}..."
+                )
+
+    assert not violations, "Virality phrases in notification copy module:\n" + "\n".join(violations)
