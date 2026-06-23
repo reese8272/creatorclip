@@ -7,6 +7,9 @@ export function Footer() {
       <a href="/static/privacy.html" className="hover:text-fg">
         Privacy
       </a>
+      <a href="/static/accessibility.html" className="hover:text-fg">
+        Accessibility
+      </a>
       <span>© AutoClip 2026</span>
     </footer>
   )

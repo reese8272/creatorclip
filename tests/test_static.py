@@ -632,10 +632,12 @@ def test_all_templates_use_design_tokens():
     import pathlib
 
     static_dir = pathlib.Path(__file__).parent.parent / "static"
-    # Only tos.html and privacy.html remain after Issue 226 retirement.
+    # Only tos.html, privacy.html, and accessibility.html remain after Issue 226 retirement.
+    # accessibility.html added by Issue 301.
     templates = [
         "tos.html",
         "privacy.html",
+        "accessibility.html",
     ]
     for name in templates:
         src = (static_dir / name).read_text()
@@ -765,10 +767,12 @@ def test_every_retained_template_has_legal_footer():
     import pathlib
 
     static_dir = pathlib.Path(__file__).parent.parent / "static"
-    # Only the two retained legal pages remain after Issue 226 retirement.
+    # Only the three retained legal pages remain after Issue 226 + Issue 301.
+    # accessibility.html added by Issue 301.
     templates = [
         "tos.html",
         "privacy.html",
+        "accessibility.html",
     ]
     for name in templates:
         src = (static_dir / name).read_text()
@@ -1367,7 +1371,7 @@ def test_static_cachebust_middleware_sets_no_store_on_html(client):
     Now verified against retained legal pages (tos.html, privacy.html).
     Note: / returns 404 when SPA is not built (Issue 226 — legacy index retired).
     """
-    for path in ("/static/tos.html", "/static/privacy.html"):
+    for path in ("/static/tos.html", "/static/privacy.html", "/static/accessibility.html"):
         resp = client.get(path)
         assert resp.status_code == 200
         cc = resp.headers.get("cache-control", "")
@@ -1799,4 +1803,132 @@ def test_csp_contains_frame_ancestors_none(client):
     assert "frame-ancestors 'none'" in csp, (
         "CSP must include frame-ancestors 'none' — prevents clickjacking of the "
         "OAuth flow and the SPA. OWASP Secure Headers Project 2025."
+    )
+
+
+# ── Issue 252: Privacy Policy GDPR Art. 13-14 / CCPA rewrite ─────────────────
+
+
+def test_privacy_page_names_all_subprocessors(client):
+    """Issue 252: privacy.html must name every sub-processor from SUBPROCESSORS.md
+    so GDPR Art. 13(1)(e) (disclosure of recipients) is satisfied in the public
+    privacy notice."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    for vendor in ("Anthropic", "Voyage AI", "Deepgram", "Cloudflare R2", "Stripe", "Google"):
+        assert vendor in text, (
+            f"privacy.html must name sub-processor '{vendor}' (Issue 252 — GDPR Art. 13 disclosure)."
+        )
+
+
+def test_privacy_page_has_ccpa_do_not_sell_statement(client):
+    """Issue 252: privacy.html must include a structured CCPA notice-at-collection
+    section with the explicit 'do not sell or share' statement."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "do not sell or share" in text.lower(), (
+        "privacy.html must include the CCPA 'do not sell or share' statement "
+        "(Issue 252 — CCPA notice-at-collection requirement)."
+    )
+    assert "California" in text, (
+        "privacy.html must include a California residents (CCPA) section (Issue 252)."
+    )
+
+
+def test_privacy_page_states_standard_contractual_clauses(client):
+    """Issue 252: privacy.html must state the international transfer mechanism.
+    All sub-processors are US-based; SCCs are the operative mechanism."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "Standard Contractual Clauses" in text, (
+        "privacy.html must state 'Standard Contractual Clauses' as the EEA→US "
+        "transfer mechanism (Issue 252 — GDPR Art. 46(2)(c))."
+    )
+
+
+def test_privacy_page_demographics_aggregation_disclosure(client):
+    """Issue 252: privacy.html must clarify that YouTube audience demographics are
+    aggregated/anonymised by YouTube before delivery — no individual viewer PII stored."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "aggregated" in text.lower(), (
+        "privacy.html must disclose that audience demographics are aggregated "
+        "(Issue 252 — audience data disclosure)."
+    )
+    assert "anonymised" in text.lower() or "anonymized" in text.lower(), (
+        "privacy.html must clarify that demographics are anonymised (Issue 252)."
+    )
+
+
+def test_privacy_page_has_breach_contact(client):
+    """Issue 252: privacy.html must include a breach contact reference."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "breach" in text.lower(), (
+        "privacy.html must reference data breach contact / notification (Issue 252)."
+    )
+    assert "reesepludwick@gmail.com" in text, (
+        "privacy.html must include the breach contact email (Issue 252)."
+    )
+
+
+def test_privacy_page_has_cookies_clause(client):
+    """Issue 252: privacy.html must have a cookies section disclosing strictly-necessary
+    cookies only (session JWT + OAuth-state) with no consent banner required."""
+    resp = client.get("/static/privacy.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "cookie" in text.lower(), (
+        "privacy.html must include a Cookies section (Issue 252 — ePrivacy compliance)."
+    )
+    assert "strictly" in text.lower(), (
+        "privacy.html cookies clause must state strictly-necessary cookies only (Issue 252)."
+    )
+
+
+# ── Issue 301: Accessibility Statement ───────────────────────────────────────
+
+
+def test_accessibility_page_served(client):
+    """Issue 301: GET /static/accessibility.html must return 200."""
+    resp = client.get("/static/accessibility.html")
+    assert resp.status_code == 200
+
+
+def test_accessibility_page_has_required_clauses(client):
+    """Issue 301: accessibility.html must contain the EAA/WCAG 2.1 required elements:
+    conformance standard, conformance status, feedback mechanism."""
+    resp = client.get("/static/accessibility.html")
+    assert resp.status_code == 200
+    text = resp.content.decode()
+    assert "WCAG 2.1" in text, (
+        "accessibility.html must cite WCAG 2.1 (Issue 301 — EAA / EN 301 549 requirement)."
+    )
+    assert "EN 301 549" in text, (
+        "accessibility.html must reference EN 301 549 (Issue 301 — EAA harmonised standard)."
+    )
+    assert "mailto:" in text, (
+        "accessibility.html must include a mailto: feedback mechanism (Issue 301 — EAA Annex V)."
+    )
+
+
+def test_footer_tsx_has_accessibility_link():
+    """Issue 301: frontend/src/components/Footer.tsx must include an Accessibility link
+    pointing to /static/accessibility.html."""
+    import pathlib
+
+    footer_path = pathlib.Path(__file__).parent.parent / "frontend" / "src" / "components" / "Footer.tsx"
+    if not footer_path.exists():
+        return  # frontend not checked out
+    src = footer_path.read_text()
+    assert "accessibility" in src.lower(), (
+        "Footer.tsx must include an Accessibility link (Issue 301 — EAA footer requirement)."
+    )
+    assert "accessibility.html" in src, (
+        "Footer.tsx must link to /static/accessibility.html (Issue 301)."
     )

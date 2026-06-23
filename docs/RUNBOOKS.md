@@ -386,3 +386,170 @@ If the purge window was missed, trigger it manually:
 kubectl exec -it deployment/creatorclip-worker -- \
   celery -A worker.celery_app call worker.tasks.purge_stale_youtube_analytics
 ```
+
+---
+
+## Personal Data Breach Response (GDPR Art. 33 / Art. 34)
+
+**When to run:** On any confirmed or suspected personal data breach — unauthorised
+access, disclosure, alteration, or destruction of personal data. Also run for
+significant near-misses (e.g. a misconfigured storage bucket that was corrected before
+external access is confirmed but cannot be ruled out).
+
+**Legal deadline:** GDPR Art. 33(1) requires notification to the competent supervisory
+authority **within 72 hours of becoming aware** of a breach that is likely to result in
+a risk to the rights and freedoms of natural persons. The 72-hour clock starts at
+"awareness" — the point when there is a reasonable degree of certainty that a breach
+has occurred (not when all details are known). Phased reporting is permitted under
+Art. 33(4): file an initial notification with available information and supplement it
+as more facts are established.
+
+**Breach records must be retained for at least 3 years** per Art. 33(5) as evidence.
+
+**Named owner / escalation contact:**
+- Primary: reesepludwick@gmail.com (owner until a DPO is designated)
+- DPO: _[PLACEHOLDER — must be filled with a real person before production launch]_
+- Legal counsel: _[PLACEHOLDER — fill before production launch]_
+
+> **Human action required:** Both placeholder fields above must be replaced with real
+> contacts before this runbook is authorised for production use.
+
+---
+
+### Step 1 — Detection and triage (0–2 hours)
+
+Potential breach sources to monitor:
+- Log anomalies: unexpected data egress, bulk query patterns, admin-action spikes
+- Vendor notification: breach notice from Anthropic, Voyage AI, Deepgram, Cloudflare R2,
+  Stripe, or Google (see SUBPROCESSORS.md for each vendor's breach-notify expectation —
+  typically 24–48 hours from their discovery)
+- Security alerts: WAF, IDS, GCP Security Command Center
+- User report: creator reports unexpected access to their data
+
+Gather the following before moving to risk assessment:
+
+| Field | Notes |
+|-------|-------|
+| Date and time of discovery | |
+| Nature of breach | Confidentiality / Integrity / Availability |
+| Affected data categories | OAuth tokens, email, analytics, audio, billing |
+| Approximate count of affected data subjects | |
+| Approximate count of affected records | |
+| Likely cause | |
+| Is breach ongoing? | Yes / No / Unknown |
+| Immediate containment actions taken | |
+
+---
+
+### Step 2 — Risk assessment (2–4 hours)
+
+Determine whether the breach is "likely to result in a risk to the rights and freedoms
+of natural persons" (Art. 33(1)).
+
+**Low-risk indicators (no supervisory authority notification required):**
+- Data is already publicly available
+- Data is strongly encrypted and the key is not compromised
+- Breach is an internal error corrected before any external access
+
+**Document the low-risk rationale** in the breach log (Step 5) and stop here if the
+risk assessment is negative.
+
+**High-risk indicators (Art. 34 individual notification also required):**
+- OAuth token exposure (high-risk: enables account takeover)
+- Audio content exfiltration (high-risk: private creator content)
+- Financial data compromise via Stripe (high-risk: even though AutoClip never holds
+  raw card numbers, a Stripe account breach may require individual notification)
+- Bulk PII exposure (email addresses, demographic inferences)
+
+---
+
+### Step 3 — Supervisory authority notification (within 72 hours of awareness)
+
+**Only required if risk assessment in Step 2 concludes risk exists.**
+
+GDPR Art. 33(3) required fields for the notification:
+
+1. **Nature of the personal data breach** — including categories and approximate numbers
+   of data subjects and records concerned.
+2. **Contact point** — name and contact details of the DPO or other contact point.
+3. **Likely consequences** — describe probable consequences of the breach.
+4. **Measures taken or proposed** — including measures to mitigate possible adverse effects.
+
+File the notification via the supervisory authority's online portal. For EU creators,
+the lead supervisory authority depends on the country where AutoClip's EU establishment
+is located (or the country of the majority of affected data subjects if there is no EU
+establishment). For UK creators, notify the ICO (ico.org.uk).
+
+Phased reporting (Art. 33(4)): if all information is not yet available, submit an
+initial notification with available facts and state that a supplement will follow.
+Supplements must be filed "without undue delay."
+
+---
+
+### Step 4 — Sub-processor notify chain
+
+Reference `docs/SUBPROCESSORS.md` for each vendor's breach-notify obligation. Each
+vendor's DPA typically requires the data processor (AutoClip) to notify them within
+24–48 hours of discovery of a breach involving their services, and vice versa.
+
+**Key actions:**
+- If the breach originated from a sub-processor: confirm their breach notification to
+  AutoClip, gather Art. 33(3) fields from them, and file the supervisory authority
+  notification on behalf of affected creators.
+- If the breach is on AutoClip's infrastructure: notify each affected sub-processor per
+  their DPA breach-notify clause.
+
+---
+
+### Step 5 — Art. 34 high-risk individual notification
+
+**Only required** if the breach is "likely to result in high risk to the rights and
+freedoms of natural persons" (Art. 34(1)).
+
+Notify affected data subjects "without undue delay" using clear and plain language.
+
+**Sample data-subject notice template:**
+
+> Subject: Important notice about your AutoClip data
+>
+> We are writing to inform you of a personal data incident that may affect your
+> AutoClip account.
+>
+> **What happened:** [brief description]
+>
+> **What data was affected:** [categories — e.g. email address, YouTube channel ID]
+>
+> **What we have done:** [containment and remediation steps taken]
+>
+> **What you should do:** [recommended action — e.g. revoke AutoClip access via
+> Google Security Settings at security.google.com/settings/security/permissions,
+> change your Google account password if OAuth tokens were compromised]
+>
+> **Contact:** reesepludwick@gmail.com — we will respond within 5 business days.
+
+---
+
+### Step 6 — Post-incident documentation
+
+Retain the breach record for at least 3 years per Art. 33(5):
+
+- Completed triage table (Step 1)
+- Risk assessment rationale (Step 2)
+- Copy of supervisory authority notification (if filed) + any supplements
+- Copy of sub-processor notifications (if applicable)
+- Copy of individual notices sent (if Art. 34 applied)
+- Timeline: detection → awareness → notification → containment → remediation
+- Lessons learned and process improvements
+
+Store breach records in a secure, access-controlled location (not in the application
+database — use a separate encrypted document store or password manager).
+
+---
+
+### Sources
+
+- GDPR Art. 33: https://gdpr-info.eu/art-33-gdpr/
+- GDPR Art. 34: https://gdpr-info.eu/art-34-gdpr/
+- EDPB guidelines on breach notification (WP250 rev.01)
+- docs/SUBPROCESSORS.md — vendor breach-notify chain and DPA details
+- docs/COMPLIANCE.md — data classes and retention policy

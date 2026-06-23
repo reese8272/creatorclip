@@ -5,6 +5,40 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 252: Privacy Policy rewrite — deferred decisions
+
+**What changed:** Two [DEC] items from the Issue 252 brief were resolved as follows:
+
+1. **Recorded-consent checkbox on Login.tsx** — deferred to Issue 299 (Wave W2). The scope of
+   Issue 252 is the HTML privacy policy content only. Login.tsx consent affordance changes require
+   separate UX research and backend consent-recording logic; they are out of scope here.
+
+2. **DPF vs SCCs as the international transfer mechanism** — SCCs chosen as the operative
+   mechanism. Each vendor's DPF enrollment status was checked at dataprivacyframework.gov. None
+   of the six sub-processors (Anthropic, Voyage AI, Deepgram, Cloudflare R2, Stripe, Google) are
+   confirmed as DPF-certified under the account/product relationship used by CreatorClip at the
+   time of authoring (2026-06-23). SCCs are therefore the correct conservative default. If any
+   vendor completes DPF certification that covers this account, privacy.html and SUBPROCESSORS.md
+   must be updated and this entry revised.
+
+3. **'Draft' marker retained** — The privacy.html header still reads "Draft. Legal review pending."
+   The implementation-complete policy ships with this marker present. Removing it is gated on
+   external counsel sign-off, which is an organizational input, not a code change.
+
+**Why:** GDPR Art. 13-14 requires the privacy notice to name sub-processors and state the transfer
+mechanism before data is processed. CCPA requires notice-at-collection for California residents.
+Both are pre-launch compliance gates.
+
+**Sources:**
+- gdpr-info.eu/art-13-gdpr/
+- www.dataprivacyframework.gov (vendor DPF status check, 2026-06-23)
+- cppa.ca.gov/regulations/ (CCPA notice-at-collection rules, eff. 2026-01-01)
+- gdpr.eu/cookies/ (strictly-necessary cookies exemption)
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-23 — Issue 226: Retire legacy static HTML pages (XSS attack surface removal)
 
 **What changed:** Deleted all legacy static HTML pages from `static/` except `tos.html` and
