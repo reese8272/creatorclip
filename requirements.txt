@@ -51,6 +51,13 @@ librosa==0.10.2
 
 # ── Vision ───────────────────────────────────────────────────────────────────
 opencv-python==4.13.0.92
+# MediaPipe — optional heavy native dep (~200 MB) for per-frame active-speaker
+# reframe (Issue 189, clip_engine/reframe.py). ONLY install in the render worker
+# image when ACTIVE_SPEAKER_REFRAME_ENABLED=true. The app and test suite import
+# cleanly without it (lazy import guard in reframe.py). Pin to 0.10.x (Tasks API
+# = current 2026 standard; legacy solutions.face_detection is deprecated).
+# To install: pip install mediapipe==0.10.21
+# mediapipe==0.10.21
 
 # ── Subtitles / Animated captions (Issue 133) ────────────────────────────────
 # pysubs2 generates ASS files for ffmpeg's `subtitles=` filter (libass).

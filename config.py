@@ -201,6 +201,20 @@ class Settings(BaseSettings):
     # ingestion is added later the guard is already in place and cannot be forgotten.
     # The clamp uses the same word-boundary rsplit pattern as titles (clamp_ingest_field).
     MAX_INGESTED_DESC_CHARS: int = 10000
+    # ── Per-frame active-speaker reframe (Issue 189) ──────────────────────────
+    # Gated off by default: the per-frame MediaPipe + sendcmd path has NEVER
+    # been verified on a real render environment (ffmpeg + real multi-speaker
+    # media required). The legacy single-keyframe Haar crop in render.py
+    # remains the production default until this flag is flipped on staging.
+    # Flip to True ONLY after the render-env smoke test passes (Issue 189 AC).
+    # See clip_engine/reframe.py and docs/DECISIONS.md (2026-06-23, Issue 189).
+    ACTIVE_SPEAKER_REFRAME_ENABLED: bool = False
+
+    # Frames-per-second to sample for face detection in the per-frame reframe
+    # path. 5 fps is sufficient for talking-head content and keeps compute
+    # proportional to clip duration. Tune up if speaker switches are missed in
+    # render-env tests.
+    REFRAME_SAMPLE_FPS: float = 5.0
 
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10

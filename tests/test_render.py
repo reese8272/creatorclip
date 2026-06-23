@@ -596,3 +596,122 @@ def test_render_clip_file_raises_on_ffmpeg_timeout(tmp_path):
         mock_cc.return_value.detectMultiScale.return_value = []
         with pytest.raises(RuntimeError, match="timed out after"):
             render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+
+# ── per-frame active-speaker reframe flag (Issue 189) ─────────────────────────
+
+
+def _render_vf_with_reframe_flag(tmp_path, *, flag_enabled: bool) -> str:
+    """Render with ACTIVE_SPEAKER_REFRAME_ENABLED toggled; return the -vf string.
+
+    Patches ``config.settings`` (the global Settings instance) so the local
+    import inside render_clip_file picks up the patched value.
+    """
+    import config as _config_mod
+
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    captured: list[list[str]] = []
+
+    def _fake(cmd, **kwargs):
+        captured.append(cmd)
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr="")
+
+    # Patch compute_reframe_crop to return a deterministic synthetic track.
+    from clip_engine.reframe import CropCenterPoint
+
+    fake_track = [
+        CropCenterPoint(10.0, 700),
+        CropCenterPoint(10.2, 720),
+    ]
+    fake_script = "0.000 [enter] crop x 396;\n0.200 [enter] crop x 416;"
+
+    with (
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+        patch.object(_config_mod.settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", flag_enabled),
+        patch.object(_config_mod.settings, "REFRAME_SAMPLE_FPS", 5.0),
+        # compute_reframe_crop is imported locally inside render_clip_file via
+        # `from clip_engine.reframe import compute_reframe_crop` — patch at source.
+        patch(
+            "clip_engine.reframe.compute_reframe_crop",
+            return_value=(fake_track, fake_script),
+        ),
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+    render_cmd = next((c for c in captured if "-vf" in c), None)
+    assert render_cmd is not None
+    return render_cmd[render_cmd.index("-vf") + 1]
+
+
+def test_reframe_flag_disabled_uses_legacy_haar_path(tmp_path):
+    """When ACTIVE_SPEAKER_REFRAME_ENABLED is False, the legacy Haar path runs
+    and the vf string must NOT contain sendcmd."""
+    vf = _render_vf_with_reframe_flag(tmp_path, flag_enabled=False)
+    assert "sendcmd" not in vf
+    assert "crop=" in vf  # static crop still present
+
+
+def test_reframe_flag_enabled_includes_sendcmd_in_vf(tmp_path):
+    """When ACTIVE_SPEAKER_REFRAME_ENABLED is True and compute_reframe_crop
+    returns a multi-point script, the vf string must start with sendcmd."""
+    vf = _render_vf_with_reframe_flag(tmp_path, flag_enabled=True)
+    assert vf.startswith("sendcmd=")
+    assert "crop=" in vf
+
+
+def test_reframe_flag_enabled_sendcmd_file_cleaned_up(tmp_path):
+    """The sendcmd temp file must be removed after render, even on success."""
+    import config as _config_mod
+
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+
+    import numpy as np
+
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+
+    from clip_engine.reframe import CropCenterPoint
+
+    fake_track = [CropCenterPoint(10.0, 700), CropCenterPoint(10.2, 720)]
+    fake_script = "0.000 [enter] crop x 396;\n0.200 [enter] crop x 416;"
+
+    def _fake(cmd, **kwargs):
+        return MagicMock(returncode=0, stdout="1920,1080\n", stderr="")
+
+    written_paths: list[Path] = []
+
+    original_write_text = Path.write_text
+
+    def _capture_write(self, text, *args, **kwargs):
+        if str(self).endswith(".sendcmd"):
+            written_paths.append(self)
+        return original_write_text(self, text, *args, **kwargs)
+
+    with (
+        patch("subprocess.run", side_effect=_fake),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+        patch.object(_config_mod.settings, "ACTIVE_SPEAKER_REFRAME_ENABLED", True),
+        patch.object(_config_mod.settings, "REFRAME_SAMPLE_FPS", 5.0),
+        patch(
+            "clip_engine.reframe.compute_reframe_crop",
+            return_value=(fake_track, fake_script),
+        ),
+        patch.object(Path, "write_text", _capture_write),
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        render_clip_file(src, start_s=10.0, end_s=70.0, out_path=out)
+
+    # Every .sendcmd file written must have been cleaned up.
+    for p in written_paths:
+        assert not p.exists(), f"sendcmd temp file not cleaned up: {p}"

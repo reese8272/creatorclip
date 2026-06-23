@@ -2,8 +2,18 @@
 Render a clip: extract segment with ffmpeg, detect active speaker face,
 crop to 9:16 centered on face, upload to storage.
 
-Face detection: OpenCV Haar frontal-face cascade on a single keyframe.
+Face detection (default): OpenCV Haar frontal-face cascade on a single keyframe.
 Falls back to frame center if no face is found.
+
+Per-frame active-speaker reframe (Issue 189, GATED):
+When ``settings.ACTIVE_SPEAKER_REFRAME_ENABLED`` is True, the static single-
+keyframe Haar crop is replaced by per-frame MediaPipe BlazeFace tracking via
+``clip_engine.reframe.compute_reframe_crop``.  The result is fed to ffmpeg as a
+time-varying crop using the ``sendcmd`` filter.  This path is disabled by default
+(flag defaults to False) because it requires a render environment (ffmpeg +
+MediaPipe + real multi-speaker media) that is NOT available on the dev box.  Flip
+the flag ONLY after render-env smoke tests pass.  See ``clip_engine/reframe.py``
+and ``docs/DECISIONS.md`` (2026-06-23, Issue 189) for the build-vs-buy rationale.
 
 Animated captions (Issue 133): when ``style_preset["subtitle"]`` names a known
 caption style (``bold_pop`` / ``bold_pop_highlight`` / ``gradient_slide`` /
@@ -307,25 +317,89 @@ def render_clip_file(
     crop_w = int(frame_h * out_w / out_h)
     crop_w = min(crop_w, frame_w)
 
-    # Find face center in a keyframe at the midpoint of the clip
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-        kf_path = Path(tmp.name)
-    try:
-        mid_s = start_s + duration / 2
-        _extract_keyframe(source_path, mid_s, kf_path, timeout_s=render_timeout_s)
-        face_x = _detect_face_center_x(kf_path, frame_w)
-    finally:
-        kf_path.unlink(missing_ok=True)
+    # ── Reframe: per-frame (gated) or single-keyframe Haar (default) ─────────
+    # Issue 189: ACTIVE_SPEAKER_REFRAME_ENABLED defaults False; the per-frame
+    # path is NEVER verified on this dev box (no ffmpeg/real media). Only flip
+    # the flag after render-env smoke tests pass. See clip_engine/reframe.py.
+    from config import settings as _settings  # local import avoids circular dep at module init
 
-    # Clamp crop x-offset
-    x_offset = max(0, min(face_x - crop_w // 2, frame_w - crop_w))
+    sendcmd_path: Path | None = None  # set when the per-frame path is active
 
-    # Build vf chain: crop → scale, with optional style additions.
+    if _settings.ACTIVE_SPEAKER_REFRAME_ENABLED:
+        # Per-frame active-speaker reframe (Issue 189).
+        # Principle 4 (Pattern interrupt) + Principle 11 (Audience-fit).
+        # Import the module (not the function) so `clip_engine.reframe.compute_reframe_crop`
+        # is the canonical patch target in tests (patching a `from … import` binding
+        # would only patch the local reference, not the source).
+        import clip_engine.reframe as _reframe_mod  # noqa: PLC0415
+
+        smoothed_track, sendcmd_script = _reframe_mod.compute_reframe_crop(
+            source_path=source_path,
+            start_s=start_s,
+            end_s=end_s,
+            frame_width=frame_w,
+            frame_height=frame_h,
+            crop_w=crop_w,
+            sample_fps=_settings.REFRAME_SAMPLE_FPS,
+        )
+        if smoothed_track:
+            # Use the first smoothed center as the static fallback; sendcmd
+            # will override x dynamically if there are multiple points.
+            x_offset = max(0, min(smoothed_track[0].center_x - crop_w // 2, frame_w - crop_w))
+        else:
+            x_offset = (frame_w - crop_w) // 2  # center fallback
+
+        if sendcmd_script:
+            # Write the sendcmd script to a sibling temp file.
+            sendcmd_path = out_path.with_suffix(".sendcmd")
+            sendcmd_path.parent.mkdir(parents=True, exist_ok=True)
+            sendcmd_path.write_text(sendcmd_script)
+            logger.info(
+                "Per-frame reframe enabled for %s: sendcmd written to %s",
+                source_path.name,
+                sendcmd_path,
+            )
+        else:
+            # Single-sample or empty track: fall through to static crop.
+            logger.info(
+                "Per-frame reframe: single-sample track for %s — using static x_offset=%d",
+                source_path.name,
+                x_offset,
+            )
+    else:
+        # Legacy path: find face center in a keyframe at the midpoint of the clip.
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            kf_path = Path(tmp.name)
+        try:
+            mid_s = start_s + duration / 2
+            _extract_keyframe(source_path, mid_s, kf_path, timeout_s=render_timeout_s)
+            face_x = _detect_face_center_x(kf_path, frame_w)
+        finally:
+            kf_path.unlink(missing_ok=True)
+        # Clamp crop x-offset.
+        x_offset = max(0, min(face_x - crop_w // 2, frame_w - crop_w))
+
+    # Build vf chain: [sendcmd→]crop → scale, with optional style additions.
     # `-ss` before `-i` is fast (seeks to the nearest keyframe first); `-accurate_seek`
     # then decodes to the exact start frame. With re-encoding (libx264) accurate_seek is
     # already the ffmpeg default, but we set it explicitly so the cut stays frame-accurate
     # even if anyone introduces `-c copy` later — the clip MUST start exactly at the setup.
-    vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={out_w}:{out_h}"]
+    #
+    # When the per-frame reframe path is active and produced a multi-point track,
+    # a ``sendcmd=f=<file>`` filter is prepended.  It has no video output pad —
+    # it only injects commands into the filtergraph — so the crop filter
+    # follows immediately after in the same comma-separated vf chain.
+    # The initial crop x is set to x_offset; sendcmd overrides it at each
+    # sample timestamp. Outside the first sample window ffmpeg holds the last
+    # set value, so there is no "uncovered" period.
+    if sendcmd_path is not None:
+        vf_parts = [
+            f"sendcmd=f={sendcmd_path}",
+            f"crop={crop_w}:{frame_h}:{x_offset}:0",
+            f"scale={out_w}:{out_h}",
+        ]
+    else:
+        vf_parts = [f"crop={crop_w}:{frame_h}:{x_offset}:0", f"scale={out_w}:{out_h}"]
 
     # Auto-zoom punch-in (Issue 184): applied to the framed video BEFORE subtitles
     # so the captions stay steady while the content zooms. Off unless the creator
@@ -438,6 +512,9 @@ def render_clip_file(
     finally:
         if ass_path is not None:
             ass_path.unlink(missing_ok=True)
+        # Clean up the per-frame reframe sendcmd temp file if it was written.
+        if sendcmd_path is not None:
+            sendcmd_path.unlink(missing_ok=True)
     logger.info(
         "Rendered clip %s→%s style=%s (%s)", source_path.name, out_path.name, style_preset, vf
     )
