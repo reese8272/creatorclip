@@ -2638,7 +2638,7 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 
 ### Issue 299: Enforceable clickwrap ToS/Privacy acceptance + versioned consent record
 
-**Status** `OPEN` · **Wave** W2 · **Lane** Privacy & Compliance · **Size** `M` · **Verify** `local`  
+**Status** `DONE` · **Wave** W2 · **Lane** Privacy & Compliance · **Size** `M` · **Verify** `local`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #252 · **Enables** #300 · **Coordinate (hot files)** `frontend/src/pages/Login.tsx`, `routers/auth.py`  
 
