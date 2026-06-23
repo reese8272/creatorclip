@@ -10,7 +10,7 @@
  *  - "Review in order" link href
  *  - Deep-link href per marker (review?video_id=…&clip_id=…)
  */
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi, afterEach } from 'vitest'
@@ -113,8 +113,11 @@ describe('VideoClipsMap', () => {
     renderMap()
     const marker = await screen.findByRole('button', { name: /Clip at/i })
     fireEvent.click(marker)
-    expect(await screen.findByText(/HOOK_SETUP/i)).toBeInTheDocument()
-    expect(await screen.findByText(/Strong channel fit/i)).toBeInTheDocument()
+    // Scope to the opened detail panel — the "Fit:" legend also shows a
+    // "Strong channel fit" badge, so an unscoped query matches multiple.
+    const panel = await screen.findByRole('region', { name: /Clip detail/i })
+    expect(within(panel).getByText(/HOOK_SETUP/i)).toBeInTheDocument()
+    expect(within(panel).getByText(/Strong channel fit/i)).toBeInTheDocument()
   })
 
   it('contains no virality language', async () => {
@@ -160,7 +163,9 @@ describe('VideoClipsMap', () => {
     renderMap('v1')
     const marker = await screen.findByRole('button', { name: /Clip at/i })
     fireEvent.click(marker)
-    const link = await screen.findByRole('link', { name: /Review →/i })
+    // The link's accessible name is its aria-label ("Review this clip in order"),
+    // which overrides the visible "Review →" text for role-name queries.
+    const link = await screen.findByRole('link', { name: /Review this clip in order/i })
     expect(link).toHaveAttribute('href', '/app/review?video_id=v1&clip_id=c1')
   })
 })
