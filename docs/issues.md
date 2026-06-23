@@ -208,6 +208,15 @@ and omitted. `main.py` is included as a HARD hub — middleware/app-setup order 
 > infrastructure: each pipeline-stage change is small and additive, integrated continuously by the
 > lane that owns that stage. If churn becomes painful, an early refactor splitting the Celery pipeline
 > into per-stage modules would pay for itself — consider it before the heavy L02/L08/L09 waves.
+### Issue 194: Publish to YouTube — add `youtube.upload` scope + incremental consent ✅ DONE (2026-06-22)
+**What:** Add the write scope to `youtube/oauth.py`; existing read-only creators re-consent only on opting into publishing; update `docs/COMPLIANCE.md` scope table.
+**AC:** scope requested only for publishing opt-ins (minimum-necessary); tokens Fernet-encrypted, read via `decrypt()`, never logged; Google OAuth verification + **YouTube API compliance audit** tracked as launch dependency. `[DEC]`. **Src:** 13 / D1a. *(D0+D1 scope per 2026-06-22 decision.)*
+**Shipped:** `PUBLISH_SCOPE` kept OUT of base login `SCOPES`; `build_authorization_url(include_publish=True)` appends it + `include_granted_scopes=true`; authed `GET /auth/connect-publishing` starts the opt-in. `can_publish` derived from `YoutubeToken.scope` (`has_publish_scope()`, no migration) → exposed on `/auth/me` + a Profile "Enable YouTube publishing" card (honest copy: pre-audit uploads are private, no virality). `COMPLIANCE.md` scope table + `[DEC]` (`docs/DECISIONS.md` 2026-06-22) done; **audit is now an explicit pre-launch gate**. Tests: +4 in `test_auth.py`. Tokens unchanged (still Fernet via `encrypt()`/`decrypt()`).
+
+### Issue 195: `publish_to_youtube` Celery task (`videos.insert`, idempotent) ✅ DONE (2026-06-22)
+**What:** Resumable upload of `render_uri` with `#Shorts` description; idempotent on `self.request.id`; stores returned video id before ack. **Pre-audit: forced `private`** (creator publishes manually) until the audit clears.
+**AC:** at-least-once redelivery never double-posts; retries transient, surfaces permanent (quota/audit); respects 100-uploads/day bucket; temp media cleaned; no token/PII logged. **Depends:** 194. `[DEC]`. **Src:** 13 / D1b. *(Re-verify the live `videos.insert` quota cost before build — finding 13 flags a discrepancy.)*
+**Shipped:** `publish_to_youtube` task + `youtube/publish.py` resumable upload client (chunked PUT + resume, raw httpx); new `clip_publications` table (model + migration 0027, RLS) with `task_id` UNIQUE for idempotency (redelivery of a `done` row → no re-upload); returned id committed before ack; forced `private` via `settings.YOUTUBE_PUBLISH_PRIVACY`. **Quota re-verified: videos.insert 1600→100 units (2025-12-04)** → `COST_DATA_VIDEOS_INSERT=100`, ~100 uploads/day (DECISIONS 2026-06-22). Retry classification: transient (quota/5xx/net) retries, permanent (audit/forbidden/grant) surfaces. Tests: +5 (`test_publish.py`). ⚠️ Migration/RLS + full task happy-path verified-by-construction (unit/mocks); real Postgres + live upload run on staging/integration. Known at-least-once limitation documented.
 
 ---
 

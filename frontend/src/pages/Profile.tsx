@@ -5,6 +5,7 @@ import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { DnaCard } from '@/components/profile/DnaCard'
 import { IdentitySection } from '@/components/profile/IdentitySection'
 import { IntakeModeSection } from '@/components/profile/IntakeModeSection'
+import { PublishingSection } from '@/components/profile/PublishingSection'
 import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
 import { BrandKitSection } from '@/components/profile/BrandKitSection'
 import { AccountDeletion } from '@/components/profile/AccountDeletion'
@@ -49,6 +50,7 @@ export function Profile() {
         />
         <IntakeModeSection initialMode={user?.analysis_mode ?? 'auto'} />
         <BrandKitSection />
+        <PublishingSection canPublish={user?.can_publish ?? false} />
         <ApiKeysSection />
         <AccountDeletion />
       </main>

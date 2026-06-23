@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 
-from auth import SESSION_COOKIE, create_session_token, decode_session_token
+from auth import SESSION_COOKIE, create_session_token, decode_session_token, get_current_creator
 from config import settings
-from youtube.oauth import build_authorization_url
+from youtube.oauth import PUBLISH_SCOPE, build_authorization_url, has_publish_scope
 
 # ── JWT unit tests ────────────────────────────────────────────────────────────
 
@@ -89,6 +89,49 @@ def test_build_authorization_url_requests_offline_access():
 def test_build_authorization_url_includes_analytics_scope():
     url = build_authorization_url("s")
     assert "yt-analytics" in url
+
+
+# ── publish scope / incremental consent (Issue 194) ───────────────────────────
+
+
+def test_base_authorization_url_excludes_upload_scope():
+    """Minimum-necessary: the base login flow must NOT request youtube.upload."""
+    url = build_authorization_url("s")
+    assert "youtube.upload" not in url
+    assert "include_granted_scopes" not in url
+
+
+def test_publish_authorization_url_adds_upload_and_incremental_flag():
+    url = build_authorization_url("s", include_publish=True)
+    assert "youtube.upload" in url  # write scope requested
+    assert "include_granted_scopes=true" in url  # incremental authorization
+    assert "yt-analytics" in url  # base scopes still present
+
+
+def test_has_publish_scope():
+    assert has_publish_scope(
+        f"openid {PUBLISH_SCOPE} https://www.googleapis.com/auth/youtube.readonly"
+    )
+    assert not has_publish_scope("openid https://www.googleapis.com/auth/youtube.readonly")
+    assert not has_publish_scope("")
+    assert not has_publish_scope(None)
+
+
+def test_connect_publishing_redirects_to_incremental_consent(client):
+    """The authed opt-in endpoint redirects into the upload-scope consent flow."""
+    from main import app
+    from models import Creator
+
+    app.dependency_overrides[get_current_creator] = lambda: AsyncMock(spec=Creator)
+    try:
+        resp = client.get("/auth/connect-publishing", follow_redirects=False)
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 302
+    loc = resp.headers["location"]
+    assert "accounts.google.com" in loc
+    assert "youtube.upload" in loc and "include_granted_scopes=true" in loc
+    assert "cc_oauth_state" in resp.cookies
 
 
 # ── Route unit tests (no DB) ──────────────────────────────────────────────────

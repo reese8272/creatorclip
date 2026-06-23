@@ -242,6 +242,33 @@ with an explicit note that the assumption holds only under the prefork pool. Tes
 failure requires live Postgres — unrelated to this lane); Layer-0 not re-run (no new deps/secrets).
 
 **SEV1 privacy track COMPLETE — Issues 247 + 248 + 249 DONE (2026-06-22).** On branch
+**Batch B publish cluster — Issue 195 (`publish_to_youtube` task) DONE (2026-06-22).** On branch
+`feat/batch-b-publish` (with 194; main merged in — privacy 247–249 now in this branch's base).
+`youtube/publish.py` resumable upload client (chunked
+PUT + resume-on-fail, raw httpx); new `clip_publications` table (model + migration **0028**, renumbered
+from 0027 after privacy's `0027_data_exports` landed on main; RLS-gated)
+with `task_id` UNIQUE = idempotency key (redelivery of a `done` row → no re-upload); returned id +
+`done` committed before ack; uploads forced `private` (`settings.YOUTUBE_PUBLISH_PRIVACY`) pre-audit.
+**videos.insert quota re-verified: 1600→100 units (2025-12-04)** → `COST_DATA_VIDEOS_INSERT=100`,
+~100/day. Transient (quota/5xx/net) retries; permanent (audit/forbidden/grant) surfaces. Tests: +5
+(`test_publish.py`); full suite **1033 passed, 3 skipped**; Layer-0 green. ⚠️ Migration/RLS + live
+upload are verified-by-construction (unit/mocks) — real Postgres + a real upload run on
+staging/integration. **Next:** Issue 196 (scheduled publish — extends `clip_publications`) or 197
+(wire to outcome loop).
+
+**Batch B publish cluster started — Issue 194 (youtube.upload scope + incremental consent) DONE
+(2026-06-22).** On branch `feat/batch-b-publish` (not merged). The write scope stays OUT of base
+login; requested only on opt-in via `GET /auth/connect-publishing` (incremental auth,
+`include_granted_scopes=true`). `can_publish` derived from `YoutubeToken.scope` (`has_publish_scope`,
+no migration); surfaced on `/auth/me` + a Profile "Enable YouTube publishing" card (honest copy:
+pre-audit uploads private, no virality). `COMPLIANCE.md` scope table + `[DEC]` (`docs/DECISIONS.md`
+2026-06-22) done; **YouTube API compliance audit is now an explicit pre-launch gate**. Tests: +4
+(`test_auth.py`); full suite **1028 passed, 3 skipped**; Layer-0 green; frontend lint/tsc/build +
+**e2e 38/38 (serial — parallel OOMs on this WSL2 box; see dev-env memory)**. **Next:** Issue 195
+(`publish_to_youtube` Celery task, idempotent, pre-audit forced `private`).
+
+**SEV1 privacy track COMPLETE + DEPLOYED — Issues 247 + 248 + 249 (2026-06-22).** Merged to main +
+deployed to prod @ `1718781` (migration `0027_data_exports` applied on the prod DB). On branch
 `feat/sev1-privacy` (off main; independent of the held `feat/batch-b-publish`). **247:** `DELETE
 /auth/me` no longer writes PII into the never-purged `audit_log` (Art. 17 / EDPB CEF 2025). **248:**
 deletion purges the separate-engine `event_logs` via `event_log.purge_creator_events`, best-effort.
@@ -253,7 +280,7 @@ deletion purges the separate-engine `event_logs` via `event_log.purge_creator_ev
 Privacy Policy "Your rights" updated. COMPLIANCE + DECISIONS updated across all three; full suite
 **1033 passed, 3 skipped**; Layer-0 green; +13 tests across the three. ⚠️ All DB-heavy → mock-verified here; migrations/RLS/
 isolation run on staging Postgres. **Migration collision:** publish branch's `0027` must renumber to
-`0028` when it merges after this. **Not merged/deployed** — awaiting verification path.
+`0028` when it merges after this. **DEPLOYED** (see above).
 
 **Batch B started — Issue 182 (Export presets + clip download) DONE (2026-06-22).** First issue of
 Batch B (export & publishing), on branch `feat/batch-b-export-download`. Added `OUTPUT_PRESETS`

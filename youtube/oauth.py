@@ -51,6 +51,21 @@ SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
+# Write scope for publishing (Issue 194). NOT in the base login SCOPES —
+# minimum-necessary (COMPLIANCE §1): requested only when a creator opts into
+# publishing, via incremental authorization (`include_granted_scopes=true`).
+# Going live with uploads requires Google OAuth verification + the YouTube API
+# compliance audit (launch dependency — see docs/DECISIONS.md 2026-06-22).
+PUBLISH_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+
+
+def has_publish_scope(scope: str | None) -> bool:
+    """True when a stored grant includes the youtube.upload write scope. The
+    scope string is the single source of truth for 'publishing enabled' — no
+    separate column (Issue 194)."""
+    return scope is not None and PUBLISH_SCOPE in scope.split()
+
+
 _TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 _USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo"
 _CHANNELS_ENDPOINT = "https://www.googleapis.com/youtube/v3/channels"
@@ -59,12 +74,17 @@ _CHANNELS_ENDPOINT = "https://www.googleapis.com/youtube/v3/channels"
 # ── URL builder ───────────────────────────────────────────────────────────────
 
 
-def build_authorization_url(state: str) -> str:
+def build_authorization_url(state: str, *, include_publish: bool = False) -> str:
+    # Incremental authorization (Issue 194): the publish opt-in requests the write
+    # scope on top of whatever the creator already granted. `include_granted_scopes`
+    # tells Google to re-present the prior grant so we keep one combined token
+    # instead of juggling two. Base login leaves `include_publish=False` → read-only.
+    scopes = [*SCOPES, PUBLISH_SCOPE] if include_publish else SCOPES
     params = {
         "client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
         "redirect_uri": settings.OAUTH_REDIRECT_URI,
         "response_type": "code",
-        "scope": " ".join(SCOPES),
+        "scope": " ".join(scopes),
         "access_type": "offline",
         # `consent`        — always re-issue a refresh_token, even on reconnect.
         # `select_account` — force Google's account picker so a user who just
@@ -74,6 +94,8 @@ def build_authorization_url(state: str) -> str:
         "prompt": "consent select_account",
         "state": state,
     }
+    if include_publish:
+        params["include_granted_scopes"] = "true"
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 
 

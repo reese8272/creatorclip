@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
@@ -14,12 +15,13 @@ from config import settings
 from db import get_session
 from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
-from models import Creator, append_audit
+from models import Creator, YoutubeToken, append_audit
 from routers._schemas import SetupStepOut
 from youtube.oauth import (
     build_authorization_url,
     exchange_code,
     fetch_creator_identity,
+    has_publish_scope,
     store_or_update_tokens,
     upsert_creator,
 )
@@ -41,6 +43,7 @@ class AuthMeOut(BaseModel):
     channel_title: str | None
     email: str | None
     onboarding_state: str
+    can_publish: bool = False  # youtube.upload granted (Issue 194)
     # 2026-06-08 — nested aggregate so auth.js can stash window.__SETUP__
     # on every page load. Replaces the old polling of /data-gate + /dna
     # + /videos to infer the next-step CTA.
@@ -51,6 +54,32 @@ class AuthMeOut(BaseModel):
 async def login() -> RedirectResponse:
     state = secrets.token_urlsafe(32)
     resp = RedirectResponse(url=build_authorization_url(state), status_code=302)
+    resp.set_cookie(
+        _STATE_COOKIE,
+        state,
+        httponly=True,
+        samesite="lax",
+        secure=_SECURE,
+        max_age=600,
+    )
+    return resp
+
+
+@router.get("/connect-publishing")
+async def connect_publishing(
+    creator: Creator = Depends(get_current_creator),
+) -> RedirectResponse:
+    """Start incremental consent for the ``youtube.upload`` write scope (Issue 194).
+
+    Authenticated opt-in only — the write scope is never in the base login flow
+    (minimum-necessary, COMPLIANCE §1). The shared ``/callback`` stores the
+    broadened grant; ``/me``'s ``can_publish`` then reflects it. Going live still
+    depends on Google verification + the YouTube API compliance audit.
+    """
+    state = secrets.token_urlsafe(32)
+    resp = RedirectResponse(
+        url=build_authorization_url(state, include_publish=True), status_code=302
+    )
     resp.set_cookie(
         _STATE_COOKIE,
         state,
@@ -191,12 +220,16 @@ async def me(
 ) -> dict:
     """Returns the authenticated creator's profile. No virality predictions made here."""
     setup = await resolve_setup_step(creator, session)
+    token = (
+        await session.execute(select(YoutubeToken).where(YoutubeToken.creator_id == creator.id))
+    ).scalar_one_or_none()
     return {
         "id": str(creator.id),
         "channel_id": creator.channel_id,
         "channel_title": creator.channel_title,
         "email": creator.email,
         "onboarding_state": creator.onboarding_state.value,
+        "can_publish": has_publish_scope(token.scope if token else None),
         "setup": setup,
     }
 

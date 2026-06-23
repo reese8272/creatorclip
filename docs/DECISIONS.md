@@ -731,6 +731,36 @@ adversarially validated (zero dependency-order violations; 513/524 cited file pa
 open `[DEC]`s, SRE completeness, launch sequence, legal/compliance, cost-at-scale) with live-sourced
 recommendations folded into the briefs; `deploy/charts/creatorclip/` + `docs/STAGING_ACCESS.md` confirming
 the chart-exists/never-run-on-K8s finding. Planning-only pass — no product code changed.
+## 2026-06-22 — Issue 195: idempotent `publish_to_youtube` task + videos.insert quota re-verified
+
+**What changed:** A `publish_to_youtube` Celery task uploads a clip's `render_uri`
+to the creator's channel via YouTube's **resumable upload protocol** (implemented
+on the existing httpx client — chunked PUT + resume-on-failure, no new dep). A new
+`clip_publications` table (migration 0027, RLS-gated) records each attempt;
+**idempotency is keyed on the Celery task id** (`task_id` UNIQUE) — a redelivery
+whose row is already `done` returns the stored video id and never re-uploads. The
+returned id + `done` are committed before the task acks. **Uploads are forced
+`privacyStatus=private`** (`settings.YOUTUBE_PUBLISH_PRIVACY`) pre-audit.
+
+**videos.insert quota — re-verified (finding 13 flagged a discrepancy):** the cost
+**dropped from ~1600 → ~100 units on 2025-12-04**. So the default 10k/day quota now
+allows ~100 uploads/day (not ~6), matching the anti-abuse cap. `COST_DATA_VIDEOS_INSERT
+= 100` (local accounting; Google's own `quotaExceeded` 403 is the hard enforcer,
+classified transient → retry).
+
+**Why these choices:** resumable upload is YouTube's recommended reliable path and
+matches the repo's raw-httpx-over-SDK convention. Task-id idempotency mirrors the
+existing render-task pattern. **Known limitation (documented):** a worker crash in
+the sub-second window between upload-success and the `done` commit could, on
+redelivery, re-upload — at-least-once semantics; the window is one commit and the
+done-row check covers every other case. Forced-private keeps us inside ToS until the
+audit clears (Issue 194's launch gate).
+
+**Source/evidence:** quota change + resumable protocol verified live (2026):
+[determine_quota_cost](https://developers.google.com/youtube/v3/determine_quota_cost),
+[YouTube API pricing 2026 (Dec-2025 reduction)](https://www.blotato.com/blog/youtube-api-pricing),
+[resumable upload protocol](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol).
+Finding: `docs/research/findings/13_multiplatform_distribution_publishing.md` (D1b).
 
 **Date:** 2026-06-22
 
@@ -765,6 +795,39 @@ to `0028` (see LEFT_OFF).
 
 **Source/evidence:** GDPR Art. 15 (access) + Art. 20 (portability — structured,
 machine-readable). Finding: `docs/research/findings/12_data_privacy_compliance.md` (177c).
+
+**Date:** 2026-06-22
+
+---
+
+## 2026-06-22 — Issue 194: publish scope via incremental consent (opt-in only)
+
+**What changed:** Publishing requires the `youtube.upload` write scope. Rather than
+add it to the base login `SCOPES`, it is requested **only when a creator opts into
+publishing**, via Google **incremental authorization**: a new authed endpoint
+`GET /auth/connect-publishing` builds the consent URL with the upload scope appended
++ `include_granted_scopes=true`. "Publishing enabled" is **derived from the stored
+`YoutubeToken.scope` string** (`has_publish_scope()`) — no new column/migration.
+`/auth/me` now returns `can_publish`; Profile gains an "Enable YouTube publishing"
+opt-in card. `docs/COMPLIANCE.md` scope table updated.
+
+**Why:** Minimum-necessary scopes is both the Google OAuth best practice and a YouTube
+ToS obligation (`COMPLIANCE.md §1`) — read-only creators must never be asked for write
+access. Incremental authorization gives one combined grant (no second token to manage)
+and lets us disable the feature cleanly if the user declines the scope. Deriving from
+the scope string avoids a migration and keeps a single source of truth.
+
+**Launch dependency (not closeable by code):** going live with uploads requires Google
+OAuth app verification **and** the YouTube API Services compliance audit. Until that
+clears, Issue 195's `publish_to_youtube` forces `privacyStatus=private` (creator
+publishes manually). This is now an explicit pre-public-launch gate.
+
+**Source/evidence:** Google OAuth 2.0 incremental authorization + minimum-scope
+guidance verified live (2026):
+[incremental auth (web-server)](https://developers.google.com/identity/protocols/oauth2/web-server),
+[OAuth best practices](https://developers.google.com/identity/protocols/oauth2/resources/best-practices),
+[requesting additional permissions](https://developers.google.com/identity/sign-in/web/incremental-auth).
+Finding: `docs/research/findings/13_multiplatform_distribution_publishing.md` (D1a).
 
 **Date:** 2026-06-22
 
