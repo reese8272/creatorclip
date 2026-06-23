@@ -15,7 +15,10 @@ class NoopEventSource {
 }
 
 // Route the SPA fetch by URL so one mock serves the dashboard's several calls.
-// `videos` is supplied per-test; everything else returns a benign default.
+// `videos` is supplied per-test; clips is a map of video_id → render_status list
+// used to build the batched /videos/clips/counts response (Issue 213).
+// Per-video /videos/{id}/clips calls should no longer be made — if they are the
+// test will still return an empty list so it doesn't mask regressions silently.
 function mockFetch(videos: Video[], clips: Record<string, { render_status: string }[]> = {}) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
@@ -28,6 +31,16 @@ function mockFetch(videos: Video[], clips: Record<string, { render_status: strin
     if (url.includes('/insights/analytics')) return json({ metrics_available: false })
     if (url.endsWith('/videos'))
       return json({ videos, state: videos.length ? 'populated' : 'empty_initial' })
+    // Batched counts endpoint (Issue 213 — replaces N+1 per-video queries).
+    if (url.endsWith('/videos/clips/counts')) {
+      const counts = Object.entries(clips).map(([video_id, cs]) => ({
+        video_id,
+        total: cs.length,
+        rendered: cs.filter((c) => c.render_status === 'done').length,
+      }))
+      return json({ counts })
+    }
+    // Fallback: per-video clips endpoint (should not be called by the updated Dashboard).
     const clipMatch = url.match(/\/videos\/([^/]+)\/clips$/)
     if (clipMatch) return json({ clips: clips[clipMatch[1]] ?? [] })
     return json({})
@@ -107,5 +120,22 @@ describe('Dashboard', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Generate clips' })).toBeInTheDocument(),
     )
+  })
+
+  it('uses the batched /videos/clips/counts endpoint (not per-video /clips calls)', async () => {
+    // Issue 213: Dashboard should make exactly one clip-count call regardless of video count.
+    const fetchMock = mockFetch(
+      [baseVideo({ id: 'v1', ingest_status: 'done' }), baseVideo({ id: 'v2', ingest_status: 'done' })],
+      { v1: [{ render_status: 'done' }], v2: [{ render_status: 'pending' }] },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderDashboard()
+    // Wait for clip counts to populate (v1 should show 1 clip).
+    await waitFor(() => expect(screen.getByRole('link', { name: '1 clips' })).toBeInTheDocument())
+    // Assert no per-video /clips calls were made — only the batched endpoint.
+    const perVideoCalls = (fetchMock.mock.calls as [RequestInfo | URL][]).filter(([url]) =>
+      String(url).match(/\/videos\/[^/]+\/clips$/),
+    )
+    expect(perVideoCalls).toHaveLength(0)
   })
 })

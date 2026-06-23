@@ -12,6 +12,7 @@ import { Pricing } from '@/pages/Pricing'
 import { Login } from '@/pages/Login'
 import { Walkthrough } from '@/pages/Walkthrough'
 import { Onboarding } from '@/pages/Onboarding'
+import { VideoClipsMap } from '@/pages/VideoClipsMap'
 
 // Root layout: owns app-wide concerns that must span every route. Today that's
 // UI telemetry (Issue 155 — emits a `navigate` event on each route change and
@@ -44,6 +45,7 @@ const router = createBrowserRouter(
                 { path: 'review', element: <Review /> },
                 { path: 'profile', element: <Profile /> },
                 { path: 'chat', element: <Chat /> },
+                { path: 'video/:videoId', element: <VideoClipsMap /> },
               ],
             },
             { path: 'walkthrough', element: <Walkthrough /> },

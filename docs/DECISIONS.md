@@ -5,6 +5,38 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 213: Per-video clips map — timeline UI + batched counts endpoint
+
+**What changed:**
+1. New dedicated route `/video/:videoId` (not `/review?view=map` query-param) renders a
+   horizontal timeline bar with percentage-positioned clip markers; peak flagged with a
+   notch element. Clicking a marker opens an inline detail panel (WhyThisClip + FitBadge).
+2. New batched endpoint `GET /videos/clips/counts` returns all clip totals for the creator in
+   one SQL query. Endpoint declared BEFORE `/{video_id}/clips` in the router to prevent the
+   literal path segment `clips` being matched as a UUID.
+3. Dashboard N+1 useQueries replaced by a single `useQuery` hitting the batched endpoint (fixes
+   OCB-2 from docs/OFF_COURSE_BUGS.md).
+4. VideoTable gets a "Timeline" link alongside the existing "N clips" review link.
+5. Per-origin empty-states use `video.origin` (VideoOrigin enum: upload/link/catalog), not
+   `video.kind` (VideoKind: long/short). The brief referenced "VideoKind.catalog" but the
+   actual model field is `Video.origin` mapped to `VideoOrigin`. Corrected at implementation.
+
+**Why:** Dedicated route is cleaner than a query-param mode: separate file, URL is deep-linkable,
+no conditional-render complexity added to the already-large Review.tsx. Custom CSS percentage
+positions are the industry standard for read-only marker views (Descript/Opus/Riverside pattern);
+no external NLE library needed. Batched counts endpoint eliminates the OCB-2 N+1 which grew
+linearly with done-video count.
+
+**Source/evidence:**
+- Custom timeline marker pattern: shadcn blocks (features-video-seekbar-scrubber-preview),
+  react-svg-timeline npm (ruled out as overkill for read-only view)
+- SQLAlchemy 2.0 batched aggregate: https://docs.sqlalchemy.org/en/20/tutorial/data_select.html
+- FastAPI+SQLAlchemy 2.0 async: https://dev-faizan.medium.com/fastapi-sqlalchemy-2-0-modern-async-database-patterns-7879d39b6843
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-23 — Issue 226: Retire legacy static HTML pages (XSS attack surface removal)
 
 **What changed:** Deleted all legacy static HTML pages from `static/` except `tos.html` and
