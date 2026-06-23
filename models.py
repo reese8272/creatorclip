@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
@@ -466,6 +467,52 @@ class CreatorDna(Base):
     )
 
     creator: Mapped["Creator"] = relationship("Creator", back_populates="dna_profiles")
+
+
+# ── Creator Brand Kit (Issue 186) ─────────────────────────────────────────────
+
+
+class CreatorStyle(Base):
+    """One row per creator storing their brand-kit render style defaults.
+
+    All style fields live in a JSONB `style` column so adding new style
+    options never requires a migration. MutableDict.as_mutable() ensures
+    in-place dict mutations (e.g. `row.style['subtitle'] = 'bold_pop'`)
+    are tracked by SQLAlchemy's unit-of-work without a re-assign.
+
+    Keys currently used by the render pipeline:
+        subtitle         : str | None   — caption style id
+        background       : str | None   — background fill ("blur"|"black")
+        captions_enabled : bool
+        zoom_on_peak     : bool
+        denoise          : bool
+        aspect           : str | None   — "9:16" | "1:1" | "16:9"
+    """
+
+    __tablename__ = "creator_style"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    style: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB()),
+        nullable=False,
+        default=dict,
+        server_default=sa.text("'{}'::jsonb"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("creator_id", name="uq_creator_style_creator_id"),
+    )
 
 
 class DnaEmbedding(Base):

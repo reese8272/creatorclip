@@ -20,7 +20,17 @@ from billing.ledger import check_balance_for_minutes, check_positive_balance, vi
 from config import settings
 from db import get_session
 from limiter import creator_key, limiter
-from models import Clip, Creator, IngestStatus, RenderStatus, Signals, Transcript, Video, VideoKind
+from models import (
+    Clip,
+    Creator,
+    CreatorStyle,
+    IngestStatus,
+    RenderStatus,
+    Signals,
+    Transcript,
+    Video,
+    VideoKind,
+)
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
 from worker.storage import presigned_download_url, upload_file
 from youtube.data_api import classify_video_kind
@@ -278,9 +288,20 @@ async def render_clip(
         raise HTTPException(status_code=409, detail="Render already in progress")
 
     # Persist style choice before enqueuing so the worker task reads it fresh.
+    # Issue 186: start from the creator's brand-kit defaults so omitted fields
+    # fall back to the kit rather than None, then apply the per-clip overrides.
     if body is not None:
-        existing = clip.style_preset or {}
-        merged: dict = {**existing}
+        kit_result = await session.execute(
+            select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
+        )
+        kit_db_row: CreatorStyle | None = kit_result.scalar_one_or_none()
+        kit_style: dict = (
+            (kit_db_row.style or {})
+            if isinstance(kit_db_row, CreatorStyle)
+            else {}
+        )
+        # Per-clip stored preset overrides the kit; the request body overrides both.
+        merged: dict = {**kit_style, **(clip.style_preset or {})}
         if body.subtitle is not None:
             merged["subtitle"] = body.subtitle
         if body.background is not None:

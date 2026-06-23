@@ -340,3 +340,16 @@ export interface ApiKey {
   last_used_at: string | null
   created_at: string | null
 }
+
+// ── Brand Kit (Issue 186) ────────────────────────────────────────────────────
+
+// Shape returned by GET /creators/me/brand-kit and PUT /creators/me/brand-kit.
+// Mirrors BrandKitOut on the server side.
+export interface BrandKit {
+  subtitle: string | null
+  background: string | null
+  captions_enabled: boolean
+  zoom_on_peak: boolean
+  denoise: boolean
+  aspect: string | null
+}

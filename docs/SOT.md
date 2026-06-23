@@ -332,6 +332,12 @@ creator_identity                     -- the STATED profile (Issue 83, append-onl
   mission, style_sample,
   created_at, superseded_at (NULL = current; partial UNIQUE enforces ≤1 current)
 
+creator_style                        -- brand-kit render defaults (Issue 186, one row per creator)
+  id, creator_id (FK, CASCADE, UNIQUE uq_creator_style_creator_id),
+  style JSONB (subtitle, background, captions_enabled, zoom_on_peak, denoise, aspect),
+  updated_at
+  RLS: tenant_isolation on creator_id
+
 dna_embeddings
   id, creator_id (FK), kind (pattern/clip/hook), embedding (vector), ref_jsonb
 

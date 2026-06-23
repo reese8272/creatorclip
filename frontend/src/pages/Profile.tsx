@@ -6,6 +6,7 @@ import { DnaCard } from '@/components/profile/DnaCard'
 import { IdentitySection } from '@/components/profile/IdentitySection'
 import { IntakeModeSection } from '@/components/profile/IntakeModeSection'
 import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
+import { BrandKitSection } from '@/components/profile/BrandKitSection'
 import { AccountDeletion } from '@/components/profile/AccountDeletion'
 import type { Identity, IdentityResponse, NicheOption } from '@/types'
 
@@ -47,6 +48,7 @@ export function Profile() {
           onSaved={() => setReloadToken((t) => t + 1)}
         />
         <IntakeModeSection initialMode={user?.analysis_mode ?? 'auto'} />
+        <BrandKitSection />
         <ApiKeysSection />
         <AccountDeletion />
       </main>
