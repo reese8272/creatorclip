@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { api, ApiError } from '@/lib/api'
+import { api } from '@/lib/api'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { fitTier } from '@/lib/fit'
 import { FitBadge } from '@/components/ui/fit-badge'
