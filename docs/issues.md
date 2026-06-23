@@ -2268,7 +2268,7 @@ Resend mailer, notification data model + idempotent send, triggers, in-app cente
 
 ### Issue 243: Notification data model + idempotent send task
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Notifications & Lifecycle · **Size** `L` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W1 · **Lane** Notifications & Lifecycle · **Size** `L` · **Verify** `staging`  
 **Src** `11 / 176b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/11_notifications_lifecycle_comms.md`  
 **Blocked by** #242 · **Enables** #193, #244, #245 · **Coordinate (hot files)** Alembic revision chain, `worker/tasks.py`  
 

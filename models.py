@@ -1059,3 +1059,164 @@ class ChatMessage(Base):
     conversation: Mapped["ChatConversation"] = relationship(
         "ChatConversation", back_populates="messages"
     )
+
+
+# ── Notifications (Issue 243) ─────────────────────────────────────────────────
+
+
+class NotificationChannel(enum.Enum):
+    """Delivery channel for a notification_deliveries row."""
+
+    email = "email"
+    inapp = "inapp"
+    push = "push"
+
+
+class NotificationDeliveryStatus(enum.Enum):
+    """Terminal or intermediate state of a single delivery attempt."""
+
+    sent = "sent"
+    skipped = "skipped"
+    failed = "failed"
+
+
+class NotificationPreference(Base):
+    """Per-creator consent and channel opt-out state (Issue 243).
+
+    One row per creator, created lazily on first send.  The ``email_transactional``
+    column is always-on (legally required for true transactional mail under
+    CAN-SPAM and GDPR legitimate-interest) — the UI shows it but disables the
+    toggle.  ``email_lifecycle`` is the unsubscribable category (welcome / nudge /
+    re-engagement); the one-click unsubscribe link is keyed on
+    ``unsubscribe_token``.
+
+    RLS note: this table does NOT have its own RLS policy.  ``creator_id`` is the
+    primary key, so a single-row-per-creator read/write never needs RLS to prevent
+    cross-tenant leaks — the application always queries by ``creator_id`` directly.
+    """
+
+    __tablename__ = "notification_preferences"
+
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # Legally always-on for true transactional mail (CAN-SPAM / GDPR Art. 6(1)(b)).
+    # UI shows the toggle but locks it to True; server-side enforcement is in the
+    # send_notification task which treats this as immutable.
+    email_transactional: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default=sa.text("true")
+    )
+    # Welcome / first-clip nudge / re-engagement (lifecycle / commercial-leaning).
+    # Unsubscribable via one-click link; must be honoured ≤10 business days (CAN-SPAM).
+    email_lifecycle: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default=sa.text("true")
+    )
+    inapp_enabled: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default=sa.text("true")
+    )
+    # Web push deferred to Phase 3 (Issue 243 / research/findings/11_notifications_…).
+    push_enabled: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.text("false")
+    )
+    # UUID4 token for no-auth one-click unsubscribe GET /unsubscribe/{token}.
+    # Unique so a token cannot be guessed from another creator's token.
+    unsubscribe_token: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, nullable=False, unique=True, default=uuid.uuid4
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class NotificationDelivery(Base):
+    """Idempotency ledger for every notification send attempt (Issue 243).
+
+    The ``dedupe_key`` UNIQUE constraint (SHA-256 of creator_id:event_type:entity_id)
+    is the primary deduplication mechanism — a Celery redelivery gets an
+    ``IntegrityError`` on the INSERT and short-circuits without a second send.
+    The ``provider_message_id`` column stores the Resend message id returned on
+    success so deliverability issues can be diagnosed without logging PII.
+
+    No RLS policy: reads are always by ``creator_id`` in the application layer,
+    and this is an internal audit table not exposed to the creator-facing API.
+    """
+
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    entity_id: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    channel: Mapped[NotificationChannel] = mapped_column(
+        sa.Enum(NotificationChannel, name="notification_channel_enum"),
+        nullable=False,
+    )
+    # sha256(creator_id:event_type:entity_id) — see notify/dedupe.py.
+    # UNIQUE enforces one delivery per (creator, event, entity) triple.
+    dedupe_key: Mapped[str] = mapped_column(sa.String(64), nullable=False, unique=True)
+    # Resend message id returned on success (no PII — provider-side opaque id).
+    provider_message_id: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    status: Mapped[NotificationDeliveryStatus] = mapped_column(
+        sa.Enum(NotificationDeliveryStatus, name="notification_delivery_status_enum"),
+        nullable=False,
+        default=NotificationDeliveryStatus.sent,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class Notification(Base):
+    """Durable in-app notification row (Issue 243, Issue 81).
+
+    Distinct from the ephemeral per-task Redis Stream (1-hour TTL, requires
+    an open connection) and from the operator-only event_logs table (no RLS,
+    PII-redacted, not creator-facing).  This table is the creator-visible
+    "notification center" — polled on page load, dismissed by the creator.
+
+    RLS policy: ``tenant_isolation`` (ENABLE + FORCE) mirrors chat_conversations
+    so creator A can never read creator B's notifications via the app role.
+    Every app-layer query additionally filters by ``creator_id`` as a defence-in-
+    depth complement to RLS (same pattern as chat_conversations / clips).
+    """
+
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Short classifier string, e.g. "clips_ready", "dna_built", "trial_ending".
+    kind: Mapped[str] = mapped_column(sa.String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(sa.String(256), nullable=False)
+    body: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # Optional deep-link to the relevant page (e.g. /app/review for clips_ready).
+    link_url: Mapped[str | None] = mapped_column(sa.String(512), nullable=True)
+    # NULL = unread; set on first display in the notification center.
+    seen_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    # NULL = not dismissed; set when the creator explicitly dismisses the row.
+    dismissed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )

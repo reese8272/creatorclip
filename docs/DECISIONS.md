@@ -7964,3 +7964,69 @@ If two hotfixes ship in the same month, the patch must be bumped (2026.6.0 → 2
 **Sources:** calver.org; packetoverwatch.com/posts/github-actions-calver/; docker/metadata-action `type=semver` docs.
 
 **Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 243: Notification data model + idempotent send task
+
+**What changed:**
+
+Three new SQLAlchemy models and a corresponding Alembic migration (0031_notifications.py) added
+to support the notification infrastructure:
+
+1. **`notification_preferences`** — one row per creator; per-channel consent state. No RLS policy
+   because the primary key is `creator_id` (one-row-per-creator pattern; a WHERE clause on the PK
+   is sufficient isolation, unlike child tables where cross-tenant leakage is possible).
+   `email_transactional` is always-on (CAN-SPAM / GDPR Art. 6(1)(b) relationship-mail; the UI shows
+   the toggle but locks it). `email_lifecycle` is unsubscribable. `unsubscribe_token` is a UUID4 that
+   powers a no-auth one-click unsubscribe link (Issue 245 wires the endpoint).
+
+2. **`notification_deliveries`** — idempotency ledger (Inbox pattern). `dedupe_key` UNIQUE =
+   SHA-256(creator_id:event_type:entity_id) is the primary deduplication mechanism. No RLS —
+   this is an internal audit/ledger table, not exposed to the creator-facing API. `provider_message_id`
+   stores the Resend opaque id for deliverability debugging without logging PII.
+
+3. **`notifications`** — durable in-app notification center. RLS ENABLE + FORCE +
+   `tenant_isolation` policy mirrors `chat_conversations` (migration 0026) so the database
+   enforces per-creator isolation independently of the application layer.
+
+**Idempotency scheme:** Two independent layers —
+- DB UNIQUE `dedupe_key` constraint: an `IntegrityError` on INSERT means "already delivered",
+  the task returns without a second send (Inbox/idempotent-consumer pattern, same shape as
+  `build_job_id` in `worker/tasks.py`).
+- Resend `Idempotency-Key` HTTP header: the provider's own 24-hour dedup window catches any
+  race between a failed DB commit and a re-enqueue.
+
+**Migration number:** 0031 (after 0030_clip_publications). The brief cited 0028 but 0028–0030
+landed on main before Issue 243 was built; 0031 is the correct next head.
+
+**`notify/dedupe.py`:** New module. SHA-256 is standard for dedup-key generation in idempotent
+API systems (Stripe, Resend). 64-char hex output is within Resend's 256-char limit and URL-safe
+without encoding.
+
+**`_send_notification_async`:** Uses `AdminSessionLocal` (BYPASSRLS role) because the task spans
+the RLS boundary: it reads `notification_preferences` (no RLS), inserts `notification_deliveries`
+(no RLS), and inserts `notifications` (has RLS). Admin role is correct for trusted worker tasks
+(same pattern as `_generate_data_export_async`, `_build_dna_async`). Per-creator isolation is
+enforced by explicit `creator_id` predicates on every query.
+
+**`_build_inapp_notification`:** In-app copy is centralised in a single dict in `worker/tasks.py`
+so it can be asserted by structural tests (no-virality guarantee). `payload['body']` override
+allows trigger callsites to pass event-specific context (e.g. video title) without changing the
+task signature.
+
+**Alternatives ruled out:**
+- Reusing `event_logs` for in-app notifications: rejected — `event_logs` is deliberately PII-redacted,
+  no-RLS, operator-only (`docs/COMPLIANCE.md`). Repurposing it would violate its stated contract.
+- Redis-Stream-based in-app notifications: rejected — the SSE stream has a 1-hour TTL and requires
+  an open tab connection. Durable notifications need persistent storage.
+- f-string templates instead of Jinja2: rejected — Jinja2 already a transitive dep; scales past 2
+  templates; template files are independently testable (Issue 242 DECISIONS).
+
+**Sources:**
+- Inbox/idempotent-consumer pattern: Celery best-practice (medium.com/@hjparmar1944)
+- Resend idempotency keys: resend.com/blog/engineering-idempotency-keys
+- CAN-SPAM always-on for transactional mail: ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business
+- GDPR Art. 6(1)(b) — legitimate interest for relationship mail: gdpr-info.eu/art-6-gdpr/
+
+**Date:** 2026-06-23
