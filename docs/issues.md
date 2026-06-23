@@ -586,7 +586,7 @@ Clip-render quality + the timeline-editor backbone (`clip_engine/render.py`, `ca
 
 ### Issue 187: Learn the Brand Kit from repeated choices (the moat)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Editorial & Render · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** Editorial & Render · **Size** `M` · **Verify** `local`  
 **Src** `03 / B2` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/03_editorial_capabilities.md`  
 **Blocked by** #186 · **Coordinate (hot files)** `frontend/src/components/profile/BrandKitSection.tsx`, `routers/creators.py`  
 
@@ -1371,7 +1371,7 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 289: Cost price book + USD translation on the Usage ledger
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `local`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #220, #237 · **Enables** #290, #291, #292, #293 · **Coordinate (hot files)** `observability.py`  
 
@@ -1497,7 +1497,7 @@ Move untrusted creator content out of `system`, JSON-delimit, untrusted-content 
 
 ### Issue 225: `<untrusted_content_policy>` clause in every system prompt
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Security — Prompt Trust Boundary · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** Security — Prompt Trust Boundary · **Size** `M` · **Verify** `local`  
 **Src** `09 / 174b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/09_llm_content_safety_prompt_injection.md`  
 **Blocked by** #224 · **Coordinate (hot files)** `analysis/brief.py`, `clip_engine/scoring.py`, `dna/brief.py`, `improvement/brief.py`, `knowledge/hooks.py`, `knowledge/thumbnails.py`, `knowledge/titles.py`, `knowledge/util.py`, `routers/insights.py`  
 
@@ -2515,7 +2515,7 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 
 ### Issue 252: [SEV2] Privacy Policy + consent accuracy rewrite
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
 **Src** `12 / 177f` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/12_data_privacy_compliance.md`  
 **Blocked by** #251 · **Enables** #299, #302 · **Coordinate (hot files)** `frontend/src/pages/Login.tsx`, `static/privacy.html`, `tests/test_static.py`  
 
@@ -2551,7 +2551,7 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 
 ### Issue 253: [SEV2] Breach-notification runbook (Art. 33/34)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
 **Src** `12 / 177g` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/12_data_privacy_compliance.md`  
 **Blocked by** #251 · **Enables** #283  
 
@@ -2579,7 +2579,7 @@ Retention sweeps, DPAs/subprocessors, privacy-policy rewrite, breach runbook, cl
 
 ### Issue 301: Published Accessibility Statement + WCAG 2.1 AA posture
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** Privacy & Compliance · **Size** `S` · **Verify** `local`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #266  
 
@@ -3859,7 +3859,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 213: Per-video clips map — source timeline with candidate markers
 
-**Status** `OPEN` · **Wave** W0 · **Lane** UI Core · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W0 · **Lane** UI Core · **Size** `M` · **Verify** `staging`  
 **Src** `01 / 183 (+ OCB-2)` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** nothing — **ready now** · **Enables** #212, #217 · **Coordinate (hot files)** `frontend/src/App.tsx`, `frontend/src/components/dashboard/VideoTable.tsx`, `frontend/src/components/review/WhyThisClip.tsx`, `frontend/src/lib/fit.ts`, `frontend/src/pages/Dashboard.tsx`, `routers/clips.py`  
 
@@ -3928,7 +3928,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 211: Global active-tasks panel (supersedes Issue 160)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** UI Core · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** UI Core · **Size** `M` · **Verify** `local`  
 **Src** `01 / 182` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** #210 · **Enables** #160 · **Coordinate (hot files)** `frontend/src/components/AppChrome.tsx`, `frontend/src/hooks/useTaskStream.ts`, `frontend/src/lib/activity.ts`  
 
@@ -4341,7 +4341,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 268: Flake detection + quarantine signal (not blanket auto-retry)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
 **Src** `15 / 180d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** #267 · **Coordinate (hot files)** `.github/workflows/ci.yml`  
 
@@ -4375,7 +4375,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 272: Visual-regression baselines on stable routes
 
-**Status** `OPEN` · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
 **Src** `15 / 180h` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** #266 · **Coordinate (hot files)** `.github/workflows/ci.yml`, `frontend/playwright.config.ts`  
 
@@ -4409,7 +4409,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 294: Expand/contract migration authoring policy (docs)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `local`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #270 · **Enables** #303  
 
@@ -4429,7 +4429,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 295: Critical-journey post-deploy smoke (not /health-only)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `staging`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #271 · **Enables** #298, #303 · **Coordinate (hot files)** `.github/workflows/deploy.yml`, `scripts/deploy.sh`  
 
@@ -4451,7 +4451,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 297: Release versioning + image/Git tagging on every promotion
 
-**Status** `OPEN` · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `staging`  
+**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `staging`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #271 · **Enables** #303 · **Coordinate (hot files)** `.github/workflows/docker-publish.yml`, `main.py`, `pyproject.toml`  
 

@@ -4,6 +4,43 @@ Updated after every issue closes.
 
 ---
 
+## 🔵 WAVE W1 — BUILT + INTEGRATED on `wave1-integration` (2026-06-23) — DEPLOY PENDING
+
+**17 issues built across 9 lanes**, integrated on branch `wave1-integration` (off `main` @ `74acea7`).
+Built via the `issue-wave` harness (Sonnet sub-agents, isolated worktrees) in 4 batches + a W0.5
+unblock batch. Not yet merged to `main` / deployed.
+
+**Issues shipped (DONE):** ui-core #211 (global active-tasks panel) · #213 (per-video clips map —
+a W0 leftover unblocked here) · security-prompt-trust-boundary #225 (`<untrusted_content_policy>`
+clause in all 9 builders) · observability #234/#238/#281 · privacy-compliance #252/#253/#301 ·
+agentic-caching-cost #289 (price-book constants) · editorial-render #187 (learned Brand Kit) ·
+carry-over-cleanup #151 · qa-release-engineering #268/#272/#294/#295/#297.
+
+**Integration result:** zero code conflicts across the 9 branches — only additive doc-append
+conflicts (DECISIONS.md/PROJECT_STATE.md), resolved keep-both. Two real defects caught + fixed at
+integration: `VideoClipsMap.tsx` unused `ApiError` import (TS6133, would have broken the image
+build — the W0 lesson) and `routers/creators.py` brand-kit-suggestion return type (`dict|Response`,
+mypy). Migration chain unchanged (`0027→0028→0029`; no W1 migrations).
+
+**Verification (static, on dev box):** `tsc -b && vite build` GREEN; ruff production clean;
+`py_compile` all changed Python; mypy clean on changed modules; config.py no duplicate settings.
+**Staging-pending (Issue 275):** full pytest suite (no Postgres/Redis here), behavioral ACs.
+
+**Deferred — genuinely staging-gated, NOT built (full implementation plans produced by triage):**
+- **#198** personalization efficacy harness (NDCG/MAP/Kendall) — size-L, DB-backed eval; blocks
+  scoring #199–202.
+- **#235** funnel instrumentation + resolver cleanup — size-L, DB-backed idempotency guard; blocks
+  activation #161/#203/#204.
+- Newly unblocked by #213/#214 but not yet built: ui-core **#212/#217**, activation **#215**, and
+  **#148** (now near-obsolete — #226 deleted the static pages it targeted).
+- External/runbook lanes (Stream-VOD Recap #191, Publish #195, K8s #276–280/#287, DR #256/#288,
+  Deploy Gates #28) — runbook hand-drafts pending.
+
+**Tracking-debt fixed this session:** #214 status OPEN→DONE (shipped W0 @ `802dcfd`, had falsely
+blocked #215); all 17 W1 issue rows flipped OPEN→DONE.
+
+---
+
 ## ✅ WAVE W0 — SHIPPED & DEPLOYED TO PROD (2026-06-23) @ `ac1a4b6`
 
 All 14 code-bearing W0 lanes (~30 issues) are built, integrated, merged, pushed, and **deployed to
