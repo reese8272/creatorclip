@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useTaskStream } from '@/hooks/useTaskStream'
+import { sendActivity } from '@/lib/activity'
 import { Button } from '@/components/ui/button'
 import { StepCard } from '@/components/onboarding/StepCard'
-import { StreamConsole } from '@/components/onboarding/StreamConsole'
 import { OnboardingIdentity } from '@/components/onboarding/OnboardingIdentity'
+import { TaskStepper } from '@/components/TaskStepper'
 import { Footer } from '@/components/Footer'
 import type { DataGate, DnaResponse, IdentityResponse, TaskQueued } from '@/types'
 
@@ -36,13 +37,32 @@ function DataGateStatus({ gate }: { gate: DataGate | undefined }) {
   )
 }
 
+// sessionStorage keys for re-attach-on-navigation survival (Issue 214). When the
+// user navigates away and returns, we re-read the stream URL from sessionStorage
+// so useTaskStream re-subscribes automatically via its existing URL-change effect.
+const SS_CATALOG_URL = 'onboarding:catalogUrl'
+const SS_DNA_URL = 'onboarding:dnaUrl'
+
 export function Onboarding() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
-  const [catalogUrl, setCatalogUrl] = useState<string | null>(null)
-  const [dnaUrl, setDnaUrl] = useState<string | null>(null)
+
+  // Initialise from sessionStorage so a back-navigate re-attaches to in-flight
+  // or completed streams without requiring a new API call.
+  const [catalogUrl, setCatalogUrl] = useState<string | null>(
+    () => sessionStorage.getItem(SS_CATALOG_URL),
+  )
+  const [dnaUrl, setDnaUrl] = useState<string | null>(
+    () => sessionStorage.getItem(SS_DNA_URL),
+  )
   const [identitySaved, setIdentitySaved] = useState(false)
   const [buildError, setBuildError] = useState<string | null>(null)
+
+  // Elapsed time tracking: record the moment streaming starts, tick each second.
+  const [catalogElapsed, setCatalogElapsed] = useState(0)
+  const [dnaElapsed, setDnaElapsed] = useState(0)
+  const catalogStartRef = useRef<number | null>(null)
+  const dnaStartRef = useRef<number | null>(null)
 
   const catalog = useTaskStream(catalogUrl)
   const dna = useTaskStream(dnaUrl)
@@ -74,14 +94,67 @@ export function Onboarding() {
     if (dna.status === 'done') queryClient.invalidateQueries({ queryKey: ['dna'] })
   }, [dna.status, queryClient])
 
+  // Elapsed-time tick for catalog stream.
+  useEffect(() => {
+    if (catalog.status !== 'streaming') return
+    if (!catalogStartRef.current) catalogStartRef.current = Date.now()
+    const id = setInterval(() => {
+      setCatalogElapsed(Date.now() - (catalogStartRef.current ?? Date.now()))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [catalog.status])
+
+  // Elapsed-time tick for DNA stream.
+  useEffect(() => {
+    if (dna.status !== 'streaming') return
+    if (!dnaStartRef.current) dnaStartRef.current = Date.now()
+    const id = setInterval(() => {
+      setDnaElapsed(Date.now() - (dnaStartRef.current ?? Date.now()))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [dna.status])
+
+  // Emit a step-view activity event each time a new step label arrives (Issue 235
+  // funnel foundation). Fires on the count change, not the label itself, so we
+  // avoid stale-closure issues — the parent only cares about progression, not
+  // which step it was.
+  const prevCatalogSteps = useRef(0)
+  const prevDnaSteps = useRef(0)
+  useEffect(() => {
+    if (catalog.steps.length > prevCatalogSteps.current) {
+      sendActivity('navigate', 'onboarding:catalog-step', {
+        source: 'ui',
+        step: catalog.steps.length,
+        label: catalog.steps.at(-1),
+      })
+      prevCatalogSteps.current = catalog.steps.length
+    }
+  }, [catalog.steps])
+  useEffect(() => {
+    if (dna.steps.length > prevDnaSteps.current) {
+      sendActivity('navigate', 'onboarding:dna-step', {
+        source: 'ui',
+        step: dna.steps.length,
+        label: dna.steps.at(-1),
+      })
+      prevDnaSteps.current = dna.steps.length
+    }
+  }, [dna.steps])
+
   const identityExists = identitySaved || Boolean(identityQuery.data?.identity)
   const briefReady = Boolean(dnaQuery.data?.profile)
 
   async function syncCatalog() {
     setCatalogUrl(null)
+    sessionStorage.removeItem(SS_CATALOG_URL)
+    catalogStartRef.current = null
+    setCatalogElapsed(0)
     try {
       const { stream_url } = await api<TaskQueued>('/creators/me/catalog/sync', { method: 'POST' })
-      if (stream_url) setCatalogUrl(stream_url)
+      if (stream_url) {
+        sessionStorage.setItem(SS_CATALOG_URL, stream_url)
+        setCatalogUrl(stream_url)
+      }
       queryClient.invalidateQueries({ queryKey: ['data-gate'] })
     } catch {
       /* gate poll still reflects the last good read */
@@ -91,9 +164,15 @@ export function Onboarding() {
   async function buildDna() {
     setBuildError(null)
     setDnaUrl(null)
+    sessionStorage.removeItem(SS_DNA_URL)
+    dnaStartRef.current = null
+    setDnaElapsed(0)
     try {
       const { stream_url } = await api<TaskQueued>('/creators/me/dna/build', { method: 'POST' })
-      if (stream_url) setDnaUrl(stream_url)
+      if (stream_url) {
+        sessionStorage.setItem(SS_DNA_URL, stream_url)
+        setDnaUrl(stream_url)
+      }
     } catch (e) {
       setBuildError(
         e instanceof ApiError
@@ -146,7 +225,7 @@ export function Onboarding() {
           <Button variant="secondary" className="w-full" onClick={syncCatalog}>
             Sync channel data
           </Button>
-          <StreamConsole buffer={catalog.buffer} />
+          <TaskStepper steps={catalog.steps} status={catalog.status} elapsedMs={catalogElapsed} />
         </StepCard>
 
         <StepCard num={3} title="Tell us about yourself" meta="(optional — 45 seconds)">
@@ -175,7 +254,7 @@ export function Onboarding() {
           {dna.status === 'error' && dna.error && (
             <p className="mt-2 text-center text-xs text-warning">{dna.error}</p>
           )}
-          <StreamConsole buffer={dna.buffer} />
+          <TaskStepper steps={dna.steps} status={dna.status} elapsedMs={dnaElapsed} />
         </StepCard>
 
         <StepCard num={5} title="Review & confirm your brief">

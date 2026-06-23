@@ -51,9 +51,25 @@ describe('useTaskStream', () => {
     const es = FakeEventSource.instances[0]
     act(() => es.emit('step', { label: 'ingest' }))
     expect(result.current.buffer).toContain('ingest')
+    // steps array is populated by onStep alongside the buffer
+    expect(result.current.steps).toEqual(['ingest'])
 
     act(() => es.emit('done', { version: 3 }))
     expect(result.current.status).toBe('done')
+  })
+
+  it('accumulates multiple step labels in order', () => {
+    const { result } = renderHook(() => useTaskStream('/tasks/abc/events'))
+    const es = FakeEventSource.instances[0]
+    act(() => es.emit('step', { label: 'fetch' }))
+    act(() => es.emit('step', { label: 'embed' }))
+    act(() => es.emit('step', { label: 'persist' }))
+    expect(result.current.steps).toEqual(['fetch', 'embed', 'persist'])
+  })
+
+  it('starts with empty steps when url is null', () => {
+    const { result } = renderHook(() => useTaskStream(null))
+    expect(result.current.steps).toEqual([])
   })
 
   it('surfaces a server error event', () => {
