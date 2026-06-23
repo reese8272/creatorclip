@@ -154,3 +154,22 @@ scoring response, import-time client loop binding, `_in_window` boundary
 undercount, caption word dup, 120s cleaned-render timeout) is carried forward
 untouched, and one env note stands: the live venv must actually install the
 0.105.2 pin or mypy will flag the removed `type: ignore`.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] generate_and_rank_clips concurrent check-then-insert (ranking.py:101-161) | → tracked in Issue 76 (post-hardening residual SEV-2 cluster) |
+| [SEV2] libass path escaping (render.py:219) | → tracked in Issue 76 |
+| [SEV2] post-snap end_s > duration_s (candidates.py:244-253) | → tracked in Issue 76 |
+| [SEV2] bare json.loads on scoring response (scoring.py:265-270) | → tracked in Issue 222 (tool-result is_error flag + structured output) |
+| [SEV2] AsyncAnthropic import-time loop binding (scoring.py:23-27) | → tracked in Issue 82 (async migration wave 2) |
+| [SEV2] _in_window boundary undercount (scoring.py:105-106) | → tracked in Issue 76 |
+| [SEV2] caption word duplicate at speaker-change boundary (captions.py:160-167) | → tracked in Issue 76 |
+| [SEV2] cleaned-render 120s timeout asymmetry (render.py:274) | → tracked in Issue 76 |
+| [cleanup] _invert_cuts DRY (edits.py:152-169) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] per-candidate signal rebuild (scoring.py:76-124) | → tracked in Issue 109 |
+| [cleanup] terminal-punct matcher O(N) (candidates.py:26-29) | → tracked in Issue 109 |
+| [cleanup] filler re-normalisation (filler.py:140-145) | → tracked in Issue 109 |
+| [cleanup] render_clip_file too long (render.py:139-260) | → tracked in Issue 109 |
+| [cleanup] magic score weights (scoring.py:127-133) | → tracked in Issue 109 |

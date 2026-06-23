@@ -226,10 +226,13 @@ async def list_clips(
     if not video or video.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Video not found")
 
+    # Hard cap to prevent unbounded scans as clip counts grow. (Issue 76)
+    _LIST_LIMIT = 100
     result = await session.execute(
         select(Clip)
         .where(Clip.video_id == video_id, Clip.creator_id == creator.id)
         .order_by(Clip.rank)
+        .limit(_LIST_LIMIT)
     )
     clips = list(result.scalars())
     items = [_clip_response(c) for c in clips]

@@ -784,7 +784,10 @@ async def _render_clip_async(clip_id: str) -> None:
         await aemit(clip_id, "step", label="render_start", stage="render")
 
         async with db.AdminSessionLocal() as session:
-            clip = await session.get(Clip, uuid.UUID(clip_id))
+            # with_for_update serializes concurrent Celery redeliveries at the Postgres row
+            # level so two concurrent deliveries of the same clip_id cannot both pass the
+            # done-check and trigger a double-encode. (Issue 76)
+            clip = await session.get(Clip, uuid.UUID(clip_id), with_for_update=True)
             if not clip:
                 raise ValueError(f"Clip {clip_id} not found")
             # Idempotent under at-least-once delivery (Issue 62): a redelivered render

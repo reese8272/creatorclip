@@ -38,8 +38,13 @@ async def get_upload_intel(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Return best upload windows and estimated optimal gap from audience activity."""
+    # AudienceActivity has at most 7*24 = 168 rows per creator (one per day-of-week/hour
+    # slot), but cap at 200 defensively to prevent unbounded scans. (Issue 76)
+    _LIST_LIMIT = 200
     result = await session.execute(
-        select(AudienceActivity).where(AudienceActivity.creator_id == creator.id)
+        select(AudienceActivity)
+        .where(AudienceActivity.creator_id == creator.id)
+        .limit(_LIST_LIMIT)
     )
     rows = list(result.scalars())
 

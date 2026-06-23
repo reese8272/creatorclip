@@ -55,6 +55,23 @@ gap is it has never run on K8s (staging = Docker-Compose on the prod VM), so **I
 first Helm deploy) is the linchpin**. → `CLAUDE.md`'s "Kubernetes (production — research pending)" line is
 stale. Prior backlog archived at `docs/archive/issues_pre_roadmap_2026-06-22.md`. **Not committed.**
 
+**Wave W0 carry-over-cleanup COMPLETE — Issues 73 + 75 + 76 DONE (2026-06-23).** Branch
+`wave0/carry-over-cleanup`. **73:** Pydantic response_model gap closure — `GET /api/logs/me` and
+`POST /{video_id}/queue` now carry explicit `response_model=`; raw dict `next_action` fields in
+videos.py and insights.py replaced with typed `NextActionOut` instances; guard test extended with
+negative path. **75:** Assessment-module reconciliation — all 14 `docs/assessment/modules/*.md`
+files annotated with owning issue numbers for every `[SEV2]`/`[cleanup]` finding; starlette
+PYSEC-2026-161 confirmed closed by Issue 143 (starlette 1.3.1 in requirements.txt;
+`PIP_AUDIT_IGNORES` entry removed); re-render-billing wont-fixed as free-by-design; DECISIONS.md
+entry added. Issue 75 marked CLOSED in issues.md. **76:** SEV-2 cluster — (A) pagination hard caps:
+`_LIST_LIMIT=100` added + `.limit(_LIST_LIMIT)` applied in videos, clips, upload_intel routers;
+(B) `with_for_update=True` on idempotency re-read in `_render_clip_async` to serialize concurrent
+Celery redeliveries at the Postgres row level; (C) ContextVar safety documented in observability.py
+with an explicit note that the assumption holds only under the prefork pool. Tests: +6 in
+`tests/test_list_caps.py` (SQL-query inspection + router code audit), guard test negative path in
+`tests/test_response_models.py`. Full suite: 1035 passed, 7 skipped (1 pre-existing data-export
+failure requires live Postgres — unrelated to this lane); Layer-0 not re-run (no new deps/secrets).
+
 **SEV1 privacy track COMPLETE — Issues 247 + 248 + 249 DONE (2026-06-22).** On branch
 `feat/sev1-privacy` (off main; independent of the held `feat/batch-b-publish`). **247:** `DELETE
 /auth/me` no longer writes PII into the never-purged `audit_log` (Art. 17 / EDPB CEF 2025). **248:**

@@ -674,14 +674,14 @@ async def list_saved_insights(
     items = [_insight_to_dict(r) for r in rows]
     state = build_envelope_state(len(items))
     message: str | None = None
-    next_action: dict | None = None
+    next_action: NextActionOut | None = None
     if state == "empty_initial":
         message = "Save an insight from the Insights page to pin it here."
-        next_action = {
-            "label": "Open Insights",
-            "action_type": "navigate",
-            "url": "/static/insights.html",
-        }
+        next_action = NextActionOut(
+            label="Open Insights",
+            action_type="navigate",
+            url="/static/insights.html",
+        )
     return {
         "insights": items,
         "state": state,

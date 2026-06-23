@@ -71,3 +71,13 @@ boundary-straddling or single-evening activity shapes. The four cleanup items
 collapse into one small refactor (`_coerce_row` + `TypedDict UploadWindow`)
 that also closes the asymmetric-hardening gap. No blockers; security and
 lifecycle concerns for the feature live in the router, not here.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] optimal_gap_hours circular-week / adjacent-peak bug (upload_intel/timing.py:75-80) | → tracked in Issue 76 (post-hardening residual SEV-2 cluster) — sub-fix (A) in that issue |
+| [cleanup] loose list[dict] return type (upload_intel/timing.py:21) | → tracked in Issue 109 (deferred design cleanups) |
+| [cleanup] duplicated bounds rule (upload_intel/timing.py:39 vs 70) | → tracked in Issue 109 |
+| [cleanup] redundant int() coercions (upload_intel/timing.py:68-71) | → tracked in Issue 109 |
+| [cleanup] asymmetric coercion hardening (upload_intel/timing.py:31,35-36,68-70) | → tracked in Issue 109 |

@@ -79,3 +79,16 @@ queries are creator-scoped (onboarding.py:92-95), the `active`-path
 ## Module verdict
 
 NEEDS-WORK — 4 SEV2 correctness findings (upload-gap week-wrap bug, dateless-video 0.5 weight, unvalidated hardcoded niche-id table, prod-silent VOYAGE_API_KEY skip) persist unchanged from the 2026-06-08 sweep; no BLOCKER — per-creator isolation holds on every query, nothing sensitive is logged, no virality promise, and the new onboarding.py resolver is clean.
+
+## Issue 75 Reconciliation (2026-06-23)
+
+| Finding | Disposition |
+|---|---|
+| [SEV2] _optimal_upload_gap_h week-wrap bug (dna/builder.py:87-96) | → tracked in Issue 200 (recency-decay half-life calibration + parameterize; includes dna builder correctness) |
+| [SEV2] dateless video 0.5 weight (dna/builder.py:38-39) | → tracked in Issue 76 (post-hardening residual SEV-2 cluster) |
+| [SEV2] unvalidated hardcoded niche-id table (dna/conflict.py:34-42) | → tracked in Issue 109 (deferred design cleanups) |
+| [SEV2] VOYAGE_API_KEY prod-silent (dna/embeddings.py:67-69) | → tracked in Issue 228 (per-creator pre-job quota + config hardening) |
+| [cleanup] lazy Voyage singleton no lock (dna/embeddings.py:21-28) | → tracked in Issue 109 |
+| [cleanup] type: ignore pair (dna/brief.py:156-157) | → tracked in Issue 82 (async migration wave 2 — drops after SDK swap) |
+| [cleanup] annotation issues (dna/builder.py) | → tracked in Issue 109 |
+| [cleanup] scalar idiom (dna/profile.py:55) | → tracked in Issue 109 |
