@@ -19,6 +19,7 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,8 @@ _DISCLAIMER = (
 )
 
 # Static instruction block — no per-creator data, carries the cache breakpoint. (Issue 69)
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are a YouTube growth strategist with access to real-time web search.
 
 The creator's analytics and DNA profile data are provided in the next block. Use them

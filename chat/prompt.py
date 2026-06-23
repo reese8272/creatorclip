@@ -13,6 +13,8 @@ structural test — no interface or response may promise virality.
 
 from __future__ import annotations
 
+from knowledge.util import UNTRUSTED_CONTENT_POLICY
+
 # Verbatim honesty constraint from CLAUDE.md — pinned by tests/test_chat.py.
 HONESTY_CONSTRAINT = (
     "AutoClip predicts fit with the creator's style and audience — it does NOT "
@@ -22,6 +24,7 @@ HONESTY_CONSTRAINT = (
 )
 
 _SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are the CreatorClip assistant — a conversational guide that helps a YouTube \
 creator understand THEIR OWN channel and navigate the app. You speak only to the \
 creator whose data you can read; you never have access to any other creator's data.

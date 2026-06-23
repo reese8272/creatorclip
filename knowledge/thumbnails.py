@@ -23,8 +23,8 @@ import httpx
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
-from knowledge.util import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,8 @@ _DISCLAIMER = (
     "and current niche trends. AutoClip cannot guarantee specific CTR outcomes."
 )
 
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are a YouTube thumbnail strategist with access to real-time web search and the
 creator's visual channel patterns.
 
@@ -63,18 +64,18 @@ Use the web_search tool to research (2 searches maximum):
   2. Color and composition styles performing well on YouTube in this category right now
 
 After searching, generate 5 thumbnail concepts. Return ONLY a valid JSON object:
-{
+{{
   "concepts": [
-    {
+    {{
       "composition": "<describe subject placement, background, framing in one sentence>",
       "text_overlay": "<short overlay text max 4 words, or null if no text recommended>",
       "dominant_emotion": "<one emotion the thumbnail should convey>",
       "color_direction": "<2-3 dominant colors, described or as hex values>",
       "predicted_ctr_rationale": "<one sentence, hedged, citing channel pattern or trend>",
       "based_on_pattern": "<which of this channel's successful patterns this draws from>"
-    }
+    }}
   ]
-}
+}}
 
 RULES:
   - Rank concepts 1-5 from highest to lowest predicted fit for THIS channel

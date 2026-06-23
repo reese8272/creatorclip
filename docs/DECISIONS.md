@@ -94,6 +94,37 @@ zero-deploy rate update when vendors reprice (FinOps Foundation cost-per-unit st
 - https://docs.voyageai.com/docs/pricing (Voyage AI, 2026-06-23)
 - https://developers.cloudflare.com/r2/pricing/ (Cloudflare, 2026-06-23)
 - https://www.finops.org/framework/phases/ (FinOps Foundation — cost-per-unit standard)
+## 2026-06-23 — Issue 225: `<untrusted_content_policy>` clause in every system prompt
+
+**What changed:** Added `UNTRUSTED_CONTENT_POLICY` constant to `knowledge/util.py` containing an
+`<untrusted_content_policy>` XML block (per Anthropic's recommended template). Wired it into the
+STATIC prefix of all nine prompt builders: `chat/prompt.py`, `dna/brief.py`,
+`clip_engine/scoring.py`, `knowledge/titles.py`, `knowledge/hooks.py`, `knowledge/thumbnails.py`,
+`improvement/brief.py`, `analysis/brief.py`, and `routers/insights.py` (inline `_system` list).
+
+**Why:** Issue 224 removed structural trust-boundary violations (creator free-text from system role)
+but did not add the declarative guard needed to tell Claude that transcripts, video titles, and
+web-search results are DATA — not instructions. Four paths enable `web_search` (titles, hooks,
+thumbnails, improvement/brief) and fold SEO-poisonable results into output with no spotlighting.
+Without the policy clause the model has no explicit instruction distinguishing 'trusted operator
+instructions' from 'content being analyzed'.
+
+**Placement choice:** The constant is prepended to the STATIC (creator-independent) prefix in
+each builder, before the cache breakpoint, so the bytes are identical across all calls and never
+invalidate prompt-cache hit rates. The constant is a single module-level object (DRY); structural
+tests assert both presence AND identity-of-reference.
+
+**Alternatives ruled out:**
+- Haiku injection-screen classifier (pre-screen each web_search result): deferred — adds latency
+  and cost for marginal gain on top of the policy clause already in place.
+- Routing untrusted content through tool_result blocks (Anthropic's strongest defense): requires
+  restructuring all nine builders into tool-use flows — a much larger refactor. Deferred.
+- Per-call dynamic injection of the policy text: breaks cache; the constant belongs in the static
+  prefix (identical across calls).
+
+**Source:** Anthropic 'Mitigate jailbreaks and prompt injections' (fetched 2026-06-23,
+https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks);
+OWASP LLM01:2025 (https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html).
 
 **Date:** 2026-06-23
 

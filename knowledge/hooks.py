@@ -19,6 +19,7 @@ import numpy as np
 from anthropic import Anthropic
 
 from config import settings
+from knowledge.util import UNTRUSTED_CONTENT_POLICY
 from observability import record_llm_tokens
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,8 @@ TRANSCRIPT_EXCERPT_S = 60.0
 DROP_THRESHOLD = 0.10  # 10 percentage points below creator median
 _DNA_BRIEF_MAX_CHARS = 3000
 
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are a YouTube hook performance analyst with access to real-time web search.
 
 Your task: analyze the first-30s hook of a video using the creator's own retention
@@ -53,14 +55,14 @@ Use the web_search tool (1–2 searches maximum) to research:
   2. Retention recovery techniques relevant to this content type
 
 Then analyze the data and return ONLY a valid JSON object with this exact schema:
-{
+{{
   "retention_drop_at_s": <float|null>,
   "retention_at_drop": <float|null>,
   "transcript_at_drop": "<string>",
   "diagnosis": "<string>",
   "rewrite_suggestion": "<string>",
   "honesty_disclaimer": "<string>"
-}
+}}
 
 RULES:
   - diagnosis: 2–4 sentences. Cite the specific retention number and timestamp.

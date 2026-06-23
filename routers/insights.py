@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from config import settings
 from db import get_session
-from knowledge.util import wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 from limiter import creator_key, limiter
 from models import (
     Creator,
@@ -577,7 +577,8 @@ async def analyze_performer(
             {
                 "type": "text",
                 "text": (
-                    "You are an analyst interpreting YouTube video performance data. "
+                    UNTRUSTED_CONTENT_POLICY
+                    + "You are an analyst interpreting YouTube video performance data. "
                     "Be concise, data-driven, and never promise virality outcomes."
                 ),
             }

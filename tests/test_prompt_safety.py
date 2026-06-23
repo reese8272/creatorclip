@@ -1,14 +1,18 @@
-"""Structural prompt-safety tests (Issue 224).
+"""Structural prompt-safety tests (Issues 224, 225).
 
 Asserts that no LLM module places attacker-influenceable content (stated_identity,
-raw video title) in a system block, and that the wrap_untrusted helper is used at
-every required call site. These are pure import + function-call tests — no DB, no
-Anthropic API, no network.
+raw video title) in a system block, that the wrap_untrusted helper is used at
+every required call site, and that UNTRUSTED_CONTENT_POLICY is present in all
+nine prompt builders' stable system blocks (Issue 225).
+
+These are pure import + function-call tests — no DB, no Anthropic API, no network.
 """
 
 from __future__ import annotations
 
 import json
+
+import pytest
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -185,3 +189,141 @@ class TestInsightsVideoTitle:
             dna_brief=None,
         )
         assert '<untrusted name="video_title">' in prompt
+
+
+# ── Issue 225: UNTRUSTED_CONTENT_POLICY present in all nine builders ──────────
+
+
+def _get_system_text(system: list[dict]) -> str:
+    """Concatenate the text fields of all system blocks."""
+    return "\n".join(block.get("text", "") for block in system)
+
+
+@pytest.mark.parametrize(
+    "builder_label,get_system",
+    [
+        (
+            "chat/prompt.py",
+            lambda: __import__("chat.prompt", fromlist=["build_system"]).build_system(None),
+        ),
+        (
+            "dna/brief.py",
+            lambda: __import__("dna.brief", fromlist=["_build_request"])._build_request(
+                patterns={}, channel_title="Chan", stated_identity=None
+            )[0],
+        ),
+        (
+            "clip_engine/scoring.py — _SYSTEM_STATIC",
+            lambda: [
+                {
+                    "text": __import__(
+                        "clip_engine.scoring", fromlist=["_SYSTEM_STATIC"]
+                    )._SYSTEM_STATIC.format(principles="")
+                }
+            ],
+        ),
+        (
+            "knowledge/titles.py",
+            lambda: __import__("knowledge.titles", fromlist=["_build_request"])._build_request(
+                channel_title="Chan",
+                dna_brief=None,
+                stated_identity=None,
+                video_title=None,
+                transcript_summary="",
+            )[0],
+        ),
+        (
+            "knowledge/hooks.py — _SYSTEM_INSTRUCTIONS",
+            lambda: [
+                {
+                    "text": __import__(
+                        "knowledge.hooks", fromlist=["_SYSTEM_INSTRUCTIONS"]
+                    )._SYSTEM_INSTRUCTIONS
+                }
+            ],
+        ),
+        (
+            "knowledge/thumbnails.py",
+            lambda: __import__(
+                "knowledge.thumbnails", fromlist=["_build_concepts_request", "_empty_patterns"]
+            )._build_concepts_request(
+                channel_title="Chan",
+                dna_brief=None,
+                patterns=__import__(
+                    "knowledge.thumbnails", fromlist=["_empty_patterns"]
+                )._empty_patterns(),
+                transcript_hook="",
+                stated_identity=None,
+            )[0],
+        ),
+        (
+            "improvement/brief.py",
+            lambda: __import__(
+                "improvement.brief", fromlist=["_build_request"]
+            )._build_request(channel_title="Chan", analytics={}, dna_brief=None)[0],
+        ),
+        (
+            "analysis/brief.py",
+            lambda: __import__(
+                "analysis.brief", fromlist=["_build_request"]
+            )._build_request(
+                channel_title="Chan",
+                youtube_video_id="abc123",
+                video_title=None,
+                query="Why did this perform well?",
+                video_metrics=None,
+                retention_summary=None,
+                channel_avg=None,
+                dna_brief=None,
+            )[0],
+        ),
+        (
+            "routers/insights.py — inline _system",
+            lambda: [
+                {
+                    "text": (
+                        __import__(
+                            "knowledge.util", fromlist=["UNTRUSTED_CONTENT_POLICY"]
+                        ).UNTRUSTED_CONTENT_POLICY
+                        + "You are an analyst interpreting YouTube video performance data. "
+                        "Be concise, data-driven, and never promise virality outcomes."
+                    )
+                }
+            ],
+        ),
+    ],
+)
+class TestUntrustedContentPolicyInAllBuilders:
+    """Issue 225 AC: UNTRUSTED_CONTENT_POLICY must appear in the assembled system prompt
+    of every prompt builder, and all builders must reference the same module-level
+    constant (single-constant DRY check).
+    """
+
+    def test_policy_clause_present(self, builder_label: str, get_system: object) -> None:
+        from knowledge.util import UNTRUSTED_CONTENT_POLICY
+
+        system = get_system()  # type: ignore[operator]
+        text = _get_system_text(system)
+        assert UNTRUSTED_CONTENT_POLICY in text, (
+            f"{builder_label}: assembled system prompt is missing UNTRUSTED_CONTENT_POLICY. "
+            "Add `from knowledge.util import UNTRUSTED_CONTENT_POLICY` and prepend it to the "
+            "stable system block. (Issue 225)"
+        )
+
+    def test_policy_clause_is_exact_module_constant(
+        self, builder_label: str, get_system: object
+    ) -> None:
+        """The clause in each builder must be the exact same object from knowledge.util,
+        not a copy-pasted string (DRY enforcement).
+        """
+        import knowledge.util as _util
+
+        system = get_system()  # type: ignore[operator]
+        text = _get_system_text(system)
+        # The text of the constant must appear verbatim — this is both a presence check
+        # and a byte-identity check: if someone copy-pasted and modified the string,
+        # this assertion would fail.
+        assert _util.UNTRUSTED_CONTENT_POLICY in text, (
+            f"{builder_label}: system text does not contain the exact UNTRUSTED_CONTENT_POLICY "
+            "bytes from knowledge.util. Use the import, not a local copy. (Issue 225)"
+        )
