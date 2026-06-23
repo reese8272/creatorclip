@@ -2304,7 +2304,7 @@ Resend mailer, notification data model + idempotent send, triggers, in-app cente
 
 ### Issue 244: Wire transactional triggers to the fan-out (supersedes Issue 81)
 
-**Status** `OPEN` · **Wave** W2 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `staging`  
+**Status** `DONE` · **Wave** W2 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `staging`  
 **Src** `11 / 176c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/11_notifications_lifecycle_comms.md`  
 **Blocked by** #243 · **Enables** #193, #246 · **Coordinate (hot files)** `billing/ledger.py`, `notify/copy.py`, `notify/templates/`, `worker/tasks.py`  
 
@@ -2373,7 +2373,7 @@ Resend mailer, notification data model + idempotent send, triggers, in-app cente
 
 ### Issue 193: "Your clips are ready" completion notification
 
-**Status** `OPEN` · **Wave** W3 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `external`  
+**Status** `DONE` · **Wave** W3 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `external`  
 **Src** `01 / 184 (overlaps 11/176c)` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** #242, #243, #244 · **Coordinate (hot files)** `notify/mailer.py`, `worker/tasks.py`  
 
