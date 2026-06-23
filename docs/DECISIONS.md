@@ -5,6 +5,33 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 197: Wire published clips into the outcome loop
+
+**What changed:**
+1. `_publish_to_youtube_async` now upserts a `ClipOutcome` row (read-then-write via
+   `session.get` + `session.add`) in the same session block that marks `ClipPublication`
+   as `done`.
+2. The upsert logic: if no existing outcome, create with `published_youtube_id`, `final=False`,
+   `fetched_at=publish_time`. If existing and `final=False`, update `published_youtube_id` only
+   (preserve `fetched_at` so the 48h/7d polling schedule is undisturbed). If `final=True`, no-op.
+
+**Why:**
+- Read-then-write (not SQLAlchemy `merge()`) is chosen because `merge()` would overwrite ALL
+  fields including `final=True`, violating the closed-measurement-cycle guard. Explicit read
+  makes the `final` guard transparent and testable.
+- `fetched_at` is NOT reset on redelivery: the 48h/7d cutoff math in `_poll_clip_outcomes_async`
+  uses `ClipOutcome.fetched_at` as the epoch. Resetting it on a task retry would artificially
+  delay the poller's first check.
+- Both writes (ClipPublication.done + ClipOutcome insert) commit together in one session block
+  to avoid a crash window where the publication is marked done but no outcome row exists.
+
+**Source/evidence:** Issue 197 brief; `_poll_clip_outcomes_async` query at worker/tasks.py:1637
+which selects on `ClipOutcome.published_youtube_id IS NOT NULL AND final IS False`.
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-23 — Issue 213: Per-video clips map — timeline UI + batched counts endpoint
 
 **What changed:**

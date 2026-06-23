@@ -359,13 +359,37 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         logger.warning("Publish %s failed permanently: %s", clip_id, type(exc).__name__)
         raise
 
-    # Store the returned video id + done BEFORE the task acks (idempotency point).
+    # Store the returned video id + done, then wire the clip into the outcome loop
+    # (Issue 197). Both writes are committed together so a crash between them cannot
+    # leave the publication done but the outcome missing.
+    now_utc = datetime.now(UTC)
     async with db.AdminSessionLocal() as session:
         row = await session.get(ClipPublication, pub_id)
         if row is not None:
             row.youtube_video_id = video_id
             row.status = PublishStatus.done
-            await session.commit()
+
+        # Upsert ClipOutcome so poll_clip_outcomes can find this clip at the 48h/7d
+        # checkpoints.  Guard: never reset final=True (that would re-open a closed
+        # measurement cycle and waste YouTube quota).
+        existing_outcome = await session.get(ClipOutcome, cid)
+        if existing_outcome is None:
+            session.add(
+                ClipOutcome(
+                    clip_id=cid,
+                    published_youtube_id=video_id,
+                    final=False,
+                    fetched_at=now_utc,
+                )
+            )
+        elif not existing_outcome.final:
+            # Re-publish or task redelivery: refresh the youtube_id without
+            # disturbing views/retention/performed_well already collected.
+            existing_outcome.published_youtube_id = video_id
+            # Do NOT reset fetched_at — the existing timestamp governs the
+            # 48h/7d polling schedule; resetting it would delay the next check.
+
+        await session.commit()
     logger.info("Published clip %s → youtube %s (%s)", clip_id, video_id, "private")
     return video_id
 

@@ -3483,7 +3483,7 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 197: Wire published clips into the outcome loop
 
-**Status** `OPEN` · **Wave** W3 · **Lane** Publish to YouTube · **Size** `S` · **Verify** `staging`  
+**Status** `DONE` (2026-06-23). `_publish_to_youtube_async` now upserts a `ClipOutcome` row on every successful publish; idempotent (final=True guard + redelivery-safe); static-verified; staging-pending. See `docs/PROJECT_STATE.md`. · **Wave** W3 · **Lane** Publish to YouTube · **Size** `S` · **Verify** `staging`  
 **Src** `13 / D1d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/13_multiplatform_distribution_publishing.md`  
 **Blocked by** #195, #196 · **Coordinate (hot files)** `worker/tasks.py`  
 

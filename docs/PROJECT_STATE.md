@@ -4,6 +4,34 @@ Updated after every issue closes.
 
 ---
 
+## ✅ W3 BATCH 1 — Issue 197: Wire published clips into the outcome loop (2026-06-23)
+
+**Issue #197 DONE (static-verified, staging-pending).**
+
+- **`worker/tasks.py`** — In `_publish_to_youtube_async` success block: after marking
+  `ClipPublication.status = done`, upserts a `ClipOutcome` row with `published_youtube_id`,
+  `final=False`, `fetched_at=publish_time`. Both writes commit together in one session block.
+  Guard: if `ClipOutcome.final=True` (closed measurement cycle), the row is left untouched.
+  On task redelivery with non-final outcome: only `published_youtube_id` is refreshed;
+  `fetched_at` is deliberately NOT reset so the 48h/7d polling schedule is undisturbed.
+  No poller code changed — the existing `poll_clip_outcomes` Beat task picks up rows with
+  `published_youtube_id IS NOT NULL AND final IS False` automatically.
+- **`tests/test_publish.py`** — 3 new unit tests (8 total, all green):
+  - `test_publish_success_creates_clip_outcome_when_absent`: verifies `ClipOutcome` created with
+    correct fields on first successful publish.
+  - `test_publish_outcome_upsert_skips_when_final_true`: verifies `final=True` outcome is
+    not clobbered by a re-publish.
+  - `test_publish_outcome_updates_youtube_id_when_not_final`: verifies task redelivery updates
+    `published_youtube_id` without resetting `fetched_at`.
+- **`docs/DECISIONS.md`** — Entry added explaining read-then-write over `merge()` and the
+  `fetched_at` preservation rationale.
+
+**Static gates GREEN:** ruff (0 errors), mypy (0 errors), py_compile (all files). 8/8 tests pass.
+**Staging-pending (Issue 275):** full end-to-end publish → outcome row → poll_clip_outcomes
+48h/7d cycle with real Postgres + worker.
+
+---
+
 ## ✅ W2 BATCH 2 — Issue 196: Scheduled publish from upload-timing window (2026-06-23)
 
 **Issue #196 DONE (static-verified, staging-pending).**
