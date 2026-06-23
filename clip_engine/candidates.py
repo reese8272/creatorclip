@@ -20,6 +20,38 @@ POST_PEAK_S = 20.0  # seconds to include after peak
 MIN_CLIP_S = 30.0  # clips shorter than this are discarded
 _NMS_IOU_THRESHOLD = 0.5  # IoU above which a lower-prominence candidate is suppressed
 
+# Named reasons a video produces no clips — each maps to a CLIPPING_PRINCIPLES.md principle.
+# These are the ONLY valid skip-reason strings; callers and tests should compare against these.
+SKIP_REASON_NO_SIGNAL = "no_signal_above_threshold"
+SKIP_REASON_NO_RETENTION_DATA = "insufficient_retention_data"
+SKIP_REASON_SOURCE_UNAVAILABLE = "source_unavailable"
+SKIP_REASON_ALL_SUPPRESSED = "all_candidates_suppressed_by_nms"
+
+# Human-readable labels surfaced to the creator (no virality language).
+# Each cites the named principle from CLIPPING_PRINCIPLES.md that defines the expectation.
+_SKIP_REASON_LABELS: dict[str, str] = {
+    SKIP_REASON_NO_SIGNAL: (
+        "No engagement signal reached the detection threshold "
+        "(Principle #6: Retention curve is ground truth — "
+        "this video lacks the data density needed to locate a setup)."
+    ),
+    SKIP_REASON_NO_RETENTION_DATA: (
+        "Insufficient retention data to identify a setup window "
+        "(Principle #6: Retention curve is ground truth — "
+        "analytics data is not yet available for this video)."
+    ),
+    SKIP_REASON_SOURCE_UNAVAILABLE: (
+        "Source file not available — upload the original file to generate clips "
+        "(Principle #2: Clip the setup, not the aftermath — "
+        "we need the source media to locate and extract the setup)."
+    ),
+    SKIP_REASON_ALL_SUPPRESSED: (
+        "All candidate windows overlapped and were deduplicated "
+        "(Principle #9: One idea per Short — "
+        "the video's signal clusters around a single moment already covered by the top clip)."
+    ),
+}
+
 _TERMINAL_PUNCT = frozenset({".", "?", "!", "...", "…", '."', '?"', '!"'})
 
 
@@ -133,6 +165,57 @@ def _find_setup_start(timeline: dict, peak_s: float, window_s: float = WINDOW_S)
         return float(min(e["start_s"] for e in energy))
 
     return earliest
+
+
+def derive_skip_reason(
+    timeline: dict,
+    source_available: bool = True,
+) -> str | None:
+    """Return the dominant reason a video produced zero clip candidates, or None when clips exist.
+
+    Priority order (first match wins):
+      1. source_unavailable — caller tells us no stored media exists
+      2. no_signal_above_threshold — peak detection found nothing (signal too flat / short video)
+      3. insufficient_retention_data — timeline has no retention_spike events at all
+      4. all_candidates_suppressed_by_nms — peaks found but all suppressed by IoU overlap
+
+    Used by routers/clips.py to populate ClipListOut.skip_reason so the creator
+    gets an honest, principle-grounded explanation instead of a silent empty list.
+    Each reason string maps to a label in _SKIP_REASON_LABELS.
+    """
+    if not source_available:
+        return SKIP_REASON_SOURCE_UNAVAILABLE
+
+    times, signal = build_signal_array(timeline)
+    if len(signal) == 0:
+        return SKIP_REASON_NO_SIGNAL
+
+    resolution_s = float(times[1] - times[0]) if len(times) > 1 else RESOLUTION_S
+    min_distance_samples = max(1, int(MIN_CLIP_S / resolution_s))
+    peak_indices, _ = find_peaks(signal, distance=min_distance_samples, prominence=0.5)
+
+    if len(peak_indices) == 0:
+        # No peaks — check whether there are any retention events at all to help
+        # distinguish a completely flat video from one with only audio signals.
+        has_retention = any(
+            e.get("type") == "retention_spike" for e in timeline.get("events", [])
+        )
+        if not has_retention:
+            return SKIP_REASON_NO_RETENTION_DATA
+        return SKIP_REASON_NO_SIGNAL
+
+    # Peaks were detected but the caller already knows zero clips were persisted;
+    # the most likely explanation is that all windows were deduplicated by NMS.
+    return SKIP_REASON_ALL_SUPPRESSED
+
+
+def skip_reason_label(reason: str) -> str:
+    """Return the human-readable label for a skip reason code.
+
+    Falls back gracefully to the raw code string if an unrecognised reason is
+    passed — so callers never silently surface an empty string.
+    """
+    return _SKIP_REASON_LABELS.get(reason, reason)
 
 
 def extract_candidates(

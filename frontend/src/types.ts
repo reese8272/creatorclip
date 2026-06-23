@@ -253,6 +253,12 @@ export interface PersonalizationStatus {
 export interface ReviewClipListResponse {
   clips: ReviewClip[]
   personalization?: PersonalizationStatus | null
+  // Issue 217 — "why not clipped" transparency surface.
+  // skip_reason is a stable code string (e.g. "no_signal_above_threshold");
+  // skip_reason_label is the human-readable, principle-grounded explanation.
+  // Both are null when clips exist or when ingest is not yet done.
+  skip_reason?: string | null
+  skip_reason_label?: string | null
 }
 
 export type FeedbackAction = 'upvote' | 'downvote' | 'skip' | 'trim'

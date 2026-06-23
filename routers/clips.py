@@ -90,6 +90,12 @@ class ClipListOut(BaseModel):
     ``personalization`` was added in Issue 216 to surface honest cold-start status
     so creators know whether ranking is personalized to their feedback or still
     using DNA + signals.
+
+    ``skip_reason`` was added in Issue 217 — when ``clips`` is empty and
+    ``state=="empty_initial"``, this carries a principle-grounded code string
+    (from ``clip_engine/candidates.py``) so the frontend can render an honest
+    "why not clipped" explanation instead of a generic empty state.
+    The label is sourced from ``CLIPPING_PRINCIPLES.md``; no virality language.
     """
 
     clips: list[ClipOut]
@@ -97,6 +103,8 @@ class ClipListOut(BaseModel):
     message: str | None = None
     next_action: NextActionOut | None = None
     personalization: PersonalizationStatus | None = None
+    skip_reason: str | None = None
+    skip_reason_label: str | None = None
 
 
 class VideoClipCount(BaseModel):
@@ -280,6 +288,10 @@ async def list_clips(
     The ``personalization`` envelope field (Issue 216) surfaces honest cold-start
     status so creators know whether ranking reflects their feedback or falls back
     to DNA + signals.
+
+    The ``skip_reason`` / ``skip_reason_label`` fields (Issue 217) carry an honest,
+    principle-grounded explanation when the video produced zero clips so the creator
+    understands *why* — never a raw score, never virality language.
     """
     video = await session.get(Video, video_id)
     if not video or video.creator_id != creator.id:
@@ -298,6 +310,9 @@ async def list_clips(
     state = build_envelope_state(len(items))
     message: str | None = None
     next_action: dict | None = None
+    skip_reason: str | None = None
+    skip_reason_label_text: str | None = None
+
     if state == "empty_initial":
         if video.ingest_status != IngestStatus.done:
             message = "This video is still ingesting — clips appear once analysis finishes."
@@ -308,6 +323,20 @@ async def list_clips(
                 "action_type": "navigate",
                 "url": f"/videos/{video_id}/clips/generate",
             }
+            # Issue 217: derive the principal reason this video has no clips so the
+            # creator sees an honest, principle-grounded "why not" explanation.
+            # source_unavailable when the video has no stored media (origin=link with
+            # no upload); otherwise consult the signal timeline if one exists.
+            from clip_engine.candidates import derive_skip_reason, skip_reason_label
+
+            source_available = bool(video.source_uri)
+            signals_row = await session.get(Signals, video_id)
+            timeline = signals_row.timeline_jsonb if signals_row else {}
+            skip_reason = derive_skip_reason(
+                timeline=timeline,
+                source_available=source_available,
+            )
+            skip_reason_label_text = skip_reason_label(skip_reason) if skip_reason else None
 
     from preference.train import load_latest
 
@@ -320,6 +349,8 @@ async def list_clips(
         "message": message,
         "next_action": next_action,
         "personalization": personalization.model_dump(),
+        "skip_reason": skip_reason,
+        "skip_reason_label": skip_reason_label_text,
     }
 
 

@@ -122,6 +122,29 @@ describe('Dashboard', () => {
     )
   })
 
+  it('shows "Why no clips?" link for a done video with zero clips (Issue 217)', async () => {
+    vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], { vd: [] }))
+    renderDashboard()
+    // The "Why no clips?" link must appear alongside the Generate clips button.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('link', { name: /why weren't clips generated/i }),
+      ).toBeInTheDocument(),
+    )
+  })
+
+  it('"Why no clips?" link does not appear when the video already has clips', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], {
+        vd: [{ render_status: 'done' }],
+      }),
+    )
+    renderDashboard()
+    await screen.findByRole('link', { name: '1 clips' })
+    expect(screen.queryByRole('link', { name: /why weren't clips generated/i })).toBeNull()
+  })
+
   it('uses the batched /videos/clips/counts endpoint (not per-video /clips calls)', async () => {
     // Issue 213: Dashboard should make exactly one clip-count call regardless of video count.
     const fetchMock = mockFetch(
