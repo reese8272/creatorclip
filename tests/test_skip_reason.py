@@ -10,6 +10,7 @@ Covers:
 """
 
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -187,9 +188,6 @@ def _signals(video_id: uuid.UUID, timeline: dict) -> MagicMock:
     s.id = video_id
     s.timeline_jsonb = timeline
     return s
-
-
-from typing import Any
 
 
 def _fake_session(video: MagicMock, clips: list, signals: MagicMock | None) -> Any:
