@@ -4,6 +4,34 @@ Updated after every issue closes.
 
 ---
 
+## ✅ W2 BATCH 2 — Issue 196: Scheduled publish from upload-timing window (2026-06-23)
+
+**Issue #196 DONE (static-verified, staging-pending).**
+
+- **Migration 0032** (`alembic/versions/0032_clip_publication_schedule.py`, `down_revision=0031`):
+  adds `scheduled_at` (TIMESTAMPTZ), `platform` (`publish_platform_enum`, default `youtube`),
+  `confirmed_at` (TIMESTAMPTZ) to `clip_publications`; makes `task_id` nullable; adds
+  `scheduled`/`confirmed` to `publish_status_enum`; adds partial index on `scheduled_at`.
+- **Models**: `PublishStatus` extended with `scheduled`/`confirmed`; `PublishPlatform` enum added;
+  `ClipPublication` gains `scheduled_at`, `platform`, `confirmed_at`, `task_id` now nullable.
+- **Beat sweep** (`worker.tasks.sweep_scheduled_publications`, every 5 min): selects
+  `status=confirmed AND scheduled_at <= now()`, transitions to `pending`, assigns `task_id`,
+  commits, then enqueues `publish_to_youtube`. `pg_try_advisory_lock` guard prevents double-sweep.
+  Commit-before-enqueue so the UNIQUE `task_id` constraint guards against double-post.
+- **API** (`routers/publications.py`, prefix `/clips`): POST schedule (→ `scheduled`); GET list
+  (+ upload-timing suggested windows); GET detail; POST confirm (→ `confirmed`); POST cancel
+  (→ `failed`, audit-trail preserved). Per-creator isolation on all endpoints.
+- **Tests** (`tests/test_scheduled_publish.py`): 12 tests — enum values, scheduling field
+  presence, validator rejects past/naive datetimes, sweep lock-skip, no-rows-no-commit, 1-row
+  enqueue, multi-row enqueue, distinct task_ids, `PublicationOut` privacy-note honesty.
+
+**Static gates GREEN:** ruff (0 errors), mypy (0 errors), py_compile (all files). 12/12 new tests
+pass; existing `test_publish.py` 5/5 unchanged.
+**Staging-pending (Issue 275):** full Alembic migration run, RLS policy enforcement on
+`clip_publications`, Beat sweep hitting live Postgres + Redis, YouTube upload round-trip.
+
+---
+
 ## ✅ W2 BATCH 1 — Publish loop landed + tracking reconciled (2026-06-23)
 
 Branch `w2-batch1`, deployed to prod. Substantive net-new: **#194** (`youtube.upload` incremental

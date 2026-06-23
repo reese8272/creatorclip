@@ -44,6 +44,7 @@ from routers import export as export_router
 from routers import improvement as improvement_router
 from routers import insights as insights_router
 from routers import logs as logs_router
+from routers import publications as publications_router
 from routers import review as review_router
 from routers import tasks as tasks_router
 from routers import thumbnails as thumbnails_router
@@ -136,6 +137,7 @@ app.include_router(creators_router.router)
 app.include_router(videos_router.router)
 app.include_router(clips_module.router)
 app.include_router(clips_module.clips_router)
+app.include_router(publications_router.router)
 app.include_router(review_router.router)
 app.include_router(upload_intel_router.router)
 app.include_router(improvement_router.router)
