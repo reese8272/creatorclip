@@ -1201,12 +1201,21 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
             # `thinking`) events as the LLM call progresses. Passing task_id=None
             # keeps the legacy .create() path for unit-test callers that mock
             # this function and any internal invocation without a job_id.
-            brief_text = await asyncio.to_thread(
+            brief_text, _brief_usage = await asyncio.to_thread(
                 generate_brief,
                 patterns,
                 channel_title,
                 stated_identity,
                 job_id if progress_enabled else None,
+            )
+
+            from billing.ledger import record_llm_usage
+
+            await record_llm_usage(
+                creator_uuid,
+                _brief_usage,
+                settings.COST_PER_MTOK_IN_SONNET,
+                settings.COST_PER_MTOK_OUT_SONNET,
             )
 
             # Stage the draft row without committing.  commit=False keeps the INSERT
@@ -2272,7 +2281,7 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                 )
                 # task_id propagates into improvement.brief.stream_and_emit,
                 # which forwards cache/token deltas on the same Redis stream.
-                brief_text = await asyncio.to_thread(
+                brief_text, _improv_usage = await asyncio.to_thread(
                     build_brief,
                     channel_title=creator.channel_title or "Unknown Channel",
                     analytics=analytics,
@@ -2293,6 +2302,15 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                     exc_type=type(exc).__name__,
                 )
                 raise
+
+            from billing.ledger import record_llm_usage
+
+            await record_llm_usage(
+                cid,
+                _improv_usage,
+                settings.COST_PER_MTOK_IN_SONNET,
+                settings.COST_PER_MTOK_OUT_SONNET,
+            )
 
             row.status = ImprovementBriefStatus.ready
             row.brief_text = brief_text
@@ -2467,7 +2485,7 @@ async def _generate_video_analysis_async(
 
             await aemit(job_id, "step", label="analyzing", stage="video_analysis")
 
-            await asyncio.to_thread(
+            _analysis_result, _analysis_usage = await asyncio.to_thread(
                 build_analysis,
                 channel_title=creator.channel_title or "Unknown Channel",
                 youtube_video_id=youtube_video_id,
@@ -2479,6 +2497,15 @@ async def _generate_video_analysis_async(
                 dna_brief=dna_brief,
                 task_id=job_id,
             )
+
+        from billing.ledger import record_llm_usage
+
+        await record_llm_usage(
+            cid,
+            _analysis_usage,
+            settings.COST_PER_MTOK_IN_SONNET,
+            settings.COST_PER_MTOK_OUT_SONNET,
+        )
 
         await aemit(job_id, "done", stage="video_analysis", message="Analysis complete.")
 
@@ -2579,7 +2606,7 @@ async def _generate_title_suggestions_async(
 
         await aemit(job_id, "step", label="generating_titles", stage="title_suggestions")
 
-        raw_json = await asyncio.to_thread(
+        raw_json, _title_usage = await asyncio.to_thread(
             build_suggestions,
             channel_title=creator.channel_title or "Unknown Channel",
             dna_brief=dna_brief,
@@ -2587,6 +2614,12 @@ async def _generate_title_suggestions_async(
             video_title=video.title,
             transcript_summary=transcript_summary,
             task_id=job_id,
+        )
+
+        from billing.ledger import record_llm_usage
+
+        await record_llm_usage(
+            cid, _title_usage, settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET
         )
 
         try:
@@ -2780,7 +2813,7 @@ async def _generate_thumbnail_concepts_async(
 
         await aemit(job_id, "step", label="generating_concepts", stage="thumbnail_concepts")
 
-        raw_json = await asyncio.to_thread(
+        raw_json, _thumb_usage = await asyncio.to_thread(
             build_concepts,
             channel_title=creator.channel_title or "Unknown Channel",
             dna_brief=dna_brief,
@@ -2788,6 +2821,15 @@ async def _generate_thumbnail_concepts_async(
             transcript_hook=transcript_hook,
             stated_identity=stated_identity,
             task_id=job_id,
+        )
+
+        from billing.ledger import record_llm_usage
+
+        await record_llm_usage(
+            cid,
+            _thumb_usage,
+            settings.COST_PER_MTOK_IN_SONNET,
+            settings.COST_PER_MTOK_OUT_SONNET,
         )
 
         try:
@@ -2952,7 +2994,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
                 medians.append(float(np.interp(grid_point, ts, rs)[0]))
             creator_median_at_drop = float(np.median(medians)) if medians else None
 
-        raw_json = await asyncio.to_thread(
+        raw_json, _hook_usage = await asyncio.to_thread(
             build_hook_report,
             channel_title=creator.channel_title or "Unknown Channel",
             dna_brief=dna_brief,
@@ -2961,6 +3003,12 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
             creator_median_at_drop=creator_median_at_drop,
             transcript_excerpt=transcript_excerpt,
             task_id=job_id,
+        )
+
+        from billing.ledger import record_llm_usage
+
+        await record_llm_usage(
+            cid, _hook_usage, settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU
         )
 
         try:
@@ -3077,12 +3125,18 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
 
         boundaries = find_chapter_boundaries(timeline, video_duration_s)
 
-        raw_json = await asyncio.to_thread(
+        raw_json, _chap_usage = await asyncio.to_thread(
             build_chapters,
             boundaries=boundaries,
             segments=segments,
             video_duration_s=video_duration_s,
             task_id=job_id,
+        )
+
+        from billing.ledger import record_llm_usage
+
+        await record_llm_usage(
+            cid, _chap_usage, settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU
         )
 
         try:

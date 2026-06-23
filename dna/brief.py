@@ -1,11 +1,15 @@
 """
 Generate a plain-language Creator Brief via Claude.
 
-Prompt structure (Issue 69): a STATIC instruction block carries the
-``cache_control: ephemeral`` breakpoint; the per-creator corpus is a SEPARATE,
-uncached system block after it. This is the correct split, but note the static
-prefix is well below Sonnet 4.6's 2048-token minimum cacheable prefix, so the
-cache does not actually engage for this low-frequency call — see docs/DECISIONS.md.
+Prompt structure (Issue 69, updated Issue 223):
+  Block 1 (and optional block 2): stable instructions + optional stated-identity.
+           The LAST stable block carries a cache_control marker. However, the static
+           prefix is well below Sonnet 4.6's 1024-token cacheable-prefix floor AND
+           the 5-min default TTL is almost certainly expired by the time scoring.py
+           runs (pipeline steps between DNA-build and scoring: transcription, signal
+           extraction, candidate detection). The marker was a pure write-premium with
+           zero expected reads. Issue 223 removes it. See docs/DECISIONS.md.
+  Block (final): volatile per-creator performance corpus — NEVER cached.
 """
 
 import json
@@ -73,20 +77,19 @@ def _build_request(
         default=str,
     )
 
-    # Per the 2026 prompt-caching standard: stable content first, variable last,
-    # cache breakpoint at the end of the stable prefix. Two stability tiers:
-    # (1) global instructions are identical across all creators; (2) the stated
-    # identity is stable per creator. Both go BEFORE the breakpoint so a
-    # creator's repeated calls in one session share the longer prefix; the
-    # volatile performance corpus stays after.
+    # Two stability tiers: (1) global instructions are identical across all
+    # creators; (2) the stated identity is stable per creator. Both go before
+    # the volatile corpus. No cache_control marker: the DNA-build call is
+    # low-frequency (once per DNA rebuild) and the pipeline steps between it
+    # and scoring.py (transcription, signal extraction, candidates) make the
+    # default 5-min TTL effectively useless. The marker was a pure write-premium
+    # (1.25×) with zero expected reads. (Issue 223 spike — removed.)
+    # Note: scoring.py's 1h marker on the *synthesised* DNA brief is correct and
+    # remains — it operates in a different cache namespace (different first block).
     system: list[dict] = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
     if stated_identity:
         system.append({"type": "text", "text": stated_identity})
-    # Mark the LAST stable block as the cache breakpoint. anthropic 0.40's
-    # TextBlockParam stub predates cache_control (Issue 78c) — the cast is
-    # what suppresses the typed-dict complaint at the call site below.
-    system[-1]["cache_control"] = {"type": "ephemeral"}
-    # Volatile per-creator data — AFTER the breakpoint, never cached.
+    # Volatile per-creator data — always the final block, never cached.
     system.append({"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"})
 
     messages: list[dict] = [
@@ -103,7 +106,7 @@ def generate_brief(
     channel_title: str,
     stated_identity: str | None = None,
     task_id: str | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """
     Call Claude to synthesise a Creator Brief from computed patterns.
 
@@ -122,7 +125,8 @@ def generate_brief(
             When None (default), uses the legacy non-streaming ``.create()`` path
             so existing unit-test mocks of this function keep working unchanged.
 
-    Returns brief_text with the honesty disclaimer appended.
+    Returns ``(brief_text, usage)`` — brief_text with the honesty disclaimer appended,
+    usage is the token-count dict. Callers should pass usage to ``billing.ledger.record_llm_usage``.
     Raises RuntimeError if Claude returns no text block.
     """
     system, messages = _build_request(patterns, channel_title, stated_identity)
@@ -148,7 +152,7 @@ def generate_brief(
             usage["cache_creation"],
             usage["output_tokens"],
         )
-        return final_text + _DISCLAIMER
+        return final_text + _DISCLAIMER, usage
 
     response = _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
@@ -157,17 +161,25 @@ def generate_brief(
         messages=messages,  # type: ignore[arg-type]  # list[dict] → MessageParam at runtime
     )
 
+    _tokens_in = response.usage.input_tokens
+    _tokens_out = response.usage.output_tokens
     logger.info(
         "dna_brief tokens: in=%d cached_read=%d cached_write=%d out=%d",
-        response.usage.input_tokens,
+        _tokens_in,
         getattr(response.usage, "cache_read_input_tokens", 0),
         getattr(response.usage, "cache_creation_input_tokens", 0),
-        response.usage.output_tokens,
+        _tokens_out,
     )
 
     text_blocks = [b for b in response.content if b.type == "text"]
     if not text_blocks:
         raise RuntimeError("Claude returned no text block in DNA brief generation")
 
+    _usage = {
+        "input_tokens": _tokens_in,
+        "output_tokens": _tokens_out,
+        "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+    }
     # Final text block is the answer (consistent with the web_search path). (Issue 69)
-    return text_blocks[-1].text + _DISCLAIMER
+    return text_blocks[-1].text + _DISCLAIMER, _usage

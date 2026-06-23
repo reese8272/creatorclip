@@ -153,10 +153,11 @@ def analyze_hook(
     creator_median_at_drop: float | None,
     transcript_excerpt: str,
     task_id: str,
-) -> str:
+) -> tuple[str, dict]:
     """Call Claude with web_search; stream tokens to the SSE consumer.
 
-    Returns the raw JSON string from Claude's final text block.
+    Returns ``(raw_json, usage)`` where usage is the token-count dict from
+    ``stream_and_emit``. Callers should pass usage to ``billing.ledger.increment_usage``.
     Raises on network / API errors so the Celery task can retry.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
@@ -222,4 +223,4 @@ def analyze_hook(
         usage["cache_creation"],
         usage["output_tokens"],
     )
-    return final_text
+    return final_text, usage

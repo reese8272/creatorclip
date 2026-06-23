@@ -161,6 +161,109 @@ mock was updated to `side_effect=[clips_result, pref_result]` where `pref_result
 - FastAPI nested BaseModel pattern (current FastAPI docs)
 
 **Date:** 2026-06-23
+## 2026-06-23 — Prompt-caching re-enabled on titles/thumbnails/analysis endpoints; floor correction (Issue 218)
+
+**What changed:**
+1. `cache_control: {type: ephemeral, ttl: "1h"}` added to the DNA brief block (block 2) in
+   `knowledge/titles.py`, `knowledge/thumbnails.py`, and `analysis/brief.py`.
+2. Code comments in `titles.py` and `thumbnails.py` cited Sonnet 4.6's cacheable-prefix floor as
+   **2048 tokens** — this was incorrect. The live Anthropic docs (fetched 2026-06-23) confirm the
+   floor is **1024 tokens** for Sonnet 4.6. The corrected floor means the ~1,550-token prefix
+   (static instructions + DNA brief) in titles/thumbnails already cleared the floor; only the
+   missing `cache_control` marker was needed.
+3. `analysis/brief.py`: static instructions alone are ~175 tokens (below the 1024-token floor).
+   When a DNA brief is available, block 2 (DNA brief, up to 1000 chars) is added as a stable
+   prefix block carrying the `cache_control` marker, pushing the combined prefix above the floor.
+   When no DNA brief is present, the call remains uncached (two-block path, as before).
+4. `knowledge/hooks.py` (Haiku 4.5, 4096-token floor): prefix is ~900 tokens — still below the
+   floor. Padding hooks to 4096 tokens would add real input tokens to every uncached call; since
+   hooks are one-per-video (rare repeat within 1h), the net cost would be negative. Left uncached.
+
+**Why:** The DNA brief is byte-identical across all calls for a creator within a session
+(titles → hooks → thumbnails on one video). A 1h TTL cache read pays 0.1x instead of 1.0x on
+the cached prefix — a 10x reduction on that portion of each call.
+
+**Source/evidence:** Anthropic Prompt Caching docs, platform.claude.com/docs/en/docs/build-with-claude/prompt-caching,
+fetched 2026-06-23: Sonnet 4.6 floor = 1024 tokens; Haiku 4.5 floor = 4096 tokens.
+1h TTL available via `cache_control: {type: ephemeral, ttl: "1h"}` at 2x write premium.
+
+**Tests updated:** `tests/test_titles.py` assertion changed from "no cache_control on any block"
+to "block 2 carries `{type: ephemeral, ttl: 1h}`". `tests/test_analyze_performer.py` docstring
+updated to clarify the analyze-performer Haiku endpoint remains correctly uncached.
+
+---
+
+## 2026-06-23 — Model-per-task assignment locked; stale Opus reference corrected (Issue 221)
+
+**What changed:**
+1. `docs/SOT.md` LLM row corrected: removed the stale "claude-opus-4-7 for DNA synthesis" claim.
+   No Python file uses Opus (confirmed by grep). The actual model assignment is:
+   - **Sonnet 4.6** (`claude-sonnet-4-6`): default for all creator-visible outputs — DNA brief,
+     titles, thumbnails, clip scoring, video analysis, improvement briefs, chat.
+   - **Haiku 4.5** (`claude-haiku-4-5-20251001`): high-frequency / lower-stakes paths —
+     chapters, hooks, analyze-performer.
+   - **No Opus anywhere** — not appropriate here; cost/quality ratio favors Sonnet for
+     quality-sensitive outputs at ~$3/MTok input vs Opus at ~$15/MTok.
+2. Any future upgrade to Opus for any path is gated on Issue 198 (LLM quality eval harness)
+   providing evidence that the quality lift justifies the 5× cost premium.
+
+**Why:** A future developer reading the stale SOT.md entry could trigger an Opus upgrade causing
+a 5–10× per-call cost spike without a quality gate. Locking the decision and requiring an eval
+gate makes the model choice deliberate and auditable.
+
+**Source/evidence:** Anthropic pricing (fetched 2026-06-23): Sonnet 4.6 input $3/MTok, output
+$15/MTok; Haiku 4.5 input $1/MTok, output $5/MTok. grep confirms zero 'opus' matches in *.py.
+
+---
+
+## 2026-06-23 — Usage cost ledger wired to all LLM callers; cost_estimate column added (Issue 220)
+
+**What changed:**
+1. `billing/ledger.py`: new async helper `increment_usage()` using an atomic PostgreSQL
+   `INSERT ... ON CONFLICT DO UPDATE` (upsert) to avoid read-modify-write races.
+2. `models.py`: `cost_estimate` column (Numeric) added to the `Usage` table.
+3. `config.py`: four pricing constants added (`COST_PER_MTOK_IN_SONNET` etc.) as env-overridable
+   defaults sourced from the live Anthropic pricing page (fetched 2026-06-23).
+4. Every LLM caller (scoring.py, dna/brief.py, knowledge/*.py, analysis/brief.py,
+   improvement/brief.py, routers/insights.py, chat/runner.py) now calls `increment_usage()`
+   after each response.
+5. Alembic migration 0028 adds the `cost_estimate` column. Down_revision = 0027. May need
+   renumbering at merge if another lane also targets 0027 head.
+
+**Why:** Without a populated `Usage` table, there is no aggregate LLM cost visibility per creator
+and no per-creator quota can be enforced. This is a pre-public-launch gate (Issue 237/289).
+
+**Source/evidence:** Anthropic Batch API pricing (platform.claude.com, fetched 2026-06-23):
+Sonnet 4.6 standard input $3/MTok, output $15/MTok; Haiku 4.5 input $1/MTok, output $5/MTok.
+PostgreSQL upsert best practice: INSERT … ON CONFLICT DO UPDATE (atomic, avoids race).
+
+---
+
+## 2026-06-23 — DNA-build cache marker removed; cross-call sharing infeasible (Issue 223)
+
+**What changed:**
+1. `dna/brief.py`: the `cache_control: {type: ephemeral}` (5-min TTL) marker removed from the
+   stable instruction block.
+2. Filed follow-up: a future issue should evaluate restructuring both `dna/brief.py` and
+   `clip_engine/scoring.py` to share a common byte-identical first system block, which would
+   enable a genuine cross-call cache hit.
+
+**Why (spike findings):**
+- `dna/brief.py` system layout: [static_instructions(cached), volatile_corpus]. The cached
+  block is the instruction text.
+- `scoring.py` system layout: [static_instructions, dna_brief(cached)]. The cached block is
+  the synthesized DNA brief text.
+- The two first blocks contain different text (different instruction content), so they have
+  different cache namespaces. Cross-call sharing is impossible without restructuring.
+- The 5-min TTL in `dna/brief.py` is almost certainly expired by the time `scoring.py` runs
+  (pipeline steps between them: transcription, signal extraction, candidate detection).
+- The 5-min marker was therefore a pure write-premium cost (1.25× on the cached block) with
+  zero expected reads.
+- Easy fix taken: remove the marker. The scoring.py 1h marker is correct and remains.
+
+**Source/evidence:** Anthropic Prompt Caching docs (fetched 2026-06-23): prefix-match requires
+byte-identical content from the start of the system list up to the cache_control breakpoint.
+Different first-block content = separate cache namespace.
 
 ---
 

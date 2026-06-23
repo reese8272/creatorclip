@@ -90,6 +90,9 @@ def test_build_request_minimal() -> None:
 
 
 def test_build_request_includes_metrics_and_dna() -> None:
+    """When dna_brief is provided, 3 system blocks are built (Issue 218):
+    Block 0: static instructions, Block 1: DNA (cache_control), Block 2: per-video data.
+    """
     system, _ = _build_request(
         channel_title="Backboard Media",
         youtube_video_id="abc12345678",
@@ -100,11 +103,14 @@ def test_build_request_includes_metrics_and_dna() -> None:
         channel_avg={"avg_views": 12000, "sample_size": 30},
         dna_brief="Creator makes basketball content.",
     )
-    data_block = system[1]["text"]
+    # 3 blocks when DNA brief present; DNA in block 1 with cache_control, data in block 2.
+    assert len(system) == 3
+    assert "basketball" in system[1]["text"]
+    assert system[1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
+    data_block = system[2]["text"]
     assert "50000" in data_block
     assert "at_25pct" in data_block
     assert "12000" in data_block
-    assert "basketball" in data_block
 
 
 def test_dna_brief_capped_at_1000_chars() -> None:

@@ -107,7 +107,7 @@ def _patch_runner(monkeypatch):
 
     async def _fake_execute(name, tool_input, creator_id, session):
         calls["tools"].append(name)
-        return '{"ok": true}'
+        return '{"ok": true}', False  # (result_json, failed) — Issue 222
 
     async def _fake_aemit(*a, **k):
         return None

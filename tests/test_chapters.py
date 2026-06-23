@@ -328,7 +328,7 @@ def test_generate_chapters_builds_request() -> None:
         {"start": 120.0, "text": "second section"},
     ]
     with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
-        result = generate_chapters(
+        result, _usage = generate_chapters(
             boundaries=[0.0, 120.0],
             segments=segments,
             video_duration_s=240.0,

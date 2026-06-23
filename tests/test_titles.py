@@ -79,12 +79,14 @@ def test_build_request_three_system_blocks() -> None:
         transcript_summary="This is the transcript.",
     )
     assert len(system) == 3, "Expected exactly 3 system blocks"
-    # SEV1 #6: NO cache_control on any block — the static instructions + DNA
-    # brief prefix (~1,550 tokens) is below Sonnet 4.6's 2048-token cacheable-
-    # prefix floor, so a marker is inert (pays the write premium for zero reads).
-    assert "cache_control" not in system[0]
-    assert "cache_control" not in system[1]
-    assert "cache_control" not in system[2]
+    # Issue 218: block 2 (DNA brief) carries the 1h cache_control breakpoint.
+    # The ~1,550-token prefix (block 1 + block 2) clears Sonnet 4.6's 1024-token
+    # cacheable-prefix floor (confirmed 2026-06-23 — the prior 2048 comment was wrong).
+    assert "cache_control" not in system[0], "Static instructions block must not have cache_control"
+    assert system[1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
+        "DNA brief block must carry the 1h cache_control marker (Issue 218)"
+    )
+    assert "cache_control" not in system[2], "Per-video context block must not have cache_control"
 
 
 def test_build_request_web_search_tool() -> None:

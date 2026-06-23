@@ -216,9 +216,12 @@ def test_analyze_performer_llm_success_creates_insight() -> None:
 
 
 def test_analyze_performer_no_inert_cache_marker() -> None:
-    """Issue 140: the system prefix (~30 tokens) is below Haiku 4.5's 4096-token
-    cacheable-prefix floor, so a cache_control marker would be inert (pays the
-    1.25x write premium for zero reads). Assert none is sent."""
+    """Issue 140 + 218: the analyze-performer system prefix (~30 tokens) is below
+    Haiku 4.5's 4096-token cacheable-prefix floor, so a cache_control marker would
+    be inert (pays the 1.25x write premium for zero reads). Assert none is sent.
+    Note: other brief endpoints (titles/thumbnails/analysis) DO carry cache markers
+    via the DNA brief block where the combined prefix clears the 1024-token floor
+    for Sonnet 4.6. (Issue 218 — Sonnet 4.6 floor confirmed 1024, not 2048)."""
     creator = _make_creator()
     video = _make_video(creator.id)
 

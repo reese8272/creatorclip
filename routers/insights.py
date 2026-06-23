@@ -581,15 +581,31 @@ async def analyze_performer(
             system=_system,
             messages=[{"role": "user", "content": prompt}],
         )
+        _pa_tokens_in = msg.usage.input_tokens
+        _pa_tokens_out = msg.usage.output_tokens
         logger.info(
             "performer_analysis tokens: in=%d cached_read=%d out=%d",
-            msg.usage.input_tokens,
+            _pa_tokens_in,
             getattr(msg.usage, "cache_read_input_tokens", 0),
-            msg.usage.output_tokens,
+            _pa_tokens_out,
         )
         raw_block = msg.content[0] if msg.content else None
         content = (
             raw_block.text if raw_block and hasattr(raw_block, "text") else "Analysis unavailable."
+        )
+
+        from billing.ledger import record_llm_usage
+
+        await record_llm_usage(
+            creator.id,
+            {
+                "input_tokens": _pa_tokens_in,
+                "output_tokens": _pa_tokens_out,
+                "cache_read": getattr(msg.usage, "cache_read_input_tokens", 0) or 0,
+                "cache_creation": getattr(msg.usage, "cache_creation_input_tokens", 0) or 0,
+            },
+            settings.COST_PER_MTOK_IN_HAIKU,
+            settings.COST_PER_MTOK_OUT_HAIKU,
         )
     except Exception as exc:
         logger.warning("performer analysis LLM failed video=%s err=%s", video_id, exc)

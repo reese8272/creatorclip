@@ -109,10 +109,12 @@ def generate_improvement_brief(
     analytics: Mapping[str, object],
     dna_brief: str | None = None,
     task_id: str | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """
     Call Claude with web_search to generate a data + research grounded improvement brief.
-    Returns brief_text with disclaimer appended.
+
+    Returns ``(brief_text, usage)`` — brief_text with disclaimer appended, usage is the
+    token-count dict. Callers should pass usage to ``billing.ledger.record_llm_usage``.
 
     Args:
         task_id: Optional Celery task id (Issue 92). When set, switches to the
@@ -155,7 +157,7 @@ def generate_improvement_brief(
         # web_search interleaves text + tool_use blocks under streaming too;
         # stream_and_emit returns the LAST text block (the synthesised
         # answer), matching the Issue 69 pattern the .create() path uses.
-        return final_text + _DISCLAIMER
+        return final_text + _DISCLAIMER, usage
 
     # web_search tool can take 60-120s; override the default 60s timeout per-call.
     response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
@@ -166,18 +168,26 @@ def generate_improvement_brief(
         messages=messages,
     )
 
+    _tokens_in = response.usage.input_tokens
+    _tokens_out = response.usage.output_tokens
     logger.info(
         "improvement_brief tokens: in=%d cached_read=%d cached_write=%d out=%d",
-        response.usage.input_tokens,
+        _tokens_in,
         getattr(response.usage, "cache_read_input_tokens", 0),
         getattr(response.usage, "cache_creation_input_tokens", 0),
-        response.usage.output_tokens,
+        _tokens_out,
     )
 
     text_blocks = [b for b in response.content if b.type == "text"]
     if not text_blocks:
         raise RuntimeError("Claude returned no text in improvement brief generation")
 
+    _usage = {
+        "input_tokens": _tokens_in,
+        "output_tokens": _tokens_out,
+        "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+    }
     # web_search interleaves blocks (preamble text → tool_use → final answer); the
     # FINAL text block is the synthesised brief, not the "let me search…" preamble. (Issue 69)
-    return text_blocks[-1].text + _DISCLAIMER
+    return text_blocks[-1].text + _DISCLAIMER, _usage

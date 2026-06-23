@@ -217,7 +217,7 @@ def test_analyze_hook_builds_prompt_with_drop() -> None:
         )
     )
     with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
-        result = analyze_hook(
+        result, _usage = analyze_hook(
             channel_title="Test Channel",
             dna_brief="DNA brief text " * 100,
             retention_drop_at_s=12.5,

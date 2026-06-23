@@ -673,6 +673,11 @@ class Usage(Base):
     clips_generated: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     tokens_in: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0)
     tokens_out: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, default=0)
+    # Cost estimate in USD persisted at write time so billing/metrics can read USD
+    # without a price-book join at query time. Added by migration 0028. (Issue 220)
+    cost_estimate: Mapped[float | None] = mapped_column(
+        sa.Numeric(precision=12, scale=6), nullable=True
+    )
 
     __table_args__ = (sa.UniqueConstraint("creator_id", "period", name="uq_usage_creator_period"),)
 

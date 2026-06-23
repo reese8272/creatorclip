@@ -1,11 +1,17 @@
 """Video performance analysis via Claude (Issue 121).
 
-Prompt structure mirrors improvement/brief.py (Issue 69): a static
-``cache_control`` breakpoint on the instruction block; per-video data
-in the uncached second block. The analysis does NOT use web_search —
-the creator's own metrics + DNA are the authority, not algorithm trend
-articles. No tools means shorter latency and a single text block in the
-response.
+Prompt structure (Issue 218 update):
+  Block 1 — static instructions: role + task (stable, creator-agnostic).
+  Block 2 — DNA brief (cache_control breakpoint, ttl=1h): per-creator, stable
+            across sessions. The static instructions alone (~175 tokens) are below
+            Sonnet 4.6's 1024-token cacheable-prefix floor, so block 2 (DNA brief,
+            up to 1000 chars) is added as a stable prefix block carrying the
+            cache_control marker. Together they reliably clear the 1024-token floor
+            when the DNA brief is available. (Issue 218)
+  Block 3 — per-video data: metrics, retention, channel averages. Uncached.
+
+The analysis does NOT use web_search — the creator's own metrics + DNA are the
+authority. No tools means shorter latency and a single text block in the response.
 
 The honesty disclaimer is always appended by Python.
 """
@@ -67,7 +73,18 @@ def _build_request(
     channel_avg: dict[str, Any] | None,
     dna_brief: str | None,
 ) -> tuple:
-    """Assemble (system, messages) for the video analysis call."""
+    """Assemble (system, messages) for the video analysis call.
+
+    Three-block system when a DNA brief is available, two-block otherwise:
+      Block 1: static instructions (stable, creator-agnostic).
+      Block 2: DNA brief with cache_control marker (stable per creator, ttl=1h).
+               When present, block 1 + block 2 reliably clears the 1024-token
+               cacheable-prefix floor for Sonnet 4.6. (Issue 218)
+      Block 3: per-video data (metrics, retention, channel averages). Uncached.
+
+    When no DNA brief is available, block 2 is omitted and the two-block call
+    is uncached (static instructions alone ~175 tokens < 1024-token floor).
+    """
     video_data: dict[str, Any] = {"youtube_video_id": youtube_video_id}
     if video_title:
         video_data["title"] = video_title
@@ -82,20 +99,27 @@ def _build_request(
     }
     if channel_avg:
         context["channel_averages"] = channel_avg
-    if dna_brief:
-        context["dna_summary"] = dna_brief[:_DNA_BRIEF_MAX_CHARS]
 
     context_json = json.dumps(context, indent=2, default=str)
 
-    # Audit fix (Issue-135 audit): cache_control breakpoint removed. Static
-    # instructions ≈ 175 tokens vs Sonnet 4.6's 1024-token minimum cacheable
-    # prefix — marker was inert and the token log silently reported
-    # `cache_read=0`. One brief per video; the missed cache is low-frequency
-    # and uncached is the correct posture. Precedent: improvement/brief.py.
-    system: list[dict] = [
-        {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        {"type": "text", "text": f"CREATOR AND VIDEO DATA:\n{context_json}"},
-    ]
+    system: list[dict] = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
+
+    if dna_brief:
+        # DNA brief carries the cache breakpoint (1h TTL). Block 1 + block 2
+        # clears Sonnet 4.6's 1024-token cacheable-prefix floor; a creator's
+        # repeated analysis calls within the window pay 0.1x on the cached
+        # portion. (Issue 218)
+        system.append(
+            {
+                "type": "text",
+                "text": f"CREATOR DNA:\n{dna_brief[:_DNA_BRIEF_MAX_CHARS]}",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        )
+
+    # Per-video data is always in the final, uncached block.
+    system.append({"type": "text", "text": f"CREATOR AND VIDEO DATA:\n{context_json}"})
+
     messages = [{"role": "user", "content": query}]
     return system, messages
 
@@ -110,13 +134,16 @@ def generate_video_analysis(
     channel_avg: dict[str, Any] | None = None,
     dna_brief: str | None = None,
     task_id: str | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """Call Claude to analyze a video's performance, optionally streaming via SSE.
 
     Args:
         task_id: When set, switches to the streaming path — token deltas flow to
             ``task:{task_id}:events`` via ``worker.anthropic_stream.stream_and_emit``,
             exactly as the improvement brief does. When None, uses ``.create()``.
+
+    Returns ``(analysis_text, usage)`` where usage is the token-count dict. Callers
+    should pass usage to ``billing.ledger.record_llm_usage`` to populate the cost ledger.
     """
     system, messages = _build_request(
         channel_title,
@@ -148,7 +175,7 @@ def generate_video_analysis(
             usage["cache_creation"],
             usage["output_tokens"],
         )
-        return final_text + _DISCLAIMER
+        return final_text + _DISCLAIMER, usage
 
     response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
         model=settings.ANTHROPIC_MODEL,
@@ -156,12 +183,22 @@ def generate_video_analysis(
         system=system,
         messages=messages,
     )
+    _tokens_in = response.usage.input_tokens
+    _tokens_out = response.usage.output_tokens
     logger.info(
-        "video_analysis tokens: in=%d out=%d",
-        response.usage.input_tokens,
-        response.usage.output_tokens,
+        "video_analysis tokens: in=%d cache_read=%d cache_write=%d out=%d",
+        _tokens_in,
+        getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        _tokens_out,
     )
     text_blocks = [b for b in response.content if b.type == "text"]
     if not text_blocks:
         raise RuntimeError("Claude returned no text in video analysis")
-    return text_blocks[-1].text + _DISCLAIMER
+    _usage = {
+        "input_tokens": _tokens_in,
+        "output_tokens": _tokens_out,
+        "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+    }
+    return text_blocks[-1].text + _DISCLAIMER, _usage

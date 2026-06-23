@@ -9,8 +9,10 @@ Requires Postgres (see docker-compose.yml). Excluded from the default run by
 pytest.ini ``-m "not integration"``; runs in the integration CI workflow.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -110,46 +112,100 @@ async def test_chat_tools_are_creator_scoped(db_session: AsyncSession):
     b_youtube_id = b_video.youtube_video_id
 
     try:
-        import json
-
         # get_recent_videos: only A's titles.
-        recent = json.loads(await execute_tool("get_recent_videos", {}, a.id, db_session))
+        recent_json, recent_failed = await execute_tool("get_recent_videos", {}, a.id, db_session)
+        recent = json.loads(recent_json)
+        assert recent_failed is False
         assert recent["count"] == 3
         assert all(v["title"].startswith("A ") for v in recent["videos"])
         assert all(v["views"] == 100 for v in recent["videos"])
 
         # get_channel_averages: A's number, never blended with B's 999_999.
-        avg = json.loads(await execute_tool("get_channel_averages", {}, a.id, db_session))
+        avg_json, avg_failed = await execute_tool("get_channel_averages", {}, a.id, db_session)
+        avg = json.loads(avg_json)
+        assert avg_failed is False
         assert avg["available"] is True
         assert avg["avg_views"] == pytest.approx(100.0)
         assert avg["sample_size"] == 3
 
         # get_video_performance: B's video id is unreachable for A.
-        perf = json.loads(
-            await execute_tool(
-                "get_video_performance", {"video_query": b_youtube_id}, a.id, db_session
-            )
+        perf_json, perf_failed = await execute_tool(
+            "get_video_performance", {"video_query": b_youtube_id}, a.id, db_session
         )
+        perf = json.loads(perf_json)
+        assert perf_failed is False
         assert perf["found"] is False
 
         # ...but A can reach A's own video.
-        own = json.loads(
-            await execute_tool(
-                "get_video_performance", {"video_query": "A video"}, a.id, db_session
-            )
+        own_json, own_failed = await execute_tool(
+            "get_video_performance", {"video_query": "A video"}, a.id, db_session
         )
+        own = json.loads(own_json)
+        assert own_failed is False
         assert own["found"] is True
         assert own["title"].startswith("A ")
 
         # get_upload_timing: from A's activity (hour 9), not B's (hour 20).
-        timing = json.loads(await execute_tool("get_upload_timing", {}, a.id, db_session))
+        timing_json, timing_failed = await execute_tool("get_upload_timing", {}, a.id, db_session)
+        timing = json.loads(timing_json)
+        assert timing_failed is False
         assert timing["available"] is True
         assert all(w["hour"] == 9 for w in timing["best_windows"])
 
         # get_channel_dna: A's brief only.
-        dna = json.loads(await execute_tool("get_channel_dna", {}, a.id, db_session))
+        dna_json, dna_failed = await execute_tool("get_channel_dna", {}, a.id, db_session)
+        dna = json.loads(dna_json)
         assert dna["available"] is True
         assert dna["brief"] == "A channel brief."
+        assert dna_failed is False, "Successful tool call must return failed=False"
     finally:
         await db_session.execute(delete(Creator).where(Creator.id.in_([a.id, b.id])))
         await db_session.commit()
+
+
+# ── Unit: execute_tool error handling (Issue 222) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_unknown_name_returns_is_error() -> None:
+    """Unknown tool name must return (error_json, True) — not raise."""
+    import uuid as _uuid
+
+    fake_session = AsyncMock()
+    result_str, failed = await execute_tool("nonexistent_tool", {}, _uuid.uuid4(), fake_session)
+    assert failed is True, "Unknown tool must set failed=True"
+    payload = json.loads(result_str)
+    assert "error" in payload
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_executor_failure_returns_is_error() -> None:
+    """An executor that raises must return (error_json, True) — not propagate."""
+    import uuid as _uuid
+    from unittest.mock import patch
+
+    fake_session = AsyncMock()
+    with patch(
+        "chat.tools._EXECUTORS",
+        {"get_channel_dna": AsyncMock(side_effect=RuntimeError("DB offline"))},
+    ):
+        result_str, failed = await execute_tool(
+            "get_channel_dna", {}, _uuid.uuid4(), fake_session
+        )
+    assert failed is True, "Executor exception must set failed=True"
+    payload = json.loads(result_str)
+    assert "error" in payload
+
+
+@pytest.mark.asyncio
+async def test_get_recent_videos_limit_schema_has_maximum() -> None:
+    """The get_recent_videos schema must advertise a 'maximum' on the limit param
+    so Claude self-corrects its parameter before calling the tool. (Issue 222)"""
+    from chat.tools import TOOLS, _MAX_VIDEOS
+
+    recent_videos_tool = next(t for t in TOOLS if t["name"] == "get_recent_videos")
+    limit_schema = recent_videos_tool["input_schema"]["properties"]["limit"]
+    assert limit_schema.get("maximum") == _MAX_VIDEOS, (
+        f"'maximum' must be {_MAX_VIDEOS} in get_recent_videos schema (Issue 222)"
+    )
+    assert limit_schema.get("minimum") == 1

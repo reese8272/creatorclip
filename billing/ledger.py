@@ -13,20 +13,116 @@ import logging
 import math
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Creator, MinuteDeduction, MinutePack
+from models import Creator, MinuteDeduction, MinutePack, Usage
 
 logger = logging.getLogger(__name__)
+
+_MTOK = 1_000_000  # tokens per million (for cost calculation)
 
 
 def video_minutes(duration_s: float) -> int:
     """Round a video duration up to the nearest whole minute (minimum 1)."""
     return max(1, math.ceil(duration_s / 60))
+
+
+async def increment_usage(
+    session: AsyncSession,
+    creator_id: uuid.UUID,
+    period: str,
+    tokens_in: int,
+    tokens_out: int,
+    cost_estimate_usd: float,
+) -> None:
+    """Atomically accumulate LLM token counts + cost for a creator in a billing period.
+
+    Uses a PostgreSQL ``INSERT ... ON CONFLICT DO UPDATE`` (upsert) — no read-modify-
+    write — so concurrent LLM calls for the same creator never race or lose counts.
+
+    ``period`` format: 'YYYY-MM' (e.g. '2026-06'). Callers derive it from
+    ``datetime.now(UTC).strftime('%Y-%m')``.
+
+    Caller is responsible for committing the outer transaction.  This helper runs
+    inside a ``begin_nested()`` savepoint so a upsert failure never silently corrupts
+    the outer transaction — the exception propagates to the caller.
+    """
+    stmt = (
+        pg_insert(Usage)
+        .values(
+            creator_id=creator_id,
+            period=period,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_estimate=Decimal(str(cost_estimate_usd)),
+        )
+        .on_conflict_do_update(
+            constraint="uq_usage_creator_period",
+            set_={
+                "tokens_in": Usage.tokens_in + tokens_in,
+                "tokens_out": Usage.tokens_out + tokens_out,
+                "cost_estimate": Usage.cost_estimate + Decimal(str(cost_estimate_usd)),
+            },
+        )
+    )
+    async with session.begin_nested():
+        await session.execute(stmt)
+
+    logger.debug(
+        "usage increment creator=%s period=%s in=%d out=%d cost=%.6f",
+        creator_id,
+        period,
+        tokens_in,
+        tokens_out,
+        cost_estimate_usd,
+    )
+
+
+def _estimate_cost_usd(
+    tokens_in: int,
+    tokens_out: int,
+    cost_per_mtok_in: float,
+    cost_per_mtok_out: float,
+) -> float:
+    """Compute USD cost from token counts and per-million-token rates."""
+    return (tokens_in * cost_per_mtok_in + tokens_out * cost_per_mtok_out) / _MTOK
+
+
+async def record_llm_usage(
+    creator_id: uuid.UUID,
+    usage: dict,
+    cost_per_mtok_in: float,
+    cost_per_mtok_out: float,
+) -> None:
+    """Open a short-lived admin session to write LLM usage to the cost ledger.
+
+    Designed for callers that need to log usage AFTER closing their primary
+    session (e.g. Celery tasks that run LLM calls outside a DB context).
+    Uses ``AdminSessionLocal`` so it bypasses RLS (consistent with how tasks
+    read creator data — cross-tenant admin path). Best-effort: logs and
+    returns on any failure to avoid disrupting the pipeline.
+
+    ``usage`` is the dict returned by ``worker.anthropic_stream.stream_and_emit``
+    (keys: input_tokens, output_tokens, cache_read, cache_creation).
+    """
+    import db as _db
+
+    tokens_in = usage.get("input_tokens", 0)
+    tokens_out = usage.get("output_tokens", 0)
+    cost = _estimate_cost_usd(tokens_in, tokens_out, cost_per_mtok_in, cost_per_mtok_out)
+    period = datetime.now(UTC).strftime("%Y-%m")
+    try:
+        async with _db.AdminSessionLocal() as session:
+            await increment_usage(session, creator_id, period, tokens_in, tokens_out, cost)
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001 — best-effort; never block pipeline
+        logger.warning("record_llm_usage failed creator=%s: %s", creator_id, exc)
 
 
 async def get_balance(creator_id: uuid.UUID, session: AsyncSession) -> int:
