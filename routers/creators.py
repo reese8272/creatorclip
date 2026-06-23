@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -251,7 +251,7 @@ async def get_brand_kit_suggestion(
     request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
-) -> dict:
+) -> dict | Response:
     """Detect a dominant render style from recent clips and suggest making it the default.
 
     Queries the last 20 clips for this creator where style_preset IS NOT NULL,
@@ -278,8 +278,6 @@ async def get_brand_kit_suggestion(
 
     suggestion = style_suggestion(history, threshold=settings.STYLE_LEARN_THRESHOLD)
     if suggestion is None:
-        from fastapi.responses import Response
-
         return Response(status_code=204)
 
     field = suggestion["field"]
