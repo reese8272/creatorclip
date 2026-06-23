@@ -9,7 +9,25 @@ import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
 import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { TranscriptEditor } from '@/components/review/TranscriptEditor'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
-import type { ReviewClipListResponse } from '@/types'
+import type { PersonalizationStatus, ReviewClipListResponse } from '@/types'
+
+// Issue 216: Honest personalization-status band — shown below the virality disclaimer.
+// Below threshold: "Still learning" with N/threshold progress; above: "Personalized".
+// No virality language; no weight float exposed to user.
+function PersonalizationBand({ status }: { status: PersonalizationStatus }) {
+  if (status.active) {
+    return (
+      <div className="border-b border-default bg-surface-subtle px-4 py-1.5 text-center text-xs text-muted">
+        Personalized to your feedback ({status.labels} ratings collected)
+      </div>
+    )
+  }
+  return (
+    <div className="border-b border-default bg-surface-subtle px-4 py-1.5 text-center text-xs text-muted">
+      Still learning — DNA-based ranking ({status.labels}/{status.threshold} ratings collected)
+    </div>
+  )
+}
 
 // Port of static/review.html (Issue 85f). Redesigned to a player-first layout:
 // the clip player + review actions lead, the transcript editor sits alongside,
@@ -57,12 +75,15 @@ export function Review() {
   if (reviewed) return message('All clips reviewed! Great work. Taking you back to the dashboard…')
   if (!clip) return message('No clips yet — generate them from the Dashboard.')
 
+  const personalization = data?.personalization ?? null
+
   return (
     <>
       <DisclaimerBand>
         AutoClip predicts fit with your style and audience — it does not promise virality. All scores
         are estimates grounded in your own channel data.
       </DisclaimerBand>
+      {personalization && <PersonalizationBand status={personalization} />}
 
       <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
         {/* Left: the clip itself + why it was picked. Right: the editing tools

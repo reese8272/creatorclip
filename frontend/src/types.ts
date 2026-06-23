@@ -229,8 +229,18 @@ export interface ReviewClip {
   cleaned_render_uri: string | null
 }
 
+// Issue 216 — honest personalization-status surface.
+// Placed on the list envelope, not per-clip, to avoid O(N) scorer reads per request.
+export interface PersonalizationStatus {
+  active: boolean
+  labels: number
+  threshold: number
+  weight: number
+}
+
 export interface ReviewClipListResponse {
   clips: ReviewClip[]
+  personalization?: PersonalizationStatus | null
 }
 
 export type FeedbackAction = 'upvote' | 'downvote' | 'skip' | 'trim'

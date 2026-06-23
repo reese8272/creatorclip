@@ -5,6 +5,56 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 216: Honest personalization-status surface — envelope placement + copy
+
+**What changed:** Added `PersonalizationStatus` (Pydantic model with `active: bool`, `labels: int`,
+`threshold: int`, `weight: float`) to the `ClipListOut` envelope returned by
+`GET /videos/{id}/clips`. The field is populated by a single `load_latest` call per request
+(not per clip). `active=False` + `weight=0.0` below `PERSONALIZATION_THRESHOLD_LABELS=20`;
+`active=True` + ramp weight at/above. UI (`Review.tsx`) renders a `PersonalizationBand`
+below the existing virality disclaimer: below threshold shows
+`"Still learning — DNA-based ranking (N/threshold ratings collected)"`;
+above shows `"Personalized to your feedback (N ratings collected)"`. No virality language in
+either band.
+
+**Why:**
+- The reranker already falls back to DNA + signals below the threshold (honest mechanics).
+  This issue makes the honesty *visible* to creators — completing the Honesty Constraint at
+  the personalization layer (CLAUDE.md: "every recommendation is an estimate grounded in
+  your own data, not a guarantee").
+- Cold-start honest status surfaces are industry standard in recommendation systems
+  (Netflix onboarding pattern; UX research on N/threshold progress framing —
+  https://www.parallelhq.com/blog/personalization-in-ux-using-ai,
+  https://userpilot.com/blog/progress-bar-ui-ux-saas).
+
+**Placement decision (envelope vs per-clip):**
+Per-list envelope placement was chosen over per-`ClipOut` placement. Rationale: the
+personalization status is a creator-level property, constant across all clips in a single
+list response. Putting it per-clip would require N scorer reads per request (O(N) DB round
+trips). Envelope placement requires exactly one read, is REST-idiomatic for
+request-scoped metadata, and avoids a separate `/personalization-status` round-trip.
+
+**`weight` field kept in API, hidden from UI:**
+The raw `weight` float is retained in the API response for API consumers and debugging, but
+the UI surfaces only `labels`/`threshold` (human-readable progress). Exposing a raw float
+in consumer copy is confusing (Risk 3 from the issue brief) and unnecessary for the
+"still learning / personalized" two-band UX.
+
+**`test_empty_state_envelopes.py` mock update (no functional change):**
+The pre-existing `_clips_session` mock assigned a single `AsyncMock` to `session.execute`.
+`list_clips` now makes two `execute` calls (clips query + PreferenceModel query), so the
+mock was updated to `side_effect=[clips_result, pref_result]` where `pref_result` returns
+`first() = None` (no model). This is a test infrastructure fix, not a behavioral change.
+
+**Source/evidence:**
+- https://www.parallelhq.com/blog/personalization-in-ux-using-ai
+- https://userpilot.com/blog/progress-bar-ui-ux-saas
+- FastAPI nested BaseModel pattern (current FastAPI docs)
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
 
 **What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a
