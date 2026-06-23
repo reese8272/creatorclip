@@ -13,6 +13,7 @@ external service, no Docker, no Postgres required.
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -51,14 +52,14 @@ def test_console_backend_renders_and_logs(caplog: pytest.LogCaptureFixture) -> N
         "review_url": "https://autoclip.studio/review/abc123",
     }
 
-    with patch.object(mailer, "settings", _fake_settings("console")):
-        with caplog.at_level(logging.INFO, logger="notify.mailer"):
-            mailer.send(
-                to="alice@example.com",
-                template="clips_ready",
-                context=context,
-                idempotency_key="test-console-abc123",
-            )
+    with patch.object(mailer, "settings", _fake_settings("console")), \
+            caplog.at_level(logging.INFO, logger="notify.mailer"):
+        mailer.send(
+            to="alice@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key="test-console-abc123",
+        )
 
     assert any("console" in r.message for r in caplog.records), (
         "Expected a log record containing 'console' for the console backend"
@@ -77,14 +78,14 @@ def test_console_backend_includes_idempotency_key_in_log(caplog: pytest.LogCaptu
         "review_url": "https://autoclip.studio/review/xyz",
     }
 
-    with patch.object(mailer, "settings", _fake_settings("console")):
-        with caplog.at_level(logging.INFO, logger="notify.mailer"):
-            mailer.send(
-                to="bob@example.com",
-                template="clips_ready",
-                context=context,
-                idempotency_key=idem_key,
-            )
+    with patch.object(mailer, "settings", _fake_settings("console")), \
+            caplog.at_level(logging.INFO, logger="notify.mailer"):
+        mailer.send(
+            to="bob@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key=idem_key,
+        )
 
     joined = " ".join(r.message for r in caplog.records)
     assert idem_key in joined, (
@@ -115,15 +116,15 @@ def test_resend_backend_forwards_idempotency_key() -> None:
     idem_key = "resend-idempotency-key-abc"
 
     # Reset the module-level initialised flag so the patched resend is used
-    with patch.object(mailer, "_resend_initialised", False):
-        with patch.object(mailer, "settings", _fake_settings("resend", resend_api_key="re_test", email_from="noreply@autoclip.studio")):
-            with patch.dict(sys.modules, {"resend": fake_resend}):
-                mailer.send(
-                    to="carol@example.com",
-                    template="clips_ready",
-                    context=context,
-                    idempotency_key=idem_key,
-                )
+    with patch.object(mailer, "_resend_initialised", False), \
+            patch.object(mailer, "settings", _fake_settings("resend", resend_api_key="re_test", email_from="noreply@autoclip.studio")), \
+            patch.dict(sys.modules, {"resend": fake_resend}):
+        mailer.send(
+            to="carol@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key=idem_key,
+        )
 
     fake_resend.Emails.send.assert_called_once()
     call_args = fake_resend.Emails.send.call_args
@@ -151,15 +152,15 @@ def test_resend_backend_params_include_from_to_subject() -> None:
     }
     email_from = "noreply@autoclip.studio"
 
-    with patch.object(mailer, "_resend_initialised", False):
-        with patch.object(mailer, "settings", _fake_settings("resend", resend_api_key="re_test", email_from=email_from)):
-            with patch.dict(sys.modules, {"resend": fake_resend}):
-                mailer.send(
-                    to="dave@example.com",
-                    template="clips_ready",
-                    context=context,
-                    idempotency_key="resend-params-key",
-                )
+    with patch.object(mailer, "_resend_initialised", False), \
+            patch.object(mailer, "settings", _fake_settings("resend", resend_api_key="re_test", email_from=email_from)), \
+            patch.dict(sys.modules, {"resend": fake_resend}):
+        mailer.send(
+            to="dave@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key="resend-params-key",
+        )
 
     params = fake_resend.Emails.send.call_args.args[0]
     assert params["from"] == email_from
@@ -185,14 +186,14 @@ def test_unknown_backend_raises_value_error() -> None:
         "review_url": "https://autoclip.studio/review/ev",
     }
 
-    with patch.object(mailer, "settings", _fake_settings("smtp")):
-        with pytest.raises(ValueError, match="Unknown NOTIFY_BACKEND"):
-            mailer.send(
-                to="eve@example.com",
-                template="clips_ready",
-                context=context,
-                idempotency_key="backend-test-key",
-            )
+    with patch.object(mailer, "settings", _fake_settings("smtp")), \
+            pytest.raises(ValueError, match="Unknown NOTIFY_BACKEND"):
+        mailer.send(
+            to="eve@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key="backend-test-key",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -205,19 +206,19 @@ def test_oversized_idempotency_key_raises() -> None:
     from notify import mailer
 
     long_key = "a" * 257
-    with patch.object(mailer, "settings", _fake_settings("console")):
-        with pytest.raises(ValueError, match="256"):
-            mailer.send(
-                to="test@example.com",
-                template="clips_ready",
-                context={
-                    "creator_name": "F",
-                    "video_title": "X",
-                    "clip_count": 1,
-                    "review_url": "https://example.com",
-                },
-                idempotency_key=long_key,
-            )
+    with patch.object(mailer, "settings", _fake_settings("console")), \
+            pytest.raises(ValueError, match="256"):
+        mailer.send(
+            to="test@example.com",
+            template="clips_ready",
+            context={
+                "creator_name": "F",
+                "video_title": "X",
+                "clip_count": 1,
+                "review_url": "https://example.com",
+            },
+            idempotency_key=long_key,
+        )
 
 
 def test_idempotency_key_at_max_length_is_accepted(caplog: pytest.LogCaptureFixture) -> None:
@@ -225,39 +226,39 @@ def test_idempotency_key_at_max_length_is_accepted(caplog: pytest.LogCaptureFixt
     from notify import mailer
 
     max_key = "a" * 256
-    with patch.object(mailer, "settings", _fake_settings("console")):
-        with caplog.at_level(logging.INFO, logger="notify.mailer"):
-            # Should not raise
-            mailer.send(
-                to="test@example.com",
-                template="clips_ready",
-                context={
-                    "creator_name": "G",
-                    "video_title": "Y",
-                    "clip_count": 1,
-                    "review_url": "https://example.com",
-                },
-                idempotency_key=max_key,
-            )
+    with patch.object(mailer, "settings", _fake_settings("console")), \
+            caplog.at_level(logging.INFO, logger="notify.mailer"):
+        # Should not raise
+        mailer.send(
+            to="test@example.com",
+            template="clips_ready",
+            context={
+                "creator_name": "G",
+                "video_title": "Y",
+                "clip_count": 1,
+                "review_url": "https://example.com",
+            },
+            idempotency_key=max_key,
+        )
 
 
 def test_idempotency_key_with_invalid_chars_raises() -> None:
     """A key with spaces or special chars must raise ValueError."""
     from notify import mailer
 
-    with patch.object(mailer, "settings", _fake_settings("console")):
-        with pytest.raises(ValueError, match="idempotency_key"):
-            mailer.send(
-                to="test@example.com",
-                template="clips_ready",
-                context={
-                    "creator_name": "H",
-                    "video_title": "Z",
-                    "clip_count": 1,
-                    "review_url": "https://example.com",
-                },
-                idempotency_key="key with spaces",
-            )
+    with patch.object(mailer, "settings", _fake_settings("console")), \
+            pytest.raises(ValueError, match="idempotency_key"):
+        mailer.send(
+            to="test@example.com",
+            template="clips_ready",
+            context={
+                "creator_name": "H",
+                "video_title": "Z",
+                "clip_count": 1,
+                "review_url": "https://example.com",
+            },
+            idempotency_key="key with spaces",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -273,14 +274,14 @@ def test_missing_resend_api_key_fails_at_settings_load() -> None:
     """
     from pydantic import ValidationError
 
-    # Build a minimal settings class that mirrors only the relevant fields
-    # so we can test the validator in isolation without needing all required vars.
     from config import Settings
 
+    # Provide all required fields via the environment so pydantic-settings reads them.
+    # Using model_construct bypasses validators; we must go through __init__ to trigger
+    # the _validate_notify_backend model_validator.
     env_overrides = {
         "NOTIFY_BACKEND": "resend",
         "RESEND_API_KEY": "",
-        # Provide all REQUIRED fields so only the notify validator fires
         "ANTHROPIC_API_KEY": "test",
         "DATABASE_URL": "postgresql+psycopg://u:p@localhost:5432/db",
         "REDIS_URL": "redis://localhost:6379/0",
@@ -292,8 +293,9 @@ def test_missing_resend_api_key_fails_at_settings_load() -> None:
         "ALLOWED_ORIGINS": "http://localhost",
     }
 
-    with pytest.raises(ValidationError, match="RESEND_API_KEY"):
-        Settings(**env_overrides)  # type: ignore[call-arg]
+    with patch.dict(os.environ, env_overrides, clear=False), \
+            pytest.raises(ValidationError, match="RESEND_API_KEY"):
+        Settings()
 
 
 # ---------------------------------------------------------------------------
@@ -313,17 +315,39 @@ def test_clips_ready_template_contains_review_url(caplog: pytest.LogCaptureFixtu
         "review_url": review_url,
     }
 
-    with patch.object(mailer, "settings", _fake_settings("console")):
-        with caplog.at_level(logging.INFO, logger="notify.mailer"):
-            mailer.send(
-                to="ivy@example.com",
-                template="clips_ready",
-                context=context,
-                idempotency_key="smoke-test-key",
-            )
+    with patch.object(mailer, "settings", _fake_settings("console")), \
+            caplog.at_level(logging.INFO, logger="notify.mailer"):
+        mailer.send(
+            to="ivy@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key="smoke-test-key",
+        )
 
     # The body is logged in the INFO record
     joined = " ".join(r.message for r in caplog.records)
     assert review_url in joined or "smoke-test-key" in joined, (
         "Expected the rendered body or idempotency key to appear in the log"
     )
+
+
+def test_clips_ready_txt_no_virality_language() -> None:
+    """The clips_ready .txt template must not promise virality, and must carry
+    the required honesty disclaimer."""
+    from notify import mailer
+    from tests.test_honesty import assert_no_virality_promise
+
+    text_body, _ = mailer._render(
+        "clips_ready",
+        {
+            "creator_name": "Jan",
+            "video_title": "My Test",
+            "clip_count": 2,
+            "review_url": "https://autoclip.studio/review/jan",
+        },
+    )
+    # Canonical honesty assertion — allowlist-scrubs the legitimate disclaimer
+    # ("does not promise virality") before scanning for banned promise phrases.
+    assert_no_virality_promise(text_body, label="clips_ready.txt")
+    # Positively require the disclaimer to be present.
+    assert "does not promise virality" in text_body.lower()

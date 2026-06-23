@@ -4,20 +4,22 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Review } from './Review'
+import type { PersonalizationStatus } from '@/types'
 
-function mockFetch() {
+const BASE_CLIP = {
+  id: 'c1', video_id: 'v1', setup_start_s: 2, start_s: 0, end_s: 20, peak_s: 10,
+  score: 0.91, rank: 1, principle: 'Curiosity gap', reasoning: 'Strong hook in 3s.',
+  render_status: 'done', render_uri: 'http://x/c1.mp4', cleaned_render_uri: null,
+}
+
+function mockFetch(personalization?: PersonalizationStatus | null) {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.endsWith('/videos/v1/clips'))
       return json({
-        clips: [
-          {
-            id: 'c1', video_id: 'v1', setup_start_s: 2, start_s: 0, end_s: 20, peak_s: 10,
-            score: 0.91, rank: 1, principle: 'Curiosity gap', reasoning: 'Strong hook in 3s.',
-            render_status: 'done', render_uri: 'http://x/c1.mp4', cleaned_render_uri: null,
-          },
-        ],
+        clips: [BASE_CLIP],
+        personalization: personalization ?? null,
       })
     if (url.endsWith('/clips/c1/transcript'))
       return json({
@@ -70,5 +72,51 @@ describe('Review', () => {
     await screen.findByText(/Clip #1/)
     await userEvent.click(screen.getByRole('button', { name: '👍 Keep' }))
     expect(screen.getByText('Why are you keeping this?')).toBeInTheDocument()
+  })
+})
+
+// ── Issue 216: PersonalizationBand honest copy ────────────────────────────────
+
+describe('PersonalizationBand', () => {
+  it('shows "Still learning" copy below threshold (active=false)', async () => {
+    const personalization: PersonalizationStatus = {
+      active: false, labels: 5, threshold: 20, weight: 0,
+    }
+    vi.stubGlobal('fetch', mockFetch(personalization))
+    renderReview('/app/review?video_id=v1')
+    // Wait for clip data to load.
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    const band = screen.getByText(/Still learning/i)
+    expect(band).toBeInTheDocument()
+    expect(screen.getByText(/5\/20/)).toBeInTheDocument()
+    // The band copy itself must not promise virality. The existing DisclaimerBand
+    // contains "does not promise virality" which is correct honesty language — we
+    // scope the check to the band element, not the whole page.
+    const bandText = band.textContent?.toLowerCase() ?? ''
+    expect(bandText).not.toMatch(/\bviral\b|\bguarantee\b/)
+  })
+
+  it('shows "Personalized" copy at/above threshold (active=true)', async () => {
+    const personalization: PersonalizationStatus = {
+      active: true, labels: 25, threshold: 20, weight: 0.25,
+    }
+    vi.stubGlobal('fetch', mockFetch(personalization))
+    renderReview('/app/review?video_id=v1')
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    const band = screen.getByText(/Personalized to your feedback/i)
+    expect(band).toBeInTheDocument()
+    expect(screen.getByText(/25 ratings collected/i)).toBeInTheDocument()
+    // The band copy itself must not promise virality.
+    const bandText = band.textContent?.toLowerCase() ?? ''
+    expect(bandText).not.toMatch(/\bviral\b|\bguarantee\b/)
+  })
+
+  it('renders no personalization band when the field is absent (null)', async () => {
+    // When the API returns no personalization field, neither band should appear.
+    vi.stubGlobal('fetch', mockFetch(null))
+    renderReview('/app/review?video_id=v1')
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    expect(screen.queryByText(/Still learning/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Personalized to your feedback/i)).not.toBeInTheDocument()
   })
 })
