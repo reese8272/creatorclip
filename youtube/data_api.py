@@ -222,6 +222,15 @@ async def list_channel_videos(access_token: str) -> list[dict]:
                             snippet.get("title"), settings.MAX_INGESTED_TITLE_CHARS
                         ),
                         "published_at": snippet.get("publishedAt"),
+                        # Issue 227: description is NOT stored on the Video model and is
+                        # not currently persisted anywhere — but the YouTube playlistItems
+                        # snippet always includes it. Clamp at the ingest boundary now so
+                        # that if description storage is added later the guard is already
+                        # in place and cannot be forgotten (defensive / future-proofing).
+                        # Callers that don't need the description can ignore this key.
+                        "description": clamp_ingest_field(
+                            snippet.get("description"), settings.MAX_INGESTED_DESC_CHARS
+                        ),
                     }
                 )
 

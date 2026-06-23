@@ -27,6 +27,35 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 **Source/evidence:** Issue 197 brief; `_poll_clip_outcomes_async` query at worker/tasks.py:1637
 which selects on `ClipOutcome.published_youtube_id IS NOT NULL AND final IS False`.
+## 2026-06-23 — Issue 227: Description clamp is defensive/future-proofing, not active
+
+**What changed:** `MAX_INGESTED_DESC_CHARS` added to `config.py` + `.env.example`; a
+`"description"` key (clamped via `clamp_ingest_field`) added to the dict returned by
+`list_channel_videos` in `youtube/data_api.py`. The description value is NOT persisted:
+the `Video` model has no `description` column, and no code downstream of `list_channel_videos`
+reads the `"description"` key.
+
+**Why:** Issue 227 requires a description clamp to close OWASP LLM01 (prompt injection) and
+token-cost/DoS gaps. Audit of the data model confirmed that YouTube descriptions are never
+ingested into the database — the `Video` model (SQLAlchemy, `models.py`) has `title` but
+no `description` column, and the only description fields in the codebase are in
+`youtube/publish.py` (outbound publish, not inbound ingest). Inventing a storage path would
+require a database migration (out of scope for Issue 227, which is explicitly no-migration)
+and would be a speculative feature addition rather than a security fix. Placing the clamp at
+the ingest boundary (`list_channel_videos`) is the correct minimal approach: it ensures the
+guard exists at the first point where API data could flow into application code, so that if
+description storage is added in a future issue the clamped value is available and the
+injection/DoS guard cannot be forgotten or bypassed.
+
+**Source/evidence:**
+- `docs/research/findings/09_llm_content_safety_prompt_injection.md` § F7: "Normalize +
+  length-clamp titles/descriptions at ingest (or at prompt-assembly)."
+- YouTube Data API v3 — `videos.snippet.description` max 5,000 chars:
+  developers.google.com/youtube/v3/docs/videos
+- `models.py` Video model (verified 2026-06-23): columns are `id, creator_id,
+  youtube_video_id, title, kind, published_at, duration_s, source_uri, origin,
+  captions_available, ingest_status, created_at, ingest_done_at` — no `description`.
+- OWASP LLM01 (prompt injection via untrusted data in context window).
 
 **Date:** 2026-06-23
 

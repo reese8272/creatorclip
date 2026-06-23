@@ -192,6 +192,16 @@ class Settings(BaseSettings):
     # creating a token-cost / DoS vector when the title enters the prompt corpus.
     MAX_INGESTED_TITLE_CHARS: int = 200
 
+    # Issue 227 — ingest length clamp for YouTube video descriptions.
+    # YouTube's published description limit is 5,000 characters
+    # (developers.google.com/youtube/v3/docs/videos — `snippet.description` max: 5000 chars).
+    # 10,000 chars is a 2× safety margin that only truncates adversarially-crafted or
+    # corrupted inputs. Descriptions are NOT currently stored on the Video model — this cap
+    # is defensive/future-proofing: applied at the ingest boundary so that if description
+    # ingestion is added later the guard is already in place and cannot be forgotten.
+    # The clamp uses the same word-boundary rsplit pattern as titles (clamp_ingest_field).
+    MAX_INGESTED_DESC_CHARS: int = 10000
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
