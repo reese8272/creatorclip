@@ -3512,7 +3512,7 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 ### Issue 214: Onboarding wait UX — labeled stepper + honest microcopy
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Activation & Onboarding · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (2026-06-23). Labeled TaskStepper + sessionStorage re-attach for long waits; shipped in W0 at `802dcfd` (branch `wave0/activation-onboarding`), deployed to prod @ `ac1a4b6`. (Status corrected 2026-06-23: W0 shipped the code but left this row marked OPEN, which falsely blocked #215 in W1 triage.) · **Wave** W0 · **Lane** Activation & Onboarding · **Size** `M` · **Verify** `local`  
 **Src** `07 / 189` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/07_activation_onboarding_funnel.md`  
 **Blocked by** nothing — **ready now** · **Enables** #100, #215 · **Coordinate (hot files)** `frontend/src/hooks/useTaskStream.ts`, `frontend/src/pages/Onboarding.tsx`  
 
