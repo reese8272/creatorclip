@@ -16,14 +16,36 @@ const defaultKit: BrandKit = {
   aspect: null,
 }
 
+interface StyleSuggestion {
+  field: string
+  value: unknown
+  count: number
+  message: string
+}
+
 export function BrandKitSection() {
   const [kit, setKit] = useState<BrandKit>(defaultKit)
   const [status, setStatus] = useState<{ text: string; tone: 'muted' | 'success' | 'danger' } | null>(null)
+  const [suggestion, setSuggestion] = useState<StyleSuggestion | null>(null)
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
 
   useEffect(() => {
     api<BrandKit>('/creators/me/brand-kit')
       .then((data) => setKit(data))
       .catch(() => setKit(defaultKit))
+  }, [])
+
+  useEffect(() => {
+    // Fetch style-learning suggestion on mount (Issue 187).
+    // 204 = no suggestion yet; any other error is silently swallowed so
+    // the main brand-kit UI is never blocked by this optional feature.
+    fetch('/creators/me/brand-kit/suggestion', { credentials: 'include' })
+      .then((res) => {
+        if (res.status === 200) return res.json() as Promise<StyleSuggestion>
+        return null
+      })
+      .then((data) => { if (data) setSuggestion(data) })
+      .catch(() => { /* non-blocking — suggestion is optional */ })
   }, [])
 
   const save = async () => {
@@ -43,6 +65,26 @@ export function BrandKitSection() {
     }
   }
 
+  const acceptSuggestion = async () => {
+    if (!suggestion) return
+    try {
+      const updated = await api<BrandKit>('/creators/me/brand-kit/suggestion/accept', {
+        method: 'POST',
+        body: { field: suggestion.field, value: suggestion.value },
+      })
+      setKit(updated)
+      setSuggestion(null)
+      setStatus({ text: 'Default updated from your render history.', tone: 'success' })
+    } catch (e) {
+      setStatus({
+        text: e instanceof ApiError ? e.message : 'Could not apply suggestion — try again.',
+        tone: 'danger',
+      })
+    }
+  }
+
+  const dismissSuggestion = () => setSuggestionDismissed(true)
+
   return (
     <Card>
       <CardHeader
@@ -51,6 +93,19 @@ export function BrandKitSection() {
       />
       <CardBody>
         <div className="flex flex-col gap-4">
+          {suggestion && !suggestionDismissed && (
+            <div className="flex items-start justify-between gap-3 rounded-md border border-accent-soft bg-accent-subtle px-3 py-2 text-sm text-fg">
+              <span>{suggestion.message}</span>
+              <div className="flex shrink-0 gap-2">
+                <Button variant="primary" size="sm" onClick={acceptSuggestion}>
+                  Accept
+                </Button>
+                <Button variant="ghost" size="sm" onClick={dismissSuggestion}>
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          )}
           <label className="flex items-center justify-between gap-3 text-sm text-fg">
             Caption style
             <select

@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from config import settings
 from db import get_session
 from dna import identity as identity_module
 from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
-from models import AnalysisMode, Creator, CreatorStyle
+from models import AnalysisMode, Clip, Creator, CreatorStyle
 from routers._schemas import SetupStepOut, TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
@@ -115,6 +116,22 @@ class BrandKitOut(BaseModel):
     aspect: str | None
 
 
+class BrandKitSuggestionOut(BaseModel):
+    """Body returned by GET /creators/me/brand-kit/suggestion (Issue 187)."""
+
+    field: str
+    value: object
+    count: int
+    message: str
+
+
+class BrandKitSuggestionAcceptIn(BaseModel):
+    """Body for POST /creators/me/brand-kit/suggestion/accept (Issue 187)."""
+
+    field: str
+    value: object = Field(..., description="The suggested value to adopt as the kit default.")
+
+
 def _style_row_to_dict(row: CreatorStyle | None) -> dict:
     """Normalise a CreatorStyle row (or None) into a BrandKitOut-compatible dict."""
     style: dict = row.style if row is not None else {}
@@ -126,6 +143,34 @@ def _style_row_to_dict(row: CreatorStyle | None) -> dict:
         "denoise": bool(style.get("denoise", False)),
         "aspect": style.get("aspect"),
     }
+
+
+async def _upsert_style_field(
+    session: AsyncSession,
+    creator_id: object,
+    field: str,
+    value: object,
+) -> CreatorStyle:
+    """Write a single style field into the creator's kit row (upsert).
+
+    Extracted as a helper so both put_brand_kit and suggestion/accept share
+    the same upsert logic (DRY).  Per-creator isolation: only touches the row
+    whose creator_id matches the caller-supplied creator_id.
+    """
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(CreatorStyle).where(CreatorStyle.creator_id == creator_id)
+    )
+    row = result.scalar_one_or_none()
+
+    if row is None:
+        row = CreatorStyle(creator_id=creator_id, style={})
+        session.add(row)
+
+    row.style = {**row.style, field: value}
+    await session.commit()
+    return row
 
 
 @router.get("/me/brand-kit", response_model=BrandKitOut)
@@ -194,6 +239,76 @@ async def put_brand_kit(
 
     row.style = {**row.style, **updates}
     await session.commit()
+    return _style_row_to_dict(row)
+
+
+# ── Style learning (Issue 187) ──────────────────────────────────────────────
+
+
+@router.get("/me/brand-kit/suggestion", response_model=BrandKitSuggestionOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def get_brand_kit_suggestion(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Detect a dominant render style from recent clips and suggest making it the default.
+
+    Queries the last 20 clips for this creator where style_preset IS NOT NULL,
+    then uses the mode-detection algorithm in preference.style_learn to find the
+    first kit field whose value appears >= STYLE_LEARN_THRESHOLD times.
+
+    Returns 204 (no content) when the history is sparse or no dominant is found.
+    Message is framed honestly — no virality language.
+
+    Per-creator isolation: only reads clip rows for the dep-injected creator.id.
+    """
+    from sqlalchemy import select
+
+    from preference.style_learn import style_suggestion
+
+    result = await session.execute(
+        select(Clip.style_preset)
+        .where(Clip.creator_id == creator.id)
+        .where(Clip.style_preset.isnot(None))
+        .order_by(Clip.created_at.desc())
+        .limit(20)
+    )
+    history: list[dict] = [row[0] for row in result.all()]
+
+    suggestion = style_suggestion(history, threshold=settings.STYLE_LEARN_THRESHOLD)
+    if suggestion is None:
+        from fastapi.responses import Response
+
+        return Response(status_code=204)
+
+    field = suggestion["field"]
+    value = suggestion["value"]
+    count = suggestion["count"]
+    message = f"You have used {value!r} for {field} {count} times — make it your default?"
+    return {"field": field, "value": value, "count": count, "message": message}
+
+
+@router.post(
+    "/me/brand-kit/suggestion/accept",
+    response_model=BrandKitOut,
+    status_code=200,
+)
+@limiter.limit("30/minute", key_func=creator_key)
+async def accept_brand_kit_suggestion(
+    request: Request,
+    body: BrandKitSuggestionAcceptIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Accept a style-learning suggestion and write it into the creator's brand kit.
+
+    Calls the shared _upsert_style_field helper so the upsert logic is not
+    duplicated from put_brand_kit.
+
+    Per-creator isolation: _upsert_style_field only touches the row for creator.id.
+    """
+    row = await _upsert_style_field(session, creator.id, body.field, body.value)
     return _style_row_to_dict(row)
 
 
