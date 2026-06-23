@@ -10,7 +10,7 @@ from db import get_session
 from dna import identity as identity_module
 from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
-from models import AnalysisMode, Creator
+from models import AnalysisMode, Creator, CreatorStyle
 from routers._schemas import SetupStepOut, TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
@@ -86,6 +86,115 @@ class DnaConfirmOut(BaseModel):
     id: str
     version: int
     status: str
+
+
+# ── Brand Kit (Issue 186) ────────────────────────────────────────────────────
+
+
+class BrandKitStyleIn(BaseModel):
+    """Partial update body for PUT /creators/me/brand-kit.
+
+    All fields are optional — only fields present in the request body are
+    written; omitted fields are left unchanged in the existing kit row.
+    """
+
+    subtitle: str | None = None
+    background: str | None = None
+    captions_enabled: bool | None = None
+    zoom_on_peak: bool | None = None
+    denoise: bool | None = None
+    aspect: str | None = None
+
+
+class BrandKitOut(BaseModel):
+    subtitle: str | None
+    background: str | None
+    captions_enabled: bool
+    zoom_on_peak: bool
+    denoise: bool
+    aspect: str | None
+
+
+def _style_row_to_dict(row: CreatorStyle | None) -> dict:
+    """Normalise a CreatorStyle row (or None) into a BrandKitOut-compatible dict."""
+    style: dict = row.style if row is not None else {}
+    return {
+        "subtitle": style.get("subtitle"),
+        "background": style.get("background"),
+        "captions_enabled": bool(style.get("captions_enabled", False)),
+        "zoom_on_peak": bool(style.get("zoom_on_peak", False)),
+        "denoise": bool(style.get("denoise", False)),
+        "aspect": style.get("aspect"),
+    }
+
+
+@router.get("/me/brand-kit", response_model=BrandKitOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def get_brand_kit(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return the creator's saved brand-kit style defaults.
+
+    Returns zeroed/null defaults when no kit row exists yet — the frontend
+    can pre-populate dropdowns without a separate existence check.
+    Per-creator isolation: the query filters on the dep-injected creator.id.
+    """
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
+    )
+    row = result.scalar_one_or_none()
+    return _style_row_to_dict(row)
+
+
+@router.put("/me/brand-kit", response_model=BrandKitOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def put_brand_kit(
+    request: Request,
+    body: BrandKitStyleIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Upsert the creator's brand-kit style defaults.
+
+    Only provided (non-None) fields overwrite the stored kit; omitted fields
+    are preserved. This means the frontend can send a single-field update
+    (e.g. just 'subtitle') without clearing the rest of the kit.
+    Per-creator isolation: we only ever read/write the row whose creator_id
+    matches the dep-injected creator.id.
+    """
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
+    )
+    row = result.scalar_one_or_none()
+
+    if row is None:
+        row = CreatorStyle(creator_id=creator.id, style={})
+        session.add(row)
+
+    # Merge only the explicitly-provided fields.
+    updates: dict = {}
+    if body.subtitle is not None:
+        updates["subtitle"] = body.subtitle
+    if body.background is not None:
+        updates["background"] = body.background
+    if body.captions_enabled is not None:
+        updates["captions_enabled"] = body.captions_enabled
+    if body.zoom_on_peak is not None:
+        updates["zoom_on_peak"] = body.zoom_on_peak
+    if body.denoise is not None:
+        updates["denoise"] = body.denoise
+    if body.aspect is not None:
+        updates["aspect"] = body.aspect
+
+    row.style = {**row.style, **updates}
+    await session.commit()
+    return _style_row_to_dict(row)
 
 
 # ── Identity (Issue 83) ───────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import type { ReviewClip } from '@/types'
+import type { BrandKit, ReviewClip } from '@/types'
 
 const selectCls =
   'rounded-sm border border-strong bg-bg px-2 py-1 text-xs text-fg focus:border-accent focus:outline-none'
 
 // Issue 119 + 133 — animated caption styles baked into a re-render.
+// Issue 186 — defaults pre-populated from the creator's saved brand kit.
 export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const [subtitle, setSubtitle] = useState('')
   const [background, setBackground] = useState('')
@@ -15,6 +16,22 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const [denoise, setDenoise] = useState(false)
   const [aspect, setAspect] = useState('')
   const [status, setStatus] = useState('')
+
+  // Pre-populate from the creator's brand kit on mount.
+  useEffect(() => {
+    api<BrandKit>('/creators/me/brand-kit')
+      .then((kit) => {
+        setSubtitle(kit.subtitle ?? '')
+        setBackground(kit.background ?? '')
+        setCaptionsEnabled(kit.captions_enabled)
+        setZoomOnPeak(kit.zoom_on_peak)
+        setDenoise(kit.denoise)
+        setAspect(kit.aspect ?? '')
+      })
+      .catch(() => {
+        // Brand-kit load failure is non-fatal — keep empty defaults.
+      })
+  }, [])
 
   async function apply() {
     setStatus('Queueing styled render…')
