@@ -190,8 +190,20 @@ async def callback(
         channel_id=identity.get("channel_id"),
     )
 
+    # Issue 215: branch on the first-login signal so new creators land on the
+    # guided onboarding flow (catalog sync visibly in progress) while returning
+    # creators go straight to the dashboard.  `is_new` is set by `upsert_creator`
+    # when no prior Creator row existed — it is the canonical first-login signal
+    # already used above to gate trial-grant and catalog-sync, so reusing it
+    # here is consistent with the rest of the callback.
+    if is_new:
+        log_event("onboarding_viewed", creator_id=str(creator.id))
+        redirect_url = "/app/onboarding"
+    else:
+        redirect_url = "/app/dashboard"
+
     session_token = create_session_token(creator.id)
-    resp = RedirectResponse(url="/", status_code=302)
+    resp = RedirectResponse(url=redirect_url, status_code=302)
     resp.delete_cookie(_STATE_COOKIE)
     resp.set_cookie(
         SESSION_COOKIE,
