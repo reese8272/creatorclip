@@ -26,8 +26,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  // Live backend + axe + full-page screenshot per route needs more than the 30s default.
-  timeout: 60_000,
+  // Issue 274 (OCB-3): video-analysis and title-optimizer flows timed out at 60s on
+  // the live account. LLM generation can take >60s on a slow run. 120s provides
+  // headroom without masking genuine outages — if a flow still exceeds 120s,
+  // file a dedicated perf issue (do not raise this further).
+  timeout: 120_000,
   reporter: [['list'], ['html', { outputFolder: 'e2e/.report-prod', open: 'never' }]],
   use: {
     baseURL: BASE_URL,

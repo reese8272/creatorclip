@@ -191,13 +191,65 @@ def test_setup_always_before_peak():
 
 SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 
+# The minimum number of scenario files that must exist. CI enforces this floor so a
+# silent deletion (or @skip-piling) cannot hollow out the eval harness without
+# raising a visible failure. Raise this number whenever a new scenario is added;
+# never lower it. (Issue 265)
+SCENARIO_FLOOR = 6
 
-def _load_scenarios():
+# Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
+# (e.g. a known-broken scenario under active investigation). Add the YAML filename
+# stem here with a brief justification. Empty by default — every scenario must be
+# runnable unless explicitly exempted here. (Issue 265)
+SKIP_ALLOWLIST: frozenset[str] = frozenset()
+
+
+def _load_scenarios() -> list:
     pattern = os.path.join(SCENARIOS_DIR, "*.yaml")
     return [
         pytest.param(path, id=os.path.splitext(os.path.basename(path))[0])
         for path in sorted(glob.glob(pattern))
     ]
+
+
+def test_eval_scenario_count_floor() -> None:
+    """Guard: eval harness must have >= SCENARIO_FLOOR scenario files.
+
+    A silent scenario deletion or bulk rename would otherwise pass the suite while
+    hollowing out the clip-quality correctness contract. (Issue 265)
+    """
+    scenarios = _load_scenarios()
+    assert len(scenarios) >= SCENARIO_FLOOR, (
+        f"Only {len(scenarios)} eval scenario(s) found in {SCENARIOS_DIR!r}; "
+        f"expected >= {SCENARIO_FLOOR}. "
+        "Do not delete scenario files — add to SKIP_ALLOWLIST if a scenario is "
+        "temporarily broken and needs investigation."
+    )
+
+
+def test_eval_scenario_no_unapproved_skip_markers() -> None:
+    """Guard: no scenario YAML may carry a skip/xfail marker unless it is listed in
+    SKIP_ALLOWLIST. This prevents the pattern of 'add @pytest.mark.skip to work
+    around a failing eval' from silently passing CI. (Issue 265)
+    """
+    import re
+
+    pattern = os.path.join(SCENARIOS_DIR, "*.yaml")
+    skip_re = re.compile(r"\bskip\b|\bxfail\b", re.IGNORECASE)
+    violations: list[str] = []
+    for path in sorted(glob.glob(pattern)):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if stem in SKIP_ALLOWLIST:
+            continue
+        with open(path) as fh:
+            content = fh.read()
+        if skip_re.search(content):
+            violations.append(stem)
+    assert not violations, (
+        f"Scenario file(s) contain 'skip' or 'xfail' markers but are NOT in "
+        f"SKIP_ALLOWLIST: {violations}. Either fix the scenario or add the stem "
+        "to SKIP_ALLOWLIST with a justification comment."
+    )
 
 
 @pytest.mark.parametrize("scenario_path", _load_scenarios())

@@ -148,6 +148,11 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Issue 269: fetch-depth 0 required for correct git diff computation
+          # in the diff-cover gate. A shallow clone (depth 1) produces an empty
+          # diff, making the patch-coverage gate a no-op.
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -164,6 +169,100 @@ jobs:
         run: >-
           python3 .claude/skills/production-assessment/scripts/run_layer0.py
           --gates coverage --require-coverage
+      - name: Run per-module coverage floors + diff/patch coverage gate (Issue 269)
+        # Runs after coverage produces _coverage.xml. module_coverage checks per-module
+        # floors for clip_engine/, preference/, crypto.py, limiter.py, auth.py.
+        # diff_cover checks changed-line coverage vs origin/main (--fail-under=80).
+        run: >-
+          python3 .claude/skills/production-assessment/scripts/run_layer0.py
+          --gates module_coverage,diff_cover
+
+  migration-lint:
+    # Issue 270: Squawk migration linter — detect unsafe DDL before it reaches prod.
+    # Runs only when alembic/versions/*.py files change (dorny/paths-filter@v3).
+    # Squawk rules enforced: ban-concurrent-index-creation-in-transaction,
+    # constraint-missing-not-valid, disallowed-unique-constraint, etc.
+    name: Migration lint (Squawk)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: creatorclip_squawk
+          POSTGRES_USER: creatorclip
+          POSTGRES_PASSWORD: squawk_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U creatorclip -d creatorclip_squawk"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://creatorclip:squawk_ci_password@localhost:5432/creatorclip_squawk
+      DATABASE_MIGRATION_URL: postgresql+psycopg://creatorclip:squawk_ci_password@localhost:5432/creatorclip_squawk
+      REDIS_URL: redis://localhost:6379/0
+      ANTHROPIC_API_KEY: sk-ant-ci-placeholder
+      GOOGLE_OAUTH_CLIENT_ID: 000000000000-ci.apps.googleusercontent.com
+      GOOGLE_OAUTH_CLIENT_SECRET: ci-secret
+      OAUTH_REDIRECT_URI: http://localhost:8000/auth/callback
+      TOKEN_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      JWT_SECRET_KEY: ci-jwt-secret-key-not-used-in-tests
+      ALLOWED_ORIGINS: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: Detect alembic/versions/ changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            migrations:
+              - 'alembic/versions/*.py'
+      - uses: actions/setup-python@v6
+        if: steps.filter.outputs.migrations == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system deps (libpq)
+        if: steps.filter.outputs.migrations == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends libpq-dev gcc
+      - name: Install Python deps + squawk-cli
+        if: steps.filter.outputs.migrations == 'true'
+        run: |
+          pip install -r requirements.txt
+          npm install -g squawk-cli
+      - name: Bootstrap schema to previous head
+        if: steps.filter.outputs.migrations == 'true'
+        run: alembic upgrade head
+      - name: Lint changed migrations with Squawk
+        if: steps.filter.outputs.migrations == 'true'
+        run: |
+          # For each changed migration file, render its SQL and lint with squawk.
+          CHANGED=$(git diff --name-only origin/main...HEAD -- alembic/versions/*.py)
+          if [ -z "$CHANGED" ]; then
+            echo "No migration files changed vs origin/main — skipping squawk."
+            exit 0
+          fi
+          FAIL=0
+          for F in $CHANGED; do
+            # Extract the revision ID from the filename (e.g. 0028_foo.py → 0028)
+            REV=$(python3 -c "
+          import re, sys
+          m = re.search(r'([0-9a-f]+)_', sys.argv[1])
+          print(m.group(1) if m else '')
+          " "$F")
+            if [ -z "$REV" ]; then
+              echo "Cannot parse revision from $F — skipping."
+              continue
+            fi
+            echo "=== Linting migration $REV ($F) ==="
+            alembic upgrade "${REV}:+1" --sql 2>/dev/null | squawk || FAIL=1
+          done
+          exit $FAIL
 
   static-gates:
     name: Types + SAST + deps (mypy, bandit, pip-audit)
@@ -204,6 +303,133 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+  eval:
+    # Issue 265: clip-quality eval gate — required on every clip_engine/ or
+    # tests/eval/ change. Runs the YAML scenario fixtures + two new guard tests
+    # (count floor + skip-marker scan) to ensure the eval harness cannot be
+    # silently hollowed out.
+    #
+    # WHY commit-status, not required job: a skipped GitHub Actions job reports
+    # 'success', so if we made this job required-only-when-paths-changed, a PR
+    # that doesn't touch clip_engine/ would report it as "passed" — a no-op gate.
+    # The commit-status API always reports the real outcome (pending / success /
+    # failure) regardless of skip state, so branch protection can require it.
+    name: Clip eval gate (setup-before-peak)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write   # needed to post the commit status
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - id: filter
+        name: Detect clip_engine/ or tests/eval/ changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            clip_engine:
+              - 'clip_engine/**'
+              - 'tests/eval/**'
+              - 'tests/test_clip_engine.py'
+      - uses: actions/setup-python@v6
+        if: steps.filter.outputs.clip_engine == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system deps (ffmpeg + libpq)
+        if: steps.filter.outputs.clip_engine == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+      - name: Install Python deps
+        if: steps.filter.outputs.clip_engine == 'true'
+        run: pip install -r requirements.txt
+      - name: Run eval scenarios + guard tests
+        if: steps.filter.outputs.clip_engine == 'true'
+        run: pytest tests/test_clip_engine.py -k "eval_scenario or eval_scenario_count_floor or eval_scenario_no_unapproved_skip_markers" -v --tb=short
+      - name: Post commit status (success — paths matched + tests passed)
+        if: steps.filter.outputs.clip_engine == 'true' && success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'eval/clip-quality',
+              description: 'Clip eval scenarios passed',
+            });
+      - name: Post commit status (failure)
+        if: steps.filter.outputs.clip_engine == 'true' && failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'failure',
+              context: 'eval/clip-quality',
+              description: 'Clip eval scenarios FAILED — check setup-before-peak invariant',
+            });
+      - name: Post commit status (skipped — no clip_engine/ changes)
+        if: steps.filter.outputs.clip_engine == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              context: 'eval/clip-quality',
+              description: 'Skipped — no clip_engine/ or tests/eval/ changes',
+            });
+
+  playwright:
+    # Issue 266: Playwright SPA smoke + a11y gate. Runs the existing
+    # frontend/e2e/smoke.spec.ts and frontend/e2e/a11y.spec.ts against the
+    # Vite dev server with the mocked backend (e2e/fixtures/mock-api.ts).
+    # Chromium-only install keeps CI fast; other browsers are CI-unused.
+    name: Playwright (smoke + a11y)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Install Playwright Chromium
+        # --with-deps installs the OS-level Chromium deps in one step, matching the
+        # official Playwright CI guidance. Chromium-only — Firefox/WebKit are not
+        # needed for smoke+a11y and would add ~300MB to the CI cache.
+        run: npx playwright install --with-deps chromium
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: playwright-chromium-
+      - name: Run Playwright (smoke + a11y)
+        # playwright.config.ts already has: forbidOnly: !!CI, retries: CI?1:0,
+        # reuseExistingServer: !CI — all CI behavour is pre-configured.
+        run: npm run test:e2e
 
   docker-build:
     name: Docker build (smoke test)

@@ -47,6 +47,8 @@ Keep `staging` fast-forward-able from `main`: after any direct hotfix to `main`,
 - `Coverage floor (pytest-cov ratchet)`
 - `Types + SAST + deps (mypy, bandit, pip-audit)`
 - `Docker build (smoke test)`
+- `Playwright (smoke + a11y)` — Issue 266: a11y regression gate (axe violations on serious/critical)
+- `eval/clip-quality` (commit status, not job) — Issue 265: required on clip_engine/ and tests/eval/ changes; posted via GitHub commit-status API because a skipped required job reports 'success' (GitHub quirk — a commit status always reflects real outcome)
 
 **Apply via `gh` (run once Pro is active), for each of `main` and `staging`:**
 
@@ -63,7 +65,9 @@ for BR in main staging; do
       "Integration tests (postgres + redis)",
       "Coverage floor (pytest-cov ratchet)",
       "Types + SAST + deps (mypy, bandit, pip-audit)",
-      "Docker build (smoke test)"
+      "Docker build (smoke test)",
+      "Playwright (smoke + a11y)",
+      "eval/clip-quality"
     ]
   },
   "enforce_admins": false,
