@@ -226,6 +226,123 @@ def test_delete_me_has_5_per_hour_limit():
     )
 
 
+# ── Issue 215: post-OAuth redirect routing (unit — no DB) ────────────────────
+
+
+def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> None:
+    """Patch every external call made by the OAuth callback.
+
+    Eliminates DB, Redis, Celery, and network dependencies so these tests run
+    without any backing services.  The ``is_new`` parameter controls whether the
+    upserted creator is treated as first-ever login (True) or a returning creator
+    (False) — the only variable that determines the redirect destination.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    # Fake Creator ORM row (no DB access required)
+    fake_creator = MagicMock()
+    fake_creator.id = uuid.uuid4()
+    fake_creator.trial_ends_at = None
+
+    # Fake session: synchronous methods (add, flush arg) stay sync; only awaitable
+    # methods need AsyncMock.  This avoids the "coroutine was never awaited" warning
+    # that arises when AsyncMock wraps SQLAlchemy's synchronous `session.add()`.
+    fake_session = MagicMock()
+    fake_session.flush = AsyncMock()
+    fake_session.commit = AsyncMock()
+
+    monkeypatch.setattr("routers.auth.exchange_code", AsyncMock(return_value={
+        "access_token": "fake_at",
+        "refresh_token": "fake_rt",
+        "scope": "https://www.googleapis.com/auth/youtube.readonly",
+        "expires_in": 3600,
+    }))
+    monkeypatch.setattr("routers.auth.fetch_creator_identity", AsyncMock(return_value={
+        "google_sub": f"sub_{uuid.uuid4().hex}",
+        "email": "test@example.com",
+        "channel_id": "UC_test",
+        "channel_title": "Test Channel",
+    }))
+    monkeypatch.setattr("routers.auth.upsert_creator", AsyncMock(return_value=(fake_creator, is_new)))
+    monkeypatch.setattr("routers.auth.store_or_update_tokens", AsyncMock(return_value=None))
+
+    # grant_minutes is imported lazily inside the is_new block:
+    #   `from billing.ledger import grant_minutes`
+    # Patch the module-level name so the local import picks up the stub.
+    monkeypatch.setattr("billing.ledger.grant_minutes", AsyncMock(return_value=None))
+
+    # Celery catalog-sync + Redis ownership stamp (only exercised on is_new).
+    # These are also lazy imports inside the is_new block; patch the canonical
+    # module paths rather than `routers.auth.*`.
+    fake_task = MagicMock()
+    fake_task.id = "fake-task-id"
+    monkeypatch.setattr(
+        "worker.tasks.sync_channel_catalog",
+        MagicMock(delay=MagicMock(return_value=fake_task)),
+    )
+    monkeypatch.setattr("worker.progress.aset_owner", AsyncMock())
+
+    # log_event is a fire-and-forget side-effect — let it run (it only writes to
+    # structlog / stdout, no external calls).
+
+    # DB session flush/commit are async no-ops on the mocked session; but the
+    # FastAPI dependency injects the real get_session.  Override it with a
+    # session that won't attempt a Postgres connection.
+    from db import get_session
+    from main import app
+
+    async def _noop_session():
+        yield fake_session
+
+    app.dependency_overrides[get_session] = _noop_session
+
+
+def test_callback_new_creator_redirects_to_onboarding(client, monkeypatch):
+    """Issue 215: a first-ever login (is_new=True) must redirect to /app/onboarding."""
+    from db import get_session
+    from main import app
+
+    _oauth_callback_mocks(monkeypatch, is_new=True)
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=test_code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302, got {resp.status_code}: {resp.text}"
+    assert resp.headers["location"] == "/app/onboarding", (
+        f"New creator must land on /app/onboarding, got: {resp.headers['location']}"
+    )
+    assert SESSION_COOKIE in resp.cookies, "Session cookie must be set on successful callback"
+
+
+def test_callback_returning_creator_redirects_to_dashboard(client, monkeypatch):
+    """Issue 215: a returning creator (is_new=False) must redirect to /app/dashboard."""
+    from db import get_session
+    from main import app
+
+    _oauth_callback_mocks(monkeypatch, is_new=False)
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=test_code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302, got {resp.status_code}: {resp.text}"
+    assert resp.headers["location"] == "/app/dashboard", (
+        f"Returning creator must land on /app/dashboard, got: {resp.headers['location']}"
+    )
+    assert SESSION_COOKIE in resp.cookies, "Session cookie must be set on successful callback"
+
+
 # ── Integration tests (require running DB) ────────────────────────────────────
 
 
