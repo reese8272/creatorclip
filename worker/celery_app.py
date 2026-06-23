@@ -12,7 +12,7 @@ from observability import configure_logging, install_celery_observability
 # Structured logs + request-id propagation on the worker side (Issue 75f). The
 # signals carry the originating request id across the publish→run boundary so a
 # worker log line is correlatable with the API request that enqueued it.
-configure_logging(json_logs=settings.LOG_JSON)
+configure_logging(json_logs=settings.LOG_JSON, log_dir=settings.LOG_DIR, filename="worker.log")
 install_celery_observability()
 
 logger = logging.getLogger(__name__)

@@ -32,31 +32,10 @@ from sqlalchemy.ext.asyncio import (
 
 from config import settings
 from models import EventLog
+from redact import _REDACTED, is_sensitive
 
 logger = logging.getLogger(__name__)
 
-# Substrings that mark a key as sensitive (matched case-insensitively against the
-# key name). Conservative + broad: better to drop a benign field than leak a token.
-_REDACT_SUBSTRINGS = (
-    "email",
-    "token",
-    "secret",
-    "password",
-    "passwd",
-    "authorization",
-    "cookie",
-    "session",
-    "jwt",
-    "bearer",
-    "api_key",
-    "apikey",
-    "raw_key",
-    "refresh",
-    "access_key",
-    "credential",
-)
-
-_REDACTED = "[redacted]"
 _MAX_KEYS = 20
 _MAX_STR_LEN = 500
 
@@ -65,8 +44,7 @@ _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
 def _is_sensitive(key: str) -> bool:
-    k = key.lower()
-    return any(s in k for s in _REDACT_SUBSTRINGS)
+    return is_sensitive(key)
 
 
 def _redact(extra: dict[str, Any] | None) -> dict[str, Any] | None:

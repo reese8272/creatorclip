@@ -46,6 +46,7 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
+from observability import RENDER_FAILURES_TOTAL
 from worker.celery_app import celery, run_async
 from youtube.errors import YouTubeAuthError
 from youtube.quota import QuotaExhaustedError, remaining
@@ -207,6 +208,7 @@ def render_clip(self, clip_id: str) -> str:
         run_async(_render_clip_async(clip_id))
     except Exception as exc:
         run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
         raise self.retry(exc=exc) from exc
     return clip_id
 

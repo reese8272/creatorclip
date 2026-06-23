@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from chat.prompt import build_system
 from chat.tools import TOOLS, execute_tool
 from config import settings
+from observability import record_llm_tokens
 from worker.anthropic_stream import stream_message
 from worker.progress import aemit
 
@@ -109,5 +110,13 @@ async def run_chat_turn(
         total["input_tokens"],
         total["cache_read"],
         total["output_tokens"],
+    )
+    record_llm_tokens(
+        provider="anthropic",
+        model=settings.ANTHROPIC_MODEL,
+        input_tokens=total["input_tokens"],
+        output_tokens=total["output_tokens"],
+        cache_read_tokens=total.get("cache_read", 0),
+        cache_creation_tokens=total.get("cache_creation", 0),
     )
     return final_text, total

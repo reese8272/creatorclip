@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — Issue 233: Formatter-level redaction backstop (deviation from call-site-discipline-only)
+
+**What changed:** Added a formatter-level PII/secret scrubber in `JsonLogFormatter.format` (via
+`scrub_dict()` from the new `redact.py` module). The blocklist (`_REDACT_SUBSTRINGS`) was extracted
+from `event_log.py` into `redact.py` so both the DB sink (`_redact`) and the formatter share the same
+definition without duplication.
+
+**Why:** Prior posture was call-site discipline only — relying on every `log_event(...)` caller to
+avoid sensitive kwarg names. OWASP Logging Cheat Sheet and DSOMM Activity 613a73dc both recommend
+masking/sanitising PII at the formatter/middleware layer as a structural backstop, not solely at
+call sites. One future careless `log_event('x', email=...)` would have leaked silently to stdout and
+`app.log`. This closes that gap without changing any call sites.
+
+**Source/evidence:** OWASP Logging Cheat Sheet (https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html);
+BetterStack 2026 sensitive data guide; DSOMM Activity 613a73dc.
+
+**Date:** 2026-06-23
+
+---
+
+## 2026-06-23 — Issue 237: LLM token Prometheus Counter label schema (provider/model/kind)
+
+**What changed:** Added `LLM_TOKENS_TOTAL` Counter with labelnames `(provider, model, kind)` and
+`RENDER_FAILURES_TOTAL` Counter with `(task,)` to `observability.py`. Label schema is aligned to
+OpenTelemetry GenAI Semantic Conventions (gen_ai.usage.input_tokens/output_tokens). Uses Prometheus
+Counter (not the full OTel histogram) because `prometheus-client` is already the metrics library
+and no additional `opentelemetry-sdk` dependency is needed. `cache_read` and `cache_creation` are
+distinct `kind` values to match the Anthropic SDK usage dict. `creator_id` deliberately excluded
+from labels to prevent cardinality blowup at 10k+ creators.
+
+**Source/evidence:** OTel GenAI Semantic Conventions (https://opentelemetry.io/blog/2026/genai-observability/);
+OpenObserve LLM observability guide; alternatives considered: free-text logs only (not alertable),
+full OTel histogram (requires adding opentelemetry-sdk dep), creator_id label (cardinality blowup).
+
+**Date:** 2026-06-23
+
+---
+
 ## 2026-06-22 — `docs/issues.md` rebuilt into the Master Roadmap to Production
 
 **What changed:** `docs/issues.md` was restructured from a priority-tier backlog into a
