@@ -201,15 +201,17 @@ async def me(
     }
 
 
-@router.delete("/me", status_code=204)
-@limiter.limit("5/hour", key_func=creator_key)
-async def delete_account(
-    request: Request,
-    response: Response,
-    creator: Creator = Depends(get_current_creator),
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    """Right-to-erasure: revoke OAuth, purge media, cascade-delete all creator data."""
+async def erase_creator(session: AsyncSession, creator: Creator) -> None:
+    """Right-to-erasure helper: revoke OAuth, purge media, delete all creator data.
+
+    Extracted from ``delete_account`` (Issue 250) so a future inactive-account
+    sweep (requires [DEC] sign-off — see docs/DECISIONS.md) can reuse this
+    logic without duplication. The session is owned by the caller; this helper
+    commits once at the end.
+
+    Error posture: OAuth revocation and storage/telemetry purges are best-effort
+    and never abort the erasure. Only the DB cascade-delete is authoritative.
+    """
     creator_id = creator.id
 
     # Revoke Google OAuth refresh token — best effort, don't abort on failure.
@@ -293,5 +295,17 @@ async def delete_account(
     await session.delete(creator)
     await session.commit()
 
-    response.delete_cookie(SESSION_COOKIE)
     logger.info("Account deleted for creator %s", creator_id)
+
+
+@router.delete("/me", status_code=204)
+@limiter.limit("5/hour", key_func=creator_key)
+async def delete_account(
+    request: Request,
+    response: Response,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Right-to-erasure: revoke OAuth, purge media, cascade-delete all creator data."""
+    await erase_creator(session, creator)
+    response.delete_cookie(SESSION_COOKIE)

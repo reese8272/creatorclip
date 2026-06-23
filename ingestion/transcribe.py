@@ -106,6 +106,14 @@ def _transcribe_deepgram(audio_path: str) -> dict:
 
     client = _deepgram_client()
     opts = PrerecordedOptions(model="nova-3", smart_format=True, utterances=True, words=True)
+    # Issue 251 — opt creator audio out of Deepgram's Model Improvement Partnership
+    # Program (MIP). deepgram-sdk v3 does NOT accept mip_opt_out as a named constructor
+    # kwarg on PrerecordedOptions (raises TypeError — confirmed via SDK issue #474 at
+    # https://github.com/deepgram/deepgram-python-sdk/issues/474). The documented
+    # workaround is to pass arbitrary parameters as an `addons` dict positional arg to
+    # transcribe_file() (source: https://deepgram.gitbook.io/help-center/self-hosted/sdks/
+    # how-do-i-specify-arbitrary-parameters-to-the-python-v3-sdk).
+    addons = {"mip_opt_out": True}
     # Stream the open file handle rather than f.read(): Deepgram's FileSource.buffer
     # accepts a BufferedReader, so httpx uploads in chunks and we never hold the whole
     # (~115 MB/hour) WAV in a Python bytes object — the OOM vector under warm
@@ -114,7 +122,7 @@ def _transcribe_deepgram(audio_path: str) -> dict:
         source = {"buffer": f, "mimetype": "audio/wav"}
         raw = (
             client.listen.rest.v("1")
-            .transcribe_file(source, opts, timeout=_http_timeout())
+            .transcribe_file(source, opts, addons, timeout=_http_timeout())
             .to_dict()
         )
     return _normalize_deepgram(raw)

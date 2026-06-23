@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete
@@ -168,6 +169,30 @@ async def purge_creator_events(creator_id: uuid.UUID | str) -> int:
             return result.rowcount or 0
     except Exception:  # noqa: BLE001 — erasure best-effort; never abort deletion
         logger.warning("event_log.purge_creator_events failed (swallowed)", exc_info=True)
+        return -1
+
+
+async def purge_stale_events(cutoff: datetime) -> int:
+    """Delete all telemetry rows older than ``cutoff`` (Issue 250 — GDPR Art. 5(1)(e)).
+
+    Enforces the rolling retention window defined by ``EVENT_LOG_RETENTION_DAYS``
+    (default 90 days). Only rows with ``at < cutoff`` are removed, so the cutoff
+    boundary is exclusive — rows exactly at the cutoff instant are kept.
+
+    Best-effort: a failure is logged and returns ``-1`` rather than propagating.
+    Mirrors ``purge_creator_events`` exactly in error posture and engine usage.
+    Returns the number of rows deleted, or 0 when telemetry is disabled.
+    """
+    if not settings.EVENT_LOG_DB_ENABLED:
+        return 0
+    try:
+        sm = _get_sessionmaker()
+        async with sm() as session:
+            result = await session.execute(delete(EventLog).where(EventLog.at < cutoff))
+            await session.commit()
+            return result.rowcount or 0
+    except Exception:  # noqa: BLE001 — best-effort; never propagate
+        logger.warning("event_log.purge_stale_events failed (swallowed)", exc_info=True)
         return -1
 
 

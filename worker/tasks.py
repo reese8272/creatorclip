@@ -291,6 +291,18 @@ def reconcile_stripe_ledger() -> None:
     run_async(_reconcile_stripe_ledger_async())
 
 
+@celery.task(name="worker.tasks.purge_stale_event_logs")
+def purge_stale_event_logs() -> None:
+    """Issue 250 — GDPR Art. 5(1)(e) storage-limitation Beat task.
+
+    Deletes event_logs rows older than EVENT_LOG_RETENTION_DAYS (default 90).
+    Best-effort: a DB failure is logged and swallowed — it must not break the
+    Beat worker loop. The async helper mirrors the purge_creator_events pattern
+    in event_log.py (same engine, same error posture).
+    """
+    run_async(_purge_stale_event_logs_async())
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """
@@ -1834,6 +1846,31 @@ async def _reconcile_stripe_ledger_async() -> None:
             "billing reconcile alert: %d sessions could not be fulfilled — check logs above",
             errors,
         )
+
+
+async def _purge_stale_event_logs_async() -> None:
+    """Issue 250 — delete event_logs rows past the rolling retention window.
+
+    Calls event_log.purge_stale_events() with a cutoff derived from
+    ``EVENT_LOG_RETENTION_DAYS`` (default 90). The event_log module owns the
+    separate-engine access pattern; this wrapper just computes the cutoff and
+    logs the result for observability.
+
+    Idempotent: running multiple times in the same window is a no-op once all
+    stale rows are gone. Best-effort: a failure is already swallowed inside
+    purge_stale_events() — this function only needs to log the outcome.
+    """
+    from datetime import timedelta
+
+    from config import settings
+    from event_log import purge_stale_events
+
+    cutoff = datetime.now(UTC) - timedelta(days=settings.EVENT_LOG_RETENTION_DAYS)
+    n = await purge_stale_events(cutoff)
+    if n > 0:
+        logger.info("purge_stale_event_logs deleted %d row(s) older than %s", n, cutoff.date())
+    elif n == -1:
+        logger.warning("purge_stale_event_logs encountered an error (swallowed by event_log)")
 
 
 async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = None) -> None:

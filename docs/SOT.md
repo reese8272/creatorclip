@@ -15,7 +15,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → signals → DNA → clip → render |
 | LLM | Anthropic SDK; **`claude-sonnet-4-6`** default (DNA brief, titles, thumbnails, scoring, analysis, improvement, chat); **`claude-haiku-4-5-20251001`** for high-frequency/lower-stakes paths (chapters, hook analysis, analyze-performer); **no Opus** — see docs/DECISIONS.md (Issue 221). Sonnet 4.6 cacheable-prefix floor = 1024 tokens (confirmed 2026-06-23). | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
 | Embeddings | Voyage AI (`voyage-3.5`) → pgvector | Local sentence-transformers as offline fallback |
-| Transcription | WhisperX (faster-whisper + forced alignment), word-level | Hosted fallback (Deepgram/AssemblyAI) behind `TRANSCRIPTION_BACKEND` config; GPU recommended |
+| Transcription | Deepgram nova-3 (default, `TRANSCRIPTION_BACKEND=deepgram`) | WhisperX (faster-whisper + forced alignment) available as self-hosted opt-in; AssemblyAI also supported; all selected via `TRANSCRIPTION_BACKEND` config. MIP opt-out (`mip_opt_out=True`) enforced on every Deepgram call (Issue 251). |
 | Audio analysis | librosa (RMS energy) | Energy, silence, volume spikes, laughter/applause heuristic. Loudness normalization is ffmpeg `loudnorm` (two-pass, −14 LUFS) at render time, not analysis (Issue 181). |
 | Vision (Phase 2) | MediaPipe / face-emotion model | Deferred |
 | DB | PostgreSQL 16 + pgvector | Relational + embeddings in one store |

@@ -2,14 +2,17 @@
 
 The load-bearing invariant: no PII / token / secret ever reaches an event_logs
 row. _redact() is a pure function, so this runs without a database.
+
+Also covers purge_stale_events (Issue 250 — GDPR Art. 5(1)(e) storage-limitation).
 """
 
 import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import event_log
-from event_log import _redact, purge_creator_events
+from event_log import _redact, purge_creator_events, purge_stale_events
 
 
 def test_redact_masks_sensitive_keys():
@@ -108,3 +111,122 @@ def test_purge_creator_events_swallows_errors(monkeypatch):
 
     monkeypatch.setattr(event_log, "_get_sessionmaker", _boom)
     assert asyncio.run(purge_creator_events(uuid.uuid4())) == -1
+
+
+# ── purge_stale_events (Issue 250 — GDPR Art. 5(1)(e) storage-limitation) ────
+
+
+def test_purge_stale_events_noop_when_disabled(monkeypatch):
+    """When EVENT_LOG_DB_ENABLED is False, the function returns 0 without touching the DB."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", False)
+    monkeypatch.setattr(event_log, "_sessionmaker", None)
+    cutoff = datetime.now(UTC) - timedelta(days=90)
+    n = asyncio.run(purge_stale_events(cutoff))
+    assert n == 0
+    assert event_log._sessionmaker is None
+
+
+def test_purge_stale_events_deletes_and_returns_rowcount(monkeypatch):
+    """Happy path: DELETE is issued and the affected rowcount is returned."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    session = MagicMock()
+    result = MagicMock()
+    result.rowcount = 17
+    session.execute = AsyncMock(return_value=result)
+    session.commit = AsyncMock()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: (lambda: _CM()))
+    cutoff = datetime.now(UTC) - timedelta(days=90)
+    n = asyncio.run(purge_stale_events(cutoff))
+    assert n == 17
+    session.execute.assert_awaited_once()
+    session.commit.assert_awaited_once()
+
+
+def test_purge_stale_events_cutoff_boundary(monkeypatch):
+    """The DELETE statement must filter on EventLog.at < cutoff (exclusive boundary)."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    captured: dict = {}
+    result = MagicMock()
+    result.rowcount = 0
+    session = MagicMock()
+
+    async def fake_execute(stmt):
+        captured["stmt"] = stmt
+        return result
+
+    session.execute = AsyncMock(side_effect=fake_execute)
+    session.commit = AsyncMock()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: (lambda: _CM()))
+    cutoff = datetime.now(UTC) - timedelta(days=90)
+    asyncio.run(purge_stale_events(cutoff))
+
+    # The DELETE statement's WHERE clause must reference the `at` column
+    where_sql = str(captured["stmt"].whereclause).lower()
+    assert "event_logs.at" in where_sql, f"expected 'event_logs.at' in: {where_sql}"
+
+
+def test_purge_stale_events_swallows_errors(monkeypatch):
+    """A DB failure must not propagate — returns -1 (mirrors purge_creator_events)."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    def _boom():
+        raise RuntimeError("logs DB down")
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", _boom)
+    cutoff = datetime.now(UTC) - timedelta(days=90)
+    assert asyncio.run(purge_stale_events(cutoff)) == -1
+
+
+# ── purge_stale_event_logs Beat task (Issue 250) ──────────────────────────────
+
+
+def test_purge_stale_event_logs_beat_registered():
+    """Beat schedule must include the daily event-log purge entry."""
+    import worker.schedule  # noqa: F401 — registers beat_schedule
+    from worker.celery_app import celery
+
+    assert "purge-stale-event-logs-daily" in celery.conf.beat_schedule
+
+
+def test_purge_stale_event_logs_beat_runs_daily():
+    from celery.schedules import timedelta as ctd
+
+    import worker.schedule  # noqa: F401
+    from worker.celery_app import celery
+
+    entry = celery.conf.beat_schedule["purge-stale-event-logs-daily"]
+    assert entry["schedule"] == ctd(hours=24)
+
+
+def test_purge_stale_event_logs_task_registered():
+    from worker.celery_app import celery
+
+    assert "worker.tasks.purge_stale_event_logs" in celery.tasks
+
+
+def test_purge_stale_event_logs_task_calls_async_impl():
+    from unittest.mock import patch
+
+    with patch("worker.tasks.run_async") as mock_run:
+        from worker.tasks import purge_stale_event_logs
+
+        purge_stale_event_logs()
+        mock_run.assert_called_once()
