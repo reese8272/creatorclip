@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_key import get_current_creator_via_api_key
@@ -99,6 +99,23 @@ class ClipListOut(BaseModel):
     personalization: PersonalizationStatus | None = None
 
 
+class VideoClipCount(BaseModel):
+    """Per-video clip count row returned by GET /videos/clips/counts (Issue 213)."""
+
+    video_id: str
+    total: int
+    rendered: int
+
+
+class ClipCountsOut(BaseModel):
+    """Batched clip-count response — one query for all the creator's videos.
+
+    Replaces the N+1 useQueries pattern in Dashboard.tsx (OCB-2).
+    """
+
+    counts: list[VideoClipCount]
+
+
 class RenderQueuedOut(TaskQueuedOut):
     """202 Accepted response for POST /clips/{id}/render (Issue 92)."""
 
@@ -138,6 +155,48 @@ def _clip_response(clip: Clip) -> dict:
         "render_uri": clip.render_uri,
         "cleaned_render_uri": clip.cleaned_render_uri,
     }
+
+
+@router.get("/clips/counts", response_model=ClipCountsOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def get_clip_counts(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return clip totals and rendered counts for ALL of the creator's videos in
+    one query (Issue 213).
+
+    This endpoint replaces the N+1 useQueries pattern on the Dashboard (OCB-2).
+    Placed at /videos/clips/counts — BEFORE /{video_id}/clips in the file so the
+    router matches the literal path segment 'clips' before treating it as a UUID.
+
+    Per-creator isolation: the WHERE clause joins through Video.creator_id so a
+    creator can only see counts for their own videos.
+    """
+    stmt = (
+        select(
+            Clip.video_id.label("video_id"),
+            func.count().label("total"),
+            func.sum(
+                case((Clip.render_status == RenderStatus.done, 1), else_=0)
+            ).label("rendered"),
+        )
+        .join(Video, Clip.video_id == Video.id)
+        .where(Video.creator_id == creator.id)
+        .group_by(Clip.video_id)
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    counts = [
+        VideoClipCount(
+            video_id=str(row.video_id),
+            total=row.total,
+            rendered=row.rendered,
+        )
+        for row in rows
+    ]
+    return {"counts": counts}
 
 
 @router.post("/{video_id}/clips/generate", response_model=ClipListOut)

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
@@ -12,7 +12,7 @@ import { EmptyHero } from '@/components/dashboard/EmptyHero'
 import { VideoTable, type ClipInfo } from '@/components/dashboard/VideoTable'
 import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/DashboardBanners'
 import type {
-  ClipListResponse,
+  ClipCountsResponse,
   DnaResponse,
   VideoListResponse,
 } from '@/types'
@@ -48,30 +48,30 @@ export function Dashboard() {
   })
 
   const videos = videosQuery.data?.videos ?? []
-  const doneVideos = videos.filter((v) => v.ingest_status === 'done')
 
-  // One clip query per done video (parallel) — feeds both the per-row action CTA
-  // and the "clips rendered" summary total.
-  const clipResults = useQueries({
-    queries: doneVideos.map((v) => ({
-      queryKey: ['clips', v.id],
-      queryFn: () => api<ClipListResponse>(`/videos/${v.id}/clips`),
-    })),
+  // Single batched query for all clip counts (Issue 213 — replaces N+1 useQueries, OCB-2).
+  const clipCountsQuery = useQuery({
+    queryKey: ['clip-counts'],
+    queryFn: () => api<ClipCountsResponse>('/videos/clips/counts'),
+    enabled: videos.length > 0,
   })
 
   const clipInfoByVideo: Record<string, ClipInfo> = {}
   let clipsRendered = 0
-  doneVideos.forEach((v, i) => {
-    const result = clipResults[i]
-    const clips = result?.data?.clips ?? []
-    const rendered = clips.filter((c) => c.render_status === 'done').length
+  const countsLoading = clipCountsQuery.isPending
+  const countsByVideoId: Record<string, { total: number; rendered: number }> = {}
+  for (const row of clipCountsQuery.data?.counts ?? []) {
+    countsByVideoId[row.video_id] = { total: row.total, rendered: row.rendered }
+  }
+  for (const v of videos.filter((v) => v.ingest_status === 'done')) {
+    const counts = countsByVideoId[v.id]
     clipInfoByVideo[v.id] = {
-      total: clips.length,
-      rendered,
-      loading: result?.isPending ?? true,
+      total: counts?.total ?? 0,
+      rendered: counts?.rendered ?? 0,
+      loading: countsLoading,
     }
-    clipsRendered += rendered
-  })
+    clipsRendered += counts?.rendered ?? 0
+  }
 
   const isEmpty = !videosQuery.isPending && videos.length === 0
   const emptyMessage =

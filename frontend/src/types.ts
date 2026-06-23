@@ -67,6 +67,17 @@ export interface ClipListResponse {
   clips: ClipListItem[]
 }
 
+// GET /videos/clips/counts — batched clip count response (Issue 213, replaces N+1).
+export interface VideoClipCount {
+  video_id: string
+  total: number
+  rendered: number
+}
+
+export interface ClipCountsResponse {
+  counts: VideoClipCount[]
+}
+
 // GET /creators/me/insights/analytics?period=… summary.
 export interface Analytics {
   videos_in_period: number

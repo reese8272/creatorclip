@@ -175,6 +175,11 @@ function ActionCell({
               {text}
             </Button>
           </Link>
+          <Link to={`/video/${video.id}`}>
+            <Button variant="secondary" size="sm">
+              Timeline
+            </Button>
+          </Link>
           {titlesLink}
         </div>
       )
