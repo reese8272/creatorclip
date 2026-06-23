@@ -558,7 +558,7 @@ Clip-render quality + the timeline-editor backbone (`clip_engine/render.py`, `ca
 
 ### Issue 189: Real per-frame active-speaker reframe
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Editorial & Render · **Size** `L` · **Verify** `render-env`  
+**Status** `DONE` · **Wave** W0 · **Lane** Editorial & Render · **Size** `L` · **Verify** `render-env`  
 **Src** `03 / C2` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/03_editorial_capabilities.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `clip_engine/render.py`, `worker/tasks.py`  
 
