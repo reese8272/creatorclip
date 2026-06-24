@@ -233,16 +233,20 @@ export function Onboarding() {
         </StepCard>
 
         <StepCard num={4} title="Build your Creator DNA">
+          {/* Issue 204: intake is genuinely optional. DNA builds from your video
+              data alone; identity only sharpens it (and any later stated-vs-inferred
+              conflict is surfaced as a nudge, not enforced here). No step-3 gate. */}
           <p className="mb-4 text-sm text-muted">
-            {identityExists ? (
-              'Analyses your top & bottom performers to generate a personalised brief.'
-            ) : (
-              <span className="text-warning">
-                → Finish step 3 first — your identity tells us what fit means for you.
-              </span>
+            Analyses your top &amp; bottom performers to generate a personalised brief.
+            {!identityExists && (
+              <>
+                {' '}
+                <span className="text-fg">Optional: tell us about yourself in step 3 to sharpen it</span>{' '}
+                — or build from your video data now.
+              </>
             )}
           </p>
-          <Button className="w-full" disabled={!identityExists} onClick={buildDna}>
+          <Button className="w-full" onClick={buildDna}>
             Build Creator DNA
           </Button>
           {buildError && <p className="mt-2 text-center text-xs text-warning">{buildError}</p>}

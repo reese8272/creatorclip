@@ -4,6 +4,70 @@ Updated after every issue closes.
 
 ---
 
+## ✅ Issue 100 — Onboarding coherence: walkthrough routed first + self-explaining badges (folded) (2026-06-24)
+
+**DONE — closed as folded** into #204 (intake optional) + #214 (labeled stepper) + #215 (post-OAuth
+routing). The 5-panel `Walkthrough.tsx` ("what this is / DNA / setup-vs-payoff / dashboard badges /
+intake") already existed but was **orphaned** — nothing routed to it. Fixes:
+
+- **`routers/auth.py`:** new creators (`is_new`) now redirect to `/app/walkthrough` (was `/app/onboarding`)
+  → walkthrough's "Set up my AutoClip" CTA → `/onboarding` → sync → DNA. Refines #215's redirect; funnel
+  event unchanged. Returning creators → dashboard.
+- **`VideoTable.tsx`:** static status Badge gains a self-explaining `title` tooltip per status
+  (`STATUS_HELP`, mirroring walkthrough panel 04). In-flight videos already use #214's `StageStepper`.
+
+**Verify:** backend redirect test updated + green; vitest **182/182** (now deterministic — see the CI-fix
+flake mitigation below); eslint 0 errors, clean build. **Files:** `routers/auth.py`, `tests/test_auth.py`,
+`frontend/src/components/dashboard/VideoTable.tsx`. DECISIONS.md 2026-06-24. **Next in wave:** #96.
+
+---
+
+## ✅ CI fixes — self-hosted CI greened: ruff-format drift, eslint errors, vitest flake (2026-06-24)
+
+**DONE (code side).** Cleared the blockers that would have red-walled the now-self-hosted `ci.yml` on
+its first run: (1) `ruff format` on 43 tracked files (drift → clean, `py_compile`-verified); (2) all 6
+frontend eslint **errors** → `npm run lint` exits 0 (config `^_` ignore; `deriveWhyNarrative` extracted
+to `insights/narrative.ts` per the react-refresh convention; 3 intentional `set-state-in-effect` effects
+suppressed with justification); (3) a pre-existing suite-wide vitest **timing flake** (~1-in-5 full runs,
+`findByRole` timeouts under parallel load) fixed via `asyncUtilTimeout: 5000` in `src/test/setup.ts` —
+**8/8** full-suite runs now green. Remaining for full CI green: the one VM apt-deps step (runbook).
+
+---
+
+## ✅ Issue 204 — Identity-gate contradiction resolved (intake genuinely optional) (2026-06-23)
+
+**DONE.** Onboarding step 4's Build-DNA button was hard-disabled until an identity row existed
+(`disabled={!identityExists}` + "→ Finish step 3 first"), while step 3 was labelled "(optional)" and
+the component promised "skip and we'll use your video data only" — a live honesty defect. **Chose
+Option (b): genuinely optional** (reverses Issue 100, re-affirms Issue 83's anti-drop-off intent):
+
+- Removed the gate; Build-DNA is always available. Identity is an **enhancer**, not a precondition.
+- Honest copy: *"Optional: tell us about yourself in step 3 to sharpen it — or build from your video
+  data now."* (replaces the "Finish step 3 first" blocker).
+- No backend change needed: `POST /me/dna/build` already builds from video data; `dna/conflict.detect`
+  already powers the later stated-vs-inferred nudge.
+- Two in-scope cleanups the touched-file lint ratchet surfaced: `eslint.config.js` now honours the
+  `^_` unused-var convention (clears 2 of the 10 baseline problems); step-4 copy reworded off
+  "d**eta**ils" to keep the no-fabricated-ETA honesty test strict.
+
+**Verify:** vitest **182/182**, eslint 0 new, `tsc -b && vite build` clean (local hybrid CI green).
+Frontend-only; no migration. **Files:** `frontend/src/pages/Onboarding.tsx` + `.test.tsx`,
+`frontend/eslint.config.js`. DECISIONS.md 2026-06-23. **Next in wave:** #100, then #96.
+
+---
+
+## ✅ Infra — Hybrid CI/CD: local pre-push gate + self-hosted CI (off GitHub-hosted minutes) (2026-06-23)
+
+**DONE (pending one VM step + commit).** `ci.yml` flipped `ubuntu-latest → self-hosted` (0 hosted
+minutes); added a Layer-1 local pre-push gate (`.githooks/pre-push` → `scripts/ci_local.sh`,
+`core.hooksPath=.githooks`) that ratchets format/lint on changed files and reuses `run_layer0.py`.
+Runner stays on the prod VM (prod PG/Redis publish no host ports → no collision). Open: run the VM
+apt-deps snippet + (recommended) register a 2nd runner; clear the 43-file `ruff format` drift
+(logged in OFF_COURSE_BUGS) so the self-hosted lint job goes green. Not yet committed (push = deploy).
+See DECISIONS.md 2026-06-23 + `docs/runbooks/local-ci-cd.md`.
+
+---
+
 ## ✅ AutoClip Redesign — Issues 306–309 COMPLETE (Review · Editor long-form · Profile/Settings · Chip wiring) (2026-06-23)
 
 **Issues #306–309 DONE (static-verified). Redesign port complete — all 6 issues (304–309) shipped.

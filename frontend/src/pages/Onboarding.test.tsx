@@ -86,23 +86,29 @@ describe('Onboarding', () => {
     )
   })
 
-  it('locks the Build-DNA step until an identity row exists', async () => {
+  // Issue 204: intake is genuinely optional — Build-DNA must NOT be gated on an
+  // identity row, and the copy must not contradict the "optional" label.
+  it('keeps Build-DNA available without an identity, framing intake as optional', async () => {
     vi.stubGlobal('fetch', mockFetch({ identity: null }))
     renderOnboarding()
     const build = await screen.findByRole('button', { name: 'Build Creator DNA' })
-    expect(build).toBeDisabled()
-    expect(screen.getByText(/Finish step 3 first/)).toBeInTheDocument()
+    expect(build).toBeEnabled()
+    expect(screen.queryByText(/Finish step 3 first/)).not.toBeInTheDocument()
+    expect(screen.getByText(/build from your video data now/i)).toBeInTheDocument()
   })
 
-  it('unlocks Build-DNA when the creator already has an identity on file', async () => {
+  it('drops the optional-intake nudge once the creator has an identity on file', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({ identity: { version: 1, niches: ['gaming'], audience_summary: 'gamers' } }),
     )
     renderOnboarding()
+    // Build-DNA is always available now; the sync point is the identity query
+    // resolving, after which the optional-intake nudge drops.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Build Creator DNA' })).toBeEnabled(),
+      expect(screen.queryByText(/build from your video data now/i)).not.toBeInTheDocument(),
     )
+    expect(screen.getByRole('button', { name: 'Build Creator DNA' })).toBeEnabled()
   })
 
   // Issue 214: TaskStepper replaces StreamConsole; re-attach via sessionStorage.

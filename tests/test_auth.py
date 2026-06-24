@@ -251,19 +251,31 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
     fake_session.flush = AsyncMock()
     fake_session.commit = AsyncMock()
 
-    monkeypatch.setattr("routers.auth.exchange_code", AsyncMock(return_value={
-        "access_token": "fake_at",
-        "refresh_token": "fake_rt",
-        "scope": "https://www.googleapis.com/auth/youtube.readonly",
-        "expires_in": 3600,
-    }))
-    monkeypatch.setattr("routers.auth.fetch_creator_identity", AsyncMock(return_value={
-        "google_sub": f"sub_{uuid.uuid4().hex}",
-        "email": "test@example.com",
-        "channel_id": "UC_test",
-        "channel_title": "Test Channel",
-    }))
-    monkeypatch.setattr("routers.auth.upsert_creator", AsyncMock(return_value=(fake_creator, is_new)))
+    monkeypatch.setattr(
+        "routers.auth.exchange_code",
+        AsyncMock(
+            return_value={
+                "access_token": "fake_at",
+                "refresh_token": "fake_rt",
+                "scope": "https://www.googleapis.com/auth/youtube.readonly",
+                "expires_in": 3600,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "routers.auth.fetch_creator_identity",
+        AsyncMock(
+            return_value={
+                "google_sub": f"sub_{uuid.uuid4().hex}",
+                "email": "test@example.com",
+                "channel_id": "UC_test",
+                "channel_title": "Test Channel",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "routers.auth.upsert_creator", AsyncMock(return_value=(fake_creator, is_new))
+    )
     monkeypatch.setattr("routers.auth.store_or_update_tokens", AsyncMock(return_value=None))
 
     # grant_minutes is imported lazily inside the is_new block:
@@ -297,8 +309,9 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
     app.dependency_overrides[get_session] = _noop_session
 
 
-def test_callback_new_creator_redirects_to_onboarding(client, monkeypatch):
-    """Issue 215: a first-ever login (is_new=True) must redirect to /app/onboarding."""
+def test_callback_new_creator_redirects_to_walkthrough(client, monkeypatch):
+    """Issue 100: a first-ever login (is_new=True) lands on the walkthrough first
+    (which then routes to /app/onboarding). Refines Issue 215's redirect target."""
     from db import get_session
     from main import app
 
@@ -314,8 +327,8 @@ def test_callback_new_creator_redirects_to_onboarding(client, monkeypatch):
         app.dependency_overrides.pop(get_session, None)
 
     assert resp.status_code == 302, f"Expected 302, got {resp.status_code}: {resp.text}"
-    assert resp.headers["location"] == "/app/onboarding", (
-        f"New creator must land on /app/onboarding, got: {resp.headers['location']}"
+    assert resp.headers["location"] == "/app/walkthrough", (
+        f"New creator must land on /app/walkthrough, got: {resp.headers['location']}"
     )
     assert SESSION_COOKIE in resp.cookies, "Session cookie must be set on successful callback"
 

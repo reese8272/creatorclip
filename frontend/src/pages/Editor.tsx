@@ -188,6 +188,10 @@ export function Editor() {
   useEffect(() => {
     if (!clip) return
     const src = `/clips/${clip.id}/download?disposition=inline`
+    // Intentional: kick off the async waveform decode (which sets loading state)
+    // when the selected clip changes — a genuine external-sync effect, not derivable
+    // during render. Proper refactor tracked in OFF_COURSE_BUGS (lint sweep).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     decodeWaveform(src)
   }, [clip, decodeWaveform])
 
@@ -200,6 +204,10 @@ export function Editor() {
 
   // Re-load cuts when the clip changes.
   useEffect(() => {
+    // Intentional: reset local cut state to the newly-selected clip's persisted
+    // cuts. The canonical alternative is a `key` on this subtree (parent-owned);
+    // tracked for the lint sweep in OFF_COURSE_BUGS.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (clip) setCuts(loadCuts(clip.id))
   }, [clip?.id])
 

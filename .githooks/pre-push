@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# pre-push gate — runs CreatorClip's local CI before any push leaves this machine.
+#
+# Enabled via `git config core.hooksPath .githooks` (run scripts/setup_hooks.sh once,
+# or it is set automatically by the repo onboarding). This is Layer 1 of the hybrid
+# CI/CD (see docs/runbooks/local-ci-cd.md). It runs the --fast profile: ruff, types,
+# SAST, frontend, and unit tests — the Docker-dependent gates run on the self-hosted
+# runner after the push.
+#
+# Escape hatches:
+#   git push --no-verify        # skip the hook for one push
+#   CI_LOCAL_SKIP=1 git push     # same, via env var
+#
+# git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin; we
+# don't need them (we gate the working tree), so drain stdin and move on.
+cat >/dev/null
+
+if [ "${CI_LOCAL_SKIP:-}" = "1" ]; then
+  echo "CI_LOCAL_SKIP=1 — skipping local CI (pre-push)."
+  exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/scripts/ci_local.sh" --fast

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { Panel } from '@/components/insights/InsightsPanel'
-import { deriveWhyNarrative } from '@/components/insights/InsightsNarrative'
+import { deriveWhyNarrative } from '@/components/insights/narrative'
 import type { Performer, PerformerInsight } from '@/types'
 
 type SortMode = 'score-desc' | 'score-asc' | 'title'

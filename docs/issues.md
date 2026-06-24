@@ -3661,9 +3661,13 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 **Risks** — (1) Issue-88 regression: any drift between display and build predicate re-introduces the 'ready but builds 0/0' bug — keep the OR logic single-sourced. (2) The sub-threshold 'clip now' path must not imply DNA exists (honesty defect) — copy must explicitly say scoring is generic. (3) DECISIONS gate: the small-catalog allow/block call is a product decision (Open Question 3) and should be settled before build to avoid rework.
 
-### Issue 204: Resolve the identity-gate contradiction
+### Issue 204: Resolve the identity-gate contradiction ✅ DONE (2026-06-23)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (2026-06-23) — Option (b): intake is genuinely optional. Removed the
+`disabled={!identityExists}` Build-DNA gate + the "Finish step 3 first" copy; identity is now an
+enhancer (backend already built from video data; `dna/conflict` later-nudge already exists). Reverses
+Issue 100. Frontend-only; vitest 182/182. See DECISIONS.md 2026-06-23.  
+**Wave** W1 · **Lane** Activation & Onboarding · **Size** `S` · **Verify** `local`  
 **Src** `07 / 192` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/07_activation_onboarding_funnel.md`  
 **Blocked by** #235 · **Enables** #96, #100 · **Coordinate (hot files)** `dna/builder.py`, `frontend/src/components/onboarding/OnboardingIdentity.tsx`, `frontend/src/pages/Onboarding.tsx`, `routers/creators.py`  
 
@@ -3724,9 +3728,14 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 **Risks** — (1) Depends on Issue 214 so the onboarding destination is actually a good wait experience (finding makes 190 depend on 189). (2) Resolver `next_action_url` still points at /static/* until Issue 235 repoints it — a mismatch between redirect and resolver could send conflicting signals; sequence with 235. (3) Must not break the existing returning-creator dashboard landing (regression on the active-state path).
 
-### Issue 100: Onboarding tutorial / "what this app does" gate + mandatory intake (fold into 204/214/215)
+### Issue 100: Onboarding tutorial / "what this app does" gate + mandatory intake (fold into 204/214/215) ✅ DONE (2026-06-24)
 
-**Status** `OPEN` · **Wave** W2 · **Lane** Activation & Onboarding · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (2026-06-24) — closed as FOLDED. The walkthrough already existed but was orphaned;
+fixed the real gap by routing new creators (`is_new`) to `/app/walkthrough` first (→ onboarding via its
+CTA). Added self-explaining `title` tooltips to the static dashboard status Badge (`STATUS_HELP`,
+mirroring walkthrough panel 04). "Mandatory intake" half superseded by #204 (optional won); pending-status
+confusion handled by #214's StageStepper. No duplicate surface built. See DECISIONS.md 2026-06-24.  
+**Wave** W2 · **Lane** Activation & Onboarding · **Size** `M` · **Verify** `local`  
 **Src** pre-existing 100 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #204, #214, #215 · **Enables** #96 · **Coordinate (hot files)** `frontend/src/pages/Dashboard.tsx`, `frontend/src/pages/Onboarding.tsx`  
 

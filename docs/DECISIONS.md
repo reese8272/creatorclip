@@ -5,6 +5,146 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Issue 100: new creators see the walkthrough FIRST (refines Issue 215's redirect)
+
+**Context.** Issue 100's "what this app does" walkthrough already exists (`Walkthrough.tsx`, 5 panels:
+what-this-is / your-DNA / setup-vs-payoff / dashboard-badges / intake) and is excellent — but it was
+**orphaned**: nothing routed to it. Issue 215's OAuth callback sent new creators straight to
+`/app/onboarding`, and no frontend gate ever navigated to `/walkthrough`. So the first-run explainer
+was reachable only by manually typing the URL.
+
+**Decision.** The OAuth callback now redirects first-login creators (`is_new`) to `/app/walkthrough`
+instead of `/app/onboarding`. The walkthrough's existing "Set up my AutoClip" CTA already routes to
+`/onboarding`, so the coherent first-session flow is now: **walkthrough → onboarding → sync → DNA**.
+Returning creators still go straight to the dashboard. This **refines Issue 215's redirect target**
+(not a reversal — 215's intent was "guide new creators"; the walkthrough is step 0 of that guidance).
+The funnel-entry event stays `onboarding_viewed` (the walkthrough is the first step of onboarding), so
+Issue 235's funnel taxonomy is unchanged.
+
+**Also (Issue 100 residual):** the static dashboard status Badge (a not-yet-queued video) now carries a
+self-explaining `title` tooltip per status, mirroring the walkthrough's plain-language badge copy
+(`VideoTable.tsx` `STATUS_HELP`). In-flight videos already get the labeled `StageStepper` (Issue 214).
+
+**Issue 100 closes as FOLDED** into 204 (intake optional) + 214 (labeled stepper/microcopy) + 215
+(post-OAuth routing), plus this routing fix + badge tooltips. No duplicate walkthrough/onboarding
+surface was built.
+
+**Source/evidence:** `routers/auth.py` callback (`is_new` branch), `frontend/src/pages/Walkthrough.tsx`
+(`finish()` → `/onboarding`), `frontend/src/App.tsx` (`/walkthrough` route). **Files:**
+`routers/auth.py`, `tests/test_auth.py`, `frontend/src/components/dashboard/VideoTable.tsx`.
+**Date:** 2026-06-24.
+
+---
+
+## 2026-06-23 — Issue 204: identity intake is genuinely OPTIONAL before DNA build (reverses Issue 100)
+
+**Context.** Onboarding step 3 (identity intake) was labelled *"(optional — 45 seconds)"* and the
+`OnboardingIdentity` copy promised *"Skip and we'll use your video data only"* — yet step 4's
+Build-DNA button was hard-disabled (`disabled={!identityExists}`) with a *"→ Finish step 3 first"*
+warning. The label said optional; the gate said required. A live **honesty-constraint** defect, and
+a documented tension: Issue 100 made intake mandatory (overriding Issue 83, which had made it
+optional specifically to dodge a ~70% intake drop-off — a number never re-litigated).
+
+**Decision — Option (b): genuinely optional.** Label + gate now agree on *optional*, end-to-end:
+- **Removed** the `disabled={!identityExists}` gate on the Build-DNA button (`Onboarding.tsx`).
+- **Replaced** the *"Finish step 3 first"* blocker copy with an honest, motivating nudge:
+  *"Optional: tell us about yourself in step 3 to sharpen it — or build from your video data now."*
+- Identity remains an **enhancer**, not a precondition. The "skip → video data only" promise is now
+  truthful.
+
+**Why this over Option (a) (keep required, drop the "optional" label):**
+1. **The backend already supports it.** `POST /creators/me/dna/build` queues the build with no
+   identity check; `dna/builder.build_patterns` gates only on *video-data* thresholds, not identity.
+   Option (b) makes the UI honest about what the system already does — Option (a) would have added a
+   real gate the backend never had.
+2. **The ~70% drop-off (Issue 83) is the decisive evidence.** Hard-gating activation on an optional
+   enrichment step is exactly the funnel-killer Issue 83 measured. Re-affirming Issue 100's mandatory
+   gate would trade a large activation loss for marginal first-build personalisation — a bad trade
+   pre-launch, when activation is the scarce resource.
+3. **The "surface conflict, don't enforce" infra already exists.** `dna/conflict.detect()` +
+   `GET /creators/me/identity`'s `conflict` field already nudge when stated identity disagrees with
+   inferred DNA. So a creator who skips and later adds identity is handled by the existing later-nudge
+   path — no new enforcement needed at build time.
+
+**This reverses Issue 100** (which had overridden Issue 83). Net: back to Issue 83's optional intent,
+but with honest copy and a motivating (not blocking) nudge — the middle the two prior decisions missed.
+
+**Two small in-scope cleanups** (the touched-file ratchet surfaced them):
+- `eslint.config.js`: added `no-unused-vars` `argsIgnorePattern/varsIgnorePattern: '^_'` so the
+  `_`-prefix "intentionally unused" convention is honoured (also clears 2 of the logged 10-problem
+  baseline). 
+- Step-4 copy avoids the substring "d**eta**ils" — it tripped the `test_*`/honesty guard
+  `queryByText(/ETA/i)` (no-fabricated-ETA invariant). Reworded, guard left strict.
+
+**Source/evidence:** Issue 83 ~70% drop-off (prior DECISIONS); `routers/creators.py` build_dna +
+`dna/builder.py` thresholds (no identity requirement); `dna/conflict.py` existing nudge. Standard
+onboarding pattern: defer optional enrichment, never gate activation on it.
+
+**Files:** `frontend/src/pages/Onboarding.tsx`, `frontend/src/pages/Onboarding.test.tsx`,
+`frontend/eslint.config.js`. (No backend change needed.)
+
+**Date:** 2026-06-23.
+
+---
+
+## 2026-06-23 — Hybrid self-hosted + local CI/CD (off GitHub-hosted runners)
+
+**Context.** The GitHub-hosted `CI` workflow fast-fails in ~6s every push because the hosted
+runner is billing-disabled, so the gate effectively never runs. The deploy path
+(`docker-publish.yml` → `deploy.yml`) was already self-hosted on the prod VM (Issue 101). The
+ask: run CI "right here" without consuming GitHub-hosted minutes, and without standing up a
+separate CI service.
+
+**What changed / decided:**
+
+1. **Two-layer hybrid model, not a new CI server.** Researched the standard options — (a)
+   self-hosted GitHub Actions runners, (b) local git hooks, (c) standalone CI server
+   (Woodpecker/Gitea Actions/Drone). Chose **(a) + (b)**: the industry-standard "fast local
+   hooks + authoritative server-side CI" split. (c) was ruled out as overkill for a solo,
+   pre-launch project — it adds a web service to operate for no benefit the runner+hook combo
+   doesn't already give.
+   - **Layer 1 — local pre-push hook** (`.githooks/pre-push` → `scripts/ci_local.sh`,
+     `core.hooksPath=.githooks`): runs the fast Docker-free gates (ruff/mypy/bandit + frontend
+     lint/test/build + unit) before a push leaves the dev box. Reuses `run_layer0.py` (the same
+     baseline-aware aggregator CI uses) so local and CI verdicts cannot diverge. Bypass:
+     `git push --no-verify` / `CI_LOCAL_SKIP=1`.
+   - **Layer 2 — `ci.yml` flipped `runs-on: ubuntu-latest` → `self-hosted`** (all 12 jobs):
+     full suite incl. the Docker-only gates (integration, eval, playwright, migration-lint,
+     docker-build). Zero GH-hosted minutes.
+
+2. **Runner host = reuse the existing prod-VM runner (for now).** It already hosts the runner +
+   Docker, and **prod Postgres/Redis publish no host ports** (`docker-compose.prod.yml`), so CI's
+   `:5432`/`:6379` service containers do not collide with production — the one real landmine,
+   verified clear. `actions/cache` + Docker `type=gha` still work on self-hosted and do not
+   consume minutes.
+   - **Upgrade trigger (explicit descope of "do it properly now"):** move CI to a dedicated
+     ~$6–12/mo box when real users are served from the VM, **or** PR/CI volume makes the
+     single-runner serial execution painful. Documented in `docs/runbooks/local-ci-cd.md`.
+
+3. **Known tradeoff — single runner serializes CI behind the deploy path.** With one runner, a
+   `main` push queues CI's ~12 jobs and `docker-publish` on the same runner, so a deploy can wait
+   ~20 min. `concurrency: cancel-in-progress` already limits CI to the latest commit; the
+   recommended fix (register a second runner) is in the runbook. Accepted for now given low
+   deploy cadence.
+
+4. **VM prerequisite captured in `setup-runner.sh`:** CI jobs `apt-get install ffmpeg/libpq-dev/gcc`
+   and use Node 22 + Python 3.12. `setup-runner.sh` now pre-installs the apt deps so jobs don't
+   depend on the `github-runner` user having passwordless sudo at job time. This is a one-time
+   VM step for the already-running runner (snippet in the runbook) — **not yet applied/verified on
+   the live VM**; Layer 2's first green run depends on it.
+
+**Source/evidence:** GitHub Docs — *About self-hosted runners* (self-hosted runners consume no
+GitHub-hosted minutes); the standard pre-commit/lefthook "fast local gate" pattern.
+`docker-compose.prod.yml` (no host port publishes on db/redis). `scripts/setup-runner.sh`
+(Issue 101, the existing self-hosted deploy runner).
+
+**Files:** `scripts/ci_local.sh`, `.githooks/pre-push`, `scripts/setup_hooks.sh`,
+`.github/workflows/ci.yml`, `scripts/setup-runner.sh`, `docs/runbooks/local-ci-cd.md`.
+
+**Date:** 2026-06-23.
+
+---
+
 ## 2026-06-23 — AutoClip UI redesign + Chip mascot (Issues 304–309): scope + foundation (304)
 
 **Context.** A high-fidelity design handoff ("React app visual review.zip") redesigns the SPA

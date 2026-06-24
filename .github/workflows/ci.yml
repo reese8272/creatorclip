@@ -6,10 +6,30 @@ name: CI
 # one concurrency group. Integration tests now run on PRs too — the 2026-06 lesson
 # (Issue 144): integration was main-only, so a poll-task regression sat red for 9+
 # days without ever blocking a PR.
+#
+# RUNNER: self-hosted (2026-06-23, DECISIONS.md "hybrid self-hosted + local CI/CD").
+# All jobs run on the self-hosted runner on the prod VM — zero GitHub-hosted minutes,
+# which is what the billing-disabled hosted runner kept fast-failing. Layer 1 of the
+# hybrid model is the local pre-push hook (.githooks/pre-push → scripts/ci_local.sh):
+# it runs the fast Docker-free gates (ruff/mypy/bandit/frontend/unit) before a push
+# ever leaves a dev machine. This workflow (Layer 2) is the authoritative full suite,
+# incl. the Docker-only gates (integration, eval, playwright, migration-lint, build).
+#
+# Self-hosted PREREQUISITES (one-time on the VM — see docs/runbooks/local-ci-cd.md):
+#   1. ffmpeg, libpq-dev, gcc, python3.12, node 22 installed on the runner host, OR
+#      the `github-runner` user has passwordless sudo (the `sudo apt-get` steps need
+#      one or the other). scripts/setup-runner.sh now provisions these.
+#   2. STRONGLY RECOMMENDED: register a SECOND self-hosted runner so CI does not
+#      queue ahead of docker-publish/deploy on a main push (single runner = serial).
+# `concurrency: cancel-in-progress` already keeps only the latest commit's CI queued.
 
 on:
-  push:
-    branches: [main, staging]
+  # NOTE (2026-06-24): the `push` trigger is intentionally omitted while CI shares
+  # the SINGLE self-hosted runner with docker-publish/deploy — a push to main must
+  # not queue CI's ~12 jobs ahead of the deploy path on the same runner. The local
+  # pre-push hook (.githooks/pre-push) gates direct-to-main pushes; CI runs on PRs
+  # and on-demand here. Restore `push: branches: [main, staging]` once a SECOND
+  # self-hosted runner is registered (docs/runbooks/local-ci-cd.md).
   pull_request:
     branches: [main, staging]
   workflow_dispatch:
@@ -27,7 +47,7 @@ permissions:
 jobs:
   lint:
     name: Lint (ruff)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -42,7 +62,7 @@ jobs:
 
   unit:
     name: Unit tests (pytest)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # conftest.py injects fake creds and DB/external APIs are overridden, but the
     # slowapi rate limiter talks to a real Redis (no in-memory fallback), so the
     # unit suite needs a Redis service. conftest defaults REDIS_URL to
@@ -81,7 +101,7 @@ jobs:
 
   integration:
     name: Integration tests (postgres + redis)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -135,7 +155,7 @@ jobs:
 
   coverage:
     name: Coverage floor (pytest-cov ratchet)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Mirrors the unit job: the slowapi limiter needs a real Redis.
     services:
       redis:
@@ -183,7 +203,7 @@ jobs:
     # Squawk rules enforced: ban-concurrent-index-creation-in-transaction,
     # constraint-missing-not-valid, disallowed-unique-constraint, etc.
     name: Migration lint (Squawk)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -266,7 +286,7 @@ jobs:
 
   static-gates:
     name: Types + SAST + deps (mypy, bandit, pip-audit)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # No DB/Redis needed — these gates are static. Fast feedback (~1 min). All gating
     # logic lives in scripts/run_layer0.py so CI and a local `/assess` measure identically.
     steps:
@@ -284,7 +304,7 @@ jobs:
 
   frontend:
     name: Frontend (lint, test, build)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # The React + TS SPA (frontend/). Mirrors the local gates: eslint, vitest unit
     # tests (incl. the brief-parser XSS-safety assertion), and a production build.
     # The Docker image compiles the SPA in its own stage, but this job gives fast,
@@ -316,7 +336,7 @@ jobs:
     # The commit-status API always reports the real outcome (pending / success /
     # failure) regardless of skip state, so branch protection can require it.
     name: Clip eval gate (setup-before-peak)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       statuses: write   # needed to post the commit status
@@ -403,7 +423,7 @@ jobs:
     # Vite dev server with the mocked backend (e2e/fixtures/mock-api.ts).
     # Chromium-only install keeps CI fast; other browsers are CI-unused.
     name: Playwright (smoke + a11y)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     defaults:
       run:
         working-directory: frontend
@@ -440,7 +460,7 @@ jobs:
     # positives. Update workflow: run with --update-snapshots, commit the
     # __snapshots__ PNGs in a dedicated PR.
     name: Visual regression (non-gating until baselines committed)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     continue-on-error: true  # becomes gating once baselines are committed
     defaults:
       run:
@@ -482,7 +502,7 @@ jobs:
     # until the root cause is fixed. Blanket rerun-as-gate is EXPLICITLY PROHIBITED
     # (see docs/BRANCHING.md and docs/DECISIONS.md — Issue 268).
     name: Flake detection (non-gating)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     continue-on-error: true  # NEVER gating — flake detection is informational only
     services:
       redis:
@@ -557,7 +577,7 @@ jobs:
 
   docker-build:
     name: Docker build (smoke test)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Verifies the image builds without a push — runs on every PR. Push to GHCR
     # happens only on merge to main (see docker-publish.yml).
     steps:

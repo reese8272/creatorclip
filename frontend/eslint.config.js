@@ -19,6 +19,15 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Honour the `_`-prefix convention for intentionally-unused params/vars
+      // (e.g. fake-event-listener signatures). Without this, `_type`/`_cb` are
+      // flagged despite the underscore signalling intent. (Issue 204 cleanup.)
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
+    },
   },
   // Node-side tooling: Playwright E2E specs/fixtures + config. No React rules —
   // the react-hooks plugin otherwise false-positives on Playwright's `use()`

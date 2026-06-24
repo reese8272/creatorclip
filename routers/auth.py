@@ -246,8 +246,15 @@ async def callback(
     # already used above to gate trial-grant and catalog-sync, so reusing it
     # here is consistent with the rest of the callback.
     if is_new:
+        # Issue 100: route new creators to the "what this app does" walkthrough
+        # FIRST — its 5 panels explain clips / DNA / setup-vs-payoff / the dashboard
+        # status badges / why intake helps, then its "Set up my AutoClip" CTA
+        # navigates to /app/onboarding. Previously Issue 215 redirected straight to
+        # /app/onboarding, leaving the walkthrough orphaned (reachable only by typing
+        # the URL). The funnel-entry event stays "onboarding_viewed" — the walkthrough
+        # is step 1 of onboarding. Returning creators → dashboard.
         log_event("onboarding_viewed", creator_id=str(creator.id))
-        redirect_url = "/app/onboarding"
+        redirect_url = "/app/walkthrough"
     else:
         redirect_url = "/app/dashboard"
 

@@ -63,6 +63,8 @@ export function useStageStream(
   useEffect(() => {
     if (!url) {
       // Not in-flight — reset to idle and make sure we have no dangling timer.
+      // Intentional reset-on-condition-change; tracked for the lint sweep.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setState(IDLE_STATE)
       if (staleTimerRef.current) clearTimeout(staleTimerRef.current)
       return

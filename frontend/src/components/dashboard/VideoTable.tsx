@@ -20,6 +20,16 @@ const STATUS_VARIANT: Record<IngestStatus, 'muted' | 'warning' | 'success' | 'da
   failed: 'danger',
 }
 
+// Issue 100: self-explaining hover copy for the static status badge, mirroring the
+// plain-language definitions in the first-run Walkthrough (panel 04 "what those
+// badges mean"). In-flight videos get the labeled StageStepper instead (Issue 214).
+const STATUS_HELP: Record<IngestStatus, string> = {
+  pending: "Waiting in line — we'll start any second.",
+  running: 'Ingesting, transcribing, and finding signals (~2–5 min on a 20-min video).',
+  done: 'Clips are scored — “Generate clips” / “Review” is your next move.',
+  failed: 'Something broke; your minutes are automatically refunded.',
+}
+
 const SOURCE_NEEDED_HELP =
   'We never download your video from YouTube (per their Terms of Service). To generate clips, ' +
   'upload the original file — for example export it from Google Takeout — and it will process ' +
@@ -87,7 +97,9 @@ function VideoRow({
             failureReason={streamState.failureReason}
           />
         ) : (
-          <Badge variant={STATUS_VARIANT[video.ingest_status]}>{video.ingest_status}</Badge>
+          <span title={STATUS_HELP[video.ingest_status]} className="cursor-help">
+            <Badge variant={STATUS_VARIANT[video.ingest_status]}>{video.ingest_status}</Badge>
+          </span>
         )}
       </td>
       <td className="px-3 py-3.5 align-middle">
