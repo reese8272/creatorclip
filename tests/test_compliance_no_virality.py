@@ -31,6 +31,10 @@ WHITELIST = [
     "it does not promise virality",
     "No virality predictions made here",
     "not promise virality",
+    # Developer docstrings that AFFIRM the honesty posture (these negate the bad
+    # promise; they leak into OpenAPI route/field descriptions). Negations, not claims.
+    "no virality language",
+    "never virality language",
     # JavaScript Promise API — not a compliance phrase
     "Promise.all",
     "Promise.race",

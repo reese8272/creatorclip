@@ -203,7 +203,7 @@ split.
 - Tests for new behavior written with the code
 - 80/20: happy path + load-bearing edges (see global CLAUDE.md)
 - `tests/` mirrors source structure
-- No DB mocking — use real Postgres (+ pgvector) via docker-compose
+- Two test lanes: **integration** tests (`-m integration`) use real Postgres (+ pgvector) via docker-compose and never mock the DB; the **default unit lane** mocks DB/Redis so it runs without Docker. Don't mock the DB in integration tests; the unit lane mocks at the session boundary by design.
 - Never hit the live YouTube API in CI — use recorded fixtures
 - API-surface end-to-end with FastAPI `TestClient`
 - Clip-quality eval harness in `tests/eval/scenarios/*.yaml` — labeled videos +
@@ -219,12 +219,12 @@ split.
   logged after every call. Use `/claude-api` skill when writing Anthropic SDK code.
 - Embeddings: Voyage AI → pgvector
 - DB: PostgreSQL 16 + pgvector + Alembic
-- Transcription: WhisperX (word-level) with hosted fallback behind config
+- Transcription: Deepgram nova-3 is the **default** (`TRANSCRIPTION_BACKEND=deepgram`, no GPU at launch); WhisperX (word-level) + AssemblyAI are config-selectable self-host/hosted alternatives
 - Video: ffmpeg cut + 9:16 active-speaker reframe
 - Storage: Cloudflare R2 (S3-compatible); local disk in dev
 - Auth: Google OAuth 2.0 (YouTube scopes) + session JWT; tokens Fernet-encrypted
 - Preference model: recency-decayed reranker (LightGBM/logistic), not a fine-tuned LLM
-- Frontend: vanilla HTML/CSS/JS (review-UI framework is a flagged DECISIONS candidate)
+- Frontend: **React + TypeScript** (Vite, Tailwind v4, shadcn-style; TanStack Query v5; React Router v7) — resolved 2026-06-17 (DECISIONS), served under `/app/*`. The legacy vanilla `static/*.html` app pages were retired (Issue 226); only `tos`/`privacy`/`accessibility` + shared CSS/JS remain under `/static`
 - Containerization: Docker Compose (dev) / Kubernetes (production — **architecture chosen + Helm chart written** at `deploy/charts/creatorclip/`: GKE Autopilot + Cloud SQL PG16 + KEDA, locked in `docs/DECISIONS.md`. Not yet validated on a real cluster — that is **Issue 275**, the deploy-track linchpin.)
 
 Deviations require a `docs/DECISIONS.md` entry before implementation.

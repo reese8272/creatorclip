@@ -41,6 +41,23 @@ def test_estimate_cost_usd_zero_tokens() -> None:
     assert _estimate_cost_usd(0, 0, 3.0, 15.0) == 0.0
 
 
+def test_estimate_cost_usd_prices_cache_tokens() -> None:
+    """Cached tokens must NOT bill at 0× (OFF_COURSE_BUGS 2026-06-24).
+
+    usage.input_tokens is the uncached remainder only; cache reads bill at 0.1×
+    the input rate and 5-min-TTL writes at 1.25×.
+    """
+    # 1M cache READS at $3/MTok × 0.1 = $0.30
+    assert abs(_estimate_cost_usd(0, 0, 3.0, 15.0, cache_read_tokens=1_000_000) - 0.30) < 1e-9
+    # 1M cache WRITES (default 5-min TTL) at $3/MTok × 1.25 = $3.75
+    assert abs(_estimate_cost_usd(0, 0, 3.0, 15.0, cache_creation_tokens=1_000_000) - 3.75) < 1e-9
+    # 1h-TTL write premium is 2× → $6.00
+    cost_1h = _estimate_cost_usd(
+        0, 0, 3.0, 15.0, cache_creation_tokens=1_000_000, cache_write_multiplier=2.0
+    )
+    assert abs(cost_1h - 6.0) < 1e-9
+
+
 # ── Unit: extended price-book math (Issue 289) ────────────────────────────────
 
 

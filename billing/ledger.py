@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from models import Creator, MinuteDeduction, MinutePack, Usage
 
 logger = logging.getLogger(__name__)
@@ -89,9 +90,29 @@ def _estimate_cost_usd(
     tokens_out: int,
     cost_per_mtok_in: float,
     cost_per_mtok_out: float,
+    *,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    cache_write_multiplier: float | None = None,
 ) -> float:
-    """Compute USD cost from token counts and per-million-token rates."""
-    return (tokens_in * cost_per_mtok_in + tokens_out * cost_per_mtok_out) / _MTOK
+    """Compute USD cost from token counts and per-million-token rates.
+
+    The Anthropic SDK's ``usage.input_tokens`` is the UNCACHED remainder only
+    (total prompt = input + cache_creation + cache_read), so cached tokens must
+    be priced separately or they bill at 0× (Issue: cache-token under-bill,
+    OFF_COURSE_BUGS 2026-06-24):
+      - cache READS bill at ``COST_CACHE_READ_MULTIPLIER`` (0.1×) of the input rate,
+      - cache WRITES bill at ``cache_write_multiplier`` of the input rate
+        (5-min-TTL default 1.25×; pass 2.0 for ttl:"1h" callers like scoring).
+    """
+    if cache_write_multiplier is None:
+        cache_write_multiplier = settings.COST_CACHE_WRITE_MULTIPLIER
+    return (
+        tokens_in * cost_per_mtok_in
+        + tokens_out * cost_per_mtok_out
+        + cache_read_tokens * cost_per_mtok_in * settings.COST_CACHE_READ_MULTIPLIER
+        + cache_creation_tokens * cost_per_mtok_in * cache_write_multiplier
+    ) / _MTOK
 
 
 async def record_llm_usage(
@@ -115,7 +136,14 @@ async def record_llm_usage(
 
     tokens_in = usage.get("input_tokens", 0)
     tokens_out = usage.get("output_tokens", 0)
-    cost = _estimate_cost_usd(tokens_in, tokens_out, cost_per_mtok_in, cost_per_mtok_out)
+    cost = _estimate_cost_usd(
+        tokens_in,
+        tokens_out,
+        cost_per_mtok_in,
+        cost_per_mtok_out,
+        cache_read_tokens=usage.get("cache_read", 0),
+        cache_creation_tokens=usage.get("cache_creation", 0),
+    )
     period = datetime.now(UTC).strftime("%Y-%m")
     try:
         async with _db.AdminSessionLocal() as session:

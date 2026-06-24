@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import IngestStatus, OnboardingState, RenderStatus, VideoKind, VideoOrigin
+from models import IngestStatus, OnboardingState, RenderStatus, Signals, VideoKind, VideoOrigin
 
 
 def _mock_creator(onboarding_state=OnboardingState.active):
@@ -146,7 +146,8 @@ def test_saved_insights_empty_returns_envelope(client):
         app.dependency_overrides.clear()
     assert body["insights"] == []
     assert body["state"] == "empty_initial"
-    assert body["next_action"]["url"] == "/static/insights.html"
+    # next_action repointed /static/insights.html → /app/insights in the SPA cutover (85g).
+    assert body["next_action"]["url"] == "/app/insights"
 
 
 def test_saved_insights_populated(client):
@@ -169,11 +170,22 @@ def _clips_session(video, clips):
     """list_clips calls session.get(Video, ...) first, then session.execute() twice:
     once for the Clip query and once for the PreferenceModel query (Issue 216).
     Return the clips result for the first execute and a no-model result for the second.
+
+    When clips is empty + ingest done, the endpoint also calls session.get(Signals, ...)
+    for the skip-reason taxonomy (Issue 217), so session.get must dispatch by model:
+    Video → the video; Signals → a stub with an empty timeline (the "no signal" case).
     """
+
+    def _get(model, _id, **_kw):
+        if model is Signals:
+            sig = MagicMock()
+            sig.timeline_jsonb = {}
+            return sig
+        return video
 
     async def _session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=video)
+        session.get = AsyncMock(side_effect=_get)
 
         clips_result = MagicMock()
         clips_result.scalars.return_value = clips

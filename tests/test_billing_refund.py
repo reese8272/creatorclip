@@ -49,7 +49,10 @@ def test_on_failure_dispatches_refund_with_uuid():
             einfo=None,
         )
 
-    assert mock_run.call_count == 1
+    # on_failure now dispatches TWO coroutines: refund_for_video (line ~128) AND
+    # _fire_refund_notification_async (line ~144, added with the refund-notification
+    # wiring). Both go through run_async. (Previously asserted 1 — stale.)
+    assert mock_run.call_count == 2
 
 
 def test_on_failure_noop_on_missing_video_id():

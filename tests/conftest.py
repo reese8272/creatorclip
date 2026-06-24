@@ -72,7 +72,15 @@ def pytest_configure(config: pytest.Config) -> None:
     integration_requested = False
     try:
         marker_expr = config.getoption("-m", default="")
-        integration_requested = bool(marker_expr and "integration" in marker_expr)
+        # Strip negations first: the DEFAULT unit lane runs with
+        # `-m "not integration and not quarantine"`, whose text contains the
+        # substring "integration" — a bare `"integration" in marker_expr` check
+        # therefore fired the Postgres guard on EVERY unit run, breaking the unit
+        # lane on any box without Postgres (masked everywhere Postgres is always
+        # up: CI/Docker/prod-VM). Only treat integration as *requested* when it is
+        # positively selected. (OCB 2026-06-24)
+        positive_expr = marker_expr.replace("not integration", "")
+        integration_requested = bool(marker_expr and "integration" in positive_expr)
     except (ValueError, AttributeError):
         pass
     db_overridden = db_url_raw != _DEFAULT_DB
@@ -97,6 +105,42 @@ def pytest_configure(config: pytest.Config) -> None:
 def client() -> TestClient:
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_state(client):
+    """Function-scoped hygiene against cross-test state leaks in a single-process run:
+
+    1. ``app.dependency_overrides`` — ~10 test modules set overrides without a
+       finally-clear.
+    2. The shared session-scoped TestClient's **cookie jar** — passing per-request
+       ``cookies=`` to the shared ``client`` leaks the cookie onto its jar in httpx2
+       (the StarletteDeprecationWarning), so an auth cookie set by an earlier test
+       authenticates later requests.
+
+    3. The slowapi rate-limiter's Redis buckets — the limiter has no in-memory fallback
+       and its Redis state persists across modules (and even across pytest invocations
+       against the same Redis), so accumulated request counts intermittently tripped a
+       spurious 429 in a later test (e.g. ``test_data_export``/``test_issue_113`` — a
+       long-standing flake whose victim moved run-to-run). ``limiter.reset()`` clears
+       only the limiter-prefixed keys (RedisStorage.reset()), so each test starts with
+       empty buckets while dedicated rate-limit tests still trip within their own test.
+
+    All three intermittently poisoned later tests — e.g. ``test_clip_counts_requires_auth``
+    saw a leaked auth cookie, so ``get_current_creator`` passed and the endpoint hit a
+    real (absent) Postgres → 500 instead of the expected 401. Clearing all three before
+    AND after every test makes execution order irrelevant. (OCB 2026-06-24)"""
+    import contextlib
+
+    from limiter import limiter
+
+    app.dependency_overrides.clear()
+    client.cookies.clear()
+    with contextlib.suppress(Exception):  # best-effort; never fail a test on limiter cleanup
+        limiter.reset()
+    yield
+    app.dependency_overrides.clear()
+    client.cookies.clear()
 
 
 @pytest.fixture()

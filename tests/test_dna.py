@@ -217,11 +217,12 @@ def test_generate_brief_raises_on_empty_response():
             generate_brief({}, "BadChannel")
 
 
-def test_generate_brief_no_cache_markers():
-    """Issue 223 spike: the DNA-build call has NO cache_control markers.
-    The static prefix is below Sonnet 4.6's 1024-token floor and the 5-min
-    default TTL expires before scoring.py runs, so the marker was a pure
-    write-premium with zero expected reads. See docs/DECISIONS.md."""
+def test_generate_brief_cache_marker_on_instructions():
+    """The DNA-build call carries exactly one cache_control marker, on the stable
+    global-instructions block (system[0]); the volatile per-creator corpus
+    (system[1]) is uncached. Issue 223's marker-removal was SUPERSEDED by Issue
+    224, whose trust-boundary restructure shipped the marker on the now-only
+    stable instruction block (deployed state, dna/brief.py:93). See docs/DECISIONS.md."""
     mock_response = _mock_anthropic_response("Brief here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
@@ -230,8 +231,9 @@ def test_generate_brief_no_cache_markers():
     call_kwargs = mock_client.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
     assert len(system) == 2  # static instructions + per-creator corpus
-    # No cache_control on any block — Issue 223 removed the inert marker.
-    assert "cache_control" not in system[0]
+    # Marker on the stable instructions block (Issue 224, deployed); never on the
+    # volatile corpus, which must sit AFTER the breakpoint.
+    assert system[0].get("cache_control") == {"type": "ephemeral"}
     assert "TestChannel" not in system[0]["text"]
     assert "cache_control" not in system[1]
     assert "TestChannel" in system[1]["text"]

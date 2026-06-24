@@ -4,6 +4,41 @@ Updated after every issue closes.
 
 ---
 
+## ✅ Backend/LLM health pass — test suite repaired (lane green) + LLM cost-ledger fix + doc cleanup (2026-06-24)
+
+**Goal:** make the backend "perfectly functional," LLM especially. Outcome: LLM call sites
+verified sound, the backend unit lane is **runnable + fully green again (1400 passed / 0 failed)**,
+one real billing bug fixed, and SOT/CLAUDE drift cleaned up.
+
+- **LLM audit (no functional defects):** all ~12 Anthropic call sites use `settings.ANTHROPIC_MODEL`
+  (no hardcoded models), `max_tokens ≤ 2000` (no non-streaming ValueError risk), module-level
+  singletons w/ timeout+retries. Per-creator isolation clean on all 5 chat tools; `chat/intake.py`
+  injection gate sound. Web-search tool = `web_search_20260209`. Sonnet 4.6 cacheable floor
+  live-confirmed at **1024** tokens. SDK is `anthropic==0.105.2` (the "0.40" comments in
+  `worker/anthropic_stream.py` are stale post-Issue-84 leftovers).
+- **Test harness (root cause: the suite had drifted red unnoticed):** `conftest.py` Postgres guard
+  fired on the default unit lane (`"integration" in "not integration…"` substring bug) → fixed, lane
+  runs without Postgres again. Added an autouse fixture clearing `dependency_overrides` + the shared
+  session-client cookie jar (per-request `cookies=` leaks onto the jar in httpx2), killing the
+  cross-test ordering flake that made `test_clip_counts_requires_auth` see a leaked auth cookie.
+- **10 masked failures → 0** (no real prod regressions): stale assertions updated to shipped state —
+  DNA-brief cache markers (Issue-224 superseded 223), brand-kit migration 0028→**0029**, SPA-cutover
+  `next_action` URLs `/static/*.html`→`/app/*`, legacy-UI retirement (Issue 226), Deepgram `addons`
+  mock (Issue 251), virality-negation whitelist, Signals mock for the skip-reason path, refund
+  dispatch count 1→2.
+- **Billing fix (SEV2, money path):** `_estimate_cost_usd` ignored cached tokens (`usage.input_tokens`
+  is the uncached remainder), billing cache reads/writes at 0×. Now prices reads at 0.1× and writes at
+  1.25×/2× (1h-TTL for scoring), threaded through `record_llm_usage` + `chat/runner` + scoring; added
+  `COST_CACHE_WRITE_MULTIPLIER`. Regression test + DECISIONS.md entry (2026-06-24).
+- **Doc cleanup:** SOT (`clients.py` doesn't exist — clients are per-module singletons; static/ app
+  pages retired; frontend migration COMPLETE), CLAUDE.md (Deepgram is the transcription default,
+  not WhisperX; frontend is React; two-lane testing reality). OFF_COURSE_BUGS updated.
+- **Gates:** ruff + format + mypy clean on all changed files. `pytest -q` (unit lane) **1400 passed,
+  64 skipped, 132 deselected**. **Still open:** backend pytest not yet wired into self-hosted CI
+  (apt-deps step) — the structural reason drift went unnoticed; closing it prevents recurrence.
+
+---
+
 ## ✅ Issue 96 — Chat-driven onboarding intake (guided Q&A → confirm) (2026-06-24)
 
 **DONE.** Added a `Quick form | Chat it out` toggle to `OnboardingIdentity`. The chat is a guided

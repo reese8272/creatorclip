@@ -408,8 +408,9 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
 
 
 def test_generate_brief_skips_identity_block_when_none(monkeypatch):
-    """No identity → just 2 system blocks (instructions + corpus). No cache_control
-    on either block (Issue 223 — inert markers removed from dna/brief.py)."""
+    """No identity → just 2 system blocks (instructions + corpus). The stable
+    instructions block carries the cache_control marker (Issue 224 deployed
+    state, superseding Issue 223's marker-removal); the volatile corpus does not."""
     from dna import brief as brief_module
 
     captured: dict = {}
@@ -441,6 +442,6 @@ def test_generate_brief_skips_identity_block_when_none(monkeypatch):
 
     system = captured["system"]
     assert len(system) == 2
-    # No cache_control markers in the DNA build call. (Issue 223)
-    assert "cache_control" not in system[0]
+    # Marker on the stable instructions block. (Issue 224, deployed state)
+    assert system[0].get("cache_control") == {"type": "ephemeral"}
     assert system[1]["text"].startswith("CREATOR PERFORMANCE DATA:")

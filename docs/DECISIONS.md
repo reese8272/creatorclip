@@ -5,6 +5,35 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — LLM cost ledger now prices cached tokens (cache-read 0.1×, cache-write 1.25×/2×)
+
+**What changed.** `billing.ledger._estimate_cost_usd` gained keyword-only `cache_read_tokens`,
+`cache_creation_tokens`, and `cache_write_multiplier` params. `record_llm_usage` threads the
+`cache_read`/`cache_creation` fields (already present in the usage dict from
+`worker.anthropic_stream`) into the cost; `chat/runner.py` and `clip_engine/scoring.py` (the two
+direct callers) pass them too. Added `settings.COST_CACHE_WRITE_MULTIPLIER = 1.25`.
+
+**Why.** The Anthropic SDK's `usage.input_tokens` is the **uncached remainder only** (total prompt =
+`input + cache_creation + cache_read`). The old formula priced only `input_tokens`+`output_tokens`,
+so every cached token billed at **0×** — systematic under-billing of exactly the traffic the caching
+strategy is designed to produce (`clip_engine/scoring.py` caches the DNA brief at `ttl:"1h"`).
+`config.COST_CACHE_READ_MULTIPLIER = 0.1` had been defined since Issue 220 but referenced nowhere.
+
+**Decision detail (the divergence worth logging).** Cache *reads* bill at `COST_CACHE_READ_MULTIPLIER`
+(0.1× input). Cache *writes* bill at a multiplier that varies by TTL — 1.25× for the 5-min default,
+2× for `ttl:"1h"`. Rather than parse the per-TTL `usage.cache_creation` tier breakdown, callers pass
+the multiplier they know applies: `scoring.py` passes `2.0` (it uses `ttl:"1h"`); everything else uses
+the 1.25× default. This keeps the estimate honest where it matters (reads are the recurring cost) and
+treats write pricing as a per-caller constant. `cost_estimate` is explicitly an estimate.
+
+**Source/evidence.** Anthropic prompt-caching pricing + the SDK usage-field semantics (verified via the
+/claude-api skill, 2026-06-24); cache-floor for Sonnet 4.6 live-confirmed at **1024 tokens** (more
+prefixes cache than the stale 2048 figure assumed, so the under-bill was real). Regression test:
+`tests/test_usage_ledger.py::test_estimate_cost_usd_prices_cache_tokens`. Found during an LLM-backend
+audit; logged in `docs/OFF_COURSE_BUGS.md` (2026-06-24).
+
+---
+
 ## 2026-06-24 — Issue 96: chat-driven onboarding intake (non-streaming; validate-then-confirm)
 
 **Context.** Issue 96 wants a CFO-Agent-style guided intake the creator completes by chatting,

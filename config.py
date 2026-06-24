@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     # Cache-read multiplier: prompt-cache hits are billed at 10% of the base input rate.
     # Source: platform.claude.com/docs/en/about-claude/pricing (fetched 2026-06-23).
     COST_CACHE_READ_MULTIPLIER: float = 0.1
+    # Cache-WRITE multiplier: writing a 5-min-TTL ephemeral cache block costs 1.25× the
+    # base input rate (1h-TTL is 2×; callers using ttl:"1h" — e.g. clip_engine/scoring.py —
+    # pass cache_write_multiplier=2.0 explicitly). Source: same pricing page. (cost ledger)
+    COST_CACHE_WRITE_MULTIPLIER: float = 1.25
     # Deepgram Nova-2 pre-recorded transcription cost per minute (pay-as-you-go).
     # Source: deepgram.com/pricing (fetched 2026-06-23).
     COST_PER_MIN_DEEPGRAM: float = 0.0043

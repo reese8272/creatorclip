@@ -188,8 +188,11 @@ def test_deepgram_streams_handle_and_passes_timeout(tmp_path, monkeypatch):
             return {}
 
     class _RestV:
-        def transcribe_file(self, source, opts, timeout=None):
+        # Real signature gained an `addons` positional (Issue 251 MIP opt-out:
+        # transcribe.py passes addons={"mip_opt_out": True} before timeout).
+        def transcribe_file(self, source, opts, addons=None, timeout=None):
             captured["buffer"] = source["buffer"]
+            captured["addons"] = addons
             captured["timeout"] = timeout
             return _Resp()
 

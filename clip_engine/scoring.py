@@ -271,6 +271,8 @@ async def score_candidates(
     _cache_creation = getattr(response.usage, "cache_creation", None)
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens
+    _cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+    _cache_write_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
     logger.info(
         "clip_scoring tokens: in=%d cached_read=%d cached_write=%d cached_write_1h=%d out=%d",
         _tokens_in,
@@ -287,6 +289,10 @@ async def score_candidates(
                 _tokens_out,
                 settings.COST_PER_MTOK_IN_SONNET,
                 settings.COST_PER_MTOK_OUT_SONNET,
+                cache_read_tokens=_cache_read_tokens,
+                cache_creation_tokens=_cache_write_tokens,
+                # DNA-brief block is cached with ttl:"1h" (above) → 2× write premium.
+                cache_write_multiplier=2.0,
             )
             await increment_usage(
                 session,

@@ -132,6 +132,8 @@ async def run_chat_turn(
             total["output_tokens"],
             settings.COST_PER_MTOK_IN_SONNET,
             settings.COST_PER_MTOK_OUT_SONNET,
+            cache_read_tokens=total.get("cache_read", 0),
+            cache_creation_tokens=total.get("cache_creation", 0),
         )
         await increment_usage(
             session,

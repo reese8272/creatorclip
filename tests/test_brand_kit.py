@@ -73,22 +73,23 @@ def test_brand_kit_style_column_uses_mutable_dict():
 # ── Structural: migration ────────────────────────────────────────────────────
 
 
-def test_brand_kit_migration_0028_present_and_chained():
-    """Migration 0028 must exist, chain after 0027, and create the creator_style table."""
+def test_brand_kit_migration_0029_present_and_chained():
+    """Migration 0029 must exist, chain after 0028, and create the creator_style table.
+    (Renumbered 0028→0029 during the W1 collision fix — see PROJECT_STATE.)"""
     src = (
-        pathlib.Path(__file__).parent.parent / "alembic" / "versions" / "0028_creator_brand_kit.py"
+        pathlib.Path(__file__).parent.parent / "alembic" / "versions" / "0029_creator_brand_kit.py"
     ).read_text()
-    assert 'down_revision = "0027"' in src, "0028 must chain after 0027"
+    assert 'down_revision = "0028"' in src, "0029 must chain after 0028"
     assert "creator_style" in src, "migration must reference the creator_style table"
     assert "uq_creator_style_creator_id" in src, "named unique constraint must appear in migration"
     assert "fk_creator_style_creator_id" in src, "named FK constraint must appear in migration"
 
 
-def test_brand_kit_migration_0028_has_rls():
-    """Migration 0028 must enable RLS + tenant_isolation policy (same pattern as
+def test_brand_kit_migration_0029_has_rls():
+    """Migration 0029 must enable RLS + tenant_isolation policy (same pattern as
     0025/0026/0027) so cross-creator kit reads are blocked at the DB layer."""
     src = (
-        pathlib.Path(__file__).parent.parent / "alembic" / "versions" / "0028_creator_brand_kit.py"
+        pathlib.Path(__file__).parent.parent / "alembic" / "versions" / "0029_creator_brand_kit.py"
     ).read_text()
     assert "ROW LEVEL SECURITY" in src
     assert "tenant_isolation" in src

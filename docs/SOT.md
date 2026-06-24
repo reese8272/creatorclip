@@ -26,7 +26,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | Auth | Google OAuth 2.0 (YouTube scopes) + server-side session JWT | PyJWT; bcrypt where local creds needed |
 | Token encryption at rest | `cryptography` MultiFernet on token columns | Primary key from `TOKEN_ENCRYPTION_KEY`; optional previous key for zero-downtime rotation |
 | Preference model | LightGBM (or logistic regression) reranker | Recency-decayed sample weights; retrained per session |
-| Frontend | **Migrating: vanilla HTML/CSS/JS → React + TypeScript (Vite, Tailwind v4, shadcn-style)**. Data layer **TanStack Query v5**; routing **React Router v7 Data Mode**; tests **Vitest + React Testing Library** (unit/component) and **Playwright** (E2E/visual harness, `frontend/e2e/`, backend mocked — Issue 162). | Framework resolved 2026-06-17; foundation + design system 2026-06-18 (Issue 85a, DECISIONS.md). Incremental strangler-fig: SPA served under `/app/*`, legacy `static/` pages unchanged. Layouts = `AuthGate` (protects routes) + `AppChrome` (Nav/Footer shell); four route contexts (protected/public × chrome/bare). Ported: Dashboard (`/app/dashboard`, live status via gated TanStack refetch — Issue 85c), Onboarding (`/app/onboarding`, protected+bare 5-step flow w/ dual SSE consoles — Issue 85d), Insights + Analysis (`/app/insights`, `/app/analysis` — LLM-streaming via new `useTaskResult` hook — Issue 85e), Review/Editor (`/app/review` — player-first redesign + transcript editor — Issue 85f), Profile, Chat, Pricing (public-or-authed), Login, Walkthrough. **Cutover (85g, soft): `/` now redirects to `/app/dashboard` when the SPA bundle is built (`main.py` `_SPA_BUILT` gate; legacy index still boots without a build). `static/*.html` pages remain served (unlinked) as rollback insurance — full retirement + backend `next_action` URL repointing is a staging-verified follow-up; `early-access.html` deleted.** Build: `npm --prefix frontend run build` → `frontend/dist/`. Design system in `docs/UI.md` (warmer OKLCH dark-Linear palette in the SPA `@theme`); legacy pages keep `static/_design-tokens.css`. |
+| Frontend | **React + TypeScript (Vite, Tailwind v4, shadcn-style)** — strangler-fig migration from the legacy vanilla UI is COMPLETE (legacy app pages retired, Issue 226). Data layer **TanStack Query v5**; routing **React Router v7 Data Mode**; tests **Vitest + React Testing Library** (unit/component) and **Playwright** (E2E/visual harness, `frontend/e2e/`, backend mocked — Issue 162). | Framework resolved 2026-06-17; foundation + design system 2026-06-18 (Issue 85a, DECISIONS.md). SPA served under `/app/*`; the legacy `static/` app pages have been RETIRED (Issue 226). Layouts = `AuthGate` (protects routes) + `AppChrome` (Nav/Footer shell); four route contexts (protected/public × chrome/bare). Ported: Dashboard (`/app/dashboard`, live status via gated TanStack refetch — Issue 85c), Onboarding (`/app/onboarding`, protected+bare 5-step flow w/ dual SSE consoles — Issue 85d), Insights + Analysis (`/app/insights`, `/app/analysis` — LLM-streaming via new `useTaskResult` hook — Issue 85e), Review/Editor (`/app/review` — player-first redesign + transcript editor — Issue 85f), Profile, Chat, Pricing (public-or-authed), Login, Walkthrough. **Cutover COMPLETE: `/` redirects to `/app/dashboard` (`main.py` `_SPA_BUILT` gate). The legacy vanilla app pages were retired (Issue 226) and backend `next_action` URLs repointed `/static/*.html` → `/app/*`. Only `tos`/`privacy`/`accessibility` HTML + shared/legacy CSS/JS remain under `/static`.** Build: `npm --prefix frontend run build` → `frontend/dist/`. Design system in `docs/UI.md` (warmer OKLCH dark-Linear palette in the SPA `@theme`); legacy pages keep `static/_design-tokens.css`. |
 | Transactional email | Resend (Python SDK v2.32.2) | `NOTIFY_BACKEND=console` in dev/CI (logs only); `NOTIFY_BACKEND=resend` in production. Jinja2 paired `.txt`/`.html` templates in `notify/templates/`. Native idempotency-key API maps onto Celery at-least-once retry. SPF/2048-bit DKIM/DMARC DNS runbook in `docs/RUNBOOKS.md`. Issue 242. |
 | Containerization | Docker Compose (dev) | `app`, `worker`, `beat`, `postgres`, `redis`. Beta prod (`docker-compose.prod.yml`) adds `cloudflared` (tunnel, no host port) + `autoheal` (restart-on-unhealthy) + app/worker healthchecks |
 | Production deployment | Kubernetes — **chart written, GKE deploy unvalidated** | Architecture locked (DECISIONS): **GKE Autopilot + Cloud SQL PG16 + KEDA + External Secrets**; Helm chart at `deploy/charts/creatorclip/` (rolling-update + probes, KEDA-on-Redis-depth, PgBouncer sidecar). It has **never run on K8s** — "staging" is still Docker-Compose on the prod VM, so the scale/pool `[DEC]`s are unverified. **Issue 275** (GKE staging + first Helm deploy) is the linchpin; gaps tracked as Issues 275–280 (Lane L12). Docker Compose = dev/test only. See `docs/DEPLOYMENT.md` + `docs/issues.md`. |
@@ -93,7 +93,11 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── crypto.py                   # Fernet helpers for token columns
 ├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
 ├── event_log.py                # Beta telemetry sink → event_logs table (Issue 151). Isolated engine (LOGS_DATABASE_URL), boundary PII/token redaction, best-effort writes
-├── clients.py                  # Anthropic singleton, Voyage client, YouTube client factory, storage client
+│   # NOTE: there is no central clients.py. External API clients are MODULE-LEVEL
+│   # singletons in the modules that use them (Issue 37 lifecycle rule): Anthropic in
+│   # dna/brief.py, clip_engine/scoring.py, chat/runner.py, chat/intake.py, knowledge/*,
+│   # analysis/brief.py, improvement/brief.py, routers/insights.py; Voyage in dna/embeddings.py;
+│   # YouTube + storage clients constructed where used. Each sets timeout + max_retries.
 │
 ├── youtube/
 │   ├── oauth.py                # OAuth flow, token storage/refresh (encrypted)
@@ -193,17 +197,17 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── progress.py             # Issue 86 — per-task Redis Stream emit/read + SSE slot cap + ownership
 │   └── anthropic_stream.py     # Issue 86 — wraps Anthropic .stream() so tokens flow into progress events; stream_message() returns full final message for the chat tool loop (Issue 152)
 │
-├── static/
-│   ├── index.html              # Dashboard
-│   ├── onboarding.html         # Connect YouTube, min-data gate, DNA confirm
-│   ├── review.html             # Fast clip review (player-first, single-player + Next)
-│   ├── profile.html            # Creator DNA view/edit
-│   ├── insights.html           # Upload timing + improvement brief
-│   ├── progressStream.js       # Issue 86 — EventSource consumer that renders live task progress
-│   ├── activeTasks.js          # Wave 5 — localStorage + SSE resume across page navigation; window.activeTasks
-│   ├── activityPanel.js        # Wave 5 — floating bottom-right widget; reacts to activeTasks.subscribe
-│   ├── activity.js             # Beta-testing UI event tracker: click/submit/navigate → POST /api/activity (Issue 122)
-│   └── analysis.html           # Video performance analysis page (Issue 121)
+├── static/                     # Legacy vanilla app pages RETIRED (Issue 226). The React SPA
+│   │                           # under /app/* is the only UI; /static still serves these:
+│   ├── tos.html                # Terms of Service (footer-linked; Google OAuth verification gate)
+│   ├── privacy.html            # Privacy Policy (COPPA/children's-privacy section, Issue 300)
+│   ├── accessibility.html      # Accessibility statement
+│   └── *.css / *.js            # shared/legacy assets still served at /static/* (page-shell.css,
+│                               #   components.css, _design-tokens.css, editor-layout.css, hero.css;
+│                               #   progressStream.js, activeTasks.js, activity.js, auth.js, editor.js,
+│                               #   tooltip.js, util.js) — some orphaned post-retirement; pending an
+│                               #   asset-cleanup pass. (Former app pages index/onboarding/review/
+│                               #   profile/insights/analysis .html are deleted.)
 │
 ├── frontend/                   # React + TS SPA (2026-06-17 adoption; served under /app/*)
 │   ├── index.html              # Vite entry shell
@@ -512,7 +516,7 @@ Research Mode (parallel):
 - **Transcription compute**: hosted Deepgram is the current default (no GPU needed at launch); WhisperX self-host is selectable via config. The measured self-host-vs-hosted break-even + R2 storage-cost monitoring is **Issue 293**.
 - **Production deployment**: Docker Compose is dev-only. Kubernetes architecture is **chosen and the Helm chart is written** (`deploy/charts/creatorclip/`: GKE Autopilot + Cloud SQL PG16 + KEDA) but has **never run on a real cluster** — closing that is **Issue 275** (GKE staging + first Helm deploy), with the rest of the deploy gaps as Issues 275–280, 287 (Lane L12). See `docs/DEPLOYMENT.md` + `docs/issues.md`.
 - **Pricing / billing**: per-input-minute minute-packs shipped (one-time, never-expiring). Remaining refinements — Stripe↔ledger reconciliation, payment-status guard, Stripe Tax, refund runbook, packaging/Stream pack — are **Issues 205–209**; spend caps + margin dashboard are **Issues 289–292**. See `docs/DECISIONS.md`.
-- **Review-UI framework**: ✅ Resolved — React + TS + Tailwind v4 adopted (2026-06-17) with a documented design system (2026-06-18, Issue 85a; `docs/UI.md`). Strangler-fig migration in progress (Issues 85a–85g); the player-first "feels like scrolling" review surface lands in the review-page port (85f).
+- **Review-UI framework**: ✅ Resolved — React + TS + Tailwind v4 adopted (2026-06-17) with a documented design system (2026-06-18, Issue 85a; `docs/UI.md`). Strangler-fig migration COMPLETE (Issues 85a–85g + the AutoClip redesign 304–309); legacy vanilla app pages retired (Issue 226). The player-first "feels like scrolling" review surface shipped in the review-page port (85f/306).
 - **YouTube quota ceilings**: Analytics/Data API quotas may throttle large catalogs — needs backoff + caching, sized once real quota is known.
 - **Preference cold-start**: below threshold, ranking leans on DNA + signals only; communicate honestly.
 - **`TOKEN_ENCRYPTION_KEY` rotation/escrow** — ✅ rotation procedure documented in `docs/RUNBOOKS.md`

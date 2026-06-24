@@ -1,15 +1,16 @@
 """
 Generate a plain-language Creator Brief via Claude.
 
-Prompt structure (Issue 69, updated Issue 223):
-  Block 1 (and optional block 2): stable instructions + optional stated-identity.
-           The LAST stable block carries a cache_control marker. However, the static
-           prefix is well below Sonnet 4.6's 1024-token cacheable-prefix floor AND
-           the 5-min default TTL is almost certainly expired by the time scoring.py
-           runs (pipeline steps between DNA-build and scoring: transcription, signal
-           extraction, candidate detection). The marker was a pure write-premium with
-           zero expected reads. Issue 223 removes it. See docs/DECISIONS.md.
-  Block (final): volatile per-creator performance corpus — NEVER cached.
+Prompt structure (Issue 69; restructured Issue 224, superseding Issue 223):
+  system[0]: stable global-instructions block — identical across all creators.
+           Carries the single `cache_control: ephemeral` breakpoint (deployed
+           state — Issue 224 won the W0 collision with 223; a prompt-injection
+           boundary outranks the caching micro-opt). Note: this static prefix is
+           below Sonnet 4.6's 1024-token cacheable floor, so the marker is inert
+           in practice (no write premium, no reads) — kept for structural clarity.
+           Stated identity is NOT here; it is creator-authored and goes in the
+           user turn (wrap_untrusted). See docs/DECISIONS.md (Issues 223/224).
+  system[1]: volatile per-creator performance corpus — AFTER the breakpoint, NEVER cached.
 """
 
 import json

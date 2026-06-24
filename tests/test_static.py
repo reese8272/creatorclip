@@ -195,7 +195,8 @@ def test_list_videos_empty_connected_state_suggests_link_video(client):
     body = resp.json()
     assert body["state"] == "empty_initial"
     assert body["next_action"]["action_type"] == "open_form"
-    assert "/static/index.html" in body["next_action"]["url"]
+    # next_action repointed /static/index.html → /app/dashboard in the SPA cutover (85g).
+    assert "/app/dashboard" in body["next_action"]["url"]
 
 
 def test_list_videos_response_has_required_keys(client):

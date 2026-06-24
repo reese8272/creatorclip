@@ -46,7 +46,9 @@ def test_spa_hashed_asset_resolves(client):
     assert "javascript" in asset.headers["content-type"]
 
 
-def test_legacy_static_page_still_served(client):
-    # Incremental migration: the vanilla pages must not regress.
+def test_legacy_static_pages_retired(client):
+    # The legacy vanilla UI was retired in Issue 226 — the /static/*.html pages
+    # were removed (the SPA under /app/* is now the only UI). The /static mount
+    # remains for CSS/JS assets, but the legacy HTML pages must be gone.
     resp = client.get("/static/login.html")
-    assert resp.status_code == 200
+    assert resp.status_code == 404
