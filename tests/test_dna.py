@@ -217,12 +217,13 @@ def test_generate_brief_raises_on_empty_response():
             generate_brief({}, "BadChannel")
 
 
-def test_generate_brief_cache_marker_on_instructions():
-    """The DNA-build call carries exactly one cache_control marker, on the stable
-    global-instructions block (system[0]); the volatile per-creator corpus
-    (system[1]) is uncached. Issue 223's marker-removal was SUPERSEDED by Issue
-    224, whose trust-boundary restructure shipped the marker on the now-only
-    stable instruction block (deployed state, dna/brief.py:93). See docs/DECISIONS.md."""
+def test_generate_brief_no_cache_marker_below_floor():
+    """Issue 315: dna/brief.py must send NO cache_control on any system block.
+    The static instructions block is ~570–650 tokens — below Sonnet 4.6's
+    1024-token cacheable floor. An inert marker charges the write-premium
+    with zero cache reads. Dropped in Issue 315; Issue 224's trust-boundary
+    structure (instructions vs volatile corpus) is retained unchanged.
+    See docs/DECISIONS.md (Issues 223/224/315)."""
     mock_response = _mock_anthropic_response("Brief here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
         mock_client.messages.create.return_value = mock_response
@@ -231,9 +232,11 @@ def test_generate_brief_cache_marker_on_instructions():
     call_kwargs = mock_client.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
     assert len(system) == 2  # static instructions + per-creator corpus
-    # Marker on the stable instructions block (Issue 224, deployed); never on the
-    # volatile corpus, which must sit AFTER the breakpoint.
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    # No cache_control on any block — prefix is below the 1024-token cacheable floor.
+    assert "cache_control" not in system[0], (
+        "Issue 315: dna/brief.py static block must have no cache_control — "
+        "~570–650 tokens is below Sonnet 4.6's 1024-token cacheable floor."
+    )
     assert "TestChannel" not in system[0]["text"]
     assert "cache_control" not in system[1]
     assert "TestChannel" in system[1]["text"]

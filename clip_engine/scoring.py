@@ -6,6 +6,16 @@ a prompt-cached prefix and all candidates as a single batched user message, keep
 token cost minimal.  Without DNA, signal features produce a cold-start score.
 
 Every returned candidate includes a named principle from CLIPPING_PRINCIPLES.md.
+
+Prompt-cache structure (Issue 78b; floor-compliance fix Issue 315):
+  Block 1 — static instructions + scoring rubric (stable, creator-agnostic).
+             ~620–720 tokens alone (raised from ~310 by including the rubric).
+  Block 2 — per-creator DNA brief. cache_control: {type: ephemeral, ttl: 1h} is
+             set ONLY when (block1_chars + block2_chars) // 4 >= 1024, ensuring
+             we never pay the 2× write premium for a prefix that cannot cache.
+             With a typical 500-word DNA brief the combined prefix is ~1250–1430
+             tokens — reliably above the Sonnet 4.6 1024-token floor.
+  User msg — volatile candidates JSON (per-video, never stable).
 """
 
 import asyncio
@@ -45,10 +55,19 @@ _PRINCIPLES = [
     "Audience-fit over generic virality",
 ]
 
-# Static, creator-independent instructions. Kept as a SEPARATE system block placed
-# BEFORE the per-creator DNA so the stable bytes lead the prefix (prompt-caching best
-# practice: stable content first, volatile content after the last breakpoint). The DNA
-# block below carries the cache breakpoint. (Issue 78b)
+# Minimum combined prefix size (chars) required to clear Sonnet 4.6's 1024-token
+# cacheable-prefix floor. Using the conservative char/4 estimate: 4 × 1024 = 4096.
+# Measured block1 alone: ~2690 chars (~670 tokens). With a 500-word DNA brief
+# (≈2500 chars), block1 + block2 ≈ 5190 chars ≈ 1297 tokens — safely above floor.
+# cache_control is applied to block2 only when this threshold is met. (Issue 315)
+_CACHE_FLOOR_CHARS: int = 4 * 1024  # = 4096
+
+# Static, creator-independent instructions + scoring rubric. Kept as a SEPARATE
+# system block placed BEFORE the per-creator DNA so stable bytes lead the prefix
+# (Anthropic prompt-caching best practice). The rubric and output-format guidance
+# that were previously in the user message are moved here because they are fully
+# static — stable across all creators and all calls — so they contribute to the
+# cacheable prefix rather than resetting it. (Issue 78b; raised in Issue 315)
 _SYSTEM_STATIC = (
     UNTRUSTED_CONTENT_POLICY
     + """\
@@ -59,10 +78,8 @@ the best fits for their audience and proven style.
 
 NAMED SCORING PRINCIPLES (cite exactly one per clip):
 {principles}
-"""
-)
 
-_USER_TEMPLATE = """\
+SCORING TASK:
 Score each clip candidate from 0.0 (poor fit) to 1.0 (excellent fit) for this creator.
 
 Each candidate includes a transcript_context with three labeled sections:
@@ -73,11 +90,30 @@ Each candidate includes a transcript_context with three labeled sections:
 Use BEFORE to judge whether the clip captures a complete thought or starts mid-idea.
 Use AFTER to check if the real payoff lands just outside the window (score lower if so).
 
+SCORING GUIDANCE:
+- dna_score: how well the clip matches THIS creator's proven style and audience (DNA only,
+  before any signal blending)
+- score: composite of dna_score + signal features (hook_energy, signal_density, spikes)
+- principle: cite EXACTLY one named principle from the list above
+- reasoning: one sentence explaining the principle application in THIS creator's context
+- Bias toward clips whose [BEFORE] shows a complete setup — clips starting mid-thought
+  score lower even if the [CLIP] window itself is strong
+- If [AFTER] shows the real payoff or punchline, mark the window as ending too early
+  (score lower)
+
+OUTPUT FORMAT:
+Return ONLY a valid JSON array — no prose, no markdown fences. Each element:
+{{"index": <int>, "dna_score": <float 0-1>, "score": <float 0-1>, \
+"principle": "<exact principle name>", "reasoning": "<one sentence>"}}
+"""
+)
+
+# Volatile user message — contains ONLY the per-video candidates JSON, which
+# changes every call and must stay outside the cached prefix. All stable
+# instructions have been moved to _SYSTEM_STATIC above. (Issue 315)
+_USER_TEMPLATE = """\
 Candidates:
 {candidates_json}
-
-Return ONLY a valid JSON array — no prose, no markdown fences. Each element:
-{{"index": <int>, "dna_score": <float 0-1 — DNA-only fit, before any signal blending>, "score": <float 0-1 — final composite>, "principle": "<exact principle name>", "reasoning": "<one sentence>"}}
 """
 
 
@@ -244,22 +280,26 @@ async def score_candidates(
     static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in _PRINCIPLES))
     user_text = _USER_TEMPLATE.format(candidates_json=json.dumps(payload, indent=2))
 
-    # Two-block system: static instructions first (identical across all creators), then the
-    # per-creator DNA brief carrying the cache breakpoint. The brief is constant across a
-    # creator's videos, so caching it lets repeat scorings within the window skip re-billing
-    # the prefix at full price. The 1h TTL widens that window past the default 5 min, so a
-    # creator's batch of videos (ingested/scored over a longer span) still hits the cache.
-    # The volatile per-video candidates stay in the uncached user message. (Issue 78b)
+    # Two-block system: static instructions + rubric first (stable, creator-agnostic),
+    # then the per-creator DNA brief. cache_control (ttl:1h) is applied to the DNA
+    # block only when the combined prefix clears Sonnet 4.6's 1024-token cacheable floor.
+    # With a typical 500-word DNA brief the combined prefix is ~1250–1430 tokens —
+    # safely above floor. With a short brief (<350 tokens of DNA) we skip the marker
+    # rather than pay a 2× write premium for a prefix that cannot cache. (Issue 315)
+    dna_block_text = f"CREATOR DNA:\n{dna_brief}"
+    combined_chars = len(static_text) + len(dna_block_text)
+    prefix_clears_floor = combined_chars // 4 >= 1024
+
+    dna_block: dict = {"type": "text", "text": dna_block_text}
+    if prefix_clears_floor:
+        dna_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+
     response = await _ANTHROPIC.messages.create(
         model=settings.ANTHROPIC_MODEL,
         max_tokens=1200,
         system=[
             {"type": "text", "text": static_text},
-            {
-                "type": "text",
-                "text": f"CREATOR DNA:\n{dna_brief}",
-                "cache_control": {"type": "ephemeral", "ttl": "1h"},
-            },
+            dna_block,  # type: ignore[list-item]  # dict[str, Any] → TextBlockParam at runtime
         ],
         messages=[{"role": "user", "content": user_text}],
     )
@@ -274,12 +314,15 @@ async def score_candidates(
     _cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", 0) or 0
     _cache_write_tokens = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
     logger.info(
-        "clip_scoring tokens: in=%d cached_read=%d cached_write=%d cached_write_1h=%d out=%d",
+        "clip_scoring tokens: in=%d cached_read=%d cached_write=%d cached_write_1h=%d "
+        "out=%d cache_marker_sent=%s prefix_chars=%d",
         _tokens_in,
-        getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-        getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        _cache_read_tokens,
+        _cache_write_tokens,
         getattr(_cache_creation, "ephemeral_1h_input_tokens", 0) or 0,
         _tokens_out,
+        prefix_clears_floor,
+        combined_chars,
     )
 
     if creator_id is not None and session is not None:
@@ -291,8 +334,12 @@ async def score_candidates(
                 settings.COST_PER_MTOK_OUT_SONNET,
                 cache_read_tokens=_cache_read_tokens,
                 cache_creation_tokens=_cache_write_tokens,
-                # DNA-brief block is cached with ttl:"1h" (above) → 2× write premium.
-                cache_write_multiplier=2.0,
+                # 2× write premium applies only when the ttl:"1h" marker was sent
+                # (i.e. the prefix cleared the 1024-token cacheable floor). When
+                # the marker was not sent, default to the 1h write rate (2.0×) only
+                # if the API actually produced a cache write (cache_write_tokens > 0),
+                # otherwise fall back to the standard 1.25× for any residual writes.
+                cache_write_multiplier=2.0 if prefix_clears_floor else None,
             )
             await increment_usage(
                 session,

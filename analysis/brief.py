@@ -1,13 +1,12 @@
 """Video performance analysis via Claude (Issue 121).
 
-Prompt structure (Issue 218 update):
-  Block 1 — static instructions: role + task (stable, creator-agnostic).
-  Block 2 — DNA brief (cache_control breakpoint, ttl=1h): per-creator, stable
-            across sessions. The static instructions alone (~175 tokens) are below
-            Sonnet 4.6's 1024-token cacheable-prefix floor, so block 2 (DNA brief,
-            up to 1000 chars) is added as a stable prefix block carrying the
-            cache_control marker. Together they reliably clear the 1024-token floor
-            when the DNA brief is available. (Issue 218)
+Prompt structure (Issue 218; cache marker removed Issue 315):
+  Block 1 — static instructions: role + task (stable, creator-agnostic). No
+            cache_control: ~410 tokens alone, below Sonnet 4.6's 1024-token floor.
+  Block 2 — DNA brief (when available): per-creator context, capped at 1000 chars
+            (~250 tokens). Block 1 + Block 2 max ≈ 660 tokens — still below the
+            1024-token cacheable floor. Cache marker dropped in Issue 315: an inert
+            marker incurs the write-premium charge without any cache reads.
   Block 3 — per-video data: metrics, retention, channel averages. Uncached.
 
 The analysis does NOT use web_search — the creator's own metrics + DNA are the
@@ -78,14 +77,13 @@ def _build_request(
     """Assemble (system, messages) for the video analysis call.
 
     Three-block system when a DNA brief is available, two-block otherwise:
-      Block 1: static instructions (stable, creator-agnostic).
-      Block 2: DNA brief with cache_control marker (stable per creator, ttl=1h).
-               When present, block 1 + block 2 reliably clears the 1024-token
-               cacheable-prefix floor for Sonnet 4.6. (Issue 218)
-      Block 3: per-video data (metrics, retention, channel averages). Uncached.
+      Block 1: static instructions (stable, creator-agnostic). ~410 tokens.
+      Block 2: DNA brief (stable per-creator, capped at 1000 chars ≈ 250 tokens).
+               No cache_control — block 1 + block 2 max ≈ 660 tokens, below
+               Sonnet 4.6's 1024-token cacheable floor. (Issue 315 — marker removed.)
+      Block 3: per-video data (metrics, retention, channel averages).
 
-    When no DNA brief is available, block 2 is omitted and the two-block call
-    is uncached (static instructions alone ~175 tokens < 1024-token floor).
+    When no DNA brief is available, block 2 is omitted (two-block call, uncached).
     """
     video_data: dict[str, Any] = {"youtube_video_id": youtube_video_id}
     if video_title:
@@ -107,15 +105,15 @@ def _build_request(
     system: list[dict] = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
 
     if dna_brief:
-        # DNA brief carries the cache breakpoint (1h TTL). Block 1 + block 2
-        # clears Sonnet 4.6's 1024-token cacheable-prefix floor; a creator's
-        # repeated analysis calls within the window pay 0.1x on the cached
-        # portion. (Issue 218)
+        # DNA brief is a stable per-creator block — no cache_control: block 1 (~410 tok)
+        # + block 2 (~250 tok max) = ~660 tokens, below Sonnet 4.6's 1024-token cacheable
+        # floor. An inert marker incurs the write-premium charge with zero cache reads.
+        # Marker dropped Issue 315. (Issue 218 originally added it; measurement showed
+        # the floor was never cleared.)
         system.append(
             {
                 "type": "text",
                 "text": f"CREATOR DNA:\n{dna_brief[:_DNA_BRIEF_MAX_CHARS]}",
-                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }
         )
 

@@ -29,10 +29,13 @@ class _Resp:
 
 
 def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
-    """Issue 223: DNA-build call has NO cache_control markers.
-    Static prefix is below Sonnet 4.6's 1024-token floor; the 5-min TTL
-    expires before scoring.py runs. Marker was a pure write-premium — removed.
-    See docs/DECISIONS.md."""
+    """Issue 315: dna/brief.py has NO cache_control markers on any block.
+    The static instructions block is ~570–650 tokens — below Sonnet 4.6's
+    1024-token cacheable floor. An inert marker charges the write-premium
+    with zero cache reads; it was removed in Issue 315.
+    Block 0: stable global instructions (no cache_control).
+    Block 1: volatile per-creator performance corpus (no cache_control).
+    See docs/DECISIONS.md (Issues 223/224/315)."""
     import dna.brief as b
 
     captured: dict = {}
@@ -49,12 +52,14 @@ def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
 
     system = captured["system"]
     assert len(system) == 2
-    # Block 0: static instructions, cached. Contains NO per-creator data.
-    # Issue 224: cache_control is now on block 0 (the only stable block).
-    assert system[0]["cache_control"] == {"type": "ephemeral"}
+    # Block 0: static instructions — no cache_control (prefix below 1024-token floor).
+    assert "cache_control" not in system[0], (
+        "Issue 315: dna/brief.py static block must have no cache_control — "
+        "~570–650 tokens is below Sonnet 4.6's 1024-token cacheable floor."
+    )
     assert "Acme Channel" not in system[0]["text"]
     assert "CREATOR PERFORMANCE DATA" not in system[0]["text"]
-    # Block 1: volatile performance corpus, NOT cached.
+    # Block 1: volatile performance corpus — never cached.
     assert "cache_control" not in system[1]
     assert "CREATOR PERFORMANCE DATA" in system[1]["text"]
     assert out.startswith("BRIEF BODY")

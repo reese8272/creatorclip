@@ -342,8 +342,8 @@ def test_get_identity_no_conflict_when_no_identity(monkeypatch):
 def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatch):
     """Issue 224 update: stated_identity is now in the user turn (not a system block)
     so the model receives it from the user role, not as trusted operator instructions.
-    System blocks are now: (0) instructions with cache_control, (1) volatile corpus.
-    stated_identity must appear JSON-encoded in the user message content."""
+    System blocks are now: (0) instructions (no cache_control — Issue 315), (1) volatile
+    corpus. stated_identity must appear JSON-encoded in the user message content."""
     import json
 
     from dna import brief as brief_module
@@ -380,14 +380,17 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
     system = captured["system"]
     messages = captured["messages"]
 
-    # Issue 224: system has exactly 2 blocks — instructions (cached) and corpus.
+    # Issue 224: system has exactly 2 blocks — instructions and corpus.
     assert len(system) == 2, (
         "Issue 224: stated_identity was moved to the user turn. "
         "System must have exactly 2 blocks (instructions + corpus)."
     )
     assert "expert YouTube channel analyst" in system[0]["text"]
-    # Cache breakpoint is on the static instructions block (the only stable block).
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    # No cache_control on any block — prefix below 1024-token floor (Issue 315).
+    assert "cache_control" not in system[0], (
+        "Issue 315: dna/brief.py static block must have no cache_control — "
+        "prefix ~570–650 tokens is below Sonnet 4.6's 1024-token cacheable floor."
+    )
     # Corpus is last and uncached.
     assert system[1]["text"].startswith("CREATOR PERFORMANCE DATA:")
     assert "cache_control" not in system[1]
@@ -408,9 +411,9 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
 
 
 def test_generate_brief_skips_identity_block_when_none(monkeypatch):
-    """No identity → just 2 system blocks (instructions + corpus). The stable
-    instructions block carries the cache_control marker (Issue 224 deployed
-    state, superseding Issue 223's marker-removal); the volatile corpus does not."""
+    """No identity → just 2 system blocks (instructions + corpus). No cache_control
+    on any block (Issue 315 — prefix ~570–650 tokens, below Sonnet 4.6's 1024-token
+    cacheable floor; an inert marker charges the write-premium with zero reads)."""
     from dna import brief as brief_module
 
     captured: dict = {}
@@ -442,6 +445,9 @@ def test_generate_brief_skips_identity_block_when_none(monkeypatch):
 
     system = captured["system"]
     assert len(system) == 2
-    # Marker on the stable instructions block. (Issue 224, deployed state)
-    assert system[0].get("cache_control") == {"type": "ephemeral"}
+    # No cache_control on any block — prefix below 1024-token floor (Issue 315).
+    assert "cache_control" not in system[0], (
+        "Issue 315: dna/brief.py static block must have no cache_control — "
+        "~570–650 tokens is below Sonnet 4.6's 1024-token cacheable floor."
+    )
     assert system[1]["text"].startswith("CREATOR PERFORMANCE DATA:")

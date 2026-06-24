@@ -1,16 +1,14 @@
 """
 Generate a plain-language Creator Brief via Claude.
 
-Prompt structure (Issue 69; restructured Issue 224, superseding Issue 223):
+Prompt structure (Issue 69; restructured Issue 224; cache marker removed Issue 315):
   system[0]: stable global-instructions block — identical across all creators.
-           Carries the single `cache_control: ephemeral` breakpoint (deployed
-           state — Issue 224 won the W0 collision with 223; a prompt-injection
-           boundary outranks the caching micro-opt). Note: this static prefix is
-           below Sonnet 4.6's 1024-token cacheable floor, so the marker is inert
-           in practice (no write premium, no reads) — kept for structural clarity.
+           NO cache_control marker: the static prefix is ~570–650 tokens, below
+           Sonnet 4.6's 1024-token cacheable floor, so any marker would be inert
+           (zero cache reads, phantom write-premium charge). Dropped in Issue 315.
            Stated identity is NOT here; it is creator-authored and goes in the
-           user turn (wrap_untrusted). See docs/DECISIONS.md (Issues 223/224).
-  system[1]: volatile per-creator performance corpus — AFTER the breakpoint, NEVER cached.
+           user turn (wrap_untrusted). See docs/DECISIONS.md (Issues 223/224/315).
+  system[1]: volatile per-creator performance corpus — never cached.
 """
 
 import json
@@ -80,21 +78,15 @@ def _build_request(
         default=str,
     )
 
-    # Per the 2026 prompt-caching standard: stable content first, variable last,
-    # cache breakpoint at the end of the stable prefix.
     # Issue 224: stated_identity is creator-authored (attacker-influenceable) and
     # must NOT go in the system role. Moved to the user turn, JSON-wrapped via
-    # wrap_untrusted. The system blocks are now two stable items:
-    #   (1) global instructions — identical across all creators,
-    #   (2) volatile performance corpus — uncached, changes each call.
-    # The cache breakpoint stays on the instructions block (only stable block).
+    # wrap_untrusted. The system blocks are two items:
+    #   (1) global instructions — identical across all creators (no cache marker:
+    #       ~570–650 tokens, below Sonnet 4.6's 1024-token cacheable floor — Issue 315),
+    #   (2) volatile performance corpus — never cached.
     system: list[dict] = [
-        {
-            "type": "text",
-            "text": _SYSTEM_INSTRUCTIONS,
-            "cache_control": {"type": "ephemeral"},
-        },
-        # Volatile per-creator data — AFTER the breakpoint, never cached.
+        {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
+        # Volatile per-creator data — never cached.
         {"type": "text", "text": f"CREATOR PERFORMANCE DATA:\n{corpus}"},
     ]
 

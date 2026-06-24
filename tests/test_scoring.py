@@ -225,28 +225,57 @@ async def test_score_candidates_with_dna_calls_claude():
 
 @pytest.mark.asyncio
 async def test_score_candidates_dna_uses_prompt_caching():
-    """The per-creator DNA block carries a 1h cache breakpoint; static block leads, uncached.
+    """cache_control (ttl:1h) is set on the DNA block when the combined prefix clears
+    Sonnet 4.6's 1024-token floor (≥ 4096 chars); omitted for short prefixes so we
+    never pay the 2× write premium on an inert marker. (Issue 78b; floor fix Issue 315)
 
-    Stable-content-first ordering + extended TTL so a creator's videos scored within an hour
-    reuse the cached DNA prefix instead of re-billing it at full price. (Issue 78b)
+    Measured block1 static text: ~2690 chars (~670 tokens). A 1500-char DNA brief
+    brings the combined prefix to ~4190 chars (≥ 4096 threshold) → marker is set.
+    A 10-char brief stays below the threshold → marker is absent.
+
+    Token-count method: char/4 (conservative lower bound). If chars/4 ≥ 1024 the
+    actual BPE token count is almost certainly ≥ 1024. (Issue 315)
     """
+    from clip_engine.scoring import _CACHE_FLOOR_CHARS, _PRINCIPLES, _SYSTEM_STATIC
+
+    static_text = _SYSTEM_STATIC.format(principles="\n".join(f"- {p}" for p in _PRINCIPLES))
+
+    # --- case 1: long DNA brief clears the floor → marker expected ---
+    long_dna = "X" * (_CACHE_FLOOR_CHARS - len(static_text) - len("CREATOR DNA:\n") + 10)
     candidates = [_candidate()]
     mock_resp = _mock_claude_response(
         [{"index": 0, "score": 0.7, "principle": "Loop-ability", "reasoning": "Clean loop."}]
     )
     with patch("clip_engine.scoring._ANTHROPIC") as mock_client:
         mock_client.messages.create = AsyncMock(return_value=mock_resp)
-        await score_candidates(candidates, _timeline(), dna_brief="some dna")
+        await score_candidates(candidates, _timeline(), dna_brief=long_dna)
 
     system = mock_client.messages.create.call_args.kwargs.get("system", [])
     assert len(system) == 2
-    # Static instructions lead and are NOT the cache breakpoint (stable bytes first).
+    # Block 0: static instructions + rubric (stable, creator-agnostic, never the breakpoint).
     assert "cache_control" not in system[0]
     assert "NAMED SCORING PRINCIPLES" in system[0]["text"]
-    assert "some dna" not in system[0]["text"]
-    # The per-creator DNA is the last block and carries the 1h breakpoint.
-    assert system[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert "some dna" in system[-1]["text"]
+    assert long_dna[:10] not in system[0]["text"]
+    # Block 1: DNA block carries the 1h breakpoint when prefix clears the floor.
+    assert system[1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
+        "Issue 315: cache_control must be set on the DNA block when combined prefix "
+        "chars // 4 >= 1024 (floor cleared). Measured block1 chars: "
+        f"{len(static_text)}, DNA block chars: {len('CREATOR DNA:\\n') + len(long_dna)}."
+    )
+    assert long_dna[:10] in system[1]["text"]
+
+    # --- case 2: short DNA brief is below floor → no marker, no 2× premium ---
+    short_dna = "brief"
+    with patch("clip_engine.scoring._ANTHROPIC") as mock_client2:
+        mock_client2.messages.create = AsyncMock(return_value=mock_resp)
+        await score_candidates(candidates, _timeline(), dna_brief=short_dna)
+
+    system2 = mock_client2.messages.create.call_args.kwargs.get("system", [])
+    assert len(system2) == 2
+    assert "cache_control" not in system2[1], (
+        "Issue 315: cache_control must NOT be set when the combined prefix chars // 4 < 1024. "
+        "An inert marker charges the 2× write premium with zero cache reads."
+    )
 
 
 @pytest.mark.asyncio
@@ -267,6 +296,59 @@ async def test_score_candidates_falls_back_on_bad_json():
         result = await score_candidates(candidates, _timeline(), dna_brief="dna")
 
     assert 0.0 <= result[0]["score"] <= 1.0  # signal fallback
+
+
+# ── Issue 315: cache floor + cost ledger correctness ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_score_candidates_no_2x_write_premium_when_marker_absent():
+    """When the DNA brief is too short to clear the 1024-token cache floor,
+    cache_control must not be sent AND _estimate_cost_usd must not be called
+    with cache_write_multiplier=2.0 (the 1h-TTL premium).
+
+    Short brief → combined prefix < 4096 chars → prefix_clears_floor=False →
+    marker absent → default multiplier (settings.COST_CACHE_WRITE_MULTIPLIER = 1.25×).
+    (Issue 315: inert marker was charging 2× premium with zero cache reads.)
+    """
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    candidates = [_candidate()]
+    mock_resp = _mock_claude_response(
+        [{"index": 0, "score": 0.6, "principle": "Hook in the first 3 seconds", "reasoning": "x"}]
+    )
+
+    creator_id = uuid.uuid4()
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock()
+    mock_session.commit = AsyncMock()
+
+    with (
+        patch("clip_engine.scoring._ANTHROPIC") as mock_client,
+        patch("clip_engine.scoring._estimate_cost_usd") as mock_cost,
+        patch("clip_engine.scoring.increment_usage", new_callable=AsyncMock),
+    ):
+        mock_client.messages.create = AsyncMock(return_value=mock_resp)
+        mock_cost.return_value = 0.001
+
+        # Short brief — stays below the 4096-char floor threshold.
+        await score_candidates(
+            candidates,
+            _timeline(),
+            dna_brief="short",
+            creator_id=creator_id,
+            session=mock_session,
+        )
+
+    # _estimate_cost_usd must have been called without cache_write_multiplier=2.0.
+    assert mock_cost.called, "cost estimator should be called when creator_id + session provided"
+    call_kwargs = mock_cost.call_args.kwargs
+    assert call_kwargs.get("cache_write_multiplier") is None, (
+        "Issue 315: cache_write_multiplier must be None (default 1.25×) when the "
+        "cache marker was not sent — not 2.0 (1h-TTL premium). "
+        f"Got: {call_kwargs.get('cache_write_multiplier')!r}"
+    )
 
 
 # ── rank_candidates ────────────────────────────────────────────────────────────

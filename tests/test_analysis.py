@@ -91,7 +91,13 @@ def test_build_request_minimal() -> None:
 
 def test_build_request_includes_metrics_and_dna() -> None:
     """When dna_brief is provided, 3 system blocks are built (Issue 218):
-    Block 0: static instructions, Block 1: DNA (cache_control), Block 2: per-video data.
+    Block 0: static instructions, Block 1: DNA (no cache_control — Issue 315),
+    Block 2: per-video data.
+
+    Issue 315: the DNA block has NO cache_control. Block 0 (~410 tokens) +
+    Block 1 (max ~250 tokens from 1000-char cap) = ~660 tokens max — below
+    Sonnet 4.6's 1024-token cacheable floor. An inert marker charges the
+    write-premium with zero cache reads; it was removed in Issue 315.
     """
     system, _ = _build_request(
         channel_title="Backboard Media",
@@ -103,10 +109,13 @@ def test_build_request_includes_metrics_and_dna() -> None:
         channel_avg={"avg_views": 12000, "sample_size": 30},
         dna_brief="Creator makes basketball content.",
     )
-    # 3 blocks when DNA brief present; DNA in block 1 with cache_control, data in block 2.
+    # 3 blocks when DNA brief present; no cache_control on any block.
     assert len(system) == 3
     assert "basketball" in system[1]["text"]
-    assert system[1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in system[1], (
+        "Issue 315: analysis/brief.py DNA block must have no cache_control — "
+        "block 0 + block 1 max ≈ 660 tokens, below the 1024-token cacheable floor."
+    )
     data_block = system[2]["text"]
     assert "50000" in data_block
     assert "at_25pct" in data_block
