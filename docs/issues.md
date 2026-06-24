@@ -5047,6 +5047,48 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 
 **Risks** — (1) Several items overlap research-derived issues (200/218/199) — risk of double-work; prune first (2) _fernet caching is security-adjacent — a wrong cache lifetime could break key rotation (rotate_token_key) (3) The fetch-then-validate rewrite changes query semantics across 6 routers — must keep 404-on-missing and RLS behavior identical
 
+### Issue 310: In-app channel browser — pick a synced video to clip without re-pasting its URL
+
+**Status** `OPEN` · **Wave** W2 · **Lane** Frontend / UX · **Size** `M` · **Verify** `local` + `staging`  
+**Src** 2026-06-24 UX pass (see `docs/DECISIONS.md` 2026-06-24 adopt-on-link entry + `docs/PROJECT_STATE.md`)  
+**Blocked by** none · **Coordinate (hot files)** `routers/videos.py`, `frontend/src/pages/Dashboard.tsx`  
+
+**Problem.** Catalog rows (the creator's whole channel, synced for DNA, `origin=catalog`) are hidden
+from the dashboard `/videos` list, and the only way to promote one for clipping is to paste its URL so
+`POST /videos/link` adopts it (the 2026-06-24 fix). That works but is indirect — the creator can't
+*see* their channel in-app and click "clip this." The design prototype's "Your videos" implies a
+browsable channel surface. This is the fuller version of the minimal adopt-on-link unblock.
+
+**Approach.** Add a read endpoint that lists the creator's catalog videos (paginated — channels can be
+hundreds of videos; per-creator isolation enforced) and a dashboard surface (modal or tab) that renders
+them with a per-row "Clip this" action calling the existing adopt path (`POST /videos/link`, which
+already flips `origin → catalog→link` in place). Reuse the existing `VideoTable`/`ClipsCell` styling.
+Honest copy: clipping a YouTube video still requires uploading the source file (we never download from
+YouTube, per ToS) — the browser just removes the URL-paste friction.
+
+**Files to touch**
+- `routers/videos.py` — new `GET /videos/catalog` (paginated, `origin=catalog`, per-creator) + Pydantic out-model
+- `frontend/src/pages/Dashboard.tsx` — "Browse my channel" affordance → list + per-row "Clip this"
+- `frontend/src/components/dashboard/` — a `ChannelBrowser` component (new) reusing table styling
+
+**Acceptance criteria**
+- [ ] Creator can browse their synced channel videos in-app (paginated) and promote one to the clip list without pasting a URL
+- [ ] "Clip this" reuses the adopt path; promoted video appears in "Your videos" with the honest upload-source affordance
+- [ ] Per-creator isolation enforced on the catalog list query; no cross-creator leakage
+- [ ] No virality language; honesty disclaimer intact
+- [ ] Full suite + Layer-0 green
+
+**Tests**
+- Backend: `GET /videos/catalog` returns only this creator's `origin=catalog` rows, paginated; isolation test
+- Frontend: ChannelBrowser renders rows; "Clip this" calls `/videos/link`; promoted row leaves the browser
+- Honesty: no virality terms in the new surface (structural test)
+
+**`[DEC]` DECISIONS.md** — pagination strategy (cursor vs offset) for large channels; whether catalog list reuses `/videos` with a filter param or a dedicated route  
+
+**Verification** — `local`: endpoint logic + component behavior unit-testable here. `staging`: real-channel pagination + RLS on the catalog query need Postgres (Issue 275).  
+
+**Risks** — (1) Large channels: unbounded list must paginate or it floods the UI / query (2) Catalog rows lack `source_uri`, so "Clip this" leads to the upload-source step — the UI must set that expectation honestly, not imply one-click clipping  
+
 ---
 
 ## Deferred parking lot (explicitly out of v1)

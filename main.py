@@ -184,6 +184,16 @@ if _SPA_BUILT:
     @app.get("/app", include_in_schema=False)
     @app.get("/app/{spa_path:path}", include_in_schema=False)
     async def spa(spa_path: str = "") -> FileResponse:
+        # Serve real build artifacts that live at the SPA root — public/ assets
+        # copied into dist/ by Vite (chip/*.png, favicon, robots.txt). Without
+        # this the catch-all returned index.html for every non-/assets path, so
+        # those files came back as HTML and rendered as broken images. Client
+        # routes (e.g. "dashboard") aren't files, so they fall through to the
+        # SPA shell. The candidate is confined to _SPA_DIST to block traversal.
+        if spa_path:
+            candidate = (_SPA_DIST / spa_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(_SPA_DIST.resolve()):
+                return FileResponse(candidate)
         return FileResponse(_SPA_INDEX)
 else:  # pragma: no cover - only hit when the SPA bundle has not been built
     logger.warning("SPA bundle not found at %s; /app routes disabled until built", _SPA_DIST)

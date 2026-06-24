@@ -33,6 +33,24 @@ def test_root_redirects_to_spa_when_built(client):
     assert resp.headers["location"] == "/app/dashboard"
 
 
+@pytest.mark.skipif(not _SPA_BUILT, reason="no SPA bundle to serve files from")
+def test_spa_serves_public_assets_before_shell_fallback(client):
+    # The Chip mascot sprites live in dist/chip/ (Vite-copied public/ assets).
+    # The /app catch-all must serve them as real files — not return index.html,
+    # which rendered the <img> blank in production.
+    resp = client.get("/app/chip/chip-book.png")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+
+
+@pytest.mark.skipif(not _SPA_BUILT, reason="no SPA bundle to serve files from")
+def test_spa_falls_back_to_shell_for_client_routes(client):
+    # A non-file path (a React Router client route) still returns the SPA shell.
+    resp = client.get("/app/dashboard")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+
+
 # ── Issue 226: retired legacy HTML pages must return 404 ─────────────────────
 # The React SPA is canonical. Legacy pages removed to eliminate XSS attack
 # surface (stored-XSS via innerHTML of LLM/YouTube output — Issues 138, 149).

@@ -158,6 +158,13 @@ export function Walkthrough() {
     navigate('/onboarding')
   }, [navigate])
 
+  // Escape hatch for already-connected creators who don't want the explainer —
+  // mark it seen (so it won't re-trigger) and go straight to the dashboard.
+  const skip = useCallback(() => {
+    markWalkthroughSeen()
+    navigate('/dashboard')
+  }, [navigate])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight') setCurrent((c) => Math.min(c + 1, PANELS.length))
@@ -173,6 +180,11 @@ export function Walkthrough() {
   return (
     <div className="flex min-h-screen flex-col items-center bg-bg px-4 py-12">
       <div className="w-full max-w-xl">
+        <div className="mb-4 flex justify-end">
+          <button onClick={skip} className="text-xs text-subtle hover:text-muted">
+            Skip to dashboard →
+          </button>
+        </div>
         <div className="mb-10 flex justify-center gap-2">
           {PANELS.map((_, i) => (
             <span

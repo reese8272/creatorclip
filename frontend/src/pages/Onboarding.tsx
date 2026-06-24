@@ -189,6 +189,14 @@ export function Onboarding() {
           AutoClip
         </a>
         <span className="flex-1" />
+        {/* Escape hatch: an already-connected creator can jump straight to the
+            dashboard without finishing every setup step. Setup is resumable —
+            the dashboard's DNA CTA and the per-step state both persist. */}
+        {user && (
+          <Link to="/dashboard" className="text-xs text-muted hover:text-fg">
+            Skip to dashboard →
+          </Link>
+        )}
         <button onClick={logout} className="text-xs text-muted hover:text-fg">
           Logout
         </button>

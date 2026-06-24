@@ -13,6 +13,7 @@ function renderWalkthrough() {
       <Routes>
         <Route path="walkthrough" element={<Walkthrough />} />
         <Route path="onboarding" element={<div>Onboarding route</div>} />
+        <Route path="dashboard" element={<div>Dashboard route</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -42,6 +43,14 @@ describe('Walkthrough', () => {
     expect(localStorage.getItem('creatorclip:walkthrough_seen')).toBe('1')
     // Issue 154: stays inside the SPA (no full-page exit to /static/onboarding.html).
     expect(screen.getByText('Onboarding route')).toBeInTheDocument()
+  })
+
+  it('offers a skip-to-dashboard escape hatch that marks the walkthrough seen', async () => {
+    const user = userEvent.setup()
+    renderWalkthrough()
+    await user.click(screen.getByRole('button', { name: /Skip to dashboard/ }))
+    expect(localStorage.getItem('creatorclip:walkthrough_seen')).toBe('1')
+    expect(screen.getByText('Dashboard route')).toBeInTheDocument()
   })
 
   // OAuth-verification gate (Issue 153): this first-run page sits outside AppChrome,

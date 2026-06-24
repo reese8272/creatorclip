@@ -4,6 +4,30 @@ Updated after every issue closes.
 
 ---
 
+## ✅ UX pass — Chip blank-sprite fix + onboarding skip + adopt-on-link (2026-06-24)
+
+Three live-app (autoclip.studio) fixes from a UX review against the Claude design prototype.
+
+- **Chip mascot blank in prod (2 compounding causes):** `Chip.tsx` requested `/chip/<pose>.png` from
+  the domain root, but the SPA base is `/app/` → 404; and `main.py`'s `/app/{spa_path}` catch-all
+  returned `index.html` for every non-`/assets` path, so the PNG was never served as a file. Fixed
+  both: src is base-relative (`import.meta.env.BASE_URL`), and the catch-all now serves real `dist/`
+  files (traversal-confined) before the SPA-shell fallback.
+- **"Nothing shows up" / can't choose videos:** root cause was the catalog-origin filter, not an
+  onboarding gate. `/videos` hides `origin=catalog` rows (the synced DNA corpus) and `POST
+  /videos/link` 409'd on an existing row — so a synced channel had 0 selectable videos. `/videos/link`
+  now **adopts** a catalog row (flips `origin → link` in place) so it appears in the dashboard with the
+  honest "upload source file" path; genuine `link`/`upload` duplicates still 409.
+- **Onboarding/walkthrough escape hatch:** added "Skip to dashboard →" to `Onboarding` (gated on a
+  resolved user) and `Walkthrough` (also marks it seen). Setup is resumable.
+- **Gates:** frontend vitest **186/186**, `tsc -b` + `vite build` clean, eslint 0 errors (4
+  pre-existing warnings in untouched files). Backend ruff + mypy clean on changed files; touched
+  suites green (test_issue_139, test_static, test_isolation, test_list_caps, test_catalog_sync).
+  DECISIONS.md 2026-06-24. Follow-up: full in-app channel browser (list catalog rows + per-row "Clip
+  this") remains larger scope.
+
+---
+
 ## ✅ Backend/LLM health pass — test suite repaired (lane green) + LLM cost-ledger fix + doc cleanup (2026-06-24)
 
 **Goal:** make the backend "perfectly functional," LLM especially. Outcome: LLM call sites

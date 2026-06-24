@@ -71,6 +71,15 @@ describe('Onboarding', () => {
     expect(await screen.findByText('Ready to build your Creator DNA.')).toBeInTheDocument()
   })
 
+  // Escape hatch: a connected creator can skip setup and go straight to the
+  // dashboard (setup is resumable). The link is gated on a resolved user.
+  it('offers a skip-to-dashboard link once the channel is connected', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderOnboarding()
+    const skip = await screen.findByRole('link', { name: /Skip to dashboard/ })
+    expect(skip).toHaveAttribute('href', '/app/dashboard')
+  })
+
   // OAuth-verification gate (Issue 153): this first-run flow sits outside AppChrome,
   // so it must carry the ToS/Privacy footer links itself.
   it('exposes the ToS and Privacy footer links', async () => {
