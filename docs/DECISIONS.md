@@ -5,6 +5,46 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Render Blueprint added as the BETA host (GKE remains the scale path)
+
+**What was decided.**
+1. **CreatorClip's beta is hosted on Render** via a `render.yaml` Blueprint at the repo root
+   (web + always-on Celery worker + single-instance Celery beat + managed Key Value/Redis +
+   managed Postgres 16/pgvector, all `region: oregon`). This is the first internet-reachable,
+   always-on-worker deployment without standing up Kubernetes. Full-scale production (10k+) remains
+   the GKE Autopilot + Cloud SQL + KEDA Helm path (`deploy/charts/creatorclip/`, **Issue 275**) — the
+   two are not in conflict; Render is beta hosting only.
+2. **Migrations run on the web service's `preDeployCommand: alembic upgrade head` ONLY.** The worker
+   and beat services have no preDeploy step so two Alembic runs cannot race the same DB.
+3. **A bare `postgresql://`/`postgres://` DSN is auto-normalized to `postgresql+psycopg://` at config
+   load** (`config._normalize_async_pg_dsn`, applied via `field_validator` to `DATABASE_URL`,
+   `DATABASE_MIGRATION_URL`, `LOGS_DATABASE_URL`). Render's `fromDatabase` injects a bare libpq DSN,
+   but the async engine (`db.py`) needs the psycopg3 async scheme. This was the single highest break
+   risk; the validator makes the injected `connectionString` work with zero call-site changes.
+4. **Beta storage is R2 and logs go to stdout.** Render's container FS is ephemeral, so
+   `STORAGE_BACKEND=r2` (rendered clips survive restarts) and `LOG_DIR=""` (Render aggregates stdout).
+5. **Key Value uses `maxmemoryPolicy: noeviction`** — a Celery broker must never evict queued jobs.
+6. **Beta keeps the single-role DB** (`DATABASE_MIGRATION_URL` = `DATABASE_URL`). The RLS migrate/app
+   role split is post-beta.
+
+**Why.** The user wants a hosted beta with an always-on Celery worker now; GKE staging (Issue 275)
+is not yet stood up. Render's `type: worker` gives a continuously-running worker without K8s.
+
+**Source / evidence.** Render Blueprint spec (render.com/docs/blueprint-spec), background-workers,
+docker, and infrastructure-as-code docs (researched by the Opus planner). Driver-scheme requirement
+confirmed against `db.py` (`create_async_engine(settings.DATABASE_URL)`) and `docs/SECRETS.md`
+(`DATABASE_URL` documented as `postgresql+psycopg://…`). Unit lane green (1420 passed) with the new
+normalization + its focused test.
+
+**Scope note.** This advances Issue 24 (production env/secrets — the env group codifies it) and
+Issue 28 (go-live smoke — health/preDeploy gate + smoke section in `docs/RENDER_DEPLOY.md`); partially
+Issue 25 (declares every external-key slot). Issue 26 (Google OAuth consent + test users) stays a
+Google-console gate. Artifacts: `render.yaml`, `docs/RENDER_DEPLOY.md`, `config._normalize_async_pg_dsn`.
+
+**Date.** 2026-06-24
+
+---
+
 ## 2026-06-24 — Issue 317: "Link a video" retired as the primary entry point in favour of "Upload a video file"
 
 **What was decided.**
