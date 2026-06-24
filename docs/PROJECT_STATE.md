@@ -4,6 +4,26 @@ Updated after every issue closes.
 
 ---
 
+## ✅ Issue 96 — Chat-driven onboarding intake (guided Q&A → confirm) (2026-06-24)
+
+**DONE.** Added a `Quick form | Chat it out` toggle to `OnboardingIdentity`. The chat is a guided
+intake: the model asks one short question at a time and, when ready, calls a strict-schema
+`propose_profile` tool. The proposal is run through the SAME `dna.identity.validate_*` functions the
+wizard uses (one self-correction round) and is **never written from the turn** — the creator confirms
+via the existing `POST /creators/me/identity`. A manipulated model therefore can't write an unknown
+niche id or over-length field (prompt-injection posture; system prompt carries `UNTRUSTED_CONTENT_POLICY`
++ `HONESTY_CONSTRAINT`).
+
+- **Non-streaming** request/response turn (short turns; avoids new SSE/Celery infra — DECISIONS
+  2026-06-24). Reuses the existing identity-write endpoint for confirm; no schema churn.
+- Backend `chat/intake.py` + `POST /creators/me/identity/chat`; model = project `ANTHROPIC_MODEL`.
+- **Verify:** backend `tests/test_identity_chat.py` (6 — validation gate, self-correction, injection
+  writes nothing, runaway guard) + frontend `OnboardingIdentity.test.tsx` (2 — both modes; chat →
+  proposal → confirm writes). vitest **184/184**, ruff/mypy/eslint clean, build clean.
+  **Files:** `chat/intake.py`, `routers/creators.py`, `frontend/.../OnboardingIdentity.tsx` + `.test.tsx`.
+
+---
+
 ## ✅ Issue 100 — Onboarding coherence: walkthrough routed first + self-explaining badges (folded) (2026-06-24)
 
 **DONE — closed as folded** into #204 (intake optional) + #214 (labeled stepper) + #215 (post-OAuth

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -356,6 +357,34 @@ class IdentityHistoryOut(BaseModel):
     versions: list[IdentityOut]
 
 
+# ── Chat-driven intake (Issue 96) ──────────────────────────────────────────────
+class IdentityChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class IdentityChatIn(BaseModel):
+    # The client holds the short intake transcript and sends it each turn; the last
+    # turn must be the creator's. Bounded so a client can't replay a huge history.
+    history: list[IdentityChatTurn] = Field(..., min_length=1, max_length=40)
+
+
+class ProposedProfileOut(BaseModel):
+    # The validated profile the model proposed — NOT yet written. The creator
+    # confirms it via POST /creators/me/identity (which validates again).
+    niches: list[str]
+    audience_summary: str
+    content_pillars: list[str] | None = None
+    tone_tags: list[str] | None = None
+    hard_nos: list[str] | None = None
+    mission: str | None = None
+
+
+class IdentityChatOut(BaseModel):
+    reply: str
+    proposal: ProposedProfileOut | None = None
+
+
 def _identity_to_dict(row) -> dict:
     return {
         "version": row.version,
@@ -699,6 +728,30 @@ async def upsert_identity(
         )
     )
     return _identity_to_dict(row)
+
+
+@router.post("/me/identity/chat", response_model=IdentityChatOut)
+@limiter.limit("40/hour", key_func=creator_key)
+async def identity_chat(
+    request: Request,
+    body: IdentityChatIn,
+    creator: Creator = Depends(get_current_creator),
+) -> dict:
+    """One turn of the chat-driven intake (Issue 96).
+
+    The client holds the short transcript and posts it each turn; the model asks
+    the next question or — once it has enough — returns a validated ``proposal``.
+    The proposal is **not written here**: the creator confirms it via
+    ``POST /creators/me/identity`` (the same validate-then-write path the wizard
+    uses). See ``chat/intake.py`` for the prompt-injection posture. Per-creator by
+    construction — the turn reads no other creator's data and writes nothing.
+    """
+    from chat import intake
+
+    history = [{"role": t.role, "content": t.content} for t in body.history]
+    if history[-1]["role"] != "user":
+        raise HTTPException(status_code=422, detail="The last message must be from the creator.")
+    return await intake.run_intake_turn(creator.id, history)
 
 
 @router.get("/me/identity/history", response_model=IdentityHistoryOut)

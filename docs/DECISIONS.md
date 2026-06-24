@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Issue 96: chat-driven onboarding intake (non-streaming; validate-then-confirm)
+
+**Context.** Issue 96 wants a CFO-Agent-style guided intake the creator completes by chatting,
+which proposes a populated `CreatorIdentity` for confirmation — alongside the existing wizard form.
+A full streaming Pro-chat agent already exists (`chat/runner.py`, SSE via Celery + `/tasks/{id}/events`),
+so this is a focused addition, not a new chat stack.
+
+**What changed / decided:**
+
+1. **Non-streaming, request/response turn — deviation from the issue's "SSE stream" wording.**
+   Each intake turn is one short question (1–2 sentences), well under the `LLM_TIMEOUT_SECONDS`
+   budget, so token-streaming + the Celery/SSE durability stack would be overkill. `POST
+   /creators/me/identity/chat` takes the short transcript (the client holds it) and returns
+   `{reply, proposal}`. This keeps the feature self-contained and avoids new worker/SSE infra.
+   *Per `/claude-api`: streaming is the default for long output; a guided Q&A with short turns is
+   the documented exception.* Surface chosen = **Claude API + tool use (workflow)**, not Managed
+   Agents (no container/tool-exec needed — that would be massive overkill).
+
+2. **The model can only PROPOSE; the validators are the gate (prompt-injection posture).** The
+   creator's answers are UNTRUSTED. `chat/intake.py`: the system prompt carries the verbatim
+   `UNTRUSTED_CONTENT_POLICY` + `HONESTY_CONSTRAINT`; the model signals "ready" by calling the
+   strict-schema `propose_profile` tool; that proposal is run through the SAME
+   `dna.identity.validate_*` functions the wizard uses (one self-correction round on a validation
+   error), and is **never written from the turn**. The actual write happens only when the creator
+   confirms — reusing the existing `POST /creators/me/identity` (which validates again). A
+   manipulated model therefore cannot write an unknown niche id or over-length field. Runaway guard:
+   `MAX_INTAKE_TURNS`. Tokens logged (counts only, no PII) via `record_llm_tokens`.
+
+3. **Frontend = a mode toggle, not a second surface.** `OnboardingIdentity.tsx` gains a
+   `Quick form | Chat it out` tab; the wizard is extracted to a local `WizardForm`, the chat to a
+   local `IntakeChat`. Both write the same row via the same endpoint. Intake stays optional (#204).
+   No schema churn (append-only versioning preserved); same `CreatorIdentity` shape.
+
+4. **Model = the project default `ANTHROPIC_MODEL` (sonnet-4-6), not forced to Opus.** The whole
+   app standardizes on `settings.ANTHROPIC_MODEL`; a short intake doesn't warrant the Opus premium.
+
+**Source/evidence:** `/claude-api` skill (workflow vs Managed Agents; tool-use; streaming default +
+short-turn exception); existing `chat/prompt.py` (`HONESTY_CONSTRAINT`, `UNTRUSTED_CONTENT_POLICY`),
+`dna/identity.py` validators + `upsert_identity`, `clip_engine/scoring.py` (AsyncAnthropic singleton
+pattern). **Files:** `chat/intake.py`, `routers/creators.py` (`POST /me/identity/chat` + models),
+`tests/test_identity_chat.py`, `frontend/src/components/onboarding/OnboardingIdentity.tsx` + `.test.tsx`.
+**Date:** 2026-06-24.
+
+---
+
 ## 2026-06-24 — Issue 100: new creators see the walkthrough FIRST (refines Issue 215's redirect)
 
 **Context.** Issue 100's "what this app does" walkthrough already exists (`Walkthrough.tsx`, 5 panels:

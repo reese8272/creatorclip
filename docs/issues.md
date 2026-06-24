@@ -3766,9 +3766,14 @@ confusion handled by #214's StageStepper. No duplicate surface built. See DECISI
 
 **Risks** — (1) High duplication risk — building 100 standalone would re-create what 204/214/215 already cover; it must fold in (2) Mandatory intake re-introduces the 70%-drop-off concern that drove the original optional design — the decision belongs to 204 (3) Walkthrough may already satisfy the "what this is" requirement; risk of rebuilding an existing page
 
-### Issue 96: Multi-step chat-driven intake form (CFO-Agent style) — supersedes Issue 83
+### Issue 96: Multi-step chat-driven intake form (CFO-Agent style) — supersedes Issue 83 ✅ DONE (2026-06-24)
 
-**Status** `OPEN` · **Wave** W3 · **Lane** Activation & Onboarding · **Size** `L` · **Verify** `local`  
+**Status** `DONE` (2026-06-24) — chat mode added beside the wizard on `OnboardingIdentity`
+(`Quick form | Chat it out`). Guided Q&A → strict-schema `propose_profile` tool → proposal validated
+through the SAME `dna.identity.validate_*` path and confirmed via the existing `POST /me/identity`
+(model never writes; prompt-injection-safe). Non-streaming (short turns; DECISIONS 2026-06-24).
+Backend 6 tests + frontend 2 tests; ruff/mypy/eslint clean. See DECISIONS.md 2026-06-24.  
+**Wave** W3 · **Lane** Activation & Onboarding · **Size** `L` · **Verify** `local`  
 **Src** pre-existing 96 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #100, #204 · **Coordinate (hot files)** `dna/identity.py`, `frontend/src/components/onboarding/OnboardingIdentity.tsx`, `frontend/src/pages/Onboarding.tsx`, `routers/creators.py`  
 
