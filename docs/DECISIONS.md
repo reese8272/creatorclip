@@ -5,6 +5,49 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Issue 317: "Link a video" retired as the primary entry point in favour of "Upload a video file"
+
+**What was decided.**
+1. **The dashboard's primary "add a video" action is now a file upload, not a paste-a-URL link.**
+   The React `LinkVideoForm` (paste a YouTube URL → `POST /videos/link`) is removed; a new
+   `UploadVideoForm` (multipart file → `POST /videos/upload`) replaces it in the Dashboard header
+   and the `EmptyHero`. Copy updated accordingly ("Upload your video file — we never download from
+   YouTube").
+2. **`youtube_video_id` is now OPTIONAL on `POST /videos/upload`** (was required). A standalone raw
+   upload (OBS recording, unpublished cut) has no published video to point at. When supplied, the ID
+   still associates the upload with a published video so its performance feeds the outcome loop
+   (Issue 197) and is still deduped per creator; when omitted the storage key falls back to a fresh
+   `uuid4().hex` token (the full key is persisted in `source_uri`, so the token is recoverable).
+3. **`videos.youtube_video_id` column made nullable** (migration `0035`). The
+   `uq_creator_youtube_video` unique constraint is retained and still holds — PostgreSQL treats NULLs
+   as distinct, so any number of un-associated uploads coexist per creator while a provided ID is
+   deduped.
+4. **The `POST /videos/link` backend endpoint is RETAINED** (not deleted). Its only remaining real
+   job — adopting a synced `origin=catalog` row into the clip pipeline (`routers/videos.py:192`) —
+   is still needed and will be absorbed by the in-app channel picker (**Issue 310**), which is the
+   intended long-term replacement for manual ID entry. Only the paste-a-URL *UI* is retired.
+
+**Why.** Under the YouTube ToS we never download source media from a link, so a linked video could
+only ever sit at `ingest_status=pending` forever — the exact dead-end a user hit. The raw uploaded
+file is the only ToS-clean source for clipping/editing/reviewing. Removing link as the headline
+action eliminates the "pending forever" trap; making the YouTube ID optional unblocks standalone
+footage while preserving the analytics/outcome tie when a creator wants it. This does **not** weaken
+the "learn from your analytics" North Star: that loop is fed by the independent automatic
+`sync_video_catalog` + hourly analytics refresh (`worker/tasks.py:2325`, `2526`), never by manual
+linking.
+
+**Scope (this change).** Swap the entry point now + make the ID optional so standalone uploads work;
+the synced-channel picker that supplies the ID without pasting a URL is tracked separately as
+Issue 310 (user-approved phasing, 2026-06-24).
+
+**Source/evidence.** `docs/COMPLIANCE.md` "we never download from YouTube"; code trace confirming
+linked rows never feed DNA (`dna/builder.py:122` filters on `VideoMetrics.engagement_rate`) and that
+catalog/analytics sync is independent of linking; user decision (CHECK brief + approval, 2026-06-24).
+Tests: `tests/test_videos_upload_streaming.py::test_upload_without_youtube_id_succeeds_standalone`
+and `::test_upload_with_youtube_id_still_dedupes`; full unit lane green (1421 passed).
+
+---
+
 ## 2026-06-24 — Issue 315: prompt-cache floor is 1024 for Sonnet 4.6 (supersedes ALL 2048 refs); drop inert markers
 
 **What was decided.**

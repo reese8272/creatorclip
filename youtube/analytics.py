@@ -262,9 +262,14 @@ async def sync_video_analytics(
         logger.warning("Creator %s has no channel_id; skipping analytics", creator.id)
         return
 
-    metrics_data = await fetch_video_metrics(
-        access_token, video.youtube_video_id, creator.channel_id
-    )
+    # A standalone upload (Issue 317) has no published YouTube video, so there
+    # is no YouTube Analytics data to fetch — skip rather than query with a NULL
+    # id. Associated uploads / catalog rows carry an id and proceed normally.
+    youtube_video_id = video.youtube_video_id
+    if not youtube_video_id:
+        return
+
+    metrics_data = await fetch_video_metrics(access_token, youtube_video_id, creator.channel_id)
     now = datetime.now(UTC)
     if metrics_data:
         existing = await session.get(VideoMetrics, video.id)
@@ -280,7 +285,7 @@ async def sync_video_analytics(
     duration_s = video.duration_s or 0.0
     if duration_s > 0:
         retention = await fetch_retention_curve(
-            access_token, video.youtube_video_id, creator.channel_id, duration_s
+            access_token, youtube_video_id, creator.channel_id, duration_s
         )
         await session.execute(delete(RetentionCurve).where(RetentionCurve.video_id == video.id))
         for point in retention:

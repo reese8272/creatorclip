@@ -375,6 +375,136 @@ def test_413_regression_no_content_length_still_rejects(upload_client, monkeypat
     )
 
 
+# ── Issue 317: standalone upload with no youtube_video_id ────────────────────
+
+
+def test_upload_without_youtube_id_succeeds_standalone(monkeypatch):
+    """A raw-file upload with NO youtube_video_id must succeed (Issue 317).
+
+    "Link a video" is retired: the raw file is the only ToS-clean source. A
+    standalone upload (OBS recording / unpublished cut) has no published video
+    to point at, so youtube_video_id is optional. The Video row is created with
+    origin=upload + a stored source_uri, the pipeline starts, and the storage
+    key falls back to a generated token (never an empty path segment).
+    """
+    monkeypatch.setattr("config.settings.UPLOAD_MAX_MB", _TEST_MAX_MB)
+
+    creator = _fake_creator()
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session()
+
+    captured_keys: list[str] = []
+
+    def _storage(_tmp, key):
+        captured_keys.append(key)
+        return f"local://{key}"
+
+    created_videos: list[object] = []
+
+    def _capture_add(obj):
+        created_videos.append(obj)
+
+    start_pipeline_mock = MagicMock()
+
+    async def _fake_balance_check(*args, **kwargs):
+        return None
+
+    def _fake_probe(_tmp):
+        return 30.0
+
+    # Override the session factory so we can inspect the added Video row.
+    async def _gen():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        session.add = MagicMock(side_effect=_capture_add)
+        session.commit = AsyncMock()
+        session.refresh = AsyncMock()
+        yield session
+
+    app.dependency_overrides[get_session] = _gen
+
+    try:
+        with (
+            patch("routers.videos.check_positive_balance", new_callable=AsyncMock),
+            patch("routers.videos.check_balance_for_minutes", side_effect=_fake_balance_check),
+            patch("routers.videos.probe_duration_s", _fake_probe),
+            patch("routers.videos.upload_file", _storage),
+            patch("routers.videos.start_pipeline", start_pipeline_mock),
+            patch("worker.progress.aset_owner", new_callable=AsyncMock),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            resp = c.post(
+                "/videos/upload",
+                files={"file": ("recording.mp4", io.BytesIO(b"\x00" * 1024), "video/mp4")},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 200, (
+        f"Issue 317: a standalone upload with no youtube_video_id must succeed. "
+        f"Got {resp.status_code}: {resp.text}"
+    )
+    # A Video row was created and the pipeline kicked off.
+    assert created_videos, "no Video row was added"
+    video = created_videos[0]
+    assert video.youtube_video_id is None
+    assert video.origin.value == "upload"
+    assert video.source_uri is not None
+    start_pipeline_mock.assert_called_once()
+    # The storage key must carry a non-empty token (no `source/<creator>/.mp4`).
+    assert captured_keys, "storage was never called"
+    token = captured_keys[0].split("/")[-1]
+    assert token and not token.startswith("."), f"empty storage token in key {captured_keys[0]!r}"
+
+
+def test_upload_with_youtube_id_still_dedupes(monkeypatch):
+    """Regression: when youtube_video_id IS provided, the duplicate check still
+    fires and a second upload of the same id returns 409."""
+    monkeypatch.setattr("config.settings.UPLOAD_MAX_MB", _TEST_MAX_MB)
+
+    creator = _fake_creator()
+    app.dependency_overrides[get_current_creator] = lambda: creator
+
+    # Session whose duplicate lookup returns an existing row.
+    async def _gen():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = MagicMock()  # duplicate found
+        session.execute = AsyncMock(return_value=result)
+        session.add = MagicMock()
+        session.commit = AsyncMock()
+        session.refresh = AsyncMock()
+        yield session
+
+    app.dependency_overrides[get_session] = _gen
+
+    async def _fake_balance_check(*args, **kwargs):
+        return None
+
+    try:
+        with (
+            patch("routers.videos.check_positive_balance", new_callable=AsyncMock),
+            patch("routers.videos.check_balance_for_minutes", side_effect=_fake_balance_check),
+            patch("routers.videos.probe_duration_s", lambda _t: 30.0),
+            patch("routers.videos.upload_file", MagicMock()),
+            patch("routers.videos.start_pipeline", MagicMock()),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            resp = c.post(
+                "/videos/upload",
+                data={"youtube_video_id": "dupe1234567"},
+                files={"file": ("v.mp4", io.BytesIO(b"\x00" * 1024), "video/mp4")},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_creator, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 409, f"Expected 409 for duplicate id, got {resp.status_code}"
+
+
 @pytest.mark.skip(
     reason="TestClient runs in-process — the test-side 100 MB payload allocation "
     "dominates ru_maxrss and overwhelms whatever the server route allocates. "

@@ -7,7 +7,7 @@ import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AnalyticsPanel } from '@/components/dashboard/AnalyticsPanel'
-import { LinkVideoForm } from '@/components/dashboard/LinkVideoForm'
+import { UploadVideoForm } from '@/components/dashboard/UploadVideoForm'
 import { EmptyHero } from '@/components/dashboard/EmptyHero'
 import { VideoTable, type ClipInfo } from '@/components/dashboard/VideoTable'
 import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/DashboardBanners'
@@ -66,7 +66,7 @@ function CreatorDnaCard({ dna }: { dna: DnaProfile | null }) {
 
 export function Dashboard() {
   const { user, balance } = useAuth()
-  const [linkOpen, setLinkOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   const videosQuery = useQuery({
     queryKey: ['videos'],
@@ -133,8 +133,8 @@ export function Dashboard() {
             </p>
           </div>
           <div className="flex gap-2.5">
-            <Button onClick={() => setLinkOpen((o) => !o)} aria-expanded={linkOpen}>
-              + Link a video
+            <Button onClick={() => setUploadOpen((o) => !o)} aria-expanded={uploadOpen}>
+              + Upload a video
             </Button>
             <Link to="/analysis">
               <Button variant="secondary">Analyze a video</Button>
@@ -142,14 +142,14 @@ export function Dashboard() {
           </div>
         </div>
 
-        <LinkVideoForm open={linkOpen} />
+        <UploadVideoForm open={uploadOpen} />
         <LowBalanceWarning balance={balance} />
 
         {videosQuery.isPending ? (
           <p className="py-8 text-center text-sm text-subtle">Loading…</p>
         ) : isEmpty ? (
           <>
-            <EmptyHero onLinkClick={() => setLinkOpen(true)} />
+            <EmptyHero onUploadClick={() => setUploadOpen(true)} />
             <p className="py-2 text-center text-sm text-subtle">{emptyMessage}</p>
           </>
         ) : (

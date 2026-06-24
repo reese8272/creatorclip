@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button'
 const STEPS = [
   {
     num: 1,
-    title: 'Paste a YouTube URL',
-    sub: 'Fastest path. We pull the video, transcribe it, and surface clips ranked by fit.',
+    title: 'Upload your video file',
+    sub: 'Your raw file is the source — we transcribe it and surface clips ranked by fit. We never download from YouTube.',
   },
   {
     num: 2,
@@ -21,8 +21,8 @@ const STEPS = [
 
 // Authenticated zero-video state. Mirrors the pre-auth hero copy so the
 // first-login user lands on an explainer with three concrete next steps instead
-// of an empty table. "Link a video" expands the LinkVideoForm in place.
-export function EmptyHero({ onLinkClick }: { onLinkClick: () => void }) {
+// of an empty table. "Upload a video" expands the UploadVideoForm in place.
+export function EmptyHero({ onUploadClick }: { onUploadClick: () => void }) {
   return (
     <section
       aria-label="Get started"
@@ -30,9 +30,8 @@ export function EmptyHero({ onLinkClick }: { onLinkClick: () => void }) {
     >
       <h2 className="mb-2 text-h2 text-fg">Let's get your first clip.</h2>
       <p className="mb-5 max-w-[60ch] text-sm leading-relaxed text-muted">
-        AutoClip needs one YouTube video to learn from before it can rank clips against your
-        channel's DNA. Pick whichever path fits your workflow — all three land in the same review
-        queue.
+        AutoClip needs one video to learn from before it can rank clips against your channel's DNA.
+        Upload your source file or stream from OBS — both land in the same review queue.
       </p>
       <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
         {STEPS.map((s) => (
@@ -46,7 +45,7 @@ export function EmptyHero({ onLinkClick }: { onLinkClick: () => void }) {
         ))}
       </div>
       <div className="flex flex-wrap gap-3">
-        <Button onClick={onLinkClick}>Link a video →</Button>
+        <Button onClick={onUploadClick}>Upload a video →</Button>
         <Link to="/profile">
           <Button variant="secondary">Get your API key</Button>
         </Link>

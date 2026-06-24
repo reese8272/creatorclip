@@ -228,7 +228,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── components/chip/    # poses.ts (CHIP_POSES registry + ChipPose) · ChipStates.tsx (8 loading/thinking animations — Issue 304); sprites in public/chip/
 │       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal
 │       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
-│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · LinkVideoForm (inline panel) · VideoTable (Video·Status·Clips·Actions) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
+│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (inline file upload, Issue 317; replaced LinkVideoForm) · VideoTable (Video·Status·Clips·Actions) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
 │       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
 │       ├── components/insights/ # InsightsPanel · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e)
 │       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)
@@ -300,7 +300,7 @@ youtube_tokens
   scope, expires_at, updated_at
 
 videos
-  id, creator_id (FK), youtube_video_id, title, kind (long/short),
+  id, creator_id (FK), youtube_video_id (NULLABLE since Issue 317), title, kind (long/short),
   published_at, duration_s, source_uri, origin (catalog/link/upload),
   captions_available, ingest_status (pending/running/done/failed), created_at
   -- origin is the canonical provenance discriminator (Issue 139):
@@ -308,8 +308,14 @@ videos
   --     hidden from /videos so the dashboard never shows "pending forever").
   --   link    = registered by ID via POST /videos/link (no media — we never
   --     download from YouTube per ToS; shown with clippable=false, the
-  --     creator uploads the source file to clip).
+  --     creator uploads the source file to clip). NOTE (Issue 317): the
+  --     paste-a-URL UI is retired in favour of file upload; the /videos/link
+  --     endpoint is retained only for catalog-row adoption (→ Issue 310).
   --   upload  = carries source_uri (stored media); the only clip-trackable path.
+  --     POST /videos/upload: youtube_video_id is OPTIONAL (Issue 317) — a
+  --     standalone raw upload (no published video) leaves it NULL; the
+  --     (creator_id, youtube_video_id) unique constraint still holds (PG NULLs
+  --     are distinct). Storage key uses a uuid4 token when the id is absent.
   -- /videos filters `origin != catalog`. source_uri now means strictly
   --   "has stored media" (used by ingest + the stale-media purge), no longer
   --   doubling as the catalog discriminator. (Issue 139 supersedes Issue 90.)

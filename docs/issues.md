@@ -649,6 +649,36 @@ into standalone issues as scheduled. Each item has a backed fix in its module fi
 
 ---
 
+### Issue 317: Retire "Link a video" as the primary entry point — "Upload a video file" + optional YouTube association ✅ DONE (2026-06-24)
+
+**Status** `DONE` · **Wave** W0 · **Lane** L16 UI Core · **Size** `M` · **Verify** `local`
+**Src** user report — a *linked* video sits at `ingest_status=pending` forever (by design: ToS forbids
+downloading source media from a link). See `docs/DECISIONS.md` 2026-06-24 Issue 317.
+
+**Problem.** The dashboard's headline "add a video" action pasted a YouTube URL (`POST /videos/link`),
+which under the YouTube ToS can never produce clips — we never download the source — so it left a
+"pending forever" row. The raw uploaded file is the only ToS-clean source for clipping.
+
+**What shipped.**
+- Frontend: `LinkVideoForm` (paste-a-URL) removed; new `UploadVideoForm` (multipart file upload with
+  progress + optional published-video association) is the Dashboard header + `EmptyHero` CTA. Copy
+  updated; Dashboard/EmptyHero state + tests renamed (`uploadOpen`, `onUploadClick`).
+- Backend: `youtube_video_id` made OPTIONAL on `POST /videos/upload`; storage key falls back to a
+  fresh `uuid4` token when absent; dedupe only fires for an associated ID. `videos.youtube_video_id`
+  column made nullable (migration `0035`); `uq_creator_youtube_video` retained (NULLs distinct in PG).
+- `POST /videos/link` endpoint retained for catalog-row adoption (→ folded into Issue 310).
+
+**Acceptance criteria**
+- [x] Dashboard primary CTA uploads a file; no paste-a-URL form remains as the entry point.
+- [x] Standalone upload (no `youtube_video_id`) succeeds, creates an `origin=upload` row, starts the pipeline.
+- [x] Associated upload still dedupes per creator (409 on duplicate id) — outcome-loop tie preserved.
+- [x] Migration 0035 applies; unique constraint intact; honesty copy ("we never download from YouTube") intact.
+- [x] `npm run build` + full vitest green (194); backend unit lane green (1421); `DECISIONS.md` recorded.
+
+**Follow-up.** Issue 310 (in-app channel picker) supplies the YouTube association without manual URL entry.
+
+---
+
 ## Execution lanes — issue briefs
 
 Each lane is one agent's territory. Work top-to-bottom (issues are listed in wave order). Hand an agent

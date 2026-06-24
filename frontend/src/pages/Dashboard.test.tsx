@@ -154,13 +154,13 @@ describe('Dashboard', () => {
     expect(await screen.findByRole('heading', { name: 'Your videos' })).toBeInTheDocument()
   })
 
-  it('the header "+ Link a video" button toggles the inline link form (Issue 305)', async () => {
+  it('the header "+ Upload a video" button toggles the inline upload form (Issue 317)', async () => {
     vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], { vd: [] }))
     renderDashboard()
-    const toggle = await screen.findByRole('button', { name: '+ Link a video' })
-    expect(screen.queryByPlaceholderText('Paste a YouTube URL…')).toBeNull()
+    const toggle = await screen.findByRole('button', { name: '+ Upload a video' })
+    expect(screen.queryByLabelText('Video file to upload')).toBeNull()
     fireEvent.click(toggle)
-    expect(screen.getByPlaceholderText('Paste a YouTube URL…')).toBeInTheDocument()
+    expect(screen.getByLabelText('Video file to upload')).toBeInTheDocument()
   })
 
   it('sidebar shows the review queue with the rendered-clip count + Open review link (Issue 305)', async () => {

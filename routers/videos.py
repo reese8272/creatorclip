@@ -30,7 +30,7 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 
 class VideoListItemOut(BaseModel):
     id: str
-    youtube_video_id: str
+    youtube_video_id: str | None
     title: str | None
     kind: str
     ingest_status: str
@@ -67,7 +67,7 @@ class VideoLinkedOut(BaseModel):
 
 class VideoStatusOut(BaseModel):
     video_id: str
-    youtube_video_id: str
+    youtube_video_id: str | None
     ingest_status: str
     source_uri: str | None
     captions_available: bool
@@ -254,8 +254,8 @@ async def link_video(
 @limiter.limit("120/minute", key_func=creator_key)
 async def upload_video(
     request: Request,
-    youtube_video_id: str = Form(...),
     file: UploadFile = File(...),
+    youtube_video_id: str | None = Form(None),
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -263,8 +263,15 @@ async def upload_video(
 
     Streams to a temp file in 1 MB chunks, enforcing the size limit without
     loading the full upload into memory.
+
+    ``youtube_video_id`` is optional (Issue 317). When supplied it associates the
+    upload with one of the creator's published videos so its later performance
+    feeds the outcome loop; when omitted the upload is a standalone raw file
+    (e.g. an OBS recording or unpublished cut) with no YouTube tie. The raw file
+    is always the source media — we never download from YouTube.
     """
-    _validate_youtube_id(youtube_video_id)
+    if youtube_video_id is not None:
+        _validate_youtube_id(youtube_video_id)
     await check_positive_balance(creator.id, session)
 
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
@@ -313,14 +320,18 @@ async def upload_video(
                     )
                 fh.write(chunk)
 
-        existing = await session.execute(
-            select(Video).where(
-                Video.creator_id == creator.id,
-                Video.youtube_video_id == youtube_video_id,
+        # Dedupe only applies when the upload is associated with a published
+        # video. Standalone uploads (youtube_video_id is None) are distinct by
+        # design — a creator may upload many un-associated raw files.
+        if youtube_video_id is not None:
+            existing = await session.execute(
+                select(Video).where(
+                    Video.creator_id == creator.id,
+                    Video.youtube_video_id == youtube_video_id,
+                )
             )
-        )
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail="Video already registered")
+            if existing.scalar_one_or_none():
+                raise HTTPException(status_code=409, detail="Video already registered")
 
         # Probe duration from the uploaded file BEFORE the R2 PUT so we never
         # store an unknown-kind row even if upload fails partway through.
@@ -340,7 +351,12 @@ async def upload_video(
         if duration_s is not None:
             await check_balance_for_minutes(creator.id, video_minutes(duration_s), session)
 
-        key = f"source/{creator.id}/{youtube_video_id}{suffix}"
+        # The object path needs a stable, collision-free token. Use the YouTube
+        # id when associated; otherwise a fresh uuid for the standalone upload.
+        # The full key is persisted in ``source_uri``, so the token is always
+        # recoverable from the row even when youtube_video_id is NULL.
+        storage_token = youtube_video_id or uuid.uuid4().hex
+        key = f"source/{creator.id}/{storage_token}{suffix}"
         # Offload the (possibly multi-hundred-MB) R2 PUT / disk copy so it never
         # blocks the API event loop and stalls other requests. (Issue 67)
         source_uri = await asyncio.to_thread(upload_file, tmp_path, key)

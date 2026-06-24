@@ -297,7 +297,11 @@ class Video(Base):
     creator_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
     )
-    youtube_video_id: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    # Nullable since Issue 317: a standalone raw-file upload has no published
+    # YouTube video to point at. The (creator_id, youtube_video_id) unique
+    # constraint still holds — Postgres treats NULLs as distinct, so any number
+    # of un-associated uploads coexist per creator.
+    youtube_video_id: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
     title: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     kind: Mapped[VideoKind] = mapped_column(
         sa.Enum(VideoKind, name="video_kind_enum"), nullable=False
