@@ -444,6 +444,27 @@ async def queue_video_for_analysis(
         # so the caller can refresh its row without seeing a 4xx.
         return {"video_id": str(video.id), "status": video.ingest_status.value, "queued": False}
 
+    # Issue 313: stamp ownership BEFORE start_pipeline, exactly as the upload
+    # path does (see queue_video_upload above). start_pipeline emits stage
+    # progress to task:{video.id}:events; the SSE endpoint (GET
+    # /tasks/{id}/events) refuses any stream whose owner key is unset, so
+    # without this the dashboard's live stage-progress bar silently 404s on
+    # the "Queue for analysis" CTA. Fail-open on a Redis blip: the Video row
+    # is already committed and start_pipeline still runs, so the creator loses
+    # live progress (the row still refreshes via polling) but not the analysis.
+    import redis as _redis_pkg
+
+    from worker import progress
+
+    try:
+        await progress.aset_owner(str(video.id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning(
+            "queue aset_owner failed (Redis down?) video_id=%s err=%s",
+            video.id,
+            exc,
+        )
+
     await asyncio.to_thread(start_pipeline, str(video.id))
     return {"video_id": str(video.id), "status": video.ingest_status.value, "queued": True}
 

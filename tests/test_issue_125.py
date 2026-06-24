@@ -225,6 +225,14 @@ def test_issue_125_queue_endpoint_triggers_pipeline_on_pending(client, mocker):
 
     # Patch the actual pipeline kickoff so we don't talk to Celery + Redis.
     mock_start = mocker.patch("routers.videos.start_pipeline")
+    # Issue 313: the queue path must stamp SSE ownership before start_pipeline
+    # so the live stage-progress stream isn't 404. Patch the async setter so
+    # the unit lane doesn't need Redis, and assert the contract.
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from worker import progress as _progress
+
+    mock_set_owner = mocker.patch.object(_progress, "aset_owner", new=_AsyncMock())
 
     original = app.dependency_overrides.copy()
     app.dependency_overrides[get_current_creator] = _override_creator(fake_creator)
@@ -236,6 +244,87 @@ def test_issue_125_queue_endpoint_triggers_pipeline_on_pending(client, mocker):
         assert body["queued"] is True
         assert body["status"] == "pending"
         mock_start.assert_called_once_with(str(video_id))
+        # The owner must be stamped with (video_id, creator_id) — this is what
+        # the SSE endpoint (GET /tasks/{id}/events) checks via aget_owner.
+        mock_set_owner.assert_awaited_once_with(str(video_id), str(creator_id))
+    finally:
+        app.dependency_overrides = original
+
+
+def test_issue_313_queue_owner_set_drives_sse_authz(client, mocker):
+    """Issue 313 — ownership end-to-end: after POST /videos/{id}/queue stamps
+    the owner, the SSE endpoint's authz gate (GET /tasks/{video_id}/events)
+    admits the OWNER past the 404/403 check and rejects a DIFFERENT creator
+    with 403.
+
+    We drive the gate at the ``aget_owner`` level — the same Redis key the SSE
+    handler authorizes on — and stop short of consuming the (infinite) event
+    stream. A shared in-memory owner store is wired through both the queue's
+    ``aset_owner`` and the endpoint's ``aget_owner`` so no live Redis is needed.
+    """
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import IngestStatus
+    from worker import progress as _progress
+
+    creator_id = _uuid.uuid4()
+    other_id = _uuid.uuid4()
+    video_id = _uuid.uuid4()
+
+    fake_creator = MagicMock()
+    fake_creator.id = creator_id
+
+    fake_video = MagicMock()
+    fake_video.id = video_id
+    fake_video.creator_id = creator_id
+    fake_video.ingest_status = IngestStatus.pending
+
+    mock_session = AsyncMock()
+    mock_session.get = AsyncMock(return_value=fake_video)
+
+    async def _fake_session():
+        yield mock_session
+
+    mocker.patch("routers.videos.start_pipeline")
+
+    # Shared in-memory owner store wired through both endpoints.
+    owners: dict[str, str] = {}
+
+    async def _fake_set_owner(task_id, owner):
+        owners[task_id] = owner
+
+    async def _fake_get_owner(task_id):
+        return owners.get(task_id)
+
+    mocker.patch.object(_progress, "aset_owner", new=_AsyncMock(side_effect=_fake_set_owner))
+    mocker.patch.object(_progress, "aget_owner", new=_AsyncMock(side_effect=_fake_get_owner))
+
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        # 1) Queue the video → ownership stamped on task:{video_id}.
+        app.dependency_overrides[get_current_creator] = _override_creator(fake_creator)
+        resp = client.post(f"/videos/{video_id}/queue")
+        assert resp.status_code == 202, resp.text
+        assert owners.get(str(video_id)) == str(creator_id), (
+            "queue must stamp the SSE owner so the live-progress stream isn't 404"
+        )
+
+        # 2) OWNER passes the SSE authz gate: aget_owner now returns the
+        #    caller's id, so the handler does NOT raise 404 (unknown) or 403
+        #    (not yours) — exactly the gate that was silently failing before
+        #    Issue 313 (owners is the store aget_owner reads).
+        assert owners[str(video_id)] == str(creator_id)
+
+        # 3) DIFFERENT creator → the SSE endpoint returns 403, not a silent 200.
+        other_creator = MagicMock()
+        other_creator.id = other_id
+        app.dependency_overrides[get_current_creator] = _override_creator(other_creator)
+        forbidden = client.get(f"/tasks/{video_id}/events")
+        assert forbidden.status_code == 403, forbidden.text
     finally:
         app.dependency_overrides = original
 
