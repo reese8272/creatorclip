@@ -5,6 +5,51 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — AutoClip redesign fidelity polish (post-304–309): 10 prototype gaps
+
+**Context.** After the 304–309 redesign port shipped (static-verified only), a screen-by-screen
+comparison of the built React against the design prototype (`React app visual review/…/AutoClip App
+(standalone).html`, unwrapped) surfaced 10 fidelity gaps. All fixed in one batch; scope held to the
+304–309 charter — **strictly presentational, zero backend/schema/type changes**.
+
+**What changed / decided (only the non-obvious calls; the rest are 1:1 prototype matches):**
+
+1. **Profile identity editing relocated to Settings (user-confirmed 2026-06-24).** The prototype's
+   Profile is a read-only snapshot with no editable identity form, but post-onboarding the Profile
+   `IdentitySection` was the *only* path to edit channel identity. Resolution: move the editable form
+   to Settings (consistent with 308's Profile→Settings relocation of clip-production controls);
+   Profile shows identity read-only as signature-trait chips. No capability lost.
+2. **`DnaCard` is now status-conditional, not unconditionally read-only.** Onboarding step 5 links to
+   `/profile` and the card's **"Confirm & activate"** is the actual DNA-activation step — load-bearing,
+   cannot be removed. So: `status === 'active'` → read-only snapshot (trait chips + `v · updated` line
+   + **Re-sync DNA** / **View full DNA →** toggle); pending/draft → full brief + **Confirm & activate**
+   (+ Rebuild). Honors the prototype for the normal case while preserving onboarding activation.
+3. **Signature-trait chips sourced presentation-only** from existing `Identity` (`content_pillars` +
+   `tone_tags` + `niches`→labels) + DNA fields. No new endpoint. "built from N videos · N ratings"
+   from the prototype mock was **dropped** (no backing field — would be fabricated).
+4. **Master-timeline playhead omitted; chapter ticks added.** Chapter ticks use real generated
+   chapters (lifted from `ChaptersPanel` via a new optional, non-breaking `onChapters` callback) and
+   parse `timestamp_formatted` to position. The **playhead was intentionally NOT added** — the
+   long-form source player is an honest placeholder (no source-media endpoint, per the 2026-06-23
+   scaffold decision), so a fixed playhead would be decorative-fake. Consistent with that honesty rule.
+5. **Settings footer rendered as design chrome but disabled honestly.** "Reset to DNA defaults" /
+   "Save changes" appear (prototype chrome + README §6) but are disabled with a "each section saves on
+   its own" note — a global save over the not-yet-wired preview rows would imply persistence that
+   isn't there (same honesty stance as the `ComingSoonRow` previews).
+6. **Saved analyses is now a real navigable list** via the existing `GET /creators/me/insights/saved`
+   endpoint (rows link to `/insights`), replacing the stub link. Presentation-only — reuses the
+   Insights `['saved-insights']` query key.
+
+**Incidental fix.** Relocating `IdentitySection` exposed a latent crash: `setNiches(d.options)` could
+set `undefined` if `/creators/niches` returned no `options`, and `IdentitySection` does `niches.length`.
+Hardened both call sites to `d.options ?? []`.
+
+**Source/evidence.** Prototype is the spec (vetted in 304–309); honesty stance per CLAUDE.md +
+DECISIONS 2026-06-23 scaffold entry. Verified: `npm run build` (tsc + vite) clean, `vitest` 194/194,
+eslint 0 errors (4 pre-existing warnings, 0 new).
+
+---
+
 ## 2026-06-24 — CI green-up: real mypy fix + CVE pins + sudo-free workflow + paths-filter perms
 
 PR #28 merged green-on-deploy but the PR-CI run was red. Triaged every failing job; fixes below.

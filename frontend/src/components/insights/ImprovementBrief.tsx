@@ -57,7 +57,7 @@ export function ImprovementBrief() {
           Content improvement brief
         </>
       }
-      sub="Live web research + your channel data. ~15s."
+      sub="Live web research + your channel data · ~15s"
     >
       <Button onClick={generate} disabled={generating}>
         {btnLabel}

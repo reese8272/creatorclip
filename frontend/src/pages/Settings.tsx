@@ -1,12 +1,16 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { BrandKitSection } from '@/components/profile/BrandKitSection'
+import { IdentitySection } from '@/components/profile/IdentitySection'
 import { IntakeModeSection } from '@/components/profile/IntakeModeSection'
 import { PublishingSection } from '@/components/profile/PublishingSection'
 import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
 import { AccountDeletion } from '@/components/profile/AccountDeletion'
+import type { Identity, IdentityResponse, NicheOption } from '@/types'
 
 // A titled section card (matches the prototype's Settings card chrome).
 function SettingsCard({ title, children }: { title: string; children: ReactNode }) {
@@ -86,6 +90,23 @@ function ToggleMock({ on }: { on: boolean }) {
 // disabled previews. No backend changes (scope: docs/DECISIONS.md, Issue 308).
 export function Settings() {
   const { user } = useAuth()
+  // Channel identity editing relocated here from the (now read-only) Profile.
+  const [niches, setNiches] = useState<NicheOption[]>([])
+  const [identity, setIdentity] = useState<Identity | null>(null)
+  const [conflict, setConflict] = useState<string | null>(null)
+  const [reloadToken, setReloadToken] = useState(0)
+
+  useEffect(() => {
+    api<{ options: NicheOption[] }>('/creators/niches')
+      .then((d) => setNiches(d.options ?? []))
+      .catch(() => setNiches([]))
+    api<IdentityResponse>('/creators/me/identity')
+      .then((d) => {
+        setIdentity(d.identity)
+        setConflict(d.conflict ?? null)
+      })
+      .catch(() => {})
+  }, [reloadToken])
 
   return (
     <>
@@ -102,6 +123,15 @@ export function Settings() {
             can override per clip in the editor.
           </p>
         </header>
+
+        {/* Channel identity — relocated from Profile (functional). */}
+        <IdentitySection
+          key={identity?.version ?? 'new'}
+          niches={niches}
+          identity={identity}
+          conflict={conflict}
+          onSaved={() => setReloadToken((t) => t + 1)}
+        />
 
         {/* Captions & rendering — functional (brand kit). */}
         <BrandKitSection />
@@ -121,6 +151,7 @@ export function Settings() {
                 <span className="h-6 w-6 rounded-sm bg-accent ring-2 ring-accent-border" />
                 <span className="h-6 w-6 rounded-sm" style={{ background: 'oklch(75% 0.16 75)' }} />
                 <span className="h-6 w-6 rounded-sm" style={{ background: 'oklch(68% 0.17 145)' }} />
+                <span className="h-6 w-6 rounded-sm" style={{ background: 'var(--color-fg)' }} />
               </div>
             }
           />
@@ -191,6 +222,21 @@ export function Settings() {
         <PublishingSection canPublish={user?.can_publish ?? false} />
         <ApiKeysSection />
         <AccountDeletion />
+
+        {/* Footer (design chrome). Each section above saves on its own; a single
+            global save/reset over the not-yet-wired previews would imply an
+            effect that isn't there, so these are disabled honestly. */}
+        <div className="flex items-center justify-between gap-3 border-t border-default pt-4">
+          <p className="text-label text-subtle">Each section saves on its own.</p>
+          <div className="flex gap-2">
+            <Button variant="ghost" disabled title="Per-control DNA defaults are coming">
+              Reset to DNA defaults
+            </Button>
+            <Button variant="secondary" disabled title="Each section above saves on its own">
+              Save changes
+            </Button>
+          </div>
+        </div>
       </main>
     </>
   )

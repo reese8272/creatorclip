@@ -58,4 +58,38 @@ describe('Profile', () => {
     expect(screen.queryByText(/API keys/i)).toBeNull()
     expect(screen.queryByText(/Delete (my )?account/i)).toBeNull()
   })
+
+  it('is read-only — the editable identity form moved to Settings', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderProfile()
+    await screen.findByRole('heading', { name: 'My Channel' })
+    expect(screen.queryByRole('button', { name: 'Save identity' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Your identity' })).toBeNull()
+  })
+
+  it('lists saved analyses with Open links when present', async () => {
+    const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.endsWith('/auth/me')) return json({ channel_title: 'My Channel', analysis_mode: 'auto' })
+        if (url.endsWith('/billing/balance')) return json({ minutes_balance: 10, low_balance: false })
+        if (url.endsWith('/creators/niches')) return json({ options: [] })
+        if (url.endsWith('/creators/me/identity')) return json({ identity: null, conflict: null })
+        if (url.endsWith('/creators/me/dna')) return json({ profile: null })
+        if (url.endsWith('/videos')) return json({ videos: [] })
+        if (url.endsWith('/creators/me/insights/saved'))
+          return json({
+            insights: [
+              { id: 'a', title: 'Why "First 3 Seconds" won', content: '', dna_version: 3, created_at: '2026-06-19T00:00:00Z' },
+            ],
+          })
+        return json({})
+      }),
+    )
+    renderProfile()
+    expect(await screen.findByText(/Why "First 3 Seconds" won/)).toBeInTheDocument()
+    expect(screen.getByText('1 saved')).toBeInTheDocument()
+  })
 })

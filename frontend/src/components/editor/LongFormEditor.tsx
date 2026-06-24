@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import { fitTier } from '@/lib/fit'
 import type { FitTier } from '@/components/ui/fit-badge'
 import { Chip } from '@/components/Chip'
 import { Button } from '@/components/ui/button'
 import { ChaptersPanel } from '@/components/analysis/ChaptersPanel'
-import type { ReviewClip } from '@/types'
+import type { Chapter, ReviewClip } from '@/types'
 
 // H:MM:SS (or M:SS) for source-relative timecodes, which can run to hours.
 function fmtClock(s: number): string {
@@ -12,6 +13,13 @@ function fmtClock(s: number): string {
   const m = Math.floor((sec % 3600) / 60)
   const ss = (sec % 60).toString().padStart(2, '0')
   return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${ss}` : `${m}:${ss}`
+}
+
+// Parse a "H:MM:SS" / "M:SS" / "S" timestamp into seconds; NaN-safe → 0.
+function parseClock(ts: string): number {
+  const parts = ts.split(':').map((p) => parseInt(p, 10))
+  if (parts.some(Number.isNaN)) return 0
+  return parts.reduce((acc, n) => acc * 60 + n, 0)
 }
 
 const TIER_LABEL: Record<FitTier, string> = {
@@ -35,19 +43,48 @@ const TIER_TEXT: Record<FitTier, string> = {
 // derived from the furthest clip end (no source-media endpoint — scaffold scope).
 function MasterTimeline({
   clips,
+  chapters,
   sourceDuration,
   onOpenClip,
 }: {
   clips: ReviewClip[]
+  chapters: Chapter[]
   sourceDuration: number
   onOpenClip: (clipId: string) => void
 }) {
   const dur = sourceDuration > 0 ? sourceDuration : 1
+  // Chapter ticks: drawn from real generated chapters (right-rail panel). Only
+  // those that fall within the derived source span are positioned.
+  const ticks = chapters
+    .map((c) => ({ title: c.title, at: parseClock(c.timestamp_formatted) }))
+    .filter((t) => t.at >= 0 && t.at <= dur)
   return (
     <div>
       <div className="mb-2 text-label uppercase tracking-[0.06em] text-muted">Source timeline</div>
+      {ticks.length > 0 && (
+        <div className="relative mb-1 h-4">
+          {ticks.map((t, i) => (
+            <span
+              key={i}
+              className="absolute -translate-x-1/2 whitespace-nowrap text-[10px] text-subtle"
+              style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
+              title={`${t.title} · ${fmtClock(t.at)}`}
+            >
+              {t.title}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="relative overflow-hidden rounded-md border border-default bg-surface shadow-inset">
         <div className="relative h-24">
+          {/* chapter tick lines */}
+          {ticks.map((t, i) => (
+            <div
+              key={i}
+              className="absolute bottom-0 top-0 w-px bg-strong/70"
+              style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
+            />
+          ))}
           {/* waveform placeholder */}
           <div className="absolute inset-0 flex items-center gap-px px-1.5">
             {Array.from({ length: 48 }, (_, i) => (
@@ -105,6 +142,9 @@ export function LongFormEditor({
 }) {
   const sourceDuration = clips.reduce((max, c) => Math.max(max, c.end_s), 0)
   const ranked = [...clips].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
+  // Chapters are generated on demand in the right-rail panel; once present they
+  // also annotate the master timeline (see ChaptersPanel onChapters).
+  const [chapters, setChapters] = useState<Chapter[]>([])
 
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -127,7 +167,12 @@ export function LongFormEditor({
           </div>
         </div>
 
-        <MasterTimeline clips={ranked} sourceDuration={sourceDuration} onOpenClip={onOpenClip} />
+        <MasterTimeline
+          clips={ranked}
+          chapters={chapters}
+          sourceDuration={sourceDuration}
+          onOpenClip={onOpenClip}
+        />
 
         {/* Suggested clips */}
         <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
@@ -181,7 +226,7 @@ export function LongFormEditor({
 
       {/* Right rail: chapters (functional) + export (UI only) */}
       <div className="flex flex-col gap-4">
-        <ChaptersPanel videoId={videoId} />
+        <ChaptersPanel videoId={videoId} onChapters={setChapters} />
 
         <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
           <div className="border-b border-default px-4 py-3.5 text-h3 font-semibold text-fg">Export</div>

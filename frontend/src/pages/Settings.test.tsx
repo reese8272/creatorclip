@@ -12,6 +12,8 @@ function mockFetch() {
     if (url.endsWith('/billing/balance')) return json({ minutes_balance: 10, low_balance: false })
     if (url.includes('/brand-kit')) return json({ caption_style: 'bold_pop', captions_enabled: true })
     if (url.includes('/api-keys')) return json({ keys: [] })
+    if (url.endsWith('/creators/niches')) return json({ options: [] })
+    if (url.endsWith('/creators/me/identity')) return json({ identity: null, conflict: null })
     return json({})
   })
 }
@@ -43,5 +45,13 @@ describe('Settings', () => {
     // Unbacked controls are present but clearly flagged — never faux-functional.
     expect(screen.getByText('Cut density')).toBeInTheDocument()
     expect(screen.getAllByText('Soon').length).toBeGreaterThan(0)
+  })
+
+  it('hosts the relocated editable identity form + a (disabled) footer', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderSettings()
+    expect(await screen.findByRole('button', { name: 'Save identity' })).toBeInTheDocument()
+    const save = screen.getByRole('button', { name: 'Save changes' })
+    expect(save).toBeDisabled()
   })
 })

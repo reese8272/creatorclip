@@ -12,6 +12,14 @@ interface ChatMsg {
   content: string
 }
 
+// Empty-state suggestion pills — click to send (Issue 309 fidelity).
+const SUGGESTIONS = [
+  'What were my best videos this month?',
+  'When should I post?',
+  'Which hooks work best for me?',
+  'What should I try next?',
+]
+
 interface QueuedReply {
   task_id: string
   stream_url: string | null
@@ -82,8 +90,8 @@ export function Chat() {
     })
   }
 
-  async function send() {
-    const text = input.trim()
+  async function send(override?: string) {
+    const text = (override ?? input).trim()
     if (!text || streaming) return
     setError(null)
     setInput('')
@@ -163,10 +171,22 @@ export function Chat() {
             <div className="flex flex-col items-center text-center text-sm text-muted">
               <Chip pose="wave" size={72} />
               <h2 className="mb-2 mt-3 text-h2 text-fg">Ask about your channel</h2>
-              <p>
-                Try “What were my best videos this month?” or “When should I post?” — I’ll pull your
-                own analytics to answer.
+              <p className="max-w-md">
+                I pull your own analytics to answer — best videos, upload timing, hooks, and what to
+                try next.
               </p>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => send(s)}
+                    className="rounded-full border border-strong bg-surface px-3.5 py-1.5 text-small text-fg shadow-inset transition-colors hover:bg-elevated focus:border-accent focus:outline-none"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

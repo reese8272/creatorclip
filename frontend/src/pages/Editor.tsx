@@ -448,7 +448,6 @@ export function Editor() {
                 {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
               </div>
               <FitBadge tier={fitTier(clip.score)} />
-              <p className="text-xs text-muted">{clip.reasoning}</p>
               <Button
                 variant="ghost"
                 size="sm"
@@ -458,6 +457,14 @@ export function Editor() {
               </Button>
             </div>
           </div>
+
+          {/* Chip guidance callout (short-form) */}
+          {clip.reasoning && (
+            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 shadow-inset">
+              <Chip pose="think" size={30} className="mt-0.5 flex-shrink-0" />
+              <p className="text-small leading-relaxed text-muted">{clip.reasoning}</p>
+            </div>
+          )}
 
           {/* Timeline */}
           <div>
@@ -479,7 +486,8 @@ export function Editor() {
 
           {/* Transcript synced to playhead */}
           <div>
-            <h2 className="mb-2 text-xs font-medium uppercase tracking-[0.06em] text-muted">
+            <h2 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.06em] text-muted">
+              <Chip pose="papers" size={22} />
               Transcript
             </h2>
             {words.length === 0 && !txPending && (

@@ -4,6 +4,32 @@ Updated after every issue closes.
 
 ---
 
+## ✅ AutoClip redesign — fidelity polish: 10 prototype gaps closed (2026-06-24)
+
+Screen-by-screen comparison of the 304–309 React build against the design prototype (unwrapped from
+`React app visual review/`) surfaced 10 fidelity gaps; all fixed in one presentational batch (zero
+backend/schema/type changes). Now **visually faithful to the prototype**, not just static-verified.
+
+- **Editor** — short-form `chip-think` guidance callout (#1) + `chip-papers` on the transcript header
+  (#5); long-form master timeline gained real chapter tick labels (#7, lifted from `ChaptersPanel` via
+  a new optional `onChapters` callback). Playhead intentionally omitted (honest scaffold — no source
+  player).
+- **Profile** — rebuilt as a true read-only snapshot: `DnaCard` is now status-conditional (active →
+  trait chips + `v · updated` + Re-sync/View-full-DNA; pending → Confirm & activate preserved for the
+  onboarding hand-off) (#2,3); Saved analyses is a real navigable list via `insights/saved` (#4); the
+  editable identity form **relocated to Settings** (#6, user-confirmed).
+- **Settings** — hosts the relocated `IdentitySection`; footer "Reset to DNA defaults"/"Save changes"
+  added as disabled honest chrome; 4th highlight swatch restored (#8).
+- **Chat** — clickable empty-state suggestion pills restored (click → send) (#9).
+- **Insights** — improvement-brief subcopy separator `· ` (#10).
+- **Incidental** — hardened `setNiches(d.options ?? [])` (relocation exposed an undefined-crash path).
+
+**Gates:** `npm run build` (tsc + vite) clean · `vitest` **194/194** (was 186; +8 regression tests:
+`DnaCard.test.tsx`, `Chat.test.tsx`, Profile/Settings extensions) · eslint **0 errors** (4 pre-existing
+warnings, 0 new). See `docs/DECISIONS.md` 2026-06-24 entry for the non-obvious calls.
+
+---
+
 ## ✅ CI green-up — mypy fix + CVE pins + sudo-free workflow + paths-filter perms (2026-06-24)
 
 PR #28's PR-CI run was red (deploy went out anyway — it keys off docker-publish). Triaged + fixed

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Chip } from '@/components/Chip'
 import { Brief } from './Brief'
-import type { DnaProfile, DnaResponse } from '@/types'
+import type { DnaProfile, DnaResponse, Identity, NicheOption } from '@/types'
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -28,10 +28,35 @@ function stats(p: DnaProfile): { label: string; value: string }[] {
   return out
 }
 
-export function DnaCard({ identityCreatedAt }: { identityCreatedAt: string | null }) {
+// Signature-trait chips derived from the creator's stated identity — content
+// pillars, tone, and niches (mapped to labels). Presentation-only; no new data.
+function signatureTraits(identity: Identity | null, niches: NicheOption[]): string[] {
+  if (!identity) return []
+  const labelOf = (id: string) => niches.find((n) => n.id === id)?.label ?? id
+  const all = [
+    ...(identity.content_pillars ?? []),
+    ...(identity.tone_tags ?? []),
+    ...identity.niches.map(labelOf),
+  ]
+  return [...new Set(all.map((s) => s.trim()).filter(Boolean))].slice(0, 6)
+}
+
+// Profile's Creator DNA card. Read-only snapshot once the DNA is active
+// (signature-trait chips + version/updated line + Re-sync / View full DNA). When
+// the DNA is built but not yet confirmed (the onboarding hand-off — Onboarding
+// step 5 links here), it shows the full brief + "Confirm & activate" so that
+// activation path is preserved.
+export function DnaCard({
+  identity,
+  niches,
+}: {
+  identity: Identity | null
+  niches: NicheOption[]
+}) {
   const [profile, setProfile] = useState<DnaProfile | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showBrief, setShowBrief] = useState(false)
   const [status, setStatus] = useState<{ text: string; tone: 'muted' | 'success' | 'danger' } | null>(null)
   const [stream, setStream] = useState('')
   const subRef = useRef<StreamSubscription | null>(null)
@@ -63,15 +88,15 @@ export function DnaCard({ identityCreatedAt }: { identityCreatedAt: string | nul
     }
   }
 
-  const rebuild = async () => {
+  const resync = async () => {
     subRef.current?.close()
     setStream('')
-    setStatus({ text: 'Rebuild queued…', tone: 'muted' })
+    setStatus({ text: 'Re-sync queued…', tone: 'muted' })
     try {
       const data = await api<{ task_id: string; stream_url?: string }>('/creators/me/dna/build', {
         method: 'POST',
       })
-      setStatus({ text: 'Rebuilding DNA — watch the progress below.', tone: 'muted' })
+      setStatus({ text: 'Re-syncing DNA — watch the progress below.', tone: 'muted' })
       if (data.stream_url) {
         subRef.current = subscribeToTaskStream(data.stream_url, {
           onRender: setStream,
@@ -79,25 +104,32 @@ export function DnaCard({ identityCreatedAt }: { identityCreatedAt: string | nul
         })
       }
     } catch {
-      setStatus({ text: 'Could not queue rebuild — try again.', tone: 'danger' })
+      setStatus({ text: 'Could not queue re-sync — try again.', tone: 'danger' })
     }
   }
 
   // "Synced with DNA" when the DNA was built at/after the latest identity edit.
   const syncState =
-    profile && identityCreatedAt
-      ? new Date(profile.created_at) >= new Date(identityCreatedAt)
+    profile && identity?.created_at
+      ? new Date(profile.created_at) >= new Date(identity.created_at)
       : null
+  // Backend DnaStatus is draft | confirmed | superseded (models.py). "confirmed"
+  // is the activated state → read-only snapshot; "draft" is the pre-confirmation
+  // onboarding hand-off → keep Confirm & activate.
+  const isActive = profile?.status === 'confirmed' || profile?.status === 'superseded'
+  const traits = signatureTraits(identity, niches)
 
   const provenance = profile ? (
-    <div className="flex items-center gap-2" title={`Internal version v${profile.version}`}>
+    <div className="flex items-center gap-2">
       {syncState !== null && (
         <Badge variant={syncState ? 'success' : 'warning'}>
           {syncState ? 'Synced' : 'Out of sync'}
         </Badge>
       )}
-      <Badge variant={profile.status === 'active' ? 'success' : 'muted'}>{profile.status}</Badge>
-      <span className="text-xs text-subtle">Updated {fmtDate(profile.created_at)}</span>
+      <Badge variant={isActive ? 'success' : 'muted'}>{profile.status}</Badge>
+      <span className="font-mono text-xs text-subtle">
+        v{profile.version} · updated {fmtDate(profile.created_at)}
+      </span>
     </div>
   ) : null
 
@@ -118,11 +150,40 @@ export function DnaCard({ identityCreatedAt }: { identityCreatedAt: string | nul
           <p className="text-sm text-muted">Loading your creator brief…</p>
         ) : profile ? (
           <>
-            {profile.brief_text ? (
+            {/* Active DNA → snapshot: signature-trait chips + optional full brief.
+                Pending DNA → show the full brief inline for review. */}
+            {isActive ? (
+              <>
+                {traits.length > 0 && (
+                  <div>
+                    <div className="mb-2 text-2xs uppercase tracking-[0.06em] text-subtle">
+                      Signature traits
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {traits.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-full border border-default bg-bg px-2.5 py-1 text-xs text-muted"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {showBrief &&
+                  (profile.brief_text ? (
+                    <Brief markdown={profile.brief_text} />
+                  ) : (
+                    <p className="text-sm text-muted">(no brief text)</p>
+                  ))}
+              </>
+            ) : profile.brief_text ? (
               <Brief markdown={profile.brief_text} />
             ) : (
               <p className="text-sm text-muted">(no brief text)</p>
             )}
+
             {stats(profile).length > 0 && (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {stats(profile).map((s) => (
@@ -130,14 +191,31 @@ export function DnaCard({ identityCreatedAt }: { identityCreatedAt: string | nul
                 ))}
               </div>
             )}
+
             <div className="flex flex-wrap gap-2">
-              <Button variant="confirm" onClick={confirm}>
-                Confirm &amp; activate
-              </Button>
-              <Button variant="outline" onClick={rebuild}>
-                ↺ Rebuild DNA
-              </Button>
+              {isActive ? (
+                <>
+                  <Button variant="outline" onClick={resync}>
+                    ↺ Re-sync DNA
+                  </Button>
+                  {profile.brief_text && (
+                    <Button variant="ghost" onClick={() => setShowBrief((s) => !s)}>
+                      {showBrief ? 'Hide full DNA' : 'View full DNA →'}
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Button variant="confirm" onClick={confirm}>
+                    Confirm &amp; activate
+                  </Button>
+                  <Button variant="outline" onClick={resync}>
+                    ↺ Rebuild DNA
+                  </Button>
+                </>
+              )}
             </div>
+
             {stream && (
               <pre className="max-h-64 overflow-auto rounded-md border border-default bg-bg p-3 font-mono text-xs text-muted">
                 {stream}

@@ -1,15 +1,29 @@
+import { useEffect, useMemo } from 'react'
 import { useStreamAction } from '@/hooks/useStreamAction'
 import { Button } from '@/components/ui/button'
 import { AnalysisPanel, CopyButton, StatusChip } from '@/components/analysis/AnalysisPanel'
 import type { Chapter } from '@/types'
 
-export function ChaptersPanel({ videoId }: { videoId: string }) {
+// `onChapters` (optional) lets a parent observe generated chapters without
+// changing this panel's self-managed behavior — used by the long-form Editor to
+// draw chapter ticks on the master timeline.
+export function ChaptersPanel({
+  videoId,
+  onChapters,
+}: {
+  videoId: string
+  onChapters?: (chapters: Chapter[]) => void
+}) {
   const { stream, error, busy, start } = useStreamAction<{
     chapters: Chapter[]
     description_block: string
   }>()
-  const chapters = stream.result?.chapters ?? []
+  const chapters = useMemo(() => stream.result?.chapters ?? [], [stream.result])
   const descriptionBlock = stream.result?.description_block ?? ''
+
+  useEffect(() => {
+    if (onChapters && chapters.length > 0) onChapters(chapters)
+  }, [onChapters, chapters])
 
   return (
     <AnalysisPanel

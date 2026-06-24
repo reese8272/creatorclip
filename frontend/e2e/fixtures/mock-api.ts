@@ -213,7 +213,7 @@ const BRIEF: ImprovementBrief = {
 const DNA: DnaResponse = {
   profile: {
     version: 3,
-    status: 'ready',
+    status: 'confirmed',
     created_at: '2026-06-15T10:00:00Z',
     brief_text:
       '**Your channel DNA**\nFast-paced maker content with hands-on builds, dry humor, and a payoff-forward structure.',

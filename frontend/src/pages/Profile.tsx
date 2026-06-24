@@ -5,7 +5,6 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { DnaCard } from '@/components/profile/DnaCard'
-import { IdentitySection } from '@/components/profile/IdentitySection'
 import { AnalyticsPanel } from '@/components/dashboard/AnalyticsPanel'
 import { Button } from '@/components/ui/button'
 import type {
@@ -13,6 +12,7 @@ import type {
   Identity,
   IdentityResponse,
   NicheOption,
+  SavedInsightsResponse,
   VideoListResponse,
 } from '@/types'
 
@@ -33,22 +33,15 @@ export function Profile() {
   const { user } = useAuth()
   const [niches, setNiches] = useState<NicheOption[]>([])
   const [identity, setIdentity] = useState<Identity | null>(null)
-  const [conflict, setConflict] = useState<string | null>(null)
-  // Bumping this re-runs the load effect (e.g. after an identity save) without
-  // setting state directly in the effect body.
-  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
     api<{ options: NicheOption[] }>('/creators/niches')
-      .then((d) => setNiches(d.options))
+      .then((d) => setNiches(d.options ?? []))
       .catch(() => setNiches([]))
     api<IdentityResponse>('/creators/me/identity')
-      .then((d) => {
-        setIdentity(d.identity)
-        setConflict(d.conflict ?? null)
-      })
+      .then((d) => setIdentity(d.identity))
       .catch(() => {})
-  }, [reloadToken])
+  }, [])
 
   // Library stats reuse the dashboard's cached queries (same query keys).
   const videosQuery = useQuery({
@@ -63,6 +56,13 @@ export function Profile() {
   })
   const clipsRendered = (clipCountsQuery.data?.counts ?? []).reduce((n, r) => n + r.rendered, 0)
   const channelName = user?.channel_title ?? user?.email ?? 'Your channel'
+
+  // Saved analyses — reuses the Insights "saved" query/key; rows link to Insights.
+  const savedQuery = useQuery({
+    queryKey: ['saved-insights'],
+    queryFn: () => api<SavedInsightsResponse>('/creators/me/insights/saved'),
+  })
+  const saved = savedQuery.data?.insights ?? []
 
   return (
     <>
@@ -83,26 +83,48 @@ export function Profile() {
         </div>
 
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
-          {/* Main: DNA snapshot + identity + saved analyses */}
+          {/* Main: DNA snapshot + saved analyses (read-only; editing lives in Settings) */}
           <div className="flex flex-col gap-6">
-            <DnaCard identityCreatedAt={identity?.created_at ?? null} />
-            <IdentitySection
-              key={identity?.version ?? 'new'}
-              niches={niches}
-              identity={identity}
-              conflict={conflict}
-              onSaved={() => setReloadToken((t) => t + 1)}
-            />
+            <DnaCard identity={identity} niches={niches} />
             <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
               <div className="flex items-center justify-between border-b border-default px-[18px] py-4">
                 <span className="text-body font-semibold text-fg">Saved analyses</span>
-                <Link to="/insights" className="text-small text-accent-text hover:underline">
-                  View saved →
-                </Link>
+                <span className="text-label text-subtle">
+                  {saved.length > 0 ? `${saved.length} saved` : ''}
+                </span>
               </div>
-              <p className="px-[18px] py-4 text-small text-subtle">
-                Your bookmarked performer analyses and improvement briefs live on the Insights page.
-              </p>
+              {savedQuery.isError ? (
+                <p className="px-[18px] py-4 text-small text-danger">Could not load saved analyses.</p>
+              ) : saved.length === 0 ? (
+                <p className="px-[18px] py-4 text-small text-subtle">
+                  No saved analyses yet — bookmark a performer analysis or improvement brief on the{' '}
+                  <Link to="/insights" className="text-accent-text hover:underline">
+                    Insights
+                  </Link>{' '}
+                  page.
+                </p>
+              ) : (
+                saved.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between border-b border-default px-[18px] py-3 last:border-b-0"
+                  >
+                    <div>
+                      <div className="text-small text-fg">{s.title || 'Saved analysis'}</div>
+                      <div className="font-mono text-label text-subtle">
+                        {new Date(s.created_at).toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
+                      </div>
+                    </div>
+                    <Link to="/insights" className="text-label text-accent-text hover:underline">
+                      Open →
+                    </Link>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
