@@ -16,6 +16,12 @@ const anim = (value: string): CSSProperties => ({ animation: value })
 
 // 1 — Analyzing: Chip bobs beside a corner-framed frame with a scan sweep.
 //     Home: clip scoring / useStageStream "scoring".
+//     Issue 314 — DEFERRED (kept exported + unit-tested): the scoring step the
+//     pipeline emits is the `signals` stage, which already surfaces an animated
+//     chip (ChipGeneratingClips, mounted in StageStepper). There is no separate
+//     scoring surface to co-locate this in without stacking two animated chips in
+//     the same tight VideoTable cell (layout thrash). Mount when a dedicated
+//     scoring surface exists. Do not delete the export.
 export function ChipAnalyzing({
   pose = 'magnify',
   size = 84,
@@ -171,6 +177,12 @@ export function ChipLoadingScreen({
 
 // 6 — Rendering: Chip bobs over a determinate progress bar (0–100).
 //     Home: caption/clean-pass "render queued" polling.
+//     Issue 314 — DEFERRED (kept exported + unit-tested): this state is
+//     determinate-only — it requires a real numeric `progress` (0–100). The
+//     pipeline deliberately exposes NO numeric progress (useStageStream emits only
+//     a coarse stage/label, and StageStepper never shows a countdown). Mounting it
+//     now would mean fabricating a percentage, which the honesty scaffold forbids.
+//     Mount when a real render-progress signal exists; until then leave unmounted.
 export function ChipRendering({
   progress,
   label = 'Rendering styled cut',

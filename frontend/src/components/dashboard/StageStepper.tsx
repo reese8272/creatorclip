@@ -5,6 +5,7 @@
 // Falls back to a Badge-style muted pill when status is idle.
 
 import { Badge } from '@/components/ui/badge'
+import { ChipGeneratingClips } from '@/components/chip/ChipStates'
 
 // Human-readable copy for each coarse stage enum the worker emits.
 const STAGE_LABELS: Record<string, string> = {
@@ -55,9 +56,15 @@ export function StageStepper({ stage, label, status, isStale, failureReason }: S
     return <Badge variant="success">done</Badge>
   }
 
-  // streaming — show stage + ETA hint
+  // streaming — show stage + ETA hint. During the `signals` stage (where the
+  // pipeline is scoring and generating clips) the design surfaces the animated
+  // ChipGeneratingClips chip above the badge (Issue 314). The chip is decorative
+  // (empty alt / aria-hidden) so it adds no text; prefers-reduced-motion collapses
+  // the card-cycle to a resting frame via the global rule in index.css.
+  const showGeneratingChip = stage === 'signals' && !isStale
   return (
     <div className="flex flex-col gap-0.5" aria-live="polite">
+      {showGeneratingChip && <ChipGeneratingClips size={48} className="mb-1" />}
       <Badge variant="warning">{stage ? stageLabel(stage) : 'running'}</Badge>
       {isStale ? (
         <span className="font-mono text-xs text-subtle">taking longer than usual</span>

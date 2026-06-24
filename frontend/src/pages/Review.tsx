@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Chip } from '@/components/Chip'
+import { ChipPersonalizing } from '@/components/chip/ChipStates'
 import { ClipPlayer } from '@/components/review/ClipPlayer'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
@@ -13,16 +14,28 @@ import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '
 
 // Issue 216: Honest personalization-status band — shown below the virality disclaimer.
 // Below threshold: "Still learning" with N/threshold progress; above: "Personalized".
-// No virality language; no weight float exposed to user. Chip (meditate) signals
-// the still-learning posture (Issue 306).
+// No virality language; no weight float exposed to user.
+//
+// Issue 314: while still learning, the animated ChipPersonalizing (meditating Chip +
+// floating binary digits, 150×200) is its real home — it signals the keep/drop
+// ratings being learned. Once personalized, the band collapses back to the thin
+// inline-chip strip (no large animation needed). prefers-reduced-motion collapses
+// the animation to a single resting frame via the global rule in index.css.
 function PersonalizationBand({ status }: { status: PersonalizationStatus }) {
-  const text = status.active
-    ? `Personalized to your feedback (${status.labels} ratings collected)`
-    : `Still learning — DNA-based ranking (${status.labels}/${status.threshold} ratings collected)`
+  if (!status.active) {
+    return (
+      <div className="flex flex-col items-center gap-1 border-b border-default bg-surface px-4 py-3 text-center text-xs text-muted">
+        <ChipPersonalizing />
+        <span>
+          Still learning — DNA-based ranking ({status.labels}/{status.threshold} ratings collected)
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="flex items-center justify-center gap-2 border-b border-default bg-surface px-4 py-1.5 text-center text-xs text-muted">
       <Chip pose="meditate" size={22} />
-      {text}
+      Personalized to your feedback ({status.labels} ratings collected)
     </div>
   )
 }
