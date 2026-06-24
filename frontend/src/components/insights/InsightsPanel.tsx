@@ -7,7 +7,7 @@ export function Panel({
   aside,
   children,
 }: {
-  title: string
+  title: ReactNode
   sub?: ReactNode
   aside?: ReactNode
   children: ReactNode
@@ -15,7 +15,7 @@ export function Panel({
   return (
     <section className="mb-5 rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
       <div className="mb-4 flex items-baseline justify-between gap-3">
-        <h3 className="text-h3 font-ui text-fg">{title}</h3>
+        <h3 className="flex items-center gap-2 text-h3 font-ui text-fg">{title}</h3>
         {sub && <span className="text-small text-muted">{sub}</span>}
         {aside}
       </div>

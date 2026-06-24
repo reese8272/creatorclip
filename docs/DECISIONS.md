@@ -5,6 +5,109 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-23 — AutoClip UI redesign + Chip mascot (Issues 304–309): scope + foundation (304)
+
+**Context.** A high-fidelity design handoff ("React app visual review.zip") redesigns the SPA
+surface and adds a mascot ("Chip"). The handoff states it is **presentation-only — no API,
+schema, type, or backend changes**. We decomposed it into Issues 304–309 (foundation, Dashboard,
+Review, Editor long-form, Profile+Settings, Chip wiring) and built **304 (foundation)** first.
+
+**What changed / decided:**
+
+1. **Strictly presentational scope — confirmed with the user (2026-06-23).** Three gaps where
+   the handoff's "no backend" claim is tested were resolved toward zero backend change:
+   - **Settings controls without a backing field** (caption position, highlight color, cut
+     density, voice/tone, profanity filter, notify-on-render — none exist on `BrandKit`):
+     build the full UI; backed controls functional, **unbacked controls rendered but clearly
+     marked "coming soon"/disabled.** Honesty constraint > faux-functionality. (Built in 308.)
+   - **Long-form Editor source data** (no full-source media URL or full-source transcript
+     endpoint): **scaffold honestly** — the candidate-segment master timeline (derived from the
+     existing clips list, which carries source-relative `start_s/end_s`), chapters (existing
+     `/creators/me/videos/{id}/chapters` stream), suggested-clips list, and export panel are
+     functional; the 16:9 full-source player + searchable full transcript get an honest
+     placeholder. (Built in 307.)
+   - **Editor in the top nav:** `/editor` is now a nav destination; a bare visit (no
+     `video_id`/`clip_id`) lands on a friendly empty state (Chip `confused` + "Go to Review")
+     instead of the old bare line. (Built in 304.)
+
+2. **Chip mascot is decorative → empty `alt=""` + `aria-hidden`, NOT the handoff's `alt="Chip"`.**
+   - The handoff's `Chip.tsx` sets `alt="Chip"`. Chip always appears beside a visible textual
+     label (header or caption), so it is decorative; announcing "Chip" at every header is
+     screen-reader noise.
+   - **Source/evidence:** W3C WAI *Decorative Images* tutorial — decorative images take a null
+     (empty) `alt`; do not combine alt with redundant ARIA. <https://www.w3.org/WAI/tutorials/images/decorative/>
+   - This is an **a11y-only deviation — zero visual change.** `components/Chip.tsx`.
+
+3. **Animation keyframes namespaced `chip-*` and added to `index.css`.** The 8 Chip loading
+   states use `chip-bob / chip-spin / chip-scan / chip-blink / chip-dot / chip-cardcycle /
+   chip-floatup` (prototype names prefixed to avoid collisions). The prototype's `shimmer`
+   keyframe is defined-but-unused upstream, so it was **not** ported. The existing global
+   `@media (prefers-reduced-motion: reduce)` rule (`*` selector, `index.css`) already collapses
+   every new keyframe to a resting frame, so no per-component motion guard was added.
+   - **Source/evidence:** web.dev *prefers-reduced-motion* + MDN — never ship looping/decorative
+     motion without the safeguard. <https://web.dev/articles/prefers-reduced-motion>
+
+4. **Sprites served from `frontend/public/chip/` (literal `/chip/chip-*.png`)**, per the
+   handoff's preference, rather than bundler-imported from `src/assets` — simpler, no indirection.
+
+5. **Pose registry split into `components/chip/poses.ts`.** Keeping the `CHIP_POSES` constant out
+   of `Chip.tsx` lets the component file export only a component (`react-refresh/only-export-components`),
+   matching the repo convention (e.g. `ui/fit-badge.tsx` keeps its label map internal).
+
+**Issue 305 (Dashboard videos-first) — additional decisions:**
+
+6. **Clip count moved from the action button into a dedicated "Clips" column; the per-row action
+   is now a plain "Review" button.** The prototype surfaces the rendered count in its own column,
+   so the old `"{n} clips"` / `"{r}/{t} rendered"` button label became redundant. The Kind column
+   was dropped and folded into the Video cell subtitle (`{kind} · {id}`) to preserve that info.
+   This is a faithful match to the prototype; the affected Dashboard/VideoTable tests were updated.
+7. **`SummaryCards.tsx` deleted, not just unmounted.** The handoff removes the three-up summary
+   from the top; Dashboard was its only consumer, so the file was removed rather than left as dead
+   code (CLAUDE.md "no dead code"). The same data now lives in the header subtitle + sidebar cards.
+8. **`AnalyticsPanel` gained a `variant` prop instead of a new component.** `sidebar` renders the
+   compact vertical metric list; `panel` preserves the original grid. Single source of truth for
+   the period selector + formatting; no duplication.
+
+**Issue 306 (Review) — additional decisions:**
+
+9. **Triage actions lifted out of `ClipPlayer` into a `YourCall` card; trim state lifted to a keyed
+   `ReviewClipView`.** The redesign puts the player+filmstrip on the left and Why/Your-call/Editor on
+   the right, so trim must be shared by the filmstrip and the "Save trim" action. Keying the per-clip
+   subtree by `clip.id` re-initialises trim from the new clip's duration via a `useState` initialiser
+   — avoiding a set-state-in-effect (the lint rule the codebase already trips elsewhere).
+10. **Filmstrip clamp math (`clampTrim`) extracted to `trim.ts`.** jsdom has no layout, so the pure
+    clamp is where the testable logic lives; also keeps `TrimFilmstrip.tsx` exporting only a
+    component (react-refresh rule).
+
+**Issue 307 (Editor long-form) — additional decisions:**
+
+11. **Long-form mode scaffolded honestly (user-confirmed scope).** The candidate-segment master
+    timeline + ranked suggested clips (from the clips list's source-relative timecodes) + chapters
+    (existing stream) + export UI are built; the full-source 16:9 player and searchable transcript are
+    honest placeholders — no source-media/source-transcript endpoint exists and we add no backend.
+12. **`MasterTimeline` is a NEW component, not a reuse of `Timeline` — deviation from the handoff.**
+    The handoff said "reuse Timeline for both waveforms," but `Timeline` draws cuts as danger overlays
+    and has no concept of fit-tier-coloured candidate segments. A small dedicated overlay component is
+    the honest fit; `Timeline` stays the short-form waveform.
+
+**Issue 308 (Profile/Settings) — additional decisions:**
+
+13. **Settings = functional sections + honest disabled previews.** Backed controls reuse the existing
+    functional components (BrandKit, Intake, Publishing, API keys, Account deletion — relocated from
+    Profile). The design's un-backed controls (caption position/highlight, cut density, filler/silence,
+    voice, profanity, notify-on-render, watermark/bumpers) render as disabled previews with a "Soon"
+    badge — never faux-functional (honesty constraint).
+14. **Profile became a read-only snapshot.** DNA (chip-book) + identity + saved-analyses link + Library
+    stats + 28-day analytics. Library "Shorts published" / "Clip ratings" show `—` (no cheap endpoint;
+    honest rather than fabricated).
+
+**Issue 309 (Chip wiring) — additional decisions:**
+
+15. **`InsightsPanel` + `CollapsibleTool` titles widened from `string` to `ReactNode`** so insight/tool
+    headers can carry a Chip (safe widening — existing string callers unaffected).
+
+---
+
 ## 2026-06-23 — Issue 300: COPPA 13+ minimum-age gate + age-neutral screening
 
 **What changed / decided:**

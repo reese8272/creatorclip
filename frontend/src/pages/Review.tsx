@@ -3,34 +3,95 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { Chip } from '@/components/Chip'
 import { ClipPlayer } from '@/components/review/ClipPlayer'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
+import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Button } from '@/components/ui/button'
-import type { PersonalizationStatus, ReviewClipListResponse } from '@/types'
+import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 
 // Issue 216: Honest personalization-status band — shown below the virality disclaimer.
 // Below threshold: "Still learning" with N/threshold progress; above: "Personalized".
-// No virality language; no weight float exposed to user.
+// No virality language; no weight float exposed to user. Chip (meditate) signals
+// the still-learning posture (Issue 306).
 function PersonalizationBand({ status }: { status: PersonalizationStatus }) {
-  if (status.active) {
-    return (
-      <div className="border-b border-default bg-surface-subtle px-4 py-1.5 text-center text-xs text-muted">
-        Personalized to your feedback ({status.labels} ratings collected)
-      </div>
-    )
-  }
+  const text = status.active
+    ? `Personalized to your feedback (${status.labels} ratings collected)`
+    : `Still learning — DNA-based ranking (${status.labels}/${status.threshold} ratings collected)`
   return (
-    <div className="border-b border-default bg-surface-subtle px-4 py-1.5 text-center text-xs text-muted">
-      Still learning — DNA-based ranking ({status.labels}/{status.threshold} ratings collected)
+    <div className="flex items-center justify-center gap-2 border-b border-default bg-surface px-4 py-1.5 text-center text-xs text-muted">
+      <Chip pose="meditate" size={22} />
+      {text}
     </div>
   )
 }
 
-// Port of static/review.html (Issue 85f). Redesigned to a player-first layout:
-// the clip player + review actions lead, the transcript editor sits alongside,
-// and the secondary tools (why / captions / clean) are collapsible sections —
-// replacing the vanilla icon-rail + slide-out drawer.
+// Per-clip subtree. Keyed by clip.id in the parent so trim state re-initialises
+// from the new clip's duration on advance (no set-state-in-effect). Lifts the
+// trim region here so the filmstrip (left) and "Save trim" (right) share it.
+function ReviewClipView({
+  clip,
+  videoId,
+  onAdvance,
+}: {
+  clip: ReviewClip
+  videoId: string
+  onAdvance: () => void
+}) {
+  const navigate = useNavigate()
+  const clipDur = clip.end_s - clip.start_s
+  const [trim, setTrim] = useState({ start: 0, end: clipDur })
+
+  return (
+    <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
+      {/* Left: player + filmstrip trim + Next */}
+      <ClipPlayer
+        clip={clip}
+        trimStart={trim.start}
+        trimEnd={trim.end}
+        onTrimChange={(start, end) => setTrim({ start, end })}
+        onNext={onAdvance}
+      />
+
+      {/* Right: Why this clip · Your call · Open in the editor */}
+      <div className="flex flex-col gap-4">
+        <CollapsibleTool
+          defaultOpen
+          plain
+          title={
+            <span className="flex items-center gap-2">
+              <Chip pose="think" size={24} />
+              Why this clip
+            </span>
+          }
+        >
+          <WhyThisClip clip={clip} />
+        </CollapsibleTool>
+
+        <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
+
+        <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm shadow-inset">
+          <div className="mb-1.5 flex items-center gap-2.5">
+            <Chip pose="laptop" size={30} />
+            <span className="text-h3 font-semibold text-fg">Open in the editor</span>
+          </div>
+          <p className="mb-3.5 text-small leading-relaxed text-muted">
+            Fine-tune the full edit — caption style &amp; placement, word-by-word transcript cuts,
+            filler &amp; silence removal, and pacing to match your style.
+          </p>
+          <Button onClick={() => navigate(`/editor?video_id=${videoId}&clip_id=${clip.id}`)}>
+            Refine in editor →
+          </Button>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+// Port of static/review.html (Issue 85f), redesigned (Issue 306) to the player-first
+// two-column layout: player + filmstrip trim on the left; Why-this-clip, the
+// "Your call" triage card, and the editor entry point on the right.
 export function Review() {
   const [params] = useSearchParams()
   const videoId = params.get('video_id')
@@ -83,35 +144,12 @@ export function Review() {
       </DisclaimerBand>
       {personalization && <PersonalizationBand status={personalization} />}
 
-      <main className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-2">
-        {/* Left: the clip player + triage actions.
-            Editorial tools (transcript / caption / clean) have moved to the
-            Editor page (Issue 188) so triage and refinement are separate
-            surfaces — the "editing-tools-beside-player conflation" bug
-            (OFF_COURSE_BUGS) is resolved by giving editing its own page. */}
-        <div className="flex flex-col gap-4">
-          <ClipPlayer key={clip.id} clip={clip} onAdvance={() => setIndex((i) => i + 1)} />
-        </div>
-
-        {/* Right: Why this clip + Refine entry point. */}
-        <div className="flex flex-col gap-4">
-          <CollapsibleTool title="Why this clip" defaultOpen>
-            <WhyThisClip clip={clip} />
-          </CollapsibleTool>
-          <div className="rounded-md border border-default bg-surface p-4">
-            <p className="mb-3 text-xs text-muted">
-              Want to cut words, adjust captions, or remove filler? Open the full editor.
-            </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => navigate(`/editor?video_id=${videoId}&clip_id=${clip.id}`)}
-            >
-              Refine →
-            </Button>
-          </div>
-        </div>
-      </main>
+      <ReviewClipView
+        key={clip.id}
+        clip={clip}
+        videoId={videoId}
+        onAdvance={() => setIndex((i) => i + 1)}
+      />
     </>
   )
 }

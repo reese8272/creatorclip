@@ -1,5 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { ChipLoadingScreen } from '@/components/chip/ChipStates'
 
 // Auth gate for the protected routes (Issue 85b). While the session probe is in
 // flight we show a loader; if it resolves to no user we redirect to the SPA
@@ -11,8 +12,8 @@ export function AuthGate() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted">
-        Loading…
+      <div className="flex min-h-screen items-center justify-center">
+        <ChipLoadingScreen label="Loading…" />
       </div>
     )
   }

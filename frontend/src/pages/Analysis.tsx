@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { Chip } from '@/components/Chip'
 import { AnalysisQuery } from '@/components/analysis/AnalysisQuery'
 import { TitleOptimizer } from '@/components/analysis/TitleOptimizer'
 import { HookAnalyzer } from '@/components/analysis/HookAnalyzer'
@@ -23,7 +24,10 @@ export function Analysis() {
       </DisclaimerBand>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-8">
-        <h1 className="mb-2 text-h1 text-fg">Analyze a video</h1>
+        <h1 className="mb-2 flex items-center gap-3 text-h1 text-fg">
+          <Chip pose="magnify" size={40} />
+          Analyze a video
+        </h1>
         <p className="mb-8 text-sm text-subtle">
           Ask why a video performed the way it did. Analysis is grounded in your channel data and
           Creator DNA.

@@ -47,12 +47,15 @@ function makeVideo(over: Partial<Video> = {}): Video {
   }
 }
 
-function renderTable(videos: Video[]) {
+function renderTable(
+  videos: Video[],
+  clipInfoByVideo: Record<string, { total: number; rendered: number; loading: boolean }> = {},
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <VideoTable videos={videos} clipInfoByVideo={{}} analysisMode="auto" />
+        <VideoTable videos={videos} clipInfoByVideo={clipInfoByVideo} analysisMode="auto" />
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -100,6 +103,25 @@ describe('VideoTable — StageStepper integration', () => {
     // No SSE opened for done rows — Badge is rendered directly.
     expect(FakeEventSource.instances).toHaveLength(0)
     expect(screen.getByText('done')).toBeInTheDocument()
+  })
+
+  it('Clips column shows the rendered count, and Actions becomes a Review link (Issue 305)', () => {
+    renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
+      vd: { total: 3, rendered: 2, loading: false },
+    })
+    // Clips column surfaces the rendered count.
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getByText('rendered')).toBeInTheDocument()
+    // Action is "Review" (the count no longer lives on the button).
+    expect(screen.getByRole('link', { name: 'Review' })).toBeInTheDocument()
+  })
+
+  it('Clips column shows 0 for a done video with no clips (Issue 305)', () => {
+    renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
+      vd: { total: 0, rendered: 0, loading: false },
+    })
+    expect(screen.getByText('0')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Generate clips' })).toBeInTheDocument()
   })
 
   it('a 10-row table with 9 done + 1 in-flight opens exactly 1 SSE connection', () => {

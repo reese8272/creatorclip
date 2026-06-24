@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { Button } from '@/components/ui/button'
+import { Chip } from '@/components/Chip'
+import { ChipLookingItUp } from '@/components/chip/ChipStates'
 import { StreamConsole } from '@/components/onboarding/StreamConsole'
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { ImprovementBrief as Brief, TaskQueued } from '@/types'
@@ -48,12 +50,27 @@ export function ImprovementBrief() {
         : 'Generate brief'
 
   return (
-    <Panel title="Content improvement brief" sub="Live web research + your channel data. ~15s.">
+    <Panel
+      title={
+        <>
+          <Chip pose="present" size={24} />
+          Content improvement brief
+        </>
+      }
+      sub="Live web research + your channel data. ~15s."
+    >
       <Button onClick={generate} disabled={generating}>
         {btnLabel}
       </Button>
 
-      {generating && stream.status === 'streaming' && <StreamConsole buffer={stream.buffer} />}
+      {generating && stream.status === 'streaming' && (
+        <>
+          <div className="my-3 flex justify-center">
+            <ChipLookingItUp size={64} />
+          </div>
+          <StreamConsole buffer={stream.buffer} />
+        </>
+      )}
 
       <div className="mt-4 min-h-[40px] whitespace-pre-wrap text-sm leading-relaxed text-fg">
         {startError && <span className="text-danger">{startError}</span>}

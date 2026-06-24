@@ -18,8 +18,10 @@ interface NavItem {
 const LINKS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', external: false },
   { label: 'Review', href: '/review', external: false },
+  { label: 'Editor', href: '/editor', external: false },
   { label: 'Insights', href: '/insights', external: false },
   { label: 'Profile', href: '/profile', external: false },
+  { label: 'Settings', href: '/settings', external: false },
   { label: 'Assistant', href: '/chat', external: false },
   { label: 'Analyze', href: '/analysis', external: false },
   { label: 'Pricing', href: '/pricing', external: false },

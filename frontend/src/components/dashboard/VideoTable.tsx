@@ -71,12 +71,13 @@ function VideoRow({
 
   return (
     <tr className="border-b border-default hover:bg-elevated">
-      <td className="px-3 py-3 align-middle">
-        <div className="max-w-[320px] truncate">{video.title || '—'}</div>
-        <div className="font-mono text-xs text-subtle">{video.youtube_video_id}</div>
+      <td className="px-4 py-3.5 align-middle">
+        <div className="max-w-[280px] truncate text-fg">{video.title || '—'}</div>
+        <div className="font-mono text-xs text-subtle">
+          {video.kind} · {video.youtube_video_id}
+        </div>
       </td>
-      <td className="px-3 py-3 align-middle">{video.kind}</td>
-      <td className="px-3 py-3 align-middle">
+      <td className="px-3 py-3.5 align-middle">
         {showStepper ? (
           <StageStepper
             stage={streamState.stage}
@@ -89,7 +90,10 @@ function VideoRow({
           <Badge variant={STATUS_VARIANT[video.ingest_status]}>{video.ingest_status}</Badge>
         )}
       </td>
-      <td className="px-3 py-3 align-middle">
+      <td className="px-3 py-3.5 align-middle">
+        <ClipsCell video={video} clipInfo={clipInfo} />
+      </td>
+      <td className="px-4 py-3.5 align-middle">
         <ActionCell
           video={video}
           clipInfo={clipInfo}
@@ -105,6 +109,27 @@ function VideoRow({
         />
       </td>
     </tr>
+  )
+}
+
+// Clips column (Issue 305): surface the rendered count that already lives in
+// clipInfoByVideo. Em-dash while the pipeline hasn't finished; "0" for a done
+// video with no clips; "{rendered} rendered" once clips exist.
+function ClipsCell({ video, clipInfo }: { video: Video; clipInfo: ClipInfo | undefined }) {
+  if (video.ingest_status !== 'done') {
+    return <span className="font-mono text-sm text-subtle">—</span>
+  }
+  if (!clipInfo || clipInfo.loading) {
+    return <span className="font-mono text-sm text-subtle">…</span>
+  }
+  if (clipInfo.total === 0) {
+    return <span className="font-mono text-base font-semibold text-muted">0</span>
+  }
+  return (
+    <span>
+      <span className="font-mono text-base font-semibold text-fg">{clipInfo.rendered}</span>
+      <span className="text-xs text-subtle"> rendered</span>
+    </span>
   )
 }
 
@@ -164,16 +189,11 @@ function ActionCell({
       return <span className="text-sm text-subtle">…</span>
     }
     if (clipInfo.total > 0) {
-      const text =
-        clipInfo.rendered === clipInfo.total
-          ? `${clipInfo.total} clips`
-          : `${clipInfo.rendered}/${clipInfo.total} rendered`
+      // Count now lives in the Clips column (Issue 305) — the action is just "Review".
       return (
         <div className="flex flex-wrap gap-2">
           <Link to={`/review?video_id=${video.id}`}>
-            <Button variant="secondary" size="sm">
-              {text}
-            </Button>
+            <Button size="sm">Review</Button>
           </Link>
           <Link to={`/video/${video.id}`}>
             <Button variant="secondary" size="sm">
@@ -223,10 +243,10 @@ export function VideoTable({
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr>
-            {['Title / ID', 'Kind', 'Status', 'Actions'].map((h) => (
+            {['Video', 'Status', 'Clips', 'Actions'].map((h) => (
               <th
                 key={h}
-                className="border-b border-default px-3 py-2 text-left text-xs font-medium uppercase tracking-[0.06em] text-subtle"
+                className="border-b border-default px-4 py-[11px] text-left text-xs font-medium uppercase tracking-[0.06em] text-subtle"
               >
                 {h}
               </th>

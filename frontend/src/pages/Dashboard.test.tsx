@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -103,7 +103,7 @@ describe('Dashboard', () => {
     expect(screen.queryByRole('button', { name: 'Queue for analysis' })).not.toBeInTheDocument()
   })
 
-  it('links to the review queue when a done video already has clips', async () => {
+  it('links to the review queue when a done video already has clips (Issue 305: Review button + Clips column)', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], {
@@ -111,7 +111,10 @@ describe('Dashboard', () => {
       }),
     )
     renderDashboard()
-    expect(await screen.findByRole('link', { name: '2 clips' })).toBeInTheDocument()
+    // The per-row action is now a "Review" link to the video's review queue
+    // (the rendered count moved into the dedicated Clips column — see VideoTable test).
+    const review = await screen.findByRole('link', { name: 'Review' })
+    expect(review).toHaveAttribute('href', '/app/review?video_id=vd')
   })
 
   it('offers "Generate clips" when a done video has no clips yet', async () => {
@@ -141,8 +144,38 @@ describe('Dashboard', () => {
       }),
     )
     renderDashboard()
-    await screen.findByRole('link', { name: '1 clips' })
+    await screen.findByRole('link', { name: 'Review' })
     expect(screen.queryByRole('link', { name: /why weren't clips generated/i })).toBeNull()
+  })
+
+  it('renders the videos-first header (Issue 305)', async () => {
+    vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], { vd: [] }))
+    renderDashboard()
+    expect(await screen.findByRole('heading', { name: 'Your videos' })).toBeInTheDocument()
+  })
+
+  it('the header "+ Link a video" button toggles the inline link form (Issue 305)', async () => {
+    vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], { vd: [] }))
+    renderDashboard()
+    const toggle = await screen.findByRole('button', { name: '+ Link a video' })
+    expect(screen.queryByPlaceholderText('Paste a YouTube URL…')).toBeNull()
+    fireEvent.click(toggle)
+    expect(screen.getByPlaceholderText('Paste a YouTube URL…')).toBeInTheDocument()
+  })
+
+  it('sidebar shows the review queue with the rendered-clip count + Open review link (Issue 305)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], {
+        vd: [{ render_status: 'done' }, { render_status: 'done' }],
+      }),
+    )
+    renderDashboard()
+    expect(await screen.findByText('Review queue')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open review →' })).toHaveAttribute(
+      'href',
+      '/app/review',
+    )
   })
 
   it('uses the batched /videos/clips/counts endpoint (not per-video /clips calls)', async () => {
@@ -153,8 +186,10 @@ describe('Dashboard', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
     renderDashboard()
-    // Wait for clip counts to populate (v1 should show 1 clip).
-    await waitFor(() => expect(screen.getByRole('link', { name: '1 clips' })).toBeInTheDocument())
+    // Wait for clip counts to populate (both done videos get a Review action once counts load).
+    await waitFor(() =>
+      expect(screen.getAllByRole('link', { name: 'Review' }).length).toBeGreaterThan(0),
+    )
     // Assert no per-video /clips calls were made — only the batched endpoint.
     const perVideoCalls = (fetchMock.mock.calls as [RequestInfo | URL][]).filter(([url]) =>
       String(url).match(/\/videos\/[^/]+\/clips$/),

@@ -71,10 +71,12 @@ describe('Review', () => {
     vi.stubGlobal('fetch', mockFetch())
     renderReview('/app/review?video_id=v1')
     await screen.findByText(/Clip #1/)
-    // These panels were relocated to Editor.tsx
-    expect(screen.queryByText(/Transcript/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Caption style/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Clean filler/i)).not.toBeInTheDocument()
+    // These panels were relocated to Editor.tsx. Assert the absence of the
+    // interactive panel controls (not descriptive copy — Issue 306's "Open in
+    // the editor" card legitimately mentions transcript/caption/filler in prose).
+    expect(screen.queryByRole('button', { name: /caption style/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /clean filler/i })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: /transcript/i })).toBeNull()
   })
 
   it('opens the tag-feedback panel when Keep is clicked', async () => {

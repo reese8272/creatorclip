@@ -220,16 +220,17 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── test/setup.ts       # Vitest + RTL setup (jest-dom matchers, cleanup)
 │       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts
 │       ├── hooks/              # useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f)
-│       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · Nav.tsx (+test) · Footer.tsx · DisclaimerBand.tsx
+│       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · Nav.tsx (+test; Editor+Settings links, Issue 304) · Footer.tsx · DisclaimerBand.tsx · Chip.tsx (+test — decorative mascot, Issue 304)
+│       ├── components/chip/    # poses.ts (CHIP_POSES registry + ChipPose) · ChipStates.tsx (8 loading/thinking animations — Issue 304); sprites in public/chip/
 │       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal
 │       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
-│       ├── components/dashboard/ # SummaryCards · AnalyticsPanel · LinkVideoForm · VideoTable · EmptyHero · DashboardBanners (Issue 85c)
+│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · LinkVideoForm (inline panel) · VideoTable (Video·Status·Clips·Actions) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
 │       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
 │       ├── components/insights/ # InsightsPanel · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e)
 │       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)
-│       ├── components/editor/   # Timeline (+test) — waveform + synced playhead + cut overlays (Issue 188)
-│       ├── components/review/   # ClipPlayer · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (Issue 85f)
-│       └── pages/              # Dashboard (+test, 85c) · Onboarding (+test, 85d) · Insights (+test, 85e) · Analysis (+test, 85e) · Review (+test, 85f; Refine→ button added 188) · Editor (+test, 188 — timeline+waveform+transcript editor) · Profile · Chat · Pricing (+test) · Login · Walkthrough (+test)
+│       ├── components/editor/   # Timeline (+test) — waveform + synced playhead + cut overlays (Issue 188) · LongFormEditor (master candidate timeline + suggested clips + chapters + export — Issue 307)
+│       ├── components/review/   # ClipPlayer (player+filmstrip, Issue 306) · TrimFilmstrip (+test) + trim.ts (dual-handle trim) · YourCall (triage card) · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (plain/ReactNode title) (Issue 85f/306)
+│       └── pages/              # Dashboard (+test, 85c; videos-first reorg 305) · Onboarding (+test, 85d) · Insights (+test, 85e; chip-idea 309) · Analysis (+test, 85e; chip-magnify 309) · Review (+test, 85f; filmstrip trim + Your-call card + Chips, 306) · Editor (+test, 188; short|long mode toggle + long-form source, 307) · Profile (+test; read-only snapshot, 308) · Settings (+test; full build 308) · Chat (chip-wave/think/streaming, 309) · Pricing (+test) · Login · Walkthrough (+test)
 │
 ├── tests/
 │   ├── conftest.py

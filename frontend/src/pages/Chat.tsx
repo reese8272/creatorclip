@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { Chip } from '@/components/Chip'
+import { ChipThinking } from '@/components/chip/ChipStates'
 import { Button } from '@/components/ui/button'
 import { subscribeToChatStream, type StreamSubscription } from '@/lib/taskStream'
 
@@ -158,8 +160,9 @@ export function Chat() {
           )}
         >
           {empty && (
-            <div className="text-center text-sm text-muted">
-              <h2 className="mb-2 text-h2 text-fg">Ask about your channel</h2>
+            <div className="flex flex-col items-center text-center text-sm text-muted">
+              <Chip pose="wave" size={72} />
+              <h2 className="mb-2 mt-3 text-h2 text-fg">Ask about your channel</h2>
               <p>
                 Try “What were my best videos this month?” or “When should I post?” — I’ll pull your
                 own analytics to answer.
@@ -171,7 +174,16 @@ export function Chat() {
             <Bubble key={i} role={m.role} content={m.content} />
           ))}
 
-          {streaming && <Bubble role="assistant" content={streamingText} streaming />}
+          {/* While streaming: Chip "thinking" until the first token arrives, then
+              the live bubble with a blink caret (Issue 309). */}
+          {streaming &&
+            (streamingText ? (
+              <Bubble role="assistant" content={streamingText} streaming />
+            ) : (
+              <div className="flex justify-start">
+                <ChipThinking size={64} />
+              </div>
+            ))}
           {toolStatus && (
             <p className="px-1 text-xs italic text-muted">…{toolStatus}</p>
           )}
@@ -243,7 +255,8 @@ function Bubble({
 }) {
   const isUser = role === 'user'
   return (
-    <div className={isUser ? 'flex justify-end' : 'flex justify-start'}>
+    <div className={isUser ? 'flex justify-end' : 'flex items-start justify-start gap-2'}>
+      {!isUser && <Chip pose="think" size={28} className="mt-1 flex-shrink-0" />}
       <div
         className={
           isUser
@@ -252,7 +265,12 @@ function Bubble({
         }
       >
         {content}
-        {streaming && <span className="ml-0.5 inline-block animate-pulse">▍</span>}
+        {streaming && (
+          <span
+            className="ml-px inline-block h-3.5 w-[7px] translate-y-0.5 bg-accent-text"
+            style={{ animation: 'chip-blink 1s steps(1) infinite' }}
+          />
+        )}
       </div>
     </div>
   )

@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { CaptionStylePanel } from '@/components/review/CaptionStylePanel'
 import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
+import { Chip } from '@/components/Chip'
+import { LongFormEditor } from '@/components/editor/LongFormEditor'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import type {
   ClipTranscript,
@@ -105,11 +107,14 @@ function activeWordIndex(words: TranscriptWord[], currentTime: number): number {
  * environment. The backend ffmpeg showwavespic path is deferred (render-env).
  */
 export function Editor() {
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const videoId = params.get('video_id')
   const clipId = params.get('clip_id')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  // Issue 307: short-form clip editor vs long-form source editor. Default to the
+  // mode implied by the URL — a clip_id means "refine this clip" (short).
+  const [editorMode, setEditorMode] = useState<'short' | 'long'>(clipId ? 'short' : 'long')
 
   // ── Clip data ────────────────────────────────────────────────────────────
 
@@ -119,9 +124,10 @@ export function Editor() {
     enabled: !!videoId,
   })
 
+  const clips: ReviewClip[] = clipsData?.clips ?? []
   const clip: ReviewClip | undefined = clipId
-    ? clipsData?.clips.find((c) => c.id === clipId)
-    : clipsData?.clips[0]
+    ? clips.find((c) => c.id === clipId)
+    : clips[0]
 
   // ── Transcript ───────────────────────────────────────────────────────────
 
@@ -313,11 +319,42 @@ export function Editor() {
     )
   }
 
-  if (!videoId || !clipId) return message('No clip selected — open from the Review page.')
-  if (clipsPending || txPending) return message('Loading…')
-  if (!clip) return message('Clip not found.')
+  // Editor is a top-nav destination (Issue 304): a bare /editor with no video at
+  // all lands on a friendly empty state instead of a bare line of text. With a
+  // video but no clip, we open long-form source mode (Issue 307).
+  if (!videoId) {
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center gap-4 px-4 py-16 text-center">
+          <Chip pose="confused" size={72} />
+          <h1 className="font-display text-h2 text-fg">Pick a clip to edit</h1>
+          <p className="max-w-md text-body text-muted">
+            Open a clip from the Review page, then choose “Open in the editor” to refine its
+            captions, cuts, and pacing.
+          </p>
+          <Button onClick={() => navigate('/review')}>Go to Review</Button>
+        </main>
+      </>
+    )
+  }
+  if (clipsPending) return message('Loading…')
 
-  const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
+  const mediaSrc = clip ? `/clips/${clip.id}/download?disposition=inline` : ''
+
+  // Open a long-form candidate as a short-form clip: point the URL at it + switch.
+  function openClipInShortEditor(id: string) {
+    setParams({ video_id: videoId!, clip_id: id })
+    setEditorMode('short')
+  }
+
+  const TAB_BASE =
+    'rounded-sm px-3 py-1.5 text-xs font-medium transition-colors duration-fast ease-standard'
+  const TAB_ACTIVE = 'bg-accent-soft text-accent-text'
+  const TAB_IDLE = 'bg-transparent text-muted hover:text-fg'
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -328,9 +365,56 @@ export function Editor() {
         are estimates grounded in your own channel data.
       </DisclaimerBand>
 
-      <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-6 px-4 py-6 lg:grid-cols-[1fr_320px]">
-        {/* ── Left: player + timeline + transcript ── */}
-        <div className="flex flex-col gap-4">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+        {/* Header + mode toggle (Issue 307) */}
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="font-display text-h1 text-fg">Editor</h1>
+            <p className="mt-1 text-small text-muted">
+              Refine a single clip, or work the full source timeline.
+            </p>
+          </div>
+          <div
+            role="tablist"
+            aria-label="Editor mode"
+            className="inline-flex gap-0.5 rounded-md border border-strong bg-bg p-[3px]"
+          >
+            <button
+              role="tab"
+              aria-selected={editorMode === 'short'}
+              onClick={() => setEditorMode('short')}
+              className={cn(TAB_BASE, editorMode === 'short' ? TAB_ACTIVE : TAB_IDLE)}
+            >
+              ▮ Short-form clip
+            </button>
+            <button
+              role="tab"
+              aria-selected={editorMode === 'long'}
+              onClick={() => setEditorMode('long')}
+              className={cn(TAB_BASE, editorMode === 'long' ? TAB_ACTIVE : TAB_IDLE)}
+            >
+              ▭ Long-form source
+            </button>
+          </div>
+        </div>
+
+        {editorMode === 'long' ? (
+          <LongFormEditor clips={clips} videoId={videoId} onOpenClip={openClipInShortEditor} />
+        ) : !clip ? (
+          <div className="flex flex-col items-center gap-3 py-16 text-center">
+            <Chip pose="confused" size={64} />
+            <p className="max-w-md text-body text-muted">
+              No clip selected. Switch to <strong className="text-fg">Long-form source</strong> to
+              pick a candidate, or head back to Review.
+            </p>
+            <Button variant="secondary" onClick={() => navigate(`/review?video_id=${videoId}`)}>
+              Go to Review
+            </Button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1fr_320px]">
+            {/* ── Left: player + timeline + transcript ── */}
+            <div className="flex flex-col gap-4">
           {/* Player */}
           <div className="flex items-start gap-4">
             {clip.render_uri ? (
@@ -521,7 +605,9 @@ export function Editor() {
           <CollapsibleTool title="Clean filler + silence">
             <CleanPassPanel clip={clip} />
           </CollapsibleTool>
-        </div>
+            </div>
+          </div>
+        )}
       </main>
     </>
   )

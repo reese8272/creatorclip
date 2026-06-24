@@ -4,6 +4,128 @@ Updated after every issue closes.
 
 ---
 
+## ✅ AutoClip Redesign — Issues 306–309 COMPLETE (Review · Editor long-form · Profile/Settings · Chip wiring) (2026-06-23)
+
+**Issues #306–309 DONE (static-verified). Redesign port complete — all 6 issues (304–309) shipped.
+Presentational only; zero backend/schema/type changes.**
+
+**306 — Review filmstrip trim + "Your call" card + Chip:**
+- `components/review/TrimFilmstrip.tsx` (+`trim.ts`, `clampTrim`) — dual-handle filmstrip replacing
+  the two trim sliders: dimmed excluded ends, accent-outlined selection, playhead synced to the
+  video, tick ruler, "Xs selected" readout.
+- `components/review/YourCall.tsx` — triage card (Keep/Drop/Skip/Save trim/Download + feedback-tag
+  panel) lifted out of `ClipPlayer`.
+- `ClipPlayer.tsx` rewritten to the left column (player + filmstrip + Next). `Review.tsx` lifts trim
+  state into a keyed `ReviewClipView` (no set-state-in-effect); Chips: meditate (personalization
+  band), think ("Why this clip"), laptop ("Open in the editor" card). `CollapsibleTool` gained a
+  `plain` header + ReactNode title.
+- Tests: TrimFilmstrip.test (clamp + render), Review.test updated.
+
+**307 — Editor long-form source mode:**
+- `pages/Editor.tsx` — added a short|long segmented toggle (`editorMode`); `/editor?video_id` (no
+  clip) now opens long mode. Short editor unchanged.
+- `components/editor/LongFormEditor.tsx` — master timeline of AI candidate segments (from the clips
+  list, coloured by fit tier) + ranked suggested-clips list (Open → short editor) + chapters
+  (reuses `ChaptersPanel`) + Export card. Honest placeholders for the full-source player + searchable
+  transcript (no source-media/transcript endpoint — scaffold scope). Chips: magnify/idea/papers.
+- Tests: Editor.test +3 (toggle, long mode, direct long mode).
+
+**308 — Profile snapshot + new Settings page:**
+- `pages/Profile.tsx` rebuilt as a read-only snapshot: header + "Editing settings →", DNA card
+  (chip-book) + identity + saved-analyses card, sidebar Library stats + `AnalyticsPanel` sidebar.
+  Relocated BrandKit/Intake/Publishing/ApiKeys/AccountDeletion OUT.
+- `pages/Settings.tsx` (full build) — "How AutoClip edits and packages your clips." Functional:
+  BrandKitSection, IntakeModeSection, PublishingSection, ApiKeysSection, AccountDeletion. Unbacked
+  design controls (caption position/highlight, cut density, filler/silence, voice, profanity, notify,
+  watermark/bumpers) rendered as honest disabled previews with a "Soon" badge (scope decision).
+- Tests: Profile.test (+3), Settings.test (+2).
+
+**309 — Chip wiring + animation states:**
+- Insights header (chip-idea) + improvement-brief header (chip-present) + `ChipLookingItUp` during
+  web research; Analyze header (chip-magnify); Chat empty state (chip-wave), assistant avatar
+  (chip-think), `ChipThinking` before the first token, blink caret; `AuthGate` loading →
+  `ChipLoadingScreen`. `InsightsPanel`/`CollapsibleTool` titles widened to ReactNode.
+
+**Gate results (cumulative):** vitest **182/182** ✅ · `tsc -b && vite build` ✅ clean · eslint
+**0 new problems** (10 pre-existing baseline held throughout). No Python touched across 304–309.
+
+---
+
+## ✅ AutoClip Redesign — Issue 305: Dashboard videos-first reorg (2026-06-23)
+
+**Issue #305 DONE (static-verified). Second of the 6-issue redesign port. Presentational only —
+all data hooks (`videosQuery`, `dnaQuery`, `clipCountsQuery`, `clipInfoByVideo`, `clipsRendered`)
+kept exactly.**
+
+- **`frontend/src/pages/Dashboard.tsx`** — rebuilt videos-first: removed the three-up
+  `SummaryCards` + the standalone "Analyze a video" CTA box; new header row (title "Your videos"
+  `font-display text-h1` + subtitle "{n} videos · {clips} clips rendered · {channel}") with primary
+  "+ Link a video" (toggles the inline form) and secondary "Analyze a video" (→ /analysis); inline
+  `LinkVideoForm` below the header; two-column body `lg:grid-cols-[minmax(0,1fr)_296px]` — main =
+  `VideoTable` in a bordered card, sidebar = `ReviewQueueCard` (clipsRendered → /review) +
+  `AnalyticsPanel variant="sidebar"` + `CreatorDnaCard` (status/version → /profile). Empty state
+  still renders `EmptyHero`.
+- **`components/dashboard/VideoTable.tsx`** — columns now Video · Status · **Clips** · Actions;
+  Kind merged into the Video subtitle (`{kind} · {id}`); new `ClipsCell` surfaces the rendered
+  count ("— / … / 0 / {rendered} rendered"); the done-with-clips action is now a primary **"Review"**
+  button (count moved off the button into the Clips column).
+- **`components/dashboard/AnalyticsPanel.tsx`** — added `variant="sidebar"` (compact vertical
+  metric list + "Full insights →" link); default `panel` variant preserved; period `select`
+  deduped via a shared `periodSelect`.
+- **`components/dashboard/LinkVideoForm.tsx`** — now renders only the inline panel when `open`
+  (toggle lives in the header / EmptyHero); restyled to the prototype's accent-border card with the
+  "We never download from YouTube… Connect OBS" helper. Dropped the `onToggle` prop.
+- **Removed** `components/dashboard/SummaryCards.tsx` (only consumer was Dashboard; dead after the
+  reorg).
+- **Tests:** Dashboard.test (+3 — videos-first header, link-form toggle, sidebar review queue;
+  updated 3 count-label assertions → Review link); VideoTable.test (+2 — Clips column rendered
+  count, 0-clip case).
+- **Gate results:** vitest **169/169** ✅ · `tsc -b && vite build` ✅ · eslint **0 new problems**
+  (10 pre-existing baseline held). No Python touched.
+
+**Next:** Issue 306 — Review filmstrip trim + "Your call" card + Chip.
+
+---
+
+## ✅ AutoClip Redesign — Issue 304: Foundation (Chip + animations + routing) (2026-06-23)
+
+**Issue #304 DONE (static-verified). First of the 6-issue UI-redesign port (304–309) from the
+"React app visual review.zip" design handoff. Strictly presentational — zero backend/schema/type
+changes (user-confirmed scope; see DECISIONS.md).**
+
+- **Assets:** 10 Chip sprites copied to `frontend/public/chip/` (served at `/chip/chip-*.png`).
+- **`frontend/src/components/Chip.tsx`** — pose→sprite mascot component. Decorative: empty
+  `alt=""` + `aria-hidden` (W3C WAI — deviation from handoff's `alt="Chip"`, a11y-only, no visual
+  change). Accepts `pose` / `size` / `className` / `style`.
+- **`frontend/src/components/chip/poses.ts`** — `CHIP_POSES` registry + `ChipPose` type (split
+  out so `Chip.tsx` exports only a component — `react-refresh/only-export-components`).
+- **`frontend/src/components/chip/ChipStates.tsx`** — the 8 loading/thinking states from the
+  "Chip Animations" prototype, recreated to-a-tee with tokens: `ChipAnalyzing` (scan sweep),
+  `ChipThinking` (dot bubble), `ChipStreaming` (text + blink caret), `ChipLookingItUp` (orbiting
+  sources), `ChipLoadingScreen` (spinner, `fullScreen` opt), `ChipRendering` (progress bar),
+  `ChipGeneratingClips` (cycling cards), `ChipPersonalizing` (floating binary). Wired into
+  surfaces in Issues 305–309.
+- **`frontend/src/index.css`** — added 7 namespaced keyframes (`chip-bob/spin/scan/blink/dot/
+  cardcycle/floatup`). Existing global `prefers-reduced-motion` rule already collapses them
+  (verified). `shimmer` not ported (unused upstream).
+- **`frontend/src/components/Nav.tsx`** — added `Editor` + `Settings` to `LINKS` in the
+  prototype's order (Dashboard · Review · Editor · Insights · Profile · Settings · Assistant ·
+  Analyze · Pricing — prototype line 1601).
+- **`frontend/src/pages/Settings.tsx` + route** — placeholder page (full build in 308) so the
+  nav link is valid now; route added under the protected `AppChrome` group in `App.tsx`.
+- **`frontend/src/pages/Editor.tsx`** — bare `/editor` (now a nav destination) renders a friendly
+  empty state (Chip `confused` + "Go to Review") instead of the old bare line.
+- **Tests:** `Chip.test.tsx` (7 — pose src, decorative alt, size, all 8 animations render + embed
+  a sprite, streaming text, progress clamp); `Nav.test.tsx` (+Editor/+Settings link assertions);
+  `Editor.test.tsx` (empty-state copy + CTA).
+- **Gate results:** vitest **164/164** ✅ · `tsc -b && vite build` ✅ clean · eslint **0 new
+  problems** (10 pre-existing, none in redesign files — logged in OFF_COURSE_BUGS.md). No Python
+  touched.
+
+**Next (screen-by-screen cadence):** Issue 305 — Dashboard videos-first reorg.
+
+---
+
 ## ✅ W3 — Issue 300: COPPA 13+ minimum-age gate + age-neutral screening (2026-06-23)
 
 **Issue #300 DONE (static-verified, staging-pending for DB migration).**

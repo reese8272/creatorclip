@@ -17,6 +17,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { Chip } from '@/components/Chip'
 import { ChannelSnapshot, DnaSnapshot } from '@/components/insights/ChannelSnapshot'
 import { PerformerPanel } from '@/components/insights/PerformerPanel'
 import { UploadWindows } from '@/components/insights/UploadWindows'
@@ -49,6 +50,17 @@ export function Insights() {
       </DisclaimerBand>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
+        <div className="mb-6 flex items-center gap-3.5">
+          <Chip pose="idea" size={48} />
+          <div>
+            <h1 className="font-display text-h1 text-fg">Insights</h1>
+            <p className="mt-1 text-small text-muted">
+              Your channel read back to you — what’s working, what changed, and what to try next. All
+              grounded in your own analytics.
+            </p>
+          </div>
+        </div>
+
         {insightsQuery.isPending ? (
           <p className="text-sm text-muted">Loading your channel insights…</p>
         ) : insightsQuery.isError ? (

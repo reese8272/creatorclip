@@ -6,10 +6,14 @@ import { useState, type ReactNode } from 'react'
 export function CollapsibleTool({
   title,
   defaultOpen = false,
+  plain = false,
   children,
 }: {
-  title: string
+  title: ReactNode
   defaultOpen?: boolean
+  // plain = normal-case h3 header (e.g. "Why this clip" with the Chip, Issue 306);
+  // default = the uppercase tracked label used by the editor tool sections.
+  plain?: boolean
   children: ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
@@ -19,12 +23,16 @@ export function CollapsibleTool({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium uppercase tracking-[0.06em] text-muted hover:text-fg"
+        className={
+          plain
+            ? 'flex w-full items-center justify-between px-[18px] py-3.5 text-h3 font-semibold text-fg'
+            : 'flex w-full items-center justify-between px-4 py-3 text-sm font-medium uppercase tracking-[0.06em] text-muted hover:text-fg'
+        }
       >
         {title}
         <span className="font-mono text-accent-text">{open ? '−' : '+'}</span>
       </button>
-      {open && <div className="border-t border-default p-4">{children}</div>}
+      {open && <div className="border-t border-default p-[18px]">{children}</div>}
     </div>
   )
 }

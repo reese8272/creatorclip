@@ -20,17 +20,11 @@ function extractYouTubeId(input: string): string {
   return input.split('?')[0]
 }
 
-// Secondary "link a video outside your catalog" affordance. POSTs form-encoded
-// (the endpoint takes Form fields, not JSON) and invalidates the videos query on
-// success so the new row appears. Open state is controlled by the parent so the
-// empty-state hero can expand + focus it.
-export function LinkVideoForm({
-  open,
-  onToggle,
-}: {
-  open: boolean
-  onToggle: (open: boolean) => void
-}) {
+// Inline "link a video" panel. Issue 305: the toggle now lives in the Dashboard
+// header ("Link a video" button) and the EmptyHero, so this renders only the panel
+// itself when `open`. POSTs form-encoded (the endpoint takes Form fields, not JSON)
+// and invalidates the videos query on success so the new row appears.
+export function LinkVideoForm({ open }: { open: boolean }) {
   const queryClient = useQueryClient()
   const [value, setValue] = useState('')
   const [status, setStatus] = useState('')
@@ -58,36 +52,32 @@ export function LinkVideoForm({
     }
   }
 
+  if (!open) return null
+
   return (
-    <div className="mb-6">
-      <button
-        type="button"
-        onClick={() => onToggle(!open)}
-        aria-expanded={open}
-        className="py-1 text-xs text-subtle hover:text-muted"
-      >
-        + Link a video outside your catalog
-      </button>
-      {open && (
-        <div className="mt-2">
-          <div className="flex gap-2">
-            <input
-              autoFocus
-              type="text"
-              placeholder="YouTube video ID or URL"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && link()}
-              aria-label="YouTube video ID or URL"
-              className="flex-1 rounded-md border border-strong bg-bg px-3 py-2 text-sm text-fg placeholder:text-subtle focus:border-accent focus:outline-none"
-            />
-            <Button variant="secondary" onClick={link}>
-              Link video
-            </Button>
-          </div>
-          {status && <p className="mt-2 text-xs text-subtle">{status}</p>}
-        </div>
-      )}
+    <div className="mb-5 animate-slide-up rounded-md border border-accent-border bg-surface px-[18px] py-4 shadow-sm shadow-inset">
+      <div className="flex flex-wrap gap-2.5">
+        <input
+          autoFocus
+          type="text"
+          placeholder="Paste a YouTube URL…"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && link()}
+          aria-label="YouTube video ID or URL"
+          className="h-10 min-w-[240px] flex-1 rounded-sm border border-strong bg-bg px-3.5 text-body text-fg placeholder:text-subtle focus:border-accent focus:outline-none"
+        />
+        <Button onClick={link}>Link</Button>
+      </div>
+      <p className="mt-2.5 text-small text-subtle">
+        {status || (
+          <>
+            We never download from YouTube. Already recording?{' '}
+            <span className="text-accent-text">Connect OBS</span> and local recordings ingest
+            automatically.
+          </>
+        )}
+      </p>
     </div>
   )
 }

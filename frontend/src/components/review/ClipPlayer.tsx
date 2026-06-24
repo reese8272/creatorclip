@@ -1,80 +1,30 @@
 import { useState } from 'react'
-import { api } from '@/lib/api'
-import { Button } from '@/components/ui/button'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
-import { cn } from '@/lib/utils'
-import type { FeedbackAction, FeedbackPayload, ReviewClip } from '@/types'
+import { TrimFilmstrip } from '@/components/review/TrimFilmstrip'
+import type { ReviewClip } from '@/types'
 
-const APPROVE_TAGS = [
-  { id: 'titles_fit_style', label: 'Titles fit my style' },
-  { id: 'editing_matches_pace', label: 'Editing matches my pace' },
-  { id: 'good_hook', label: 'Good hook' },
-  { id: 'right_length', label: 'Right length' },
-]
-const DENY_TAGS = [
-  { id: 'editing_mismatch', label: "Editing doesn't match" },
-  { id: 'off_brand_topic', label: 'Off-brand topic' },
-  { id: 'bad_hook', label: 'Bad hook' },
-  { id: 'wrong_length', label: 'Wrong length' },
-]
-
-export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: () => void }) {
+// Issue 306 (redesign): the left review column — the 9:16 player, clip meta + fit
+// pill, the filmstrip trim, and "Next clip →". Trim state is owned by the parent
+// (Review) so the "Save trim" action in the Your-call card submits the same region.
+export function ClipPlayer({
+  clip,
+  trimStart,
+  trimEnd,
+  onTrimChange,
+  onNext,
+}: {
+  clip: ReviewClip
+  trimStart: number
+  trimEnd: number
+  onTrimChange: (start: number, end: number) => void
+  onNext: () => void
+}) {
   const clipDur = clip.end_s - clip.start_s
-  // Issue 182: clips are served through the authed download endpoint (presigned
-  // R2 in prod, file stream in dev) — never a raw s3:// render_uri. `inline`
-  // backs the <video>; the bare endpoint forces an attachment download.
+  // Issue 182: clips stream through the authed download endpoint (presigned R2 in
+  // prod, file stream in dev). `inline` backs the <video>.
   const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
-  const downloadUrl = `/clips/${clip.id}/download`
-  const [trimStart, setTrimStart] = useState(0)
-  const [trimEnd, setTrimEnd] = useState(clipDur)
-  const [panel, setPanel] = useState<'upvote' | 'downvote' | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [note, setNote] = useState('')
-  const [flash, setFlash] = useState('')
-
-  async function sendFeedback(action: FeedbackAction, tags?: string[], feedbackNote?: string) {
-    const body: FeedbackPayload = { action }
-    if (action === 'trim') {
-      body.trim_start_s = trimStart
-      body.trim_end_s = trimEnd
-    }
-    if (tags?.length) body.feedback_tags = tags
-    if (feedbackNote) body.feedback_note = feedbackNote
-    try {
-      await api(`/clips/${clip.id}/feedback`, { method: 'POST', body })
-      setFlash(action === 'trim' ? 'Trim saved ✓' : `${action} recorded ✓`)
-      setTimeout(() => setFlash(''), 1500)
-      if (action !== 'trim') onAdvance()
-    } catch {
-      setFlash('Error — try again')
-    }
-  }
-
-  function openPanel(action: 'upvote' | 'downvote') {
-    setPanel(action)
-    setSelected(new Set())
-    setNote('')
-  }
-
-  function toggleTag(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  function submitTagged() {
-    if (!panel) return
-    const tags = Array.from(selected).filter((t) => t !== '__other__')
-    const action = panel
-    setPanel(null)
-    sendFeedback(action, tags, note.trim() || undefined)
-  }
-
-  const tags = panel === 'upvote' ? APPROVE_TAGS : DENY_TAGS
+  const [currentTime, setCurrentTime] = useState(0)
 
   return (
     <div className="flex animate-fade-in flex-col items-center gap-4">
@@ -85,10 +35,11 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
           controls
           playsInline
           autoPlay
-          className="aspect-[9/16] w-full max-w-[360px] rounded-xl border border-default bg-black shadow-accent-glow"
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          className="aspect-[9/16] w-full max-w-[340px] rounded-xl border border-default bg-black shadow-accent-glow"
         />
       ) : (
-        <div className="flex aspect-[9/16] w-full max-w-[360px] items-center justify-center rounded-xl border border-default bg-black text-sm text-subtle">
+        <div className="flex aspect-[9/16] w-full max-w-[340px] items-center justify-center rounded-xl border border-default bg-black text-sm text-subtle">
           Not yet rendered
         </div>
       )}
@@ -101,106 +52,15 @@ export function ClipPlayer({ clip, onAdvance }: { clip: ReviewClip; onAdvance: (
         <FitBadge tier={fitTier(clip.score)} />
       </div>
 
-      <div className="w-full max-w-[360px]">
-        <label className="mb-1 block text-xs uppercase tracking-[0.04em] text-muted">
-          Trim start
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            aria-label="Trim start"
-            min={0}
-            max={clipDur}
-            step={0.1}
-            value={trimStart}
-            onChange={(e) => setTrimStart(parseFloat(e.target.value))}
-            className="flex-1 accent-[var(--color-accent)]"
-          />
-          <span className="w-12 text-right font-mono text-xs text-fg">{trimStart.toFixed(1)}s</span>
-        </div>
-        <label className="mb-1 mt-2 block text-xs uppercase tracking-[0.04em] text-muted">
-          Trim end
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            aria-label="Trim end"
-            min={0}
-            max={clipDur}
-            step={0.1}
-            value={trimEnd}
-            onChange={(e) => setTrimEnd(parseFloat(e.target.value))}
-            className="flex-1 accent-[var(--color-accent)]"
-          />
-          <span className="w-12 text-right font-mono text-xs text-fg">{trimEnd.toFixed(1)}s</span>
-        </div>
-      </div>
+      <TrimFilmstrip
+        duration={clipDur}
+        trimStart={trimStart}
+        trimEnd={trimEnd}
+        currentTime={currentTime}
+        onChange={onTrimChange}
+      />
 
-      <div className="min-h-[18px] text-center text-xs text-success">{flash}</div>
-
-      <div className="flex flex-wrap justify-center gap-2">
-        <Button variant="confirm" onClick={() => openPanel('upvote')}>
-          👍 Keep
-        </Button>
-        <Button variant="danger" onClick={() => openPanel('downvote')}>
-          👎 Drop
-        </Button>
-        <Button variant="secondary" onClick={() => sendFeedback('skip')}>
-          Skip
-        </Button>
-        <Button onClick={() => sendFeedback('trim')}>✂ Trim</Button>
-        {clip.render_uri && (
-          <a
-            href={downloadUrl}
-            download
-            className="inline-flex items-center rounded-md border border-strong bg-bg px-3 py-1.5 text-sm text-muted hover:border-muted hover:text-fg"
-          >
-            ⬇ Download
-          </a>
-        )}
-      </div>
-
-      {panel && (
-        <div className="w-full max-w-[360px] animate-slide-up rounded-md border border-default bg-surface p-4 shadow-sm shadow-inset">
-          <h4 className="mb-3 text-xs uppercase tracking-[0.06em] text-muted">
-            {panel === 'upvote' ? 'Why are you keeping this?' : 'Why are you dropping this?'}
-          </h4>
-          <div className="mb-3 flex flex-wrap gap-2">
-            {[...tags, { id: '__other__', label: 'Other…' }].map((t) => (
-              <button
-                key={t.id}
-                onClick={() => toggleTag(t.id)}
-                className={cn(
-                  'rounded-md border px-3 py-1 text-xs',
-                  selected.has(t.id)
-                    ? 'border-accent bg-accent-soft text-accent-text'
-                    : 'border-strong bg-bg text-muted hover:border-muted hover:text-fg',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {selected.has('__other__') && (
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Tell us more…"
-              className="mb-3 w-full rounded-md border border-strong bg-bg px-3 py-2 text-xs text-fg placeholder:text-subtle focus:border-accent focus:outline-none"
-            />
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setPanel(null)}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={submitTagged}>
-              Submit
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <button onClick={onAdvance} className="text-xs text-muted hover:text-fg">
+      <button onClick={onNext} className="mt-1 text-xs text-muted hover:text-fg">
         Next clip →
       </button>
     </div>

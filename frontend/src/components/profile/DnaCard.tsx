@@ -4,6 +4,7 @@ import { subscribeToTaskStream, type StreamSubscription } from '@/lib/taskStream
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
+import { Chip } from '@/components/Chip'
 import { Brief } from './Brief'
 import type { DnaProfile, DnaResponse } from '@/types'
 
@@ -103,7 +104,12 @@ export function DnaCard({ identityCreatedAt }: { identityCreatedAt: string | nul
   return (
     <Card>
       <CardHeader
-        title="Your Creator DNA"
+        title={
+          <span className="flex items-center gap-2">
+            <Chip pose="book" size={26} />
+            Your Creator DNA
+          </span>
+        }
         description="What we've learned about your channel from your own analytics — grounded in your data, not a generic virality score."
         aside={provenance}
       />

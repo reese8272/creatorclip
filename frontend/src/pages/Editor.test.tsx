@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -64,10 +65,11 @@ function renderEditor(entry: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Editor', () => {
-  it('shows a prompt when no clip_id is present', () => {
+  it('shows the empty state when no clip_id is present (Issue 304 — Editor is a nav destination)', () => {
     vi.stubGlobal('fetch', mockFetch())
     renderEditor('/app/editor')
-    expect(screen.getByText(/No clip selected/i)).toBeInTheDocument()
+    expect(screen.getByText(/Pick a clip to edit/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Go to Review/i })).toBeInTheDocument()
   })
 
   it('renders the editor with clip meta and honesty disclaimer', async () => {
@@ -110,6 +112,31 @@ describe('Editor', () => {
     // so getAllByText is appropriate here.
     expect(screen.getAllByText('Caption style').length).toBeGreaterThan(0)
     expect(screen.getByText('Clean filler + silence')).toBeInTheDocument()
+  })
+
+  // ── Issue 307: mode toggle + long-form source mode ──
+  it('shows the short|long mode toggle (Issue 307)', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    await screen.findByText(/Clip #1/i)
+    expect(screen.getByRole('tab', { name: /Short-form clip/i })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Long-form source/i })).toBeInTheDocument()
+  })
+
+  it('switches to long-form source mode and lists suggested clips (Issue 307)', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    await screen.findByText(/Clip #1/i)
+    await userEvent.click(screen.getByRole('tab', { name: /Long-form source/i }))
+    expect(screen.getByText('Suggested clips')).toBeInTheDocument()
+    // Honest placeholder for the un-backed full-source surfaces (scaffold scope).
+    expect(screen.getByText(/Full-source preview isn’t available/i)).toBeInTheDocument()
+  })
+
+  it('opens /editor?video_id (no clip) directly in long-form mode (Issue 307)', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1')
+    expect(await screen.findByText('Suggested clips')).toBeInTheDocument()
   })
 })
 
