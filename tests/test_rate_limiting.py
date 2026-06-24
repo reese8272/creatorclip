@@ -3,6 +3,11 @@ Tests for Issue 18 — per-creator rate limiting.
 Covers: limiter registered on app, key function extracts creator_id from JWT,
 429 returned when limit exceeded, Retry-After header present,
 expensive endpoints have tighter limits than standard endpoints.
+
+Issue 312 additions:
+- Limiter storage carries bounded socket_timeout / socket_connect_timeout so a
+  Redis stall degrades one request instead of blocking the event loop.
+- creator_key resolves creator_id from request.state (not from the JWT).
 """
 
 import uuid
@@ -204,3 +209,96 @@ def test_429_returned_on_limit_exceeded(client):
     from main import app as main_app
 
     assert RLE in dict(main_app.exception_handlers)
+
+
+# ── Issue 312: bounded socket timeout on the limiter storage ─────────────────
+
+
+def test_limiter_storage_has_bounded_socket_timeout() -> None:
+    """The limiter's Redis storage must carry a bounded socket_timeout so a
+    Redis stall degrades one request instead of blocking the event-loop thread
+    indefinitely (Issue 312 — SEV1 event-loop-blocking fix).
+
+    We inspect the Redis client's connection-pool kwargs directly — these are
+    the values redis-py uses when it opens a socket, so this is the load-bearing
+    assertion that the timeout is actually applied, not just configured.
+    """
+    from limiter import _REDIS_STORAGE_OPTIONS, limiter
+
+    # Retrieve the redis client inside the limits RedisStorage.
+    redis_client = limiter._storage.storage  # type: ignore[attr-defined]
+    pool_kwargs = redis_client.connection_pool.connection_kwargs
+
+    socket_timeout: float | None = pool_kwargs.get("socket_timeout")
+    socket_connect_timeout: float | None = pool_kwargs.get("socket_connect_timeout")
+
+    assert socket_timeout is not None, (
+        "limiter storage must set socket_timeout — a None value means Redis "
+        "stalls will block the event-loop thread indefinitely (Issue 312)"
+    )
+    assert socket_timeout <= 0.5, (
+        f"socket_timeout {socket_timeout}s is too loose; keep <= 500 ms so "
+        "a stalled Redis degrades one request without user-visible latency."
+    )
+    # The configured value must match the constant — so a careless edit cannot
+    # silently revert to None without this test catching it.
+    assert socket_timeout == _REDIS_STORAGE_OPTIONS["socket_timeout"], (
+        "limiter socket_timeout does not match _REDIS_STORAGE_OPTIONS — "
+        "the constant and the storage are out of sync (Issue 312)"
+    )
+
+    assert socket_connect_timeout is not None, (
+        "limiter storage must set socket_connect_timeout (Issue 312)"
+    )
+    assert socket_connect_timeout == _REDIS_STORAGE_OPTIONS["socket_connect_timeout"]
+
+
+def test_limiter_storage_is_sync_not_async() -> None:
+    """The limiter must use the sync RedisStorage, not the async variant.
+
+    slowapi 0.1.9 calls limiter.hit() without await (extension.py line 509).
+    If async storage were used, hit() would return a coroutine that evaluates
+    as truthy — silently disabling all rate limits.  This test guards against
+    an accidental switch to async+redis:// before the slowapi upgrade lands.
+
+    When slowapi is upgraded to a version that awaits hit(), this test should
+    be updated to assert the async storage class instead.
+    """
+    from limits.storage import RedisStorage
+
+    from limiter import limiter
+
+    assert isinstance(limiter._storage, RedisStorage), (  # type: ignore[attr-defined]
+        f"Expected limits.storage.RedisStorage, got {type(limiter._storage).__name__}. "
+        "slowapi 0.1.9 does not await hit() — switching to async storage silently "
+        "disables all rate limits (Issue 312). Upgrade slowapi first."
+    )
+
+
+# ── Issue 312: creator_key resolves creator_id from request.state ────────────
+
+
+def test_creator_key_resolves_from_request_state() -> None:
+    """creator_key must read request.state.creator_id — not re-decode the JWT.
+
+    This is the canonical slowapi pattern: the auth dependency stamps
+    request.state.creator_id; the key_func reads it.  This test asserts the
+    per-creator bucket is correctly populated from the already-resolved identity
+    so that bearer-auth routes (no session cookie) are bucketed by creator, not IP.
+    """
+    import uuid
+
+    from fastapi import Request
+
+    from limiter import creator_key
+
+    cid = uuid.uuid4()
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
+    request = Request(scope=scope)
+    request.state.creator_id = cid
+
+    key = creator_key(request)
+    assert key == str(cid), (
+        f"creator_key must return str(creator_id) == '{cid}', got {key!r}. "
+        "The key_func must read request.state.creator_id, not fall back to IP."
+    )
