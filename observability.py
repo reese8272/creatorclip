@@ -28,10 +28,15 @@ import time
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+if TYPE_CHECKING:
+    # sentry-sdk ships inline types; `before_send` must be typed as its `Event`
+    # (a TypedDict), not a bare dict, or mypy rejects the callable at `init()`.
+    from sentry_sdk.types import Event
 
 from redact import scrub_dict
 
@@ -389,20 +394,24 @@ def _record_task_and_clear(task: Any = None, state: str | None = None, **_: Any)
     _task_start_ctx.set(0.0)
 
 
-def _sentry_before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
+def _sentry_before_send(event: Event, hint: dict[str, Any]) -> Event | None:
     """Scrub PII / secrets from Sentry events before they leave the process.
 
     Applies scrub_dict (from redact.py, the project's single source of truth for
     the blocklist) to the event's extra dict and request body. This is a
     structural backstop — it catches any field that slips past call-site
     discipline, which is the same pattern JsonLogFormatter uses.
+
+    `event` is sentry's `Event` TypedDict; we mutate it through a plain-dict view
+    (`cast`) since scrub_dict is structural and the keys we touch are dynamic.
     """
-    if "extra" in event:
-        event["extra"] = scrub_dict(event["extra"])
+    data = cast("dict[str, Any]", event)
+    if "extra" in data:
+        data["extra"] = scrub_dict(data["extra"])
     try:
-        req_data = event.get("request", {}).get("data")
+        req_data = data.get("request", {}).get("data")
         if isinstance(req_data, dict):
-            event["request"]["data"] = scrub_dict(req_data)
+            data["request"]["data"] = scrub_dict(req_data)
     except Exception:
         pass
     return event

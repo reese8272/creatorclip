@@ -48,6 +48,9 @@ tenacity==9.1.4
 # (clip_engine/render.py, Issue 181) — no Python LUFS lib is imported. The former
 # pyloudnorm pin was dead weight (zero imports) and was removed.
 librosa==0.10.2
+# msgpack is transitive (librosa + CacheControl). Pin >= the fixed release to
+# clear GHSA-6v7p-g79w-8964 (pip-audit gate); 1.2.1 is the first patched build.
+msgpack==1.2.1
 
 # ── Vision ───────────────────────────────────────────────────────────────────
 opencv-python==4.13.0.92
@@ -87,7 +90,8 @@ boto3==1.35.54
 # ── Transactional email (Issue 242) ─────────────────────────────────────────
 # Jinja2 was already a transitive dep (via markupsafe/starlette templating)
 # but is now load-bearing for notify/mailer.py — pin it explicitly.
-jinja2==3.1.2
+# 3.1.6 clears CVE-2024-22195/34064/56326/56201 + CVE-2025-27516 (pip-audit gate).
+jinja2==3.1.6
 # Resend Python SDK v2 — native idempotency key support, 3k/month free tier.
 # https://resend.com/docs/send-with-python ; https://pypi.org/project/resend/
 resend==2.32.2

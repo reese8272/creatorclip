@@ -5,6 +5,45 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — CI green-up: real mypy fix + CVE pins + sudo-free workflow + paths-filter perms
+
+PR #28 merged green-on-deploy but the PR-CI run was red. Triaged every failing job; fixes below.
+All static gates re-verified in a **clean CI-equivalent venv** (`python -m venv` + a fresh
+`pip install -r requirements.txt -r requirements-dev.txt`) because the dev box's `.venv` had a stale
+sentry-sdk that masked the mypy error — the clean venv reproduced CI exactly.
+
+**1. mypy (the real bug, surfaced only in CI).** `observability._sentry_before_send` was typed
+`(dict, dict) -> dict | None`, but `sentry_sdk.init(before_send=…)` is typed as
+`Callable[[Event, dict], Event | None]` (sentry-sdk ships inline types; `Event` is a TypedDict). The
+dev `.venv` lacked the typed sentry-sdk so mypy skipped it locally; CI's fresh install type-checked it
+→ 1 error. Fixed: annotate with sentry's `Event` (imported under `TYPE_CHECKING`), mutate via a
+`cast("dict[str, Any]", event)` view (scrub is structural; keys are dynamic). Behavior identical
+(redaction test still passes).
+
+**2. pip-audit (5 vulns → 0).** `jinja2 3.1.2 → 3.1.6` (CVE-2024-22195/34064/56326/56201 +
+CVE-2025-27516) and a new explicit `msgpack==1.2.1` pin (transitive via librosa/CacheControl;
+GHSA-6v7p-g79w-8964). The pip + pytest CVEs were already in `run_layer0.PIP_AUDIT_IGNORES`
+(dev/build-time only, not runtime deps).
+
+**3. Self-hosted-runner `sudo: a password is required` (failed unit/integration/coverage/playwright).**
+Root cause is infra (the `github-runner` user lacks passwordless sudo and deps weren't pre-installed),
+but the workflow shouldn't hard-fail on it. Since `psycopg[binary]` needs no gcc/libpq and ffmpeg is
+only used at render time, the apt steps are now **best-effort**: skip if `ffmpeg` already present, try
+`sudo -n` (non-interactive), and `|| echo ::warning::` instead of failing. Playwright falls back from
+`--with-deps` to a browser-only install. The durable fix remains running `scripts/setup-runner.sh` on
+the VM (and registering a 2nd runner) — see `docs/runbooks/local-ci-cd.md`.
+
+**4. `dorny/paths-filter` "Resource not accessible by integration" (failed eval + migration-lint).**
+On `pull_request` the action reads the PR Files API, which needs `pull-requests: read`. Added it to
+both jobs' `permissions` (workflow default stays least-privilege `contents: read`).
+
+**Verification.** Clean-venv Layer-0 (ruff/mypy/bandit/pip_audit/freshness) all green; unit lane
+**1407 passed / 0 failed** on the bumped deps; `ci.yml` YAML-validated. Note: `ci.yml` runs on
+`pull_request` only (single-runner constraint), so these workflow fixes are exercised on the next PR,
+not on the direct-to-main push.
+
+---
+
 ## 2026-06-24 — `POST /videos/link` adopts a catalog row instead of 409 (+ Chip asset path + onboarding skip)
 
 Three production-facing fixes from a UX pass on the live app (autoclip.studio), confirmed against the

@@ -4,6 +4,26 @@ Updated after every issue closes.
 
 ---
 
+## ✅ CI green-up — mypy fix + CVE pins + sudo-free workflow + paths-filter perms (2026-06-24)
+
+PR #28's PR-CI run was red (deploy went out anyway — it keys off docker-publish). Triaged + fixed
+every failing job. Verified in a clean CI-equivalent venv (the dev `.venv` had a stale sentry-sdk that
+masked the mypy error locally):
+
+- **mypy (real, CI-only):** `observability._sentry_before_send` typed `(dict,dict)->dict|None` but
+  sentry's `before_send` expects `(Event, dict)->Event|None`. Annotated with `Event` (TYPE_CHECKING)
+  + `cast` view; behavior identical.
+- **pip-audit 5→0:** `jinja2 3.1.2→3.1.6`, new `msgpack==1.2.1` pin (transitive). pip/pytest CVEs
+  already in `PIP_AUDIT_IGNORES` (dev/build-time only).
+- **runner sudo/apt failures:** apt steps now best-effort (psycopg binary wheel → no gcc/libpq;
+  ffmpeg render-only) — skip-if-present, `sudo -n`, `||echo ::warning::`. Playwright falls back off
+  `--with-deps`. Durable fix = provision the runner (`scripts/setup-runner.sh`).
+- **paths-filter "Resource not accessible":** added `pull-requests: read` to eval + migration-lint.
+- **Gates:** clean-venv Layer-0 all green; unit lane **1407 passed / 0 failed**; ci.yml YAML-valid.
+  `ci.yml` runs on PRs only, so workflow fixes land on the next PR. DECISIONS.md 2026-06-24.
+
+---
+
 ## ✅ UX pass — Chip blank-sprite fix + onboarding skip + adopt-on-link (2026-06-24)
 
 Three live-app (autoclip.studio) fixes from a UX review against the Claude design prototype.

@@ -85,8 +85,14 @@ jobs:
           cache: pip
       - name: Install system deps (ffmpeg + libpq)
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+          # Best-effort: the self-hosted runner is normally pre-provisioned
+          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
+          # ffmpeg matters (render/integration). Never hard-fail on a runner
+          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          command -v ffmpeg >/dev/null 2>&1 && exit 0
+          sudo -n apt-get update -q \
+            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+            || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps
         run: pip install -r requirements.txt
       - name: Import smoke (fail fast on dep drift)
@@ -144,8 +150,14 @@ jobs:
           cache: pip
       - name: Install system deps
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+          # Best-effort: the self-hosted runner is normally pre-provisioned
+          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
+          # ffmpeg matters (render/integration). Never hard-fail on a runner
+          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          command -v ffmpeg >/dev/null 2>&1 && exit 0
+          sudo -n apt-get update -q \
+            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+            || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps
         run: pip install -r requirements.txt
       - name: Run Alembic migrations
@@ -179,8 +191,14 @@ jobs:
           cache: pip
       - name: Install system deps (ffmpeg + libpq)
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+          # Best-effort: the self-hosted runner is normally pre-provisioned
+          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
+          # ffmpeg matters (render/integration). Never hard-fail on a runner
+          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          command -v ffmpeg >/dev/null 2>&1 && exit 0
+          sudo -n apt-get update -q \
+            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+            || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install deps
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run coverage gate
@@ -204,6 +222,11 @@ jobs:
     # constraint-missing-not-valid, disallowed-unique-constraint, etc.
     name: Migration lint (Squawk)
     runs-on: self-hosted
+    # dorny/paths-filter calls the PR Files API on pull_request events; without
+    # pull-requests:read it errors "Resource not accessible by integration".
+    permissions:
+      contents: read
+      pull-requests: read
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -248,8 +271,11 @@ jobs:
       - name: Install system deps (libpq)
         if: steps.filter.outputs.migrations == 'true'
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends libpq-dev gcc
+          # Best-effort (see note in other jobs). psycopg uses the binary wheel,
+          # so libpq/gcc are not actually needed to install — never hard-fail.
+          sudo -n apt-get update -q \
+            && sudo -n apt-get install -y --no-install-recommends libpq-dev gcc \
+            || echo "::warning::libpq/gcc unavailable; psycopg binary wheel is used so this is usually fine"
       - name: Install Python deps + squawk-cli
         if: steps.filter.outputs.migrations == 'true'
         run: |
@@ -339,7 +365,8 @@ jobs:
     runs-on: self-hosted
     permissions:
       contents: read
-      statuses: write   # needed to post the commit status
+      statuses: write          # needed to post the commit status
+      pull-requests: read      # dorny/paths-filter reads the PR Files API on PRs
     services:
       redis:
         image: redis:7-alpine
@@ -369,8 +396,14 @@ jobs:
       - name: Install system deps (ffmpeg + libpq)
         if: steps.filter.outputs.clip_engine == 'true'
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+          # Best-effort: the self-hosted runner is normally pre-provisioned
+          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
+          # ffmpeg matters (render/integration). Never hard-fail on a runner
+          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          command -v ffmpeg >/dev/null 2>&1 && exit 0
+          sudo -n apt-get update -q \
+            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+            || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps
         if: steps.filter.outputs.clip_engine == 'true'
         run: pip install -r requirements.txt
@@ -439,7 +472,9 @@ jobs:
         # --with-deps installs the OS-level Chromium deps in one step, matching the
         # official Playwright CI guidance. Chromium-only — Firefox/WebKit are not
         # needed for smoke+a11y and would add ~300MB to the CI cache.
-        run: npx playwright install --with-deps chromium
+        # --with-deps needs sudo/apt for OS libs; fall back to a browser-only
+        # install when the runner is already provisioned (no passwordless sudo).
+        run: npx playwright install --with-deps chromium 2>/dev/null || npx playwright install chromium
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -474,7 +509,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        # --with-deps needs sudo/apt for OS libs; fall back to a browser-only
+        # install when the runner is already provisioned (no passwordless sudo).
+        run: npx playwright install --with-deps chromium 2>/dev/null || npx playwright install chromium
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -522,8 +559,14 @@ jobs:
           cache: pip
       - name: Install system deps (ffmpeg + libpq)
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc
+          # Best-effort: the self-hosted runner is normally pre-provisioned
+          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
+          # ffmpeg matters (render/integration). Never hard-fail on a runner
+          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          command -v ffmpeg >/dev/null 2>&1 && exit 0
+          sudo -n apt-get update -q \
+            && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
+            || echo "::warning::ffmpeg/system deps unavailable (no passwordless apt); render/integration tests may be affected"
       - name: Install Python deps (including pytest-rerunfailures)
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run flake detection (reruns=1, not quarantine, not integration)
