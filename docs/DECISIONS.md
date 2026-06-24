@@ -5,6 +5,56 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Issue 315: prompt-cache floor is 1024 for Sonnet 4.6 (supersedes ALL 2048 refs); drop inert markers
+
+**What was decided.**
+1. **The authoritative cacheable-prefix floor for Sonnet 4.6 is 1024 tokens.** Every "2048" figure
+   elsewhere in this file (lines ~151, ~1154, ~1515, ~2520, ~2533–2564, ~3121 and any others) is
+   **SUPERSEDED and historically incorrect** — read them as 1024. Issue 138 (2026-06-16) "corrected"
+   the floor up to 2048 based on a misread; Issue 218 (2026-06-23) re-corrected to 1024 via a live
+   fetch; Issue 315 (2026-06-24) re-confirmed 1024. 2048 is not a Sonnet-4.6 figure.
+2. **Three inert markers removed / gated.** The `cache_control{ttl:1h}` markers on
+   `clip_engine/scoring.py`, `analysis/brief.py`, `dna/brief.py` sat on ~570–985-token prefixes —
+   below 1024 — so they produced **zero** cache reads while the cost ledger charged a phantom 2×
+   write premium. Decision per site: `scoring.py` (hottest call, 1/scored-video) **keeps** the marker
+   but now folds the static rubric into the cached prefix and gates both the marker AND the 2×
+   multiplier on `combined_chars//4 >= 1024`; `analysis/brief.py` and `dna/brief.py` **drop** the
+   marker (prefixes structurally can't reach the floor — honest: too short to cache).
+
+**Why.** "Mandatory prompt caching" was violated in effect on the highest-volume LLM call, and the
+ledger over-billed against a cache that never fired. Honesty + cost-correctness both demand it.
+
+**Source/evidence.** Live floor verification at platform.claude.com 2026-06-23 (Issue 218) +
+2026-06-24 (Issue 315); per-site token measurement (char/4 lower bound) in the Issue 315 implementation;
+prod token logs showed `cache_read_input_tokens=0` on the marked calls. New token-log line on
+`scoring.py` now emits `cache_marker_sent` + `prefix_chars` so an inert marker can't silently regress.
+
+**Date.** 2026-06-24
+
+## 2026-06-24 — Issue 312: slowapi limiter keeps SYNC Redis storage + bounded socket timeout (NOT async+redis://)
+
+**What was decided.** Keep slowapi's synchronous `limits.storage.RedisStorage` and add
+`socket_timeout=0.1` / `socket_connect_timeout=0.25` via `storage_options`, so a Redis stall degrades
+one request (≤100 ms) instead of head-of-line-blocking the event loop indefinitely. Do **NOT** switch
+to `async+redis://`.
+
+**Why.** slowapi 0.1.9's `_check_request_limit` calls `self.limiter.hit(...)` **synchronously**
+(`extension.py:509`, no `await`; `SlowAPIMiddleware` dispatches via `sync_check_limits`). An
+`async+redis://` URI would return a `limits.aio.storage.RedisStorage` whose `hit()` is a coroutine;
+called without `await` it is **always truthy**, making `not limiter.hit(...)` always False and
+**silently disabling all 69 rate-limited routes**. The bounded timeout is the correct interim mitigation.
+This is the Issue 82 "slowapi-on-loop" lineage, re-severitied to SEV1 by the 2026-06-24 assessment (axis B).
+
+**Revisit when.** slowapi ships a version that `await`s `hit()` — then switch to `async+redis://` +
+`limits.aio.strategies`. (`SlowAPIASGIMiddleware` already awaits, but `main.py` registers the sync
+`SlowAPIMiddleware`.) Verified by `test_limiter_storage_has_bounded_socket_timeout` (inspects the
+connection-pool `socket_timeout`). The staging Locust p99 check is deferred to Issue 261/275.
+
+**Source/evidence.** Direct read of installed `slowapi/extension.py`, `slowapi/middleware.py`,
+`limits 5.8.0 aio/strategies.py` + `storage/__init__.py`. **Date.** 2026-06-24
+
+---
+
 ## 2026-06-24 — AutoClip redesign fidelity polish (post-304–309): 10 prototype gaps
 
 **Context.** After the 304–309 redesign port shipped (static-verified only), a screen-by-screen
