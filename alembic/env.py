@@ -31,24 +31,27 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
-    # Issue 270: set lock_timeout and statement_timeout on the migration connection
-    # so a blocking ALTER or unsafe ADD COLUMN NOT NULL DEFAULT cannot lock prod
-    # indefinitely. lock_timeout = 5s matches Squawk's recommendation; statement_timeout
-    # = 120s is enough for the largest expected migration (index build on non-empty table).
-    # Both are session-level — they apply only to this migration connection.
-    from sqlalchemy import text
-
-    connection.execute(text("SET lock_timeout = '5s'"))
-    connection.execute(text("SET statement_timeout = '120s'"))
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_async_migrations() -> None:
+    # Issue 270: bound lock_timeout / statement_timeout on the migration connection
+    # so a blocking ALTER or unsafe ADD COLUMN NOT NULL DEFAULT cannot lock prod
+    # indefinitely. lock_timeout = 5s matches Squawk's recommendation; statement_timeout
+    # = 120s covers the largest expected migration (index build on a non-empty table).
+    #
+    # These MUST be applied via libpq `options` at connect time, NOT via
+    # `connection.execute("SET ...")` inside do_run_migrations: a pre-transaction
+    # execute auto-begins a transaction on the SQLAlchemy 2.0 connection, which
+    # alembic's context.begin_transaction() then treats as caller-owned and never
+    # commits — so every migration silently rolled back (exit 0, no error) and prod
+    # drifted behind head. Confirmed on prod 2026-06-24; see docs/OFF_COURSE_BUGS.md.
     connectable = create_async_engine(
         config.get_main_option("sqlalchemy.url"),
         poolclass=pool.NullPool,
+        connect_args={"options": "-c lock_timeout=5s -c statement_timeout=120s"},
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

@@ -96,25 +96,14 @@ async def connect_publishing(
     return resp
 
 
-@router.get("/callback")
-async def callback(
-    request: Request,
-    session: AsyncSession = Depends(get_session),
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-) -> RedirectResponse:
-    if error:
-        logger.warning("OAuth error from Google: %s", error)
-        raise HTTPException(400, f"Google OAuth error: {error}")
+async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creator, bool, dict]:
+    """Exchange the OAuth code, upsert the creator, grant the trial + record consent
+    for new creators, and persist tokens — all in one committed transaction.
 
-    stored_state = request.cookies.get(_STATE_COOKIE)
-    if not stored_state or stored_state != state:
-        raise HTTPException(400, "Invalid OAuth state — possible CSRF attempt")
-
-    if not code:
-        raise HTTPException(400, "Missing authorization code")
-
+    Raises on any failure (``httpx`` for the Google calls, ``SQLAlchemyError`` for
+    the DB write) so the caller can map it to a clean redirect rather than leak a
+    500 mid-OAuth. Returns ``(creator, is_new, identity)``.
+    """
     tokens = await exchange_code(code)
     identity = await fetch_creator_identity(tokens["access_token"])
 
@@ -187,6 +176,49 @@ async def callback(
         expires_in=tokens.get("expires_in", 3600),
     )
     await session.commit()
+    return creator, is_new, identity
+
+
+@router.get("/callback")
+async def callback(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    if error:
+        logger.warning("OAuth error from Google: %s", error)
+        raise HTTPException(400, f"Google OAuth error: {error}")
+
+    stored_state = request.cookies.get(_STATE_COOKIE)
+    if not stored_state or stored_state != state:
+        raise HTTPException(400, "Invalid OAuth state — possible CSRF attempt")
+
+    if not code:
+        raise HTTPException(400, "Missing authorization code")
+
+    try:
+        creator, is_new, identity = await _exchange_and_persist(session, code)
+    except HTTPException:
+        # Deliberate 4xx (e.g. Google returned no refresh token) — preserve it.
+        raise
+    except httpx.HTTPStatusError as exc:
+        # Google token-exchange / identity fetch failed (reused/expired code,
+        # invalid_grant, client-secret or redirect mismatch). Map to a clean
+        # login redirect instead of leaking a 500 mid-OAuth. Log the status only
+        # — never the token or response body.
+        await session.rollback()
+        logger.warning("OAuth callback exchange failed: HTTP %s", exc.response.status_code)
+        return RedirectResponse(url="/app/login?error=oauth_failed", status_code=302)
+    except Exception as exc:
+        # Catch-all so a DB/schema/Redis/unknown fault can never surface as a 500
+        # to a user mid-login (this is what the 2026-06-24 migration-drift outage
+        # did). Log the exception TYPE only — SQLAlchemy messages can carry SQL
+        # params / PII, which must never hit a log line (COMPLIANCE).
+        await session.rollback()
+        logger.error("OAuth callback failed: %s", type(exc).__name__)
+        return RedirectResponse(url="/app/login?error=oauth_failed", status_code=302)
 
     # Kick off the initial catalog pull so the user's videos land in the DB
     # by the time they reach the onboarding data-gate. Async because the

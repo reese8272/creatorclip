@@ -17,7 +17,11 @@
 import { useState } from 'react'
 
 export function Login() {
-  const yt = new URLSearchParams(window.location.search).get('yt')
+  const params = new URLSearchParams(window.location.search)
+  const yt = params.get('yt')
+  // Set by the backend OAuth callback when token exchange or persistence fails,
+  // instead of leaking a 500 mid-OAuth (see routers/auth.py callback hardening).
+  const oauthFailed = params.get('error') === 'oauth_failed'
   const signInHref = yt ? `/auth/login?yt=${encodeURIComponent(yt)}` : '/auth/login'
 
   const [agreed, setAgreed] = useState(false)
@@ -33,6 +37,16 @@ export function Login() {
           <div className="mb-7 text-sm leading-relaxed text-muted">
             The only AI editor that truly knows your channel.
           </div>
+
+          {oauthFailed && (
+            <div
+              role="alert"
+              className="mb-5 rounded-md border border-danger-border bg-danger-soft px-3.5 py-3 text-left text-xs leading-relaxed text-danger"
+            >
+              We couldn't complete sign-in with Google. This is usually temporary — please try
+              again. If it keeps happening, contact support.
+            </div>
+          )}
 
           <h1 className="mb-2.5 text-h1 text-fg">Sign in to continue</h1>
           <p className="mb-7 text-sm leading-relaxed text-muted">

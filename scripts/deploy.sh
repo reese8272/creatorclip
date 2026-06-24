@@ -50,6 +50,23 @@ docker compose -f docker-compose.prod.yml run --rm app python scripts/doctor.py
 echo "  Running migrations..."
 docker compose -f docker-compose.prod.yml run --rm app alembic upgrade head
 
+# Verify the DB actually reached head. A faulty env.py once made `alembic upgrade`
+# exit 0 while silently rolling back every migration (2026-06-24 outage: prod sat at
+# 0027 while code expected 0034 → new-signup /auth/callback 500s). Fail the deploy if
+# current != head so a silent no-op can never ship again. Revision ids are the leading
+# token of each command's stdout (e.g. "0034 (head)"); stderr is dropped.
+echo "  Verifying DB is at head..."
+CUR_REV=$(docker compose -f docker-compose.prod.yml run --rm -T app alembic current 2>/dev/null \
+  | grep -oE '^[0-9a-f]+' | head -1)
+HEAD_REV=$(docker compose -f docker-compose.prod.yml run --rm -T app alembic heads 2>/dev/null \
+  | grep -oE '^[0-9a-f]+' | head -1)
+if [ -z "$CUR_REV" ] || [ "$CUR_REV" != "$HEAD_REV" ]; then
+  echo "Migration verification FAILED: current='${CUR_REV:-none}' head='${HEAD_REV:-none}'." >&2
+  echo "The upgrade likely no-op'd (check alembic/env.py transaction handling)." >&2
+  exit 1
+fi
+echo "  Migrations confirmed at head ($CUR_REV)."
+
 echo "  Rolling out..."
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 docker image prune -f

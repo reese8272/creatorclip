@@ -250,6 +250,7 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
     fake_session = MagicMock()
     fake_session.flush = AsyncMock()
     fake_session.commit = AsyncMock()
+    fake_session.rollback = AsyncMock()  # awaited by the callback's error path
 
     monkeypatch.setattr(
         "routers.auth.exchange_code",
@@ -354,6 +355,73 @@ def test_callback_returning_creator_redirects_to_dashboard(client, monkeypatch):
         f"Returning creator must land on /app/dashboard, got: {resp.headers['location']}"
     )
     assert SESSION_COOKIE in resp.cookies, "Session cookie must be set on successful callback"
+
+
+# ── Callback hardening: failures redirect to login, never leak a 500 (2026-06-24) ──
+
+
+def test_callback_exchange_failure_redirects_to_login(client, monkeypatch):
+    """A Google token-exchange failure (httpx.HTTPStatusError — reused code,
+    invalid_grant, secret/redirect mismatch) must redirect to
+    /app/login?error=oauth_failed, not surface a 500."""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from db import get_session
+    from main import app
+
+    _oauth_callback_mocks(monkeypatch, is_new=True)
+    request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+    response = httpx.Response(400, request=request, json={"error": "invalid_grant"})
+    monkeypatch.setattr(
+        "routers.auth.exchange_code",
+        AsyncMock(side_effect=httpx.HTTPStatusError("400", request=request, response=response)),
+    )
+
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=reused_code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302 redirect, got {resp.status_code}: {resp.text}"
+    assert resp.headers["location"] == "/app/login?error=oauth_failed"
+    assert SESSION_COOKIE not in resp.cookies, "No session may be issued on a failed exchange"
+
+
+def test_callback_db_failure_redirects_to_login(client, monkeypatch):
+    """A DB write failure (e.g. schema drift → UndefinedColumn) must redirect to
+    login rather than leak a 500. Regression guard for the 2026-06-24 outage where
+    prod sat behind head and the new-signup INSERT 500'd."""
+    from unittest.mock import AsyncMock
+
+    from db import get_session
+    from main import app
+
+    _oauth_callback_mocks(monkeypatch, is_new=False)
+    monkeypatch.setattr(
+        "routers.auth.store_or_update_tokens",
+        AsyncMock(side_effect=RuntimeError('column "terms_version" does not exist')),
+    )
+
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=test_code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302 redirect, got {resp.status_code}: {resp.text}"
+    assert resp.headers["location"] == "/app/login?error=oauth_failed"
+    assert SESSION_COOKIE not in resp.cookies
 
 
 # ── Issue 300: COPPA minimum-age column + recording path ─────────────────────
