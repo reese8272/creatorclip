@@ -172,12 +172,17 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     video_stub.id = uuid.UUID(video_id)
     video_stub.creator_id = uuid.uuid4()
 
+    # Issue 311: _generate_clips_async loads the Creator (for the clips_ready
+    # email greeting) between the Video and Signals fetches.
+    creator_stub = MagicMock()
+    creator_stub.channel_title = "Test Channel"
+
     signals_stub = MagicMock()
     signals_stub.timeline_jsonb = {}
 
     fake_session = AsyncMock()
-    # get() returns Video, then Signals, then Transcript (None).
-    fake_session.get = AsyncMock(side_effect=[video_stub, signals_stub, None])
+    # get() returns Video, then Creator, then Signals, then Transcript (None).
+    fake_session.get = AsyncMock(side_effect=[video_stub, creator_stub, signals_stub, None])
     # `existing_done` check returns None (no rendered clips yet).
     fake_session.scalar = AsyncMock(return_value=None)
     fake_session.commit = AsyncMock()

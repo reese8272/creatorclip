@@ -46,13 +46,18 @@ class TestClipsReadyTrigger:
         mock_video = MagicMock()
         mock_video.creator_id = creator_uuid
 
+        # Issue 311: _generate_clips_async now loads the Creator (for the
+        # clips_ready email greeting) between the Video and Signals fetches.
+        mock_creator = MagicMock()
+        mock_creator.channel_title = "Test Channel"
+
         mock_signals = MagicMock()
         mock_signals.timeline_jsonb = {}
 
         mock_clips = [MagicMock(), MagicMock()]  # 2 clips
 
         mock_session = AsyncMock()
-        mock_session.get = AsyncMock(side_effect=[mock_video, mock_signals, None])
+        mock_session.get = AsyncMock(side_effect=[mock_video, mock_creator, mock_signals, None])
         mock_session.scalar = AsyncMock(return_value=None)  # no existing done clips
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
@@ -72,12 +77,20 @@ class TestClipsReadyTrigger:
 
             await _generate_clips_async(video_id)
 
-        mock_send_notif.delay.assert_called_once_with(
-            str(creator_uuid),
-            "clips_ready",
-            video_id,
-            {"clip_count": 2},
-        )
+        # Issue 311: payload now carries the per-email vars the clips_ready
+        # template needs (creator_name greeting, video_title, absolute review_url)
+        # in addition to clip_count. Assert the positional args + the key payload
+        # fields rather than exact equality (video_title is a MagicMock attr).
+        mock_send_notif.delay.assert_called_once()
+        call_args = mock_send_notif.delay.call_args.args
+        assert call_args[0] == str(creator_uuid)
+        assert call_args[1] == "clips_ready"
+        assert call_args[2] == video_id
+        payload = call_args[3]
+        assert payload["clip_count"] == 2
+        assert payload["creator_name"] == "Test Channel"
+        assert payload["review_url"].startswith("http")
+        assert "video_title" in payload
 
     @pytest.mark.asyncio
     async def test_clips_ready_not_enqueued_on_error(self) -> None:
