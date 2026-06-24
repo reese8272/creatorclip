@@ -68,3 +68,9 @@ docs/assessment/_coverage.xml
 # Node / React frontend (Issue: React adoption 2026-06-17)
 node_modules/
 frontend/node_modules/
+
+# Design-handoff bundles — local reference only, never committed
+React app visual review/
+Chip Animations.dc.html
+# Windows "downloaded-from-internet" marker files
+*:Zone.Identifier

@@ -385,6 +385,12 @@ Two tracks run *alongside* the lane waves rather than inside them:
 | 301 🧪 | Published Accessibility Statement + WCAG 2.1 AA posture | W1 | Privacy & Compliance | S | local |
 | 302 🧪 | Honor & document the Global Privacy Control (GPC) opt-out signal | W2 | Privacy & Compliance | S | local |
 | 303 🧪 | Consolidated go/no-go launch checklist (docs/GO_LIVE.md) — CAPST… | W4 | QA & Release Engineering | M | local |
+| 311 ✅ | [SEV1] notify — transactional emails ship blank-subject/host-less in prod | W0 | Notifications & Lifecycle | S | local |
+| 312 ✅ | [SEV1] slowapi sync-Redis storage blocks the event loop on 69 limited routes | W0 | Scale, Quota & Load | M | staging |
+| 313 ✅ | [SEV1] POST /videos/{id}/queue missing aset_owner → live-progress SSE 404 | W0 | UI Core | S | local |
+| 314 ✅ | [SEV2] Wire the 4 unmounted Chip animation states (handoff Task A) | W0 | UI Core | M | local |
+| 315 ✅ | [SEV2] Inert prompt-cache markers below 1024 floor + reconcile DECISIONS | W0 | Agentic / Caching / Cost | S | staging |
+| 316 | [SEV2] 2026-06-24 assessment hardening backlog (tracker → REPORT) | W0 | Carry-over & Cleanup | L | local |
 
 *🧪 research-derived/proposed · ⛔ blocked. Done issues: 181–185, 226, 229, 230, 232, 247–249 (see Completed).*
 
@@ -464,6 +470,182 @@ Two tracks run *alongside* the lane waves rather than inside them:
 
 ### Issue 232: Early Content-Length upload rejection + session-revocation documentation
 **Status** `DONE` (2026-06-23). Early Content-Length header check in `upload_video` before temp file created (rejects > UPLOAD_MAX_MB before streaming). WHY comment in `create_session_token` documenting 60-min exposure window + Redis jti deny-list deferral rationale. `COMPLIANCE.md` Auth section updated. 2 new tests. Branch: `wave0/security-platform`.
+
+---
+
+## Assessment 2026-06-24 — new issues (311–316)
+
+Filed from the full `/assess` run on commit `a503ade` (15 modules + 5 focus agents, adversarially
+verified). Full register + evidence: `docs/assessment/REPORT.md`; per-module detail under
+`docs/assessment/modules/`. Verdict: **CONDITIONAL — 0 BLOCKER · 3 SEV1 · ~70 SEV2**. Each issue below
+carries its assigned **Lane** so it can be picked up by that lane's agent; they are grouped here only
+because they were filed together.
+
+### Issue 311: [SEV1] notify — transactional emails ship blank-subject / host-less links in production
+
+**Status** `✅ DONE` (shipped 367d782, deployed autoclip.studio 2026-06-24) · **Wave** W0 · **Lane** Notifications & Lifecycle · **Size** `S` · **Verify** `local`
+**Src** assessment 2026-06-24 (`docs/assessment/modules/notify.md`) — verdict **confirmed SEV1**
+
+**Problem.** `notify` templates reference Jinja vars the live caller never supplies. `worker/tasks.py:4055`
+renders `context={"creator": creator, **payload}`, and the `clips_ready` dispatch passes payload only
+`{"clip_count": N}`. The Environment (`mailer.py:37`) uses the default silent `Undefined`, so
+`{{ creator_name }}`, `{{ video_title }}`, `{{ review_url }}`, and `{{ app_url }}` all render empty —
+every email ships with a blank subject suffix, a "Hi ," greeting, and host-less relative links like
+`/pricing`. `app_url` is supplied by **no** caller (grep: 0 occurrences) so it is broken across all six
+templates (`refund_issued`/`balance_low`/`trial_ending`/`reauth_required`/`dna_built` dispatch `{}`).
+The unit tests pass only because they hand-feed the variables; no test exercises the production context
+shape. Also in-scope (SEV2, same file): `Subject:` line leaks into the body; the Resend path logs the
+recipient email (PII) at INFO; `welcome`/`catalog_sync_done` have COPY but no template pair.
+
+**Approach.** Set `undefined=StrictUndefined` on the Environment so a missing var fails loudly instead of
+shipping blank. Align every caller to pass `app_url` (from `settings.APP_BASE_URL`, `config.py:339`) plus
+the per-event vars each template needs, or add them as `env.globals`. Strip the `Subject:` line from the
+body. Drop `to=` from the Resend log line. Add the missing template pairs (or a generic fallback).
+
+**Acceptance criteria**
+- [ ] A render test using the **production context shape** `{"creator": <obj>, "clip_count": N}` asserts a
+      non-empty subject and a non-empty absolute (`https://…`) link for `clips_ready` and for one `{}`-payload event.
+- [ ] `StrictUndefined` set; a missing var raises in tests rather than rendering empty.
+- [ ] No recipient email in any prod log line; no `Subject:` line in the rendered body.
+- [ ] Every emailable `event_type` / COPY key has a matching `.txt` + `.html` template (asserted by a test).
+
+### Issue 312: [SEV1] slowapi synchronous-Redis storage blocks the event loop on 69 rate-limited routes
+
+**Status** `✅ DONE` (shipped 367d782, deployed autoclip.studio 2026-06-24; staging Locust p99 check deferred → Issue 261/275) · **Wave** W0 · **Lane** Scale, Quota & Load · **Size** `M` · **Verify** `staging`
+**Src** assessment 2026-06-24 (`docs/assessment/modules/_root_infra.md`) — verdict **confirmed SEV1** (axis B)
+**Related** re-severity of the prior "slowapi-on-loop" SEV2 (was under Issue 82)
+
+**Problem.** `limiter.py:80-83` builds `Limiter(storage_uri=settings.REDIS_URL)` with a plain `redis://`
+URI, which resolves to the **synchronous** `limits` `RedisStorage`. slowapi 0.1.9's middleware calls
+`limiter.hit()` with no threadpool offload (`to_thread`/`run_in_threadpool` count 0 in `middleware.py`/
+`extension.py`). Applied via global `SlowAPIMiddleware` + 69 `@limiter.limit` async routes, so **every**
+rate-limited request makes a blocking Redis round-trip on the event-loop thread. `redis.from_url`'s
+default `socket_timeout=None` means a Redis stall head-of-line-blocks the loop indefinitely at the
+hundreds-of-users target. This is the exact event-loop-blocking pattern the team already fixed as SEV1
+elsewhere (billing checkout, oauth lock — both `asyncio.to_thread`-wrapped).
+
+**Approach.** Near-term: append `?socket_timeout=0.1` to the limiter storage URI so a stall degrades one
+request instead of the loop. Proper fix: construct the `Limiter` against the **async** storage path
+(`async+redis://` → `limits.aio.storage.RedisStorage`) and confirm the moving-window `hit()` is awaited.
+Record the choice in `docs/DECISIONS.md` (Issue 82 lineage). Note this is the limiter on axis F too — the
+limiter being a throughput ceiling is worth measuring under load.
+
+**Acceptance criteria**
+- [ ] Limiter storage has a bounded socket timeout (interim) or runs on the async storage path (proper).
+- [ ] A Locust run on staging shows no p99 latency cliff on limited routes when Redis is briefly slowed.
+- [ ] Rate limiting still enforces per-creator limits correctly (existing limiter tests green).
+- [ ] Decision recorded in `docs/DECISIONS.md`.
+
+### Issue 313: [SEV1] POST /videos/{id}/queue missing aset_owner → live-progress SSE 404 on the queue journey
+
+**Status** `✅ DONE` (shipped 367d782, deployed autoclip.studio 2026-06-24) · **Wave** W0 · **Lane** UI Core · **Size** `S` · **Verify** `local`
+**Src** assessment 2026-06-24 (`docs/assessment/modules/_focus_e2e.md`) — verdict **confirmed SEV1**
+
+**Problem.** `routers/videos.py:447` (`queue_video_for_analysis`) runs `start_pipeline` (which emits stage
+progress to `task:{video_id}:events`) but never calls `progress.aset_owner(video_id, creator_id)` — unlike
+the identical `/videos/upload` (`videos.py:378-387`) and `/clips/ingest` (`clips.py:926`) paths. So the SSE
+endpoint's `aget_owner` returns `None` and `/tasks/{id}/events` 404s. The dashboard `useStageStream` opens
+that stream for pending+clippable rows, so the live stage-progress bar is **silently dead** for the
+"Queue for analysis" CTA (Issue 125 selective/manual mode — the primary entry) and the auto-mode retry
+path. The pipeline still completes and the row refreshes via `['videos']` invalidation, so no data is lost
+— but the live-progress feature is broken on this journey, and it's untested (`test_issue_125.py` asserts
+only that `start_pipeline` is called).
+
+**Approach.** In `queue_video_for_analysis`, before/after `start_pipeline`, add the same fail-open block
+upload uses: `try: await progress.aset_owner(str(video.id), str(creator.id)) except redis.RedisError: log`.
+
+**Acceptance criteria**
+- [ ] `POST /videos/{id}/queue` then `GET /tasks/{id}/events` returns 200 for the owner and 403 for a
+      different creator (regression test).
+- [ ] Manual: the dashboard StageStepper shows live progress on the Queue-for-analysis CTA.
+
+### Issue 314: [SEV2] Wire the 4 unmounted Chip animation states (handoff Task A) + correct the "all 8 wired" claim
+
+**Status** `✅ DONE` (shipped 367d782, deployed autoclip.studio 2026-06-24; 5 of 8 mounted, 2 consciously deferred) · **Wave** W0 · **Lane** UI Core · **Size** `M` · **Verify** `local`
+**Src** assessment 2026-06-24 (`docs/assessment/modules/_focus_chip_animations.md`)
+
+**Problem.** The Chip-animation audit resolved a documented contradiction by reading the live code: only
+**3 of 8** `ChipStates` are mounted (`ChipThinking`, `ChipLookingItUp`, `ChipLoadingScreen`). Five are
+built + unit-tested but rendered in no real surface — the commit `a503ade` / project-memory claim that
+"all 8 are wired" is **inaccurate**. Supporting infra is all correct (10 sprites, 7 keyframes,
+base-relative paths, `prefers-reduced-motion` collapse, motion timings byte-match the SoT). Of the five,
+`ChipStreaming` is intentionally superseded by an inline equivalent (handoff A5 — leave as-is). The other
+four are the work: `ChipPersonalizing` (Review hand-rolls a static `<Chip pose="meditate">`),
+`ChipGeneratingClips` (VideoTable uses StageStepper), `ChipRendering` (no numeric progress source to bind),
+`ChipAnalyzing` (fully dark; its real home is the `useStageStream` "scoring" surface, not VideoClipsMap).
+
+**Approach.** Presentational-only (zero backend/type change), per handoff `CLAUDE_CODE_INSTRUCTIONS.md` §4.
+Mount `ChipPersonalizing` (A1, mind the 150×200 footprint) and `ChipGeneratingClips` (A3). Decide
+`ChipRendering` (A2 — needs a progress source; either drive an indeterminate climb or leave + document) and
+`ChipAnalyzing` (A4 — co-locate with the scoring StageStepper or delete the dead export). Correct the
+stale "all 8 wired" note in `docs/PROJECT_STATE.md` + the project memory.
+
+**Acceptance criteria**
+- [ ] `ChipPersonalizing` + `ChipGeneratingClips` render in their intended surfaces; no layout thrash; reduced-motion static.
+- [ ] `ChipRendering`/`ChipAnalyzing` either mounted or consciously removed (no built-but-dark export left undocumented).
+- [ ] `npm run test` + `npm run build` green; honesty constraints intact (DisclaimerBand, no virality copy).
+- [ ] The "3 of 8 mounted" reality recorded; "all wired" claim corrected.
+
+### Issue 315: [SEV2] Inert prompt-cache markers below the 1024 floor + reconcile DECISIONS cache-floor contradiction
+
+**Status** `✅ DONE` (shipped 367d782, deployed autoclip.studio 2026-06-24) · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `staging`
+**Src** assessment 2026-06-24 (`docs/assessment/modules/_focus_llm_caching_concurrency.md`)
+
+**Problem.** The `cache_control {ttl:1h}` markers on `clip_engine/scoring.py:261` (one call **per scored
+video** — the highest-volume LLM call), `analysis/brief.py:118`, and `dna/brief.py:91` sit on prefixes of
+only ~660–985 tokens — **below Sonnet 4.6's 1,024-token cacheable floor** (live-verified at
+platform.claude.com, 2026-06-24). The markers never produce a cache read, **and** the cost ledger bills a
+phantom 2× cache-write premium (`COST_CACHE_WRITE_MULTIPLIER`) against a cache that produces nothing. The
+"mandatory prompt caching" rule is violated in effect on the hottest path. Compounding it, `DECISIONS.md`
+**contradicts itself**: Issue 138 (06-16) "corrected" the floor to 2048; Issue 218 (06-23) re-corrected to
+1024 with a live fetch; stale 2048 refs remain (lines 1515, 2520, 2528-2540).
+
+**Approach.** Per path, either (a) raise the stable prefix over 1,024 (fold the scoring rubric / raise the
+DNA char cap so block1+DNA ≥ ~1,150 tok) and keep the marker, or (b) drop the marker + the 2× multiplier
+where the prefix can't reach the floor (honest: too short to cache). Add a test asserting
+`usage.cache_read_input_tokens > 0` on the 2nd identical call so an inert marker can't silently regress.
+Reconcile `DECISIONS.md` to a single authoritative floor (**1024** for Sonnet 4.6) and delete the stale
+2048 references.
+
+**Acceptance criteria**
+- [ ] Each of the three call sites either provably caches (`cache_read > 0` on repeat) or has no marker + no 2× premium.
+- [ ] `DECISIONS.md` states one floor (1024 for Sonnet 4.6); the stale 2048 references are removed/annotated.
+- [ ] Token-log lines no longer advertise a 1h tier that never fires.
+
+### Issue 316: [SEV2] 2026-06-24 assessment hardening backlog (tracker)
+
+**Status** `OPEN` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `L` · **Verify** `local`
+**Src** assessment 2026-06-24 — tracker for the ~65 remaining SEV2s; itemized in `docs/assessment/REPORT.md`
+
+**Problem.** Beyond the SEV1s (311–313) and the two focus items (314–315), the assessment confirmed ~65
+SEV2s with bounded blast radius. Rather than 65 issue numbers, track them here grouped by lane; promote
+into standalone issues as scheduled. Each item has a backed fix in its module file under
+`docs/assessment/modules/`.
+
+**Backlog by lane (lead items — full list in REPORT.md register):**
+- **L07 Security — Platform:** `/api/activity` unauthenticated log-injection/500; Google refresh token in
+  revoke **query string**; link/upload double-submit → 500 (should be 409); unthrottled `/auth/callback` +
+  chat reads; `ENV=='production'` free-string gate; JWT-secret min-length; MultiFernet rebuilt per
+  `decrypt()`; shallow `scrub_dict`.
+- **L13 Scale/Quota:** youtube Redis fail-open defeated by `finally`; quota under-count on retries;
+  publish false-fail → duplicate upload; unbounded catalog/reconcile/GDPR-export/daily-refresh pagination;
+  worker advisory-lock unlock-without-rollback (×2, incl. global purge key); soft-timeout leaves
+  `ingest_status=running`; `recreate_engine` bool race; request-path `event_log` write.
+- **L05 Cost/Agentic & L08 Observability:** thumbnail vision call un-metered + un-billed; 3 knowledge
+  builders skip the Prometheus token metric; `improvement`/`chat` drop cache-token fields; `_HAIKU_MODEL`
+  hardcoded; Stripe `max_network_retries` no-op (0 retries); idempotency key not tenant-scoped; ledger 402
+  burns reprocess retries; `notify` recipient-email PII in prod log.
+- **L16 UI Core:** no app-level ErrorBoundary (a render throw blanks the SPA); `VideoTable.act()` swallows
+  fetch errors (button stuck); `activeTasks` SSE-cap-store invariant bypassed by 4 consumers;
+  `ActivityPanel` undefined Tailwind tokens; Footer honesty-tagline drop; `CaptionStylePanel` no render-SSE
+  subscription; React 19 vs documented 18.
+- **L03 Scoring/Eval:** `dominant_style` first-over-threshold-not-max (×2 DRY); train/serve feature-adapter
+  skew; unpinned `joblib` securing the RCE allowlist; dna upload-gap week-wrap + null-date 0.5 weight;
+  upload_intel filter-after-slice + week-wrap; ingestion AssemblyAI silent-empty + audio OOM cap.
+
+**Acceptance criteria**
+- [ ] Items are triaged each hardening cycle; fixed ones checked off; promoted ones get their own issue #.
+- [ ] No item is silently dropped without a "non-issue" note here.
 
 ---
 

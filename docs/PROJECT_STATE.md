@@ -4,6 +4,57 @@ Updated after every issue closes.
 
 ---
 
+## ✅ W0 assessment fixes 311–315 SHIPPED + DEPLOYED (2026-06-24, commit `367d782`)
+
+The 3 SEV1s + 2 focus SEV2s from the CONDITIONAL verdict were built by a supervised 5-agent fan-out
+(isolated worktrees), integrated onto `w0-assessment-fixes`, re-verified at integration, and deployed
+to autoclip.studio (Docker publish → deploy → **smoke test passed, no rollback**).
+
+- **311** notify: `StrictUndefined` + `app_url` global; `Subject:` stripped from body; recipient email
+  out of logs; `welcome`/`catalog_sync_done` templates added. **312** limiter: bounded `socket_timeout`
+  (sync storage kept — `async+redis://` would silently disable all 69 limits on slowapi 0.1.9; see
+  DECISIONS). **313** queue SSE: fail-open `aset_owner` mirror. **314** chips: 5 of 8 mounted (2
+  consciously deferred, none deleted). **315** cache: `scoring.py` marker now gated ≥1024 with the rubric
+  folded into the cached prefix; `analysis`/`dna` markers dropped; phantom 2× premium killed; DECISIONS
+  reconciled to a single 1024 floor.
+- **Gates at integration:** full unit suite **1418 passed / 0 failed**, clip-quality eval harness 65
+  passed, ruff + mypy clean, frontend vitest 194/194 + build clean. One integration bug (311's extra
+  `Creator` fetch broke 2 call-order tests not in any agent's `-k` filter) was caught + fixed by the
+  supervisor before merge.
+- **Deferred:** 312's staging Locust p99 check (no staging → Issue 261/275). **Remaining:** Issue 316
+  SEV2 backlog tracker.
+
+---
+
+## 🔍 Full production assessment — VERDICT: CONDITIONAL (2026-06-24)
+
+Ran the full `/assess` (Layer 0 gates + 15 module agents + 5 focus agents on backend/LLM/caching/
+concurrency, e2e-functionality, frontend, UI-vs-prototype, Chip-animations), each BLOCKER/SEV1 finding
+adversarially verified. Commit `a503ade`, ~82,950 LOC. Full register: `docs/assessment/REPORT.md`.
+
+- **Verdict: CONDITIONAL — 0 BLOCKER · 3 SEV1 · ~70 SEV2.** Layer 0 green (ruff/mypy/bandit 0,
+  coverage **76.71%**, only the known local-venv pip-audit drift). Tenant isolation holds everywhere
+  (no cross-tenant leak in any of 20 units); app is usable end-to-end (all 9 journeys connect, all 56
+  frontend calls map to a real route).
+- **Adversarial verification was load-bearing:** of 10 SEV1s flagged, it **confirmed 3, downgraded 7**
+  (chat BYPASSRLS→SEV2, UI band→cleanup, worker mailer→SEV2, 4 unmounted Chip states→2×SEV2+2×cleanup).
+- **3 confirmed SEV1 → Issues 311–313:** (311) `notify` ships every transactional email blank-subject/
+  host-less in prod (templates use vars the caller never supplies; tests mask it); (312) slowapi
+  synchronous-Redis blocks the event loop on all 69 limited routes; (313) `POST /videos/{id}/queue`
+  missing `aset_owner` → live-progress SSE 404 on the queue journey.
+- **Focus-area items → Issues 314–315:** (314) **Chip animations are NOT all wired — only 3 of 8 states
+  are mounted** (`ChipThinking`/`ChipLookingItUp`/`ChipLoadingScreen`); the other 4 are built+tested but
+  dark (ChipStreaming intentionally superseded). The "all 8 wired" framing is inaccurate. Supporting
+  infra (10 sprites, 7 keyframes, reduced-motion, base-relative paths, motion-parity vs the SoT) is all
+  correct. (315) prompt-cache markers on the **highest-volume** LLM call (`scoring.py`) + analysis/dna
+  are inert (prefix < the live-confirmed **1024**-token Sonnet-4.6 floor) and bill a phantom 2× write
+  premium; `DECISIONS.md` self-contradicts on the floor (1024 vs 2048).
+- **Issue 316** tracks the ~65-SEV2 hardening backlog grouped by lane (→ REPORT register).
+- **Filed into `docs/issues.md`** (index + briefs, lanes L05/L07/L09/L13/L16/L19). No code changed this
+  session — assessment + triage only.
+
+---
+
 ## ✅ AutoClip redesign — fidelity polish: 10 prototype gaps closed (2026-06-24)
 
 Screen-by-screen comparison of the 304–309 React build against the design prototype (unwrapped from
