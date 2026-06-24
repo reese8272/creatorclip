@@ -14,10 +14,12 @@ import {
 } from './chip/ChipStates'
 
 describe('Chip', () => {
-  it('renders the sprite for the requested pose from /chip/', () => {
+  it('renders the sprite for the requested pose under the SPA base', () => {
     const { container } = render(<Chip pose="magnify" />)
     const img = container.querySelector('img')!
-    expect(img).toHaveAttribute('src', '/chip/chip-magnify.png')
+    // Base-relative (import.meta.env.BASE_URL): '/app/chip/...' in the build,
+    // '/chip/...' under the test base — assert the suffix, not the prefix.
+    expect(img.getAttribute('src')).toMatch(/\/chip\/chip-magnify\.png$/)
   })
 
   it('is decorative: empty alt + aria-hidden so screen readers skip it (W3C WAI)', () => {
@@ -53,7 +55,7 @@ describe('Chip animation states', () => {
     ]
     for (const node of states) {
       const { container, unmount } = render(node)
-      expect(container.querySelector('img[src^="/chip/"]')).toBeInTheDocument()
+      expect(container.querySelector('img[src*="/chip/"]')).toBeInTheDocument()
       unmount()
     }
   })

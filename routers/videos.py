@@ -174,13 +174,40 @@ async def link_video(
 ) -> dict:
     """Register a YouTube video by ID. Does not download any content."""
     _validate_youtube_id(youtube_video_id)
-    existing = await session.execute(
-        select(Video).where(
-            Video.creator_id == creator.id,
-            Video.youtube_video_id == youtube_video_id,
+    existing_video = (
+        await session.execute(
+            select(Video).where(
+                Video.creator_id == creator.id,
+                Video.youtube_video_id == youtube_video_id,
+            )
         )
-    )
-    if existing.scalar_one_or_none():
+    ).scalar_one_or_none()
+    if existing_video is not None:
+        # A catalog row was synced for DNA/analytics and is hidden from the clip
+        # work-list (origin != catalog). "Linking" one of your own channel videos
+        # should ADOPT that row into the clip pipeline, not 409 — otherwise a
+        # creator whose channel is synced sees 0 clippable videos and has no way
+        # to promote one. Flipping origin → link surfaces it in /videos with the
+        # honest "upload the source file" path (we never download from YouTube).
+        if existing_video.origin == VideoOrigin.catalog:
+            existing_video.origin = VideoOrigin.link
+            await session.commit()
+            await session.refresh(existing_video)
+
+            from observability import log_event
+
+            log_event(
+                "video_linked",
+                creator_id=str(creator.id),
+                video_id=str(existing_video.id),
+                youtube_video_id=youtube_video_id,
+                adopted_from_catalog=True,
+            )
+            return {
+                "video_id": str(existing_video.id),
+                "status": existing_video.ingest_status.value,
+            }
+        # Already a link/upload row — a genuine duplicate.
         raise HTTPException(status_code=409, detail="Video already registered")
 
     # Resolve kind+duration from YouTube so a manually-linked Short is not

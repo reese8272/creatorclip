@@ -12,7 +12,10 @@ interface ChipProps {
 }
 
 // Chip — the AutoClip mascot ("Chip the AI Clip Editor"). Issue 304 (design handoff).
-// Sprites live in frontend/public/chip/ and are served at /chip/chip-<pose>.png.
+// Sprites live in frontend/public/chip/ and Vite copies them to dist/chip/, served
+// under the SPA base (/app/chip/<pose>.png). The src MUST be base-relative: a bare
+// /chip/... is rooted at the domain and 404s because the SPA lives under /app/.
+// import.meta.env.BASE_URL is '/app/' in the build (and always ends with '/').
 // The pose registry + concept map live in ./chip/poses.
 //
 // Chip is decorative — it sits beside headers and inside loading chrome that
@@ -23,7 +26,7 @@ interface ChipProps {
 export function Chip({ pose, size = 48, className, style }: ChipProps) {
   return (
     <img
-      src={`/chip/chip-${pose}.png`}
+      src={`${import.meta.env.BASE_URL}chip/chip-${pose}.png`}
       alt=""
       aria-hidden="true"
       width={size}

@@ -5,6 +5,42 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — `POST /videos/link` adopts a catalog row instead of 409 (+ Chip asset path + onboarding skip)
+
+Three production-facing fixes from a UX pass on the live app (autoclip.studio), confirmed against the
+Claude design prototype as the target.
+
+**1. `/videos/link` now adopts catalog videos (behavior change — the divergence worth logging).**
+Previously linking a YouTube video that already existed as a row always returned `409 "Video already
+registered"`. But catalog rows (synced from the uploads playlist for DNA, `origin=catalog`) are
+**excluded** from the dashboard list (`/videos` filters `origin != catalog`, Issue 139). The
+combination meant a creator whose channel had been synced saw **0 selectable videos** and had no path
+to clip one — re-linking just 409'd. Now: if the existing row is `origin=catalog`, the endpoint flips
+it to `origin=link` in place (no new row) so it surfaces in the dashboard with the honest "upload the
+source file" affordance (we never download from YouTube, per ToS). A second link of an
+already-`link`/`upload` row is a genuine duplicate and still 409s.
+*Why this over a separate channel-picker:* minimal surface to unblock "choose which video to clip"
+now; the full in-app channel browser (list catalog rows + per-row "Clip this") remains a larger
+follow-up. Evidence: `routers/videos.py::link_video`; tests
+`tests/test_issue_139.py::test_link_adopts_catalog_video_into_clip_pipeline` +
+`::test_link_still_409s_for_a_genuine_duplicate`.
+
+**2. Chip mascot sprites rendered blank in production.** `Chip.tsx` requested `/chip/<pose>.png` from
+the domain root, but the SPA's base is `/app/`, so Vite emits the sprites at `/app/chip/...` → 404. And
+even the correct path failed: `main.py`'s `/app/{spa_path}` catch-all returned `index.html` for every
+non-`/assets` path, so the file was never served. Fix: src is now base-relative
+(`import.meta.env.BASE_URL + 'chip/...'`), **and** the catch-all serves a real file under `dist/`
+(path-confined to block traversal) before falling back to the SPA shell — fixing chip + any future
+public asset (favicon, robots.txt). Evidence: `frontend/src/components/Chip.tsx`, `main.py`; tests
+`tests/test_static.py::test_spa_serves_public_assets_before_shell_fallback` (+ shell-fallback test).
+
+**3. Onboarding/walkthrough escape hatch.** A connected creator had no link from the first-run flow to
+the dashboard (those routes render outside `AppChrome`, so no nav). Added a "Skip to dashboard →" link
+to `Onboarding` (gated on a resolved user) and `Walkthrough` (also marks the walkthrough seen). Setup
+is resumable. Evidence: `frontend/src/pages/Onboarding.tsx`, `Walkthrough.tsx` + their tests.
+
+---
+
 ## 2026-06-24 — LLM cost ledger now prices cached tokens (cache-read 0.1×, cache-write 1.25×/2×)
 
 **What changed.** `billing.ledger._estimate_cost_usd` gained keyword-only `cache_read_tokens`,

@@ -74,6 +74,72 @@ def test_link_video_sets_origin_link():
         app.dependency_overrides.clear()
 
 
+# ── adopt-on-link: a synced channel video can be chosen for clipping ──────────
+
+
+def test_link_adopts_catalog_video_into_clip_pipeline():
+    """Linking a video already synced as a catalog row adopts it in place
+    (origin catalog -> link) so it surfaces in the dashboard for clipping —
+    instead of 409'ing and leaving the creator with 0 selectable videos."""
+    creator = _creator()
+    catalog_video = MagicMock()
+    catalog_video.id = uuid.uuid4()
+    catalog_video.creator_id = creator.id
+    catalog_video.youtube_video_id = "abcdefghijk"
+    catalog_video.origin = VideoOrigin.catalog
+    catalog_video.ingest_status = IngestStatus.pending
+
+    fake_session = AsyncMock()
+    fake_session.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=lambda: catalog_video)
+    )
+    fake_session.add = MagicMock()
+    fake_session.commit = AsyncMock()
+    fake_session.refresh = AsyncMock()
+
+    async def _sess():
+        yield fake_session
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _sess
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/videos/link", data={"youtube_video_id": "abcdefghijk"})
+        assert resp.status_code == 200, resp.text
+        # Promoted in place — no new Video inserted, the existing row flips.
+        assert catalog_video.origin == VideoOrigin.link
+        fake_session.add.assert_not_called()
+        assert resp.json()["video_id"] == str(catalog_video.id)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_link_still_409s_for_a_genuine_duplicate():
+    """A second link of an already-linked (non-catalog) row is a true duplicate
+    and still 409s — adoption is catalog-only."""
+    creator = _creator()
+    dup = MagicMock()
+    dup.id = uuid.uuid4()
+    dup.youtube_video_id = "abcdefghijk"
+    dup.origin = VideoOrigin.link
+
+    fake_session = AsyncMock()
+    fake_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: dup))
+    fake_session.commit = AsyncMock()
+
+    async def _sess():
+        yield fake_session
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _sess
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/videos/link", data={"youtube_video_id": "abcdefghijk"})
+        assert resp.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_model_default_origin_is_upload():
     """A directly-constructed Video defaults to origin=upload (the clip-track
     path), so any insert that forgets to set origin is safe — never a hidden
