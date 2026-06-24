@@ -692,7 +692,8 @@ Clip-render quality + the timeline-editor backbone (`clip_engine/render.py`, `ca
 
 ### Issue 186: Creator Brand Kit — saved style applied by default
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Editorial & Render · **Size** `M` · **Verify** `staging`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Editorial & Render · **Size** `M` · **Verify** `staging`
+**Reconciled** 2026-06-24 — verified shipped: commit 8a1addf brand-kit; models.py:535 class CreatorStyle; routers/creators.py BrandKit endpoints; migration 0029_creator_brand_kit.  
 **Src** `03 / B1` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/03_editorial_capabilities.md`  
 **Blocked by** nothing — **ready now** · **Enables** #187 · **Coordinate (hot files)** Alembic revision chain, `frontend/src/components/profile/BrandKitSection.tsx`, `frontend/src/pages/Profile.tsx`, `routers/clips.py`, `routers/creators.py`  
 
@@ -1384,7 +1385,8 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 218: Re-enable prompt caching on the repeated-prefix brief endpoints
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `M` · **Verify** `staging`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `M` · **Verify** `staging`
+**Reconciled** 2026-06-24 — verified shipped: commit a1836a5; cache_control {ephemeral, ttl:1h} at knowledge/titles.py:138 + thumbnails.py:216; analysis/brief.py 3-block cached path.  
 **Src** `02 / 167b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/02_agentic_caching_cost.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `analysis/brief.py`, `clip_engine/scoring.py`, `knowledge/hooks.py`, `knowledge/thumbnails.py`, `knowledge/titles.py`  
 
@@ -1501,7 +1503,8 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 221: Model-per-task — correct SOT + log the decision
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `local`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `S` · **Verify** `local`
+**Reconciled** 2026-06-24 — verified shipped: commit a1836a5 (docs-only): SOT.md:16 corrected to sonnet-4-6 default + haiku-4-5 high-frequency, no Opus.  
 **Src** `02 / 167a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/02_agentic_caching_cost.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `knowledge/hooks.py`  
 
@@ -1561,7 +1564,8 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 223: Spike — share the DNA-brief cached block between DNA build and scoring
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `M` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `M` · **Verify** `external`
+**Reconciled** 2026-06-24 — verified shipped: commit a1836a5 DNA-build cache spike; superseded-by-224, reconciled in 051395f.  
 **Src** `02 / 167f` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/02_agentic_caching_cost.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `clip_engine/scoring.py`, `dna/brief.py`  
 
@@ -1644,7 +1648,8 @@ Move untrusted creator content out of `system`, JSON-delimit, untrusted-content 
 
 ### Issue 224: Trust-boundary hardening — untrusted content out of `system`, JSON-delimited
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Prompt Trust Boundary · **Size** `M` · **Verify** `local`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Security — Prompt Trust Boundary · **Size** `M` · **Verify** `local`
+**Reconciled** 2026-06-24 — verified shipped: commit 0be2f04 prompt-trust hardening; wrap_untrusted at knowledge/util.py:32; tests/test_prompt_safety.py present.  
 **Src** `09 / 174a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/09_llm_content_safety_prompt_injection.md`  
 **Blocked by** nothing — **ready now** · **Enables** #225 · **Coordinate (hot files)** `clip_engine/scoring.py`, `dna/brief.py`, `knowledge/thumbnails.py`, `knowledge/titles.py`, `knowledge/util.py`, `routers/insights.py`  
 
@@ -3401,7 +3406,8 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 264: Reconcile + pin the PgBouncer image; fix token-rotation doc contradiction
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Scale, Quota & Load · **Size** `S` · **Verify** `local`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Scale, Quota & Load · **Size** `S` · **Verify** `local`
+**Reconciled** 2026-06-24 — verified shipped: commit 843ebc9 digest-pinned pgbouncer v1.25.2 in values.yaml + docker-compose.staging.yml.  
 **Src** `04 / J` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/04_security_scalability.md`  
 **Blocked by** nothing — **ready now** · **Enables** #298 · **Coordinate (hot files)** `deploy/charts/creatorclip/values.yaml`, `docker-compose.staging.yml`, `scripts/rotate_token_key.py`  
 
@@ -3543,7 +3549,8 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 194: Publish to YouTube — add `youtube.upload` scope + incremental consent
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Publish to YouTube · **Size** `M` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** Publish to YouTube · **Size** `M` · **Verify** `external`
+**Reconciled** 2026-06-24 — verified shipped: commit 8e57a40 youtube.upload incremental consent; oauth.py:59 PUBLISH_SCOPE; auth.py:73 /connect-publishing. (Remaining OAuth re-verification is external gate #29, not code.) Duplicate entry — canonical DONE brief is at the top of this file (around line 211).
 **Src** `13 / D1a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/13_multiplatform_distribution_publishing.md`  
 **Blocked by** nothing — **ready now** · **Enables** #29, #195, #196 · **Coordinate (hot files)** `frontend/src/pages/Profile.tsx`, `routers/auth.py`, `youtube/oauth.py`  
 
@@ -3582,7 +3589,8 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 195: `publish_to_youtube` Celery task (`videos.insert`, idempotent)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Publish to YouTube · **Size** `L` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W1 · **Lane** Publish to YouTube · **Size** `L` · **Verify** `external`
+**Reconciled** 2026-06-24 — Duplicate entry resolved. Canonical DONE brief is at the top of this file (around line 216). commit 8a1addf + wave-B work shipped publish_to_youtube task, youtube/publish.py, clip_publications model+migration, per-creator RLS isolation.
 **Src** `13 / D1b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/13_multiplatform_distribution_publishing.md`  
 **Blocked by** #194 · **Enables** #196, #197 · **Coordinate (hot files)** Alembic revision chain, `worker/tasks.py`, `youtube/quota.py`  
 
@@ -4266,7 +4274,8 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 160: Cross-page active-tasks panel (single-owner SSE store) — SUPERSEDED by Issue 211
 
-**Status** `OPEN` · **Wave** W2 · **Lane** UI Core · **Size** `S` · **Verify** `local`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W2 · **Lane** UI Core · **Size** `S` · **Verify** `local`
+**Reconciled** 2026-06-24 — verified shipped: Superseded by Issue 211 (commit 4c86a84 global active-tasks panel; ActivityPanel.tsx + stores/activeTasks.ts present). Close as SUPERSEDED, not built standalone.  
 **Src** pre-existing 160 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #211 · **Coordinate (hot files)** `frontend/src/components/AppChrome.tsx`  
 
@@ -4303,7 +4312,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 265: Eval gates `clip_engine/` changes as a required CI check
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; ci.yml:353 eval job; test_clip_engine.py:198 SCENARIO_FLOOR=6.  
 **Src** `15 / 180a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `.github/workflows/ci.yml`, `tests/test_clip_engine.py`  
 
@@ -4339,7 +4349,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 266: Wire the Playwright SPA harness (smoke + a11y) into CI
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `external`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; ci.yml:453 playwright job (Chromium, e2e smoke+a11y).  
 **Src** `15 / 180b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Enables** #272, #301 · **Coordinate (hot files)** `.github/workflows/ci.yml`, `frontend/playwright.config.ts`  
 
@@ -4371,7 +4382,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 267: Test-isolation hardening — `pytest-randomly` + conftest cookie fixture + PG fail-fast
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `staging`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `staging`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; requirements-dev.txt pytest-randomly==4.1.0; conftest.py Postgres fail-fast + per-test unique-creator fixture.  
 **Src** `15 / 180c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Enables** #268 · **Coordinate (hot files)** `limiter.py`, `tests/conftest.py`  
 
@@ -4407,7 +4419,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 269: Diff/patch-coverage gate + per-module floors for load-bearing modules
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `local`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `local`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; diff-cover==10.3.0; run_layer0.py gate_module_coverage + gate_diff_cover.  
 **Src** `15 / 180e` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `.claude/skills/production-assessment/scripts/run_layer0.py`, `.github/workflows/ci.yml`  
 
@@ -4440,7 +4453,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 270: Migration safety — Squawk + lock/statement timeouts + rollback runbook
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `staging`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `staging`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; ci.yml:219 Squawk migration-lint; alembic env lock_timeout/statement_timeout; DEPLOYMENT.md rollback runbook.  
 **Src** `15 / 180f` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Enables** #294, #296, #303 · **Coordinate (hot files)** `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`  
 
@@ -4475,7 +4489,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 271: Auto-rollback on failed deploy smoke test
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; deploy.yml smoke step with rollback (_rollback_and_fail re-pulling PREV_IMAGE).  
 **Src** `15 / 180g` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Enables** #295, #297, #303 · **Coordinate (hot files)** `.github/workflows/deploy.yml`  
 
@@ -4508,7 +4523,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 273: Scoped mutation-testing cadence on the load-bearing core
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `L` · **Verify** `local`  
+**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `L` · **Verify** `local`
+**Reconciled** 2026-06-24 — 273 NOT actually shipped — mutmut present but unconfigured, no CI job (reconciled 2026-06-24).  
 **Src** `15 / 180i` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `clip_engine/scoring.py`, `crypto.py`, `limiter.py`, `preference/decay.py`, `pyproject.toml`  
 
@@ -4545,7 +4561,8 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 274: Test-stack hygiene — httpx2 migration + flow-test robustness
 
-**Status** `OPEN` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
+**Status** `DONE (2026-06-24, reconciled)` · **Wave** W0 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`
+**Reconciled** 2026-06-24 — verified shipped: commit 7b0c668; httpx2==2.4.0; playwright.config.prod.ts timeout 120000; OFF_COURSE_BUGS OCB-1/OCB-3 fixed.  
 **Src** OCB-1 + OCB-3 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `tests/conftest.py`  
 

@@ -5,6 +5,32 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Beta hosting: managed PaaS (Render) for the always-on stack, not the self-managed VM
+
+**What was decided.** For the **beta** (target: ≤100 users), the app + Celery worker + Redis + Postgres
+move to **Render** managed services — Web Service (FastAPI) + Background Worker (Celery) + managed
+Key-Value (Redis) + managed Postgres — replacing the current self-managed docker-compose-on-a-VM
+(DigitalOcean `147.182.136.107`). The eventual GKE Autopilot + Cloud SQL + KEDA path (Issue 275) remains
+the **full-scale production** target, unchanged; Render is the beta bridge.
+
+**Why.** The user wants a constant always-on connection (the chat SSE flow requires a live Celery worker
+draining the queue — see the "connection lost" root cause: worker not running) **without operating their
+own services**. Render gives a managed Background Worker + managed Redis/Postgres with no VM or K8s to
+maintain, comfortably handles >100 users, and is the most direct lift from the existing compose topology
+(app/worker/redis/postgres map 1:1 to Render service types). Railway/Fly.io were considered (more DIY
+networking / more ops knobs); the self-managed VM was rejected as exactly the "own service" burden to avoid.
+
+**Source / evidence.** Diagnosed this session: live `claude-sonnet-4-6` call succeeds (LLM API healthy);
+`routers/chat.py:103` enqueues `chat_respond.delay` → needs a worker; prod compose `worker` service
+(`docker-compose.yml:16`) is what makes chat work on autoclip.studio. User selection 2026-06-24.
+
+**Follow-up.** File a beta-hosting issue (Render `render.yaml` blueprint: web + worker + redis + postgres,
+env-var parity with `docs/SECRETS.md`, migration-on-deploy, smoke check). Does NOT supersede Issue 275.
+
+**Date.** 2026-06-24
+
+---
+
 ## 2026-06-24 — Issue 317: "Link a video" retired as the primary entry point in favour of "Upload a video file"
 
 **What was decided.**

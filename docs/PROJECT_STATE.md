@@ -4,6 +4,12 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-24 — Tracker reconciliation
+
+15 stale-OPEN issues (160, 186, 194, 218, 221, 223, 224, 264, 265, 266, 267, 269, 270, 271, 274) corrected to DONE with evidence; 273 corrected from false-DONE to OPEN (mutmut present but unconfigured, no CI job); 194/195 de-duped (duplicate OPEN entries in L14_PUBLISHING lane resolved to DONE). Source: reconcile-open-backlog workflow.
+
+---
+
 ## ✅ W0 assessment fixes 311–315 SHIPPED + DEPLOYED (2026-06-24, commit `367d782`)
 
 The 3 SEV1s + 2 focus SEV2s from the CONDITIONAL verdict were built by a supervised 5-agent fan-out
@@ -569,7 +575,7 @@ production** (`autoclip.studio`). `main` == `staging` == `origin/main` == `origi
 Deploy applied migrations `0028_usage_cost_estimate` + `0029_creator_brand_kit` on the prod DB (linear
 chain `0027→0028→0029`) and the app came up green (`/` → 302 → `/app/dashboard`, dashboard → 200).
 
-**Lanes shipped:** ui-core (99, 210) · qa-release-engineering (265–267, 269–271, 273, 274) ·
+**Lanes shipped:** ui-core (99, 210) · qa-release-engineering (265–267, 269–271, 274) [273 NOT actually shipped — mutmut present but unconfigured, no CI job (reconciled 2026-06-24)] ·
 activation-onboarding (214) · security-platform (226, 229, 230, 232) · notifications-lifecycle (242) ·
 scoring-eval-preference (216) · agentic-caching-cost (218, 220, 221, 222, 223) · editorial-render (186) ·
 billing-monetization (205–209) · carry-over-cleanup (73, 75, 76) · privacy-compliance (250, 251) ·
