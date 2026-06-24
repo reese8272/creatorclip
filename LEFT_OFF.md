@@ -1,131 +1,108 @@
-# LEFT_OFF — Wave-0 build, integrated to local `main`/`staging` (NOT pushed/deployed)
+# LEFT_OFF — W2 core product SHIPPED to prod; onboarding wave + Issue-275 staging are next
 
 > **Read this first.** Living "where we are right now" file for a brand-new session with zero memory.
-> Source-of-truth docs live in `docs/`; this file orients and points to them.
+> Source-of-truth docs live in `docs/`; this file orients and points to them — it is NOT a source of truth.
 
 **Last updated:** 2026-06-23
-**Checked out:** `main` @ **`ac1a4b6`** · working tree clean
-**SHIPPED:** `main` == `staging` == `origin/main` == `origin/staging` == **`ac1a4b6`** — W0 is **DEPLOYED to prod**.
-Prod health: `autoclip.studio/` → 302 → `/app/dashboard` (green). `Deploy to production` for `ac1a4b6` = success.
+**Checked out:** `main` @ **`bb5be31`** · working tree clean
+**SHIPPED:** `main` == `staging` == `origin/main` == `origin/staging` == **`bb5be31`**. Prod health:
+`autoclip.studio/` → 302 → `/app/dashboard` (200). Latest `Deploy to production` = success (smoke green).
 
 ---
 
-## ✅ DEPLOYED — what's live + what's next (start here)
+## ✅ CURRENT FOCUS — what's live + what's next (start here)
 
-All of roadmap **Wave W0** (14 code-bearing lanes) is **built, integrated, merged, pushed, and DEPLOYED to
-prod** at `ac1a4b6`. The deploy ran migrations `0028` + `0029` on the prod DB and the app came up green
-(302 → `/app/dashboard`). One build break was caught + fixed mid-deploy: `BrandKitSection.tsx` used
-`<CardHeader>` with children instead of `title`/`description` props (TS2741) — the **image-build gate blocked
-it, prod stayed safe**, fixed in `ac1a4b6`. (Lesson: that lane agent's "frontend builds" claim was false; it
-never ran `tsc`. Run `cd frontend && npm run build` locally before trusting a UI lane.)
+**This session shipped ~24 issues across 9 prod deploys** (every push QA-gated + smoke-tested, auto-rollback
+never triggered). The **entire usable-beta functional surface is now live on prod**: sign-up → clickwrap
+consent + 13+ age gate → new-creator onboarding redirect → ingest → AI clips → review + "why-not-clipped"
+transparency → **timeline/waveform Editor** → **publish to YouTube (incl. scheduled)** → outcome-learning
+loop → **transactional notifications** ("your clips are ready" + 5 more), plus Insights, honesty surfaces,
+funnel telemetry, and the logging/cost/retention stack.
 
-**→ NEXT ACTION (post-deploy):**
-1. **Spot-check prod** beyond the redirect: log in; open Profile→Brand Kit, Review, the Dashboard pipeline
-   stepper; tail `docker compose logs --tail 200 app worker` on the VM for errors; confirm the new Beat tasks
-   (`reconcile-stripe-ledger-daily`, `purge-stale-event-logs-daily`) registered and the app starts clean.
-2. **Reconcile the doc debts** (below): the 223-vs-224 `DECISIONS.md` contradiction + the union-merged
-   `PROJECT_STATE.md`/`.env.example`; then write a real PROJECT_STATE "W0 shipped" entry.
-3. **Behavioral verification** of the ACs that never ran here (migrations DID apply on prod now, but RLS
-   isolation, SSE round-trips, Stripe reconcile race) — watch prod or do Issue 275 staging.
-4. **Start W1** with the harness (see KEY COORDINATES).
-
-**Rollback if needed:** `git push -f origin <prev-good-sha>:main` (last known-good is `65a1d4f`) then let it
-redeploy, or image-rollback via `scripts/deploy.sh`. Migrations are additive (new column + new table) — a
-code rollback leaves them as harmless unused schema.
+**→ NEXT ACTION (pick one):**
+1. **Onboarding wave — #204 / #100 / #96** (now unblocked: the #204 "identity = OPTIONAL, skip-and-nudge"
+   product decision is made — see DECISIONS/this file — and #235 funnel is live). Clean next batch; build
+   #204 first (resolve the optional-vs-required UI contradiction per the decision), then #100 folds in,
+   then #96 (chat-driven intake). Dev-box verifiable (frontend + auth).
+2. **Issue 275 — stand up real GKE staging** (the linchpin, unchanged from W1). It's the ONLY thing that
+   unblocks the **moat/eval set #198–202** (NDCG/MAP/Kendall efficacy harness + adversarial scenarios +
+   recency-decay calibration + continuous eval) and validates every behavioral AC this session marked
+   "staging-pending." Runbook: `docs/runbooks/275-279-k8s-deploy.md`.
+3. **Flip `ACTIVE_SPEAKER_REFRAME_ENABLED`** once a render-env exists: #189 per-frame reframe is shipped
+   but **behind a default-OFF flag** (legacy Haar crop is still live). Verify on real media, then enable.
 
 ---
 
-## WHAT HAPPENED THIS SESSION (the arc)
+## WHAT SHIPPED THIS SESSION (9 deploys, in order)
 
-1. Built a **reusable wave-execution harness** — `.claude/workflows/issue-wave.js` (multi-agent Workflow):
-   per lane it does *research → CHECK brief → buildability triage → autonomous build in an isolated git
-   worktree → conflict-aware merge plan*. Lessons baked in after real failures: **Sonnet 4.6** sub-agents
-   (`model:'sonnet'` — Opus burned the usage cap), **slimmed prompts** (read each issue's section, not the
-   650KB `issues.md` / 81k-token `PROJECT_STATE.md`), **discovery 529-retry**, a **loud lane-filter guard**,
-   and **defensive args parsing** (a stringified-args bug had silently run all 19 lanes on Opus twice).
-2. Ran W0 in batches (usage-cap-aware): one 5-lane batch + three 3-lane trios = **14 code-bearing lanes**,
-   each committed to a `wave0/<lane>` branch.
-3. **Integrated** all 14 onto `wave0-integration` in dependency order; resolved every conflict by hand
-   (additive "keep both" for Beat tasks/metrics; **semantic** calls where they clashed — see below);
-   renumbered the colliding migration; fixed a real F821 bug; got production code ruff-clean.
-4. Hand-drafted the **4 external/runbook lanes** to `docs/runbooks/`.
-5. Fast-forwarded `wave0-integration` → local `main` → local `staging`; deleted the per-lane branches +
-   worktrees; wrote this handoff. **Held the push** for explicit go.
+1. **Batch 1** (`75cda13`) — #194/#195 publish (youtube.upload consent + idempotent upload task) landed off
+   the held `feat/batch-b-publish`; **migration renumbered 0028→0030**. Plus **8 mis-tracked-OPEN issues
+   reconciled to DONE** after a verified audit: #242 #233 #216 #220 #239 #237 #250 #222.
+2. **Batch 2** (`24a4128`) — #243 notification data model + idempotent send task (mig 0031) · #196 scheduled
+   publish (mig 0032).
+3. **Core loop** (`f3ad126`) — #244 wire all 6 notification triggers (**delivers #193**) · #197 publish→ClipOutcome wire.
+4. **Usability** (`a39491e`) — #215 new-creator onboarding redirect · #227 desc-clamp · #212 Insights rebuild · #217 clip-transparency.
+5. **Editor** (`c58ff0b`) — #188 timeline+waveform Editor; Review streamlined to triage + "Refine →".
+6. **Reframe** (`cbc68c5`) — #189 per-frame active-speaker reframe, **flag-gated default-off** (mediapipe lazy-imported, not installed → app imports clean).
+7. **Funnel** (`cf060db`) — #235 funnel instrumentation + resolver /static→/app cleanup (**closes #161**).
+8. **Consent** (`f1bd74f`) — #299 clickwrap consent + versioned record (mig 0033).
+9. **Age gate** (`bb5be31`) — #300 COPPA 13+ age gate (mig 0034).
 
-## THE 14 LANES (what's in this deploy)
+---
 
-| Lane (merged) | Issues shipped |
-|---|---|
-| ui-core | 99 mono polish · 210 per-video pipeline stepper |
-| qa-release-engineering | 265/266/267/269/270/271/273/274 (QA + release-eng tooling subset) |
-| activation-onboarding | 214 labeled onboarding TaskStepper + sessionStorage re-attach |
-| security-platform | 226 retire legacy static UI · 229 security headers · 230 CSRF · 232 content-length guard |
-| notifications-lifecycle | 242 transactional email infra (Resend, `console` dev backend) |
-| scoring-eval-preference | 216 honest personalization-status surface (198 left plan-only) |
-| agentic-caching-cost | 218 prompt caching · 220 Usage cost ledger (+migration 0028) · 221 model-per-task · 222 tool `is_error` · 223 DNA-cache spike |
-| editorial-render | 186 Creator Brand Kit (+migration 0029) — 188/189 left plan-only |
-| billing-monetization | 205 Stripe↔ledger reconcile Beat · 206 payment_status webhook guard · 207 Stripe Tax flag · 208 refund runbook · 209 Stream pack |
-| carry-over-cleanup | 73 response_model long tail · 75 SEV-2 tracker close · 76 /assess residuals |
-| privacy-compliance | 250 retention purge sweeps (+ Deepgram model-improvement opt-out) |
-| observability | 233 log redaction backstop · 237 LLM-cost metrics · 239 durable worker log sink |
-| scale-quota-load | 260 YT quota-at-scale · 264 PgBouncer image pin (worker PgBouncer sidecar, RedBeat HA) |
-| security-prompt-trust-boundary | 224 untrusted-content trust boundary · 227 honesty guard + ingest clamp |
+## VERIFICATION REALITY (important honesty — unchanged)
 
-**Triaged NOT built (correctly):** the L-spikes 188/189/198 (editor/reframe/eval-harness) and the
-`external` lanes — they're plan-only/runbook, see `docs/runbooks/` + `docs/issues.md`.
+- This dev box has **no Docker / Postgres / Redis / ffmpeg**. Backend **pytest suite can't fully run**
+  (conftest needs live Redis/PG). **Everything behavioral is staging-pending → Issue 275**: RLS isolation,
+  SSE, live `videos.insert`, the DB-backed eval harness, real reframe render, notification exactly-once,
+  funnel events actually writing, all migrations' live `alembic upgrade`.
+- What IS verified every push: `ruff`/`mypy`/`py_compile`/`bandit`, `cd frontend && npm run build` (tsc+vite),
+  `npx vitest run`, and **DB-free unit tests via `pytest <file> --override-ini="addopts=" -p no:cacheprovider`**
+  (the override dodges a known conftest PG-guard bug — see OFF_COURSE_BUGS). The prod **smoke test** is the
+  real behavioral gate.
+- **Never trust a build-agent's "tests passed"** — re-run everything at integration. This session that caught:
+  a #242 honesty test that falsely "passed" (naive substring vs the canonical `assert_no_virality_promise`),
+  the pre-existing `test_no_virality_in_openapi_schema_descriptions` failure, and a #217 `E402` ruff miss.
 
-## VERIFICATION REALITY (important honesty)
+---
 
-- This dev box has **no Docker / Postgres / ffmpeg / live APIs**. `tests/conftest.py` hard-requires live
-  **Redis** always, and (via an `"integration" in "not integration"` substring quirk) probes **Postgres**
-  on the default run too — so the **full pytest suite cannot run here**.
-- Therefore the lane build-agents' "N tests passed" claims **could not have actually run on this box** —
-  treat them as **staging-pending**. What IS verified here: ruff (production code clean), `py_compile`
-  (all changed Python), conflict-free merge, linear migration chain.
-- Net: real behavioral verification of W0 = **Issue 275 staging** (GKE or any real PG16 + Redis).
-
-## CONFLICT-RESOLUTION DECISIONS (so you trust the merge)
-
-- **Additive (kept both):** privacy's `purge_stale_event_logs` + billing's `reconcile_stripe_ledger`
-  (Beat entries, tasks, async helpers); agentic's cost-ledger write + observability's `record_llm_tokens`
-  metric in `chat/runner.py` + `knowledge/hooks.py` (the latter keeps agentic's `(text, usage)` tuple return).
-- **Semantic call — `dna/brief.py`:** agentic (Issue 223) *removed* the cache marker and kept identity in the
-  system role; security (Issue 224) *moved creator-authored identity to the user turn* (the trust boundary)
-  and kept cache_control. **Security (224) WON** — a prompt-injection boundary outranks a caching micro-opt.
-- **Migration collision:** two `0028`s → kept agentic's `0028_usage_cost_estimate`, renumbered editorial's to
-  **`0029_creator_brand_kit`** (`down_revision="0028"`). Chain is `0027 → 0028 → 0029` (verified linear).
-- **Real bug found + fixed:** 7 LLM-task fns (`_build_dna_async`, `_generate_*`, `_analyze_hook_async`,
-  `_generate_chapters_async`) used `settings.COST_*` with no local `from config import settings` (F821 →
-  runtime `NameError`). Added local imports (module-level is deliberately avoided in `worker/tasks.py` to
-  keep config-load deferred).
-
-## RECONCILE BEFORE/AFTER MERGE (cleanup debts)
-
-1. **`docs/DECISIONS.md` contradicts itself** — it now has BOTH the 223 "removed cache marker" and 224
-   "added cache marker" entries. Decide final caching stance (security structure kept either way) and delete
-   the stale entry.
-2. **`docs/PROJECT_STATE.md` + `.env.example`** were **union-merged** across 14 lanes (all entries present,
-   possibly unordered/duplicated). Do a de-dup/ordering pass; then write a proper PROJECT_STATE "W0 done" entry.
-3. **9 `SIM117`** (nested-`with`) ruff nits in `tests/test_mailer.py` — pre-existing (notifications lane),
-   test-only, not auto-fixable, non-blocking.
-4. **`stream-vod-recap` (Issue 190)** lane never ran (L-spike → plan-only). Run research-only or hand-plan.
-
-## KEY COORDINATES
+## KEY COORDINATES & FACTS
 
 | Item | Value |
 |------|-------|
-| Trunk now | `main`==`staging`==`origin/main`==`origin/staging` @ `ac1a4b6` (DEPLOYED to prod) |
-| Prod | `autoclip.studio` live on `ac1a4b6`; `CI` (GitHub-hosted) red = known billing, ignore; deploy path is self-hosted |
-| Held separate | `feat/batch-b-publish` (your YouTube-publish work — its 0027 migration may collide; renumber if it lands after this) |
-| Remote | `origin` = github.com/reese8272/creatorclip.git (no `wave0/*` ever pushed) |
-| Migrations added | `alembic/versions/0028_usage_cost_estimate.py`, `0029_creator_brand_kit.py` |
-| Runbooks | `docs/runbooks/{24-25-26-beta-deploy-gates,255-258-dr-durability,275-279-k8s-deploy,194-youtube-publish}.md` |
-| Tests | `.venv/bin/pytest` (8.3.3); needs live Redis + Postgres. `.venv/bin/ruff` for lint. |
-| Wave harness | `.claude/workflows/issue-wave.js` — run W1: `Workflow({scriptPath, args:{wave:1, mode:'build', model:'sonnet', lanes:[...short tokens...]}})`; batch ~3 lanes/run to respect the usage cap; runbook/external lanes hand-draft instead. |
+| Trunk | `main`==`staging`==`origin/main`==`origin/staging` @ `bb5be31` — DEPLOYED |
+| Prod | `autoclip.studio`; host `147.182.136.107`; deploy dir `/opt/autoclip` |
+| Deploy chain | push `main` → GH **"Docker publish"** (~1-5min GHCR) → on success → **"Deploy to production"** (self-hosted: migrations → rollout → **smoke test w/ auto-rollback** → cleanup) |
+| Known-red CI | GitHub-hosted **`CI`** fails in ~6s every push = **billing-disabled runner**. Ignore it. |
+| Watch a run | `gh run watch <id> --exit-status --interval 15` |
+| Migrations | linear `0026←0027←0028←0029←0030(clip_publications)←0031(notifications)←0032(clip_pub_schedule)←0033(consent)←0034(age)` |
+| Feature flag | `ACTIVE_SPEAKER_REFRAME_ENABLED=false` (#189) — flip after render-env verify |
+| Product decision | **#204: creator identity is OPTIONAL at onboarding** (skip → use video data, nudge later). Bake into DECISIONS.md when building #204. |
+| Multi-agent run | spawn build agents with **`isolation: "worktree"`** (MANDATORY — without it they thrash the shared tree); assign **migration numbers up front** for parallel migration-adders; integrate with keep-both doc strips. |
 
-## POINTERS
+---
 
-- `docs/issues.md` — Master Roadmap (waves/lanes/batches, per-issue briefs). W1+ lanes live here.
-- `docs/SOT.md` · `docs/DECISIONS.md` · `docs/COMPLIANCE.md` · `docs/CLIPPING_PRINCIPLES.md`.
-- `CLAUDE.md` — project rules (One Rule: research current standard first; per-issue workflow).
-- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` (`project_wave_execution_workflow.md` has the W0 outcome + harness usage).
+## WHAT'S LEFT (post-this-session)
+
+- **Onboarding wave (dev-box buildable now):** #204 (resolve optional-identity contradiction — decision made),
+  #100 (tutorial, folds into 204+215), #96 (chat-driven intake, dep 204).
+- **Moat / eval (genuinely staging-gated → Issue 275):** #198 efficacy harness (NDCG/MAP/Kendall), #199
+  adversarial scenarios, #200 recency-decay calibration, #201 `performed_well` baseline (dep 198), #202
+  continuous eval logging.
+- **The big tail you deferred:** scale/quota/load, K8s & deploy (#275–280), DR/infra (#255–258), edge security
+  (WAF/rate-limit), cost dashboards, external-legal (Google OAuth verification #29/#26), the deploy-gate
+  capstone #303/#30. See `docs/issues.md` lanes.
+
+---
+
+## POINTERS (the real source-of-truth docs)
+
+- `docs/PROJECT_STATE.md` — progress log; top has the W2-batch1 + per-issue DONE entries.
+- `docs/issues.md` — Master Roadmap (waves/lanes/briefs). Statuses reconciled this session — but ALWAYS
+  re-verify a "DONE" against the code before depending on it (audit-before-build is the #1 lesson).
+- `docs/SOT.md` · `docs/DECISIONS.md` · `docs/COMPLIANCE.md` · `docs/CLIPPING_PRINCIPLES.md` · `docs/DEPLOYMENT.md`.
+- `docs/runbooks/{275-279-k8s-deploy, 255-258-dr-durability, 24-25-26-beta-deploy-gates, 194-youtube-publish}.md`.
+- `CLAUDE.md` — project rules (One Rule: research current standard first; per-issue CHECK→APPROVE→BUILD→REVIEW).
+- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` —
+  `project_wave_execution_workflow.md` has the W0/W1/W2 outcomes, the supervised batch-of-3 loop, and the
+  recurring lessons (audit-first, worktree isolation, migration numbering, never-trust-agent-green).
