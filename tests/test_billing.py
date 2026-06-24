@@ -24,7 +24,15 @@ from tests._helpers import override_current_creator
 
 def test_all_packs_present():
     # Issue 209: Stream pack added
-    assert set(PACKS.keys()) == {"trial", "starter", "regular", "creator", "pro", "studio", "stream"}
+    assert set(PACKS.keys()) == {
+        "trial",
+        "starter",
+        "regular",
+        "creator",
+        "pro",
+        "studio",
+        "stream",
+    }
 
 
 def test_trial_is_not_purchasable():
@@ -594,7 +602,9 @@ def test_create_checkout_session_raises_when_session_url_is_none():
 # ── Issue 206: payment_status guard in the webhook ────────────────────────────
 
 
-def _make_checkout_completed_event(payment_status: str | None, *, session_id: str = "cs_test_xxx") -> dict:
+def _make_checkout_completed_event(
+    payment_status: str | None, *, session_id: str = "cs_test_xxx"
+) -> dict:
     """Build a synthetic checkout.session.completed event dict."""
     obj: dict = {
         "id": session_id,
@@ -778,7 +788,9 @@ def test_webhook_bad_signature_emits_received_then_rejected(client):
         "billing_webhook_rejected must be emitted on bad signature"
     )
     # Verify reason field and absence of secret values.
-    rejected_call = next(c for c in mock_log.call_args_list if c.args[0] == "billing_webhook_rejected")
+    rejected_call = next(
+        c for c in mock_log.call_args_list if c.args[0] == "billing_webhook_rejected"
+    )
     assert rejected_call.kwargs.get("reason") == "bad_signature", (
         "billing_webhook_rejected must carry reason='bad_signature'"
     )
@@ -836,7 +848,9 @@ def test_webhook_payment_status_paid_emits_processed(client):
     event_names = [c.args[0] for c in mock_log.call_args_list]
     assert "billing_webhook_received" in event_names
     assert "billing_webhook_processed" in event_names
-    processed_call = next(c for c in mock_log.call_args_list if c.args[0] == "billing_webhook_processed")
+    processed_call = next(
+        c for c in mock_log.call_args_list if c.args[0] == "billing_webhook_processed"
+    )
     assert processed_call.kwargs.get("pack_id") == "creator"
     assert processed_call.kwargs.get("creator_id") == creator_id
 

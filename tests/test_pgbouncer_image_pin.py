@@ -31,9 +31,7 @@ def _pgbouncer_image_lines(content: str) -> list[str]:
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        if "pgbouncer" in stripped.lower() and (
-            "image:" in stripped or "image =" in stripped
-        ):
+        if "pgbouncer" in stripped.lower() and ("image:" in stripped or "image =" in stripped):
             result.append(line)
     return result
 

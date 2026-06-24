@@ -78,17 +78,14 @@ def _validate_idempotency_key(key: str) -> None:
     """Raise ValueError for keys that would be silently truncated or rejected by Resend."""
     if len(key) > _IDEMPOTENCY_KEY_MAX_LEN:
         raise ValueError(
-            f"idempotency_key must be <= {_IDEMPOTENCY_KEY_MAX_LEN} chars; "
-            f"got {len(key)}"
+            f"idempotency_key must be <= {_IDEMPOTENCY_KEY_MAX_LEN} chars; got {len(key)}"
         )
     if not _IDEMPOTENCY_KEY_RE.match(key):
-        raise ValueError(
-            "idempotency_key must match [A-Za-z0-9_\\-\\.]+; "
-            f"got {key!r}"
-        )
+        raise ValueError(f"idempotency_key must match [A-Za-z0-9_\\-\\.]+; got {key!r}")
 
 
 # ── Template rendering ───────────────────────────────────────────────────────
+
 
 def _render(template: str, context: dict) -> tuple[str, str]:
     """Return (text_body, html_body) for the named template + context dict.
@@ -101,6 +98,7 @@ def _render(template: str, context: dict) -> tuple[str, str]:
 
 
 # ── Public send API ──────────────────────────────────────────────────────────
+
 
 def send(
     *,
@@ -128,9 +126,13 @@ def send(
     text_body, html_body = _render(template, context)
 
     if settings.NOTIFY_BACKEND == "console":
-        _send_console(to=to, template=template, text_body=text_body, idempotency_key=idempotency_key)
+        _send_console(
+            to=to, template=template, text_body=text_body, idempotency_key=idempotency_key
+        )
     elif settings.NOTIFY_BACKEND == "resend":
-        _send_resend(to=to, text_body=text_body, html_body=html_body, idempotency_key=idempotency_key)
+        _send_resend(
+            to=to, text_body=text_body, html_body=html_body, idempotency_key=idempotency_key
+        )
     else:
         raise ValueError(
             f"Unknown NOTIFY_BACKEND={settings.NOTIFY_BACKEND!r}. "
@@ -202,6 +204,6 @@ def _extract_subject(text_body: str) -> str:
         stripped = line.strip()
         if stripped:
             if stripped.lower().startswith("subject:"):
-                return stripped[len("subject:"):].strip()
+                return stripped[len("subject:") :].strip()
             return stripped
     return "(no subject)"

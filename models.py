@@ -566,9 +566,7 @@ class CreatorStyle(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    __table_args__ = (
-        sa.UniqueConstraint("creator_id", name="uq_creator_style_creator_id"),
-    )
+    __table_args__ = (sa.UniqueConstraint("creator_id", name="uq_creator_style_creator_id"),)
 
 
 class DnaEmbedding(Base):
@@ -731,17 +729,13 @@ class ClipPublication(Base):
     # scheduled_at: the creator's chosen publish time (UTC). The Beat sweep
     # enqueues the upload when scheduled_at <= now() AND status=confirmed.
     # NULL is valid for rows created directly as pending (immediate publish).
-    scheduled_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
+    scheduled_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     platform: Mapped[PublishPlatform] = mapped_column(
         sa.Enum(PublishPlatform, name="publish_platform_enum"),
         nullable=False,
         default=PublishPlatform.youtube,
     )
-    confirmed_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
     )
@@ -1280,13 +1274,9 @@ class Notification(Base):
     # Optional deep-link to the relevant page (e.g. /app/review for clips_ready).
     link_url: Mapped[str | None] = mapped_column(sa.String(512), nullable=True)
     # NULL = unread; set on first display in the notification center.
-    seen_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
+    seen_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     # NULL = not dismissed; set when the creator explicitly dismisses the row.
-    dismissed_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
+    dismissed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

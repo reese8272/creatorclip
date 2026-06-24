@@ -146,8 +146,7 @@ class TestBuildInappNotification:
             combined = (notif.title + " " + notif.body).lower()
             for phrase in virality_promise_phrases:
                 assert phrase not in combined, (
-                    f"event_type={event_type!r} contains virality promise {phrase!r}: "
-                    f"{combined!r}"
+                    f"event_type={event_type!r} contains virality promise {phrase!r}: {combined!r}"
                 )
 
     def test_unknown_event_type_returns_generic_notification(self) -> None:
@@ -310,7 +309,7 @@ class TestSendNotificationTransactionalAlwaysOn:
         prefs = NotificationPreference(
             creator_id=cid,
             email_transactional=True,
-            email_lifecycle=False,   # lifecycle opted out
+            email_lifecycle=False,  # lifecycle opted out
             inapp_enabled=True,
             push_enabled=False,
             unsubscribe_token=uuid.uuid4(),

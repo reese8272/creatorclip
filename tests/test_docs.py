@@ -38,8 +38,7 @@ def test_runbooks_breach_section_references_art_33():
     engineers understand the legal basis for the 72-hour notification."""
     src = (_REPO_ROOT / "docs" / "RUNBOOKS.md").read_text()
     assert "Art. 33" in src or "Article 33" in src, (
-        "docs/RUNBOOKS.md must reference GDPR Art. 33 in the breach-response "
-        "section (Issue 253)."
+        "docs/RUNBOOKS.md must reference GDPR Art. 33 in the breach-response section (Issue 253)."
     )
 
 

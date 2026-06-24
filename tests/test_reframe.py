@@ -41,10 +41,7 @@ from clip_engine.reframe import (
 def _make_track(*centers: int, start_s: float = 0.0, fps: float = 5.0) -> list[CropCenterPoint]:
     """Build a synthetic raw track with evenly spaced timestamps."""
     interval = 1.0 / fps
-    return [
-        CropCenterPoint(start_s + i * interval, cx)
-        for i, cx in enumerate(centers)
-    ]
+    return [CropCenterPoint(start_s + i * interval, cx) for i, cx in enumerate(centers)]
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +449,7 @@ class TestLazyImportGuard:
         try:
             # Re-import the module; it should not blow up.
             import clip_engine.reframe as reframe_mod
+
             importlib.reload(reframe_mod)
         finally:
             if mediapipe_backup is not None:

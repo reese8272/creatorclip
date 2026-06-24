@@ -250,9 +250,9 @@ def gate_freshness() -> dict:
 MODULE_COVERAGE_FLOORS: dict[str, float] = {
     "clip_engine": 0.0,
     "preference": 0.0,
-    "crypto": 0.0,    # crypto.py
-    "limiter": 0.0,   # limiter.py
-    "auth": 0.0,      # auth.py
+    "crypto": 0.0,  # crypto.py
+    "limiter": 0.0,  # limiter.py
+    "auth": 0.0,  # auth.py
 }
 
 
@@ -328,17 +328,20 @@ def gate_diff_cover() -> dict:
     if not xml_out.exists():
         return {"status": "skipped", "detail": "coverage.xml not found — run coverage gate first"}
 
-    proc = _run([
-        "diff-cover",
-        str(xml_out),
-        "--compare-branch=origin/main",
-        "--fail-under=80",
-        "--quiet",
-    ])
+    proc = _run(
+        [
+            "diff-cover",
+            str(xml_out),
+            "--compare-branch=origin/main",
+            "--fail-under=80",
+            "--quiet",
+        ]
+    )
     # diff-cover exits 0 if coverage >= --fail-under, non-zero otherwise.
     # Parse the last line for the coverage percentage if available.
     output = (proc.stdout or "") + (proc.stderr or "")
     import re as _re
+
     match = _re.search(r"(\d+(?:\.\d+)?)\s*%", output)
     patch_rate = float(match.group(1)) if match else None
 

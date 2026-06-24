@@ -62,9 +62,7 @@ class TestBeatDeploymentLivenessProbe:
 
     def test_liveness_probe_present(self) -> None:
         content = _read(BEAT_DEPLOY)
-        assert "livenessProbe:" in content, (
-            "beat deployment must have a livenessProbe (Issue 263)"
-        )
+        assert "livenessProbe:" in content, "beat deployment must have a livenessProbe (Issue 263)"
 
     def test_liveness_probe_checks_heartbeat_file(self) -> None:
         content = _read(BEAT_DEPLOY)
@@ -74,9 +72,7 @@ class TestBeatDeploymentLivenessProbe:
 
     def test_liveness_probe_threshold_is_300s(self) -> None:
         content = _read(BEAT_DEPLOY)
-        assert "-lt 300" in content, (
-            "beat liveness probe file-mtime threshold must be 300 seconds"
-        )
+        assert "-lt 300" in content, "beat liveness probe file-mtime threshold must be 300 seconds"
 
     def test_schedule_file_arg_removed_from_command(self) -> None:
         # With RedBeat, the --schedule= file path is no longer needed.
@@ -108,9 +104,7 @@ class TestConfigRedBeatProperty:
         prop_idx = content.find("def redbeat_redis_url")
         assert prop_idx != -1, "config.py must have a redbeat_redis_url property"
         prop_body = content[prop_idx : prop_idx + 200]
-        assert "REDIS_URL" in prop_body, (
-            "redbeat_redis_url property must fall back to REDIS_URL"
-        )
+        assert "REDIS_URL" in prop_body, "redbeat_redis_url property must fall back to REDIS_URL"
 
 
 class TestEnvExampleRedBeat:

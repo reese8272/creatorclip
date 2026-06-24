@@ -99,7 +99,7 @@ def test_purge_creator_events_deletes_and_returns_rowcount(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: (lambda: _CM()))
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: lambda: _CM())
     n = asyncio.run(purge_creator_events(str(uuid.uuid4())))
     assert n == 3
     session.execute.assert_awaited_once()  # a DELETE was issued
@@ -146,7 +146,7 @@ def test_purge_stale_events_deletes_and_returns_rowcount(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: (lambda: _CM()))
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: lambda: _CM())
     cutoff = datetime.now(UTC) - timedelta(days=90)
     n = asyncio.run(purge_stale_events(cutoff))
     assert n == 17
@@ -177,7 +177,7 @@ def test_purge_stale_events_cutoff_boundary(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: (lambda: _CM()))
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: lambda: _CM())
     cutoff = datetime.now(UTC) - timedelta(days=90)
     asyncio.run(purge_stale_events(cutoff))
 

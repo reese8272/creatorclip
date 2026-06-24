@@ -174,9 +174,7 @@ def test_no_static_url_in_any_resolver_output(client):
         creator = _mock_creator(state)
         original = app.dependency_overrides.copy()
         app.dependency_overrides[get_current_creator] = _override_creator(creator)
-        app.dependency_overrides[get_session] = _session_for(
-            data_gate=data_gate, video_count=0
-        )
+        app.dependency_overrides[get_session] = _session_for(data_gate=data_gate, video_count=0)
         try:
             body = client.get("/auth/me").json()
         finally:

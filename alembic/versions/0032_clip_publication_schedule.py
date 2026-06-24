@@ -54,9 +54,7 @@ def upgrade() -> None:
     op.execute("ALTER TYPE publish_status_enum ADD VALUE IF NOT EXISTS 'confirmed'")
 
     # ── 2. Create the platform enum ──────────────────────────────────────────
-    op.execute(
-        "CREATE TYPE publish_platform_enum AS ENUM ('youtube')"
-    )
+    op.execute("CREATE TYPE publish_platform_enum AS ENUM ('youtube')")
 
     # ── 3. Add columns to clip_publications ─────────────────────────────────
     op.add_column(

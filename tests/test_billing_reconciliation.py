@@ -139,8 +139,9 @@ async def test_reconcile_grants_unfulfilled_paid_session():
     mock_session.commit = AsyncMock()
 
     with (
-        patch("billing.stripe_client.list_recent_paid_sessions",
-              return_value=[PAID_SESSION_FIXTURE]),
+        patch(
+            "billing.stripe_client.list_recent_paid_sessions", return_value=[PAID_SESSION_FIXTURE]
+        ),
         patch("billing.ledger.grant_minutes", new_callable=AsyncMock) as mock_grant,
         patch("db.AdminSessionLocal") as mock_ctx,
     ):
@@ -165,8 +166,10 @@ async def test_reconcile_skips_already_fulfilled_session():
     mock_session.scalar = AsyncMock(return_value=existing_id)  # already fulfilled
 
     with (
-        patch("billing.stripe_client.list_recent_paid_sessions",
-              return_value=[ALREADY_FULFILLED_SESSION_FIXTURE]),
+        patch(
+            "billing.stripe_client.list_recent_paid_sessions",
+            return_value=[ALREADY_FULFILLED_SESSION_FIXTURE],
+        ),
         patch("billing.ledger.grant_minutes", new_callable=AsyncMock) as mock_grant,
         patch("db.AdminSessionLocal") as mock_ctx,
     ):

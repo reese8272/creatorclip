@@ -5,6 +5,7 @@ These tests do NOT require Postgres/Redis/ffmpeg — they assert that
 structured events are emitted on the correct paths using unittest.mock.
 DB-free unit tests only (no `integration` mark).
 """
+
 import asyncio
 from unittest.mock import AsyncMock, patch
 

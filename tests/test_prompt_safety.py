@@ -258,15 +258,13 @@ def _get_system_text(system: list[dict]) -> str:
         ),
         (
             "improvement/brief.py",
-            lambda: __import__(
-                "improvement.brief", fromlist=["_build_request"]
-            )._build_request(channel_title="Chan", analytics={}, dna_brief=None)[0],
+            lambda: __import__("improvement.brief", fromlist=["_build_request"])._build_request(
+                channel_title="Chan", analytics={}, dna_brief=None
+            )[0],
         ),
         (
             "analysis/brief.py",
-            lambda: __import__(
-                "analysis.brief", fromlist=["_build_request"]
-            )._build_request(
+            lambda: __import__("analysis.brief", fromlist=["_build_request"])._build_request(
                 channel_title="Chan",
                 youtube_video_id="abc123",
                 video_title=None,

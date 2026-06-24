@@ -114,13 +114,12 @@ def generate_waveform_image(
     cmd = [
         "ffmpeg",
         "-y",  # overwrite without prompting
-        "-i", str(audio_path),
+        "-i",
+        str(audio_path),
         "-filter_complex",
-        (
-            f"showwavespic=s={width}x{height}"
-            f":colors={fg_color}:bg_color={bg_color}"
-        ),
-        "-frames:v", "1",
+        (f"showwavespic=s={width}x{height}:colors={fg_color}:bg_color={bg_color}"),
+        "-frames:v",
+        "1",
         str(output_path),
     ]
 

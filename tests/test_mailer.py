@@ -27,7 +27,9 @@ import pytest
 _TEMPLATE_DIR = Path(__file__).parent.parent / "notify" / "templates"
 
 
-def _fake_settings(notify_backend: str = "console", resend_api_key: str = "", email_from: str = "") -> MagicMock:
+def _fake_settings(
+    notify_backend: str = "console", resend_api_key: str = "", email_from: str = ""
+) -> MagicMock:
     """Return a mock Settings object with just the fields mailer.py reads."""
     s = MagicMock()
     s.NOTIFY_BACKEND = notify_backend
@@ -52,8 +54,10 @@ def test_console_backend_renders_and_logs(caplog: pytest.LogCaptureFixture) -> N
         "review_url": "https://autoclip.studio/review/abc123",
     }
 
-    with patch.object(mailer, "settings", _fake_settings("console")), \
-            caplog.at_level(logging.INFO, logger="notify.mailer"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        caplog.at_level(logging.INFO, logger="notify.mailer"),
+    ):
         mailer.send(
             to="alice@example.com",
             template="clips_ready",
@@ -78,8 +82,10 @@ def test_console_backend_includes_idempotency_key_in_log(caplog: pytest.LogCaptu
         "review_url": "https://autoclip.studio/review/xyz",
     }
 
-    with patch.object(mailer, "settings", _fake_settings("console")), \
-            caplog.at_level(logging.INFO, logger="notify.mailer"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        caplog.at_level(logging.INFO, logger="notify.mailer"),
+    ):
         mailer.send(
             to="bob@example.com",
             template="clips_ready",
@@ -88,9 +94,7 @@ def test_console_backend_includes_idempotency_key_in_log(caplog: pytest.LogCaptu
         )
 
     joined = " ".join(r.message for r in caplog.records)
-    assert idem_key in joined, (
-        f"Expected idempotency key {idem_key!r} to appear in log output"
-    )
+    assert idem_key in joined, f"Expected idempotency key {idem_key!r} to appear in log output"
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +120,17 @@ def test_resend_backend_forwards_idempotency_key() -> None:
     idem_key = "resend-idempotency-key-abc"
 
     # Reset the module-level initialised flag so the patched resend is used
-    with patch.object(mailer, "_resend_initialised", False), \
-            patch.object(mailer, "settings", _fake_settings("resend", resend_api_key="re_test", email_from="noreply@autoclip.studio")), \
-            patch.dict(sys.modules, {"resend": fake_resend}):
+    with (
+        patch.object(mailer, "_resend_initialised", False),
+        patch.object(
+            mailer,
+            "settings",
+            _fake_settings(
+                "resend", resend_api_key="re_test", email_from="noreply@autoclip.studio"
+            ),
+        ),
+        patch.dict(sys.modules, {"resend": fake_resend}),
+    ):
         mailer.send(
             to="carol@example.com",
             template="clips_ready",
@@ -152,9 +164,15 @@ def test_resend_backend_params_include_from_to_subject() -> None:
     }
     email_from = "noreply@autoclip.studio"
 
-    with patch.object(mailer, "_resend_initialised", False), \
-            patch.object(mailer, "settings", _fake_settings("resend", resend_api_key="re_test", email_from=email_from)), \
-            patch.dict(sys.modules, {"resend": fake_resend}):
+    with (
+        patch.object(mailer, "_resend_initialised", False),
+        patch.object(
+            mailer,
+            "settings",
+            _fake_settings("resend", resend_api_key="re_test", email_from=email_from),
+        ),
+        patch.dict(sys.modules, {"resend": fake_resend}),
+    ):
         mailer.send(
             to="dave@example.com",
             template="clips_ready",
@@ -186,8 +204,10 @@ def test_unknown_backend_raises_value_error() -> None:
         "review_url": "https://autoclip.studio/review/ev",
     }
 
-    with patch.object(mailer, "settings", _fake_settings("smtp")), \
-            pytest.raises(ValueError, match="Unknown NOTIFY_BACKEND"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("smtp")),
+        pytest.raises(ValueError, match="Unknown NOTIFY_BACKEND"),
+    ):
         mailer.send(
             to="eve@example.com",
             template="clips_ready",
@@ -206,8 +226,10 @@ def test_oversized_idempotency_key_raises() -> None:
     from notify import mailer
 
     long_key = "a" * 257
-    with patch.object(mailer, "settings", _fake_settings("console")), \
-            pytest.raises(ValueError, match="256"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        pytest.raises(ValueError, match="256"),
+    ):
         mailer.send(
             to="test@example.com",
             template="clips_ready",
@@ -226,8 +248,10 @@ def test_idempotency_key_at_max_length_is_accepted(caplog: pytest.LogCaptureFixt
     from notify import mailer
 
     max_key = "a" * 256
-    with patch.object(mailer, "settings", _fake_settings("console")), \
-            caplog.at_level(logging.INFO, logger="notify.mailer"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        caplog.at_level(logging.INFO, logger="notify.mailer"),
+    ):
         # Should not raise
         mailer.send(
             to="test@example.com",
@@ -246,8 +270,10 @@ def test_idempotency_key_with_invalid_chars_raises() -> None:
     """A key with spaces or special chars must raise ValueError."""
     from notify import mailer
 
-    with patch.object(mailer, "settings", _fake_settings("console")), \
-            pytest.raises(ValueError, match="idempotency_key"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        pytest.raises(ValueError, match="idempotency_key"),
+    ):
         mailer.send(
             to="test@example.com",
             template="clips_ready",
@@ -293,8 +319,10 @@ def test_missing_resend_api_key_fails_at_settings_load() -> None:
         "ALLOWED_ORIGINS": "http://localhost",
     }
 
-    with patch.dict(os.environ, env_overrides, clear=False), \
-            pytest.raises(ValidationError, match="RESEND_API_KEY"):
+    with (
+        patch.dict(os.environ, env_overrides, clear=False),
+        pytest.raises(ValidationError, match="RESEND_API_KEY"),
+    ):
         Settings()
 
 
@@ -315,8 +343,10 @@ def test_clips_ready_template_contains_review_url(caplog: pytest.LogCaptureFixtu
         "review_url": review_url,
     }
 
-    with patch.object(mailer, "settings", _fake_settings("console")), \
-            caplog.at_level(logging.INFO, logger="notify.mailer"):
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        caplog.at_level(logging.INFO, logger="notify.mailer"),
+    ):
         mailer.send(
             to="ivy@example.com",
             template="clips_ready",

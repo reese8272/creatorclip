@@ -49,8 +49,7 @@ def test_system_prompt_carries_untrusted_content_policy():
     blocks = build_system("My Channel")
     text = " ".join(b["text"] for b in blocks)
     assert UNTRUSTED_CONTENT_POLICY in text, (
-        "chat/prompt.py build_system output must contain UNTRUSTED_CONTENT_POLICY. "
-        "(Issue 225)"
+        "chat/prompt.py build_system output must contain UNTRUSTED_CONTENT_POLICY. (Issue 225)"
     )
 
 

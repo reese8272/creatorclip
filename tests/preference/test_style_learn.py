@@ -114,10 +114,7 @@ def test_style_suggestion_returns_none_when_no_kit_field_present() -> None:
 
 def test_style_suggestion_count_matches_occurrences() -> None:
     """The returned count must equal the actual number of matching rows."""
-    history = (
-        [{"subtitle": "bold_pop"}] * 8
-        + [{"subtitle": "minimal"}] * 2
-    )
+    history = [{"subtitle": "bold_pop"}] * 8 + [{"subtitle": "minimal"}] * 2
     result = style_suggestion(history, threshold=5)
     assert result is not None
     assert result["field"] == "subtitle"

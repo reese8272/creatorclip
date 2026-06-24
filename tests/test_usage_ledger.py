@@ -72,7 +72,8 @@ def test_estimate_cost_mixed_llm_and_deepgram() -> None:
     deepgram_minutes = 30.0
 
     llm_cost = _estimate_cost_usd(
-        tokens_in, tokens_out,
+        tokens_in,
+        tokens_out,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
     )
@@ -115,7 +116,7 @@ async def test_record_llm_usage_calls_increment() -> None:
     # creator_id and token counts must match
     assert call_kwargs.args[1] == creator_id
     assert call_kwargs.args[3] == 1000  # tokens_in
-    assert call_kwargs.args[4] == 500   # tokens_out
+    assert call_kwargs.args[4] == 500  # tokens_out
     # cost_estimate: (1000*3 + 500*15) / 1_000_000 = (3000+7500)/1e6 = 0.0105
     assert abs(call_kwargs.args[5] - 0.0105) < 1e-9
 

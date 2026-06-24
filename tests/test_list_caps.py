@@ -52,11 +52,7 @@ def test_list_upload_intel_query_has_limit() -> None:
     from sqlalchemy import select
 
     creator_id = uuid.uuid4()
-    stmt = (
-        select(AudienceActivity)
-        .where(AudienceActivity.creator_id == creator_id)
-        .limit(200)
-    )
+    stmt = select(AudienceActivity).where(AudienceActivity.creator_id == creator_id).limit(200)
     sql = str(stmt.compile(compile_kwargs={"literal_binds": False}))
     assert "LIMIT" in sql.upper(), "upload_intel query must include a LIMIT clause"
 

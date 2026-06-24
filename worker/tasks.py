@@ -191,7 +191,9 @@ async def _fire_refund_notification_async(video_uuid: uuid.UUID) -> None:
 )
 def ingest_video(self, video_id: str) -> str:
     creator_id = run_async(_creator_id_for_video(video_id))
-    log_event("ingest_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "ingest_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     try:
         run_async(_ingest_async(video_id))
     except SoftTimeLimitExceeded:
@@ -202,7 +204,9 @@ def ingest_video(self, video_id: str) -> str:
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
-    log_event("ingest_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "ingest_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     return video_id
 
 
@@ -215,7 +219,12 @@ def ingest_video(self, video_id: str) -> str:
 )
 def transcribe_video(self, video_id: str) -> str:
     creator_id = run_async(_creator_id_for_video(video_id))
-    log_event("transcribe_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "transcribe_video_started",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=video_id,
+    )
     try:
         run_async(_transcribe_async(video_id))
     except SoftTimeLimitExceeded:
@@ -224,7 +233,9 @@ def transcribe_video(self, video_id: str) -> str:
     except Exception as exc:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
-    log_event("transcribe_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "transcribe_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     return video_id
 
 
@@ -237,7 +248,9 @@ def transcribe_video(self, video_id: str) -> str:
 )
 def build_signals(self, video_id: str) -> str:
     creator_id = run_async(_creator_id_for_video(video_id))
-    log_event("build_signals_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "build_signals_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     try:
         run_async(_signals_async(video_id))
     except SoftTimeLimitExceeded:
@@ -247,7 +260,9 @@ def build_signals(self, video_id: str) -> str:
         run_async(_set_status(video_id, IngestStatus.failed))
         raise self.retry(exc=exc) from exc
     generate_clips.delay(video_id)
-    log_event("build_signals_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "build_signals_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     return video_id
 
 
@@ -261,12 +276,16 @@ def build_signals(self, video_id: str) -> str:
 def generate_clips(self, video_id: str) -> str:
     """Score and rank clip candidates for a fully-ingested video."""
     creator_id = run_async(_creator_id_for_video(video_id))
-    log_event("generate_clips_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "generate_clips_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     try:
         run_async(_generate_clips_async(video_id))
     except Exception as exc:
         raise self.retry(exc=exc) from exc
-    log_event("generate_clips_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id)
+    log_event(
+        "generate_clips_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
+    )
     return video_id
 
 
@@ -274,7 +293,9 @@ def generate_clips(self, video_id: str) -> str:
 def render_clip(self, clip_id: str) -> str:
     """Render a clip to 9:16 and upload to storage."""
     creator_id = run_async(_creator_id_for_clip(clip_id))
-    log_event("render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id)
+    log_event(
+        "render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id
+    )
     try:
         run_async(_render_clip_async(clip_id))
     except Exception as exc:
@@ -1635,15 +1656,19 @@ async def _sweep_scheduled_publications_async() -> None:
 
         try:
             rows = (
-                await session.execute(
-                    select(ClipPublication).where(
-                        ClipPublication.status == PublishStatus.confirmed,
-                        ClipPublication.scheduled_at.isnot(None),
-                        ClipPublication.scheduled_at <= now,
-                        ClipPublication.platform == PublishPlatform.youtube,
+                (
+                    await session.execute(
+                        select(ClipPublication).where(
+                            ClipPublication.status == PublishStatus.confirmed,
+                            ClipPublication.scheduled_at.isnot(None),
+                            ClipPublication.scheduled_at <= now,
+                            ClipPublication.platform == PublishPlatform.youtube,
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             if not rows:
                 return
@@ -1679,9 +1704,7 @@ async def _sweep_scheduled_publications_async() -> None:
             await session.rollback()
             raise
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
-            )
+            await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
 
 
 async def _poll_clip_outcomes_async() -> None:
@@ -3951,9 +3974,7 @@ async def _send_notification_async(
         # ── 1. Load creator (needed for the email address) ──────────────────
         creator = await session.get(Creator, cid)
         if creator is None:
-            logger.warning(
-                "send_notification: creator %s not found — skipping", creator_id
-            )
+            logger.warning("send_notification: creator %s not found — skipping", creator_id)
             return
 
         # ── 2. Load preferences (lazy-create with defaults if absent) ────────
@@ -3970,9 +3991,7 @@ async def _send_notification_async(
                 await session.rollback()
                 prefs = await session.get(NotificationPreference, cid)
                 if prefs is None:
-                    logger.error(
-                        "send_notification: cannot load prefs for creator %s", creator_id
-                    )
+                    logger.error("send_notification: cannot load prefs for creator %s", creator_id)
                     return
 
         # ── 3. Preference gate ────────────────────────────────────────────────

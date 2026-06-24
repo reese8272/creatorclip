@@ -190,12 +190,7 @@ def _mediapipe_model_path() -> str:
         # Path: <mediapipe_pkg>/modules/face_detection/face_detection_short_range.tflite
         # The Tasks API also accepts the .task bundle from the model hub.
         pkg_root = Path(mp.__file__).parent
-        short_range = (
-            pkg_root
-            / "modules"
-            / "face_detection"
-            / "face_detection_short_range.tflite"
-        )
+        short_range = pkg_root / "modules" / "face_detection" / "face_detection_short_range.tflite"
         if short_range.exists():
             return str(short_range)
         # Newer mediapipe versions use the tasks bundle layout.
@@ -345,8 +340,13 @@ def smooth_crop_track(
     if not raw_track:
         return []
     if len(raw_track) == 1:
-        return [CropCenterPoint(raw_track[0].timestamp_s, raw_track[0].center_x,
-                                is_fallback=raw_track[0].is_fallback)]
+        return [
+            CropCenterPoint(
+                raw_track[0].timestamp_s,
+                raw_track[0].center_x,
+                is_fallback=raw_track[0].is_fallback,
+            )
+        ]
 
     smoothed: list[CropCenterPoint] = []
     prev_cx = float(raw_track[0].center_x)
@@ -366,9 +366,7 @@ def smooth_crop_track(
                 ema_cx = prev_cx + math.copysign(max_delta, delta)
 
         cx_int = int(round(ema_cx))
-        smoothed.append(
-            CropCenterPoint(point.timestamp_s, cx_int, is_fallback=point.is_fallback)
-        )
+        smoothed.append(CropCenterPoint(point.timestamp_s, cx_int, is_fallback=point.is_fallback))
         prev_cx = ema_cx
         prev_ts = point.timestamp_s
 
@@ -489,7 +487,10 @@ def compute_reframe_crop(
     except Exception as exc:
         logger.warning(
             "Reframe track build failed for %s [%.2f–%.2f]: %s — falling back to center",
-            source_path.name, start_s, end_s, exc,
+            source_path.name,
+            start_s,
+            end_s,
+            exc,
         )
         mid = start_s + (end_s - start_s) / 2.0
         fallback = [CropCenterPoint(mid, frame_width // 2, is_fallback=True)]
@@ -504,8 +505,7 @@ def compute_reframe_crop(
 
     script = build_sendcmd_script(smoothed, crop_w, frame_width, start_s)
     logger.info(
-        "Reframe track: %d samples for %s [%.2f–%.2f], "
-        "fallback_pct=%.0f%%",
+        "Reframe track: %d samples for %s [%.2f–%.2f], fallback_pct=%.0f%%",
         len(smoothed),
         source_path.name,
         start_s,

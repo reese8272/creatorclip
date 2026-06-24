@@ -64,9 +64,7 @@ COPY: dict[str, dict[str, str]] = {
     },
     "balance_low": {
         "subject": "Your minutes balance is running low",
-        "body": (
-            "You have a few minutes left. Add more at /pricing to keep processing videos."
-        ),
+        "body": ("You have a few minutes left. Add more at /pricing to keep processing videos."),
     },
     "catalog_sync_done": {
         "subject": "Your video catalog has been updated",

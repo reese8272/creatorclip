@@ -255,8 +255,7 @@ def test_csrf_get_routes_not_blocked(monkeypatch):
             headers={"sec-fetch-site": "cross-site"},
         )
     assert resp.status_code != 403, (
-        f"Issue 230: GET with cross-site header must NOT be CSRF-blocked. "
-        f"Got {resp.status_code}."
+        f"Issue 230: GET with cross-site header must NOT be CSRF-blocked. Got {resp.status_code}."
     )
 
 

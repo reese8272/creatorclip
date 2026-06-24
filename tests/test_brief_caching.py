@@ -43,7 +43,9 @@ def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
 
     mocker.patch.object(b._ANTHROPIC.messages, "create", side_effect=_create)
 
-    out, _usage = b.generate_brief({"top_videos": [{"title": "T", "hook_text": "H"}]}, "Acme Channel")
+    out, _usage = b.generate_brief(
+        {"top_videos": [{"title": "T", "hook_text": "H"}]}, "Acme Channel"
+    )
 
     system = captured["system"]
     assert len(system) == 2

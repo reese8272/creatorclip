@@ -333,9 +333,7 @@ def test_all_authenticated_templates_include_active_tasks_and_panel():
 # ── Wave 5: activeTasks.js library exists + exposes documented API ──────────
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/index.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/index.html retired — React SPA is canonical.")
 def test_link_video_input_accepts_full_urls():
     """The Link-a-video input must accept full YouTube URLs, not just bare IDs.
     Users naturally paste share URLs; the extractYouTubeId() helper must strip
@@ -421,9 +419,7 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/review.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/review.html retired — React SPA is canonical.")
 def test_review_page_exposes_why_this_clip_panel():
     """Issue 94 — clip transparency. review.html must surface the
     Claude-authored reasoning + cited principle + score + timing
@@ -455,9 +451,7 @@ def test_review_page_exposes_why_this_clip_panel():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/insights.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/insights.html retired — React SPA is canonical.")
 def test_insights_page_consumes_new_insights_endpoint():
     """Issue 93 — rebuilt insights.html surfaces channel totals, DNA
     snapshot, top + bottom performers, upload windows, improvement
@@ -482,9 +476,7 @@ def test_insights_page_consumes_new_insights_endpoint():
     assert "/creators/me/improvement-brief" in src
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/insights.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/insights.html retired — React SPA is canonical.")
 def test_insights_performers_have_sort_control():
     """Issue 149 — the Top/Underperformers panels expose a Sort control
     (default score high→low; flip to low→high or A–Z) and render via the
@@ -510,9 +502,7 @@ def test_insights_performers_have_sort_control():
     assert "escapeHtml(p.kind)" in src
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/walkthrough.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/walkthrough.html retired — React SPA is canonical.")
 def test_walkthrough_page_exists_with_five_panels():
     """Issue 100 — first-run walkthrough has exactly 5 panels (the
     user-locked structure: what-this-is / DNA / what-a-clip-is /
@@ -587,9 +577,7 @@ def test_auth_js_redirects_new_creators_to_walkthrough():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/onboarding.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/onboarding.html retired — React SPA is canonical.")
 def test_onboarding_intake_is_mandatory():
     """Issue 100 — intake step on onboarding.html is no longer skippable.
     The 'Skip for now' button was removed (Issue 83's optional decision
@@ -654,9 +642,7 @@ def test_all_templates_use_design_tokens():
         )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/pricing.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/pricing.html retired — React SPA is canonical.")
 def test_pricing_page_uses_design_tokens():
     """Issue 99 Phase A: pricing.html is the proof retrofit. It must
     consume the shared _design-tokens.css (not redefine its own palette
@@ -686,9 +672,7 @@ def test_pricing_page_uses_design_tokens():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/index.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/index.html retired — React SPA is canonical.")
 def test_dashboard_registers_in_flight_ingests_with_active_tasks():
     """Wave 6 Fix D: the dashboard's loadVideos() must call into
     window.activeTasks.registerTask for any video in pending/running
@@ -837,9 +821,7 @@ def test_active_tasks_library_exists_and_exports_api():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/profile.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/profile.html retired — React SPA is canonical.")
 def test_profile_page_exposes_api_keys_section():
     """Issue 95 frontend — profile.html surfaces the API-key management
     card for the OBS companion app. Pins:
@@ -1048,9 +1030,7 @@ def test_auth_js_populates_nav_elements():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/profile.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/profile.html retired — React SPA is canonical.")
 def test_profile_dna_section_is_collapsible():
     """Issue 114: the Creator DNA section must be wrapped in a <details> element
     so it doesn't dominate the profile page by default."""
@@ -1068,9 +1048,7 @@ def test_profile_dna_section_is_collapsible():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/profile.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/profile.html retired — React SPA is canonical.")
 def test_profile_rebuild_wires_streaming():
     """Issue 116: profile.html must load progressStream.js and wire rebuildDna()
     to subscribe to the SSE task stream from the build_dna endpoint."""
@@ -1088,9 +1066,7 @@ def test_profile_rebuild_wires_streaming():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/index.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/index.html retired — React SPA is canonical.")
 def test_dashboard_has_analytics_panel_with_period_select():
     """Issue 115: the dashboard must show a YouTube Analytics panel with a
     period dropdown (7d / 28d / 90d / all) fetching /creators/me/insights/analytics."""
@@ -1108,9 +1084,7 @@ def test_dashboard_has_analytics_panel_with_period_select():
     )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/review.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/review.html retired — React SPA is canonical.")
 def test_review_page_has_structured_feedback_panel():
     """Issue 118: review.html must include the multi-select structured feedback
     panel for approve and deny actions."""
@@ -1127,9 +1101,7 @@ def test_review_page_has_structured_feedback_panel():
     assert "feedback_tags" in src, "Issue 118: feedback payload must include feedback_tags field."
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/review.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/review.html retired — React SPA is canonical.")
 def test_review_page_has_style_picker():
     """Issue 119: review.html must include the clip style picker with subtitle
     and background controls, and an applyStyle() function."""
@@ -1145,9 +1117,7 @@ def test_review_page_has_style_picker():
     assert "applyStyle" in src, "Issue 119: review.html must include applyStyle() function."
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/insights.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/insights.html retired — React SPA is canonical.")
 def test_insights_page_has_ai_analysis_and_saved_panels():
     """Issue 117: insights.html must support per-performer AI analysis
     (analyze button + /analyze-performer endpoint) and a saved insights panel."""
@@ -1210,9 +1180,7 @@ def test_issue_136_editor_layout_css_exists_with_editor_tokens():
     assert "transition: transform" in layout
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/review.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/review.html retired — React SPA is canonical.")
 def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
     """review.html opts into editor mode + uses ONLY --editor-* tokens —
     no hardcoded hex in the new layout markup (Issue 136 acceptance)."""
@@ -1253,9 +1221,7 @@ def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
         )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/index.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/index.html retired — React SPA is canonical.")
 def test_issue_136_index_html_pre_auth_hero_block():
     """Issue 136: index.html carries a hero block + opts into anonymous
     rendering so the pre-auth landing shows up for logged-out visitors."""
@@ -1478,9 +1444,7 @@ def test_issue_137_authenticated_pages_link_page_shell_and_opt_in():
         )
 
 
-@pytest.mark.skip(
-    reason="Issue 226: static/index.html retired — React SPA is canonical."
-)
+@pytest.mark.skip(reason="Issue 226: static/index.html retired — React SPA is canonical.")
 def test_issue_137_index_video_table_wrapped_for_overflow():
     """Issue 137: the dashboard's video table was the load-bearing source of
     horizontal scroll (4 columns + 2-button action cell). It must be wrapped
@@ -1721,7 +1685,9 @@ def test_react_spa_has_zero_dangerouslysetinnerhtml():
             # Find line numbers for clarity.
             for lineno, line in enumerate(content.splitlines(), start=1):
                 if "dangerouslySetInnerHTML" in line:
-                    violations.append(f"{ts_file.relative_to(frontend_src)}:{lineno}: {line.strip()}")
+                    violations.append(
+                        f"{ts_file.relative_to(frontend_src)}:{lineno}: {line.strip()}"
+                    )
 
     assert not violations, (
         "Issue 226 (OWASP LLM05:2025): zero dangerouslySetInnerHTML allowed in "
@@ -1750,9 +1716,7 @@ def test_security_headers_present_on_every_response(client):
         assert "frame-ancestors 'none'" in csp, (
             f"{path}: CSP must include frame-ancestors 'none' — clickjacking defence."
         )
-        assert "default-src" in csp, (
-            f"{path}: CSP must include default-src directive."
-        )
+        assert "default-src" in csp, f"{path}: CSP must include default-src directive."
         assert resp.headers.get("x-frame-options") == "DENY", (
             f"{path}: X-Frame-Options must be DENY (defence-in-depth for legacy browsers)."
         )
@@ -1922,7 +1886,9 @@ def test_footer_tsx_has_accessibility_link():
     pointing to /static/accessibility.html."""
     import pathlib
 
-    footer_path = pathlib.Path(__file__).parent.parent / "frontend" / "src" / "components" / "Footer.tsx"
+    footer_path = (
+        pathlib.Path(__file__).parent.parent / "frontend" / "src" / "components" / "Footer.tsx"
+    )
     if not footer_path.exists():
         return  # frontend not checked out
     src = footer_path.read_text()

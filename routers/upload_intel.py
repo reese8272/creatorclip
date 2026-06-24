@@ -42,9 +42,7 @@ async def get_upload_intel(
     # slot), but cap at 200 defensively to prevent unbounded scans. (Issue 76)
     _LIST_LIMIT = 200
     result = await session.execute(
-        select(AudienceActivity)
-        .where(AudienceActivity.creator_id == creator.id)
-        .limit(_LIST_LIMIT)
+        select(AudienceActivity).where(AudienceActivity.creator_id == creator.id).limit(_LIST_LIMIT)
     )
     rows = list(result.scalars())
 

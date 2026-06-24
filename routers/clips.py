@@ -186,9 +186,7 @@ async def get_clip_counts(
         select(
             Clip.video_id.label("video_id"),
             func.count().label("total"),
-            func.sum(
-                case((Clip.render_status == RenderStatus.done, 1), else_=0)
-            ).label("rendered"),
+            func.sum(case((Clip.render_status == RenderStatus.done, 1), else_=0)).label("rendered"),
         )
         .join(Video, Clip.video_id == Video.id)
         .where(Video.creator_id == creator.id)
@@ -388,11 +386,7 @@ async def render_clip(
             select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
         )
         kit_db_row: CreatorStyle | None = kit_result.scalar_one_or_none()
-        kit_style: dict = (
-            (kit_db_row.style or {})
-            if isinstance(kit_db_row, CreatorStyle)
-            else {}
-        )
+        kit_style: dict = (kit_db_row.style or {}) if isinstance(kit_db_row, CreatorStyle) else {}
         # Per-clip stored preset overrides the kit; the request body overrides both.
         merged: dict = {**kit_style, **(clip.style_preset or {})}
         if body.subtitle is not None:

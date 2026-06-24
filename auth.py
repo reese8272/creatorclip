@@ -55,6 +55,7 @@ def check_not_cross_site(request: Request) -> None:
             detail="Cross-site request blocked (Fetch-Metadata policy, Issue 230).",
         )
 
+
 SESSION_COOKIE = "cc_session"
 _ALGORITHM = "HS256"
 

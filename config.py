@@ -73,10 +73,10 @@ class Settings(BaseSettings):
     # Source: Anthropic pricing page (platform.claude.com, fetched 2026-06-23).
     # Override via env var to pick up price changes without a code deploy.
     # (Issue 220 — Usage cost ledger)
-    COST_PER_MTOK_IN_SONNET: float = 3.0   # Sonnet 4.6 input: $3/MTok standard
+    COST_PER_MTOK_IN_SONNET: float = 3.0  # Sonnet 4.6 input: $3/MTok standard
     COST_PER_MTOK_OUT_SONNET: float = 15.0  # Sonnet 4.6 output: $15/MTok standard
-    COST_PER_MTOK_IN_HAIKU: float = 1.0    # Haiku 4.5 input: $1/MTok standard
-    COST_PER_MTOK_OUT_HAIKU: float = 5.0   # Haiku 4.5 output: $5/MTok standard
+    COST_PER_MTOK_IN_HAIKU: float = 1.0  # Haiku 4.5 input: $1/MTok standard
+    COST_PER_MTOK_OUT_HAIKU: float = 5.0  # Haiku 4.5 output: $5/MTok standard
     # Cache-read multiplier: prompt-cache hits are billed at 10% of the base input rate.
     # Source: platform.claude.com/docs/en/about-claude/pricing (fetched 2026-06-23).
     COST_CACHE_READ_MULTIPLIER: float = 0.1
@@ -377,9 +377,11 @@ class Settings(BaseSettings):
     # Short name used as the Sentry "environment" tag (e.g. "staging", "production").
     # Defaults to ENV so no extra config is needed in most cases.
     SENTRY_ENVIRONMENT: str = ""
+
     @property
     def sentry_environment(self) -> str:
         return self.SENTRY_ENVIRONMENT or self.ENV
+
     # Git SHA / image tag for Sentry release tracking. Set via IMAGE_SHA env var
     # at container build time (e.g. short git SHA). Empty → not sent.
     IMAGE_SHA: str = ""

@@ -76,10 +76,7 @@ def test_brand_kit_style_column_uses_mutable_dict():
 def test_brand_kit_migration_0028_present_and_chained():
     """Migration 0028 must exist, chain after 0027, and create the creator_style table."""
     src = (
-        pathlib.Path(__file__).parent.parent
-        / "alembic"
-        / "versions"
-        / "0028_creator_brand_kit.py"
+        pathlib.Path(__file__).parent.parent / "alembic" / "versions" / "0028_creator_brand_kit.py"
     ).read_text()
     assert 'down_revision = "0027"' in src, "0028 must chain after 0027"
     assert "creator_style" in src, "migration must reference the creator_style table"
@@ -91,10 +88,7 @@ def test_brand_kit_migration_0028_has_rls():
     """Migration 0028 must enable RLS + tenant_isolation policy (same pattern as
     0025/0026/0027) so cross-creator kit reads are blocked at the DB layer."""
     src = (
-        pathlib.Path(__file__).parent.parent
-        / "alembic"
-        / "versions"
-        / "0028_creator_brand_kit.py"
+        pathlib.Path(__file__).parent.parent / "alembic" / "versions" / "0028_creator_brand_kit.py"
     ).read_text()
     assert "ROW LEVEL SECURITY" in src
     assert "tenant_isolation" in src

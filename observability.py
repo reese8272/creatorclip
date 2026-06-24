@@ -169,6 +169,7 @@ def record_llm_tokens(
     `getattr(usage, "cache_read_input_tokens", 0)` — the coercion silently
     drops non-integer values (e.g. None) to 0.
     """
+
     def _to_int(v: Any) -> int:
         try:
             return int(v)

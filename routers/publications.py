@@ -43,8 +43,7 @@ _MUTABLE_STATUSES = {PublishStatus.scheduled, PublishStatus.confirmed}
 
 # Honesty note surfaced on every response — no virality promise.
 _PRIVACY_NOTE = (
-    "Pre-audit: clips are uploaded as private. "
-    "Open YouTube Studio to publish publicly when ready."
+    "Pre-audit: clips are uploaded as private. Open YouTube Studio to publish publicly when ready."
 )
 
 
@@ -233,9 +232,7 @@ async def list_publications(
     # Fetch audience activity for upload-window suggestions.
     _LIST_LIMIT = 200  # 7*24 = 168 max rows; cap defensively
     activity_result = await session.execute(
-        select(AudienceActivity)
-        .where(AudienceActivity.creator_id == creator.id)
-        .limit(_LIST_LIMIT)
+        select(AudienceActivity).where(AudienceActivity.creator_id == creator.id).limit(_LIST_LIMIT)
     )
     activity_rows = list(activity_result.scalars())
     windows = best_upload_windows(activity_rows, top_n=3)

@@ -189,9 +189,7 @@ async def test_execute_tool_executor_failure_returns_is_error() -> None:
         "chat.tools._EXECUTORS",
         {"get_channel_dna": AsyncMock(side_effect=RuntimeError("DB offline"))},
     ):
-        result_str, failed = await execute_tool(
-            "get_channel_dna", {}, _uuid.uuid4(), fake_session
-        )
+        result_str, failed = await execute_tool("get_channel_dna", {}, _uuid.uuid4(), fake_session)
     assert failed is True, "Executor exception must set failed=True"
     payload = json.loads(result_str)
     assert "error" in payload

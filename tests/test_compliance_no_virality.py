@@ -203,8 +203,7 @@ def test_no_virality_in_notification_templates() -> None:
                 end = min(len(cleaned), match.end() + 40)
                 context = cleaned[start:end].replace("\n", " ")
                 violations.append(
-                    f"notify/templates/{path.name}: "
-                    f"found {match.group()!r} — ...{context}..."
+                    f"notify/templates/{path.name}: found {match.group()!r} — ...{context}..."
                 )
 
     assert not violations, "Virality phrases in notification templates:\n" + "\n".join(violations)

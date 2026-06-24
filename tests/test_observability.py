@@ -204,9 +204,7 @@ def test_record_llm_tokens_increments_input_and_output() -> None:
     )
 
     assert (
-        LLM_TOKENS_TOTAL.labels(
-            provider="anthropic", model="test-model", kind="input"
-        )._value.get()
+        LLM_TOKENS_TOTAL.labels(provider="anthropic", model="test-model", kind="input")._value.get()
         == before_in + 100
     )
     assert (

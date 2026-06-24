@@ -197,9 +197,7 @@ def derive_skip_reason(
     if len(peak_indices) == 0:
         # No peaks — check whether there are any retention events at all to help
         # distinguish a completely flat video from one with only audio signals.
-        has_retention = any(
-            e.get("type") == "retention_spike" for e in timeline.get("events", [])
-        )
+        has_retention = any(e.get("type") == "retention_spike" for e in timeline.get("events", []))
         if not has_retention:
             return SKIP_REASON_NO_RETENTION_DATA
         return SKIP_REASON_NO_SIGNAL

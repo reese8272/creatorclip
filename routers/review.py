@@ -87,9 +87,7 @@ async def submit_feedback(
 
     # Issue 235 — check idempotency BEFORE the commit so the new row is not
     # included in the existence query (the session hasn't flushed yet).
-    is_activation = body.action in _KEEP_ACTIONS and await _is_first_keep(
-        session, creator.id
-    )
+    is_activation = body.action in _KEEP_ACTIONS and await _is_first_keep(session, creator.id)
 
     feedback = ClipFeedback(
         clip_id=clip_id,

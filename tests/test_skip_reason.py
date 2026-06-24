@@ -324,9 +324,7 @@ def test_list_clips_skip_reason_label_no_virality(client):
     assert resp.status_code == 200
     body_text = resp.text.lower()
     for term in _VIRALITY_TERMS:
-        assert term not in body_text, (
-            f"Found virality term {term!r} in /videos/<id>/clips response"
-        )
+        assert term not in body_text, f"Found virality term {term!r} in /videos/<id>/clips response"
 
 
 # ── (e) Per-creator isolation ─────────────────────────────────────────────────
@@ -357,7 +355,9 @@ def test_list_clips_skip_reason_does_not_return_other_creators_video(client):
             return None
 
         session.get = AsyncMock(side_effect=_get)
-        session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=iter([]))))
+        session.execute = AsyncMock(
+            return_value=MagicMock(scalars=MagicMock(return_value=iter([])))
+        )
         yield session
 
     app.dependency_overrides[get_current_creator] = lambda: creator_b

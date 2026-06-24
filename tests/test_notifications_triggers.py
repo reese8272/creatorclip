@@ -143,7 +143,14 @@ class TestDnaBuiltTrigger:
             patch(
                 "dna.builder.build_patterns",
                 new_callable=AsyncMock,
-                return_value=({"long_videos_analyzed": 5, "shorts_analyzed": 3}, [], [], 60, "top", 24),
+                return_value=(
+                    {"long_videos_analyzed": 5, "shorts_analyzed": 3},
+                    [],
+                    [],
+                    60,
+                    "top",
+                    24,
+                ),
             ),
             patch("dna.identity.get_current", new_callable=AsyncMock, return_value=None),
             patch("dna.identity.format_for_prompt", return_value=None),
@@ -503,9 +510,7 @@ class TestNotificationCopyHonestyConstraint:
         for path in txt_files:
             content = path.read_text(encoding="utf-8").lower()
             for phrase in self.VIRALITY_PROMISE_PHRASES:
-                assert phrase not in content, (
-                    f"{path.name} contains virality promise {phrase!r}"
-                )
+                assert phrase not in content, f"{path.name} contains virality promise {phrase!r}"
 
     def test_all_event_types_have_templates(self) -> None:
         """Every event type that fires a notification has a corresponding template pair."""
@@ -522,12 +527,8 @@ class TestNotificationCopyHonestyConstraint:
             "balance_low",
         }
         for event in expected_events:
-            assert (templates_dir / f"{event}.txt").exists(), (
-                f"Missing template {event}.txt"
-            )
-            assert (templates_dir / f"{event}.html").exists(), (
-                f"Missing template {event}.html"
-            )
+            assert (templates_dir / f"{event}.txt").exists(), f"Missing template {event}.txt"
+            assert (templates_dir / f"{event}.html").exists(), f"Missing template {event}.html"
 
 
 # ── Staging-pending integration tests ─────────────────────────────────────────
