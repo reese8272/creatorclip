@@ -1,0 +1,14 @@
+Subject: Welcome to AutoClip
+
+Hi {{ creator.channel_title or "there" }},
+
+Welcome to AutoClip.
+
+AutoClip predicts fit with your style and audience — it does not promise virality. Every recommendation is an estimate grounded in your own data.
+
+Get started by connecting your first video:
+
+{{ app_url }}/app/dashboard
+
+—
+CreatorClip

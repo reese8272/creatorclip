@@ -1850,16 +1850,26 @@ async def _generate_clips_async(video_id: str) -> None:
 
         video_uuid = uuid.UUID(video_id)
 
-        # Capture creator_id outside the session context so it is available for
-        # the notification enqueue after the session closes.
+        # Capture creator_id and per-email vars outside the session so they are
+        # available for the notification enqueue after the session closes.
         clip_creator_id: uuid.UUID | None = None
+        clip_video_title: str | None = None
+        clip_creator_name: str | None = None
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, video_uuid)
             if not video:
                 raise ValueError(f"Video {video_id} not found")
+            clip_video_title = video.title
 
             clip_creator_id = video.creator_id
+
+            # Load creator channel_title for the clips_ready email greeting.
+            # Captured here (inside the session) so it is available post-close.
+            from models import Creator as _Creator
+
+            _creator_row = await session.get(_Creator, clip_creator_id)
+            clip_creator_name = (_creator_row.channel_title if _creator_row else None) or "there"
 
             # Idempotency guard (Issue 46): a late retry on a video whose clips are
             # already rendered is a no-op. Without this, generate_and_rank_clips would
@@ -1927,7 +1937,14 @@ async def _generate_clips_async(video_id: str) -> None:
                     str(clip_creator_id),
                     "clips_ready",
                     video_id,
-                    {"clip_count": len(clips)},
+                    {
+                        "clip_count": len(clips),
+                        "creator_name": clip_creator_name or "there",
+                        "video_title": clip_video_title or "your video",
+                        # review_url is an absolute link built from APP_BASE_URL so the
+                        # clips_ready template renders a clickable button in prod.
+                        "review_url": f"{settings.APP_BASE_URL}/app/review",
+                    },
                 )
             except Exception as notify_exc:
                 logger.warning(

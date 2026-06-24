@@ -1,5 +1,5 @@
 """
-Unit tests for notify/mailer.py (Issue 242).
+Unit tests for notify/mailer.py (Issue 242, Issue 311).
 
 These tests run against the console backend with monkeypatching — no live
 external service, no Docker, no Postgres required.
@@ -10,11 +10,17 @@ external service, no Docker, no Postgres required.
 - Backend switch (console vs resend) is config-driven
 - Missing RESEND_API_KEY in resend mode fails fast at settings load
 - Invalid/oversized idempotency keys raise ValueError immediately
+- Issue 311: StrictUndefined raises on missing vars (not silent empty string)
+- Issue 311: clips_ready production context shape renders correctly
+- Issue 311: Subject line stripped from text body
+- Issue 311: Every COPY key has both .txt and .html template files on disk
+- Issue 311: No "to=" PII in log output
 """
 
 import logging
 import os
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -367,7 +373,7 @@ def test_clips_ready_txt_no_virality_language() -> None:
     from notify import mailer
     from tests.test_honesty import assert_no_virality_promise
 
-    text_body, _ = mailer._render(
+    _, text_body, _ = mailer._render(
         "clips_ready",
         {
             "creator_name": "Jan",
@@ -381,3 +387,190 @@ def test_clips_ready_txt_no_virality_language() -> None:
     assert_no_virality_promise(text_body, label="clips_ready.txt")
     # Positively require the disclaimer to be present.
     assert "does not promise virality" in text_body.lower()
+
+
+# ---------------------------------------------------------------------------
+# Issue 311 — StrictUndefined, Subject stripping, PII log, template coverage
+# ---------------------------------------------------------------------------
+
+
+def _make_creator(channel_title: str = "Test Channel") -> types.SimpleNamespace:
+    """Lightweight creator stand-in matching what worker/tasks passes to mailer.send()."""
+    return types.SimpleNamespace(channel_title=channel_title)
+
+
+def test_strict_undefined_raises_on_missing_var() -> None:
+    """StrictUndefined must raise jinja2.UndefinedError when a template var is missing,
+    not silently render an empty string."""
+    from jinja2 import UndefinedError
+
+    from notify import mailer
+
+    # clips_ready requires creator_name, video_title, clip_count, review_url.
+    # Omit creator_name — StrictUndefined must blow up.
+    with pytest.raises(UndefinedError):
+        mailer._render(
+            "clips_ready",
+            {
+                # deliberately missing creator_name
+                "video_title": "Missing Var Test",
+                "clip_count": 1,
+                "review_url": "https://autoclip.studio/review/x",
+            },
+        )
+
+
+def test_clips_ready_production_context_shape(caplog: pytest.LogCaptureFixture) -> None:
+    """clips_ready rendered with the production context shape produces a non-empty subject
+    and an absolute review link (must start with 'https://').
+
+    Reproduces the exact payload worker/tasks.py send_notification.delay() now sends.
+    """
+    from notify import mailer
+
+    review_url = "https://autoclip.studio/app/review"
+    context = {
+        "creator_name": "Alice",
+        "video_title": "My YouTube Video",
+        "clip_count": 3,
+        "review_url": review_url,
+    }
+
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        caplog.at_level(logging.INFO, logger="notify.mailer"),
+    ):
+        mailer.send(
+            to="alice@example.com",
+            template="clips_ready",
+            context=context,
+            idempotency_key="311-clips-ready-test",
+        )
+
+    # Confirm subject is non-empty by checking the rendered .txt directly
+    subject, text_body, _ = mailer._render("clips_ready", context)
+    assert subject, "Subject must not be empty"
+    assert review_url in text_body, "Absolute review_url must appear in the text body"
+    assert text_body.startswith("Hi "), "Body must not start with 'Subject:'"
+
+
+def test_trial_ending_empty_payload_context(caplog: pytest.LogCaptureFixture) -> None:
+    """trial_ending with an empty {} payload renders correctly via creator object.
+
+    This mirrors the actual dispatch: send_notification.delay(creator_id, 'trial_ending', ..., {})
+    The 'creator' object is injected by the task and app_url is a Jinja2 global.
+    """
+    from notify import mailer
+
+    creator = _make_creator("Bob's Channel")
+    subject, text_body, _ = mailer._render("trial_ending", {"creator": creator})
+
+    assert subject, "Subject must not be empty for trial_ending"
+    # The absolute link must appear (app_url global + /pricing)
+    assert "http" in text_body, "trial_ending body must contain an absolute link"
+    assert "/pricing" in text_body, "trial_ending body must reference the pricing path"
+
+
+def test_rendered_body_does_not_contain_subject_line() -> None:
+    """The text body returned by _render must never start with 'Subject:'.
+
+    The Subject: line belongs in the email header, not the message body.
+    """
+    from notify import mailer
+
+    creator = _make_creator()
+    for template_name in [
+        "clips_ready",
+        "trial_ending",
+        "balance_low",
+        "dna_built",
+        "reauth_required",
+        "refund_issued",
+        "welcome",
+        "catalog_sync_done",
+    ]:
+        ctx: dict = {"creator": creator}
+        if template_name == "clips_ready":
+            ctx = {
+                "creator_name": "Alice",
+                "video_title": "My Video",
+                "clip_count": 2,
+                "review_url": "https://autoclip.studio/app/review",
+            }
+
+        _, text_body, _ = mailer._render(template_name, ctx)
+
+        for line in text_body.splitlines():
+            assert not line.strip().lower().startswith("subject:"), (
+                f"{template_name}.txt rendered body must not contain a 'Subject:' line; "
+                f"got: {line!r}"
+            )
+
+
+def test_all_copy_keys_have_template_files() -> None:
+    """Every emailable event_type defined in notify/copy.py COPY must have both
+    a .txt and .html template file on disk.
+
+    Prevents the situation where copy exists but no template pair renders it.
+    """
+    from notify.copy import COPY
+
+    templates_dir = Path(__file__).parent.parent / "notify" / "templates"
+
+    for event_type in COPY:
+        txt_path = templates_dir / f"{event_type}.txt"
+        html_path = templates_dir / f"{event_type}.html"
+        assert txt_path.exists(), (
+            f"Missing template: notify/templates/{event_type}.txt "
+            f"(defined in COPY but no .txt file)"
+        )
+        assert html_path.exists(), (
+            f"Missing template: notify/templates/{event_type}.html "
+            f"(defined in COPY but no .html file)"
+        )
+
+
+def test_no_pii_in_console_log(caplog: pytest.LogCaptureFixture) -> None:
+    """The console backend must not log the recipient email address (PII)."""
+    from notify import mailer
+
+    recipient = "secret-user@private-domain.com"
+    context = {
+        "creator_name": "Charlie",
+        "video_title": "PII Test",
+        "clip_count": 1,
+        "review_url": "https://autoclip.studio/app/review",
+    }
+
+    with (
+        patch.object(mailer, "settings", _fake_settings("console")),
+        caplog.at_level(logging.INFO, logger="notify.mailer"),
+    ):
+        mailer.send(
+            to=recipient,
+            template="clips_ready",
+            context=context,
+            idempotency_key="311-pii-test",
+        )
+
+    joined = " ".join(r.message for r in caplog.records)
+    assert recipient not in joined, f"Recipient email {recipient!r} must not appear in any log line"
+
+
+def test_clips_ready_subject_contains_video_title() -> None:
+    """The clips_ready subject line must include the video title (dynamic suffix)."""
+    from notify import mailer
+
+    video_title = "How to grow your channel in 2026"
+    subject, _, _ = mailer._render(
+        "clips_ready",
+        {
+            "creator_name": "Diana",
+            "video_title": video_title,
+            "clip_count": 5,
+            "review_url": "https://autoclip.studio/app/review",
+        },
+    )
+    assert video_title in subject, (
+        f"clips_ready subject must contain the video title; got: {subject!r}"
+    )

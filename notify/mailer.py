@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 from typing import cast
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from config import settings
 
@@ -39,7 +39,16 @@ _jinja_env = Environment(
     autoescape=select_autoescape(["html"]),
     trim_blocks=True,
     lstrip_blocks=True,
+    # StrictUndefined: any template var the caller forgets raises jinja2.UndefinedError
+    # immediately at render time instead of silently rendering to an empty string.
+    # This catches missing context keys (e.g. forgotten creator_name, video_title) during
+    # development and CI rather than shipping blank subjects / "Hi ," greetings to users.
+    undefined=StrictUndefined,
 )
+# Inject app_url as a Jinja2 global so every template can build absolute links
+# (e.g. {{ app_url }}/pricing) without callers remembering to pass it explicitly.
+# Pulled from settings.APP_BASE_URL; defaults to http://localhost:8000 in dev.
+_jinja_env.globals["app_url"] = settings.APP_BASE_URL
 
 # ── Resend SDK singleton (lazy-imported only when needed) ────────────────────
 # import deferred to avoid requiring the 'resend' package in environments that
@@ -87,14 +96,51 @@ def _validate_idempotency_key(key: str) -> None:
 # ── Template rendering ───────────────────────────────────────────────────────
 
 
-def _render(template: str, context: dict) -> tuple[str, str]:
-    """Return (text_body, html_body) for the named template + context dict.
+def _render(template: str, context: dict) -> tuple[str, str, str]:
+    """Return (subject, text_body, html_body) for the named template + context dict.
 
     Raises jinja2.TemplateNotFound if the paired .txt/.html files are absent.
+    Raises jinja2.UndefinedError if the context is missing a required variable
+    (enforced by StrictUndefined on the module-level environment).
+
+    Convention: the first line of every .txt template is "Subject: <text>".
+    _extract_subject() reads that first raw line for the subject header, then
+    _strip_subject_line() removes it from the body so the recipient never sees a
+    raw "Subject: ..." meta-line in the message text.  The HTML template has no
+    Subject line to strip — it uses a proper <title> tag for preview text instead.
     """
-    text_body: str = _jinja_env.get_template(f"{template}.txt").render(**context)
+    raw_text: str = _jinja_env.get_template(f"{template}.txt").render(**context)
+    subject = _extract_subject(raw_text)
+    text_body = _strip_subject_line(raw_text)
     html_body: str = _jinja_env.get_template(f"{template}.html").render(**context)
-    return text_body, html_body
+    return subject, text_body, html_body
+
+
+def _strip_subject_line(text: str) -> str:
+    """Remove the leading 'Subject: ...' line (and the blank line after it) from a .txt body.
+
+    _extract_subject() already reads that first line to build the email subject header.
+    This companion helper strips it from the body so the rendered text the recipient
+    sees never starts with a raw "Subject:" meta-line.
+
+    If the first non-empty line does not start with "Subject:" the text is returned
+    unchanged — templates that omit the convention work without penalty.
+    """
+    lines = text.splitlines(keepends=True)
+    # Find the first non-blank line
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped:
+            if stripped.lower().startswith("subject:"):
+                # Drop this Subject line; also drop one immediately-following blank line
+                # so the greeting starts at the top rather than leaving an extra blank.
+                remaining = lines[idx + 1 :]
+                if remaining and remaining[0].strip() == "":
+                    remaining = remaining[1:]
+                return "".join(remaining)
+            # First non-blank line is NOT a Subject line — return as-is
+            break
+    return text
 
 
 # ── Public send API ──────────────────────────────────────────────────────────
@@ -123,15 +169,17 @@ def send(
         API errors (let callers / Celery retry logic handle them).
     """
     _validate_idempotency_key(idempotency_key)
-    text_body, html_body = _render(template, context)
+    subject, text_body, html_body = _render(template, context)
 
     if settings.NOTIFY_BACKEND == "console":
-        _send_console(
-            to=to, template=template, text_body=text_body, idempotency_key=idempotency_key
-        )
+        _send_console(template=template, text_body=text_body, idempotency_key=idempotency_key)
     elif settings.NOTIFY_BACKEND == "resend":
         _send_resend(
-            to=to, text_body=text_body, html_body=html_body, idempotency_key=idempotency_key
+            to=to,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            idempotency_key=idempotency_key,
         )
     else:
         raise ValueError(
@@ -142,15 +190,14 @@ def send(
 
 def _send_console(
     *,
-    to: str,
     template: str,
     text_body: str,
     idempotency_key: str,
 ) -> None:
     """Log the email to stdout (dev / CI sink). Never calls any external service."""
+    # Recipient email intentionally omitted to avoid PII in log sinks.
     logger.info(
-        "notify.mailer [console] to=%s template=%s idempotency_key=%s body_preview=%.120r",
-        to,
+        "notify.mailer [console] template=%s idempotency_key=%s body_preview=%.120r",
         template,
         idempotency_key,
         text_body,
@@ -160,6 +207,7 @@ def _send_console(
 def _send_resend(
     *,
     to: str,
+    subject: str,
     text_body: str,
     html_body: str,
     idempotency_key: str,
@@ -179,16 +227,16 @@ def _send_resend(
         {
             "from": settings.EMAIL_FROM,
             "to": [to],
-            "subject": _extract_subject(text_body),
+            "subject": subject,
             "text": text_body,
             "html": html_body,
         },
     )
     options = cast(resend.Emails.SendOptions, {"idempotency_key": idempotency_key})
     response = resend.Emails.send(params, options)
+    # Recipient email omitted from log to avoid PII in log sinks.
     logger.info(
-        "notify.mailer [resend] to=%s resend_id=%s idempotency_key=%s",
-        to,
+        "notify.mailer [resend] resend_id=%s idempotency_key=%s",
         getattr(response, "id", None),
         idempotency_key,
     )

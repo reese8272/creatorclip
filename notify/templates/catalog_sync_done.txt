@@ -1,0 +1,10 @@
+Subject: Your video catalog has been updated
+
+Hi {{ creator.channel_title or "there" }},
+
+Your YouTube catalog has been synced successfully. Your latest videos and analytics are now up to date.
+
+View your catalog: {{ app_url }}/app/dashboard
+
+—
+CreatorClip
