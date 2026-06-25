@@ -91,3 +91,64 @@ ignore-vulns = [
     # Re-evaluate when the CI toolchain updates pip past 26.1.2.
     "PYSEC-2026-196",
 ]
+
+# --- Mutation testing (Issue 273) — CADENCE-ONLY, report-not-gate -----------------
+# mutmut targets ONLY the load-bearing core (~10-20% that must be correct): the
+# clip_engine setup-vs-aftermath / peak comparisons, the recency-decay sign+math,
+# and decrypt() token-security correctness. Line coverage proves these lines RUN;
+# mutation testing proves the tests ASSERT on them. Runs on a weekly schedule
+# (.github/workflows/mutation.yml), NEVER per-PR (slow; the standard warns against a
+# per-PR mutation gate). limiter.py is intentionally EXCLUDED here — Issue 228 owns
+# it on a parallel branch; fold it into paths_to_mutate after 228 merges (see
+# docs/DECISIONS.md, 2026-06-24). Target score >80% (tolerate >75%, ratchet to >85%);
+# survivors are triaged into test-gap follow-ups, never a build failure.
+[tool.mutmut]
+paths_to_mutate = [
+    "clip_engine/scoring.py",
+    "preference/decay.py",
+    "crypto.py",
+]
+# mutmut copies the mutated source into a ./mutants/ sandbox, REMOVES the repo root
+# from sys.path (so the original code can't shadow the mutants), and runs pytest from
+# inside the sandbox. Everything the targeted tests import must therefore be copied in
+# too. We copy:
+#   - pytest.ini  — carries the UNIT-lane marker filter (addopts = -m "not integration
+#                   and not quarantine"), asyncio_mode, and testpaths, so the sandbox
+#                   run stays on the unit lane and never touches Postgres.
+#   - the first-party import closure of tests/conftest.py (which imports `main`) plus
+#     the three target modules: config/db/models/crypto + the billing/clip_engine/
+#     dna/knowledge/preference/routers/worker/youtube/upload_intel packages and the
+#     remaining top-level modules. (clip_engine/scoring.py, preference/decay.py and
+#     crypto.py are auto-copied as the mutated paths.) limiter.py is copied only so the
+#     app imports — it is NOT in paths_to_mutate, so it is never mutated (Issue 228).
+also_copy = [
+    "pytest.ini",
+    "main.py",
+    "config.py",
+    "db.py",
+    "models.py",
+    "auth.py",
+    "api_key.py",
+    "limiter.py",
+    "event_log.py",
+    "observability.py",
+    "redact.py",
+    "billing",
+    "clip_engine",
+    "dna",
+    "knowledge",
+    "preference",
+    "routers",
+    "upload_intel",
+    "worker",
+    "youtube",
+    "static",
+]
+# Scope the mutant test runs to the three test files that directly exercise the
+# targeted modules. This keeps each mutant pass fast (the standard's guidance) and
+# avoids unrelated full-suite collection fragility inside the sandbox.
+pytest_add_cli_args_test_selection = [
+    "tests/test_crypto.py",
+    "tests/test_preference.py",
+    "tests/test_scoring.py",
+]

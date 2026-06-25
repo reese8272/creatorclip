@@ -136,6 +136,74 @@ adopt path at `routers/videos.py` link_video (`origin == catalog` → `link`); I
 entry below naming Issue 310 as the picker follow-up.
 
 **Date.** 2026-06-24.
+---
+## 2026-06-24 — Issue 273: Mutation-testing scope = load-bearing core only; REPORT-only on a weekly schedule; limiter.py deferred to Issue 228
+
+**What was decided.**
+1. **Scope (the load-bearing 10–20%).** `mutmut` is configured to mutate exactly three
+   modules — `clip_engine/scoring.py`, `preference/decay.py`, `crypto.py` — via
+   `[tool.mutmut] paths_to_mutate` in `pyproject.toml`. These are the comparisons whose
+   silent flip is a product/security failure: the clip-engine setup-vs-aftermath /
+   `_in_window` boundaries, the recency-decay sign+clamp math, and `decrypt()` token
+   correctness. Line coverage proves these lines RUN; mutation testing proves the tests
+   ASSERT on them.
+2. **`limiter.py` is DELIBERATELY EXCLUDED from `paths_to_mutate`** even though the
+   issue body lists it. **Issue 228 owns `limiter.py` on a parallel branch**; mutating it
+   here would collide. Fold `limiter.py` (the `_creator_key` / `creator_key` per-creator
+   isolation predicate) into the target set *after Issue 228 merges*. This is the one
+   deviation from the issue's "Coordinate (hot files)" line, taken to honour the
+   cross-branch collision rule.
+3. **Gate-vs-report (Open Q3) resolved → REPORT-only, on a weekly schedule.** A new
+   `.github/workflows/mutation.yml` runs `mutmut` on `cron: "0 7 * * 1"` (07:00 UTC
+   Mondays) + `workflow_dispatch`, with **no** `pull_request`/`push` trigger, `mutmut run
+   || true`, and the score published to `$GITHUB_STEP_SUMMARY` + an artifact. It is kept
+   OUT of the required-status set so it can never red-wall an unrelated PR. Target score
+   **>80%** (tolerate >75% initially, ratchet toward >85%); survivors are triaged into
+   test-gap follow-ups, never a build failure. Gating can be a later ratchet once the
+   score is stable.
+4. **`mutmut` pin bumped `3.2.0 → 3.6.0`** in `requirements-dev.txt`. The pinned 3.2.0
+   reads config ONLY from `setup.cfg [mutmut]` and ignores `pyproject.toml`'s
+   `[tool.mutmut]` entirely (no `paths_to_mutate`/`runner` support), so the scoped config
+   the issue requires is impossible on 3.2.0. 3.6.0 has a proper `configuration.py` that
+   reads `[tool.mutmut]` from `pyproject.toml` via `tomllib`, supporting `paths_to_mutate`,
+   `also_copy`, and `pytest_add_cli_args_test_selection`.
+5. **Sandbox isolation: copy the import closure + pin the unit lane.** mutmut copies the
+   mutated source into `./mutants/`, removes the repo root from `sys.path`, and runs pytest
+   there. `also_copy` therefore carries `pytest.ini` (which holds
+   `addopts = -m "not integration and not quarantine"`, so the mutant runs stay on the UNIT
+   lane and never touch Postgres) plus the first-party import closure of `tests/conftest.py`
+   (`main` + config/db/models/static + the app packages). `pytest_add_cli_args_test_selection`
+   scopes the mutant test runs to `test_crypto.py` / `test_preference.py` / `test_scoring.py`
+   so each pass is fast (the standard's tight-scope guidance).
+
+**Why.** Per the issue's research-confirmed recommendation: mutation testing on Python is
+memory- and time-sensitive (documented OOM / long runtimes on large repos), and the
+standard guidance is to apply it to only ~10–20% of the codebase. Report-on-schedule
+surfaces real test-quality gaps in the modules where correctness is load-bearing (crypto,
+scoring, decay) without blocking velocity or flaking the merge gate.
+
+**Triage (first pass).** The baseline run killed the load-bearing comparison survivors by
+adding assertions, NOT by chasing every mutant (80/20):
+- `preference/decay.py` — `max(0.0, …)` clamp on `recency_weight` and `feedback_age_days`
+  (a `max(1.0, …)` mutant survived) → killed by `recency_weight(-5.0) == 1.0` and
+  `feedback_age_days(future) == 0.0`.
+- `clip_engine/scoring.py` `_in_window` — both `<=` edges (`setup_s <= start_s <= end_s`)
+  survived an edge-flip to `<` → killed by on-lower-edge and on-upper-edge event tests plus
+  exact-arithmetic assertions on `clip_duration_s` / `setup_length_s` / `silence_ratio`.
+- **Deliberately NOT chased** (logged as test-gap follow-ups, not over-tested per the 80/20
+  rule): the `crypto.decrypt` survivors are all cosmetic exception-MESSAGE-string mutations
+  (the load-bearing wrong-key → `TokenDecryptError` and rotation paths are already killed by
+  `test_crypto.py`); and the bulk of `score_candidates` survivors live in the Claude-call
+  path, which the unit tests mock by design.
+
+**Source/evidence.** mutmut 3.6.0 `mutmut/configuration.py` (`tomllib` read of
+`[tool.mutmut]`, `paths_to_mutate`/`also_copy`/`pytest_add_cli_args_test_selection`) and
+`__main__.py` `setup_source_paths()` (repo root removed from `sys.path`); local baseline
+`mutmut run` (740 mutants) showing the `_in_window` `<=`→`<` (mutant 86) and decay
+`max(0.0,…)`→`max(1.0,…)` (mutant 8) survivors; issue-confirmed research
+(`mutmut.readthedocs.io` 3.x incremental model; `github.com/boxed/mutmut` + paiml
+large-codebase perf hazards; `johal.in` score targets >75%→85%). Collision rule:
+task-supplied COLLISION RULE assigning `limiter.py` to Issue 228.
 
 ---
 

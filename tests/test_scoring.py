@@ -84,6 +84,60 @@ def test_compute_features_laughter_detected():
     assert feats["has_laughter"] is True
 
 
+def test_compute_features_event_on_lower_window_edge_is_in_window():
+    """An event whose start_s == setup_s (lower edge) is INSIDE the window.
+
+    Mutation guard (Issue 273): pins the lower `<=` in
+    `_in_window` (setup_s <= start_s <= end_s). A mutant flipping it to `<`
+    would silently drop a setup-aligned retention spike — the engine clips the
+    SETUP, so an event landing exactly at the setup boundary must count.
+    """
+    tl = _timeline([{"type": "retention_spike", "start_s": 40.0, "end_s": 41.0, "value": 1.5}])
+    feats = compute_features(_candidate(setup=40.0, peak=60.0, end=80.0), tl)
+    assert feats["has_retention_spike"] is True
+
+
+def test_compute_features_event_on_upper_window_edge_is_in_window():
+    """An event whose start_s == end_s (upper edge) is INSIDE the window.
+
+    Mutation guard (Issue 273): pins the upper `<=` in
+    `_in_window`. A mutant flipping it to `<` would drop an event landing
+    exactly on the window's closing boundary.
+    """
+    tl = _timeline([{"type": "retention_spike", "start_s": 80.0, "end_s": 81.0, "value": 1.5}])
+    feats = compute_features(_candidate(setup=40.0, peak=60.0, end=80.0), tl)
+    assert feats["has_retention_spike"] is True
+
+
+def test_compute_features_numeric_values_exact():
+    """Pin the numeric feature outputs, not just their keys.
+
+    Mutation guard (Issue 273): the key-only test let mutants survive that
+    flipped clip_duration (end_s - setup_s), setup_length (peak_s - setup_s),
+    and the silence_ratio quotient. These assertions kill those mutants by
+    asserting the exact arithmetic.
+    """
+    silence = {"type": "silence", "start_s": 45.0, "end_s": 50.0}  # 5s of silence, in-window
+    feats = compute_features(_candidate(setup=40.0, peak=60.0, end=80.0), _timeline([silence]))
+    # clip_duration = end_s - setup_s = 80 - 40
+    assert feats["clip_duration_s"] == pytest.approx(40.0)
+    # setup_length = peak_s - setup_s = 60 - 40
+    assert feats["setup_length_s"] == pytest.approx(20.0)
+    # silence_ratio = silence_duration / clip_dur = 5 / 40
+    assert feats["silence_ratio"] == pytest.approx(5.0 / 40.0)
+
+
+def test_compute_features_silence_outside_window_excluded():
+    """Silence starting before the setup edge is NOT counted in silence_ratio.
+
+    Mutation guard (Issue 273): pins that _in_window gates silence too — a
+    mutant widening the window would pull in out-of-window silence.
+    """
+    silence = {"type": "silence", "start_s": 5.0, "end_s": 35.0}  # before setup=40
+    feats = compute_features(_candidate(setup=40.0, peak=60.0, end=80.0), _timeline([silence]))
+    assert feats["silence_ratio"] == pytest.approx(0.0)
+
+
 # ── _signal_score ─────────────────────────────────────────────────────────────
 
 
