@@ -5,15 +5,19 @@ All external HTTP calls go through _get_json() so tests can patch a single point
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import random
 import re
+import uuid
 
 import httpx
 
 from config import settings
 from models import VideoKind
 from youtube import _http
+from youtube._redis import get_redis_client
 from youtube.errors import (
     PERMANENT_403_REASONS,
     TRANSIENT_403_REASONS,
@@ -34,6 +38,53 @@ _MAX_RETRIES = 4
 
 _YOUTUBE_V3 = "https://www.googleapis.com/youtube/v3"
 _MAX_RESULTS = 50
+
+# fields= field-filters (Google's partial-response syntax) trim the response to
+# only the keys we persist. This cuts bandwidth/parse cost (Google cites 50-80%
+# smaller payloads); it does NOT reduce quota units (those are fixed per method
+# server-side — the quota lever is the ETag 304 path + batching). (Issue 260)
+_FIELDS_PLAYLIST_ITEMS = (
+    "nextPageToken,items(snippet(resourceId/videoId,title,description,publishedAt))"
+)
+_FIELDS_VIDEOS_CONTENT_DETAILS = "items(id,contentDetails/duration)"
+_FIELDS_VIDEOS_STATISTICS = "items(id,statistics/viewCount)"
+
+
+def _etag_cache_key(url: str, params: dict, creator_id: uuid.UUID | None) -> str:
+    """Deterministic per-creator cache key from url+params (+creator_id).
+
+    Per-creator isolation: the URL+params already embed the resource id /
+    playlistId, but we also fold in creator_id so no cross-creator body reuse is
+    ever possible even if two creators query an overlapping public resource.
+    """
+    canonical = json.dumps(
+        {"url": url, "params": dict(sorted(params.items())), "creator": str(creator_id)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"creatorclip:yt_etag:{digest}"
+
+
+async def _etag_cache_get(cache_key: str) -> tuple[str | None, dict | None]:
+    """Return (etag, body) for a cached conditional GET, or (None, None) on miss."""
+    r = get_redis_client()
+    raw = await r.get(cache_key)
+    if not raw:
+        return None, None
+    try:
+        payload = json.loads(raw)
+        return payload.get("etag"), payload.get("body")
+    except (ValueError, TypeError):
+        return None, None
+
+
+async def _etag_cache_put(cache_key: str, etag: str, body: dict, ttl: int) -> None:
+    """Store an ETag + response body for future If-None-Match conditional GETs."""
+    if not etag:
+        return
+    r = get_redis_client()
+    await r.set(cache_key, json.dumps({"etag": etag, "body": body}), ex=ttl)
 
 
 def parse_duration_seconds(iso_duration: str) -> float:
@@ -112,10 +163,32 @@ def _classify_error(resp: httpx.Response) -> tuple[str, bool]:
 
 
 async def _get_json(
-    access_token: str, url: str, params: dict, cost: int = COST_DATA_VIDEOS
+    access_token: str,
+    url: str,
+    params: dict,
+    cost: int = COST_DATA_VIDEOS,
+    *,
+    creator_id: uuid.UUID | None = None,
+    sub_budget: int | None = None,
+    etag_cache: bool = False,
 ) -> dict:
-    await consume(cost)
+    """Issue 260: quota consume is now deferred until AFTER the 304 decision.
+
+    A `304 Not Modified` from a conditional (If-None-Match) GET returns the
+    cached body and spends NO quota — mirroring Google's conditional-request
+    semantics where a 304 is free. This is the measurable quota-unit reduction
+    lever. On a `200`, consume(cost) is charged once and the new ETag+body are
+    cached. `creator_id`/`sub_budget` thread the per-creator refresh sub-budget
+    through to consume().
+    """
     headers = {"Authorization": f"Bearer {access_token}"}
+    cache_key: str | None = None
+    cached_body: dict | None = None
+    if etag_cache:
+        cache_key = _etag_cache_key(url, params, creator_id)
+        cached_etag, cached_body = await _etag_cache_get(cache_key)
+        if cached_etag:
+            headers["If-None-Match"] = cached_etag
     delay = 1.0
 
     for attempt in range(_MAX_RETRIES):
@@ -138,8 +211,20 @@ async def _get_json(
             )
             raise
 
+        # A 304 means the cached body is still fresh — return it without spending
+        # any quota (Issue 260). Google charges nothing for a conditional 304.
+        if resp.status_code == 304 and cached_body is not None:
+            logger.debug("YouTube Data API 304 (cache hit) %s — no quota spent", url)
+            return cached_body
+
         if resp.status_code < 400:
-            return resp.json()
+            # Charge quota only now that we know it is a real (non-304) response.
+            await consume(cost, creator_id=creator_id, sub_budget=sub_budget)
+            body = resp.json()
+            if cache_key is not None:
+                etag = resp.headers.get("ETag", "")
+                await _etag_cache_put(cache_key, etag, body, settings.YOUTUBE_ETAG_CACHE_TTL_S)
+            return body
 
         if resp.status_code in (401, 403, 429):
             reason, is_transient = _classify_error(resp)
@@ -175,12 +260,15 @@ async def _get_json(
     return {}  # unreachable
 
 
-async def get_uploads_playlist_id(access_token: str) -> str:
+async def get_uploads_playlist_id(
+    access_token: str, *, creator_id: uuid.UUID | None = None
+) -> str:
     data = await _get_json(
         access_token,
         f"{_YOUTUBE_V3}/channels",
         {"part": "contentDetails", "mine": "true"},
         cost=COST_DATA_CHANNELS,
+        creator_id=creator_id,
     )
     items = data.get("items", [])
     if not items:
@@ -188,9 +276,11 @@ async def get_uploads_playlist_id(access_token: str) -> str:
     return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
 
-async def list_channel_videos(access_token: str) -> list[dict]:
+async def list_channel_videos(
+    access_token: str, *, creator_id: uuid.UUID | None = None
+) -> list[dict]:
     """Return all video IDs + metadata from the uploads playlist (paginated)."""
-    playlist_id = await get_uploads_playlist_id(access_token)
+    playlist_id = await get_uploads_playlist_id(access_token, creator_id=creator_id)
     results: list[dict] = []
     page_token: str | None = None
 
@@ -199,12 +289,18 @@ async def list_channel_videos(access_token: str) -> list[dict]:
             "part": "snippet",
             "playlistId": playlist_id,
             "maxResults": _MAX_RESULTS,
+            "fields": _FIELDS_PLAYLIST_ITEMS,
         }
         if page_token:
             params["pageToken"] = page_token
 
         data = await _get_json(
-            access_token, f"{_YOUTUBE_V3}/playlistItems", params, cost=COST_DATA_PLAYLIST_ITEMS
+            access_token,
+            f"{_YOUTUBE_V3}/playlistItems",
+            params,
+            cost=COST_DATA_PLAYLIST_ITEMS,
+            creator_id=creator_id,
+            etag_cache=True,
         )
         for item in data.get("items", []):
             snippet = item.get("snippet", {})
@@ -241,14 +337,22 @@ async def list_channel_videos(access_token: str) -> list[dict]:
     return results
 
 
-async def get_videos_metadata(access_token: str, video_ids: list[str]) -> list[dict]:
+async def get_videos_metadata(
+    access_token: str, video_ids: list[str], *, creator_id: uuid.UUID | None = None
+) -> list[dict]:
     """Fetch contentDetails (duration) for up to 50 video IDs per call."""
     if not video_ids:
         return []
     data = await _get_json(
         access_token,
         f"{_YOUTUBE_V3}/videos",
-        {"part": "contentDetails", "id": ",".join(video_ids[:50])},
+        {
+            "part": "contentDetails",
+            "id": ",".join(video_ids[:50]),
+            "fields": _FIELDS_VIDEOS_CONTENT_DETAILS,
+        },
+        creator_id=creator_id,
+        etag_cache=True,
     )
     results = []
     for item in data.get("items", []):
@@ -263,22 +367,32 @@ async def get_videos_metadata(access_token: str, video_ids: list[str]) -> list[d
     return results
 
 
-async def check_captions_available(access_token: str, video_id: str) -> bool:
+async def check_captions_available(
+    access_token: str, video_id: str, *, creator_id: uuid.UUID | None = None
+) -> bool:
     data = await _get_json(
         access_token,
         f"{_YOUTUBE_V3}/captions",
         {"part": "snippet", "videoId": video_id},
         cost=COST_DATA_CAPTIONS,
+        creator_id=creator_id,
     )
     return bool(data.get("items"))
 
 
-async def get_video_stats(access_token: str, youtube_video_id: str) -> dict:
+async def get_video_stats(
+    access_token: str, youtube_video_id: str, *, creator_id: uuid.UUID | None = None
+) -> dict:
     """Fetch view count for a single published video. Returns {} if not found."""
     data = await _get_json(
         access_token,
         f"{_YOUTUBE_V3}/videos",
-        {"part": "statistics", "id": youtube_video_id},
+        {
+            "part": "statistics",
+            "id": youtube_video_id,
+            "fields": _FIELDS_VIDEOS_STATISTICS,
+        },
+        creator_id=creator_id,
     )
     items = data.get("items", [])
     if not items:

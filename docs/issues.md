@@ -3255,6 +3255,7 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 27: YouTube API quota check + backoff verification — BETA gate (overlaps Issue 260)
 
+**Status** `CLOSED — SUBSUMED by Issue 260` (2026-06-24): backoff confirmed shipped (`youtube/errors.py:63` transient-403 set + retry loops); the at-scale fairness/caching + quota-extension audit plan + units-per-creator estimate are recorded in the Issue 260 DECISIONS entry.  
 **Status** `OPEN` · **Wave** W0 · **Lane** Scale, Quota & Load · **Size** `S` · **Verify** `external`  
 **Src** pre-existing (carry-over 27) — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Enables** #28 · **Coordinate (hot files)** `youtube/analytics.py`, `youtube/quota.py`  
@@ -3326,7 +3327,7 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 
 ### Issue 260: YouTube Data API quota at scale — extension + fairness + caching
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Scale, Quota & Load · **Size** `L` · **Verify** `local`  
+**Status** `DONE` (2026-06-24) · **Wave** W0 · **Lane** Scale, Quota & Load · **Size** `L` · **Verify** `local`  
 **Src** `04 / C` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/04_security_scalability.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `tests/test_quota.py`, `worker/tasks.py`, `youtube/data_api.py`, `youtube/quota.py`  
 
@@ -3345,10 +3346,10 @@ Worker DB pooling, YouTube quota at scale, the deferred load test, refresh-storm
 - `tests/test_quota.py` _(existing quota test module)_ — Add per-creator sub-budget exhaustion (one creator's overuse doesn't block another), and ETag 304 → no consume cases
 
 **Acceptance criteria**
-- [ ] Projected units/day at the target creator count documented and within the (extended) quota in DECISIONS.md
-- [ ] Per-creator fairness sub-budget enforced in youtube/quota.py so beat refresh fan-out cannot starve interactive onboarding (test: one creator over-budget, another still served)
-- [ ] ETag/field-filter/batch caching reduces measured units/creator (304 responses spend no quota)
-- [ ] Quota-extension audit plan + target creator count recorded; carry-over Issue 27 closed
+- [x] Projected units/day at the target creator count documented and within the (extended) quota in DECISIONS.md
+- [x] Per-creator fairness sub-budget enforced in youtube/quota.py so beat refresh fan-out cannot starve interactive onboarding (test: one creator over-budget, another still served)
+- [x] ETag/field-filter/batch caching reduces measured units/creator (304 responses spend no quota)
+- [x] Quota-extension audit plan + target creator count recorded; carry-over Issue 27 closed
 
 **Tests**
 - tests/test_quota.py: per-creator sub-budget — creator A exhausts its sub-cap, A's consume returns -1 but B still succeeds

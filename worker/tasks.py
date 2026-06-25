@@ -52,7 +52,7 @@ from models import (
 from observability import RENDER_FAILURES_TOTAL, log_event
 from worker.celery_app import celery, run_async
 from youtube.errors import YouTubeAuthError
-from youtube.quota import QuotaExhaustedError, remaining
+from youtube.quota import QuotaExhaustedError, QuotaSubBudgetExhaustedError, remaining
 
 logger = logging.getLogger(__name__)
 
@@ -2584,6 +2584,18 @@ async def _refresh_youtube_analytics_async() -> None:
                     creator.last_analytics_refreshed_at = datetime.now(UTC)
                     await session.commit()
                     logger.info("Refreshed analytics for creator %s", creator.id)
+                except QuotaSubBudgetExhaustedError:
+                    # One creator hit its per-day refresh sub-budget — skip it but
+                    # keep serving the rest of the fan-out (Issue 260). This except
+                    # MUST precede the global QuotaExhaustedError arm because the
+                    # sub-budget error subclasses it; otherwise the `break` below
+                    # would swallow the per-creator case and stop the whole run.
+                    logger.warning(
+                        "Creator %s hit its daily refresh sub-budget — skipping, others continue",
+                        creator.id,
+                    )
+                    await session.rollback()
+                    continue
                 except QuotaExhaustedError:
                     logger.warning(
                         "YouTube quota exhausted during analytics refresh — stopping early. "
