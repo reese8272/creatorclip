@@ -2,8 +2,31 @@ import logging
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError, model_validator
+from pydantic import ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _normalize_async_pg_dsn(dsn: str | None) -> str | None:
+    """Upgrade a bare libpq Postgres DSN to the psycopg3 async driver scheme.
+
+    SQLAlchemy's async engine (db.py) needs the ``postgresql+psycopg://`` scheme to
+    select the psycopg3 async driver. Managed Postgres providers (e.g. Render's
+    ``fromDatabase`` connectionString) inject a plain ``postgresql://`` (or the
+    legacy ``postgres://``) DSN, which SQLAlchemy maps to the *sync* psycopg2
+    driver and then fails when create_async_engine() is called. Rewriting the
+    scheme here makes those injected DSNs work with zero call-site changes.
+    Already-qualified schemes (``postgresql+psycopg``, ``postgresql+asyncpg``, …)
+    and non-Postgres / empty values are passed through untouched. (Render beta)
+    """
+    if not dsn:
+        return dsn
+    if dsn.startswith("postgresql+") or dsn.startswith("postgres+"):
+        return dsn
+    if dsn.startswith("postgresql://"):
+        return "postgresql+psycopg://" + dsn[len("postgresql://") :]
+    if dsn.startswith("postgres://"):
+        return "postgresql+psycopg://" + dsn[len("postgres://") :]
+    return dsn
 
 
 class Settings(BaseSettings):
@@ -40,6 +63,18 @@ class Settings(BaseSettings):
     @property
     def logs_database_url(self) -> str:
         return self.LOGS_DATABASE_URL or self.DATABASE_URL
+
+    @field_validator(
+        "DATABASE_URL",
+        "DATABASE_MIGRATION_URL",
+        "LOGS_DATABASE_URL",
+        mode="after",
+    )
+    @classmethod
+    def _normalize_pg_dsn_scheme(cls, value: str | None) -> str | None:
+        # Render (and other managed Postgres) inject a bare postgresql:// DSN;
+        # the async engine requires postgresql+psycopg://. Normalize once at load.
+        return _normalize_async_pg_dsn(value)
 
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str

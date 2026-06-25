@@ -53,7 +53,7 @@ These are read by `config.py` (pydantic-settings). **Required** vars have no def
 
 | Var | Secret? | Required | What it does | Where to get it |
 |-----|:------:|:--------:|--------------|-----------------|
-| `DATABASE_URL` | 🔑 | ✅ | Postgres DSN (`postgresql+psycopg://…`). In production: connects as the **`creatorclip_app`** role (no `BYPASSRLS`). | Compose builds it from `POSTGRES_PASSWORD`; prod set by hand |
+| `DATABASE_URL` | 🔑 | ✅ | Postgres DSN (`postgresql+psycopg://…`). In production: connects as the **`creatorclip_app`** role (no `BYPASSRLS`). A bare `postgresql://`/`postgres://` DSN (e.g. Render's managed-Postgres `connectionString`) is auto-normalized to `postgresql+psycopg://` at load (`config._normalize_async_pg_dsn`). | Compose builds it from `POSTGRES_PASSWORD`; prod set by hand; on Render injected via `fromDatabase` |
 | `DATABASE_MIGRATION_URL` | 🔑 | – (falls back to `DATABASE_URL`) | Postgres DSN for the **`creatorclip_migrate`** role (`BYPASSRLS`). Used by Alembic and Celery worker tasks. Required in production; optional in dev. | See `docs/DEPLOYMENT.md` "RLS one-time setup" |
 | `REDIS_URL` | – | ✅ | Celery broker + cache DSN | `redis://redis:6379/0` (compose) / `redis://localhost:6379/0` (local) |
 | `POSTGRES_PASSWORD` | 🔑 | ✅ (compose) | Password the `postgres` container initializes with. **Not** read by `config.py` — used only by docker-compose. | You choose it; `openssl rand -hex 24` |

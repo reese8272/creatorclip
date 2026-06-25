@@ -1,0 +1,197 @@
+# CreatorClip — Render Blueprint (beta-only host)
+#
+# Spec: https://render.com/docs/blueprint-spec
+# This Blueprint provisions the full beta stack on Render:
+#   - creatorclip-web    (web service, FastAPI/uvicorn, serves the SPA + API)
+#   - creatorclip-worker (background worker, always-on Celery worker)
+#   - creatorclip-beat   (background worker, single-instance Celery beat / RedBeat)
+#   - creatorclip-keyvalue (managed Key Value / Redis — Celery broker + cache)
+#   - creatorclip-db     (managed Postgres 16 + pgvector)
+#
+# All resources pin region: oregon so private networking + low latency hold.
+# Beta-only: full-scale production remains the GKE/Helm path (Issue 275).
+# See docs/RENDER_DEPLOY.md for the provisioning + smoke-check runbook and
+# docs/SECRETS.md for where each secret originates.
+
+# ── Shared env (one group referenced by web + worker + beat) ──────────────────
+envVarGroups:
+  - name: creatorclip-beta-env
+    envVars:
+      # --- Non-secret config (plain values) ---
+      - key: ENV
+        value: production
+      - key: TRANSCRIPTION_BACKEND
+        value: deepgram
+      - key: STORAGE_BACKEND
+        value: r2
+      - key: NOTIFY_BACKEND
+        value: console
+      # LOG_DIR empty => log to stdout only (Render aggregates stdout/stderr).
+      # The container FS is ephemeral, so persistent file logs would be lost
+      # on every deploy/restart. Keep LOG_JSON=true (config default).
+      - key: LOG_DIR
+        value: ""
+      # The exact production origin. Set to the live Render web URL after the
+      # first deploy (https://creatorclip-web.onrender.com), then to the custom
+      # domain once attached. ALLOWED_ORIGINS must NOT contain a wildcard or
+      # localhost in production (config validators + CORS lock to this).
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+      - key: OAUTH_REDIRECT_URI
+        sync: false
+      # --- Secrets (sync:false => Render prompts once, never stored in git) ---
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      # Fernet key for OAuth-token encryption. Generate a FRESH key just for
+      # Render — do NOT reuse the VM's. (docs/RUNBOOKS.md)
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      # Session JWT signing secret. Render can mint one for you.
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      # Stripe — REQUIRED in production: config._require_prod_secrets() refuses
+      # to boot without STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET. Use test-mode
+      # keys for beta if billing is not live yet.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      # Cloudflare R2 (media storage). STORAGE_BACKEND=r2 above requires these.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      # /metrics scrape token. Without it, config disables /metrics in production
+      # (fail-safe). Set to enable authenticated Prometheus scraping.
+      - key: METRICS_TOKEN
+        sync: false
+      # Optional error tracking (Sentry / GlitchTip DSN). Leave unset to disable.
+      - key: SENTRY_DSN
+        sync: false
+
+services:
+  # ── Web service (FastAPI + SPA) ─────────────────────────────────────────────
+  - name: creatorclip-web
+    type: web
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    # Override the Dockerfile dev CMD (--reload on :8000). Render injects $PORT
+    # and routes inbound traffic to it; the app must bind 0.0.0.0:$PORT.
+    dockerCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2
+    healthCheckPath: /health
+    # Run migrations once, on the web service only, after build and before start.
+    # Worker + beat MUST NOT also run alembic (concurrent migration race).
+    preDeployCommand: alembic upgrade head
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: creatorclip-beta-env
+      - key: DATABASE_URL
+        fromDatabase:
+          name: creatorclip-db
+          property: connectionString
+      # Beta is single-role; the RLS migrate/app role split is post-beta, so the
+      # migration URL is the same DSN. config normalizes the scheme to +psycopg.
+      - key: DATABASE_MIGRATION_URL
+        fromDatabase:
+          name: creatorclip-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: creatorclip-keyvalue
+          type: keyvalue
+          property: connectionString
+
+  # ── Celery worker (always-on) ───────────────────────────────────────────────
+  - name: creatorclip-worker
+    type: worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerCommand: celery -A worker.celery_app worker --loglevel=info --concurrency=2
+    # No healthCheckPath / no preDeployCommand: migrations run on web only.
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: creatorclip-beta-env
+      - key: DATABASE_URL
+        fromDatabase:
+          name: creatorclip-db
+          property: connectionString
+      - key: DATABASE_MIGRATION_URL
+        fromDatabase:
+          name: creatorclip-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: creatorclip-keyvalue
+          type: keyvalue
+          property: connectionString
+
+  # ── Celery beat (single instance — RedBeat distributed lock) ────────────────
+  - name: creatorclip-beat
+    type: worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    # Dedicated beat, exactly one instance. RedBeat holds a Redis lock so a
+    # restart cannot double-schedule. Keep numInstances:1.
+    numInstances: 1
+    dockerCommand: celery -A worker.celery_app beat --loglevel=info -S redbeat.RedBeatScheduler
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: creatorclip-beta-env
+      - key: DATABASE_URL
+        fromDatabase:
+          name: creatorclip-db
+          property: connectionString
+      - key: DATABASE_MIGRATION_URL
+        fromDatabase:
+          name: creatorclip-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: creatorclip-keyvalue
+          type: keyvalue
+          property: connectionString
+
+  # ── Managed Key Value (Redis) — Celery broker + cache ───────────────────────
+  - name: creatorclip-keyvalue
+    type: keyvalue
+    plan: starter
+    region: oregon
+    # CRITICAL: a Celery broker must NOT evict keys — allkeys-lru would silently
+    # drop queued jobs. noeviction returns errors instead of losing tasks.
+    maxmemoryPolicy: noeviction
+    # Empty list = internal-only access from Render services (required field).
+    ipAllowList: []
+
+# ── Managed Postgres 16 (pgvector) ──────────────────────────────────────────
+databases:
+  - name: creatorclip-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    databaseName: creatorclip
+    user: creatorclip
+    region: oregon
+    diskSizeGB: 10
+    # Empty list = internal-only access from Render services.
+    ipAllowList: []
