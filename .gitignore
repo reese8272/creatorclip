@@ -74,3 +74,9 @@ React app visual review/
 Chip Animations.dc.html
 # Windows "downloaded-from-internet" marker files
 *:Zone.Identifier
+
+# Mutation testing (Issue 273) — mutmut's source sandbox + result cache; never committed
+mutants/
+.mutmut-cache
+mutmut-stats.json
+mutmut_results.txt

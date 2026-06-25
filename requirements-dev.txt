@@ -8,7 +8,7 @@ mypy==1.14.1            # static type checking (gate: mypy_errors)
 pytest-cov==6.0.0       # coverage measurement (gate: coverage_line_rate floor)
 bandit==1.8.0           # Python SAST (gate: bandit_high / bandit_medium)
 pip-audit==2.7.3        # dependency CVE scanning (gate: pip_audit_vulns)
-mutmut==3.2.0           # mutation testing — test-quality, cadence-only (slow)
+mutmut==3.6.0           # mutation testing — test-quality, cadence-only (slow). 3.6 reads [tool.mutmut] from pyproject (Issue 273); 3.2 ignored it.
 locust==2.32.4          # load testing scaffold — see tests/perf/
 pytest-randomly==4.1.0  # Issue 267: randomise test order every run to surface hidden order-coupling
 diff-cover==10.3.0      # Issue 269: diff/patch coverage gate (changed-line coverage floor)

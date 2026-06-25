@@ -32,6 +32,17 @@ def test_recency_weight_never_negative():
     assert recency_weight(1000.0) >= 0.0
 
 
+def test_recency_weight_negative_age_clamped_to_today():
+    """A negative age (clock skew / future timestamp) must clamp to 0 → weight 1.0.
+
+    Mutation guard (Issue 273): pins the `max(0.0, feedback_age_days)` clamp. Without
+    this assertion a mutant changing the clamp floor (e.g. max(1.0, ...) or dropping
+    the max) survives, silently down-weighting freshly-created feedback.
+    """
+    assert recency_weight(-5.0) == pytest.approx(1.0)
+    assert recency_weight(-5.0) == pytest.approx(recency_weight(0.0))
+
+
 def test_recency_weight_older_feedback_lower_weight():
     assert recency_weight(5.0) > recency_weight(25.0)
 
@@ -52,6 +63,16 @@ def test_feedback_age_days_recent():
 def test_feedback_age_days_naive_datetime():
     naive = datetime.now() - timedelta(days=5)
     assert feedback_age_days(naive) >= 0.0
+
+
+def test_feedback_age_days_future_timestamp_clamped_to_zero():
+    """A future created_at (clock skew) clamps to 0 days, never negative.
+
+    Mutation guard (Issue 273): pins the `max(0.0, ...)` floor in feedback_age_days.
+    A mutant raising the floor (max(1.0, ...)) would survive without this case.
+    """
+    future = datetime.now(UTC) + timedelta(days=3)
+    assert feedback_age_days(future) == pytest.approx(0.0)
 
 
 # ── sample_weight ─────────────────────────────────────────────────────────────

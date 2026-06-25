@@ -1,0 +1,59 @@
+name: Mutation Testing (cadence)
+
+# Issue 273 — REPORT-only, scheduled (NOT per-PR). Mutation testing proves the
+# unit tests ASSERT on the load-bearing core (clip_engine scoring comparisons,
+# recency-decay math, decrypt()). Slow + memory-sensitive, so weekly + manual only.
+# Deliberately NOT a pull_request/push trigger: it must never gate a merge and must
+# stay OUT of the required-status set so it can never red-wall an unrelated PR.
+on:
+  schedule:
+    - cron: "0 7 * * 1" # 07:00 UTC every Monday
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Mutation score — load-bearing core (>80% target)
+    runs-on: self-hosted
+    # The unit lane talks to a real Redis (slowapi limiter, no in-memory fallback),
+    # so mutmut's runner needs Redis up. Postgres is deliberately NOT provisioned:
+    # the runner pins `-m 'not integration'`, so an accidental DB hit fails loudly
+    # rather than silently mutating against a live database.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run mutmut (scoped to the load-bearing core)
+        # Non-gating: surface the score, never fail the run on survivors.
+        run: mutmut run || true
+      - name: Publish mutation score to the job summary
+        if: always()
+        run: |
+          mutmut results | tee mutmut_results.txt
+          {
+            echo "## Mutation score (Issue 273)"
+            echo '```'
+            mutmut results
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutmut-results
+          path: mutmut_results.txt
