@@ -88,21 +88,46 @@ def test_catalog_returns_only_catalog_rows_shape(client):
     assert item["clippable"] is False
 
 
-def test_catalog_query_isolation_filters_creator_and_origin():
-    """The base SELECT filters on BOTH creator_id (per-creator isolation) and
-    origin == catalog (catalog-only) — the AC's load-bearing requirement.
-    Asserted by compiling the statement, mirroring tests/test_list_caps.py."""
-    from sqlalchemy import select
+def test_catalog_query_isolation_filters_creator_and_origin(client):
+    """The endpoint's OWN query filters on BOTH creator_id (per-creator isolation)
+    and origin == catalog (catalog-only) — the AC's load-bearing requirement.
 
-    from models import Video
+    Asserted against the real code path: we capture the statements list_catalog
+    passes to ``session.execute`` and compile them with literal binds, so the
+    creator's id and the catalog enum value must literally appear in the SQL.
+    """
+    creator = _mock_creator()
+    captured: list = []
 
-    creator_id = uuid.uuid4()
-    stmt = select(Video).where(
-        Video.creator_id == creator_id, Video.origin == VideoOrigin.catalog
-    )
-    sql = str(stmt.compile(compile_kwargs={"literal_binds": False})).lower()
-    assert "creator_id" in sql
-    assert "origin" in sql
+    async def _capturing_session():
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        page_result = MagicMock()
+        page_result.scalars.return_value = _Scalars([])
+
+        async def _execute(stmt, *args, **kwargs):
+            captured.append(stmt)
+            # First execute() is the count, the second is the page query.
+            return count_result if len(captured) == 1 else page_result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        yield session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _capturing_session
+    try:
+        assert client.get("/videos/catalog").status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    # The page query (second execute) is the base SELECT with order/limit/offset.
+    page_sql = str(
+        captured[1].compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+    # UUIDs render hex-without-dashes under literal_binds; match on .hex.
+    assert creator.id.hex in page_sql  # per-creator isolation
+    assert VideoOrigin.catalog.value in page_sql  # catalog-only
 
 
 def test_catalog_limit_clamps_to_max(client):

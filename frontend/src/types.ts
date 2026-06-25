@@ -42,7 +42,9 @@ export type IngestStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface Video {
   id: string
-  youtube_video_id: string
+  // Nullable since Issue 317 made the column nullable (standalone uploads have
+  // no associated YouTube id); mirrors backend VideoListItemOut.youtube_video_id.
+  youtube_video_id: string | null
   title: string | null
   kind: string
   ingest_status: IngestStatus

@@ -24,6 +24,12 @@ function CatalogRow({ video }: { video: Video }) {
   const [label, setLabel] = useState<string | null>(null)
 
   async function clip() {
+    // /videos/link adopts a catalog row by its YouTube id (a required Form field),
+    // so a row without one (nullable since Issue 317) cannot be promoted here.
+    if (!video.youtube_video_id) {
+      setLabel('Unavailable')
+      return
+    }
     setBusy(true)
     setLabel('Adding…')
     const form = new FormData()
