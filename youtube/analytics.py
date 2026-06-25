@@ -229,9 +229,24 @@ async def fetch_demographics(
 # ── DB sync helpers ───────────────────────────────────────────────────────────
 
 
-async def sync_video_catalog(session: AsyncSession, creator: Creator, access_token: str) -> None:
-    """Upsert Video rows from the uploads playlist. Skips existing rows."""
-    playlist_items = await list_channel_videos(access_token, creator_id=creator.id)
+async def sync_video_catalog(
+    session: AsyncSession,
+    creator: Creator,
+    access_token: str,
+    *,
+    charge_sub_budget: bool = True,
+) -> None:
+    """Upsert Video rows from the uploads playlist. Skips existing rows.
+
+    ``charge_sub_budget`` controls whether the underlying YouTube reads are
+    charged to this creator's per-day refresh sub-budget. The Beat fan-out
+    (default ``True``) charges it so one large channel cannot drain the shared
+    interactive pool; the interactive onboarding sync passes ``False`` so a
+    first-time large-channel sync is bounded only by the global daily cap and
+    never blocked by its own sub-budget (Issue 260).
+    """
+    budget_creator_id = creator.id if charge_sub_budget else None
+    playlist_items = await list_channel_videos(access_token, creator_id=budget_creator_id)
     if not playlist_items:
         return
 
@@ -241,7 +256,7 @@ async def sync_video_catalog(session: AsyncSession, creator: Creator, access_tok
     duration_map: dict[str, dict] = {}
     for i in range(0, len(all_ids), 50):
         for m in await get_videos_metadata(
-            access_token, all_ids[i : i + 50], creator_id=creator.id
+            access_token, all_ids[i : i + 50], creator_id=budget_creator_id
         ):
             duration_map[m["video_id"]] = m
 
@@ -277,8 +292,15 @@ async def sync_video_analytics(
     video: Video,
     creator: Creator,
     access_token: str,
+    *,
+    charge_sub_budget: bool = True,
 ) -> None:
-    """Fetch and upsert VideoMetrics and RetentionCurve for one video."""
+    """Fetch and upsert VideoMetrics and RetentionCurve for one video.
+
+    ``charge_sub_budget`` (see ``sync_video_catalog``): the interactive
+    onboarding path passes ``False`` so a large first-sync is bounded only by
+    the global daily cap, not by its own per-creator sub-budget (Issue 260).
+    """
     if not creator.channel_id:
         logger.warning("Creator %s has no channel_id; skipping analytics", creator.id)
         return
@@ -290,8 +312,9 @@ async def sync_video_analytics(
     if not youtube_video_id:
         return
 
+    budget_creator_id = creator.id if charge_sub_budget else None
     metrics_data = await fetch_video_metrics(
-        access_token, youtube_video_id, creator.channel_id, creator_id=creator.id
+        access_token, youtube_video_id, creator.channel_id, creator_id=budget_creator_id
     )
     now = datetime.now(UTC)
     if metrics_data:
@@ -308,21 +331,37 @@ async def sync_video_analytics(
     duration_s = video.duration_s or 0.0
     if duration_s > 0:
         retention = await fetch_retention_curve(
-            access_token, youtube_video_id, creator.channel_id, duration_s, creator_id=creator.id
+            access_token,
+            youtube_video_id,
+            creator.channel_id,
+            duration_s,
+            creator_id=budget_creator_id,
         )
         await session.execute(delete(RetentionCurve).where(RetentionCurve.video_id == video.id))
         for point in retention:
             session.add(RetentionCurve(video_id=video.id, **point))
 
 
-async def sync_audience_data(session: AsyncSession, creator: Creator, access_token: str) -> None:
-    """Fetch and upsert AudienceActivity and Demographics for the channel."""
+async def sync_audience_data(
+    session: AsyncSession,
+    creator: Creator,
+    access_token: str,
+    *,
+    charge_sub_budget: bool = True,
+) -> None:
+    """Fetch and upsert AudienceActivity and Demographics for the channel.
+
+    ``charge_sub_budget`` (see ``sync_video_catalog``): the interactive
+    onboarding path passes ``False`` to stay off the per-creator sub-budget and
+    rely on the global daily cap only (Issue 260).
+    """
     if not creator.channel_id:
         return
 
+    budget_creator_id = creator.id if charge_sub_budget else None
     now = datetime.now(UTC)
     for row in await fetch_audience_activity(
-        access_token, creator.channel_id, creator_id=creator.id
+        access_token, creator.channel_id, creator_id=budget_creator_id
     ):
         existing = await session.get(
             AudienceActivity, (creator.id, row["day_of_week"], row["hour"])
@@ -342,7 +381,7 @@ async def sync_audience_data(session: AsyncSession, creator: Creator, access_tok
             )
 
     demo_data = await fetch_demographics(
-        access_token, creator.channel_id, creator_id=creator.id
+        access_token, creator.channel_id, creator_id=budget_creator_id
     )
     existing_demo = await session.get(Demographics, creator.id)
     if existing_demo:

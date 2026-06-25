@@ -134,6 +134,92 @@ async def test_sync_channel_catalog_no_token_is_a_clean_no_op():
     sync_catalog_mock.assert_not_awaited()
 
 
+# ── Issue 260: interactive sync stays OFF the per-creator refresh sub-budget ───
+#
+# The per-creator/day refresh sub-budget exists so the Beat fan-out cannot drain
+# the shared interactive pool. It must NOT be charged on the user-triggered
+# onboarding sync, or a large channel's first sync could exhaust its own
+# 300-unit/day allowance mid-onboarding. The load-bearing boundary is the
+# creator_id threaded into each YouTube fetch: creator.id charges the sub-budget,
+# None falls back to the global cap only (see youtube/quota.py::consume).
+
+
+@pytest.mark.asyncio
+async def test_sync_video_catalog_interactive_does_not_charge_sub_budget():
+    """charge_sub_budget=False ⇒ inner fetchers receive creator_id=None, so the
+    interactive first-sync is bounded only by the global daily cap (Issue 260)."""
+    from youtube import analytics
+
+    creator = MagicMock(id=uuid.uuid4())
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(
+        return_value=MagicMock(__iter__=lambda self: iter([]))
+    )
+
+    list_videos = AsyncMock(return_value=[{"video_id": "v1", "title": "t"}])
+    get_meta = AsyncMock(return_value=[])
+    with (
+        patch.object(analytics, "list_channel_videos", new=list_videos),
+        patch.object(analytics, "get_videos_metadata", new=get_meta),
+    ):
+        await analytics.sync_video_catalog(
+            fake_session, creator, "tok", charge_sub_budget=False
+        )
+
+    assert list_videos.await_args.kwargs["creator_id"] is None
+    assert get_meta.await_args.kwargs["creator_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_sync_video_catalog_beat_default_charges_sub_budget():
+    """Default (Beat fan-out) ⇒ inner fetchers receive creator.id, charging the
+    per-creator sub-budget so one channel cannot drain the shared pool."""
+    from youtube import analytics
+
+    creator = MagicMock(id=uuid.uuid4())
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(
+        return_value=MagicMock(__iter__=lambda self: iter([]))
+    )
+
+    list_videos = AsyncMock(return_value=[{"video_id": "v1", "title": "t"}])
+    get_meta = AsyncMock(return_value=[])
+    with (
+        patch.object(analytics, "list_channel_videos", new=list_videos),
+        patch.object(analytics, "get_videos_metadata", new=get_meta),
+    ):
+        await analytics.sync_video_catalog(fake_session, creator, "tok")
+
+    assert list_videos.await_args.kwargs["creator_id"] == creator.id
+    assert get_meta.await_args.kwargs["creator_id"] == creator.id
+
+
+@pytest.mark.asyncio
+async def test_sync_video_analytics_interactive_does_not_charge_sub_budget():
+    """charge_sub_budget=False on per-video metrics ⇒ creator_id=None to the
+    metrics + retention fetchers (global cap only). (Issue 260)"""
+    from youtube import analytics
+
+    creator = MagicMock(id=uuid.uuid4(), channel_id="UC123")
+    video = MagicMock(id=uuid.uuid4(), youtube_video_id="v1", duration_s=120.0)
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=None)
+    fake_session.execute = AsyncMock(return_value=MagicMock())
+
+    metrics = AsyncMock(return_value=None)
+    retention = AsyncMock(return_value=[])
+    with (
+        patch.object(analytics, "fetch_video_metrics", new=metrics),
+        patch.object(analytics, "fetch_retention_curve", new=retention),
+    ):
+        await analytics.sync_video_analytics(
+            fake_session, video, creator, "tok", charge_sub_budget=False
+        )
+
+    assert metrics.await_args.kwargs["creator_id"] is None
+    assert retention.await_args.kwargs["creator_id"] is None
+
+
 # ── /videos/link resolves kind from YouTube metadata ──────────────────────────
 
 

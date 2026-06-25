@@ -2401,8 +2401,16 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                     return
 
                 # Phase 1 — catalog upsert.
+                # This is the INTERACTIVE, user-triggered first sync. It must NOT
+                # be charged to the per-creator refresh sub-budget — that budget
+                # exists to stop the Beat fan-out from draining the shared pool, and
+                # charging it here would let a large channel exhaust its own
+                # 300-unit/day allowance mid-onboarding. charge_sub_budget=False keeps
+                # only the global daily cap in force on this path (Issue 260).
                 await _emit("step", label="fetch_uploads", stage="catalog_sync")
-                await sync_video_catalog(session, creator, access_token)
+                await sync_video_catalog(
+                    session, creator, access_token, charge_sub_budget=False
+                )
                 await session.commit()
 
                 # Phase 2 — fetch metrics for any video that doesn't have them yet.
@@ -2458,7 +2466,10 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 fetched = 0
                 for i, video in enumerate(unmeasured, 1):
                     try:
-                        await sync_video_analytics(session, video, creator, access_token)
+                        # Interactive path — global cap only, no sub-budget (Issue 260).
+                        await sync_video_analytics(
+                            session, video, creator, access_token, charge_sub_budget=False
+                        )
                         fetched += 1
                         await _emit(
                             "step",
