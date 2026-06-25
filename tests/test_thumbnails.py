@@ -181,6 +181,15 @@ class TestBuildConceptsRequest:
         assert len(system[1]["text"]) <= 3100
 
 
+@pytest.fixture(autouse=True)
+def _bypass_balance_gate():
+    """Issue 228 added a per-creator balance floor on the thumbnail routes. These
+    tests assert routing/DNA/cache behavior, not billing — neutralize the gate
+    (the quota suite lives in tests/test_creator_quota.py)."""
+    with patch("routers.thumbnails.check_positive_balance", AsyncMock(return_value=None)):
+        yield
+
+
 # ── API endpoint tests — POST thumbnail-concepts ──────────────────────────────
 
 

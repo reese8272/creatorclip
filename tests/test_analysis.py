@@ -44,6 +44,16 @@ def cleanup():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_balance_gate():
+    """Issue 228 added a per-creator balance floor on these routes. These tests
+    mock the session at the boundary and assert routing/validation behavior, not
+    billing — so neutralize the gate (a dedicated suite covers it in
+    tests/test_creator_quota.py)."""
+    with patch("routers.analysis.check_positive_balance", AsyncMock(return_value=None)):
+        yield
+
+
 # ── Unit: URL extraction ───────────────────────────────────────────────────────
 
 

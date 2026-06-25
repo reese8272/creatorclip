@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per
     # active creator/day. Tune from real token logs (DECISIONS 2026-06-17).
     CHAT_DAILY_MESSAGE_LIMIT: int = 25
+    # --- Per-creator pre-job quota (Issue 228) ---
+    # Daily ceiling on LLM-backed jobs (titles/thumbnails/insights/improvement/
+    # analysis/generate_clips) per creator. Stacked beneath the existing hourly
+    # burst limits as a slowapi "/day" cap. Bounds worst-case Anthropic/Deepgram
+    # spend per creator/day. Starting point — tune from real token logs.
+    LLM_DAILY_JOB_LIMIT: int = 50
+    # Daily ceiling on render jobs (render_clip/clean_clip/submit_cuts/
+    # ingest_clip) per creator. Bounds ffmpeg CPU + Cloudflare R2 egress per
+    # creator/day. Starting point — tune from real billing data.
+    RENDER_DAILY_JOB_LIMIT: int = 60
     # Max creator-scoped tool rounds per message before the model is forced to
     # answer in text. Caps agentic token blow-up (tools burn 3–30× a plain turn).
     CHAT_MAX_TOOL_ITERATIONS: int = 4

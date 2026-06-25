@@ -13,9 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.ledger import check_positive_balance
 from config import settings
 from db import get_session
-from limiter import creator_key, limiter
+from limiter import LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, CreatorDna, DnaStatus, Transcript, Video
 
 router = APIRouter(prefix="/creators", tags=["thumbnails"])
@@ -142,6 +143,7 @@ class ThumbnailConceptsQueuedOut(BaseModel):
     response_model=ThumbnailPatternsOut,
 )
 @limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def get_thumbnail_patterns(
     request: Request,
     creator: Creator = Depends(get_current_creator),
@@ -158,6 +160,8 @@ async def get_thumbnail_patterns(
     lock so concurrent first-hits (or a degraded cache) cannot fan out into
     multiple billed multimodal calls (SEV1 #3).
     """
+    await check_positive_balance(creator.id, session)
+
     from knowledge.thumbnails import (
         PATTERNS_CACHE_KEY_PREFIX,
         PATTERNS_CACHE_TTL,
@@ -230,6 +234,7 @@ async def get_thumbnail_patterns(
     response_model=ThumbnailConceptsQueuedOut,
 )
 @limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def start_thumbnail_concepts(
     request: Request,
     video_id: str,
@@ -242,6 +247,8 @@ async def start_thumbnail_concepts(
     and emits a terminal ``done`` event containing the concept objects.
     Results are ephemeral — no DB row is persisted (same pattern as Issue 128).
     """
+    await check_positive_balance(creator.id, session)
+
     try:
         vid_uuid = _uuid_mod.UUID(video_id)
     except ValueError as exc:

@@ -5,6 +5,54 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Issue 228: per-creator daily LLM/render quota via STACKED slowapi limits (not a bespoke Redis counter)
+
+**What was decided.**
+1. **Every LLM/render endpoint now carries a per-creator DAILY ceiling** stacked beneath its
+   existing short-window hourly burst limit. The daily cap is a second
+   `@limiter.limit(LLM_DAILY_LIMIT | RENDER_DAILY_LIMIT, key_func=creator_key)` decorator —
+   slowapi stores both limits in `limiter._route_limits[qualname]` and the most-restrictive
+   binds per request, so no custom store is needed. Routes covered: `clips.generate_clips`
+   (LLM), `clips.render_clip`/`clean_clip`/`submit_cuts`/`ingest_clip` (render),
+   `titles.start_title_suggestions`, `thumbnails.get_thumbnail_patterns`/`start_thumbnail_concepts`,
+   `insights.analyze_performer`, `improvement.start_improvement_brief`,
+   `analysis.start_video_analysis`/`start_hook_analysis`/`start_chapter_generation`.
+2. **The LLM routers that had only a rate limit now also call `check_positive_balance`** before
+   enqueueing billed work (titles, thumbnails, insights, improvement, analysis, plus
+   `generate_clips`). The quota is ADDITIVE to the existing balance FLOOR — the floor stops a
+   zero-balance creator (402); the daily ceiling stops a funded creator from burning unbounded
+   spend (429). The render routes already carried the floor; they were untouched there.
+3. **Two new settings** `LLM_DAILY_JOB_LIMIT=50` and `RENDER_DAILY_JOB_LIMIT=60` (mirroring the
+   `CHAT_DAILY_MESSAGE_LIMIT` FinOps-margin pattern). Starting points to tune from real token /
+   billing logs.
+4. **A structural AST guard** (`tests/test_security_baselines.py`) sweeps every LLM/render router
+   and fails if a write route lacks BOTH a `@limiter.limit` and a `check_positive_balance` /
+   `check_balance*` call — so a future gate-less billed route is caught at commit time.
+
+**Why.** Today's per-endpoint hourly limits bound burst *rate* but not daily *spend* (e.g.
+20/hour render = 480/day of unbounded ffmpeg + R2), and the LLM routers had no usage ceiling at
+all — one creator could burn unbounded Anthropic/Deepgram cost. This is a beta-critical
+cost-safety gap.
+
+**Industry standard checked.** Stacking multiple `@limiter.limit` decorators is the canonical
+slowapi pattern for layering a long-window cap on a short-window burst without a custom backend;
+`routers/chat.py` already uses exactly this (`f"{settings.CHAT_DAILY_MESSAGE_LIMIT}/day"`). We reuse
+it verbatim (KISS/DRY) rather than hand-rolling a Redis day-counter.
+
+**Accepted risk (best-effort cap).** The daily cap is Redis-backed. Under the Issue 312
+bounded-socket-timeout fallback a Redis stall degrades to fail-open, so the ceiling is momentarily
+unenforced if Redis is down — accepted and consistent with every other limit in `limiter.py`. The
+"scripted loop throttled / normal session unaffected" end-to-end assertion needs cross-request Redis
+and is the staging Verify gate; the unit lane covers introspection + AST + a fake-limiter 429.
+
+**Source/evidence.** slowapi 0.1.9 `_route_limits` list semantics (proven by
+`tests/test_rate_limiting.py::_limits_for`); `routers/chat.py:36,118` prior art;
+`billing/ledger.py:338 check_positive_balance`.
+
+**Date.** 2026-06-24
+
+---
+
 ## 2026-06-24 — Issue 317: "Link a video" retired as the primary entry point in favour of "Upload a video file"
 
 **What was decided.**

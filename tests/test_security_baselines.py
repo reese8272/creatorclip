@@ -292,3 +292,142 @@ def test_csrf_disabled_in_dev(monkeypatch):
         f"Issue 230: with CSRF_FETCH_METADATA_ENABLED=False, cross-site POST must "
         f"NOT be blocked. Got {resp.status_code}."
     )
+
+
+# ── Issue 228: every LLM/render route is quota + rate-limit gated ─────────────
+#
+# Cost-safety structural guard. A new handler in any LLM/render router that
+# enqueues billed work MUST carry BOTH a @limiter.limit decorator (the daily/
+# burst ceiling) AND a check_positive_balance / check_balance* call (the floor).
+# Walking the AST catches a gate-less route at commit time instead of in prod.
+
+_LLM_RENDER_ROUTERS = (
+    "clips",
+    "titles",
+    "thumbnails",
+    "insights",
+    "improvement",
+    "analysis",
+)
+
+# Read-only / cheap routes in these modules that intentionally carry no balance
+# floor (plain polls/reads at 60–120/minute) — excluded from the floor sweep but
+# still required to be rate-limited.
+_FLOOR_EXEMPT_HANDLERS = frozenset(
+    {
+        "get_clip_counts",
+        "list_clips",
+        "clean_preview",
+        "clean_confirm",
+        "clip_transcript",
+        "get_clip",
+        "download_clip",
+        "get_insights",
+        "get_analytics_summary",
+        "save_insight",
+        "list_insights",
+        "delete_insight",
+        "get_improvement_brief",
+        "get_video_analysis",
+        "get_hook_analysis",
+        "get_chapters",
+    }
+)
+
+
+def _decorator_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """Return dotted-attribute names for each decorator on a function node."""
+    names: list[str] = []
+    for dec in node.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        parts: list[str] = []
+        while isinstance(target, ast.Attribute):
+            parts.append(target.attr)
+            target = target.value
+        if isinstance(target, ast.Name):
+            parts.append(target.id)
+        names.append(".".join(reversed(parts)))
+    return names
+
+
+def _is_write_route(dec_names: list[str]) -> bool:
+    """True if the handler is a state-changing/enqueueing route (post/put)."""
+    return any(n.endswith(".post") or n.endswith(".put") for n in dec_names)
+
+
+def _has_limiter_decorator(dec_names: list[str]) -> bool:
+    return any(n.endswith("limiter.limit") or n == "limiter.limit" for n in dec_names)
+
+
+def _calls_balance_gate(node: ast.AST) -> bool:
+    """True if the function body calls check_positive_balance / check_balance*."""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            fn = sub.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+            if name == "check_positive_balance" or name.startswith("check_balance"):
+                return True
+    return False
+
+
+def _gated_handlers(module_src: str) -> list[tuple[str, bool, bool]]:
+    """For each write-route handler in a router module return
+    (name, has_limiter, has_balance_gate)."""
+    tree = ast.parse(module_src)
+    out: list[tuple[str, bool, bool]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        dec_names = _decorator_names(node)
+        # get_thumbnail_patterns is a GET that runs a billed multimodal LLM call,
+        # so it is in-scope for the gate despite not being a write route.
+        in_scope = _is_write_route(dec_names) or node.name == "get_thumbnail_patterns"
+        if not in_scope:
+            continue
+        out.append((node.name, _has_limiter_decorator(dec_names), _calls_balance_gate(node)))
+    return out
+
+
+def test_every_llm_render_route_is_quota_and_rate_gated() -> None:
+    """Issue 228: each LLM/render write route carries a @limiter.limit AND a
+    check_positive_balance/check_balance* call."""
+    routers_dir = _REPO_ROOT / "routers"
+    checked = 0
+    for mod in _LLM_RENDER_ROUTERS:
+        src = (routers_dir / f"{mod}.py").read_text()
+        for name, has_limiter, has_floor in _gated_handlers(src):
+            assert has_limiter, (
+                f"routers/{mod}.py::{name} is a billed route with no @limiter.limit "
+                f"rate/quota decorator (Issue 228)."
+            )
+            if name in _FLOOR_EXEMPT_HANDLERS:
+                continue
+            assert has_floor, (
+                f"routers/{mod}.py::{name} enqueues billed work but never calls "
+                f"check_positive_balance/check_balance* — add the balance floor "
+                f"(Issue 228)."
+            )
+            checked += 1
+    # Guard against the sweep silently matching nothing (e.g. a refactor that
+    # renamed decorators) — we must have asserted the floor on real handlers.
+    assert checked >= 10, f"expected >=10 gated handlers, swept {checked}"
+
+
+def test_ast_sweep_flags_a_gateless_route() -> None:
+    """A synthetic LLM route with a limiter but NO balance gate must fail the
+    floor assertion — proving the sweep is not a no-op."""
+    synthetic = (
+        "import limiter\n"
+        "from billing.ledger import check_positive_balance\n"
+        "router = object()\n"
+        "@router.post('/leak')\n"
+        "@limiter.limit('10/hour')\n"
+        "async def leaky_route(request, creator, session):\n"
+        "    return {'ok': True}\n"
+    )
+    handlers = _gated_handlers(synthetic)
+    assert handlers, "synthetic route should be detected as a write route"
+    name, has_limiter, has_floor = handlers[0]
+    assert name == "leaky_route"
+    assert has_limiter is True
+    assert has_floor is False, "gate-less route must be reported as ungated"

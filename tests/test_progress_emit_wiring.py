@@ -851,6 +851,9 @@ async def test_improvement_brief_router_returns_stream_url_on_happy_path(mocker)
     fake_task.id = "celery-brief-xyz"
     mocker.patch("worker.tasks.generate_improvement_brief.delay", return_value=fake_task)
     aset_owner_mock = mocker.patch("worker.progress.aset_owner", new_callable=AsyncMock)
+    # Issue 228: the route now pre-flights a balance floor; this test mocks the
+    # session and asserts the enqueue path, not billing — neutralize the gate.
+    mocker.patch("routers.improvement.check_positive_balance", AsyncMock(return_value=None))
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session_gen
@@ -920,6 +923,9 @@ async def test_improvement_brief_router_fails_open_on_redis_down(mocker):
         new_callable=AsyncMock,
         side_effect=redis.ConnectionError("Redis down"),
     )
+    # Issue 228: neutralize the new balance floor — this test asserts the
+    # Redis-down fail-open path, not billing.
+    mocker.patch("routers.improvement.check_positive_balance", AsyncMock(return_value=None))
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _fake_session_gen

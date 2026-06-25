@@ -23,10 +23,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.ledger import check_positive_balance
 from config import settings
 from db import get_session
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from limiter import creator_key, limiter
+from limiter import LLM_DAILY_LIMIT, creator_key, limiter
 from models import (
     Creator,
     CreatorDna,
@@ -495,6 +496,7 @@ def _build_analysis_prompt(
 
 @router.post("/analyze-performer", response_model=InsightOut)
 @limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def analyze_performer(
     request: Request,
     body: AnalyzePerformerIn,
@@ -506,6 +508,8 @@ async def analyze_performer(
     Uses Haiku 4.5 (fast, low cost). Cached: if an insight for this
     (video, dna_version) already exists, returns it without a new LLM call.
     """
+    await check_positive_balance(creator.id, session)
+
     try:
         video_id = uuid.UUID(body.video_id)
     except ValueError as exc:
