@@ -308,6 +308,18 @@ class Settings(BaseSettings):
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
     YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
+    # Per-creator/day sub-budget charged ONLY to the non-interactive Beat
+    # analytics-refresh fan-out (Issue 260). Bounds how many units a single
+    # creator's refresh can drain so the fan-out can never starve interactive
+    # onboarding under the global YOUTUBE_QUOTA_DAILY_UNITS outer cap. Refresh
+    # cost is ~10-60 units/creator (catalog list + per-video metadata + reports),
+    # so 300 leaves wide headroom while capping pathological fan-out.
+    YOUTUBE_QUOTA_PER_CREATOR_REFRESH_UNITS: int = 300
+    # TTL (seconds) for the Redis-backed ETag/body cache used for conditional
+    # YouTube Data API GETs (Issue 260). A cached 304 (If-None-Match match)
+    # returns the stored body and spends NO quota — the measurable quota-unit
+    # reduction lever. 6h balances freshness against Beat-refresh cadence.
+    YOUTUBE_ETAG_CACHE_TTL_S: int = 21600
     # Privacy status for clips published via the API (Issue 195). Forced "private"
     # until the YouTube API compliance audit clears — the creator flips each Short
     # to public manually. Flip to "public" only post-audit.

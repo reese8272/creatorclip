@@ -52,7 +52,7 @@ from models import (
 from observability import RENDER_FAILURES_TOTAL, log_event
 from worker.celery_app import celery, run_async
 from youtube.errors import YouTubeAuthError
-from youtube.quota import QuotaExhaustedError, remaining
+from youtube.quota import QuotaExhaustedError, QuotaSubBudgetExhaustedError, remaining
 
 logger = logging.getLogger(__name__)
 
@@ -2401,8 +2401,16 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                     return
 
                 # Phase 1 — catalog upsert.
+                # This is the INTERACTIVE, user-triggered first sync. It must NOT
+                # be charged to the per-creator refresh sub-budget — that budget
+                # exists to stop the Beat fan-out from draining the shared pool, and
+                # charging it here would let a large channel exhaust its own
+                # 300-unit/day allowance mid-onboarding. charge_sub_budget=False keeps
+                # only the global daily cap in force on this path (Issue 260).
                 await _emit("step", label="fetch_uploads", stage="catalog_sync")
-                await sync_video_catalog(session, creator, access_token)
+                await sync_video_catalog(
+                    session, creator, access_token, charge_sub_budget=False
+                )
                 await session.commit()
 
                 # Phase 2 — fetch metrics for any video that doesn't have them yet.
@@ -2458,7 +2466,10 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 fetched = 0
                 for i, video in enumerate(unmeasured, 1):
                     try:
-                        await sync_video_analytics(session, video, creator, access_token)
+                        # Interactive path — global cap only, no sub-budget (Issue 260).
+                        await sync_video_analytics(
+                            session, video, creator, access_token, charge_sub_budget=False
+                        )
                         fetched += 1
                         await _emit(
                             "step",
@@ -2584,6 +2595,18 @@ async def _refresh_youtube_analytics_async() -> None:
                     creator.last_analytics_refreshed_at = datetime.now(UTC)
                     await session.commit()
                     logger.info("Refreshed analytics for creator %s", creator.id)
+                except QuotaSubBudgetExhaustedError:
+                    # One creator hit its per-day refresh sub-budget — skip it but
+                    # keep serving the rest of the fan-out (Issue 260). This except
+                    # MUST precede the global QuotaExhaustedError arm because the
+                    # sub-budget error subclasses it; otherwise the `break` below
+                    # would swallow the per-creator case and stop the whole run.
+                    logger.warning(
+                        "Creator %s hit its daily refresh sub-budget — skipping, others continue",
+                        creator.id,
+                    )
+                    await session.rollback()
+                    continue
                 except QuotaExhaustedError:
                     logger.warning(
                         "YouTube quota exhausted during analytics refresh — stopping early. "

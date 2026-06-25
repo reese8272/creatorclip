@@ -4,6 +4,7 @@ Unit tests for youtube/quota.py.
 All Redis calls are patched — no live Redis required.
 """
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,8 @@ from youtube.quota import (
     COST_DATA_CAPTIONS,
     COST_DATA_VIDEOS,
     QuotaExhaustedError,
+    QuotaSubBudgetExhaustedError,
+    _creator_quota_key,
     _quota_key,
     consume,
     remaining,
@@ -50,9 +53,94 @@ async def test_consume_captions_cost_passed_to_lua():
     mock_redis = _make_redis_mock(eval_return=50)
     with patch("youtube.quota.get_redis_client", return_value=mock_redis):
         await consume(COST_DATA_CAPTIONS)
+    # eval positional layout: script, numkeys, global_key, creator_key, cost, ...
     call_args = mock_redis.eval.call_args
-    cost_arg = int(call_args.args[3])
+    cost_arg = int(call_args.args[4])
     assert cost_arg == COST_DATA_CAPTIONS
+
+
+# ── Issue 260: per-creator refresh sub-budget ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_consume_with_creator_id_passes_creator_key_and_limit():
+    """consume(cost, creator_id=...) threads BOTH keys + the per-creator limit."""
+    from config import settings
+
+    cid = uuid.uuid4()
+    mock_redis = _make_redis_mock(eval_return=10)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
+        await consume(COST_DATA_VIDEOS, creator_id=cid)
+
+    args = mock_redis.eval.call_args.args
+    # script, numkeys(2), global_key, creator_key, cost, global_limit, per_creator_limit, ttl
+    assert args[1] == 2
+    assert args[2] == _quota_key()
+    assert args[3] == _creator_quota_key(cid)
+    assert str(cid) in args[3]
+    assert int(args[6]) == settings.YOUTUBE_QUOTA_PER_CREATOR_REFRESH_UNITS
+
+
+@pytest.mark.asyncio
+async def test_consume_without_creator_id_uses_empty_creator_key():
+    """No creator_id ⇒ the creator arm is empty (global-only, backward compatible)."""
+    mock_redis = _make_redis_mock(eval_return=10)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
+        await consume(COST_DATA_VIDEOS)
+    args = mock_redis.eval.call_args.args
+    assert args[2] == _quota_key()
+    assert args[3] == ""  # empty creator key → Lua skips the sub-budget arm
+
+
+@pytest.mark.asyncio
+async def test_consume_sub_budget_exhausted_raises_subclass():
+    """Lua -2 ⇒ QuotaSubBudgetExhaustedError, which is catchable as QuotaExhaustedError."""
+    cid = uuid.uuid4()
+    mock_redis = _make_redis_mock(eval_return=-2)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
+        with pytest.raises(QuotaSubBudgetExhaustedError):
+            await consume(COST_DATA_VIDEOS, creator_id=cid)
+        # subclass relationship — existing `except QuotaExhaustedError` still catches it
+        with pytest.raises(QuotaExhaustedError):
+            await consume(COST_DATA_VIDEOS, creator_id=cid)
+
+
+@pytest.mark.asyncio
+async def test_consume_global_cap_is_outer_bound_regardless_of_creator():
+    """Lua -1 (global exhausted) raises QuotaExhaustedError even with a creator_id."""
+    mock_redis = _make_redis_mock(eval_return=-1)
+    with (
+        patch("youtube.quota.get_redis_client", return_value=mock_redis),
+        pytest.raises(QuotaExhaustedError),
+    ):
+        await consume(COST_DATA_VIDEOS, creator_id=uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_fairness_one_over_budget_creator_does_not_block_another():
+    """Creator A over sub-budget (-2) raises; creator B (positive) succeeds."""
+    cid_a, cid_b = uuid.uuid4(), uuid.uuid4()
+
+    async def fake_eval(_script, _numkeys, _gkey, ckey, *_rest):
+        return -2 if ckey == _creator_quota_key(cid_a) else 25
+
+    mock_redis = AsyncMock()
+    mock_redis.eval = AsyncMock(side_effect=fake_eval)
+
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
+        with pytest.raises(QuotaSubBudgetExhaustedError):
+            await consume(COST_DATA_VIDEOS, creator_id=cid_a)
+        # B is unaffected — over-budget A did not block it
+        await consume(COST_DATA_VIDEOS, creator_id=cid_b)
+
+
+@pytest.mark.asyncio
+async def test_consume_custom_sub_budget_overrides_default():
+    """An explicit sub_budget is passed through as the per-creator limit."""
+    mock_redis = _make_redis_mock(eval_return=10)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
+        await consume(COST_DATA_VIDEOS, creator_id=uuid.uuid4(), sub_budget=42)
+    assert int(mock_redis.eval.call_args.args[6]) == 42
 
 
 @pytest.mark.asyncio

@@ -46,7 +46,22 @@ the ToS would result in API access revocation, destroying the product.
    guidelines.
 
 4. **Quota management**: Do not exceed the project's daily quota. Implement exponential
-   backoff on 429/403 responses.
+   backoff on 429/403 responses (shipped — `youtube/errors.py` transient-403 set + the
+   `_get_json`/`_fetch_report` retry loops). The Data API quota is **per-Google-Cloud-project,
+   10,000 units/day, one project per client** — there is no cross-project sharding; raising
+   it at scale (beta ~1,000 → GA ~10,000 creators) requires the **YouTube API Services
+   compliance audit** (branding/attribution, privacy policy, user-data control), which is
+   triggered by the quota-extension request (Issue 260). Per-creator fairness sub-budgets
+   (Issue 260) ensure the non-interactive Beat refresh fan-out cannot drain the day's budget
+   and starve interactive onboarding.
+
+   **ETag/304 cache surface (Issue 260, new):** conditional Data API GETs cache the response
+   body + ETag in Redis under `creatorclip:yt_etag:{sha256(url+params+creator_id)}`, TTL-bounded
+   (`YOUTUBE_ETAG_CACHE_TTL_S`, default 6h), so a `304 Not Modified` is served without spending
+   quota. This is an **ephemeral, per-creator-keyed cache** that holds **no OAuth tokens and no
+   PII** — only public YouTube resource bodies (video metadata / playlist items) the creator is
+   already authorized to read. It auto-expires on TTL and is bound by the same 30-day
+   data-retention/refresh purge posture as the rest of the YouTube data class.
 
 5. **Source acquisition**: Downloading YouTube video bytes via third-party tools (`yt-dlp`)
    violates the ToS — **even for the creator's own content** (Issue 139 research, 2026-06-16).

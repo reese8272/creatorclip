@@ -9210,3 +9210,69 @@ The flag must NOT be flipped to True until:
 - Sieve eye-contact pricing ($0.10/min): https://www.sievedata.com/pricing (fetched 2026-06-23)
 
 **Date:** 2026-06-23
+
+---
+
+## Issue 260 — YouTube Data API quota at scale: per-creator fairness sub-budget + ETag/304 caching (backoff already shipped)
+
+**What was decided.**
+
+1. **Per-creator refresh fairness sub-budget.** `youtube/quota.consume()` gains
+   `creator_id` + `sub_budget` kwargs. The non-interactive Beat analytics-refresh
+   fan-out now charges each creator's calls to a per-creator/day Redis sub-counter
+   (`creatorclip:yt_quota:{PT-date}:creator:{id}`) capped at
+   `YOUTUBE_QUOTA_PER_CREATOR_REFRESH_UNITS=300`, layered over the global
+   `YOUTUBE_QUOTA_DAILY_UNITS=8000` outer bound. Interactive/onboarding calls pass
+   no `creator_id` → global-only (unchanged behaviour). The check-then-incr stays
+   **atomic across both counters in one Lua eval** (two KEYS) — splitting it into
+   two evals would reintroduce the TOCTOU race the Issue-76 atomic design exists to
+   prevent. A new `QuotaSubBudgetExhaustedError(QuotaExhaustedError)` lets the Beat
+   loop `continue` past one over-budget creator while the global cap still `break`s
+   the whole run (sub-budget except ordered FIRST since it subclasses the global one).
+
+2. **ETag (If-None-Match) + 304 caching = the real quota lever.** `_get_json` now
+   defers `consume(cost)` until AFTER the 304 decision: a conditional GET that
+   returns `304 Not Modified` returns the Redis-cached body and spends **zero**
+   quota, mirroring Google's conditional-request semantics. Cache key =
+   `sha256(url + sorted-params + creator_id)` (per-creator isolation: no cross-creator
+   body reuse), TTL `YOUTUBE_ETAG_CACHE_TTL_S=21600` (6h), holds no tokens/PII.
+   Applied to `list_channel_videos` (playlistItems) and `get_videos_metadata`
+   (videos.contentDetails) — the repeat-read refresh calls.
+
+3. **`fields=` is a BANDWIDTH optimization, NOT a quota reduction (honesty scope).**
+   YouTube Data API quota units are **fixed per method server-side**; `fields=`
+   partial-response only shrinks the payload (Google cites 50-80% smaller bodies),
+   it does not lower units. The only measurable units/creator reductions are (a) the
+   ETag 304 path (free) and (b) batching (`get_videos_metadata` already sends 50 ids
+   per call). The AC "reduces measured units/creator" is therefore scoped to 304 +
+   batching; `fields=` was added on the three read calls for bandwidth/parse cost only.
+
+4. **Backoff was ALREADY shipped — not re-implemented.** Exponential backoff with
+   jitter on `403 quotaExceeded / rateLimitExceeded / userRateLimitExceeded` (and 429
+   with `Retry-After`) already lives in `youtube/errors.py:63` (`TRANSIENT_403_REASONS`)
+   + the `_get_json` / `_fetch_report` retry loops. Issue 260 only adds fairness +
+   caching + `creator_id` threading on top.
+
+**Quota math / target creator count.** Onboarding ≈ 10-60 units/creator (catalog
+list + per-video metadata + Analytics reports). At the beta target of ~1,000 creators
+that is ~10k-60k units/day; GA at ~10,000 creators needs ~100k-600k units/day — both
+**require the YouTube quota-extension audit** (one project per client; no cross-project
+sharding allowed). The per-creator refresh cap (300) × expected concurrent refreshers
+must stay under the global 8000 so interactive onboarding always has headroom; getting
+this split wrong starves either refresh or onboarding — sized conservatively (300 ≈ 5×
+the typical refresh cost) and the global cap is the hard outer bound regardless.
+
+**Why.** Finding 04 §C4 flagged the single global pool as a 10k-scale BLOCKER: the
+Beat fan-out can drain the day's budget and starve interactive onboarding. Per-creator
+fairness + conditional-request caching is the standard mitigation; the quota extension
+is the compliance-gated operational step.
+
+**Carry-over Issue 27 is CLOSED/SUBSUMED** by this entry (its at-scale fairness/caching
+items were explicitly deferred to 260; backoff confirmation is satisfied by errors.py:63).
+
+**Source/evidence.** `docs/research/findings/04_security_scalability.md` §C4;
+Google quota & compliance audits: https://developers.google.com/youtube/v3/guides/quota_and_compliance_audits ;
+partial response (`fields=`): https://developers.google.com/youtube/v3/getting-started#partial ;
+HTTP conditional requests (304/If-None-Match): RFC 9110 §13.
+
+**Date:** 2026-06-24
