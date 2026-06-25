@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
@@ -55,6 +55,21 @@ class VideoListOut(BaseModel):
     state: EmptyState
     message: str | None = None
     next_action: NextActionOut | None = None
+
+
+class CatalogListOut(BaseModel):
+    """Paginated catalog (origin=catalog) videos for the in-app channel browser (Issue 310).
+
+    These are the creator's own synced channel videos (upserted by sync_video_catalog),
+    hidden from GET /videos. ``clippable`` is always false here — promoting one via POST
+    /videos/link adopts it (origin catalog -> link) and the source file must still be
+    uploaded (we never download from YouTube, per ToS).
+    """
+
+    videos: list[VideoListItemOut]  # reuse existing item model
+    total: int  # total catalog rows for this creator (drives pagination UI)
+    limit: int
+    offset: int
 
 
 class VideoLinkedOut(BaseModel):
@@ -162,6 +177,61 @@ async def list_videos(
         "message": message,
         "next_action": next_action,
     }
+
+
+_CATALOG_PAGE_DEFAULT = 50
+_CATALOG_PAGE_MAX = 100
+
+
+@router.get("/catalog", response_model=CatalogListOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def list_catalog(
+    request: Request,
+    limit: int = _CATALOG_PAGE_DEFAULT,
+    offset: int = 0,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """List this creator's synced channel videos (origin=catalog), paginated, newest first.
+
+    These are the DNA/analytics reference rows upserted by ``sync_video_catalog`` and
+    hidden from ``GET /videos``. The in-app channel browser (Issue 310) surfaces them so a
+    creator can promote ("Clip this") one of their own published videos without pasting a
+    URL. Promotion adopts the row via ``POST /videos/link`` (origin catalog -> link); the
+    source file must still be uploaded — we never download from YouTube (ToS).
+
+    Offset pagination (DECISIONS 2026-06-24): channels are bounded and append-mostly, so
+    offset matches the existing ``_LIST_LIMIT`` house pattern without cursor complexity.
+    """
+    limit = max(1, min(limit, _CATALOG_PAGE_MAX))
+    offset = max(0, offset)
+    # Per-creator isolation enforced on BOTH the count and the page query.
+    base = select(Video).where(
+        Video.creator_id == creator.id, Video.origin == VideoOrigin.catalog
+    )
+    total = (
+        await session.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+    result = await session.execute(
+        base.order_by(Video.created_at.desc()).limit(limit).offset(offset)
+    )
+    videos = list(result.scalars())
+    items = [
+        {
+            "id": str(v.id),
+            "youtube_video_id": v.youtube_video_id,
+            "title": v.title,
+            "kind": v.kind.value,
+            "ingest_status": v.ingest_status.value,
+            "duration_s": v.duration_s,
+            "created_at": v.created_at.isoformat(),
+            "origin": v.origin.value,
+            # Catalog rows have no stored source media -> always false.
+            "clippable": v.source_uri is not None,
+        }
+        for v in videos
+    ]
+    return {"videos": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/link", response_model=VideoLinkedOut)

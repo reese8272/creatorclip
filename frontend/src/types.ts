@@ -42,7 +42,9 @@ export type IngestStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface Video {
   id: string
-  youtube_video_id: string
+  // Nullable since Issue 317 made the column nullable (standalone uploads have
+  // no associated YouTube id); mirrors backend VideoListItemOut.youtube_video_id.
+  youtube_video_id: string | null
   title: string | null
   kind: string
   ingest_status: IngestStatus
@@ -56,6 +58,17 @@ export interface VideoListResponse {
   videos: Video[]
   state: 'empty_initial' | 'empty_filtered' | 'populated'
   message?: string | null
+}
+
+// GET /videos/catalog — paginated synced-channel rows for the ChannelBrowser
+// (Issue 310). These are origin=catalog videos hidden from GET /videos; each
+// carries clippable=false (no stored source). Promoting one via POST /videos/link
+// adopts it into the clip pipeline.
+export interface CatalogListResponse {
+  videos: Video[]
+  total: number
+  limit: number
+  offset: number
 }
 
 // Subset of ClipOut the dashboard reads to count rendered clips per video.
