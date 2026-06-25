@@ -555,6 +555,9 @@ def test_rendered_body_does_not_contain_subject_line() -> None:
                 "clip_count": 2,
                 "review_url": "https://autoclip.studio/app/review",
             }
+        elif template_name == "welcome":
+            # welcome is a lifecycle email — CAN-SPAM body carries an unsubscribe URL.
+            ctx = {"creator": creator, "unsubscribe_url": "https://autoclip.studio/unsubscribe/x"}
 
         _, text_body, _ = mailer._render(template_name, ctx)
 

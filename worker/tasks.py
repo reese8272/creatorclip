@@ -2259,6 +2259,17 @@ async def _run_lifecycle_scan_async() -> None:
     from config import settings
     from models import ClipFeedback, Creator, Video
 
+    # CAN-SPAM safety gate: with no physical postal address configured, no
+    # lifecycle email may legally be sent. Short-circuit the whole sweep so we do
+    # not enqueue tasks that would each individually skip. (send_notification
+    # enforces the same gate defensively for the welcome path.)
+    if not settings.MAILING_ADDRESS:
+        logger.info(
+            "run_lifecycle_scan: MAILING_ADDRESS unset — skipping lifecycle sweep "
+            "(CAN-SPAM safety gate)"
+        )
+        return
+
     now = datetime.now(UTC)
 
     async with db.AdminSessionLocal() as session:
@@ -2284,8 +2295,13 @@ async def _run_lifecycle_scan_async() -> None:
 
         # ── Re-engagement: has a video but no recent clip review ─────────────
         inactivity_cutoff = now - timedelta(days=settings.LIFECYCLE_INACTIVITY_DAYS)
-        # Stable period bucket so the dedupe_key recurs at most once per window.
-        period_bucket = f"reengage-{now.date().isoformat()}"
+        # Stable period bucket so the dedupe_key recurs at most once per the
+        # documented ~14-day cadence. A DAILY bucket would re-fire roughly every
+        # 48h (only blocked by the shared frequency cap); flooring the ordinal day
+        # to a LIFECYCLE_INACTIVITY_DAYS-wide window means a dormant creator gets
+        # at most one re-engagement email per inactivity window.
+        period_window = now.toordinal() // settings.LIFECYCLE_INACTIVITY_DAYS
+        period_bucket = f"reengage-{period_window}"
         recent_feedback = exists().where(
             (ClipFeedback.creator_id == Creator.id)
             & (ClipFeedback.created_at >= inactivity_cutoff)
@@ -4134,6 +4150,22 @@ async def _send_notification_async(
         # Lifecycle events (welcome, nudge, re-engagement) respect opt-out.
         _LIFECYCLE_EVENTS = frozenset({"welcome", "first_clip_nudge", "re_engagement"})
         is_lifecycle = event_type in _LIFECYCLE_EVENTS
+
+        # CAN-SPAM safety gate: lifecycle (commercial-leaning) email may not be
+        # sent without a physical postal address in the body. With MAILING_ADDRESS
+        # unset we SKIP the send entirely (no delivery row, no in-app fallback) and
+        # log the skip — so merging/deploying this branch cannot blast users until
+        # a real address is configured.
+        from config import settings as _settings
+
+        if is_lifecycle and not _settings.MAILING_ADDRESS:
+            logger.info(
+                "send_notification: MAILING_ADDRESS unset — skipping lifecycle email %s "
+                "for creator %s (CAN-SPAM safety gate)",
+                event_type,
+                creator_id,
+            )
+            return
 
         if is_lifecycle and not prefs.email_lifecycle:
             logger.info(

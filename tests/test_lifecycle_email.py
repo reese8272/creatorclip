@@ -78,6 +78,7 @@ class TestLifecycleScan:
         session = _scan_session([nudge_id], [reengage_id])
 
         with (
+            patch("config.settings.MAILING_ADDRESS", "CreatorClip, 1 Main St, USA"),
             patch("db.AdminSessionLocal", return_value=session),
             patch("worker.tasks.send_notification") as mock_send,
         ):
@@ -100,6 +101,7 @@ class TestLifecycleScan:
     async def test_empty_cohorts_enqueue_nothing(self) -> None:
         session = _scan_session([], [])
         with (
+            patch("config.settings.MAILING_ADDRESS", "CreatorClip, 1 Main St, USA"),
             patch("db.AdminSessionLocal", return_value=session),
             patch("worker.tasks.send_notification") as mock_send,
         ):
@@ -117,6 +119,7 @@ class TestLifecycleScan:
         session.scalar = AsyncMock(return_value=uuid.uuid4())
 
         with (
+            patch("config.settings.MAILING_ADDRESS", "CreatorClip, 1 Main St, USA"),
             patch("db.AdminSessionLocal", return_value=session),
             patch("worker.tasks.send_notification") as mock_send,
         ):
@@ -124,6 +127,45 @@ class TestLifecycleScan:
 
             await _run_lifecycle_scan_async()
         mock_send.delay.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scan_skipped_when_mailing_address_unset(self) -> None:
+        """CAN-SPAM safety gate: with MAILING_ADDRESS unset the whole sweep is a
+        no-op — no DB session opened, no email enqueued — so merging this branch
+        cannot blast existing users."""
+        session = _scan_session([_cid()], [_cid()])
+        with (
+            patch("config.settings.MAILING_ADDRESS", ""),
+            patch("db.AdminSessionLocal", return_value=session) as mock_session,
+            patch("worker.tasks.send_notification") as mock_send,
+        ):
+            from worker.tasks import _run_lifecycle_scan_async
+
+            await _run_lifecycle_scan_async()
+        mock_send.delay.assert_not_called()
+        mock_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reengagement_bucket_is_14_day_cadence(self) -> None:
+        """The re_engagement dedupe bucket floors the day to the inactivity window
+        so a dormant creator is re-engaged at most once per ~14 days, not daily."""
+        reengage_id = _cid()
+        session = _scan_session([], [reengage_id])
+        with (
+            patch("config.settings.MAILING_ADDRESS", "CreatorClip, 1 Main St, USA"),
+            patch("db.AdminSessionLocal", return_value=session),
+            patch("worker.tasks.send_notification") as mock_send,
+        ):
+            from worker.tasks import _run_lifecycle_scan_async
+
+            await _run_lifecycle_scan_async()
+        reengage_call = next(
+            c for c in mock_send.delay.call_args_list if c.args[1] == "re_engagement"
+        )
+        from config import settings
+
+        expected_window = datetime.now(UTC).toordinal() // settings.LIFECYCLE_INACTIVITY_DAYS
+        assert reengage_call.args[2] == f"reengage-{expected_window}"
 
 
 # ── Welcome trigger (OAuth is_new branch) ─────────────────────────────────────
@@ -170,7 +212,9 @@ class TestLifecycleCopyHonesty:
 
     def test_new_templates_exist_and_clean(self) -> None:
         templates_dir = Path(__file__).parent.parent / "notify" / "templates"
-        for event in ("first_clip_nudge", "re_engagement"):
+        # welcome is a lifecycle (commercial-leaning) email and must carry the
+        # CAN-SPAM unsubscribe affordance + a {{ mailing_address }} placeholder.
+        for event in ("welcome", "first_clip_nudge", "re_engagement"):
             txt = templates_dir / f"{event}.txt"
             html = templates_dir / f"{event}.html"
             assert txt.exists(), f"Missing {event}.txt"
@@ -179,5 +223,7 @@ class TestLifecycleCopyHonesty:
                 content = path.read_text(encoding="utf-8").lower()
                 for phrase in _VIRALITY_PHRASES:
                     assert phrase not in content, f"{path.name} contains {phrase!r}"
-                # CAN-SPAM: lifecycle templates carry an unsubscribe link.
+                # CAN-SPAM: lifecycle templates carry an unsubscribe link AND a
+                # physical mailing-address placeholder in the visible body.
                 assert "unsubscribe" in content, f"{path.name} missing unsubscribe link"
+                assert "mailing_address" in content, f"{path.name} missing mailing address"

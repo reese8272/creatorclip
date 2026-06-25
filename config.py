@@ -417,9 +417,12 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = ""
     # Issue 246 — physical postal address rendered in lifecycle (commercial-
     # leaning) emails. CAN-SPAM §A.5 requires a valid physical postal address in
-    # every commercial message. MUST be set to a real address before sending
-    # lifecycle email in production; the default is a non-deliverable placeholder.
-    MAILING_ADDRESS: str = "CreatorClip — [physical mailing address pending]"
+    # every commercial message. OPTIONAL with an EMPTY default so production boot
+    # never fails — but it doubles as the lifecycle/welcome SAFETY GATE: while
+    # MAILING_ADDRESS is unset, send_notification SKIPS every lifecycle email
+    # (welcome / nudge / re-engagement) and only logs the skip. Set this to a real
+    # address before enabling lifecycle email in production.
+    MAILING_ADDRESS: str = ""
 
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":
