@@ -153,6 +153,15 @@ def cleanup():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_balance_gate():
+    """Issue 228 added a per-creator balance floor on hook analysis. These tests
+    assert routing/validation, not billing — neutralize the gate (covered in
+    tests/test_creator_quota.py)."""
+    with patch("routers.analysis.check_positive_balance", AsyncMock(return_value=None)):
+        yield
+
+
 def test_hook_analysis_requires_auth() -> None:
     with TestClient(app) as client:
         resp = client.post(_HOOK_URL.format(video_id=str(uuid.uuid4())))

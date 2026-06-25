@@ -131,3 +131,39 @@ limiter = Limiter(
     storage_uri=settings.REDIS_URL,
     storage_options=_REDIS_STORAGE_OPTIONS,  # type: ignore[arg-type]  # Dict[str,float] vs Dict[str,str] stub
 )
+
+
+# Issue 228 — per-creator DAILY job ceiling (cost safety).
+#
+# The existing per-endpoint hourly @limiter.limit values (e.g. "10/hour",
+# "20/hour") are the SHORT-WINDOW burst guard. They bound how fast a creator can
+# fire jobs, but NOT how much they can spend over a full day — 20/hour render =
+# 480/day of unbounded ffmpeg + R2, and the LLM routers had no usage ceiling at
+# all. This module exposes two reusable daily-cap limit strings that routers
+# STACK as a second @limiter.limit decorator beneath the hourly one. slowapi
+# stores both in limiter._route_limits[qualname] and the MOST-RESTRICTIVE binds
+# per request, so the daily ceiling layers on cleanly without a bespoke Redis
+# counter — the same pattern routers/chat.py uses for CHAT_DAILY_MESSAGE_LIMIT.
+#
+# Best-effort caveat (Issue 312): the cap is Redis-backed. Under the bounded
+# socket-timeout fallback above, a Redis stall degrades to fail-open and the
+# daily ceiling is momentarily unenforced — accepted and consistent with every
+# other limit in this module (see docs/DECISIONS.md, Issue 228).
+
+
+def daily_limit(cap: int) -> str:
+    """Return a slowapi 'N/day' limit string for a per-creator daily ceiling.
+
+    ``cap`` is the maximum number of jobs a single creator may run per day;
+    slowapi parses the returned string via ``limits.parse``.
+    """
+    return f"{cap}/day"
+
+
+# LLM jobs (titles/thumbnails/insights/improvement/analysis/generate_clips) —
+# bounds worst-case Anthropic/Deepgram spend per creator/day.
+LLM_DAILY_LIMIT: str = daily_limit(settings.LLM_DAILY_JOB_LIMIT)
+
+# Render jobs (render_clip/clean_clip/submit_cuts/ingest_clip) — bounds ffmpeg
+# CPU + Cloudflare R2 egress per creator/day.
+RENDER_DAILY_LIMIT: str = daily_limit(settings.RENDER_DAILY_JOB_LIMIT)

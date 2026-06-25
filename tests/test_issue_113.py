@@ -76,6 +76,10 @@ def test_improvement_post_handles_concurrent_insert_race(client, mocker):
     original = app.dependency_overrides.copy()
     app.dependency_overrides[get_current_creator] = lambda: fake_creator
 
+    # Issue 228: the route now pre-flights a balance floor; this test mocks the
+    # session and asserts the race path, not billing — neutralize the gate.
+    mocker.patch("routers.improvement.check_positive_balance", AsyncMock(return_value=None))
+
     # Build a mock session that covers the full router call path:
     #   scalar() call 1 → has_metrics check: non-None (creator has data)
     #   execute().scalar() → SKIP LOCKED returns None (no row, no lock)

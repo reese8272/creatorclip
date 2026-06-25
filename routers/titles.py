@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.ledger import check_positive_balance
 from db import get_session
-from limiter import creator_key, limiter
+from limiter import LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, Transcript, Video
 
 router = APIRouter(prefix="/creators", tags=["titles"])
@@ -29,6 +30,7 @@ class TitleSuggestionsQueuedOut(BaseModel):
     response_model=TitleSuggestionsQueuedOut,
 )
 @limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def start_title_suggestions(
     request: Request,
     video_id: str,
@@ -42,6 +44,8 @@ async def start_title_suggestions(
     ``result`` event containing the top-5 TitleSuggestion objects before
     the final ``done`` event. Results are ephemeral — no DB row is persisted.
     """
+    await check_positive_balance(creator.id, session)
+
     import uuid as _uuid
 
     try:

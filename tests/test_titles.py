@@ -314,7 +314,10 @@ def test_titles_no_transcript_returns_400() -> None:
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _gen
 
-    with TestClient(app) as client:
+    with (
+        patch("routers.titles.check_positive_balance", AsyncMock(return_value=None)),
+        TestClient(app) as client,
+    ):
         resp = client.post(
             f"/creators/me/videos/{video.id}/titles",
             cookies={"session": "x"},
@@ -347,6 +350,7 @@ def test_titles_happy_path_queues_task() -> None:
             **{"delay.return_value": fake_task},
         ),
         patch("worker.progress.aset_owner", new=AsyncMock()),
+        patch("routers.titles.check_positive_balance", AsyncMock(return_value=None)),
         TestClient(app) as client,
     ):
         resp = client.post(

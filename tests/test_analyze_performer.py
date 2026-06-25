@@ -93,6 +93,15 @@ def cleanup():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_balance_gate():
+    """Issue 228 added a per-creator balance floor on analyze-performer. These
+    tests assert routing/LLM behavior, not billing — neutralize the gate (the
+    quota suite lives in tests/test_creator_quota.py)."""
+    with patch("routers.insights.check_positive_balance", AsyncMock(return_value=None)):
+        yield
+
+
 # ── Unit: prompt builder ───────────────────────────────────────────────────────
 
 

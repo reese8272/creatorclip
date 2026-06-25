@@ -19,7 +19,7 @@ from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from config import settings
 from db import get_session
-from limiter import creator_key, limiter
+from limiter import LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
 from models import (
     Clip,
     Creator,
@@ -207,6 +207,7 @@ async def get_clip_counts(
 
 @router.post("/{video_id}/clips/generate", response_model=ClipListOut)
 @limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def generate_clips(
     request: Request,
     video_id: uuid.UUID,
@@ -214,6 +215,8 @@ async def generate_clips(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Extract, score, and rank clip candidates for a fully-ingested video."""
+    await check_positive_balance(creator.id, session)
+
     video = await session.get(Video, video_id)
     if not video or video.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -357,6 +360,7 @@ async def list_clips(
 
 @clips_router.post("/{clip_id}/render", status_code=202, response_model=RenderQueuedOut)
 @limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
 async def render_clip(
     request: Request,
     clip_id: uuid.UUID,
@@ -551,6 +555,7 @@ async def clean_preview(
 
 @clips_router.post("/{clip_id}/clean", status_code=202, response_model=CleanQueuedOut)
 @limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
 async def clean_clip(
     request: Request,
     clip_id: uuid.UUID,
@@ -733,6 +738,7 @@ async def clip_transcript(
     response_model=CutsQueuedOut,
 )
 @limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
 async def submit_cuts(
     request: Request,
     clip_id: uuid.UUID,
@@ -841,6 +847,7 @@ def _obs_clip_youtube_id() -> str:
 
 @clips_router.post("/ingest", status_code=202, response_model=ClipIngestedOut)
 @limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
 async def ingest_clip(
     request: Request,
     file: UploadFile = File(...),
