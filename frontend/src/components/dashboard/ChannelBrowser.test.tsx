@@ -31,7 +31,7 @@ function catalogPayload(): CatalogListResponse {
 // 200 for the POST /videos/link adopt call. Returns the spy so tests can assert
 // the link call carried FormData with youtube_video_id.
 function stubFetch() {
-  const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+  const fetchSpy = vi.fn(async (url: string, _init?: RequestInit) => {
     if (typeof url === 'string' && url.startsWith('/videos/catalog')) {
       return {
         ok: true,
