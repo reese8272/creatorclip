@@ -381,3 +381,29 @@ export interface BrandKit {
   denoise: boolean
   aspect: string | null
 }
+
+// ── Notifications (Issue 245) ────────────────────────────────────────────────
+
+// One durable in-app notification row (GET /api/notifications).
+export interface NotificationItem {
+  id: string
+  kind: string
+  title: string
+  body: string
+  link_url: string | null
+  seen_at: string | null
+  created_at: string
+}
+
+export interface NotificationList {
+  items: NotificationItem[]
+  unread_count: number
+}
+
+// Consent preferences (GET/PATCH /api/notifications/preferences).
+export interface NotificationPreferences {
+  email_transactional: boolean
+  email_lifecycle: boolean
+  inapp_enabled: boolean
+  push_enabled: boolean
+}

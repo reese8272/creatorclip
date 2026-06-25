@@ -78,4 +78,22 @@ COPY: dict[str, dict[str, str]] = {
             "Connect your first video to get started."
         ),
     },
+    "first_clip_nudge": {
+        "subject": "Ready to make your first clip?",
+        "body": (
+            "You haven't created a clip yet. Upload a video and AutoClip will surface "
+            "candidate clips scored against your own channel's style and audience data. "
+            "It predicts fit with your content — it does not promise virality. You can "
+            "opt out of these reminders any time from Settings."
+        ),
+    },
+    "re_engagement": {
+        "subject": "Your channel data is waiting",
+        "body": (
+            "It's been a while since you reviewed a clip. New clips are scored against "
+            "your evolving channel DNA, so the more you review, the better the fit gets. "
+            "AutoClip estimates fit with your content — it does not promise virality. "
+            "You can opt out of these emails any time from Settings."
+        ),
+    },
 }

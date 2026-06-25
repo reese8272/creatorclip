@@ -14,6 +14,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { Link } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   subscribe,
   getSnapshot,
@@ -23,6 +24,8 @@ import {
 } from '@/stores/activeTasks'
 import { subscribeToTaskStream } from '@/lib/taskStream'
 import { sendActivity } from '@/lib/activity'
+import { api } from '@/lib/api'
+import type { NotificationItem, NotificationList } from '@/types'
 
 // ── Motion guard ──────────────────────────────────────────────────────────────
 
@@ -142,18 +145,72 @@ function TaskRow({ entry, reducedMotion }: TaskRowProps) {
   )
 }
 
+// ── Notification row ───────────────────────────────────────────────────────────
+// Durable in-app notifications (Issue 245) — distinct from the transient task
+// rows above. Each is dismissible (POST /api/notifications/{id}/dismiss).
+
+function NotificationRow({
+  item,
+  onDismiss,
+}: {
+  item: NotificationItem
+  onDismiss: (id: string) => void
+}) {
+  return (
+    <div className="flex items-start justify-between gap-2 rounded-md bg-surface-raised px-3 py-2 text-sm">
+      <span className="min-w-0">
+        <span className="block truncate font-medium text-fg">{item.title}</span>
+        <span className="block text-xs text-subtle">{item.body}</span>
+        {item.link_url && (
+          <Link
+            to={item.link_url}
+            className="mt-0.5 inline-block text-xs text-accent underline-offset-2 hover:underline"
+          >
+            view
+          </Link>
+        )}
+      </span>
+      <button
+        type="button"
+        aria-label="Dismiss notification"
+        onClick={() => onDismiss(item.id)}
+        className="shrink-0 text-xs text-muted hover:text-fg"
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
 // ── Panel ─────────────────────────────────────────────────────────────────────
 
 export function ActivityPanel() {
   const tasks = useSyncExternalStore(subscribe, getSnapshot)
   const reducedMotion = prefersReducedMotion()
+  const queryClient = useQueryClient()
 
   // Drive SSE subscriptions from the store state.
   useTaskSubscriptions(tasks)
 
-  if (tasks.size === 0) return null
+  // Durable in-app notifications. Fail-open: a fetch error (e.g. logged-out)
+  // leaves notifications empty so the panel still works for live tasks.
+  const notificationsQuery = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => api<NotificationList>('/api/notifications'),
+    retry: false,
+  })
+  const dismiss = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/notifications/${id}/dismiss`, { method: 'POST' }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    },
+  })
 
+  const notifications = notificationsQuery.data?.items ?? []
   const entries = Array.from(tasks.values())
+
+  if (tasks.size === 0 && notifications.length === 0) return null
 
   return (
     <div
@@ -173,12 +230,26 @@ export function ActivityPanel() {
         .filter(Boolean)
         .join(' ')}
     >
-      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-subtle select-none">
-        In progress
-      </p>
-      {entries.map((entry) => (
-        <TaskRow key={entry.taskId} entry={entry} reducedMotion={reducedMotion} />
-      ))}
+      {entries.length > 0 && (
+        <>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-subtle select-none">
+            In progress
+          </p>
+          {entries.map((entry) => (
+            <TaskRow key={entry.taskId} entry={entry} reducedMotion={reducedMotion} />
+          ))}
+        </>
+      )}
+      {notifications.length > 0 && (
+        <>
+          <p className="mb-1 mt-1 text-xs font-semibold uppercase tracking-wide text-subtle select-none">
+            Notifications
+          </p>
+          {notifications.map((item) => (
+            <NotificationRow key={item.id} item={item} onDismiss={(id) => dismiss.mutate(id)} />
+          ))}
+        </>
+      )}
     </div>
   )
 }

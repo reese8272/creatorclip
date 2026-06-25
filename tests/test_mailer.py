@@ -195,6 +195,64 @@ def test_resend_backend_params_include_from_to_subject() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue 245 — RFC 8058 one-click unsubscribe headers on lifecycle sends
+# ---------------------------------------------------------------------------
+
+
+def _resend_send_with_headers(headers: dict | None) -> MagicMock:
+    """Run a resend-backend send() with the given headers and return the mock
+    so the params dict can be asserted."""
+    from notify import mailer
+
+    fake_resend = MagicMock()
+    fake_resend.api_key = None
+    fake_resend.Emails = MagicMock()
+    fake_resend.Emails.send = MagicMock(return_value=MagicMock(id="resend-msg-lifecycle"))
+
+    with (
+        patch.object(mailer, "_resend_initialised", False),
+        patch.object(
+            mailer,
+            "settings",
+            _fake_settings("resend", resend_api_key="re_test", email_from="noreply@autoclip.studio"),
+        ),
+        patch.dict(sys.modules, {"resend": fake_resend}),
+    ):
+        mailer.send(
+            to="lifecycle@example.com",
+            template="first_clip_nudge",
+            context={
+                "creator": types.SimpleNamespace(channel_title="Nudge Channel"),
+                "unsubscribe_url": "https://autoclip.studio/unsubscribe/abc",
+            },
+            idempotency_key="lifecycle-headers-key",
+            headers=headers,
+        )
+    return fake_resend
+
+
+def test_lifecycle_send_forwards_unsubscribe_headers() -> None:
+    """A lifecycle send() forwards the RFC 8058 one-click unsubscribe pair into
+    the resend SendParams 'headers' dict."""
+    headers = {
+        "List-Unsubscribe": "<https://autoclip.studio/unsubscribe/abc>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
+    fake_resend = _resend_send_with_headers(headers)
+    params = fake_resend.Emails.send.call_args.args[0]
+    assert params["headers"]["List-Unsubscribe"] == "<https://autoclip.studio/unsubscribe/abc>"
+    assert params["headers"]["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+
+
+def test_transactional_send_omits_unsubscribe_headers() -> None:
+    """A transactional send() (headers=None) must NOT carry a 'headers' key in
+    the resend SendParams."""
+    fake_resend = _resend_send_with_headers(None)
+    params = fake_resend.Emails.send.call_args.args[0]
+    assert "headers" not in params
+
+
+# ---------------------------------------------------------------------------
 # Backend dispatch — console vs resend selected by settings
 # ---------------------------------------------------------------------------
 

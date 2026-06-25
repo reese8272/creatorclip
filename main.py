@@ -44,6 +44,7 @@ from routers import export as export_router
 from routers import improvement as improvement_router
 from routers import insights as insights_router
 from routers import logs as logs_router
+from routers import notifications as notifications_router
 from routers import publications as publications_router
 from routers import review as review_router
 from routers import tasks as tasks_router
@@ -148,6 +149,8 @@ app.include_router(chat_router.router)
 app.include_router(thumbnails_router.router)
 app.include_router(titles_router.router)
 app.include_router(tasks_router.router)
+app.include_router(notifications_router.router)
+app.include_router(notifications_router.unsubscribe_router)
 
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")

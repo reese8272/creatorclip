@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react'
 import { render, screen, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ActivityPanel } from './ActivityPanel'
 import { upsert, _reset } from '@/stores/activeTasks'
@@ -21,20 +23,35 @@ vi.mock('@/lib/activity', () => ({
   sendActivity: vi.fn(),
 }))
 
-function renderPanel() {
-  return render(
-    <MemoryRouter>
-      <ActivityPanel />
-    </MemoryRouter>,
+// A fresh QueryClient per render keeps the durable-notifications query (Issue
+// 245) isolated; fetch is stubbed to a never-resolving call so the query stays
+// pending and the notifications list is empty for these task-focused tests.
+function withProviders(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{ui}</MemoryRouter>
+    </QueryClientProvider>
   )
+}
+
+function renderPanel() {
+  return render(withProviders(<ActivityPanel />))
 }
 
 beforeEach(() => {
   vi.useFakeTimers()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => new Promise(() => {})),
+  )
   _reset()
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   _reset()
   vi.clearAllMocks()
 })
@@ -78,29 +95,17 @@ describe('ActivityPanel', () => {
   })
 
   it('disappears after a terminal done entry auto-removes from the store', () => {
-    const { rerender } = render(
-      <MemoryRouter>
-        <ActivityPanel />
-      </MemoryRouter>,
-    )
+    const { rerender } = render(withProviders(<ActivityPanel />))
     act(() => {
       upsert('t1', { videoId: 'v1', phase: 'done' })
     })
-    rerender(
-      <MemoryRouter>
-        <ActivityPanel />
-      </MemoryRouter>,
-    )
+    rerender(withProviders(<ActivityPanel />))
     expect(screen.getByRole('region', { name: /active tasks/i })).toBeInTheDocument()
 
     act(() => {
       vi.runAllTimers()
     })
-    rerender(
-      <MemoryRouter>
-        <ActivityPanel />
-      </MemoryRouter>,
-    )
+    rerender(withProviders(<ActivityPanel />))
     expect(screen.queryByRole('region', { name: /active tasks/i })).not.toBeInTheDocument()
   })
 

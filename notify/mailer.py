@@ -49,6 +49,9 @@ _jinja_env = Environment(
 # (e.g. {{ app_url }}/pricing) without callers remembering to pass it explicitly.
 # Pulled from settings.APP_BASE_URL; defaults to http://localhost:8000 in dev.
 _jinja_env.globals["app_url"] = settings.APP_BASE_URL
+# CAN-SPAM physical postal address for lifecycle (commercial-leaning) email
+# footers (Issue 246). Pulled from settings.MAILING_ADDRESS.
+_jinja_env.globals["mailing_address"] = settings.MAILING_ADDRESS
 
 # ── Resend SDK singleton (lazy-imported only when needed) ────────────────────
 # import deferred to avoid requiring the 'resend' package in environments that
@@ -152,6 +155,7 @@ def send(
     template: str,
     context: dict,
     idempotency_key: str,
+    headers: dict[str, str] | None = None,
 ) -> None:
     """Render and send a transactional email.
 
@@ -163,6 +167,11 @@ def send(
         idempotency_key: Provider-level dedup key (≤256 alphanumeric/._-).
                          The Resend backend forwards this to the API's 24-hour
                          dedup window; the console backend logs it for tracing.
+        headers: Extra RFC 5322 headers to attach (Issue 245). Lifecycle sends
+                 pass the RFC 8058 one-click unsubscribe pair here
+                 (``List-Unsubscribe`` + ``List-Unsubscribe-Post``); transactional
+                 sends pass ``None`` so the headers are omitted entirely. The
+                 console backend ignores them (logs only that they are present).
 
     Returns:
         None. Raises on template-render errors, invalid keys, or Resend
@@ -172,7 +181,12 @@ def send(
     subject, text_body, html_body = _render(template, context)
 
     if settings.NOTIFY_BACKEND == "console":
-        _send_console(template=template, text_body=text_body, idempotency_key=idempotency_key)
+        _send_console(
+            template=template,
+            text_body=text_body,
+            idempotency_key=idempotency_key,
+            headers=headers,
+        )
     elif settings.NOTIFY_BACKEND == "resend":
         _send_resend(
             to=to,
@@ -180,6 +194,7 @@ def send(
             text_body=text_body,
             html_body=html_body,
             idempotency_key=idempotency_key,
+            headers=headers,
         )
     else:
         raise ValueError(
@@ -193,13 +208,16 @@ def _send_console(
     template: str,
     text_body: str,
     idempotency_key: str,
+    headers: dict[str, str] | None = None,
 ) -> None:
     """Log the email to stdout (dev / CI sink). Never calls any external service."""
     # Recipient email intentionally omitted to avoid PII in log sinks.
     logger.info(
-        "notify.mailer [console] template=%s idempotency_key=%s body_preview=%.120r",
+        "notify.mailer [console] template=%s idempotency_key=%s has_unsubscribe=%s "
+        "body_preview=%.120r",
         template,
         idempotency_key,
+        bool(headers and "List-Unsubscribe" in headers),
         text_body,
     )
 
@@ -211,6 +229,7 @@ def _send_resend(
     text_body: str,
     html_body: str,
     idempotency_key: str,
+    headers: dict[str, str] | None = None,
 ) -> None:
     """Send via the Resend SDK with provider-level idempotency.
 
@@ -218,20 +237,25 @@ def _send_resend(
     options={'idempotency_key': key} threads the key to the 24-hour
     dedup window on the provider side. This is the documented API shape
     from https://resend.com/docs/dashboard/emails/idempotency-keys .
+
+    ``headers`` (Issue 245) is forwarded into the Resend SendParams "headers"
+    dict — Resend's documented mechanism for custom RFC 5322 headers — so a
+    lifecycle send carries the RFC 8058 one-click unsubscribe pair. Omitted
+    entirely for transactional sends (headers=None).
     """
     _init_resend()
     import resend  # already guaranteed importable by _init_resend
 
-    params = cast(
-        resend.Emails.SendParams,
-        {
-            "from": settings.EMAIL_FROM,
-            "to": [to],
-            "subject": subject,
-            "text": text_body,
-            "html": html_body,
-        },
-    )
+    params_dict: dict = {
+        "from": settings.EMAIL_FROM,
+        "to": [to],
+        "subject": subject,
+        "text": text_body,
+        "html": html_body,
+    }
+    if headers:
+        params_dict["headers"] = headers
+    params = cast(resend.Emails.SendParams, params_dict)
     options = cast(resend.Emails.SendOptions, {"idempotency_key": idempotency_key})
     response = resend.Emails.send(params, options)
     # Recipient email omitted from log to avoid PII in log sinks.

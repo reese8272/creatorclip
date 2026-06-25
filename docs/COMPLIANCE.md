@@ -140,6 +140,42 @@ the blast radius of a token compromise.
 
 ---
 
+## Communications consent & unsubscribe (Issues 245 / 246)
+
+CreatorClip sends two classes of email, governed differently:
+
+**Transactional (always-on).** clips_ready, dna_built, refund_issued, reauth_required,
+trial_ending, balance_low, catalog_sync_done. These are required for the operation of the
+account (GDPR Art. 6(1)(b) contract necessity; CAN-SPAM treats true transactional mail as
+exempt from the unsubscribe requirement). `notification_preferences.email_transactional` is
+locked to `True`: the Settings UI shows the toggle disabled-on, and the API request model
+(`PreferencesPatch`) omits the field so it can never be disabled server-side. No
+List-Unsubscribe header is attached to transactional sends.
+
+**Lifecycle (commercial-leaning, opt-out).** welcome, first_clip_nudge, re_engagement. Sent
+under GDPR **legitimate interest** with a clear opt-out, and treated as commercial mail under
+CAN-SPAM:
+
+- **One-click unsubscribe (RFC 8058).** Every lifecycle send carries
+  `List-Unsubscribe: <{APP_BASE_URL}/unsubscribe/{token}>` and
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. The link resolves to an unauthenticated
+  `GET /unsubscribe/{token}` that flips `email_lifecycle=False`. The token is the unguessable,
+  unique UUID4 `notification_preferences.unsubscribe_token`.
+- **Honored ≤10 business days** (CAN-SPAM): the opt-out takes effect immediately on click — the
+  `send_notification` task gates every lifecycle send on `email_lifecycle`.
+- **Link live ≥30 days** (CAN-SPAM): the token does not expire or rotate on unsubscribe.
+- **Physical postal address** (CAN-SPAM §A.5): every lifecycle template renders
+  `MAILING_ADDRESS`. This MUST be set to a real, deliverable address before lifecycle email is
+  enabled in production — the default is a non-deliverable placeholder.
+- **Frequency cap.** A shared 48h budget (`LIFECYCLE_FREQUENCY_CAP_HOURS`) across all lifecycle
+  events prevents a creator receiving more than one lifecycle email per window.
+- **No virality promise.** All copy + templates pass the honesty structural check.
+
+The unsubscribe endpoint never reveals which email/creator a token maps to (a missing token
+returns a generic 404), so it cannot be used as an enumeration oracle.
+
+---
+
 ## Billing & Refund Policy
 
 CreatorClip's billing is pay-per-use: minutes are deducted from the creator's
