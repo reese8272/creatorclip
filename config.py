@@ -401,6 +401,20 @@ class Settings(BaseSettings):
     # Threshold below which the dashboard nav chip lights up amber + pre-action
     # warnings render before Generate / Queue. Tuneable without a deploy.
     LOW_BALANCE_THRESHOLD_MINUTES: int = 10
+    # ── Lifecycle email sequence (Issue 246) ─────────────────────────────────
+    # First-clip nudge: fires to a creator who signed up at least this many days
+    # ago but has never uploaded a video (no Video rows). 3 days is the common
+    # SaaS onboarding-nudge window — long enough to not feel pushy, short enough
+    # to recover activation before the cohort goes cold.
+    LIFECYCLE_NUDGE_AFTER_DAYS: int = 3
+    # Re-engagement: fires to a previously-active creator (has ≥1 Video) who has
+    # reviewed no clips (no ClipFeedback) within this many days. 14 days is the
+    # standard "dormant" cutoff for win-back email in creator SaaS.
+    LIFECYCLE_INACTIVITY_DAYS: int = 14
+    # Shared frequency cap across ALL lifecycle events (welcome / nudge /
+    # re-engagement): at most one lifecycle email per creator per this window.
+    # 48h prevents a welcome + nudge landing on the same day.
+    LIFECYCLE_FREQUENCY_CAP_HOURS: int = 48
     # Per-request HTTP timeout for the Stripe SDK. Default SDK timeout is ~80s;
     # one stuck call would pin an asyncio.to_thread executor slot for that long.
     # Scale-checklist E (backpressure): every external call needs a bounded
@@ -458,6 +472,14 @@ class Settings(BaseSettings):
     # From-address used for all outbound transactional emails. Must match a
     # domain verified in the Resend dashboard (e.g. noreply@autoclip.studio).
     EMAIL_FROM: str = ""
+    # Issue 246 — physical postal address rendered in lifecycle (commercial-
+    # leaning) emails. CAN-SPAM §A.5 requires a valid physical postal address in
+    # every commercial message. OPTIONAL with an EMPTY default so production boot
+    # never fails — but it doubles as the lifecycle/welcome SAFETY GATE: while
+    # MAILING_ADDRESS is unset, send_notification SKIPS every lifecycle email
+    # (welcome / nudge / re-engagement) and only logs the skip. Set this to a real
+    # address before enabling lifecycle email in production.
+    MAILING_ADDRESS: str = ""
 
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":

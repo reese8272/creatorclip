@@ -1,0 +1,17 @@
+Subject: Ready to make your first clip?
+
+Hi {{ creator.channel_title or "there" }},
+
+You haven't created a clip yet. Upload a video and AutoClip will surface candidate clips scored against your own channel's style and audience data.
+
+AutoClip predicts fit with your content — it does not promise virality. Every recommendation is an estimate grounded in your own data.
+
+Upload your first video:
+
+{{ app_url }}/app/dashboard
+
+—
+You're receiving this because you signed up for AutoClip. To stop lifecycle emails like this one, unsubscribe here:
+{{ unsubscribe_url }}
+
+{{ mailing_address }}

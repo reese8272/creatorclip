@@ -57,6 +57,15 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.expire_trials",
         "schedule": timedelta(hours=24),
     },
+    # Issue 246 — daily lifecycle-email sweep. Enqueues first_clip_nudge for
+    # creators who never uploaded a video N days after signup, and re_engagement
+    # for previously-active creators who've reviewed no clips in the inactivity
+    # window. Reads + enqueues only; the shared 48h frequency cap, per-event
+    # dedupe ledger, and email_lifecycle opt-out gate make daily re-runs safe.
+    "run-lifecycle-scan-daily": {
+        "task": "worker.tasks.run_lifecycle_scan",
+        "schedule": timedelta(hours=24),
+    },
     # Issue 205 — daily Stripe↔ledger reconciliation. Catches paid Checkout
     # sessions whose webhook was never delivered (Stripe outage / endpoint down
     # past the retry window) by sweeping the Sessions list API and granting

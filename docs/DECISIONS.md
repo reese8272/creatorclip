@@ -204,6 +204,57 @@ adding assertions, NOT by chasing every mutant (80/20):
 (`mutmut.readthedocs.io` 3.x incremental model; `github.com/boxed/mutmut` + paiml
 large-codebase perf hazards; `johal.in` score targets >75%→85%). Collision rule:
 task-supplied COLLISION RULE assigning `limiter.py` to Issue 228.
+---
+## 2026-06-24 — Issues 245 + 246: Notification center / unsubscribe / lifecycle email sequence
+
+**What was decided / diverged.**
+
+1. **The 245 consent surface targets React (`frontend/src/`), not the vanilla static app the
+   issue brief named.** The brief (and research finding 11) said `static/activityPanel.js` +
+   `static/profile.html`. Those are dead — the app migrated to React+TS (Issue 226 retired the
+   static app pages); `static/profile.html` does not exist. The real surfaces are
+   `frontend/src/components/ActivityPanel.tsx` (now also renders durable in-app notifications +
+   dismiss) and a new `frontend/src/components/profile/NotificationPreferencesSection.tsx`
+   rendered from `frontend/src/pages/Settings.tsx` (Settings, not the now-read-only Profile per
+   Issue 308). This is the React re-target the brief predates.
+
+2. **One-click unsubscribe is intentionally unauthenticated, no-auth, no token rotation.**
+   `GET /unsubscribe/{token}` (separate `unsubscribe_router`, NOT under `/api/notifications`)
+   looks up `NotificationPreference.unsubscribe_token` (UUID4, unique, no RLS on the prefs table)
+   via an admin session and flips `email_lifecycle` off. The recipient has no session, so auth is
+   impossible; the token is the trust boundary (unguessable uuid4). A malformed token → 422
+   (FastAPI path coercion); an unknown token → generic 404 that reveals no email/creator id;
+   flipping an already-False pref is an idempotent no-op success. Rate-limited per-IP
+   (`get_remote_address`), matching the `/billing/webhook` precedent (Issue 110). Source: RFC 8058
+   (one-click List-Unsubscribe), CAN-SPAM (link live ≥30 days).
+
+3. **`email_transactional` cannot be disabled via the API.** `PreferencesPatch` simply omits the
+   field, so a crafted `PATCH /api/notifications/preferences` body with `email_transactional=false`
+   is ignored server-side — transactional mail is legally always-on (CAN-SPAM / GDPR Art. 6(1)(b)).
+
+4. **Scope: 245/246 each touch one previously-"isolated" file additively.** A new router cannot be
+   served without one `include_router` line in `main.py`; the lifecycle thresholds require new
+   `pydantic-settings` fields in `config.py`. Both are surgical additions, not refactors.
+
+5. **Lifecycle = first marketing-class comms.** Welcome / first_clip_nudge / re_engagement are
+   commercial-leaning, sent under GDPR legitimate-interest with a clear opt-out. They carry RFC 8058
+   one-click unsubscribe headers (lifecycle only — transactional sends omit them) and a physical
+   mailing address (new `MAILING_ADDRESS` setting, CAN-SPAM §A.5). The welcome trigger fires only
+   inside the OAuth `is_new` branch (`routers/auth.py`), so it fires on first email set, never on
+   re-login, and `entity_id == creator_id` dedupes it to exactly once ever.
+
+6. **Shared 48h lifecycle frequency cap.** The daily `run_lifecycle_scan` checks
+   `notification_deliveries` for ANY lifecycle event within `LIFECYCLE_FREQUENCY_CAP_HOURS` before
+   enqueuing, because the per-event `dedupe_key` alone cannot stop a welcome + nudge landing the
+   same day. Nudge `entity_id = creator_id` (once ever); re-engagement uses a date-period bucket
+   (recurs at most once per inactivity window).
+
+**Evidence.** Code read: `models.py:1153-1289` (prefs no-RLS, notifications RLS FORCE),
+`worker/tasks.py` send_notification lifecycle gate, `routers/export.py` isolation pattern,
+`limiter.py` (per-IP fallback). Validations: ruff clean, mypy clean on changed files, unit lane
+1434 passed, frontend 196 passed.
+
+**Date.** 2026-06-24.
 
 ---
 

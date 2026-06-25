@@ -510,6 +510,17 @@ def expire_trials() -> None:
     run_async(_expire_trials_async())
 
 
+@celery.task(name="worker.tasks.run_lifecycle_scan")
+def run_lifecycle_scan() -> None:
+    """Issue 246 — daily lifecycle-email sweep (first-clip nudge + re-engagement).
+
+    Reads + enqueues only. The shared 48h cap, per-event dedupe, and the
+    email_lifecycle opt-out gate all live downstream in ``_run_lifecycle_scan_async``
+    and ``send_notification``, so re-running daily is idempotent.
+    """
+    run_async(_run_lifecycle_scan_async())
+
+
 @celery.task(name="worker.tasks.reconcile_stripe_ledger")
 def reconcile_stripe_ledger() -> None:
     """Issue 205 — daily Stripe↔ledger reconciliation sweep.
@@ -2188,6 +2199,128 @@ async def _expire_trials_async() -> None:
                     "trial_ending notification failed for creator %s: %s",
                     cid,
                     notify_exc,
+                )
+
+
+# ── Lifecycle email sequence (Issue 246) ──────────────────────────────────────
+
+# All event types that count against the shared lifecycle frequency budget.
+_LIFECYCLE_EVENT_TYPES = ("welcome", "first_clip_nudge", "re_engagement")
+
+
+async def _lifecycle_capped(session: Any, creator_id: uuid.UUID, now: datetime) -> bool:
+    """Return True if a lifecycle email was already delivered to this creator
+    within ``LIFECYCLE_FREQUENCY_CAP_HOURS`` (the shared budget across welcome /
+    nudge / re-engagement).
+
+    This is the cross-event cap the per-event dedupe_key cannot enforce on its
+    own: it stops a welcome and a nudge from landing on the same day.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from config import settings
+    from models import NotificationDelivery
+
+    cutoff = now - timedelta(hours=settings.LIFECYCLE_FREQUENCY_CAP_HOURS)
+    existing = await session.scalar(
+        select(NotificationDelivery.id)
+        .where(NotificationDelivery.creator_id == creator_id)
+        .where(NotificationDelivery.event_type.in_(_LIFECYCLE_EVENT_TYPES))
+        .where(NotificationDelivery.created_at >= cutoff)
+        .limit(1)
+    )
+    return existing is not None
+
+
+async def _run_lifecycle_scan_async() -> None:
+    """Issue 246 — daily lifecycle-sequence sweep.
+
+    Reads + enqueues only (no mutation). Uses AdminSessionLocal (BYPASSRLS) for
+    a cross-tenant sweep, mirroring ``_expire_trials_async``. Two cohorts:
+
+      * FIRST-CLIP NUDGE — creators older than ``LIFECYCLE_NUDGE_AFTER_DAYS``
+        with no Video rows. entity_id = creator_id ⇒ once ever per creator.
+      * RE-ENGAGEMENT — creators with ≥1 Video but no ClipFeedback within
+        ``LIFECYCLE_INACTIVITY_DAYS``. entity_id = a stable period bucket so it
+        recurs at most once per inactivity window.
+
+    The shared 48h frequency cap (``_lifecycle_capped``) is checked before every
+    enqueue so welcome / nudge / re-engagement share one budget. The
+    send_notification task additionally gates on prefs.email_lifecycle and
+    dedupes via notification_deliveries, so opted-out creators get none and a
+    daily re-scan of the same quiet creator does not re-send.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import exists, select
+
+    from config import settings
+    from models import ClipFeedback, Creator, Video
+
+    # CAN-SPAM safety gate: with no physical postal address configured, no
+    # lifecycle email may legally be sent. Short-circuit the whole sweep so we do
+    # not enqueue tasks that would each individually skip. (send_notification
+    # enforces the same gate defensively for the welcome path.)
+    if not settings.MAILING_ADDRESS:
+        logger.info(
+            "run_lifecycle_scan: MAILING_ADDRESS unset — skipping lifecycle sweep "
+            "(CAN-SPAM safety gate)"
+        )
+        return
+
+    now = datetime.now(UTC)
+
+    async with db.AdminSessionLocal() as session:
+        # ── First-clip nudge: signed up ≥ N days ago, never uploaded a video ──
+        nudge_cutoff = now - timedelta(days=settings.LIFECYCLE_NUDGE_AFTER_DAYS)
+        has_video = exists().where(Video.creator_id == Creator.id)
+        nudge_rows = await session.execute(
+            select(Creator.id)
+            .where(Creator.created_at <= nudge_cutoff)
+            .where(~has_video)
+        )
+        for (cid,) in nudge_rows.all():
+            if await _lifecycle_capped(session, cid, now):
+                continue
+            try:
+                send_notification.delay(str(cid), "first_clip_nudge", str(cid), {})
+            except Exception as notify_exc:
+                logger.warning(
+                    "first_clip_nudge notification enqueue failed creator=%s err=%s",
+                    cid,
+                    type(notify_exc).__name__,
+                )
+
+        # ── Re-engagement: has a video but no recent clip review ─────────────
+        inactivity_cutoff = now - timedelta(days=settings.LIFECYCLE_INACTIVITY_DAYS)
+        # Stable period bucket so the dedupe_key recurs at most once per the
+        # documented ~14-day cadence. A DAILY bucket would re-fire roughly every
+        # 48h (only blocked by the shared frequency cap); flooring the ordinal day
+        # to a LIFECYCLE_INACTIVITY_DAYS-wide window means a dormant creator gets
+        # at most one re-engagement email per inactivity window.
+        period_window = now.toordinal() // settings.LIFECYCLE_INACTIVITY_DAYS
+        period_bucket = f"reengage-{period_window}"
+        recent_feedback = exists().where(
+            (ClipFeedback.creator_id == Creator.id)
+            & (ClipFeedback.created_at >= inactivity_cutoff)
+        )
+        reengage_rows = await session.execute(
+            select(Creator.id)
+            .where(exists().where(Video.creator_id == Creator.id))
+            .where(~recent_feedback)
+        )
+        for (cid,) in reengage_rows.all():
+            if await _lifecycle_capped(session, cid, now):
+                continue
+            try:
+                send_notification.delay(str(cid), "re_engagement", period_bucket, {})
+            except Exception as notify_exc:
+                logger.warning(
+                    "re_engagement notification enqueue failed creator=%s err=%s",
+                    cid,
+                    type(notify_exc).__name__,
                 )
 
 
@@ -4041,6 +4174,22 @@ async def _send_notification_async(
         _LIFECYCLE_EVENTS = frozenset({"welcome", "first_clip_nudge", "re_engagement"})
         is_lifecycle = event_type in _LIFECYCLE_EVENTS
 
+        # CAN-SPAM safety gate: lifecycle (commercial-leaning) email may not be
+        # sent without a physical postal address in the body. With MAILING_ADDRESS
+        # unset we SKIP the send entirely (no delivery row, no in-app fallback) and
+        # log the skip — so merging/deploying this branch cannot blast users until
+        # a real address is configured.
+        from config import settings as _settings
+
+        if is_lifecycle and not _settings.MAILING_ADDRESS:
+            logger.info(
+                "send_notification: MAILING_ADDRESS unset — skipping lifecycle email %s "
+                "for creator %s (CAN-SPAM safety gate)",
+                event_type,
+                creator_id,
+            )
+            return
+
         if is_lifecycle and not prefs.email_lifecycle:
             logger.info(
                 "send_notification: creator %s opted out of lifecycle email — skip %s",
@@ -4089,12 +4238,28 @@ async def _send_notification_async(
         # is not opted-out. We prefer the event_type as the template name.
         to_email = creator.email
         if to_email and prefs.email_transactional:
+            # RFC 8058 one-click unsubscribe headers on LIFECYCLE sends only.
+            # Transactional sends pass no such headers (legally always-on).
+            email_headers: dict[str, str] | None = None
+            if is_lifecycle:
+                from config import settings as _settings
+
+                unsub_url = (
+                    f"{_settings.APP_BASE_URL}/unsubscribe/{prefs.unsubscribe_token}"
+                )
+                email_headers = {
+                    "List-Unsubscribe": f"<{unsub_url}>",
+                    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                }
             try:
                 mailer_send(
                     to=to_email,
                     template=event_type,
-                    context={"creator": creator, **payload},
+                    context={"creator": creator, "unsubscribe_url": unsub_url, **payload}
+                    if is_lifecycle
+                    else {"creator": creator, **payload},
                     idempotency_key=dedupe_key,
+                    headers=email_headers,
                 )
                 logger.info(
                     "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
@@ -4191,6 +4356,22 @@ def _build_inapp_notification(
                 "Every recommendation is an estimate grounded in your own data."
             ),
             "/app/dashboard",
+        ),
+        "first_clip_nudge": (
+            "Ready to make your first clip?",
+            (
+                "Upload a video and AutoClip will surface candidate clips scored against your "
+                "own channel's style and audience data."
+            ),
+            "/app/dashboard",
+        ),
+        "re_engagement": (
+            "Your channel data is waiting.",
+            (
+                "It's been a while since you reviewed a clip. The more you review, the better "
+                "AutoClip's fit estimates get for your channel."
+            ),
+            "/app/review",
         ),
     }
 

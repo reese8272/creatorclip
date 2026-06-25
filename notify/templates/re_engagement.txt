@@ -1,0 +1,17 @@
+Subject: Your channel data is waiting
+
+Hi {{ creator.channel_title or "there" }},
+
+It's been a while since you reviewed a clip. New clips are scored against your evolving channel DNA, so the more you review, the better the fit gets.
+
+AutoClip estimates fit with your content — it does not promise virality. Every recommendation is grounded in your own data.
+
+Review your latest clips:
+
+{{ app_url }}/app/review
+
+—
+You're receiving this because you signed up for AutoClip. To stop lifecycle emails like this one, unsubscribe here:
+{{ unsubscribe_url }}
+
+{{ mailing_address }}

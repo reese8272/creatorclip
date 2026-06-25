@@ -10,6 +10,7 @@ import { IntakeModeSection } from '@/components/profile/IntakeModeSection'
 import { PublishingSection } from '@/components/profile/PublishingSection'
 import { ApiKeysSection } from '@/components/profile/ApiKeysSection'
 import { AccountDeletion } from '@/components/profile/AccountDeletion'
+import { NotificationPreferencesSection } from '@/components/profile/NotificationPreferencesSection'
 import type { Identity, IdentityResponse, NicheOption } from '@/types'
 
 // A titled section card (matches the prototype's Settings card chrome).
@@ -192,13 +193,9 @@ export function Settings() {
 
         {/* Workflow — intake is functional. */}
         <IntakeModeSection initialMode={user?.analysis_mode ?? 'auto'} />
-        <SettingsCard title="Workflow — more">
-          <ComingSoonRow
-            label="Notify when clips are ready"
-            description="Email on render completion"
-            mock={<ToggleMock on />}
-          />
-        </SettingsCard>
+
+        {/* Email & notification consent — functional (Issue 245). */}
+        <NotificationPreferencesSection />
 
         {/* Brand kit — watermark / bumpers preview. */}
         <SettingsCard title="Brand kit">

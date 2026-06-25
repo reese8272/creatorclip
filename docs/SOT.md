@@ -180,6 +180,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── thumbnails.py           # GET thumbnail-patterns + POST thumbnail-concepts (Issue 129)
 │   ├── titles.py               # POST video title suggestions (Issue 128)
 │   ├── publications.py         # Scheduled publish: POST/GET/confirm/cancel ClipPublication (Issue 196)
+│   ├── notifications.py        # /api/notifications (list/dismiss/preferences) + no-auth GET /unsubscribe/{token} (Issue 245)
 │   └── tasks.py                # SSE live-progress endpoint (Issue 86)
 │
 ├── notify/                     # Transactional email + notification helpers (Issues 242-243)

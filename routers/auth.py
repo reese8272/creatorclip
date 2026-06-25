@@ -245,6 +245,26 @@ async def callback(
                 exc,
             )
 
+        # Issue 246 — welcome lifecycle email. Fires only inside the is_new
+        # branch (post-commit), so it triggers on first email set, never on a
+        # re-login. entity_id = creator_id ⇒ the notification_deliveries UNIQUE
+        # dedupe_key makes welcome fire exactly once ever per creator. The
+        # send_notification task gates lifecycle on prefs.email_lifecycle, so an
+        # opted-out creator (theoretically — defaults to on) gets none.
+        # Best-effort: a broker hiccup must not break the OAuth redirect.
+        from worker.tasks import send_notification
+
+        try:
+            await asyncio.to_thread(
+                send_notification.delay, str(creator.id), "welcome", str(creator.id), {}
+            )
+        except Exception as exc:
+            logger.warning(
+                "auth callback welcome notification enqueue failed creator=%s err=%s",
+                creator.id,
+                type(exc).__name__,
+            )
+
     from observability import log_event
 
     log_event(

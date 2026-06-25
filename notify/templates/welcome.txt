@@ -11,4 +11,7 @@ Get started by connecting your first video:
 {{ app_url }}/app/dashboard
 
 —
-CreatorClip
+You're receiving this because you signed up for AutoClip. To stop lifecycle emails like this one, unsubscribe here:
+{{ unsubscribe_url }}
+
+{{ mailing_address }}
