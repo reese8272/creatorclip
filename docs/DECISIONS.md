@@ -5,6 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-24 — Issue 310: synced-channel catalog browser (`GET /videos/catalog` + ChannelBrowser)
+
+**What was decided.**
+1. **Offset pagination, not cursor.** `GET /videos/catalog` paginates with `limit`/`offset`
+   (default 50, max 100) rather than a keyset/cursor scheme. A per-creator synced channel is
+   bounded and append-mostly, so offset matches the existing `_LIST_LIMIT=100` house pattern
+   (`routers/videos.py` list_videos) without the extra cursor-encoding complexity. Deep-page
+   offset is O(n) on Postgres, acceptable at beta volume and re-evaluated only if real channels
+   exceed a few thousand rows (Postgres-dependent verification belongs to Issue 275 staging).
+2. **A dedicated `/videos/catalog` route, not a `/videos?origin=catalog` filter param.** The
+   catalog feed has a different response contract from `GET /videos`: `clippable` is always false
+   (catalog rows have no stored source — we never download from YouTube), it is paginated with a
+   `total`, and it carries no empty-state onboarding envelope (`state`/`message`/`next_action`).
+   Folding it into `/videos` would overload one response shape with two contracts; a dedicated
+   route keeps each endpoint single-responsibility and lets the ChannelBrowser query it cleanly.
+
+**Why.** Issue 317 retired paste-a-URL linking and recorded the in-app channel picker as the
+intended no-paste replacement for manual ID entry (see the Issue 317 entry below, point 4). The
+browser lists the creator's already-synced `origin=catalog` rows and promotes one via the
+existing `POST /videos/link` adopt path (origin catalog → link, unchanged) — the source file
+must still be uploaded, so honest copy says so and no virality language appears.
+
+**Source / evidence.** Existing offset cap pattern at `routers/videos.py` (`_LIST_LIMIT=100`);
+adopt path at `routers/videos.py` link_video (`origin == catalog` → `link`); Issue 317 DECISIONS
+entry below naming Issue 310 as the picker follow-up.
+
+**Date.** 2026-06-24.
+
+---
+
 ## 2026-06-24 — Issue 317: "Link a video" retired as the primary entry point in favour of "Upload a video file"
 
 **What was decided.**

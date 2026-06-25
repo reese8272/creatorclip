@@ -31,7 +31,8 @@ function extractYouTubeId(input: string): string {
 // `youtube_video_id` is optional: filling the association field ties the upload
 // to a published video so its later performance feeds the outcome loop; leaving
 // it blank uploads standalone footage (e.g. an OBS recording or unpublished
-// cut). The in-app channel picker (Issue 310) will replace manual entry.
+// cut). The in-app channel picker (ChannelBrowser, Issue 310) is the no-paste
+// alternative: "Browse my channel" promotes a synced video into this same flow.
 export function UploadVideoForm({ open }: { open: boolean }) {
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)

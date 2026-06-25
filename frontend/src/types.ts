@@ -58,6 +58,17 @@ export interface VideoListResponse {
   message?: string | null
 }
 
+// GET /videos/catalog — paginated synced-channel rows for the ChannelBrowser
+// (Issue 310). These are origin=catalog videos hidden from GET /videos; each
+// carries clippable=false (no stored source). Promoting one via POST /videos/link
+// adopts it into the clip pipeline.
+export interface CatalogListResponse {
+  videos: Video[]
+  total: number
+  limit: number
+  offset: number
+}
+
 // Subset of ClipOut the dashboard reads to count rendered clips per video.
 export interface ClipListItem {
   id: string

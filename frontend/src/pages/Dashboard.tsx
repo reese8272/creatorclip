@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AnalyticsPanel } from '@/components/dashboard/AnalyticsPanel'
 import { UploadVideoForm } from '@/components/dashboard/UploadVideoForm'
+import { ChannelBrowser } from '@/components/dashboard/ChannelBrowser'
 import { EmptyHero } from '@/components/dashboard/EmptyHero'
 import { VideoTable, type ClipInfo } from '@/components/dashboard/VideoTable'
 import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/DashboardBanners'
@@ -67,6 +68,7 @@ function CreatorDnaCard({ dna }: { dna: DnaProfile | null }) {
 export function Dashboard() {
   const { user, balance } = useAuth()
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [browseOpen, setBrowseOpen] = useState(false)
 
   const videosQuery = useQuery({
     queryKey: ['videos'],
@@ -136,6 +138,9 @@ export function Dashboard() {
             <Button onClick={() => setUploadOpen((o) => !o)} aria-expanded={uploadOpen}>
               + Upload a video
             </Button>
+            <Button variant="secondary" onClick={() => setBrowseOpen(true)}>
+              Browse my channel
+            </Button>
             <Link to="/analysis">
               <Button variant="secondary">Analyze a video</Button>
             </Link>
@@ -143,6 +148,7 @@ export function Dashboard() {
         </div>
 
         <UploadVideoForm open={uploadOpen} />
+        <ChannelBrowser open={browseOpen} onClose={() => setBrowseOpen(false)} />
         <LowBalanceWarning balance={balance} />
 
         {videosQuery.isPending ? (
