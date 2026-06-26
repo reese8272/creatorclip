@@ -22,7 +22,21 @@ merge-gate defect fixed inline: Issue 318's literal-scan test excluded `tests/` 
 broke on a local checkout (joblib's non-UTF-8 fixture) though it passed in the wave's venv-less worktree —
 now excludes virtualenv/build/cache trees. Layer 0 (ruff/mypy/bandit/coverage) deferred — needs Docker;
 the unit lane is the verified gate on this box. Staging-pending: 319 nightly live-LLM run (needs
-`ANTHROPIC_API_KEY` secret), 321 Redis quota concurrency. **W1 (322–325) runs next.**
+`ANTHROPIC_API_KEY` secret), 321 Redis quota concurrency.
+
+**W1 (322–325) SHIPPED + merged to `main` (local, not pushed):** built by a Sonnet-4.6 agent on the W0
+foundation (clean fast-forward, no stale-base hazard), independently re-verified — **backend 1599 passed /
+0 failed** (+66 tests), **frontend `tsc -b`+`vite` clean, vitest 206 passed**. New: per-clip Short-title +
+hook-rewrite (322), per-clip caption/overlay-text (323), chat tools over clips & outcomes with creator-id
+isolation (324), "explain this clip" narrative with a cited-principle gate (325) — 3 new `knowledge/clip_*`
+generators, 3 new `/clips/{id}/*` endpoints (quota-gated + usage-logged), 3 new chat tools, Review-surface
+cards. All honesty-constraint-safe, DNA-grounded, cache-aware, untrusted-input-wrapped. Staging-pending:
+live LLM behavior (319's nightly harness) + the 324 chat-isolation integration test (needs Postgres).
+
+**L20 (318–325) is code-complete on local `main` (4 commits ahead of origin, NOT pushed).** Remaining are
+user decisions, not build work: (a) push `main` to deploy to prod (auto-deploys); (b) add the
+`ANTHROPIC_API_KEY` GitHub secret + trigger `llm-e2e-nightly` to clear the live-LLM assertions; (c) run
+Layer 0 + the Postgres integration lane on CI/staging.
 
 ---
 
