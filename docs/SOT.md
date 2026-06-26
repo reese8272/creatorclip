@@ -13,7 +13,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 |-------|-----------|-------|
 | Backend | FastAPI (Python 3.12+) | Async-first |
 | Task queue | Celery + Redis | Durable video jobs: ingest → transcribe → signals → DNA → clip → render |
-| LLM | Anthropic SDK; **`claude-sonnet-4-6`** default (DNA brief, titles, thumbnails, scoring, analysis, improvement, chat); **`claude-haiku-4-5-20251001`** for high-frequency/lower-stakes paths (chapters, hook analysis, analyze-performer); **no Opus** — see docs/DECISIONS.md (Issue 221). Sonnet 4.6 cacheable-prefix floor = 1024 tokens (confirmed 2026-06-23). | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
+| LLM | Anthropic SDK; per-task model registry (Issue 318): **`claude-sonnet-4-6`** for reasoning/streaming tasks (DNA brief, titles, thumbnails, scoring, analysis, improvement, chat, intake); **`claude-haiku-4-5`** for cheap classify tasks (hooks, chapters, performer analysis); **no Opus** — see docs/DECISIONS.md (Issue 221). Each task has an independently overridable `ANTHROPIC_MODEL_<TASK>` env var in config.py. Sonnet 4.6 cacheable-prefix floor = 1024 tokens; Haiku 4.5 = 4096 tokens (confirmed 2026-06-26). | Prompt caching on DNA profile + evergreen corpus **mandatory**; web-search tool for live research |
 | Embeddings | Voyage AI (`voyage-3.5`) → pgvector | Local sentence-transformers as offline fallback |
 | Transcription | Deepgram nova-3 (default, `TRANSCRIPTION_BACKEND=deepgram`) | WhisperX (faster-whisper + forced alignment) available as self-hosted opt-in; AssemblyAI also supported; all selected via `TRANSCRIPTION_BACKEND` config. MIP opt-out (`mip_opt_out=True`) enforced on every Deepgram call (Issue 251). |
 | Audio analysis | librosa (RMS energy) | Energy, silence, volume spikes, laughter/applause heuristic. Loudness normalization is ffmpeg `loudnorm` (two-pass, −14 LUFS) at render time, not analysis (Issue 181). |
@@ -250,12 +250,18 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── test_preference.py      # Recency decay actually reweights
 │   ├── test_review.py
 │   ├── test_upload_intel.py
+│   ├── test_model_config.py    # Issue 318 — per-task model key registry + literal ban (always runs)
+│   ├── test_llm_live.py        # Issue 319 — flag-gated live API tests (requires RUN_LLM_LIVE=1; mark: llm_live)
+│   ├── test_llm_conformance.py # Issue 320 — SDK conformance: singleton/timeout, typed exceptions, cache floors
+│   ├── test_usage_coverage.py  # Issue 321 — usage ledger coverage guard (all LLM tasks call record_llm_usage)
+│   ├── test_brief_quota.py     # Issue 321 — per-creator brief daily quota (BRIEF_DAILY_LIMIT_PER_CREATOR)
 │   └── eval/                   # Clip-quality eval: labeled videos + expected clip windows
 │       └── scenarios/*.yaml
 │
 ├── scripts/
 │   ├── doctor.py               # Preflight secrets validator (presence/format/live, redacted) — deploy gate
-│   └── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
+│   ├── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
+│   └── llm_e2e.py              # Live-API LLM verification harness (Issue 319); RUN_LLM_LIVE=1 guard
 │
 └── docs/
     ├── README.md              # ← START HERE: full documentation index (Issue 146)

@@ -98,6 +98,25 @@ class Settings(BaseSettings):
     # perishable: verify against the live Anthropic model/tool catalog
     # (via the /claude-api skill) before each launch.
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+    # Per-task model routing (Issue 318). Each key maps one LLM task to its own
+    # model so cheap classify-style calls (hooks, chapters, performer analysis)
+    # route to Haiku 4.5 while reasoning-heavy or streaming tasks stay on Sonnet
+    # 4.6. Use bare aliases (no date suffix) per Anthropic docs. Override any
+    # individual key via env var without touching the others. Defaults:
+    #   Sonnet 4.6 — scoring, dna_brief, analysis, titles, thumbnails, chat, intake, improvement
+    #   Haiku 4.5  — hooks, chapters, performer (cheap classify calls)
+    # Source: https://platform.claude.com/docs/en/about-claude/models/overview (2026-06-26)
+    ANTHROPIC_MODEL_SCORING: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_DNA_BRIEF: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_ANALYSIS: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_TITLES: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_THUMBNAILS: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_HOOKS: str = "claude-haiku-4-5"
+    ANTHROPIC_MODEL_CHAPTERS: str = "claude-haiku-4-5"
+    ANTHROPIC_MODEL_PERFORMER: str = "claude-haiku-4-5"
+    ANTHROPIC_MODEL_CHAT: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_INTAKE: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_IMPROVEMENT: str = "claude-sonnet-4-6"
     # web_search_20260209 is the GA version with dynamic filtering: Claude
     # writes code to pre-filter search results before they reach the context
     # window, reducing tokens read and improving accuracy. Same tool API
@@ -153,6 +172,12 @@ class Settings(BaseSettings):
     # burst limits as a slowapi "/day" cap. Bounds worst-case Anthropic/Deepgram
     # spend per creator/day. Starting point — tune from real token logs.
     LLM_DAILY_JOB_LIMIT: int = 50
+    # Separate per-creator daily ceiling specifically for brief-generating
+    # endpoints (titles, thumbnails, insights analysis, improvement brief).
+    # Independently tunable from LLM_DAILY_JOB_LIMIT so operators can control
+    # the most expensive single-request inference paths without touching the
+    # shared job queue cap.
+    BRIEF_DAILY_LIMIT_PER_CREATOR: int = 50
     # Daily ceiling on render jobs (render_clip/clean_clip/submit_cuts/
     # ingest_clip) per creator. Bounds ffmpeg CPU + Cloudflare R2 egress per
     # creator/day. Starting point — tune from real billing data.

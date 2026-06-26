@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from db import get_session
-from limiter import LLM_DAILY_LIMIT, creator_key, limiter
+from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, ImprovementBrief, ImprovementBriefStatus, Video, VideoMetrics
 
 router = APIRouter(prefix="/creators", tags=["improvement"])
@@ -43,6 +43,7 @@ class ImprovementBriefOut(BaseModel):
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
+@limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
 async def start_improvement_brief(
     request: Request,
     creator: Creator = Depends(get_current_creator),

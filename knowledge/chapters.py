@@ -13,13 +13,11 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
 
 logger = logging.getLogger(__name__)
-
-_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 _ANTHROPIC = Anthropic(
     api_key=settings.ANTHROPIC_API_KEY,
@@ -202,19 +200,25 @@ def generate_chapters(
     from worker.anthropic_stream import stream_and_emit
 
     client = _ANTHROPIC.with_options(timeout=60.0)
-    final_text, usage = stream_and_emit(
-        client,
-        task_id,
-        model=_HAIKU_MODEL,
-        # 2000 (was 512): a 1h+ video yields 20+ chapters whose JSON exceeded
-        # the 512-token cap, truncating the response and failing all 3 retries
-        # identically. description_block was also dropped from the output schema
-        # (parse_chapters rebuilds it in Python), so the model spends its budget
-        # only on the chapters array.
-        max_tokens=2000,
-        system=system,
-        messages=messages,
-    )
+    try:
+        final_text, usage = stream_and_emit(
+            client,
+            task_id,
+            model=settings.ANTHROPIC_MODEL_CHAPTERS,
+            # 2000 (was 512): a 1h+ video yields 20+ chapters whose JSON exceeded
+            # the 512-token cap, truncating the response and failing all 3 retries
+            # identically. description_block was also dropped from the output schema
+            # (parse_chapters rebuilds it in Python), so the model spends its budget
+            # only on the chapters array.
+            max_tokens=2000,
+            system=system,
+            messages=messages,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error(
+            "generate_chapters LLM error task=%s exc_type=%s", task_id, type(exc).__name__
+        )
+        raise
     logger.info(
         "generate_chapters tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],

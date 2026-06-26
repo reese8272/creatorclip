@@ -15,7 +15,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
@@ -143,14 +143,20 @@ def generate_brief(
         # path so cache breakpoints are interchangeable between the two.
         from worker.anthropic_stream import stream_and_emit
 
-        final_text, usage = stream_and_emit(
-            _ANTHROPIC,
-            task_id,
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=2000,
-            system=system,
-            messages=messages,
-        )
+        try:
+            final_text, usage = stream_and_emit(
+                _ANTHROPIC,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
+                max_tokens=2000,
+                system=system,
+                messages=messages,
+            )
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            logger.error(
+                "dna_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__
+            )
+            raise
         logger.info(
             "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
             usage["input_tokens"],
@@ -160,12 +166,16 @@ def generate_brief(
         )
         return final_text + _DISCLAIMER, usage
 
-    response = _ANTHROPIC.messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=2000,
-        system=system,  # type: ignore[arg-type]
-        messages=messages,  # type: ignore[arg-type]  # list[dict] → MessageParam at runtime
-    )
+    try:
+        response = _ANTHROPIC.messages.create(
+            model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
+            max_tokens=2000,
+            system=system,  # type: ignore[arg-type]
+            messages=messages,  # type: ignore[arg-type]  # list[dict] → MessageParam at runtime
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error("dna_brief LLM error exc_type=%s", type(exc).__name__)
+        raise
 
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens

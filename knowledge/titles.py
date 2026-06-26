@@ -20,7 +20,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
@@ -218,15 +218,21 @@ def generate_title_suggestions(
     from worker.anthropic_stream import stream_and_emit
 
     client = _ANTHROPIC.with_options(timeout=120.0)
-    final_text, usage = stream_and_emit(
-        client,
-        task_id,
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=2000,
-        system=system,
-        messages=messages,
-        tools=tools,
-    )
+    try:
+        final_text, usage = stream_and_emit(
+            client,
+            task_id,
+            model=settings.ANTHROPIC_MODEL_TITLES,
+            max_tokens=2000,
+            system=system,
+            messages=messages,
+            tools=tools,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error(
+            "title_suggestions LLM error task=%s exc_type=%s", task_id, type(exc).__name__
+        )
+        raise
     logger.info(
         "title_suggestions tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],

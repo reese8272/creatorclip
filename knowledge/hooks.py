@@ -16,15 +16,13 @@ import logging
 
 import httpx
 import numpy as np
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
 from observability import record_llm_tokens
 
 logger = logging.getLogger(__name__)
-
-_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 _ANTHROPIC = Anthropic(
     api_key=settings.ANTHROPIC_API_KEY,
@@ -210,15 +208,19 @@ def analyze_hook(
     from worker.anthropic_stream import stream_and_emit
 
     client = _ANTHROPIC.with_options(timeout=120.0)
-    final_text, usage = stream_and_emit(
-        client,
-        task_id,
-        model=_HAIKU_MODEL,
-        max_tokens=1024,
-        system=system,
-        messages=messages,
-        tools=tools,
-    )
+    try:
+        final_text, usage = stream_and_emit(
+            client,
+            task_id,
+            model=settings.ANTHROPIC_MODEL_HOOKS,
+            max_tokens=1024,
+            system=system,
+            messages=messages,
+            tools=tools,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error("hook_analysis LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
+        raise
     logger.info(
         "hook_analysis tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],
@@ -228,7 +230,7 @@ def analyze_hook(
     )
     record_llm_tokens(
         provider="anthropic",
-        model=_HAIKU_MODEL,
+        model=settings.ANTHROPIC_MODEL_HOOKS,
         input_tokens=usage["input_tokens"],
         output_tokens=usage["output_tokens"],
         cache_read_tokens=usage["cache_read"],

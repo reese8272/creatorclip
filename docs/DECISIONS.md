@@ -9423,3 +9423,113 @@ partial response (`fields=`): https://developers.google.com/youtube/v3/getting-s
 HTTP conditional requests (304/If-None-Match): RFC 9110 §13.
 
 **Date:** 2026-06-24
+
+---
+
+## 2026-06-26 — Issues 318–321: LLM Features & Hardening (Wave 0 / llm-features-hardening)
+
+### Issue 318 — Per-task model routing via ANTHROPIC_MODEL_<TASK> config keys
+
+**What was decided.** Replaced the single `ANTHROPIC_MODEL` key with 11 per-task
+keys: `ANTHROPIC_MODEL_SCORING`, `ANTHROPIC_MODEL_DNA_BRIEF`, `ANTHROPIC_MODEL_ANALYSIS`,
+`ANTHROPIC_MODEL_TITLES`, `ANTHROPIC_MODEL_THUMBNAILS`, `ANTHROPIC_MODEL_HOOKS`,
+`ANTHROPIC_MODEL_CHAPTERS`, `ANTHROPIC_MODEL_PERFORMER`, `ANTHROPIC_MODEL_CHAT`,
+`ANTHROPIC_MODEL_INTAKE`, `ANTHROPIC_MODEL_IMPROVEMENT`. Bare aliases only (no date
+suffix): `claude-sonnet-4-6` for reasoning/streaming tasks, `claude-haiku-4-5` for
+cheap classify tasks.
+
+**Why.** A single model key conflates the cost/quality tradeoff for very different
+tasks. Hooks and chapters are short classify jobs — using Haiku 4.5 saves ~6× vs
+Sonnet 4.6 at equal quality. Operators need to tune models independently without
+a code change.
+
+**Alternatives ruled out.** (A) Keep one key — doesn't let operators tune
+cheaply-classified tasks independently. (B) Date-suffix model aliases (e.g.
+`claude-haiku-4-5-20251001`) — Anthropic's routing resolves bare aliases to the
+latest stable version; date-suffix pins to a specific snapshot that Anthropic
+may deprecate, requiring a code change; bare aliases are the SDK-recommended
+approach (Anthropic model naming docs, 2026-06-26).
+
+**Source/evidence.** Anthropic model names: https://docs.anthropic.com/en/docs/about-claude/models .
+`tests/test_model_config.py` enforces no hardcoded claude-* literals outside config.py.
+
+---
+
+### Issue 319 — Flag-gated live API tests
+
+**What was decided.** Live API tests are gated behind `RUN_LLM_LIVE=1` env var and
+the `llm_live` pytest mark, excluded from default `addopts` alongside `integration`
+and `quarantine`. A nightly GitHub Actions workflow (`.github/workflows/llm-e2e-nightly.yml`)
+runs on `schedule: cron: '0 3 * * *'` + `workflow_dispatch` only — never triggered
+on push/PR. A standalone harness (`scripts/llm_e2e.py`) runs outside pytest for
+manual smoke testing.
+
+**Why.** Running live API tests on every push burns Anthropic credits and introduces
+flakiness from network conditions. The nightly lane is the industry standard for
+live-API regression (Google Cloud, Stripe, Twilio all gate live tests on schedule/dispatch).
+The standalone harness lets engineers run a quick smoke test without the pytest
+collection overhead.
+
+**Alternatives ruled out.** (A) Always-on live tests — credit waste + flakiness.
+(B) Manual-only live tests with no CI — misses regressions introduced by model updates.
+(C) VCR/cassette mocking — useful for unit tests but masks real model-behavior changes;
+not appropriate for the nightly regression lane.
+
+---
+
+### Issue 320 — Anthropic-SDK production-standards conformance
+
+**What was decided.** Every LLM module must: (a) import and handle `RateLimitError`,
+`APIStatusError`, `APIConnectionError` from the Anthropic SDK around every
+`messages.create` / `stream_and_emit` call; (b) use only config-routed model keys
+(enforced by `test_model_config.py` literal scan); (c) inject `UNTRUSTED_CONTENT_POLICY`
+in any module that accepts user-supplied text (OWASP LLM01 injection defense);
+(d) have `cache_control` breakpoints only when the prefix clears the model's cacheable
+floor (Sonnet 4.6: 1,024 tokens; Haiku 4.5: 4,096 tokens). A conformance test
+(`tests/test_llm_conformance.py`) enforces all four rules via AST scan + import
+introspection.
+
+**Cache floors.** Sonnet 4.6 minimum cacheable prefix: 1,024 tokens. Haiku 4.5:
+4,096 tokens. Modules using Haiku 4.5 with short prefixes (`knowledge.hooks` ~900 tokens,
+`knowledge.chapters` ~175 tokens) have cache_control markers removed — paying the
+write premium (1.25× or 2×) for a prefix that can't cache is waste, confirmed in
+the Issue-135 audit and Issue-315 cleanup.
+
+**Source/evidence.** Anthropic prompt caching docs:
+https://platform.claude.com/docs/en/build-with-claude/prompt-caching ;
+OWASP LLM Top 10 2025 LLM01 (Prompt Injection):
+https://owasp.org/www-project-top-10-for-large-language-model-applications/ .
+
+---
+
+### Issue 321 — Per-creator brief quota + usage ledger coverage guard
+
+**What was decided.** Added `BRIEF_DAILY_LIMIT_PER_CREATOR: int = 50` to `config.py`
+and `BRIEF_DAILY_LIMIT: str = daily_limit(settings.BRIEF_DAILY_LIMIT_PER_CREATOR)` to
+`limiter.py`. Applied as a third stacked `@limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)`
+decorator to `start_title_suggestions`, `get_thumbnail_patterns`, `start_thumbnail_concepts`,
+`analyze_performer`, and `start_improvement_brief`. This is independently tunable
+from `LLM_DAILY_JOB_LIMIT` (the shared LLM job cap).
+
+An AST-based guard (`tests/test_usage_coverage.py`) verifies all 7 LLM Celery async
+helpers call `record_llm_usage` inside their own function body. A structural test
+(`tests/test_brief_quota.py`) verifies the config key, limiter export, and decorator
+presence on every brief endpoint.
+
+**Why.** Brief-generating endpoints are the most expensive single-request inference
+paths. Sharing a cap with all LLM jobs means a burst of scoring jobs can exhaust
+the day's budget for high-value brief features. An independent tunable cap lets
+operators budget separately. The ledger coverage guard catches future tasks added
+without the billing write — a real revenue leak pattern confirmed in the Issue-321 audit.
+
+**Alternatives ruled out.** (A) Use only `LLM_DAILY_JOB_LIMIT` — doesn't allow
+independent brief-budget tuning. (B) Hard-code the cap — config-driven is the
+production standard (pydantic-settings env override). (C) Skip the ledger guard —
+one unmetered task is enough to cause billing gaps at scale.
+
+**Source/evidence.** slowapi stacked decorator behavior: https://slowapi.readthedocs.io/ ;
+`billing/ledger.py::record_llm_usage` is the canonical ledger write.
+
+**Date:** 2026-06-26
+
+**Date:** 2026-06-24
