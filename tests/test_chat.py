@@ -1,10 +1,12 @@
-"""Unit tests for the Pro chatbot (Issue 152) — no DB, no live Anthropic.
+"""Unit tests for the Pro chatbot (Issues 152, 324) — no DB, no live Anthropic.
 
 Covers the load-bearing, non-DB pieces:
 - honesty constraint is structurally present in the system prompt (CLAUDE.md);
 - tool schemas never expose a creator_id parameter (the worker injects it);
 - the access gate's active-creator predicate;
-- the agentic loop: tool round-trips, the iteration cap, and usage summing.
+- the agentic loop: tool round-trips, the iteration cap, and usage summing;
+- Issue 324: new clip/outcome tool schemas (list_top_clips, get_clip_detail,
+  suggest_clip_titles) are present, executor-backed, and isolation-safe.
 
 DB-backed per-creator isolation is verified in
 tests/test_chat_isolation_integration.py (CI / real Postgres).
@@ -173,3 +175,75 @@ async def test_runner_caps_tool_iterations(_patch_runner):
     # At most MAX_TOOL_ITERATIONS tool rounds + 1 forced-text round.
     assert calls["stream"] == settings.CHAT_MAX_TOOL_ITERATIONS + 1
     assert text == ""  # never produced a text answer, but did not hang
+
+
+# ── Issue 324: new clip/outcome tool schemas ──────────────────────────────────
+
+_CLIP_TOOL_NAMES = {"list_top_clips", "get_clip_detail", "suggest_clip_titles"}
+
+
+def test_clip_tools_all_present_in_tools_list() -> None:
+    """All three Issue-324 tools must appear in TOOLS."""
+    names = {t["name"] for t in TOOLS}
+    missing = _CLIP_TOOL_NAMES - names
+    assert not missing, f"Issue-324 tools missing from TOOLS: {missing}"
+
+
+def test_clip_tools_have_executors() -> None:
+    """Every Issue-324 tool must have a corresponding executor in _EXECUTORS."""
+    missing = _CLIP_TOOL_NAMES - set(_EXECUTORS)
+    assert not missing, f"Executors missing for Issue-324 tools: {missing}"
+
+
+def test_clip_tools_no_creator_id_in_schema() -> None:
+    """No Issue-324 tool schema may expose a creator_id property."""
+    for tool in TOOLS:
+        if tool["name"] not in _CLIP_TOOL_NAMES:
+            continue
+        props = tool["input_schema"].get("properties", {})
+        assert "creator_id" not in props, (
+            f"Tool '{tool['name']}' must not expose creator_id in its schema — "
+            "the worker injects it from the session owner."
+        )
+        assert tool["input_schema"].get("additionalProperties") is False, (
+            f"Tool '{tool['name']}' must set additionalProperties=False"
+        )
+
+
+def test_list_top_clips_schema() -> None:
+    """list_top_clips must accept an optional limit with bounded range."""
+    tool = next(t for t in TOOLS if t["name"] == "list_top_clips")
+    props = tool["input_schema"]["properties"]
+    assert "limit" in props
+    limit_schema = props["limit"]
+    assert limit_schema["type"] == "integer"
+    assert limit_schema["minimum"] >= 1
+    assert limit_schema["maximum"] <= 25
+
+
+def test_get_clip_detail_schema() -> None:
+    """get_clip_detail must require clip_id."""
+    tool = next(t for t in TOOLS if t["name"] == "get_clip_detail")
+    assert "clip_id" in tool["input_schema"].get("required", [])
+    props = tool["input_schema"]["properties"]
+    assert props["clip_id"]["type"] == "string"
+
+
+def test_suggest_clip_titles_schema() -> None:
+    """suggest_clip_titles must require clip_id."""
+    tool = next(t for t in TOOLS if t["name"] == "suggest_clip_titles")
+    assert "clip_id" in tool["input_schema"].get("required", [])
+    props = tool["input_schema"]["properties"]
+    assert props["clip_id"]["type"] == "string"
+
+
+def test_all_tools_no_creator_id_and_match_executors() -> None:
+    """Regression: all tools (original + 324) have executors and no creator_id."""
+    names = {t["name"] for t in TOOLS}
+    assert names == set(_EXECUTORS), (
+        f"TOOLS/EXECUTORS mismatch. Extra in TOOLS: {names - set(_EXECUTORS)}. "
+        f"Extra in EXECUTORS: {set(_EXECUTORS) - names}."
+    )
+    for tool in TOOLS:
+        props = tool["input_schema"].get("properties", {})
+        assert "creator_id" not in props, f"{tool['name']} must not take creator_id"

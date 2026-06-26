@@ -420,3 +420,38 @@ export interface NotificationPreferences {
   inapp_enabled: boolean
   push_enabled: boolean
 }
+
+// ── Per-clip AI features (Issues 322, 323, 325) ──────────────────────────────
+
+// POST /clips/{clip_id}/title-suggestions (Issue 322)
+export interface TitleCandidate {
+  title: string
+  rationale: string
+  ctr_signal: 'up' | 'neutral' | 'down'
+}
+export interface HookRewrite {
+  rewrite: string
+  rationale: string
+}
+export interface TitleSuggestionsResponse {
+  titles: TitleCandidate[]
+  hook_rewrites: HookRewrite[]
+  disclaimer: string
+}
+
+// POST /clips/{clip_id}/caption-hooks (Issue 323)
+export interface CaptionHookOption {
+  text: string
+  rationale: string
+}
+export interface CaptionHooksResponse {
+  options: CaptionHookOption[]
+  disclaimer: string
+}
+
+// POST /clips/{clip_id}/explanation (Issue 325)
+export interface ClipExplanationResponse {
+  explanation: string
+  cited_principle: string
+  disclaimer: string
+}

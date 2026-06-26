@@ -35,6 +35,9 @@ _LLM_MODULES: list[tuple[str, str, bool]] = [
     ("knowledge.titles", "_ANTHROPIC", False),
     ("knowledge.chapters", "_ANTHROPIC", False),
     ("knowledge.thumbnails", "_ANTHROPIC", False),
+    ("knowledge.clip_titles", "_ANTHROPIC", False),    # Issue 322
+    ("knowledge.clip_captions", "_ANTHROPIC", False),  # Issue 323
+    ("knowledge.clip_explain", "_ANTHROPIC", False),   # Issue 325
     ("analysis.brief", "_ANTHROPIC", False),
     ("dna.brief", "_ANTHROPIC", False),
     ("improvement.brief", "_ANTHROPIC", False),
@@ -49,6 +52,9 @@ _MUST_INJECT_POLICY = {
     "knowledge.hooks",
     "knowledge.titles",
     "knowledge.thumbnails",
+    "knowledge.clip_titles",    # accepts clip transcript (untrusted)
+    "knowledge.clip_captions",  # accepts clip transcript hook (untrusted)
+    "knowledge.clip_explain",   # accepts clip transcript (untrusted)
     "clip_engine.scoring",
     "chat.intake",
 }
@@ -56,10 +62,13 @@ _MUST_INJECT_POLICY = {
 # Modules that SHOULD have a cache_control breakpoint in their system prompt
 # (because their prefix clears the relevant model's cacheable floor).
 _MUST_CACHE = {
-    "knowledge.titles",     # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "knowledge.thumbnails", # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "clip_engine.scoring",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "improvement.brief",    # cache_control ephemeral on static instructions block
+    "knowledge.titles",      # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.thumbnails",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.clip_titles", # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.clip_captions", # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.clip_explain",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "clip_engine.scoring",   # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "improvement.brief",     # cache_control ephemeral on static instructions block
 }
 
 # Modules that have CONFIRMED NO cache_control (prefix too short for their model floor)

@@ -148,6 +148,9 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── titles.py               # Title suggestion generation (Issue 128)
 │   ├── hooks.py                # First-30s hook analysis vs retention curves (Issue 130)
 │   ├── chapters.py             # Auto chapter marker generation from transcript (Issue 131)
+│   ├── clip_titles.py          # Per-clip Short-title + hook-rewrite generator (Issue 322)
+│   ├── clip_captions.py        # Per-clip caption-hook / thumbnail overlay-text (Issue 323)
+│   ├── clip_explain.py         # Per-clip Why-This-Clip narrative, cites CLIPPING_PRINCIPLES (Issue 325)
 │   ├── util.py                 # Shared transcript extraction helpers
 │   └── seed/                   # Evergreen corpus: hook psychology, pacing, retention theory
 │
@@ -162,7 +165,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │
 ├── chat/                       # Pro chatbot (Issue 152)
 │   ├── prompt.py               # Cached, honesty-constrained system prompt
-│   ├── tools.py                # 5 creator-scoped tools (DNA/recent videos/video perf/averages/timing) — every query filtered by creator_id
+│   ├── tools.py                # 8 creator-scoped tools (DNA/videos/perf/averages/timing + clips/outcomes/title-gen) — every query filtered by creator_id (Issue 324)
 │   └── runner.py               # Manual agentic streaming loop (stream → tool_use → execute → loop), iteration/token capped
 │
 ├── routers/
@@ -172,7 +175,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── auth.py                 # OAuth login/callback, session
 │   ├── creators.py             # Creator profile, DNA, onboarding state
 │   ├── videos.py               # Link/upload video, ingestion status
-│   ├── clips.py                # List candidate clips, get clip, render status
+│   ├── clips.py                # List candidate clips, get clip, render status; POST /clips/{id}/title-suggestions, /caption-hooks, /explanation (Issues 322/323/325)
 │   ├── review.py               # Feedback: upvote/downvote/skip/trim/format
 │   ├── upload_intel.py         # GET timing recommendation
 │   ├── improvement.py          # GET improvement brief

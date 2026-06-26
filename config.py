@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     ANTHROPIC_MODEL_CHAT: str = "claude-sonnet-4-6"
     ANTHROPIC_MODEL_INTAKE: str = "claude-sonnet-4-6"
     ANTHROPIC_MODEL_IMPROVEMENT: str = "claude-sonnet-4-6"
+    # Per-clip LLM feature models (Issues 322–325).
+    # All three are Sonnet 4.6 reasoning tasks (DNA-grounded, per-clip context).
+    ANTHROPIC_MODEL_CLIP_TITLES: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_CLIP_CAPTIONS: str = "claude-sonnet-4-6"
+    ANTHROPIC_MODEL_CLIP_EXPLAIN: str = "claude-sonnet-4-6"
     # web_search_20260209 is the GA version with dynamic filtering: Claude
     # writes code to pre-filter search results before they reach the context
     # window, reducing tokens read and improving accuracy. Same tool API

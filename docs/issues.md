@@ -5531,7 +5531,7 @@ a proper 429 with a safe message. Document the new key in `.env.example`.
 
 ### Issue 322: Per-clip AI Short-title + hook-rewrite suggestions (Review surface)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Status** `DONE` (static-verified; staging-pending for live LLM) · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
 **Blocked by** 318 (config-driven model), 320 (conformance), 321 (usage/quota) — **build after the W0 half** · **Coordinate (hot files)** `routers/clips.py`, `frontend/src/components/review/WhyThisClip.tsx`, `frontend/src/pages/Review.tsx`
 
 **Problem.** `knowledge/titles.py` generates *video-level* title suggestions, but the Review surface — where
@@ -5558,11 +5558,11 @@ rewrite hook" card with click-to-copy. Honesty + no-virality copy.
 - `docs/SOT.md` — new endpoint/module
 
 **Acceptance criteria**
-- [ ] `POST /clips/{clip_id}/title-suggestions` returns N ranked Short titles + ≥1 hook rewrite as schema-valid structured output
-- [ ] Grounded in the creator's DNA brief (cached prefix) + the clip transcript (uncached); per-creator isolation enforced
-- [ ] Honesty disclaimer appended by Python; no response promises virality (structural test)
-- [ ] Usage logged + quota-gated (via 321); clip transcript treated as untrusted content
-- [ ] Review surface shows the suggestions with copy-to-clipboard
+- [x] `POST /clips/{clip_id}/title-suggestions` returns N ranked Short titles + ≥1 hook rewrite as schema-valid structured output
+- [x] Grounded in the creator's DNA brief (cached prefix) + the clip transcript (uncached); per-creator isolation enforced
+- [x] Honesty disclaimer appended by Python; no response promises virality (structural test)
+- [x] Usage logged + quota-gated (via 321); clip transcript treated as untrusted content
+- [x] Review surface shows the suggestions with copy-to-clipboard
 
 **Tests** — backend structured-output + isolation + injection + no-virality; frontend render/copy.
 
@@ -5572,7 +5572,7 @@ rewrite hook" card with click-to-copy. Honesty + no-virality copy.
 
 ### Issue 323: Per-clip caption-hook / thumbnail-text concepts
 
-**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Status** `DONE` (static-verified; staging-pending for live LLM) · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
 **Blocked by** 318, 320, 321 · **Coordinate (hot files)** `routers/thumbnails.py`, `routers/clips.py`, `frontend/src/pages/Review.tsx`
 
 **Problem.** `knowledge/thumbnails.py` produces *channel/video-level* thumbnail concepts, but a Short's
@@ -5593,10 +5593,10 @@ Surface alongside the title suggestions from 322 in Review.
 - `docs/SOT.md` — new endpoint/module
 
 **Acceptance criteria**
-- [ ] Endpoint returns 3–5 short overlay-text options + rationale as schema-valid output, grounded in DNA + clip hook
-- [ ] Per-creator isolation, usage logged, quota-gated; clip transcript treated as untrusted
-- [ ] Honesty/no-virality preserved
-- [ ] Review surface shows the options with copy
+- [x] Endpoint returns 3–5 short overlay-text options + rationale as schema-valid output, grounded in DNA + clip hook
+- [x] Per-creator isolation, usage logged, quota-gated; clip transcript treated as untrusted
+- [x] Honesty/no-virality preserved
+- [x] Review surface shows the options with copy
 
 **Tests** — backend structured/isolation/injection; frontend render.
 
@@ -5604,7 +5604,7 @@ Surface alongside the title suggestions from 322 in Review.
 
 ### Issue 324: Agentic chat — new creator-scoped tools over clips & outcomes
 
-**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Status** `DONE` (static-verified; integration-lane isolation test staging-pending for live PG) · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
 **Blocked by** 318, 320 · **Coordinate (hot files)** `chat/tools.py`, `chat/prompt.py`
 
 **Problem.** The Pro chat assistant (`chat/tools.py`) has creator-scoped tools over videos/metrics/
@@ -5628,11 +5628,11 @@ constant so the prompt-cache prefix is byte-stable. Honesty constraint unchanged
 - `docs/SOT.md` — note the expanded chat tool surface
 
 **Acceptance criteria**
-- [ ] New clip/outcome tools added; each filters by injected `creator_id` (model never supplies it)
-- [ ] Isolation test extended: creator A's chat can never read creator B's clips/outcomes
-- [ ] Tool schemas remain a module-level constant (prompt-cache prefix unchanged); descriptions are prescriptive about when to call
-- [ ] Honesty/no-virality preserved; no PII/token logged
-- [ ] `suggest_clip_titles` tool reuses the 322 generator (DRY)
+- [x] New clip/outcome tools added; each filters by injected `creator_id` (model never supplies it)
+- [ ] Isolation test extended: creator A's chat can never read creator B's clips/outcomes — unit schema tests pass; DB integration test (test_chat_isolation_integration.py) staging-pending (no PG here)
+- [x] Tool schemas remain a module-level constant (prompt-cache prefix unchanged); descriptions are prescriptive about when to call
+- [x] Honesty/no-virality preserved; no PII/token logged
+- [x] `suggest_clip_titles` tool reuses the 322 generator (DRY)
 
 **Tests** — extend chat + chat-isolation tests (the isolation test is load-bearing — keep it real-PG in the integration lane).
 
@@ -5640,7 +5640,7 @@ constant so the prompt-cache prefix is byte-stable. Honesty constraint unchanged
 
 ### Issue 325: "Explain this clip" — deeper Why-This-Clip LLM narrative
 
-**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Status** `DONE` (static-verified; staging-pending for live LLM) · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
 **Blocked by** 318, 320, 321 · **Coordinate (hot files)** `routers/clips.py`, `frontend/src/components/review/WhyThisClip.tsx`
 
 **Problem.** The Why-This-Clip surface shows the score + (per CLAUDE.md) the named principle a clip cites,
@@ -5663,10 +5663,10 @@ as an expandable "Why this clip" explanation. Reuse the cached DNA prefix.
 - `docs/SOT.md` / `docs/CLIPPING_PRINCIPLES.md` — note the surface if a principle is added/cited
 
 **Acceptance criteria**
-- [ ] Endpoint returns a 2–4 sentence DNA-grounded explanation as structured output
-- [ ] The explanation cites a real named principle from `docs/CLIPPING_PRINCIPLES.md` (structural test)
-- [ ] No-virality / honesty preserved (structural test); per-creator isolation; usage logged + quota-gated
-- [ ] WhyThisClip shows the explanation
+- [x] Endpoint returns a 2–4 sentence DNA-grounded explanation as structured output
+- [x] The explanation cites a real named principle from `docs/CLIPPING_PRINCIPLES.md` (structural test)
+- [x] No-virality / honesty preserved (structural test); per-creator isolation; usage logged + quota-gated
+- [x] WhyThisClip shows the explanation
 
 **Tests** — backend cited-principle + no-virality + isolation + structured output; frontend render.
 

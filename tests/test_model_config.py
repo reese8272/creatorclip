@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-# All per-task model keys added in Issue 318
+# All per-task model keys added in Issues 318 and 322–325
 _TASK_MODEL_KEYS = [
     "ANTHROPIC_MODEL_SCORING",
     "ANTHROPIC_MODEL_DNA_BRIEF",
@@ -26,6 +26,10 @@ _TASK_MODEL_KEYS = [
     "ANTHROPIC_MODEL_CHAT",
     "ANTHROPIC_MODEL_INTAKE",
     "ANTHROPIC_MODEL_IMPROVEMENT",
+    # Issue 322–325: per-clip LLM feature models
+    "ANTHROPIC_MODEL_CLIP_TITLES",
+    "ANTHROPIC_MODEL_CLIP_CAPTIONS",
+    "ANTHROPIC_MODEL_CLIP_EXPLAIN",
 ]
 
 # Bare alias pattern for Claude model names: claude-<family>-<major>-<minor>

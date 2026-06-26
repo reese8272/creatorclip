@@ -19,7 +19,8 @@ from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from config import settings
 from db import get_session
-from limiter import LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
+from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
+from observability import record_llm_tokens
 from models import (
     Clip,
     Creator,
@@ -1022,3 +1023,310 @@ async def download_clip(
         filename=filename,
         content_disposition_type=disposition,
     )
+
+
+# ── Issue 322: Per-clip Short-title + hook-rewrite suggestions ────────────────
+
+class TitleSuggestionsOut(BaseModel):
+    """Response for POST /clips/{clip_id}/title-suggestions."""
+
+    titles: list[dict]
+    hook_rewrites: list[dict]
+    disclaimer: str
+
+
+@clips_router.post("/{clip_id}/title-suggestions", response_model=TitleSuggestionsOut)
+@limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
+@limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
+async def get_clip_title_suggestions(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Generate per-clip Short-title candidates + hook-rewrite options (Issue 322).
+
+    Grounded in the creator's DNA brief (cached prefix) + the clip's own
+    transcript excerpt (uncached). Returns 5 ranked title candidates and 1–2
+    hook rewrites. The honesty disclaimer is always appended by Python.
+
+    Per-creator isolation: the clip's creator_id must match the authenticated
+    creator. Usage is logged to the billing ledger.
+    """
+    from anthropic import APIConnectionError, APIStatusError, RateLimitError
+
+    from billing.ledger import record_llm_usage
+    from dna.profile import get_active as _get_active_dna
+    from knowledge.clip_titles import generate_clip_title_suggestions
+    from knowledge.util import extract_transcript_text
+
+    await check_positive_balance(creator.id, session)
+
+    # Fetch clip with isolation check.
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Fetch transcript for the clip's parent video.
+    transcript = await session.scalar(
+        select(Transcript).where(Transcript.video_id == clip.video_id)
+    )
+    clip_transcript = (
+        extract_transcript_text(transcript.segments_jsonb if transcript else None, 1500)
+    )
+
+    # Fetch the creator's DNA brief.
+    dna = await _get_active_dna(session, creator.id)
+    dna_brief = dna.brief_text if dna else None
+
+    channel_title = creator.channel_title or "Your Channel"
+
+    try:
+        result, usage = await asyncio.to_thread(
+            generate_clip_title_suggestions,
+            channel_title,
+            dna_brief,
+            clip_transcript,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error(
+            "clip_title_suggestions route LLM error clip=%s exc_type=%s",
+            clip_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="AI title suggestions temporarily unavailable. Try again shortly.",
+        ) from exc
+    except ValueError as exc:
+        logger.error("clip_title_suggestions parse error clip=%s err=%s", clip_id, exc)
+        raise HTTPException(
+            status_code=502, detail="AI returned an unexpected response format."
+        ) from exc
+
+    record_llm_tokens(
+        provider="anthropic",
+        model=settings.ANTHROPIC_MODEL_CLIP_TITLES,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        cache_read_tokens=usage["cache_read"],
+        cache_creation_tokens=usage["cache_creation"],
+    )
+    await record_llm_usage(
+        creator.id,
+        usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+    logger.info(
+        "clip_title_suggestions done creator=%s clip=%s titles=%d",
+        creator.id,
+        clip_id,
+        len(result.get("titles", [])),
+    )
+    return result
+
+
+# ── Issue 323: Per-clip caption-hook / thumbnail-text concepts ────────────────
+
+class CaptionHooksOut(BaseModel):
+    """Response for POST /clips/{clip_id}/caption-hooks."""
+
+    options: list[dict]
+    disclaimer: str
+
+
+@clips_router.post("/{clip_id}/caption-hooks", response_model=CaptionHooksOut)
+@limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
+@limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
+async def get_clip_caption_hooks(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Generate per-clip caption-hook / thumbnail overlay-text options (Issue 323).
+
+    Grounded in the creator's DNA brief + the clip's opening transcript hook.
+    Returns 3–5 short overlay-text options. The honesty disclaimer is always
+    appended by Python. Per-creator isolation enforced.
+    """
+    from anthropic import APIConnectionError, APIStatusError, RateLimitError
+
+    from billing.ledger import record_llm_usage
+    from dna.profile import get_active as _get_active_dna
+    from knowledge.clip_captions import generate_clip_caption_hooks
+    from knowledge.util import extract_transcript_text
+
+    await check_positive_balance(creator.id, session)
+
+    # Fetch clip with isolation check.
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Fetch opening transcript hook for the clip's parent video.
+    transcript = await session.scalar(
+        select(Transcript).where(Transcript.video_id == clip.video_id)
+    )
+    clip_hook = (
+        extract_transcript_text(transcript.segments_jsonb if transcript else None, 800)
+    )
+
+    dna = await _get_active_dna(session, creator.id)
+    dna_brief = dna.brief_text if dna else None
+    channel_title = creator.channel_title or "Your Channel"
+
+    try:
+        result, usage = await asyncio.to_thread(
+            generate_clip_caption_hooks,
+            channel_title,
+            dna_brief,
+            clip_hook,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error(
+            "clip_caption_hooks route LLM error clip=%s exc_type=%s",
+            clip_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="AI caption suggestions temporarily unavailable. Try again shortly.",
+        ) from exc
+    except ValueError as exc:
+        logger.error("clip_caption_hooks parse error clip=%s err=%s", clip_id, exc)
+        raise HTTPException(
+            status_code=502, detail="AI returned an unexpected response format."
+        ) from exc
+
+    record_llm_tokens(
+        provider="anthropic",
+        model=settings.ANTHROPIC_MODEL_CLIP_CAPTIONS,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        cache_read_tokens=usage["cache_read"],
+        cache_creation_tokens=usage["cache_creation"],
+    )
+    await record_llm_usage(
+        creator.id,
+        usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+    logger.info(
+        "clip_caption_hooks done creator=%s clip=%s options=%d",
+        creator.id,
+        clip_id,
+        len(result.get("options", [])),
+    )
+    return result
+
+
+# ── Issue 325: "Explain this clip" — Why-This-Clip LLM narrative ─────────────
+
+class ClipExplanationOut(BaseModel):
+    """Response for POST /clips/{clip_id}/explanation."""
+
+    explanation: str
+    cited_principle: str
+    disclaimer: str
+
+
+@clips_router.post("/{clip_id}/explanation", response_model=ClipExplanationOut)
+@limiter.limit("10/hour", key_func=creator_key)
+@limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
+@limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
+async def get_clip_explanation(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Generate a plain-language Why-This-Clip explanation (Issue 325).
+
+    Returns a 2–4 sentence DNA-grounded explanation that explicitly cites one
+    named principle from docs/CLIPPING_PRINCIPLES.md. The honesty disclaimer is
+    always appended by Python. Per-creator isolation enforced.
+    """
+    from anthropic import APIConnectionError, APIStatusError, RateLimitError
+
+    from billing.ledger import record_llm_usage
+    from dna.profile import get_active as _get_active_dna
+    from knowledge.clip_explain import generate_clip_explanation
+    from knowledge.util import extract_transcript_text
+
+    await check_positive_balance(creator.id, session)
+
+    # Fetch clip with isolation check.
+    clip = await session.get(Clip, clip_id)
+    if not clip or clip.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Fetch transcript.
+    transcript = await session.scalar(
+        select(Transcript).where(Transcript.video_id == clip.video_id)
+    )
+    clip_transcript = (
+        extract_transcript_text(transcript.segments_jsonb if transcript else None, 1200)
+    )
+
+    dna = await _get_active_dna(session, creator.id)
+    dna_brief = dna.brief_text if dna else None
+    channel_title = creator.channel_title or "Your Channel"
+
+    # Pull principle + score from signals_jsonb (populated by the clip engine).
+    signals = clip.signals_jsonb or {}
+    clip_principle = signals.get("principle", "Audience-fit over generic virality")
+    clip_score = clip.score
+
+    try:
+        result, usage = await asyncio.to_thread(
+            generate_clip_explanation,
+            channel_title,
+            dna_brief,
+            clip_principle,
+            clip_score,
+            clip.start_s,
+            clip.end_s,
+            clip_transcript,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error(
+            "clip_explain route LLM error clip=%s exc_type=%s",
+            clip_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="AI explanation temporarily unavailable. Try again shortly.",
+        ) from exc
+    except ValueError as exc:
+        logger.error("clip_explain parse error clip=%s err=%s", clip_id, exc)
+        raise HTTPException(
+            status_code=502, detail="AI returned an unexpected response format."
+        ) from exc
+
+    record_llm_tokens(
+        provider="anthropic",
+        model=settings.ANTHROPIC_MODEL_CLIP_EXPLAIN,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        cache_read_tokens=usage["cache_read"],
+        cache_creation_tokens=usage["cache_creation"],
+    )
+    await record_llm_usage(
+        creator.id,
+        usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+    logger.info(
+        "clip_explain done creator=%s clip=%s principle=%s",
+        creator.id,
+        clip_id,
+        result.get("cited_principle", ""),
+    )
+    return result

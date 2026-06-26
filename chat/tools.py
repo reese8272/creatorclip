@@ -1,4 +1,4 @@
-"""Creator-scoped tools for the Pro chatbot (Issue 152).
+"""Creator-scoped tools for the Pro chatbot (Issue 152 + Issue 324).
 
 Every executor takes the authenticated ``creator_id`` and an ``AsyncSession``
 and filters EVERY query by that id. The model never supplies the creator id —
@@ -10,10 +10,18 @@ Tool descriptions are prescriptive about WHEN to call (Sonnet/Opus reach for
 tools conservatively — see /claude-api shared/tool-use-concepts.md). The schema
 list is a module-level constant so it renders byte-identically on every request,
 keeping the prompt-cache prefix intact.
+
+Issue 324 adds three clip/outcome tools:
+  - ``list_top_clips``: read the creator's top-performing clips by score.
+  - ``get_clip_detail``: fetch one clip's score, principle, timing, and outcome.
+  - ``suggest_clip_titles``: call the Issue-322 generator (DRY reuse).
+
+No ``creator_id`` parameter appears in any tool schema — the worker injects it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -22,7 +30,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import AudienceActivity, RetentionCurve, Video, VideoMetrics
+from models import AudienceActivity, Clip, ClipOutcome, RetentionCurve, Video, VideoMetrics
 from upload_intel.timing import best_upload_windows, optimal_gap_hours
 
 logger = logging.getLogger(__name__)
@@ -30,6 +38,8 @@ logger = logging.getLogger(__name__)
 # Bounds the model can't exceed regardless of what it asks for.
 _MAX_VIDEOS = 25
 _DEFAULT_VIDEOS = 10
+_MAX_CLIPS = 20
+_DEFAULT_CLIPS = 10
 
 # Stable, deterministically-ordered tool schemas (keep order frozen — see module
 # docstring). No ``creator_id`` parameter: the worker injects it.
@@ -102,6 +112,69 @@ TOOLS: list[dict[str, Any]] = [
             "is about when to post or how often."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    # ── Issue 324: clip/outcome tools ─────────────────────────────────────────
+    {
+        "name": "list_top_clips",
+        "description": (
+            "List the creator's top-performing clips ranked by fit score, including "
+            "each clip's score, timing, named principle, and published outcome if "
+            "available. Call this when the creator asks which of their clips performed "
+            "best, how their clips rank, or for an overview of their clip catalog."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": f"How many clips to return (1–{_MAX_CLIPS}).",
+                    "minimum": 1,
+                    "maximum": _MAX_CLIPS,
+                }
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_clip_detail",
+        "description": (
+            "Get the full detail for ONE specific clip: its score, timing, the named "
+            "clipping principle the engine cited, and its published outcome (views, "
+            "retention) if available. Call this when the creator asks about a specific "
+            "clip — why it was selected, how it performed, or what principle it cites."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "clip_id": {
+                    "type": "string",
+                    "description": "The UUID of the clip (from list_top_clips results).",
+                }
+            },
+            "required": ["clip_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "suggest_clip_titles",
+        "description": (
+            "Generate 5 ranked Short-title candidates + 1–2 hook-rewrite options for a "
+            "specific clip, grounded in the creator's DNA and the clip's own transcript. "
+            "Call this ONLY when the creator explicitly asks for title suggestions or hook "
+            "rewrites for a clip — this triggers a separate AI call and should be used "
+            "sparingly, not as a default action."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "clip_id": {
+                    "type": "string",
+                    "description": "The UUID of the clip to generate titles for.",
+                }
+            },
+            "required": ["clip_id"],
+            "additionalProperties": False,
+        },
     },
 ]
 
@@ -280,12 +353,176 @@ async def _get_upload_timing(creator_id: uuid.UUID, session: AsyncSession, _inp:
     }
 
 
+async def _list_top_clips(creator_id: uuid.UUID, session: AsyncSession, inp: dict) -> dict:
+    """Return the creator's top-scoring clips, with outcome data if available.
+
+    Filters by creator_id on every query — the model cannot supply or override
+    this value (Issue 324 isolation guarantee).
+    """
+    raw_limit = inp.get("limit", _DEFAULT_CLIPS)
+    try:
+        limit = max(1, min(_MAX_CLIPS, int(raw_limit)))
+    except (TypeError, ValueError):
+        limit = _DEFAULT_CLIPS
+
+    rows = list(
+        (
+            await session.execute(
+                select(Clip, ClipOutcome)
+                .outerjoin(ClipOutcome, ClipOutcome.clip_id == Clip.id)
+                .where(Clip.creator_id == creator_id)
+                .order_by(Clip.score.desc().nulls_last())
+                .limit(limit)
+            )
+        ).all()
+    )
+
+    clips_out = []
+    for clip, outcome in rows:
+        sj = clip.signals_jsonb or {}
+        clips_out.append(
+            {
+                "clip_id": str(clip.id),
+                "video_id": str(clip.video_id),
+                "score": clip.score,
+                "rank": clip.rank,
+                "principle": sj.get("principle", ""),
+                "reasoning": sj.get("reasoning", ""),
+                "start_s": clip.start_s,
+                "end_s": clip.end_s,
+                "render_status": clip.render_status.value,
+                "outcome": (
+                    {
+                        "views": outcome.views,
+                        "retention": outcome.retention,
+                        "performed_well": outcome.performed_well,
+                    }
+                    if outcome
+                    else None
+                ),
+            }
+        )
+    return {"count": len(clips_out), "clips": clips_out}
+
+
+async def _get_clip_detail(creator_id: uuid.UUID, session: AsyncSession, inp: dict) -> dict:
+    """Return full detail for one specific clip.
+
+    Filters by creator_id to enforce per-creator isolation.
+    """
+    raw_id = (inp.get("clip_id") or "").strip()
+    if not raw_id:
+        return {"found": False, "message": "No clip_id provided."}
+
+    try:
+        clip_uuid = uuid.UUID(raw_id)
+    except ValueError:
+        return {"found": False, "message": f"Invalid clip_id format: {raw_id!r}"}
+
+    clip = await session.scalar(
+        select(Clip).where(Clip.id == clip_uuid, Clip.creator_id == creator_id)
+    )
+    if clip is None:
+        return {"found": False, "message": "Clip not found in your catalog."}
+
+    outcome = await session.scalar(
+        select(ClipOutcome).where(ClipOutcome.clip_id == clip.id)
+    )
+    sj = clip.signals_jsonb or {}
+
+    return {
+        "found": True,
+        "clip_id": str(clip.id),
+        "video_id": str(clip.video_id),
+        "score": clip.score,
+        "rank": clip.rank,
+        "principle": sj.get("principle", ""),
+        "reasoning": sj.get("reasoning", ""),
+        "start_s": clip.start_s,
+        "end_s": clip.end_s,
+        "peak_s": clip.peak_s,
+        "render_status": clip.render_status.value,
+        "outcome": (
+            {
+                "views": outcome.views,
+                "retention": outcome.retention,
+                "performed_well": outcome.performed_well,
+                "fetched_at": outcome.fetched_at.isoformat(),
+            }
+            if outcome
+            else None
+        ),
+    }
+
+
+async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp: dict) -> dict:
+    """Generate Short-title candidates for a clip (reuses Issue-322 generator).
+
+    Fetches the clip, its transcript, and the creator's DNA brief from DB (all
+    filtered by creator_id), then calls the Issue-322 generator synchronously
+    via asyncio.to_thread. Returns the title/hook suggestions as a dict.
+    """
+    from dna.profile import get_active as _get_active_dna
+    from knowledge.clip_titles import generate_clip_title_suggestions
+    from knowledge.util import extract_transcript_text
+    from models import Creator, Transcript
+
+    raw_id = (inp.get("clip_id") or "").strip()
+    if not raw_id:
+        return {"available": False, "message": "No clip_id provided."}
+
+    try:
+        clip_uuid = uuid.UUID(raw_id)
+    except ValueError:
+        return {"available": False, "message": f"Invalid clip_id: {raw_id!r}"}
+
+    # Isolation: creator_id filter on clip lookup.
+    clip = await session.scalar(
+        select(Clip).where(Clip.id == clip_uuid, Clip.creator_id == creator_id)
+    )
+    if clip is None:
+        return {"available": False, "message": "Clip not found in your catalog."}
+
+    # Fetch transcript for the clip's parent video.
+    transcript = await session.scalar(
+        select(Transcript).where(Transcript.video_id == clip.video_id)
+    )
+    clip_transcript = extract_transcript_text(
+        transcript.segments_jsonb if transcript else None, 1500
+    )
+
+    # Fetch creator for channel_title.
+    creator_row = await session.get(Creator, creator_id)
+    channel_title = (creator_row.channel_title if creator_row else None) or "Your Channel"
+
+    # Fetch DNA brief.
+    dna = await _get_active_dna(session, creator_id)
+    dna_brief = dna.brief_text if dna else None
+
+    try:
+        result, _usage = await asyncio.to_thread(
+            generate_clip_title_suggestions,
+            channel_title,
+            dna_brief,
+            clip_transcript,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as tool error, not propagate
+        logger.warning("suggest_clip_titles tool failed clip=%s err=%s", clip_uuid, exc)
+        return {"available": False, "message": "Title generation failed; try again later."}
+
+    return {"available": True, "clip_id": str(clip.id), **result}
+
+
 _EXECUTORS = {
     "get_channel_dna": _get_channel_dna,
     "get_recent_videos": _get_recent_videos,
     "get_video_performance": _get_video_performance,
     "get_channel_averages": _get_channel_averages,
     "get_upload_timing": _get_upload_timing,
+    # Issue 324: clip/outcome tools.
+    "list_top_clips": _list_top_clips,
+    "get_clip_detail": _get_clip_detail,
+    "suggest_clip_titles": _suggest_clip_titles,
 }
 
 
