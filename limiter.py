@@ -167,3 +167,9 @@ LLM_DAILY_LIMIT: str = daily_limit(settings.LLM_DAILY_JOB_LIMIT)
 # Render jobs (render_clip/clean_clip/submit_cuts/ingest_clip) — bounds ffmpeg
 # CPU + Cloudflare R2 egress per creator/day.
 RENDER_DAILY_LIMIT: str = daily_limit(settings.RENDER_DAILY_JOB_LIMIT)
+
+# Brief-generating endpoints (titles/thumbnails/insights analysis/improvement
+# brief) — independently tunable cap for the most expensive single-request
+# inference paths. Stacked on top of the existing hourly burst limit and the
+# shared LLM_DAILY_LIMIT; the tightest limit wins at runtime.
+BRIEF_DAILY_LIMIT: str = daily_limit(settings.BRIEF_DAILY_LIMIT_PER_CREATOR)

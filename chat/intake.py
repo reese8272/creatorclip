@@ -31,7 +31,7 @@ import uuid
 from typing import Any
 
 import httpx
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from chat.prompt import HONESTY_CONSTRAINT
 from config import settings
@@ -185,13 +185,20 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
     # At most one validation-correction round, so a bad propose_profile can
     # self-correct once without looping.
     for attempt in range(2):
-        message = await _ANTHROPIC.messages.create(
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=settings.CHAT_MAX_TOKENS,
-            system=system,
-            messages=messages,
-            tools=tools,
-        )
+        try:
+            message = await _ANTHROPIC.messages.create(
+                model=settings.ANTHROPIC_MODEL_INTAKE,
+                max_tokens=settings.CHAT_MAX_TOKENS,
+                system=system,
+                messages=messages,
+                tools=tools,
+            )
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            logger.error(
+                "intake_turn LLM error creator=%s exc_type=%s",
+                creator_id, type(exc).__name__,
+            )
+            raise
         usage = getattr(message, "usage", None)
         total_in += getattr(usage, "input_tokens", 0) or 0
         total_out += getattr(usage, "output_tokens", 0) or 0

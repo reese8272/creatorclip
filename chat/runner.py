@@ -25,7 +25,7 @@ import uuid
 from typing import Any
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from chat.prompt import build_system
@@ -75,16 +75,23 @@ async def run_chat_turn(
         # The final allowed round forces a text answer (no tools) so the loop
         # can't run past the cap with a dangling tool_use.
         tools = None if i == max_iters else TOOLS
-        message, usage = await asyncio.to_thread(
-            stream_message,
-            client,
-            task_id,
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=settings.CHAT_MAX_TOKENS,
-            system=system,
-            messages=messages,
-            tools=tools,
-        )
+        try:
+            message, usage = await asyncio.to_thread(
+                stream_message,
+                client,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_CHAT,
+                max_tokens=settings.CHAT_MAX_TOKENS,
+                system=system,
+                messages=messages,
+                tools=tools,
+            )
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            logger.error(
+                "chat_turn LLM error creator=%s round=%d exc_type=%s",
+                creator_id, i, type(exc).__name__,
+            )
+            raise
         for k in total:
             total[k] += usage.get(k, 0)
 

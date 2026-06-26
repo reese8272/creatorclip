@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 
 import anthropic as _anthropic
 import httpx as _httpx
+from anthropic import APIConnectionError, APIStatusError, RateLimitError
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -27,7 +28,7 @@ from billing.ledger import check_positive_balance
 from config import settings
 from db import get_session
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from limiter import LLM_DAILY_LIMIT, creator_key, limiter
+from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import (
     Creator,
     CreatorDna,
@@ -456,10 +457,8 @@ async def get_analytics_summary(
 
 # ── AI per-performer analysis (Issue 117) ────────────────────────────────────
 
-_HAIKU_MODEL = "claude-haiku-4-5-20251001"
-
 # Module-level Anthropic singleton (Issue 123 SEV1 fix: was constructed per-request).
-# Haiku is used here (low cost, fast) — caching on the stable static system prefix.
+# Haiku is used here (low cost, fast) — model selected via settings.ANTHROPIC_MODEL_PERFORMER.
 _ANTHROPIC = _anthropic.Anthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=_httpx.Timeout(120.0, connect=10.0),
@@ -497,6 +496,7 @@ def _build_analysis_prompt(
 @router.post("/analyze-performer", response_model=InsightOut)
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
+@limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
 async def analyze_performer(
     request: Request,
     body: AnalyzePerformerIn,
@@ -587,13 +587,19 @@ async def analyze_performer(
                 ),
             }
         ]
-        msg = await _aio.to_thread(
-            _ANTHROPIC.messages.create,  # type: ignore[arg-type]  # overloaded fn; callable at runtime
-            model=_HAIKU_MODEL,
-            max_tokens=256,
-            system=_system,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        try:
+            msg = await _aio.to_thread(
+                _ANTHROPIC.messages.create,  # type: ignore[arg-type]  # overloaded fn; callable at runtime
+                model=settings.ANTHROPIC_MODEL_PERFORMER,
+                max_tokens=256,
+                system=_system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            logger.error("performer_analysis LLM error exc_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=503, detail="AI analysis temporarily unavailable. Try again shortly."
+            ) from exc
         _pa_tokens_in = msg.usage.input_tokens
         _pa_tokens_out = msg.usage.output_tokens
         logger.info(
@@ -604,7 +610,7 @@ async def analyze_performer(
         )
         record_llm_tokens(
             provider="anthropic",
-            model=_HAIKU_MODEL,
+            model=settings.ANTHROPIC_MODEL_PERFORMER,
             input_tokens=msg.usage.input_tokens,
             output_tokens=msg.usage.output_tokens,
             cache_read_tokens=getattr(msg.usage, "cache_read_input_tokens", 0),

@@ -5359,7 +5359,8 @@ singletons) and the CLAUDE.md honesty constraint. Touches `config.py`, `knowledg
 
 ### Issue 318: Kill hardcoded Claude model IDs — complete the model-per-task config registry
 
-**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Status** `DONE` (2026-06-26, wave0/llm-features-hardening, merged to main local) · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Shipped:** 11 per-task `ANTHROPIC_MODEL_<TASK>` keys in `config.py` (Sonnet for reasoning/streaming, Haiku for hooks/chapters/performer); 3 hardcoded literals removed (`knowledge/hooks.py`, `knowledge/chapters.py`, `routers/insights.py`); all LLM modules read task-specific keys; `.env.example` documented; `tests/test_model_config.py` (grep-scan for literals + alias-format + tier routing). Completes Issue 221's intent. _Merge-gate fix: the literal-scan test excluded `tests/` but not `.venv/` — broke on a local checkout (joblib's non-UTF-8 fixture); fixed to exclude virtualenv/build/cache trees + tolerant read._
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `config.py`, `knowledge/hooks.py`, `knowledge/chapters.py`
 
 **Problem.** Issue 221 ("model-per-task — correct SOT") is marked reconciled-DONE, but a hardcoded model
@@ -5403,7 +5404,8 @@ per `/claude-api shared/models.md`. Log the chosen model per call (already partl
 
 ### Issue 319: End-to-end live-API LLM verification harness (flag-gated) + CI nightly
 
-**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `external`
+**Status** `DONE (static-verified; live assertions staging-pending)` (2026-06-26, wave0/llm-features-hardening) · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `external`
+**Shipped:** `scripts/llm_e2e.py` (standalone, `RUN_LLM_LIVE=1`-gated, direct module imports + synthetic fixture); `tests/test_llm_live.py` (`@pytest.mark.llm_live`, 6 live tests deselected by default + an always-running guard test); `pytest.ini` marker + addopts deselection; `.github/workflows/llm-e2e-nightly.yml` (cron 03:00 UTC + dispatch, never push/PR). **Staging-pending (the deliverable is built; running it is external):** add the `ANTHROPIC_API_KEY` GitHub secret and trigger the nightly to clear the live assertions (cache_read>0, disclaimer present, typed-exception path).
 **Blocked by** nothing — **ready now (harness authorable; live run is external)** · **Coordinate (hot files)** none (new files)
 
 **Problem.** Every LLM test under `tests/` mocks the Anthropic SDK — `test_titles.py`, `test_hooks.py`,
@@ -5450,7 +5452,8 @@ dependency is documented — the harness calls the runner directly (no Celery ne
 
 ### Issue 320: Anthropic-SDK production-standards conformance test
 
-**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Status** `DONE` (2026-06-26, wave0/llm-features-hardening) · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Shipped:** `tests/test_llm_conformance.py` (34 assertions: singleton timeout+max_retries, typed-exception imports, `UNTRUSTED_CONTENT_POLICY` injection, cache_control presence/absence per model floor — Sonnet 1024 / Haiku 4096); all 10 LLM modules now import + handle `RateLimitError`/`APIStatusError`/`APIConnectionError` around their create/stream calls. Durable replacement for the 2026-06-24 manual audit.
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** read-only across all LLM modules
 
 **Problem.** The 2026-06-24 "backend/LLM health pass" verified the SDK call sites are sound *by hand*
@@ -5489,7 +5492,8 @@ import-and-introspect of the module singletons. Fix any call site that fails the
 
 ### Issue 321: Usage-ledger coverage guard + per-creator brief quota (beta-sized)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Status** `DONE (quota concurrency staging-pending)` (2026-06-26, wave0/llm-features-hardening) · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Shipped:** `BRIEF_DAILY_LIMIT_PER_CREATOR=50` (config) + `BRIEF_DAILY_LIMIT` (limiter), stacked `@limiter.limit(..., key_func=creator_key)` on the 5 brief endpoints (titles, thumbnails×2, insights, improvement); `tests/test_usage_coverage.py` (AST guard that every LLM caller writes the ledger) + `tests/test_brief_quota.py` (config/limiter/decorator wiring). **Staging-pending:** Redis-backed per-creator 429-at-51st-request + isolation under concurrent load (needs live Redis).
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `billing/ledger.py`, `config.py`, `routers/insights.py`, `routers/titles.py`, `routers/thumbnails.py`, `routers/improvement.py`
 
 **Problem.** Issue 220 wired the `Usage` ledger increment into every LLM caller, but there is no test that

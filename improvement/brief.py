@@ -16,7 +16,7 @@ import logging
 from collections.abc import Mapping
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
@@ -140,15 +140,21 @@ def generate_improvement_brief(
         # The 120s timeout matters more here than on the streaming path
         # (streaming returns first byte fast), but pass it through for parity.
         client = _ANTHROPIC.with_options(timeout=120.0)
-        final_text, usage = stream_and_emit(
-            client,
-            task_id,
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=2000,
-            system=system,
-            messages=messages,
-            tools=tools,
-        )
+        try:
+            final_text, usage = stream_and_emit(
+                client,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
+                max_tokens=2000,
+                system=system,
+                messages=messages,
+                tools=tools,
+            )
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            logger.error(
+                "improvement_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__
+            )
+            raise
         logger.info(
             "improvement_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
             usage["input_tokens"],
@@ -162,13 +168,17 @@ def generate_improvement_brief(
         return final_text + _DISCLAIMER, usage
 
     # web_search tool can take 60-120s; override the default 60s timeout per-call.
-    response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=2000,
-        system=system,
-        tools=tools,
-        messages=messages,
-    )
+    try:
+        response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
+            model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
+            max_tokens=2000,
+            system=system,
+            tools=tools,
+            messages=messages,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error("improvement_brief LLM error exc_type=%s", type(exc).__name__)
+        raise
 
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens

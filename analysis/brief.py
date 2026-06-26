@@ -22,7 +22,7 @@ import logging
 from typing import Any
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
@@ -160,14 +160,20 @@ def generate_video_analysis(
         from worker.anthropic_stream import stream_and_emit
 
         client = _ANTHROPIC.with_options(timeout=120.0)
-        final_text, usage = stream_and_emit(
-            client,
-            task_id,
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=2000,
-            system=system,
-            messages=messages,
-        )
+        try:
+            final_text, usage = stream_and_emit(
+                client,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_ANALYSIS,
+                max_tokens=2000,
+                system=system,
+                messages=messages,
+            )
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            logger.error(
+                "video_analysis LLM error task=%s exc_type=%s", task_id, type(exc).__name__
+            )
+            raise
         logger.info(
             "video_analysis streaming tokens: in=%d cache_read=%d cache_write=%d out=%d",
             usage["input_tokens"],
@@ -177,12 +183,16 @@ def generate_video_analysis(
         )
         return final_text + _DISCLAIMER, usage
 
-    response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=2000,
-        system=system,
-        messages=messages,
-    )
+    try:
+        response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
+            model=settings.ANTHROPIC_MODEL_ANALYSIS,
+            max_tokens=2000,
+            system=system,
+            messages=messages,
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error("video_analysis LLM error exc_type=%s", type(exc).__name__)
+        raise
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens
     logger.info(

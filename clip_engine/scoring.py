@@ -25,7 +25,7 @@ import uuid
 from datetime import UTC, datetime
 
 import httpx
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, APIConnectionError, APIStatusError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from billing.ledger import _estimate_cost_usd, increment_usage
@@ -294,15 +294,19 @@ async def score_candidates(
     if prefix_clears_floor:
         dna_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
 
-    response = await _ANTHROPIC.messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=1200,
-        system=[
-            {"type": "text", "text": static_text},
-            dna_block,  # type: ignore[list-item]  # dict[str, Any] → TextBlockParam at runtime
-        ],
-        messages=[{"role": "user", "content": user_text}],
-    )
+    try:
+        response = await _ANTHROPIC.messages.create(
+            model=settings.ANTHROPIC_MODEL_SCORING,
+            max_tokens=1200,
+            system=[
+                {"type": "text", "text": static_text},
+                dna_block,  # type: ignore[list-item]  # dict[str, Any] → TextBlockParam at runtime
+            ],
+            messages=[{"role": "user", "content": user_text}],
+        )
+    except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+        logger.error("clip_scoring LLM error creator=%s exc_type=%s", creator_id, type(exc).__name__)
+        raise
 
     # anthropic>=0.105 exposes per-TTL cache-write tiers on usage.cache_creation;
     # cached_write_1h lets us confirm the ttl:"1h" breakpoint actually lands in

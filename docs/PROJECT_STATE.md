@@ -14,8 +14,15 @@ is **Issue 29** (Google OAuth verification). New active build track: **L20 — L
 (318 model-per-task literal removal, 319 live-API E2E harness, 320 SDK conformance test, 321 usage/quota
 guards); W1 = new creator features (322 per-clip titles/hook-rewrite, 323 caption-hooks, 324 chat
 clip/outcome tools, 325 "explain this clip"). Batch API (219) deliberately descoped at this size. Full
-rationale + evidence in `docs/DECISIONS.md` (two 2026-06-26 entries). _No code shipped in this planning
-step — docs + issue definitions only; the build waves run next._
+rationale + evidence in `docs/DECISIONS.md` (two 2026-06-26 entries).
+
+**W0 (318–321) SHIPPED + merged to `main` (local, not pushed):** Sonnet-4.6 issue-wave built all four green;
+independently re-verified on the merged tree — **unit lane 1533 passed / 0 failed** (57 new tests). One
+merge-gate defect fixed inline: Issue 318's literal-scan test excluded `tests/` but not `.venv/`, so it
+broke on a local checkout (joblib's non-UTF-8 fixture) though it passed in the wave's venv-less worktree —
+now excludes virtualenv/build/cache trees. Layer 0 (ruff/mypy/bandit/coverage) deferred — needs Docker;
+the unit lane is the verified gate on this box. Staging-pending: 319 nightly live-LLM run (needs
+`ANTHROPIC_API_KEY` secret), 321 Redis quota concurrency. **W1 (322–325) runs next.**
 
 ---
 

@@ -1,0 +1,85 @@
+name: LLM E2E Nightly
+
+# Issue 319 — End-to-end live-API LLM verification harness.
+#
+# Runs the llm_live test suite nightly against the real Anthropic API to verify:
+#   - Correct structured output from every LLM feature module
+#   - Honesty disclaimer present in every response
+#   - Prompt cache landing (cache_read_input_tokens > 0 on 2nd same-creator call)
+#   - Usage dict recorded (non-empty)
+#   - Typed SDK exceptions raised (not bare Exception) on bad requests
+#   - No PII / API key in captured log output
+#
+# This workflow is intentionally NOT triggered on push or pull_request — it is
+# cost-metered (real Anthropic API calls) and bound to nightly or manual dispatch
+# only. PR-gating runs a separate mocked suite (ci.yml) that covers the same
+# logic without live API spend.
+#
+# Job runs on ubuntu-latest (GitHub-hosted) so it is not dependent on the
+# self-hosted runner's availability. No Docker / Postgres needed — the tests
+# import modules directly and stub the DB with env-var stubs.
+
+on:
+  schedule:
+    # 03:00 UTC daily — off-peak, avoids quota contention with daytime workflows
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    # Allows manual triggering from the Actions UI; useful for pre-launch smoke tests
+
+jobs:
+  llm-e2e:
+    name: LLM end-to-end (live API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run llm_live tests
+        env:
+          RUN_LLM_LIVE: "1"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Stub env vars required by config.py (no real DB/Redis needed)
+          DATABASE_URL: "postgresql+psycopg://creatorclip:dev@localhost:5432/creatorclip"
+          REDIS_URL: "redis://localhost:6379/0"
+          GOOGLE_OAUTH_CLIENT_ID: "stub"
+          GOOGLE_OAUTH_CLIENT_SECRET: "stub"
+          OAUTH_REDIRECT_URI: "http://localhost:8000/auth/callback"
+          TOKEN_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          JWT_SECRET_KEY: "stub-jwt-secret-32-bytes-minimum-!"
+          ALLOWED_ORIGINS: "http://localhost:8000"
+          LOG_DIR: ""
+        run: |
+          python -m pytest tests/test_llm_live.py \
+            -m llm_live \
+            -v \
+            --tb=short \
+            --no-header \
+            2>&1 | tee llm_e2e_results.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+      - name: Post result summary
+        if: always()
+        run: |
+          RESULT_FILE=llm_e2e_results.txt
+          if [ -f "$RESULT_FILE" ]; then
+            echo "## LLM E2E Nightly Results" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -30 "$RESULT_FILE" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## LLM E2E Nightly Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "No result file found — test step may have failed to start." >> "$GITHUB_STEP_SUMMARY"
+          fi
