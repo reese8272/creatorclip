@@ -101,12 +101,18 @@ pytest==8.3.3
 pytest-asyncio==0.24.0
 pytest-mock==3.14.0
 
-# ── Transcription (WhisperX) ─────────────────────────────────────────────────
-# WhisperX is not on PyPI with a stable release. Install separately:
-#   pip install git+https://github.com/m-bain/whisperX.git
-# Or use the hosted fallback (Deepgram / AssemblyAI) via TRANSCRIPTION_BACKEND env var.
-# deepgram-sdk==3.7.7
-# assemblyai==0.33.0
+# ── Transcription ────────────────────────────────────────────────────────────
+# Deepgram nova-3 is the DEFAULT backend (TRANSCRIPTION_BACKEND=deepgram, no GPU
+# at launch) — so deepgram-sdk is a HARD dependency, not optional. It was
+# previously commented out, which left the prod worker image unable to transcribe
+# (ingest succeeded, then `from deepgram import …` raised ImportError on every
+# upload). Pinned to the v3 line the code targets (DeepgramClient /
+# PrerecordedOptions / nova-3 / MIP opt-out, Issue 251); 4.x+ is a breaking API.
+deepgram-sdk==3.7.7
+# Config-selectable alternatives (installed only when that backend is chosen):
+#   AssemblyAI (hosted):  assemblyai==0.33.0
+#   WhisperX (self-host, word-level) — not on PyPI with a stable release:
+#     pip install git+https://github.com/m-bain/whisperX.git
 
 # ── Video / Source Acquisition ───────────────────────────────────────────────
 # ffmpeg binary must be installed at the OS level (see Dockerfile).

@@ -11,8 +11,31 @@ Also tests: docs/SUBPROCESSORS.md existence (Art. 30 record presence gate).
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch  # noqa: E402
+
+import pytest
+
+
+# ── regression guard: the DEFAULT backend's SDK must actually be installed ─────
+# Root cause of a prod outage: deepgram-sdk was commented out of requirements.txt
+# while TRANSCRIPTION_BACKEND defaulted to "deepgram". Ingest succeeded, then
+# `from deepgram import …` raised ImportError on EVERY upload — invisible to the
+# mocked unit tests. This guard imports the configured default backend's SDK for
+# real, so a missing hard dependency fails CI instead of prod.
+def test_default_transcription_backend_sdk_is_installed():
+    from config import settings
+
+    sdk_module = {"deepgram": "deepgram", "assemblyai": "assemblyai"}.get(
+        settings.TRANSCRIPTION_BACKEND
+    )
+    if sdk_module is None:
+        pytest.skip(
+            f"backend {settings.TRANSCRIPTION_BACKEND!r} ships no pip SDK "
+            "(e.g. whisperx self-host) — nothing to import-check"
+        )
+    importlib.import_module(sdk_module)  # raises ImportError if the SDK isn't installed
 
 # ── mip_opt_out enforcement ───────────────────────────────────────────────────
 
@@ -20,9 +43,10 @@ from unittest.mock import MagicMock, patch  # noqa: E402
 def _make_deepgram_mocks() -> tuple[MagicMock, MagicMock, MagicMock]:
     """Build the fake Deepgram client + PrerecordedOptions + file stat mocks.
 
-    deepgram-sdk is commented out in requirements.txt (dev-box only; not installed
-    in the CI venv). We mock both the `deepgram` module import and the client
-    singleton so the test runs without the SDK.
+    We mock the `deepgram` module and the client singleton so these MIP-opt-out
+    assertions don't make a network call. (deepgram-sdk IS a real installed
+    dependency now — see test_default_transcription_backend_sdk_is_installed —
+    but mocking keeps these unit tests hermetic and offline.)
     """
     # Minimal transcribe_file response structure that _normalize_deepgram accepts.
     fake_response = MagicMock()
