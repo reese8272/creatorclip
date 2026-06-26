@@ -38,14 +38,27 @@ jobs:
         # with special characters and keeps values out of the rendered command.
         # Each sync is GUARDED: a secret that is unset in GitHub is left as-is on the
         # VM (we never blank an existing prod value). Infra secrets (DATABASE_URL,
-        # REDIS_URL, JWT_SECRET_KEY, TOKEN_ENCRYPTION_KEY, OAuth, R2, …) remain
-        # VM-managed and are intentionally not listed here.
+        # REDIS_URL, JWT_SECRET_KEY, TOKEN_ENCRYPTION_KEY, OAuth, …) remain VM-managed
+        # and are intentionally not listed here.
+        #
+        # R2 object storage IS synced here (added after a prod upload silently
+        # FAILED): app and worker are separate containers with no shared media
+        # volume, so the pipeline only works when STORAGE_BACKEND=r2 and the R2
+        # creds resolve. Leaving these to manual VM `.env` edits meant a fresh VM
+        # or a key rotation could route every upload onto the app container's local
+        # disk, where the worker can't read it. STORAGE_BACKEND is pinned to r2
+        # below (authoritative — local is a broken topology in prod, enforced by
+        # the config validator).
         env:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           YOUTUBE_API_V3_KEY: ${{ secrets.YOUTUBE_API_V3_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           sync_secret() {
             key="$1"; val="$2"
@@ -64,6 +77,21 @@ jobs:
           sync_secret DEEPGRAM_API_KEY   "$DEEPGRAM_API_KEY"
           sync_secret VOYAGE_API_KEY     "$VOYAGE_API_KEY"
           sync_secret YOUTUBE_API_V3_KEY "$YOUTUBE_API_V3_KEY"
+          sync_secret R2_ACCOUNT_ID        "$R2_ACCOUNT_ID"
+          sync_secret R2_ACCESS_KEY_ID     "$R2_ACCESS_KEY_ID"
+          sync_secret R2_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY"
+          sync_secret R2_BUCKET            "$R2_BUCKET"
+          # Pin STORAGE_BACKEND=r2 AUTHORITATIVELY (not a guarded default): with the
+          # multi-container prod topology, local-disk storage is a broken backend —
+          # the worker can't read the app container's disk. Rewrite any existing
+          # value so an operator can't accidentally leave it at the ./local default.
+          if grep -q '^STORAGE_BACKEND=' .env; then
+            awk 'BEGIN{FS="="} $1=="STORAGE_BACKEND"{print "STORAGE_BACKEND=r2"; next} {print}' .env > .env.tmp \
+              && mv .env.tmp .env
+          else
+            echo 'STORAGE_BACKEND=r2' >> .env
+          fi
+          echo "pinned STORAGE_BACKEND=r2"
           # Non-secret operational default: keep prod at INFO (verbose + safe; DEBUG
           # can leak request headers via httpx). Only add if absent — never clobber
           # an operator's explicit VM override.

@@ -206,9 +206,19 @@ def _section_transcription(env: dict[str, str]) -> list[Result]:
 
 def _section_storage(env: dict[str, str]) -> list[Result]:
     backend = env.get("STORAGE_BACKEND", "local")
+    prod = env.get("ENV", "development") == "production"
     results = [check_field(env, "STORAGE_BACKEND", required=False, secret=False)]
     if backend not in {"local", "r2"}:
         results[0] = Result("STORAGE_BACKEND", Status.FAIL, f"unknown backend {backend!r}")
+    elif prod and backend != "r2":
+        # Mirror the config validator: prod's app/worker split has no shared media
+        # volume, so local-disk storage is unreadable by the worker and every
+        # upload FAILs. Catch it here, at deploy preflight, before the rollout.
+        results[0] = Result(
+            "STORAGE_BACKEND",
+            Status.FAIL,
+            f"must be 'r2' in production (worker can't read local disk); got {backend!r}",
+        )
     if backend == "r2":
         results += [
             check_field(env, "R2_ACCOUNT_ID", required=True, secret=False),
@@ -216,6 +226,21 @@ def _section_storage(env: dict[str, str]) -> list[Result]:
             check_field(env, "R2_SECRET_ACCESS_KEY", required=True, secret=True),
             check_field(env, "R2_BUCKET", required=True, secret=False),
         ]
+    elif backend == "local" and any(
+        env.get(k)
+        for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
+    ):
+        # Blind-spot guard: R2 creds present but backend still local almost always
+        # means the operator stood up R2 and forgot STORAGE_BACKEND=r2 — the exact
+        # misconfig that silently broke a prod upload. Flag it (WARN in dev so the
+        # local lane isn't noisy; the prod FAIL above already covers production).
+        results.append(
+            Result(
+                "STORAGE_BACKEND",
+                Status.WARN,
+                "R2 credentials are set but STORAGE_BACKEND=local — did you mean r2?",
+            )
+        )
     return results
 
 

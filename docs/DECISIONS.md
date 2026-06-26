@@ -5,6 +5,54 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-26 — Object storage (R2) is mandatory in production; storage misconfig is now fail-fast and observable
+
+**What changed.** A live prod upload silently went to `FAILED`. Root cause: the prod
+`app` and `worker` run as separate containers with **no shared media volume**
+(`docker-compose.prod.yml`), so a `STORAGE_BACKEND=local` backend writes the source to
+the app container's disk where the worker can never read it — every upload then fails in
+the ingest pipeline. Five separate surfaces let this slip through silently, all now closed:
+
+1. **Config fail-fast** (`config.py::_require_prod_secrets`): in `ENV=production`,
+   `STORAGE_BACKEND` **must** be `r2` and all four `R2_*` creds must be set, else the app
+   refuses to boot. Previously prod accepted `local` (the default) with only a
+   `LOCAL_MEDIA_DIR`-absolute check.
+2. **Deploy secret-sync** (`.github/workflows/deploy.yml`): the four `R2_*` secrets are now
+   synced from GitHub secrets like the AI keys, and `STORAGE_BACKEND` is pinned to `r2`
+   authoritatively. Previously R2 config was 100% manual VM `.env` — a fresh VM or rotation
+   could drift it.
+3. **Doctor preflight** (`scripts/doctor.py::_section_storage`): FAILs on `prod + backend≠r2`,
+   and WARNs when R2 creds are set but `STORAGE_BACKEND` is still `local` (the exact "stood up
+   R2 but forgot the flag" mistake). Doctor runs before the rollout, so this blocks a bad deploy.
+4. **/health probe** (`main.py::_check_storage`): adds a bucket HEAD (only when `backend=r2`)
+   so an unreachable/misconfigured bucket shows as `"storage":"error"`/`degraded` instead of
+   being invisible until a creator's upload fails. No-op success under `local` (dev).
+5. **Failure transparency** (`models.videos.failure_reason`, migration `0036`): the worker now
+   persists a short, creator-safe reason when a video flips to `failed`, surfaced on the
+   dashboard. It maps exception→reason coarsely (stage + category, never the raw message) so a
+   presigned URL / path / token can never leak into a user-visible field. Cleared on a
+   successful re-run.
+
+**Why.** The North-Star pipeline is worthless if uploads silently die. The failure mode was a
+single missing/incorrect env var, and four independent safety nets (validator, doctor, health,
+UI) all failed to surface it — so the fix hardens all four plus the deploy that sets the var.
+
+**Alternatives ruled out.** (A) Add a shared media volume so `local` works multi-container —
+rejected: doesn't scale past one node, contradicts the R2 architecture already locked, and
+Render/K8s have no shared local disk either. (B) Only fix the config validator — insufficient;
+the operator still gets no signal at deploy time or in `/health`, and past failures stay opaque.
+(C) Store the raw exception in `failure_reason` — rejected: PII/secret-leak risk; humanized,
+stage-scoped reasons are the safe standard.
+
+**Source/evidence.** `docker-compose.prod.yml` (no media volume); `worker/storage.py::local_path`
+(worker reads `source_uri`); reproduced from the prod dashboard `FAILED` row. Tests:
+`tests/test_input_hardening.py` (config guard), `tests/test_doctor.py` (storage section),
+`tests/test_health.py` (storage probe), `tests/test_failure_reason.py` (humanizer + no-leak).
+
+**Date:** 2026-06-26
+
+---
+
 ## 2026-06-26 — v1 scope locked to a ≤100-user private beta; the build-for-10k infra track is DESCOPED
 
 **What was decided.** v1's target is a **private beta of under 100 users** (a "few dozen" hand-invited

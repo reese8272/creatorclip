@@ -320,6 +320,11 @@ class Video(Base):
         nullable=False,
         default=IngestStatus.pending,
     )
+    # A short, creator-safe explanation set when ingest_status flips to failed, so
+    # the dashboard can show WHY instead of a bare "FAILED" badge that needs a log
+    # dive. Cleared on a successful re-run. Never holds a stack trace or any secret
+    # — the worker maps the exception to a humanized reason before storing.
+    failure_reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

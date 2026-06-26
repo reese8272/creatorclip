@@ -48,6 +48,9 @@ export interface Video {
   title: string | null
   kind: string
   ingest_status: IngestStatus
+  // Set only when ingest_status === 'failed': a short, creator-safe reason the
+  // dashboard shows in place of the generic "Something broke" copy. Null otherwise.
+  failure_reason: string | null
   duration_s: number | null
   created_at: string
   origin: string

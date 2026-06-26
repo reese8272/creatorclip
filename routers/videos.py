@@ -34,6 +34,10 @@ class VideoListItemOut(BaseModel):
     title: str | None
     kind: str
     ingest_status: str
+    # Populated only when ingest_status == "failed": a short, creator-safe reason
+    # so the dashboard can explain the failure instead of a bare badge. Defaults to
+    # None so the catalog endpoint (which reuses this model, never failed) is unaffected.
+    failure_reason: str | None = None
     duration_s: float | None
     created_at: str
     # Issue 139: provenance lets the dashboard tell a clip-trackable upload from
@@ -143,6 +147,7 @@ async def list_videos(
             "title": v.title,
             "kind": v.kind.value,
             "ingest_status": v.ingest_status.value,
+            "failure_reason": v.failure_reason,
             "duration_s": v.duration_s,
             "created_at": v.created_at.isoformat(),
             "origin": v.origin.value,

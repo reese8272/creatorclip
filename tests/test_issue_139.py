@@ -159,6 +159,7 @@ def test_linked_video_appears_in_list_with_clippable_false():
     link_video.title = "Linked"
     link_video.kind = VideoKind.long
     link_video.ingest_status = IngestStatus.pending
+    link_video.failure_reason = None
     link_video.duration_s = 120.0
     link_video.created_at = datetime.now(UTC)
     link_video.origin = VideoOrigin.link

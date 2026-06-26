@@ -36,15 +36,24 @@ def test_health_response_shape(client):
     assert "status" in data
     assert "postgres" in data
     assert "redis" in data
+    assert "storage" in data  # Gap 5: object-storage reachability is now probed
     assert data["status"] in ("ok", "degraded")
     assert data["postgres"] in ("ok", "error")
     assert data["redis"] in ("ok", "error")
+    assert data["storage"] in ("ok", "error")
+
+
+def test_health_storage_ok_in_local_backend(client):
+    """With STORAGE_BACKEND=local (the unit-test default) the storage probe is a
+    no-op success — we never degrade a non-r2 box over object storage."""
+    data = client.get("/health").json()
+    assert data["storage"] == "ok"
 
 
 def test_health_status_reflects_services(client):
-    """Status is 'ok' only when both services report 'ok'."""
+    """Status is 'ok' only when every probed service reports 'ok'."""
     data = client.get("/health").json()
-    if data["postgres"] == "ok" and data["redis"] == "ok":
+    if data["postgres"] == "ok" and data["redis"] == "ok" and data["storage"] == "ok":
         assert data["status"] == "ok"
     else:
         assert data["status"] == "degraded"

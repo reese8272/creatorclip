@@ -97,8 +97,20 @@ function VideoRow({
             failureReason={streamState.failureReason}
           />
         ) : (
-          <span title={STATUS_HELP[video.ingest_status]} className="cursor-help">
+          <span
+            title={
+              video.ingest_status === 'failed' && video.failure_reason
+                ? video.failure_reason
+                : STATUS_HELP[video.ingest_status]
+            }
+            className="cursor-help"
+          >
             <Badge variant={STATUS_VARIANT[video.ingest_status]}>{video.ingest_status}</Badge>
+            {video.ingest_status === 'failed' && video.failure_reason && (
+              <span className="mt-1 block max-w-[260px] text-xs font-normal text-subtle">
+                {video.failure_reason}
+              </span>
+            )}
           </span>
         )}
       </td>

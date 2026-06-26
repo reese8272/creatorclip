@@ -202,7 +202,7 @@ def ingest_video(self, video_id: str) -> str:
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
         raise
     except Exception as exc:
-        run_async(_set_status(video_id, IngestStatus.failed))
+        run_async(_set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest")))
         raise self.retry(exc=exc) from exc
     log_event(
         "ingest_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
@@ -231,7 +231,9 @@ def transcribe_video(self, video_id: str) -> str:
         # See ingest_video above — re-raise immediately to fire on_failure.
         raise
     except Exception as exc:
-        run_async(_set_status(video_id, IngestStatus.failed))
+        run_async(
+            _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "transcribe"))
+        )
         raise self.retry(exc=exc) from exc
     log_event(
         "transcribe_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
@@ -257,7 +259,9 @@ def build_signals(self, video_id: str) -> str:
         # See ingest_video above — re-raise immediately to fire on_failure.
         raise
     except Exception as exc:
-        run_async(_set_status(video_id, IngestStatus.failed))
+        run_async(
+            _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "signals"))
+        )
         raise self.retry(exc=exc) from exc
     generate_clips.delay(video_id)
     log_event(
@@ -753,12 +757,34 @@ async def _creator_id_for_clip(clip_id: str) -> str | None:
         return None
 
 
-async def _set_status(video_id: str, status: IngestStatus) -> None:
+async def _set_status(
+    video_id: str, status: IngestStatus, *, reason: str | None = None
+) -> None:
     async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
             video.ingest_status = status
+            # Record WHY on failure so the dashboard isn't a black box; clear any
+            # stale reason on a transition that isn't a failure (e.g. a retry that
+            # reaches running/done), so a recovered video doesn't keep showing it.
+            video.failure_reason = reason if status == IngestStatus.failed else None
             await session.commit()
+
+
+# Map a stage + exception to a short, creator-safe failure reason. Deliberately
+# coarse (stage + category, never the raw exception message) so we can never leak
+# a presigned URL, file path, token, or other secret into a user-visible field.
+def _humanize_failure(exc: Exception, stage: str) -> str:
+    name = type(exc).__name__
+    if isinstance(exc, FileNotFoundError) or "NoSuchKey" in name or "source_uri" in str(exc):
+        return "We couldn't read your uploaded file from storage. Please re-upload and try again."
+    if stage == "transcribe":
+        return "Transcription failed. This can be a temporary service issue — please try again."
+    if stage == "signals":
+        return "We couldn't analyse this video's content. Please try again."
+    if stage == "ingest":
+        return "We couldn't process this video file. Check the file is a valid video and re-upload."
+    return "Processing failed. Please try again, or contact support if it persists."
 
 
 async def _ingest_async(video_id: str) -> None:

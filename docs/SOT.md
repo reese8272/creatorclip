@@ -52,8 +52,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 | `TRANSCRIPTION_BACKEND` | No | `whisperx` (default) \| `deepgram` \| `assemblyai` |
 | `DEEPGRAM_API_KEY` / `ASSEMBLYAI_API_KEY` | Conditional | Required if hosted transcription backend selected |
 | `WHISPER_MODEL` | No | Default `large-v3` |
-| `STORAGE_BACKEND` | No | `r2` (production) \| `local` (dev) |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Conditional | Required if `STORAGE_BACKEND=r2` |
+| `STORAGE_BACKEND` | No | `local` (dev) only; **must be `r2` in production** — the config validator fails fast otherwise (app/worker have no shared media volume, so local-disk uploads are unreadable by the worker). See DECISIONS 2026-06-26. |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | Conditional | **Required in production** (and whenever `STORAGE_BACKEND=r2`). Synced from GitHub secrets on deploy. |
 | `SOURCE_MEDIA_RETENTION_HOURS` | No | Default `72`; source video purge timer |
 | `CLIPS_PER_VIDEO_DEFAULT` | No | Default `8` |
 | `MIN_VIDEOS_FOR_DNA` | No | Default `10` |
@@ -86,7 +86,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── docs/assessment/            # production-readiness register: baselines + per-module findings + report history
 ├── tests/perf/                 # Locust load-test scaffold (concurrency evidence)
 │
-├── main.py                     # FastAPI entrypoint, /health, /metrics (Issue 75f)
+├── main.py                     # FastAPI entrypoint, /health (postgres+redis+storage probes), /metrics (Issue 75f)
 ├── config.py                   # Pydantic Settings; fail-fast on missing required
 ├── db.py                       # SQLAlchemy async engine + session (Issue 2)
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
@@ -312,7 +312,9 @@ youtube_tokens
 videos
   id, creator_id (FK), youtube_video_id (NULLABLE since Issue 317), title, kind (long/short),
   published_at, duration_s, source_uri, origin (catalog/link/upload),
-  captions_available, ingest_status (pending/running/done/failed), created_at
+  captions_available, ingest_status (pending/running/done/failed),
+  failure_reason (NULLABLE, migration 0036 — creator-safe reason set when status=failed,
+    surfaced on the dashboard; never holds a raw exception/secret), created_at
   -- origin is the canonical provenance discriminator (Issue 139):
   --   catalog = DNA/analytics reference from sync_video_catalog (no media,
   --     hidden from /videos so the dashboard never shows "pending forever").

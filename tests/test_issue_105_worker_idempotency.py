@@ -370,6 +370,11 @@ def test_config_validator_allows_relative_local_media_dir_in_prod_when_r2() -> N
         os.environ["STORAGE_BACKEND"] = "r2"
         os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake"
         os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
+        # Object storage is required in production, so r2 creds must resolve.
+        os.environ["R2_ACCOUNT_ID"] = "acct"
+        os.environ["R2_ACCESS_KEY_ID"] = "ak"
+        os.environ["R2_SECRET_ACCESS_KEY"] = "sk"
+        os.environ["R2_BUCKET"] = "bucket"
 
         # Must NOT raise — LOCAL_MEDIA_DIR is unused with STORAGE_BACKEND=r2.
         s = Settings()
@@ -388,3 +393,6 @@ def test_config_validator_allows_relative_local_media_dir_in_prod_when_r2() -> N
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        # The r2 creds were only set for this test; clear them so they don't leak.
+        for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
+            os.environ.pop(k, None)

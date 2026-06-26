@@ -29,6 +29,7 @@ function makeVideo(over: Partial<Video> = {}): Video {
     title: 'Test video',
     kind: 'long',
     ingest_status: 'done',
+    failure_reason: null,
     duration_s: 300,
     created_at: '2026-06-01T00:00:00Z',
     origin: 'upload',

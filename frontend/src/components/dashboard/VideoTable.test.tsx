@@ -39,6 +39,7 @@ function makeVideo(over: Partial<Video> = {}): Video {
     title: 'Test video',
     kind: 'long',
     ingest_status: 'pending',
+    failure_reason: null,
     duration_s: 600,
     created_at: '2026-06-01T00:00:00Z',
     origin: 'upload',
@@ -78,6 +79,17 @@ describe('VideoTable — StageStepper integration', () => {
     renderTable([makeVideo({ ingest_status: 'failed', clippable: true })])
     expect(FakeEventSource.instances).toHaveLength(0)
     expect(screen.getByText('failed')).toBeInTheDocument()
+  })
+
+  it('surfaces the persisted failure_reason on a failed video', () => {
+    renderTable([
+      makeVideo({
+        ingest_status: 'failed',
+        clippable: true,
+        failure_reason: 'We couldn’t read your uploaded file from storage. Please re-upload.',
+      }),
+    ])
+    expect(screen.getByText(/couldn’t read your uploaded file/i)).toBeInTheDocument()
   })
 
   it('opens one SSE connection for a pending clippable video', () => {

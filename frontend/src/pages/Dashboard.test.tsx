@@ -66,6 +66,7 @@ const baseVideo = (over: Partial<Video>): Video => ({
   title: 'My video',
   kind: 'long',
   ingest_status: 'pending',
+  failure_reason: null,
   duration_s: 600,
   created_at: '2026-06-01T00:00:00Z',
   origin: 'upload',

@@ -600,6 +600,35 @@ class Settings(BaseSettings):
                     f"LOCAL_MEDIA_DIR must be absolute in production when "
                     f"STORAGE_BACKEND=local; got {self.LOCAL_MEDIA_DIR!r}"
                 )
+            # Object storage is REQUIRED in production. The app and worker run as
+            # separate containers with no shared media volume, so a local-disk
+            # backend silently routes uploads to the app container where the worker
+            # can never read them — every upload then FAILs in the pipeline. This
+            # fail-fast turns that invisible misconfig into a startup error. The
+            # four R2_* credentials must also resolve, or the first upload's R2 PUT
+            # would 500 with no row created. (Root-caused from a prod FAILED upload
+            # after the R2 instance was stood up but STORAGE_BACKEND stayed local.)
+            if self.STORAGE_BACKEND != "r2":
+                raise ValueError(
+                    "STORAGE_BACKEND must be 'r2' in production: app and worker are "
+                    "separate containers with no shared volume, so local-disk storage "
+                    f"is unreadable by the worker. Got {self.STORAGE_BACKEND!r}."
+                )
+            missing_r2 = [
+                name
+                for name in (
+                    "R2_ACCOUNT_ID",
+                    "R2_ACCESS_KEY_ID",
+                    "R2_SECRET_ACCESS_KEY",
+                    "R2_BUCKET",
+                )
+                if not getattr(self, name)
+            ]
+            if missing_r2:
+                raise ValueError(
+                    "In production with STORAGE_BACKEND=r2 these must be set: "
+                    f"{', '.join(missing_r2)}"
+                )
         return self
 
 

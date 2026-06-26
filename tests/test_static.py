@@ -130,6 +130,7 @@ def _mock_video(creator_id, title="Test video", yt_id="abc123"):
     v.title = title
     v.kind = VideoKind.long
     v.ingest_status = IngestStatus.done
+    v.failure_reason = None
     v.duration_s = 600.0
     v.created_at = datetime.datetime.now(datetime.UTC)
     v.origin = VideoOrigin.upload

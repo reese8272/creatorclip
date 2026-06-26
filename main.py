@@ -423,13 +423,39 @@ async def _check_redis() -> bool:
         return False
 
 
+async def _check_storage() -> bool:
+    """Probe object storage reachability.
+
+    With STORAGE_BACKEND=local (dev) there's nothing remote to reach, so the
+    check is a no-op success — we never degrade a dev box over storage. With
+    STORAGE_BACKEND=r2 a misconfigured/unreachable bucket would otherwise stay
+    invisible until a creator's upload silently FAILs in the worker pipeline;
+    a HEAD on the bucket surfaces it at /health instead (Gap 5). boto3 is sync,
+    so the HEAD runs in a worker thread under a hard timeout.
+    """
+    if settings.STORAGE_BACKEND != "r2":
+        return True
+    try:
+        from worker.storage import _r2
+
+        async with asyncio.timeout(3.0):
+            await asyncio.to_thread(_r2().head_bucket, Bucket=settings.R2_BUCKET)
+        return True
+    except Exception as exc:
+        logger.warning("Storage (R2) health check failed: %s", exc)
+        return False
+
+
 @app.get("/health")
 async def health() -> dict:
-    postgres_ok, redis_ok = await asyncio.gather(_check_postgres(), _check_redis())
+    postgres_ok, redis_ok, storage_ok = await asyncio.gather(
+        _check_postgres(), _check_redis(), _check_storage()
+    )
     return {
-        "status": "ok" if (postgres_ok and redis_ok) else "degraded",
+        "status": "ok" if (postgres_ok and redis_ok and storage_ok) else "degraded",
         "postgres": "ok" if postgres_ok else "error",
         "redis": "ok" if redis_ok else "error",
+        "storage": "ok" if storage_ok else "error",
         # Issue 297: expose the running CalVer so `curl /health` answers
         # "what version is live" — the standard observability touchpoint for
         # incident triage and rollback targeting.

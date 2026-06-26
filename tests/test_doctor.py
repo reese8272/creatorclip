@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from scripts.doctor import (
     Result,
     Status,
+    _section_storage,
     audit,
     check_cors,
     check_field,
@@ -20,6 +21,36 @@ from scripts.doctor import (
     has_failures,
     redact,
 )
+
+# ── storage backend guards (root-caused from a prod FAILED upload) ───────────────
+
+
+def test_doctor_storage_fails_on_local_backend_in_production():
+    results = _section_storage({"ENV": "production", "STORAGE_BACKEND": "local"})
+    assert results[0].status is Status.FAIL
+    assert "r2" in results[0].detail
+
+
+def test_doctor_storage_warns_when_r2_creds_set_but_backend_local():
+    # Operator stood up R2 but forgot STORAGE_BACKEND=r2 — the exact misconfig.
+    results = _section_storage(
+        {"STORAGE_BACKEND": "local", "R2_ACCOUNT_ID": "acct", "R2_BUCKET": "b"}
+    )
+    assert any(r.status is Status.WARN and "STORAGE_BACKEND=local" in r.detail for r in results)
+
+
+def test_doctor_storage_ok_for_fully_configured_r2():
+    results = _section_storage(
+        {
+            "ENV": "production",
+            "STORAGE_BACKEND": "r2",
+            "R2_ACCOUNT_ID": "acct",
+            "R2_ACCESS_KEY_ID": "ak",
+            "R2_SECRET_ACCESS_KEY": "sk",
+            "R2_BUCKET": "bucket",
+        }
+    )
+    assert all(r.status is Status.OK for r in results)
 
 # ── redaction never leaks the value ─────────────────────────────────────────────
 
