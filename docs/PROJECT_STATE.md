@@ -4,6 +4,29 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-26 — Live LLM E2E run (Issue 319) — 22/22 PASS; caught + fixed 3 real bugs
+
+Ran `scripts/llm_e2e.py` against the **real Anthropic API** (`RUN_LLM_LIVE=1`, the user's key) — the first
+time the LLM pipeline was exercised live rather than mocked. Final: **22 passed / 0 failed.** Proof of live
+calls: real `POST /v1/messages 200`, real token usage, and `cache_read_input_tokens > 0` on the 2nd
+same-creator titles call (server-side prompt cache landing). The run surfaced **3 production defects every
+mocked test passed over**, all now fixed:
+
+1. **hooks (P0 — broken in prod):** `claude-haiku-4-5` does not support `web_search_20260209`'s default
+   programmatic-tool-calling (dynamic filtering) → live `400`. Fixed with `allowed_callers=["direct"]` on the
+   web_search tool (`knowledge/hooks.py`).
+2. **titles / thumbnails (P1):** dynamic filtering routed output into tool/code blocks, leaving the streamed
+   text empty → `JSONDecodeError`. Fixed by (a) `allowed_callers=["direct"]` on both tools and (b) a shared
+   `extract_json_block` helper (`knowledge/util.py`) tolerant of markdown-fenced / preamble-wrapped JSON, wired
+   into `parse_candidates` (titles) and `parse_concepts` (thumbnails). +6 regression unit tests.
+3. **harness standalone-run bug:** `python scripts/llm_e2e.py` failed to import app modules (repo root not on
+   `sys.path`); fixed so the documented invocation works without `PYTHONPATH`.
+
+Gates: backend unit lane **1605 passed / 0 failed**; ruff clean on all changed files. analysis/dna/improvement,
+typed-exception handling, and no-PII-in-logs all passed live unchanged.
+
+---
+
 ## 2026-06-26 — Scope locked to ≤100-user beta + new LLM build track (L20)
 
 v1 scope narrowed to a **≤100-user private beta** (user directive). The build-for-10k infra is

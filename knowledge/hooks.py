@@ -194,7 +194,18 @@ def analyze_hook(
             ),
         },
     ]
-    tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+    # allowed_callers=["direct"] is REQUIRED here: hooks runs on Haiku 4.5, which
+    # does NOT support programmatic tool calling (the dynamic-filtering path that
+    # web_search_20260209 otherwise requires) — a live 400 the mocked tests missed.
+    # Direct calling gives Haiku plain web_search (results into context), which it
+    # supports. (Sonnet-backed callers keep the default programmatic/dynamic path.)
+    tools: list[dict] = [
+        {
+            "type": settings.ANTHROPIC_WEB_SEARCH_TOOL,
+            "name": "web_search",
+            "allowed_callers": ["direct"],
+        }
+    ]
     messages = [
         {
             "role": "user",

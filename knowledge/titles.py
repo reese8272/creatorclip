@@ -23,7 +23,7 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,18 @@ def _build_request(
         # Block 3: per-video factual context — no creator free-text.
         {"type": "text", "text": f"VIDEO TO TITLE:\n{video_context}"},
     ]
-    tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+    # allowed_callers=["direct"]: this call must return a parseable JSON text block.
+    # web_search_20260209's default dynamic filtering (programmatic tool calling) routes
+    # output into tool/code blocks, leaving the streamed text empty — a live failure the
+    # mocked tests missed. Direct calling puts search results in context and keeps the
+    # model's JSON answer in the normal text stream.
+    tools: list[dict] = [
+        {
+            "type": settings.ANTHROPIC_WEB_SEARCH_TOOL,
+            "name": "web_search",
+            "allowed_callers": ["direct"],
+        }
+    ]
 
     # stated_identity travels in the user turn so the model receives it from the
     # user role, not as trusted operator instructions. JSON-wrapped to prevent
@@ -167,7 +178,7 @@ def parse_candidates(raw_json: str) -> list[dict]:
     Returns top SURFACE_N candidates. Raises ValueError on malformed JSON or
     missing required fields so the caller can surface an error event.
     """
-    data = json.loads(raw_json)
+    data = json.loads(extract_json_block(raw_json))
     candidates = data.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         raise ValueError("Claude response missing 'candidates' list")
@@ -229,9 +240,7 @@ def generate_title_suggestions(
             tools=tools,
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error(
-            "title_suggestions LLM error task=%s exc_type=%s", task_id, type(exc).__name__
-        )
+        logger.error("title_suggestions LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
         raise
     logger.info(
         "title_suggestions tokens: in=%d cached_read=%d cached_write=%d out=%d",

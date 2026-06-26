@@ -5,7 +5,41 @@ DB-free, import-only. Tests the wrap_untrusted helper added in Issue 224.
 
 import json
 
-from knowledge.util import wrap_untrusted
+from knowledge.util import extract_json_block, wrap_untrusted
+
+
+class TestExtractJsonBlock:
+    """Issue 319 follow-up — robust JSON extraction from real (non-mocked) output.
+
+    The live E2E harness caught titles/thumbnails JSONDecodeErrors: a successful
+    web-search-grounded call returns JSON wrapped in a markdown fence or behind a
+    sentence of preamble, which a bare json.loads cannot parse.
+    """
+
+    def test_plain_json_object_unchanged(self) -> None:
+        raw = '{"candidates": [{"title": "x"}]}'
+        assert json.loads(extract_json_block(raw)) == {"candidates": [{"title": "x"}]}
+
+    def test_strips_json_code_fence(self) -> None:
+        raw = 'Here are the titles:\n\n```json\n{"candidates": []}\n```\n'
+        assert json.loads(extract_json_block(raw)) == {"candidates": []}
+
+    def test_strips_bare_code_fence(self) -> None:
+        raw = '```\n{"concepts": [1, 2]}\n```'
+        assert json.loads(extract_json_block(raw)) == {"concepts": [1, 2]}
+
+    def test_strips_leading_preamble_without_fence(self) -> None:
+        raw = 'Based on the search results:\n{"candidates": [{"title": "y"}]}'
+        assert json.loads(extract_json_block(raw)) == {"candidates": [{"title": "y"}]}
+
+    def test_handles_array_root(self) -> None:
+        raw = "preamble [1, 2, 3] trailing"
+        assert json.loads(extract_json_block(raw)) == [1, 2, 3]
+
+    def test_non_json_returns_stripped_so_caller_raises(self) -> None:
+        # No JSON present -> return stripped text so the caller's json.loads
+        # raises the same clear error as before (no silent masking).
+        assert extract_json_block("  not json at all  ") == "not json at all"
 
 
 class TestWrapUntrusted:

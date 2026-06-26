@@ -23,7 +23,7 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,17 @@ def _build_concepts_request(
             "text": f"CHANNEL THUMBNAIL PATTERNS:\n{pattern_text}\n\nVIDEO CONTEXT:\n{video_context}",
         },
     ]
-    tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+    # allowed_callers=["direct"]: this call must return a parseable JSON text block.
+    # web_search_20260209's default dynamic filtering (programmatic tool calling) routes
+    # output into tool/code blocks, leaving the streamed text empty — a live failure the
+    # mocked tests missed. Direct calling keeps the model's JSON answer in the text stream.
+    tools: list[dict] = [
+        {
+            "type": settings.ANTHROPIC_WEB_SEARCH_TOOL,
+            "name": "web_search",
+            "allowed_callers": ["direct"],
+        }
+    ]
 
     # stated_identity travels in the user turn so the model receives it from the
     # user role, not as trusted operator instructions. JSON-wrapped to prevent
@@ -252,7 +262,7 @@ def parse_concepts(raw_json: str) -> list[dict]:
     Returns up to CONCEPT_SURFACE_N concepts. Raises ValueError on malformed
     JSON or missing required fields so the caller can surface an error event.
     """
-    data = json.loads(raw_json)
+    data = json.loads(extract_json_block(raw_json))
     concepts = data.get("concepts")
     if not isinstance(concepts, list) or not concepts:
         raise ValueError("Claude response missing 'concepts' list")

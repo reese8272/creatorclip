@@ -19,12 +19,18 @@ Exit codes: 0 = all assertions pass, 1 = one or more assertions failed.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
-import re
 import sys
 import uuid
 from pathlib import Path
+
+# ── Make the repo root importable when run as `python scripts/llm_e2e.py` ─────
+# Running a script puts its own dir (scripts/) on sys.path[0], NOT the repo root,
+# so `import knowledge` / `config` would fail. Prepend the repo root explicitly
+# so the documented standalone invocation works without PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # ── Bootstrap environment stubs BEFORE any app import ─────────────────────────
 _FERNET_STUB = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -62,7 +68,6 @@ logging.basicConfig(
 logger = logging.getLogger("llm_e2e")
 
 # Capture log output to assert no secrets appear in logs
-import io
 _log_capture = io.StringIO()
 _log_handler = logging.StreamHandler(_log_capture)
 _log_handler.setLevel(logging.DEBUG)
@@ -86,8 +91,16 @@ _FAKE_SEGMENTS: list[dict] = [
     {"start": 6.0, "end": 10.0, "text": "You only need three ingredients."},
     {"start": 10.0, "end": 15.0, "text": "Salt, olive oil, and pasta — that's it."},
     {"start": 15.0, "end": 20.0, "text": "Let's get started with the water first."},
-    {"start": 20.0, "end": 25.0, "text": "Always add a handful of salt. It makes a huge difference."},
-    {"start": 25.0, "end": 30.0, "text": "While we wait, let me tell you why most people overcook pasta."},
+    {
+        "start": 20.0,
+        "end": 25.0,
+        "text": "Always add a handful of salt. It makes a huge difference.",
+    },
+    {
+        "start": 25.0,
+        "end": 30.0,
+        "text": "While we wait, let me tell you why most people overcook pasta.",
+    },
 ]
 _FAKE_SEGMENTS_JSONB = {"segments": _FAKE_SEGMENTS}
 _FAKE_TRANSCRIPT = " ".join(s["text"] for s in _FAKE_SEGMENTS)
@@ -95,9 +108,19 @@ _FAKE_TRANSCRIPT = " ".join(s["text"] for s in _FAKE_SEGMENTS)
 _FAKE_VIDEO_TITLE = "Easiest 3-Ingredient Pasta You've Never Tried"
 
 _HONESTY_WORDS = {
-    "estimate", "estimates", "grounded", "predicts", "not a guarantee",
-    "cannot guarantee", "does not promise", "may", "likely", "based on",
-    "suggest", "suggests", "reflects patterns",
+    "estimate",
+    "estimates",
+    "grounded",
+    "predicts",
+    "not a guarantee",
+    "cannot guarantee",
+    "does not promise",
+    "may",
+    "likely",
+    "based on",
+    "suggest",
+    "suggests",
+    "reflects patterns",
 }
 
 # ── Test helpers ──────────────────────────────────────────────────────────────
@@ -136,6 +159,7 @@ def _assert_usage_nonempty(usage: dict, name: str) -> None:
 
 # ── Module tests ──────────────────────────────────────────────────────────────
 
+
 def test_titles() -> None:
     """knowledge/titles.py — title suggestion with web_search."""
     from knowledge.titles import generate_title_suggestions, parse_candidates
@@ -155,9 +179,7 @@ def test_titles() -> None:
         all("title" in c and c["title"] for c in candidates1),
         "titles: all candidates have title field",
     )
-    _assert_honesty(
-        "\n".join(c.get("rationale", "") for c in candidates1), "titles"
-    )
+    _assert_honesty("\n".join(c.get("rationale", "") for c in candidates1), "titles")
     _assert_usage_nonempty(usage1, "titles call 1")
 
     # Second call — should see cache_read > 0 (1h TTL DNA prefix)
@@ -218,9 +240,7 @@ def test_thumbnails() -> None:
     concepts = parse_concepts(raw)
     _assert(len(concepts) > 0, "thumbnails: concepts non-empty")
     _assert_usage_nonempty(usage, "thumbnails")
-    _assert_honesty(
-        "\n".join(c.get("predicted_ctr_rationale", "") for c in concepts), "thumbnails"
-    )
+    _assert_honesty("\n".join(c.get("predicted_ctr_rationale", "") for c in concepts), "thumbnails")
 
 
 def test_analysis() -> None:
