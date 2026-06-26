@@ -4,6 +4,21 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-26 — Scope locked to ≤100-user beta + new LLM build track (L20)
+
+v1 scope narrowed to a **≤100-user private beta** (user directive). The build-for-10k infra is
+**DESCOPED**: Lane **L12** (K8s/GKE/KEDA — 275–280, 287) in full and most of **L13** (10k load test 261,
+PgBouncer 58/259, 262, 263). Beta deploys on Render / the existing VM; the only hard launch gate remaining
+is **Issue 29** (Google OAuth verification). New active build track: **L20 — LLM Features & Hardening**
+(Issues **318–325**), run as two Sonnet-4.6 waves — W0 = production-standards + verified-E2E LLM
+(318 model-per-task literal removal, 319 live-API E2E harness, 320 SDK conformance test, 321 usage/quota
+guards); W1 = new creator features (322 per-clip titles/hook-rewrite, 323 caption-hooks, 324 chat
+clip/outcome tools, 325 "explain this clip"). Batch API (219) deliberately descoped at this size. Full
+rationale + evidence in `docs/DECISIONS.md` (two 2026-06-26 entries). _No code shipped in this planning
+step — docs + issue definitions only; the build waves run next._
+
+---
+
 ## 2026-06-24 — Tracker reconciliation
 
 15 stale-OPEN issues (160, 186, 194, 218, 221, 223, 224, 264, 265, 266, 267, 269, 270, 271, 274) corrected to DONE with evidence; 273 corrected from false-DONE to OPEN (mutmut present but unconfigured, no CI job); 194/195 de-duped (duplicate OPEN entries in L14_PUBLISHING lane resolved to DONE). Source: reconcile-open-backlog workflow.

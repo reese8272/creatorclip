@@ -5,6 +5,74 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-26 — v1 scope locked to a ≤100-user private beta; the build-for-10k infra track is DESCOPED
+
+**What was decided.** v1's target is a **private beta of under 100 users** (a "few dozen" hand-invited
+creators) — not a public 10k-scale launch. As a direct consequence, the entire *build-for-10k*
+infrastructure track is **descoped from v1** and parked behind the functionality work:
+
+- **Lane L12 (Kubernetes & Deploy) — descoped in full** for the beta: Issues **275, 276, 277, 278, 279,
+  280, 287** (GKE Autopilot staging, KEDA autoscaling, PgBouncer sidecar, Helm rollout validation,
+  supply-chain signing for the cluster). The Helm chart at `deploy/charts/creatorclip/` is *kept on disk*
+  for the eventual scale path, but standing up GKE is **no longer a v1 gate**.
+- **Lane L13 (Scale, Quota & Load) — mostly descoped:** Issue **261** (10k-user Locust load test),
+  **58** (PgBouncer / prepared-statements pool math), **259** (connection-budget pool math), **262**,
+  **263** are not v1 gates at this size. **KEPT:** the per-creator quota / rate-limit work (already
+  shipped: 228, 260) and the spend kill-switch (**290**) — those protect a small beta cheaply.
+- **Lane L11 (DR & Infra) — the GKE-scale items defer with L12;** ordinary managed-host backups (Render)
+  suffice for the beta.
+
+**Deploy target for the beta is the already-decided managed PaaS (Render) blueprint** (see the
+2026-06-24 entries) or the existing single-VM compose — both comfortably serve <100 users. The
+remaining hard launch gate is **Issue 29 (Google OAuth app verification)**, which is required for the
+YouTube scopes regardless of user count.
+
+**Why.** The user set the goal explicitly: "a few dozen people is all I need to get this successful."
+At that size, GKE/KEDA/Cloud-SQL/10k-load-testing is pure over-engineering (KISS) — it consumes the
+roadmap without moving the North Star. Descoping it frees the build waves to focus on **functionality
+and the LLM layer**, which is where beta value actually accrues.
+
+**Source / evidence.** User directive 2026-06-26 ("change the scope … to a user base of under 100").
+Consistent with the existing 2026-06-24 Render beta-hosting decision (which already cited "≤100 users").
+The descoped issues are tagged **DESCOPED-BETA** in `docs/issues.md` (Lane×Wave matrix note); they are
+NOT deleted — they remain the documented scale path if the product outgrows the beta.
+
+---
+
+## 2026-06-26 — New build track: LLM production-standards hardening + verified E2E + new creator features
+
+**What was decided.** A new lane **L20 — LLM Features & Hardening** (Issues **318–325**) is added and run
+as two Sonnet-4.6 build waves. The track has two halves, both grounded in the live `/claude-api` guidance
+(researched this session, not from memory):
+
+- **W0 — production standards + verified correctness (318–321):** kill all hardcoded Claude model IDs and
+  complete the model-per-task config registry (a hardcoded `claude-haiku-4-5-20251001` survives in
+  `knowledge/hooks.py:25` despite Issue 221 being marked reconciled-DONE — so 221's intent is not fully
+  realized); add a **live-API end-to-end LLM verification harness** (flag-gated `scripts/llm_e2e.py` +
+  `pytest -m llm_live`) because today *every* LLM test mocks the SDK and nothing proves the features work
+  end-to-end; add an **Anthropic-SDK conformance test** that pins the standards the 2026-06-24 manual
+  audit found (singleton client + timeout/retries, typed-exception handling, `max_tokens` stream guard,
+  config-driven model, cache breakpoint above the model floor, injection policy present); add a
+  **Usage-ledger coverage guard** + a beta-sized per-creator brief quota.
+- **W1 — net-new creator features (322–325):** per-clip AI Short-title + hook-rewrite suggestions;
+  per-clip caption-hook / thumbnail-text concepts; new creator-scoped agentic chat tools over clips &
+  outcomes; and a deeper "explain this clip" Why-This-Clip narrative. All grounded in the creator's DNA,
+  honesty-constraint-safe, cache-aware, and usage-logged.
+
+**Why.** User directive 2026-06-26: "more functionality and LLM workings … ensure we are using production
+standards on the LLM and making sure the LLM actually works E2E." The existing cost/cache issues (218,
+220, 221, 222, 223, 289) are largely DONE, so the remaining LLM value is (a) closing the
+production-standards gaps those left, (b) *proving* the pipeline works against the real API, and (c)
+shipping user-facing AI features that deepen the channel-knowledge loop (North Star).
+
+**Source / evidence.** Verified this session: `knowledge/hooks.py:25` hardcoded model; no `-m llm_live`
+test lane exists (only mocked tests under `tests/`); `/claude-api` reference loaded for current Anthropic
+SDK best practice (adaptive thinking, structured outputs, prompt-cache floors, typed exceptions). Batch
+API (Issue 219) deliberately **left descoped** — at <100 users the −50% token saving is immaterial and
+the ≤24h turnaround adds complexity, so it stays parked.
+
+---
+
 ## 2026-06-24 — Beta hosting: managed PaaS (Render) for the always-on stack, not the self-managed VM
 
 **What was decided.** For the **beta** (target: ≤100 users), the app + Celery worker + Redis + Postgres

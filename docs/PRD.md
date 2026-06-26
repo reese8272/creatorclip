@@ -41,6 +41,12 @@ multi-tenant from day one because YouTube OAuth is inherently per-creator, but t
 a small, hand-picked set (the developer's own channel plus a few invited creators) before any
 public launch.
 
+> **Scope (locked 2026-06-26 — `docs/DECISIONS.md`):** v1 is a **private beta of ≤100 users** (a few
+> dozen invited creators), not a public 10k launch. The build-for-10k infrastructure track (GKE/KEDA,
+> Cloud SQL pooling, 10k load testing — Lanes L12 and most of L13) is **descoped** and parked behind the
+> functionality work; the beta runs on a managed PaaS (Render) / the existing VM. This sharpens the focus
+> on the North Star (channel-knowledge functionality + the LLM layer) rather than premature scale.
+
 ---
 
 ## User Stories

@@ -244,7 +244,14 @@ Deviations require a `docs/DECISIONS.md` entry before implementation.
 
 ## Production Deployment
 
-Target: Kubernetes at 10k+ scale. Docker Compose = dev only.
+> **v1 SCOPE (locked 2026-06-26 — `docs/DECISIONS.md`): ≤100-user private beta.** The Kubernetes/10k-scale
+> track below is **DESCOPED for v1** — Lane **L12** (GKE/KEDA, Issues 275–280, 287) and most of Lane **L13**
+> (10k load test 261, PgBouncer 58/259, 262, 263) are parked behind functionality. The **beta deploys on the
+> managed PaaS (Render) blueprint** (`render.yaml`, `docs/RENDER_DEPLOY.md`) or the existing single-VM
+> compose — both comfortably serve a few dozen users. The GKE path remains documented as the scale option if
+> the product outgrows the beta. The active build track is **L20 — LLM Features & Hardening** (Issues 318–325).
+
+Target (scale option, NOT a v1 gate): Kubernetes at 10k+ scale. Docker Compose = dev only.
 The Helm chart exists (`deploy/charts/creatorclip/`) and the architecture is locked (GKE Autopilot +
 Cloud SQL PG16 + KEDA). It has **never run on K8s** yet — "staging" is currently Docker-Compose on the
 prod VM, which makes the scale/pool `[DEC]`s unfalsifiable. **Standing up a real GKE staging cluster +

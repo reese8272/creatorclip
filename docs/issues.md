@@ -55,6 +55,12 @@ M(1–2 days) / L(multi-day or spike) · `Verify` = where ACs are *truly* provab
 3. **Multilingual — ENGLISH-ONLY v1.** The entire i18n track (finding 14) stays in the parking lot.
 4. **Editor — FULL TIMELINE TOOL.** Waveform+transcript timeline (188) + per-frame active-speaker
    reframe (189) + denoise (185, done), not the lean "AI does it, you tweak" path.
+5. **USER BASE ≤100 — PRIVATE BETA (locked 2026-06-26, `docs/DECISIONS.md`).** v1 targets a few-dozen
+   hand-invited creators, NOT a public 10k launch. The **build-for-10k infra track is DESCOPED**:
+   Lane **L12** (K8s & Deploy: 275–280, 287) in full, and most of Lane **L13** (Scale/Quota/Load: 261,
+   58, 259, 262, 263). Beta runs on the Render blueprint / existing VM. KEPT: per-creator quota (228/260)
+   + spend kill-switch (290). New functionality lane **L20 — LLM Features & Hardening** (318–325) is the
+   active build track. The descoped issues are annotated **DESCOPED-BETA** below and kept for the scale path.
 
 ---
 
@@ -115,16 +121,20 @@ deduped from 32 raw gaps)** and **13 decision recommendations** folded into the 
 | **Notifications & Lifecycle** | 242 | 243 | 244 245 | 193 246 | · | · |
 | **Privacy & Compliance** | 250 251 | 252 253 301 | 254 299 302 | 300 | · | · |
 | **Disaster Recovery & Infra** | 255 258 | 256 288 | 257 293 | · | · | · |
-| **Kubernetes & Deploy** | 275 279 | 276 277 278 280 287 | · | · | · | · |
-| **Scale, Quota & Load** | 27 259 260 263 264 | 261 | 58 262 | · | · | · |
+| **Kubernetes & Deploy** _(DESCOPED-BETA)_ | 275 279 | 276 277 278 280 287 | · | · | · | · |
+| **Scale, Quota & Load** _(261/58/259/262/263 DESCOPED-BETA)_ | 27 259 260 263 264 | 261 | 58 262 | · | · | · |
 | **Publish to YouTube** | 194 | 195 | 29 196 | 197 | · | · |
 | **Activation & Onboarding** | 214 235 | 161 203 204 215 | 100 | 96 | · | · |
 | **UI Core** | 99 210 213 | 148 211 212 217 | 160 | · | · | · |
 | **QA & Release Engineering** | 265 266 267 269 270 271 273 274 | 268 272 294 295 297 | 298 | 296 | 303 | · |
 | **Deploy Gates (Launch Track)** | 24 25 26 | 28 | · | · | · | 30 |
 | **Carry-over & Cleanup** | 73 75 76 82 132 150 | 151 | 78 109 | · | · | · |
+| **LLM Features & Hardening** _(NEW — active beta track)_ | 318 319 320 321 | 322 323 324 325 | · | · | · | · |
 
-*138 open issues across 19 lanes and 6 waves. 8 done (below). Read a column as "what a full parallel round looks like"; read a row as "one agent's serial chain."*
+*138 open issues across 19 lanes and 6 waves, plus the new **L20 LLM Features & Hardening** lane (318–325).
+**Scope (2026-06-26):** the build-for-10k infra is DESCOPED for the ≤100-user beta — Lane **L12** in full and
+**L13**'s 261/58/259/262/263 are parked (kept for the scale path, not v1 gates). Read a column as "what a full
+parallel round looks like"; read a row as "one agent's serial chain."*
 
 ---
 
@@ -393,6 +403,19 @@ Two tracks run *alongside* the lane waves rather than inside them:
 | 316 | [SEV2] 2026-06-24 assessment hardening backlog (tracker → REPORT) | W0 | Carry-over & Cleanup | L | local |
 
 *🧪 research-derived/proposed · ⛔ blocked. Done issues: 181–185, 226, 229, 230, 232, 247–249 (see Completed).*
+
+### LLM Features & Hardening (L20 — new 2026-06-26 beta track)
+
+| # | Title | Wave | Lane | Size | Verify |
+|--:|-------|:----:|------|:----:|:------:|
+| 318 | Kill hardcoded Claude model IDs — complete the model-per-task config registry | W0 | LLM Features & Hardening | S | local |
+| 319 | End-to-end live-API LLM verification harness (flag-gated) + CI nightly | W0 | LLM Features & Hardening | M | external |
+| 320 | Anthropic-SDK production-standards conformance test (singleton/retries/typed-errors/stream-guard/config-model/cache-floor) | W0 | LLM Features & Hardening | M | local |
+| 321 | Usage-ledger coverage guard + per-creator brief quota (beta-sized) | W0 | LLM Features & Hardening | S | local |
+| 322 | Per-clip AI Short-title + hook-rewrite suggestions (Review surface) | W1 | LLM Features & Hardening | M | local |
+| 323 | Per-clip caption-hook / thumbnail-text concepts | W1 | LLM Features & Hardening | M | local |
+| 324 | Agentic chat — new creator-scoped tools over clips & outcomes | W1 | LLM Features & Hardening | M | local |
+| 325 | "Explain this clip" — deeper Why-This-Clip LLM narrative (cites a named principle) | W1 | LLM Features & Hardening | S | local |
 
 ## Index — by original priority tier
 
@@ -5317,6 +5340,335 @@ YouTube, per ToS) — the browser just removes the URL-paste friction.
 **Verification** — `local`: endpoint logic + component behavior unit-testable here. `staging`: real-channel pagination + RLS on the catalog query need Postgres (Issue 275).  
 
 **Risks** — (1) Large channels: unbounded list must paginate or it floods the UI / query (2) Catalog rows lack `source_uri`, so "Clip this" leads to the upload-source step — the UI must set that expectation honestly, not imply one-click clipping  
+
+---
+
+## LLM Features & Hardening  —  `L20_LLM_FEATURES`
+
+New 2026-06-26 beta track. Two halves: **W0** closes the LLM production-standards gaps the earlier
+cost/cache issues (218/220/221/222/223/289) left and *proves the pipeline works against the real API*;
+**W1** ships net-new, DNA-grounded creator features. Every issue follows the current `/claude-api`
+guidance (adaptive thinking, structured outputs, prompt-cache floors, typed exceptions, module-level
+singletons) and the CLAUDE.md honesty constraint. Touches `config.py`, `knowledge/`, `chat/`,
+`clip_engine/`, `routers/`, `frontend/`, `scripts/`, `tests/`.
+
+**Lane issues (wave order):** #318, #319, #320, #321 · #322, #323, #324, #325 · **Waves:** W0, W1 · **Suggested agent:** `python-senior-engineer`
+
+> **Scope note (≤100-user beta):** the Batch API saving (Issue 219) is DESCOPED — at this size the −50%
+> token cost is immaterial and the ≤24h turnaround adds complexity. Keep the synchronous scoring path.
+
+### Issue 318: Kill hardcoded Claude model IDs — complete the model-per-task config registry
+
+**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Blocked by** nothing — **ready now** · **Coordinate (hot files)** `config.py`, `knowledge/hooks.py`, `knowledge/chapters.py`
+
+**Problem.** Issue 221 ("model-per-task — correct SOT") is marked reconciled-DONE, but a hardcoded model
+literal still survives: `knowledge/hooks.py:25` sets `_HAIKU_MODEL = "claude-haiku-4-5-20251001"` instead
+of reading from config. Hardcoded model IDs violate the CLAUDE.md production standard ("no hardcoded
+secrets/config; all config via pydantic-settings"), silently bypass any future model swap, and pin a
+date-suffixed ID that the `/claude-api` guidance warns against. There may be other call sites — the
+"all sites use `settings.ANTHROPIC_MODEL`" claim from the 2026-06-24 audit must be re-verified and
+enforced.
+
+**Approach.** Add a small **model-per-task registry** to `config.py` — a typed mapping
+(e.g. `MODEL_FOR_TASK: dict[str, str]` or discrete settings keys) keyed by task
+(`scoring`, `dna_brief`, `analysis`, `titles`, `thumbnails`, `hooks`, `chapters`, `analyze_performer`,
+`chat`, `intake`, `improvement`) with the *current* default per task (Sonnet 4.6 for reasoning-heavy
+streaming/scoring/chat; Haiku 4.5 for the cheap classify-style hooks/chapters/analyze calls), each
+overridable by an env var documented in `.env.example`. Every call site resolves its model from this
+registry — no literals. Grep the source tree for `claude-` / `claude_` string literals outside
+`config.py`/tests and remove each. Use bare alias IDs (`claude-haiku-4-5`), not date-suffixed strings,
+per `/claude-api shared/models.md`. Log the chosen model per call (already partly done via token logging).
+
+**Files to touch**
+- `config.py` — add the model-per-task registry + per-task env overrides
+- `knowledge/hooks.py` _(`_HAIKU_MODEL` line 25)_ — read model from the registry; drop the literal
+- `knowledge/chapters.py` — same (Haiku caller); confirm it reads from config
+- `knowledge/titles.py`, `knowledge/thumbnails.py`, `analysis/brief.py`, `clip_engine/scoring.py`, `dna/brief.py`, `improvement/brief.py`, `chat/runner.py`, `chat/intake.py`, `routers/insights.py` — confirm each resolves its model from the registry (fix any that don't)
+- `.env.example` — document each `ANTHROPIC_MODEL_<TASK>` override with a description
+- `tests/test_model_config.py` _(NEW FILE)_ — assert no `claude-` literal exists in source outside config/tests; assert every task key resolves to a non-empty alias
+
+**Acceptance criteria**
+- [ ] No hardcoded `claude-*` model literal remains in any module outside `config.py` (grep-enforced by a test)
+- [ ] `knowledge/hooks.py` (and any other offender) resolves its model from the registry
+- [ ] Each task's model is overridable via a documented `.env.example` key; defaults are bare aliases, not date-suffixed
+- [ ] A test enumerates every task key and asserts a valid resolved model
+- [ ] DECISIONS.md notes this completes Issue 221's intent (SOT logged AND literals removed)
+
+**Tests** — `tests/test_model_config.py`: source-tree literal scan; registry completeness; env override wins.
+
+**`[DEC]` DECISIONS.md** — record that 221 was reopened/completed (literal removal) + the per-task default table and rationale (Sonnet for reasoning/streaming, Haiku for cheap classify calls).
+
+**Verification** — `local`: pure config + static scan; no live API needed.
+
+### Issue 319: End-to-end live-API LLM verification harness (flag-gated) + CI nightly
+
+**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `external`
+**Blocked by** nothing — **ready now (harness authorable; live run is external)** · **Coordinate (hot files)** none (new files)
+
+**Problem.** Every LLM test under `tests/` mocks the Anthropic SDK — `test_titles.py`, `test_hooks.py`,
+`test_thumbnails.py`, `test_chat.py`, `test_identity_chat.py`, `test_anthropic_stream.py` all stub the
+client. **Nothing proves the LLM features actually work end-to-end against the real API** (correct
+structured output, honesty disclaimer present, prompt cache landing, usage recorded, no PII/token leak).
+This is the user's core ask ("make sure the LLM actually works E2E") and the gap that let the chat
+"connection lost" runtime issue go unnoticed (LEFT_OFF).
+
+**Approach.** Add a flag-gated live-API verification harness — `scripts/llm_e2e.py` plus a
+`pytest -m llm_live` lane (registered in `pyproject.toml`/`pytest.ini` markers, deselected by default,
+**skipped unless `RUN_LLM_LIVE=1` and `ANTHROPIC_API_KEY` are set**). It exercises each LLM feature
+(titles, thumbnails, hooks, analysis brief, DNA brief, scoring, chat turn, identity intake) against the
+real API with a fixed synthetic creator/DNA fixture and asserts: (1) non-empty, schema-valid output per
+feature; (2) the Python-appended honesty disclaimer is present (never left to the model); (3)
+`cache_read_input_tokens > 0` on the 2nd same-creator call where caching is expected (titles/thumbnails/
+hooks/analysis/scoring); (4) the Usage ledger / token log was written; (5) no API key, OAuth token, or
+PII appears in captured logs; (6) typed Anthropic exceptions are handled (simulate a 400 with a bad
+request). Add a **nightly GitHub Actions job** (schedule + workflow_dispatch, NOT per-PR) that runs the
+lane with the org `ANTHROPIC_API_KEY` secret and posts a pass/fail summary. The chat path's worker
+dependency is documented — the harness calls the runner directly (no Celery needed) for the chat assertion.
+
+**Files to touch**
+- `scripts/llm_e2e.py` _(NEW)_ — orchestrates the per-feature live checks; usable standalone (`python scripts/llm_e2e.py`)
+- `tests/test_llm_live.py` _(NEW, `@pytest.mark.llm_live`)_ — the gated assertions; `pytestmark` skip unless `RUN_LLM_LIVE=1`
+- `pyproject.toml` / `pytest.ini` — register the `llm_live` marker; ensure default lane deselects it
+- `.github/workflows/llm-e2e-nightly.yml` _(NEW)_ — scheduled + dispatch job; uses `ANTHROPIC_API_KEY` secret; summary step
+- `.env.example` — document `RUN_LLM_LIVE`
+- `docs/SOT.md` — note the new live test lane + how to run it
+
+**Acceptance criteria**
+- [ ] `scripts/llm_e2e.py` exercises every LLM feature against the live API behind `RUN_LLM_LIVE=1` and exits non-zero on any failure
+- [ ] Per feature: non-empty schema-valid output; honesty disclaimer present; usage recorded; no secret/PII in logs
+- [ ] Cache check: `cache_read_input_tokens > 0` on the 2nd same-creator call for the cached endpoints
+- [ ] Typed-exception path asserted (a deliberately bad request raises the typed Anthropic error and is handled, not a bare except)
+- [ ] Nightly CI workflow runs the lane (schedule + manual dispatch), never on PRs, and surfaces a summary
+- [ ] Default unit lane still deselects `llm_live` (zero live calls in normal CI)
+
+**Tests** — the harness IS the test; additionally a tiny unit test asserts the lane is skipped when `RUN_LLM_LIVE` is unset.
+
+**`[DEC]` DECISIONS.md** — record the flag-gated live-test pattern (cost-bounded, nightly not per-PR) and why mocked-only coverage was insufficient.
+
+**Verification** — `external`: the live assertions require a real `ANTHROPIC_API_KEY` (and metered tokens), so they run in the nightly job / locally with the flag — NOT on this dev box. The harness + workflow + skip-gating are authored and statically verified here.
+
+### Issue 320: Anthropic-SDK production-standards conformance test
+
+**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Blocked by** nothing — **ready now** · **Coordinate (hot files)** read-only across all LLM modules
+
+**Problem.** The 2026-06-24 "backend/LLM health pass" verified the SDK call sites are sound *by hand*
+(singletons, `max_tokens ≤ 2000`, no hardcoded models, injection gates) — but nothing pins those
+findings, so they can silently regress (and 318 just showed one already had: the hooks model literal).
+The user wants the LLM layer held to production standards durably, not audited once.
+
+**Approach.** Add a `tests/test_llm_conformance.py` that statically/structurally asserts, for every LLM
+call site, the standards from `/claude-api`: (1) the Anthropic client is a **module-level singleton**
+constructed with an explicit `timeout` and `max_retries` (not per-call `Anthropic()`); (2) every
+`messages.create`/`.stream` either sets `max_tokens` within the streaming-safe ceiling or uses
+`.stream()` for large outputs (no non-streaming ValueError risk); (3) model is resolved from config
+(reuses 318's scan); (4) callers handle **typed** Anthropic exceptions (`RateLimitError`/`APIStatusError`
+/`APIConnectionError`) rather than bare `except`/string-matching; (5) each stable-prefix builder carries
+the `UNTRUSTED_CONTENT_POLICY` injection clause and a `cache_control` breakpoint whose prefix clears the
+model floor (Sonnet 4.6 = 1024, Haiku 4.5 = 4096 — assert via `messages.count_tokens` where feasible, or
+a token-estimate guard offline). Where a pure-static assertion is impractical, assert via a lightweight
+import-and-introspect of the module singletons. Fix any call site that fails the new test.
+
+**Files to touch**
+- `tests/test_llm_conformance.py` _(NEW)_ — the conformance assertions (AST scan + singleton introspection)
+- any failing call site in `knowledge/`, `chat/`, `clip_engine/scoring.py`, `analysis/brief.py`, `dna/brief.py`, `improvement/brief.py`, `routers/insights.py` — brought into conformance
+- `docs/SOT.md` — note the conformance gate exists and what it pins
+
+**Acceptance criteria**
+- [ ] A test enumerates every Anthropic call site and asserts: singleton client w/ timeout+retries; config-driven model; typed-exception handling; injection policy in the stable prefix; cache breakpoint above the model floor where caching is intended
+- [ ] Any pre-existing violation is fixed (not just asserted)
+- [ ] The test is in the default unit lane (no live API) and green
+- [ ] DECISIONS.md references this as the durable replacement for the one-time manual audit
+
+**Tests** — `tests/test_llm_conformance.py` (default lane). 
+
+**`[DEC]` DECISIONS.md** — record the conformance-test approach + the per-model cache floors used (1024 Sonnet 4.6 / 4096 Haiku 4.5), citing the live `/claude-api` prompt-caching reference.
+
+**Verification** — `local`: static + import-time introspection; no live API.
+
+### Issue 321: Usage-ledger coverage guard + per-creator brief quota (beta-sized)
+
+**Status** `OPEN` · **Wave** W0 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Blocked by** nothing — **ready now** · **Coordinate (hot files)** `billing/ledger.py`, `config.py`, `routers/insights.py`, `routers/titles.py`, `routers/thumbnails.py`, `routers/improvement.py`
+
+**Problem.** Issue 220 wired the `Usage` ledger increment into every LLM caller, but there is no test that
+*guarantees* a new caller can't be added without recording usage — coverage can silently rot (the exact
+failure mode 318/320 are correcting elsewhere). Issue 220 also left the per-creator brief quota
+"optional"; at a ≤100-user beta a simple per-creator daily brief cap is the cheap guard against a single
+account running up cost (the spend kill-switch, 290, is the global backstop).
+
+**Approach.** (1) Add a coverage guard test: enumerate the LLM caller modules and assert each calls the
+shared `record_llm_usage`/ledger-increment helper (AST scan for the helper call, or an
+import-and-patch test that fails if a call path skips it). (2) Add a per-creator daily brief quota in
+`config.py` (`BRIEF_DAILY_LIMIT_PER_CREATOR`, beta default e.g. 50) enforced before the title/hook/
+thumbnail/analysis/improvement calls (mirror the existing `CHAT_DAILY_MESSAGE_LIMIT` pattern), returning
+a proper 429 with a safe message. Document the new key in `.env.example`.
+
+**Files to touch**
+- `tests/test_usage_coverage.py` _(NEW)_ — asserts every LLM caller writes the ledger
+- `config.py` — `BRIEF_DAILY_LIMIT_PER_CREATOR` + override
+- `billing/ledger.py` or a shared limiter helper — per-creator daily brief count check (reuse the existing daily-limit machinery)
+- `routers/insights.py`, `routers/titles.py`, `routers/thumbnails.py`, `routers/improvement.py` — enforce the quota before the LLM call
+- `.env.example` — document the new key
+- `tests/test_brief_quota.py` _(NEW)_ — quota enforced; isolation (creator A's count ≠ B's); 429 shape
+
+**Acceptance criteria**
+- [ ] A test fails if any LLM caller path omits the Usage-ledger increment
+- [ ] Per-creator daily brief quota enforced before the brief LLM calls; 429 with a safe message once hit
+- [ ] Quota is per-creator isolated; documented in `.env.example`; beta default sized for ≤100 users
+- [ ] No PII/token in the rejection log line
+
+**Tests** — `tests/test_usage_coverage.py`, `tests/test_brief_quota.py` (default lane, mocked DB).
+
+**`[DEC]` DECISIONS.md** — note the beta quota sizing + that it coordinates with the spend kill-switch (290) and pricing (171).
+
+**Verification** — `local`: mocked-DB unit lane.
+
+### Issue 322: Per-clip AI Short-title + hook-rewrite suggestions (Review surface)
+
+**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Blocked by** 318 (config-driven model), 320 (conformance), 321 (usage/quota) — **build after the W0 half** · **Coordinate (hot files)** `routers/clips.py`, `frontend/src/components/review/WhyThisClip.tsx`, `frontend/src/pages/Review.tsx`
+
+**Problem.** `knowledge/titles.py` generates *video-level* title suggestions, but the Review surface — where
+the creator triages a rendered Short — has no per-clip title help, and no "rewrite my hook" affordance.
+This is a high-value, North-Star-aligned feature: a per-clip Short title + a punchier opening-line
+rewrite, grounded in the creator's DNA and the clip's own transcript, surfaced exactly where the creator
+decides to keep/drop.
+
+**Approach.** Add a per-clip title/hook generator (extend `knowledge/titles.py` or a sibling
+`knowledge/clip_titles.py`) that reuses the cached static+DNA prefix pattern (1h `cache_control`
+breakpoint above the Sonnet floor) and takes the clip's transcript excerpt as the uncached block. It
+returns N ranked Short-title candidates + 1–2 hook-rewrite options as strict structured output
+(`output_config.format`), with the honesty disclaimer appended in Python (never the model). New endpoint
+`POST /clips/{clip_id}/title-suggestions` (creator-scoped, per-creator isolation, usage logged via 321's
+ledger, quota-gated). Surface in the Review "Your call" / WhyThisClip area as a small "Suggest titles /
+rewrite hook" card with click-to-copy. Honesty + no-virality copy.
+
+**Files to touch**
+- `knowledge/clip_titles.py` _(NEW)_ or extend `knowledge/titles.py` — per-clip generator (cached DNA prefix + clip transcript)
+- `routers/clips.py` — `POST /clips/{clip_id}/title-suggestions` (auth, isolation, quota, usage)
+- `frontend/src/components/review/WhyThisClip.tsx` / `frontend/src/pages/Review.tsx` — suggestions card + copy
+- `tests/test_clip_titles.py` _(NEW)_ — structured output, disclaimer present, isolation, injection-safe (clip transcript is untrusted)
+- frontend test — card renders + copy action
+- `docs/SOT.md` — new endpoint/module
+
+**Acceptance criteria**
+- [ ] `POST /clips/{clip_id}/title-suggestions` returns N ranked Short titles + ≥1 hook rewrite as schema-valid structured output
+- [ ] Grounded in the creator's DNA brief (cached prefix) + the clip transcript (uncached); per-creator isolation enforced
+- [ ] Honesty disclaimer appended by Python; no response promises virality (structural test)
+- [ ] Usage logged + quota-gated (via 321); clip transcript treated as untrusted content
+- [ ] Review surface shows the suggestions with copy-to-clipboard
+
+**Tests** — backend structured-output + isolation + injection + no-virality; frontend render/copy.
+
+**`[DEC]` DECISIONS.md** — only if the per-clip generator diverges from the video-level titles design.
+
+**Verification** — `local`: mocked SDK + DB; live behavior covered by 319's harness.
+
+### Issue 323: Per-clip caption-hook / thumbnail-text concepts
+
+**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Blocked by** 318, 320, 321 · **Coordinate (hot files)** `routers/thumbnails.py`, `routers/clips.py`, `frontend/src/pages/Review.tsx`
+
+**Problem.** `knowledge/thumbnails.py` produces *channel/video-level* thumbnail concepts, but a Short's
+on-screen caption-hook / thumbnail text is a per-clip decision and isn't surfaced. Creators want a short,
+punchy on-screen text suggestion per clip, grounded in their channel's pattern + the clip's hook.
+
+**Approach.** Add a per-clip caption-hook/thumbnail-text generator (reuse `knowledge/thumbnails.py`'s
+DNA-grounded concept path, scoped to one clip's transcript hook + the channel thumbnail-text patterns
+from DNA). Strict structured output: 3–5 short overlay-text options + a one-line rationale each. New
+endpoint `POST /clips/{clip_id}/caption-hooks` (creator-scoped, usage-logged, quota-gated, disclaimer).
+Surface alongside the title suggestions from 322 in Review.
+
+**Files to touch**
+- `knowledge/thumbnails.py` _(extend)_ or `knowledge/clip_captions.py` _(NEW)_ — per-clip overlay-text generator
+- `routers/clips.py` / `routers/thumbnails.py` — `POST /clips/{clip_id}/caption-hooks`
+- `frontend/src/pages/Review.tsx` — overlay-text suggestions card
+- `tests/test_clip_captions.py` _(NEW)_ — structured output, isolation, injection-safe, no-virality
+- `docs/SOT.md` — new endpoint/module
+
+**Acceptance criteria**
+- [ ] Endpoint returns 3–5 short overlay-text options + rationale as schema-valid output, grounded in DNA + clip hook
+- [ ] Per-creator isolation, usage logged, quota-gated; clip transcript treated as untrusted
+- [ ] Honesty/no-virality preserved
+- [ ] Review surface shows the options with copy
+
+**Tests** — backend structured/isolation/injection; frontend render.
+
+**Verification** — `local`: mocked SDK + DB; live behavior via 319.
+
+### Issue 324: Agentic chat — new creator-scoped tools over clips & outcomes
+
+**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `M` · **Verify** `local`
+**Blocked by** 318, 320 · **Coordinate (hot files)** `chat/tools.py`, `chat/prompt.py`
+
+**Problem.** The Pro chat assistant (`chat/tools.py`) has creator-scoped tools over videos/metrics/
+retention/audience-activity, but cannot reason about the creator's **clips and their outcomes** — so it
+can't answer "which of my clips performed best", "why did this clip underperform", or "draft titles for
+clip X". These deepen the channel-knowledge loop (North Star) and reuse the hardened, isolation-tested
+tool framework.
+
+**Approach.** Add new read-only, creator-scoped tools to `chat/tools.py`: e.g. `list_top_clips`
+(by ClipOutcome metrics), `get_clip_detail` (clip + score + cited principle + outcome), and a
+`suggest_clip_titles` tool that calls the 322 generator. Every executor filters by the injected
+`creator_id` (never model-supplied) — the load-bearing isolation guarantee, pinned by the existing
+`test_chat_isolation_integration.py` pattern. Tool descriptions are prescriptive about *when* to call
+(per `/claude-api` — recent models reach for tools conservatively). Schema list stays a module-level
+constant so the prompt-cache prefix is byte-stable. Honesty constraint unchanged.
+
+**Files to touch**
+- `chat/tools.py` — new creator-scoped clip/outcome tools + executors (isolation on every query)
+- `chat/prompt.py` — only if a tool-usage hint is needed (keep the cached prefix byte-stable)
+- `tests/test_chat.py` / `tests/test_chat_isolation_integration.py` — extend: new tools work + never cross-tenant
+- `docs/SOT.md` — note the expanded chat tool surface
+
+**Acceptance criteria**
+- [ ] New clip/outcome tools added; each filters by injected `creator_id` (model never supplies it)
+- [ ] Isolation test extended: creator A's chat can never read creator B's clips/outcomes
+- [ ] Tool schemas remain a module-level constant (prompt-cache prefix unchanged); descriptions are prescriptive about when to call
+- [ ] Honesty/no-virality preserved; no PII/token logged
+- [ ] `suggest_clip_titles` tool reuses the 322 generator (DRY)
+
+**Tests** — extend chat + chat-isolation tests (the isolation test is load-bearing — keep it real-PG in the integration lane).
+
+**Verification** — `local` for logic + mocked tools; the isolation integration test runs in the Postgres lane (CI/staging); live tool-calling covered by 319.
+
+### Issue 325: "Explain this clip" — deeper Why-This-Clip LLM narrative
+
+**Status** `OPEN` · **Wave** W1 · **Lane** LLM Features & Hardening · **Size** `S` · **Verify** `local`
+**Blocked by** 318, 320, 321 · **Coordinate (hot files)** `routers/clips.py`, `frontend/src/components/review/WhyThisClip.tsx`
+
+**Problem.** The Why-This-Clip surface shows the score + (per CLAUDE.md) the named principle a clip cites,
+but there's no creator-facing, plain-language explanation of *why this moment fits THIS channel*. A short,
+DNA-grounded narrative that explicitly cites a named principle from `docs/CLIPPING_PRINCIPLES.md` makes
+the recommendation legible and reinforces the honesty stance (estimate, not a guarantee).
+
+**Approach.** Add an "explain this clip" generator producing a 2–4 sentence narrative grounded in the
+creator's DNA + the clip's score breakdown + the named principle the score already cites (must reference a
+real principle from `docs/CLIPPING_PRINCIPLES.md` — pin with a structural test, like the existing
+no-virality test). Strict structured output; honesty disclaimer appended by Python. Endpoint
+`POST /clips/{clip_id}/explanation` (creator-scoped, usage-logged, quota-gated). Surface in WhyThisClip
+as an expandable "Why this clip" explanation. Reuse the cached DNA prefix.
+
+**Files to touch**
+- `knowledge/clip_explain.py` _(NEW)_ — the narrative generator (DNA prefix + score breakdown + cited principle)
+- `routers/clips.py` — `POST /clips/{clip_id}/explanation`
+- `frontend/src/components/review/WhyThisClip.tsx` — expandable explanation
+- `tests/test_clip_explain.py` _(NEW)_ — cites a real principle (structural), no-virality, isolation, structured output
+- `docs/SOT.md` / `docs/CLIPPING_PRINCIPLES.md` — note the surface if a principle is added/cited
+
+**Acceptance criteria**
+- [ ] Endpoint returns a 2–4 sentence DNA-grounded explanation as structured output
+- [ ] The explanation cites a real named principle from `docs/CLIPPING_PRINCIPLES.md` (structural test)
+- [ ] No-virality / honesty preserved (structural test); per-creator isolation; usage logged + quota-gated
+- [ ] WhyThisClip shows the explanation
+
+**Tests** — backend cited-principle + no-virality + isolation + structured output; frontend render.
+
+**`[DEC]` DECISIONS.md** — only if a new clipping principle is introduced.
+
+**Verification** — `local`: mocked SDK + DB; live behavior via 319.
 
 ---
 
