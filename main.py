@@ -53,7 +53,9 @@ from routers import titles as titles_router
 from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
-configure_logging(json_logs=settings.LOG_JSON, log_dir=settings.LOG_DIR)
+configure_logging(
+    json_logs=settings.LOG_JSON, level=settings.log_level_int, log_dir=settings.LOG_DIR
+)
 init_sentry(
     dsn=settings.SENTRY_DSN,
     environment=settings.sentry_environment,

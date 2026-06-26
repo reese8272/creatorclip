@@ -33,10 +33,41 @@ jobs:
         run: cp ${{ github.workspace }}/docker-compose.prod.yml /opt/autoclip/docker-compose.prod.yml
 
       - name: Sync secrets to .env
+        # Secrets are passed via env: (the GitHub-recommended pattern) rather than
+        # interpolated into the script — avoids shell-injection / sed-delimiter issues
+        # with special characters and keeps values out of the rendered command.
+        # Each sync is GUARDED: a secret that is unset in GitHub is left as-is on the
+        # VM (we never blank an existing prod value). Infra secrets (DATABASE_URL,
+        # REDIS_URL, JWT_SECRET_KEY, TOKEN_ENCRYPTION_KEY, OAuth, R2, …) remain
+        # VM-managed and are intentionally not listed here.
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          YOUTUBE_API_V3_KEY: ${{ secrets.YOUTUBE_API_V3_KEY }}
         run: |
-          grep -q '^STRIPE_SECRET_KEY=' .env \
-            && sed -i "s|^STRIPE_SECRET_KEY=.*|STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}|" .env \
-            || echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env
+          sync_secret() {
+            key="$1"; val="$2"
+            if [ -z "$val" ]; then echo "skip $key (no GitHub secret set)"; return; fi
+            if grep -q "^${key}=" .env; then
+              # exact-key match on the first '='; rebuild the value to tolerate any chars
+              awk -v k="$key" -v v="$val" 'BEGIN{FS="="} $1==k{print k"="v; next} {print}' .env > .env.tmp \
+                && mv .env.tmp .env
+            else
+              printf '%s=%s\n' "$key" "$val" >> .env
+            fi
+            echo "synced $key"
+          }
+          sync_secret STRIPE_SECRET_KEY  "$STRIPE_SECRET_KEY"
+          sync_secret ANTHROPIC_API_KEY  "$ANTHROPIC_API_KEY"
+          sync_secret DEEPGRAM_API_KEY   "$DEEPGRAM_API_KEY"
+          sync_secret VOYAGE_API_KEY     "$VOYAGE_API_KEY"
+          sync_secret YOUTUBE_API_V3_KEY "$YOUTUBE_API_V3_KEY"
+          # Non-secret operational default: keep prod at INFO (verbose + safe; DEBUG
+          # can leak request headers via httpx). Only add if absent — never clobber
+          # an operator's explicit VM override.
+          grep -q '^LOG_LEVEL=' .env || echo 'LOG_LEVEL=INFO' >> .env
 
       - name: Authenticate with GHCR
         run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin

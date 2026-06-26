@@ -403,10 +403,27 @@ class Settings(BaseSettings):
     # JSON structured logs (one object per line) for log aggregators. Defaults on;
     # set false for human-readable text in local dev.
     LOG_JSON: bool = True
+    # Root log level. INFO (default) is the verbose-but-safe operational level: it
+    # logs every LLM call's token usage, each outbound HTTP request line (httpx),
+    # pipeline stage transitions, and errors with tracebacks — ideal for watching
+    # E2E activity. DEBUG is intentionally NOT the default: at DEBUG, httpx logs
+    # request HEADERS (which include the Anthropic x-api-key), so DEBUG can leak the
+    # key into logs. Only set DEBUG for short, local diagnosis — never standing in prod.
+    LOG_LEVEL: str = "INFO"
     # Directory for persistent log files. Defaults to /app/logs which maps to
     # ./logs on the host via the .:/app Docker volume — readable after a session
     # ends without any extra mount. Set to "" to disable file logging.
     LOG_DIR: str = "/app/logs"
+
+    @property
+    def log_level_int(self) -> int:
+        """Resolve LOG_LEVEL (a name like 'INFO'/'DEBUG') to the logging int.
+
+        Falls back to INFO for an unknown/empty value so a typo never silences logs.
+        """
+        import logging as _logging
+
+        return _logging.getLevelNamesMapping().get(self.LOG_LEVEL.upper(), _logging.INFO)
     # Inbound header carrying a correlation id from an upstream proxy/gateway. If
     # absent or malformed, the middleware mints a UUID4. Echoed back on the response.
     REQUEST_ID_HEADER: str = "X-Request-ID"

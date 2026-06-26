@@ -12,7 +12,12 @@ from observability import configure_logging, init_sentry, install_celery_observa
 # Structured logs + request-id propagation on the worker side (Issue 75f). The
 # signals carry the originating request id across the publish→run boundary so a
 # worker log line is correlatable with the API request that enqueued it.
-configure_logging(json_logs=settings.LOG_JSON, log_dir=settings.LOG_DIR, filename="worker.log")
+configure_logging(
+    json_logs=settings.LOG_JSON,
+    level=settings.log_level_int,
+    log_dir=settings.LOG_DIR,
+    filename="worker.log",
+)
 init_sentry(
     dsn=settings.SENTRY_DSN,
     environment=settings.sentry_environment,
