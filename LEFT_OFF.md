@@ -4,30 +4,28 @@
 > Source-of-truth docs live in `docs/`; this file orients and points to them — it is NOT a source of truth.
 
 **Last updated:** 2026-06-27
-**Checked out:** `main` @ `e837979` — **1 commit AHEAD of `origin/main`** (Issue 326 is committed locally, **NOT pushed**).
-**Working tree:** clean except screenshot churn (`Screenshot *.png` — ignore) + one untracked helper `scripts/clip_pipeline_state.py` (not yet committed).
-**CI:** all green. **Last prod deploy:** `705cb56` → autoclip.studio succeeded. `e837979` has **not** deployed (not pushed).
+**Checked out:** `main` @ `d83da76` — **pushed to `origin/main`**; `staging` fast-forwarded to match (both in line). Issue 326 (code + VM activation wiring) is committed AND pushed.
+**Working tree:** clean. Screenshot churn removed this session; `.gitignore` now has a working `Screenshot *.png` glob so it won't recur.
+**CI:** all green. **Last prod deploy:** pushing `d83da76` triggers a VM deploy (Docker publish → "Deploy to production"). The OTel code remains a **strict no-op** until the SaaS secrets are set, so this deploy changes prod behavior **not at all** yet.
 
-> ⚠️ **Pushing `main` auto-deploys to the VM** (Docker publish → "Deploy to production"). `e837979` is safe to push — the new OpenTelemetry code is a **strict no-op** until `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and that env var is **not** set anywhere yet.
+> ⚠️ **Pushing `main` auto-deploys to the VM.** Already done for `d83da76` — safe because OTel/Sentry stay dormant until `OTEL_EXPORTER_OTLP_ENDPOINT` / `SENTRY_DSN` GitHub secrets exist (still unset). The **next** push that matters is after those secrets are set — that one actually arms the exporters.
 
 ---
 
 ## CURRENT FOCUS
 
-**Give the live backend full observability ("see every detail") — Issue 326.** Research + design + code are done and committed; what remains is (a) extending the wiring to the **actually-live VM host**, and (b) creating the SaaS accounts + setting creds so it lights up.
+**Give the live backend full observability ("see every detail") — Issue 326.** Research + design + code + **VM activation wiring are all done, committed, and pushed.** All that remains is a **user/external** step: create the SaaS accounts, set 3 GitHub secrets, then verify it lights up live.
 
-### → NEXT ACTION (pick up here)
+### ✅ DONE this session (code-side complete)
+- **Issue 326 code** (`e837979`) — `init_otel()`/instrumentation in `observability.py`, wired into `main.py` + `worker/celery_app.py`, no-op until env set; 42/42 obs tests green.
+- **VM activation wiring** (`d83da76`) — `.github/workflows/deploy.yml` guarded secret-sync now propagates `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` to the VM `.env` (skipped while unset → no drift, no premature activation), and stamps `IMAGE_SHA` for release attribution. No `docker-compose.prod.yml` change (all services `env_file: .env`). 4 non-secret OTEL_* tunables keep `config.py` defaults. Logged in `docs/DECISIONS.md` (2026-06-27).
+- **`scripts/clip_pipeline_state.py`** committed (read-only DB diagnostic, sibling to `scripts/r2_inspect.py`).
+- **Pushed `main` → `origin/main`; `staging` fast-forwarded to match.**
 
-1. **Decide push timing for `e837979`.** It's safe now (no-op without OTel env). Either `git push origin main` (will redeploy the VM with the dormant OTel code) or hold until the VM wiring (step 2) is also ready and push together.
-2. **✅ DONE (uncommitted) — Extend Issue 326 to the VM.** The OTel code is host-agnostic; it just needed the env vars to reach the VM. Wired the deploy **secret-sync** step (`.github/workflows/deploy.yml`) — same guarded mechanism as `R2_*`/AI keys, so a fresh VM can't drift:
-   - Added guarded `sync_secret` for the 3 credential/env-specific keys: `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`. Until the matching **GitHub Actions secrets** are set, each sync is a no-op and OTel/Sentry stay dormant.
-   - Also stamps `IMAGE_SHA` (deployed commit) every deploy so Sentry/OTel attribute events to the exact build (config field existed, nothing set it before).
-   - **No `docker-compose.prod.yml` change needed:** `app`/`worker`/`beat` all use `env_file: .env`, so synced keys propagate to all three automatically. (Adding explicit `environment:` blocks would risk empty-string overrides that defeat the no-op gate.)
-   - The 4 non-secret OTEL_* tunables (`OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLE_RATE`, `OTEL_METRICS_ENABLED`, `OTEL_LOGS_ENABLED`) keep their `config.py` defaults — intentionally not synced.
-   - **Remaining for this step:** set the 3 GitHub Actions secrets (step 3) — the wiring is ready and waits on them.
-3. **Create the SaaS accounts + set creds** (user step — see `docs/RENDER_DEPLOY.md` §11, which also applies conceptually to the VM): Sentry project → `SENTRY_DSN`; Grafana Cloud stack → OTLP endpoint + Basic-auth token → `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`.
-4. **Verify live** once creds are set: reproduce one upload→clip flow, confirm an HTTP→Celery trace appears in Grafana Cloud Tempo and exceptions in Sentry. Then close Issue 326 (Verify: external) + update `docs/PROJECT_STATE.md`.
-5. **Commit `scripts/clip_pipeline_state.py`** if keeping it (read-only DB diagnostic, sibling to the committed `scripts/r2_inspect.py`).
+### → NEXT ACTION (pick up here — all EXTERNAL/USER)
+1. **Create the SaaS accounts + set creds** (see `docs/RENDER_DEPLOY.md` §11 — applies conceptually to the VM): Sentry project → `SENTRY_DSN`; Grafana Cloud stack → OTLP endpoint + Basic-auth token → `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`. Set all 3 as **GitHub Actions secrets** (the deploy secret-sync picks them up automatically).
+2. **Trigger a deploy** (push any commit to `main`, or re-run the "Deploy to production" workflow) so the secrets sync into the VM `.env` and the exporters arm.
+3. **Verify live:** reproduce one upload→clip flow, confirm an HTTP→Celery trace appears in Grafana Cloud Tempo and exceptions in Sentry. Then check off Issue 326's external ACs (`docs/issues.md`) + flip its `docs/PROJECT_STATE.md` row to ✅ Done.
 
 ### Lower-priority follow-ups (raised this session, not yet done)
 - **Render DB cleanup:** remove the temporary **IP allowlist entry** added to Render `creatorclip-db` during debugging (that DB is empty/unused).

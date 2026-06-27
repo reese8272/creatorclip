@@ -48,7 +48,8 @@ logs/
 *.swp
 *.swo
 .DS_Store
-"Screenshot 2026-05-27 124552.png"
+# Dev screenshots — ad-hoc, never committed (glob; the old quoted entry never matched)
+Screenshot *.png
 
 # Claude Code per-project state (worktrees, agent caches, session metadata)
 # — ignore everything EXCEPT committed project skills, slash commands, the shared
