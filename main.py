@@ -28,7 +28,9 @@ from observability import (
     RequestIDMiddleware,
     collect_saturation_gauges,
     configure_logging,
+    init_otel,
     init_sentry,
+    instrument_fastapi_app,
     metrics_response,
     request_id_ctx,
 )
@@ -61,6 +63,9 @@ init_sentry(
     environment=settings.sentry_environment,
     release=settings.IMAGE_SHA,
 )
+# OTel SDK: no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset (dev/CI safe).
+# FastAPI span instrumentation is applied below after `app = FastAPI(...)`.
+init_otel(service_name="creatorclip-web")
 logger = logging.getLogger(__name__)
 
 # Issue 297: CalVer version from pyproject.toml [project].version via stdlib
@@ -120,6 +125,10 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+
+# OTel FastAPI instrumentation must happen after the app object is created.
+# No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+instrument_fastapi_app(app)
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)

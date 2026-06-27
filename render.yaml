@@ -82,7 +82,18 @@ envVarGroups:
       - key: METRICS_TOKEN
         sync: false
       # Optional error tracking (Sentry / GlitchTip DSN). Leave unset to disable.
+      # IMPORTANT: set SENTRY_DSN to capture exceptions from both web + worker.
       - key: SENTRY_DSN
+        sync: false
+      # Optional OpenTelemetry → Grafana Cloud (Issue 326).
+      # Leave OTEL_EXPORTER_OTLP_ENDPOINT unset to disable all OTel telemetry
+      # (no imports, no network calls — same no-op pattern as SENTRY_DSN).
+      # See docs/RENDER_DEPLOY.md §12 for the Grafana Cloud setup steps.
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        sync: false
+      # Grafana Cloud Basic-auth header: "Authorization=Basic <base64(id:token)>".
+      # Treat as a secret — never log or commit.
+      - key: OTEL_EXPORTER_OTLP_HEADERS
         sync: false
 
 services:

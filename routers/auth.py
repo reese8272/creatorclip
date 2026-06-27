@@ -451,7 +451,7 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
     logger.info("Account deleted for creator %s", creator_id)
 
 
-@router.delete("/me", status_code=204)
+@router.delete("/me", status_code=204, response_class=Response, response_model=None)
 @limiter.limit("5/hour", key_func=creator_key)
 async def delete_account(
     request: Request,

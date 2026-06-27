@@ -416,6 +416,7 @@ Two tracks run *alongside* the lane waves rather than inside them:
 | 323 | Per-clip caption-hook / thumbnail-text concepts | W1 | LLM Features & Hardening | M | local |
 | 324 | Agentic chat — new creator-scoped tools over clips & outcomes | W1 | LLM Features & Hardening | M | local |
 | 325 | "Explain this clip" — deeper Why-This-Clip LLM narrative (cites a named principle) | W1 | LLM Features & Hardening | S | local |
+| 326 | Beta observability activation on Render — Grafana Cloud (logs+metrics+traces) + Sentry + OTel | W0 | Observability | L | external |
 
 ## Index — by original priority tier
 
@@ -2054,7 +2055,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, tracing, error-tracking, status page (`observability.py`).
 
-**Lane issues (wave order):** #233, #236, #237, #239, #241, #284, #234, #238, #240, #281, #282, #283, #291, #292 · **Waves:** W0, W1, W2 · **Suggested agent:** `python-senior-engineer`
+**Lane issues (wave order):** #233, #236, #237, #239, #241, #284, #234, #238, #240, #281, #282, #283, #291, #292, #326 · **Waves:** W0, W1, W2 · **Suggested agent:** `python-senior-engineer`
 
 ### Issue 233: Redaction backstop on the stdout/file log sink
 
@@ -2458,6 +2459,43 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 - [ ] A read-only dashboard shows cost-per-processed-video, cost-per-render, per-creator COGS vs minutes-revenue (gross margin), and pipeline cost split by stage
 - [ ] Budget-burn alerting is wired off it
 - [ ] Figures reconcile with the 289 USD ledger on a sampled video
+
+### Issue 326: Beta observability activation on Render — Grafana Cloud (unified logs+metrics+traces) + Sentry + OTel
+
+**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `L` · **Verify** `external`  
+**Brings forward (beta-scoped):** #281 (Sentry DSN activation), #241 (OpenTelemetry distributed tracing), #240 (log aggregation — managed Grafana Cloud for beta, NOT self-hosted Loki-on-GKE), #236 (resolves its open managed-vs-self-hosted question → managed). Reverses the 2026-05-29 "defer OTel for the single-VM beta" decision **for the Render beta** — see `docs/DECISIONS.md` (2026-06-26).  
+**Coordinate (hot files)** `main.py`, `observability.py`, `worker/celery_app.py`, `config.py`, `requirements.txt`, `render.yaml`, `.env.example`
+
+**Problem.** Production debugging visibility has three holes: (1) Sentry is fully coded (Issue 281) but `SENTRY_DSN` is unset in prod → zero exception capture; (2) Render stdout logs are ~7-day, unsearchable, no alerting; (3) the prometheus-client `/metrics` golden signals are emitted but **nothing scrapes them on Render**, and there are **no distributed traces** at all — so a "upload succeeded, render never produced a clip" failure (the live R2 symptom that opened this issue: `source/`+`audio/` present, `clips/` empty) cannot be traced HTTP→Celery.
+
+**Approach.** Keep the working foundation (structured JSON logs + request-id correlation + prometheus-client). Layer on, in ROI order: **(1)** set `SENTRY_DSN` (env only — code already wired, PII-scrubbed). **(2)** Add the **OpenTelemetry SDK** with auto-instrumentation for FastAPI, Celery, SQLAlchemy, Redis, **httpx** (Deepgram/Voyage/YouTube), **botocore** (R2, pinned), and **`opentelemetry-instrumentation-anthropic`** (OpenLLMetry — LLM token spans, `TRACELOOP_TRACE_CONTENT=false` for PII). Export via **OTLP HTTP → Grafana Cloud** (logs via Loki, metrics, traces via Tempo — unified vendor, free tier sufficient for ≤100 users, no dead end for the GKE path). All exporters are **no-ops when their endpoint/DSN env is unset** (same pattern as Sentry) so dev/CI run clean. Then **reproduce one upload→clip flow** and read the trace to root-cause the missing clips.
+
+**Files to touch**
+- `requirements.txt` — pin `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, the instrumentation packages (fastapi/celery/sqlalchemy/redis/httpx/botocore), `opentelemetry-instrumentation-anthropic`
+- `observability.py` — new `init_otel(...)` (no-op on empty endpoint); OTLP trace+metric exporters; instrument calls
+- `main.py` — call `init_otel` at API startup (after Sentry)
+- `worker/celery_app.py` — call `init_otel` for the worker
+- `config.py` — `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` (Grafana Cloud token), `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLE_RATE`; fail-soft when unset
+- `render.yaml` — add the OTel env keys (`sync: false`) for web + worker + beat; document `SENTRY_DSN` must be set
+- `.env.example` — document every new key
+- `docs/RUNBOOKS.md` / `docs/RENDER_DEPLOY.md` — Grafana Cloud + Sentry setup steps; log-drain note
+- `tests/test_observability.py` — assert `init_otel` is a no-op on empty config and instruments once when configured
+
+**Acceptance criteria**
+- [ ] `SENTRY_DSN` set in Render → exceptions from API + worker land in Sentry
+- [ ] OTel traces correlate an inbound HTTP request to its Celery task spans (HTTP→queue→worker), visible in Grafana Cloud Tempo
+- [ ] Outbound spans captured for Anthropic (with token attrs, content OFF), Deepgram, Voyage, YouTube (httpx) and R2 (botocore)
+- [ ] App golden-signal metrics reach Grafana Cloud via OTLP push (prometheus-client retained for local)
+- [ ] Render logs are searchable/retained off-box (Grafana Cloud Loki or a Render syslog drain)
+- [ ] All OTel/Sentry exporters are no-ops when their env is unset (dev/CI green, no network)
+- [ ] Layer-0 gates stay green
+- [ ] The original "why no clips" question is answered from a live trace (or a one-off DB read of `clips.render_status`)
+
+**`[DEC]` DECISIONS.md** — Records: (a) reversal of the 2026-05-29 beta-OTel deferral for the Render beta; (b) Grafana Cloud (managed, unified) chosen over self-hosted Loki-on-GKE (#240) for the beta, with the GKE self-host kept as the documented scale option; (c) Sentry SaaS for errors; (d) the decision matrix + sources.
+
+**Verification** — `external`: full trace/log/metric flow requires the live Render services + a Grafana Cloud account; the no-op-when-unset behavior and single-instrumentation are unit-testable locally.
+
+**Risks** — (1) Grafana Cloud account + OTLP token is a user/ops step, not code — code must fail-soft without it. (2) `botocore`/`celery` instrumentations are "development"-status OTel semconv — pin versions. (3) Double metric paths (prometheus-client + OTel) — keep prometheus-client for local only; don't double-count. (4) LLM span content must stay OFF (`TRACELOOP_TRACE_CONTENT=false`) to honor the PII/token no-leak boundary.
 
 ---
 

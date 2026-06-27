@@ -7,7 +7,7 @@ from celery import Celery
 from celery.signals import worker_process_init, worker_process_shutdown
 
 from config import settings
-from observability import configure_logging, init_sentry, install_celery_observability
+from observability import configure_logging, init_otel, init_sentry, install_celery_observability
 
 # Structured logs + request-id propagation on the worker side (Issue 75f). The
 # signals carry the originating request id across the publish→run boundary so a
@@ -23,6 +23,9 @@ init_sentry(
     environment=settings.sentry_environment,
     release=settings.IMAGE_SHA,
 )
+# OTel SDK: no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset (dev/CI safe).
+# CeleryInstrumentor is applied inside init_otel alongside all other instrumentors.
+init_otel(service_name="creatorclip-worker")
 install_celery_observability()
 
 logger = logging.getLogger(__name__)

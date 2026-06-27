@@ -9649,3 +9649,61 @@ one unmetered task is enough to cause billing gaps at scale.
 **Date:** 2026-06-26
 
 **Date:** 2026-06-24
+
+---
+
+## 2026-06-26 — Issue 326: Beta observability activated on Render via managed Grafana Cloud + Sentry + OTel (reverses the 2026-05-29 beta-OTel deferral)
+
+**What was decided.** Bring the L08 observability lane forward onto the **Render
+beta now**, rather than waiting for the GKE target, using a **two-vendor split**:
+- **Sentry SaaS** for error/exception tracking + basic perf tracing (code already
+  wired in Issue 281 — activation is setting `SENTRY_DSN`).
+- **Grafana Cloud** (managed, free tier) as the **single unified backend for logs
+  (Loki) + metrics + traces (Tempo)**, fed by an in-app **OpenTelemetry SDK** with
+  auto-instrumentation (FastAPI, Celery, SQLAlchemy, Redis, httpx, botocore) and
+  **OpenLLMetry** (`opentelemetry-instrumentation-anthropic`) for LLM token spans,
+  exported via OTLP/HTTP. All exporters are **no-ops when their env is unset**
+  (same pattern as the existing Sentry init) so dev/CI stay offline-clean.
+
+**Why (the trigger).** A live R2 inspection during debugging showed `source/` +
+`audio/` objects present but `clips/` empty — a "render never produced a clip"
+symptom that **cannot be diagnosed** today: Sentry DSN is unset (no exceptions
+captured), Render stdout logs are ~7-day/unsearchable, `/metrics` is scraped by
+nothing on Render, and there are **no distributed traces** to follow an HTTP
+request into its Celery task. The user asked for the most robust, production-
+standard, research-backed visibility — explicitly accepting loss of historical
+errors in exchange for a correct go-forward stack.
+
+**What this changes / deviates from.**
+- **Reverses, for the Render beta only,** the **2026-05-29** decision to *defer
+  OpenTelemetry for the single-VM beta*. Rationale then (single VM, no aggregator)
+  no longer holds: a managed OTLP backend (Grafana Cloud) needs no infra to run.
+- **Re-scopes Issue 240** ("self-hosted Grafana Loki on GCS, deployed on GKE")
+  for the beta to **managed Grafana Cloud Loki**. The self-hosted Loki-on-GKE
+  build remains the documented **scale option** for the GKE target, not the beta.
+- **Resolves Issue 236's open question** (managed vs self-hosted Prometheus/
+  Alertmanager) → **managed Grafana Cloud**.
+- Keeps `prometheus-client` (Issues 237/238) for local dev; does not rip it out.
+
+**Industry standard checked (2026).** OTel is the de-facto instrumentation
+standard (≈77% Prometheus / ≈49% OTel adoption — complementary layers, not
+either/or); Sentry SaaS is the statistical default for error tracking at small-
+team/PaaS scale; OpenLLMetry implements the OTel GenAI semantic conventions for
+Claude spans. For a ≤100-user beta the unified-Grafana-Cloud + Sentry split is
+$0–$26/mo and carries cleanly to the GKE path (Grafana Cloud is K8s-native).
+
+**Alternatives ruled out.** Datadog (cost/lock-in, overkill for beta); self-hosted
+GlitchTip (4 extra containers to save ~$11/mo); standing up our own Prometheus on
+Render (Render doesn't scrape managed services — push via OTLP instead); ripping
+out prometheus-client (correct + free — keep for local); Honeycomb (excellent but
+$130/mo Pro — wrong price point for beta); Better Stack free tier (3-day retention
+too short to debug past incidents).
+
+**Source/evidence.** Industry-standards research pass (2026-06-26), sources incl.:
+OpenTelemetry Python contrib instrumentation README; OTel GenAI semantic
+conventions (open-telemetry/semantic-conventions, genai spans); `opentelemetry-
+instrumentation-anthropic` v0.61.0 (PyPI, 2026-05-31); Render log-streams &
+metrics-streams docs; Sentry / Grafana Cloud / New Relic / Axiom / Honeycomb
+pricing pages (all verified 2026-06). Coral­ogix OTel-vs-Prometheus adoption stats.
+
+**Date:** 2026-06-26

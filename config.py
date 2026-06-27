@@ -424,6 +424,7 @@ class Settings(BaseSettings):
         import logging as _logging
 
         return _logging.getLevelNamesMapping().get(self.LOG_LEVEL.upper(), _logging.INFO)
+
     # Inbound header carrying a correlation id from an upstream proxy/gateway. If
     # absent or malformed, the middleware mints a UUID4. Echoed back on the response.
     REQUEST_ID_HEADER: str = "X-Request-ID"
@@ -507,6 +508,36 @@ class Settings(BaseSettings):
     # Git SHA / image tag for Sentry release tracking. Set via IMAGE_SHA env var
     # at container build time (e.g. short git SHA). Empty → not sent.
     IMAGE_SHA: str = ""
+
+    # ── OpenTelemetry / Grafana Cloud (Issue 326) ─────────────────────────────
+    # All OTEL_* settings are optional — an empty OTEL_EXPORTER_OTLP_ENDPOINT
+    # disables the entire SDK (no imports, no network calls) so dev/CI stays
+    # fully offline. Never log OTEL_EXPORTER_OTLP_HEADERS — it carries the
+    # Grafana Cloud Basic-auth token.
+    #
+    # Grafana Cloud OTLP endpoint (e.g.
+    #   https://otlp-gateway-prod-us-east-0.grafana.net/otlp).
+    # Empty string = OTel completely disabled (default in dev/CI).
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+    # OTLP auth headers in the OTel-standard format: "key=value,key2=value2".
+    # Grafana Cloud uses: "Authorization=Basic <base64(instanceID:token)>".
+    # Treat as a secret — never emit in logs.
+    OTEL_EXPORTER_OTLP_HEADERS: str = ""
+    # Human-readable service name attached to every span/metric/log.
+    # init_otel accepts an explicit service_name arg that overrides this so
+    # main.py can use "creatorclip-web" and celery_app.py "creatorclip-worker".
+    OTEL_SERVICE_NAME: str = "creatorclip"
+    # Head-based trace sampling rate [0.0, 1.0].  1.0 = sample everything
+    # (correct default for a ≤100-user beta with tiny volume).
+    OTEL_TRACES_SAMPLE_RATE: float = 1.0
+    # Push metrics via OTLP to Grafana Cloud.  Keep prometheus-client for local
+    # /metrics — this is the push path, not a replacement.
+    OTEL_METRICS_ENABLED: bool = True
+    # Attach an OTel LoggingHandler and push log records via OTLP.
+    # Default OFF — Grafana Cloud Loki is best served via a Render syslog drain
+    # (zero code, see docs/RENDER_DEPLOY.md §12).  Enable only if you prefer
+    # in-process log shipping over the syslog-drain approach.
+    OTEL_LOGS_ENABLED: bool = False
 
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:

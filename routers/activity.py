@@ -10,7 +10,7 @@ populated when a valid session exists, "anonymous" otherwise.
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field
 from slowapi.util import get_remote_address
 
@@ -31,7 +31,9 @@ class ActivityEvent(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.post("", status_code=204, include_in_schema=False)
+@router.post(
+    "", status_code=204, include_in_schema=False, response_class=Response, response_model=None
+)
 @limiter.limit("200/minute", key_func=get_remote_address)
 async def record_activity(request: Request, event: ActivityEvent) -> None:
     # Resolve creator id from the signed session cookie (no DB lookup — this

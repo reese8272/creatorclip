@@ -83,6 +83,24 @@ prometheus-client==0.25.0
 # Pin to the stable 2.x series; 2.x ships FastApiIntegration as a first-class part
 # of the package. Disabled in dev/CI when SENTRY_DSN is empty.
 sentry-sdk==2.32.0
+# OpenTelemetry — distributed tracing + metrics push to Grafana Cloud (Issue 326).
+# SDK 1.43.0 is the current stable release; contrib instrumentors are versioned
+# separately at 0.64b0 (the coordinated release that pairs with SDK 1.43.0).
+# All OTel code is guarded behind OTEL_EXPORTER_OTLP_ENDPOINT so dev/CI stay
+# offline — imports only happen inside init_otel() when the endpoint is set.
+# Versions verified 2026-06-26 via pip download --no-deps.
+opentelemetry-sdk==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0
+opentelemetry-instrumentation-fastapi==0.64b0
+opentelemetry-instrumentation-celery==0.64b0
+opentelemetry-instrumentation-sqlalchemy==0.64b0
+opentelemetry-instrumentation-redis==0.64b0
+opentelemetry-instrumentation-httpx==0.64b0
+opentelemetry-instrumentation-botocore==0.64b0
+# OpenLLMetry — OTel GenAI semantic conventions for Anthropic spans (Issue 326).
+# Set TRACELOOP_TRACE_CONTENT=false (enforced in init_otel) to keep prompt/
+# completion text out of spans — required by the PII/token no-leak boundary.
+opentelemetry-instrumentation-anthropic==0.61.0
 
 # ── Storage (S3-compatible / Cloudflare R2) ──────────────────────────────────
 boto3==1.35.54

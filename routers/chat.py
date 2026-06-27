@@ -19,7 +19,7 @@ import logging
 import uuid as _uuid_mod
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -256,7 +256,12 @@ async def get_messages(
     }
 
 
-@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
 async def delete_conversation(
     conversation_id: str,
     creator: Creator = Depends(get_current_creator),

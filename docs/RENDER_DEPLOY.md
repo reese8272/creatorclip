@@ -150,7 +150,60 @@ DNS per Render's instructions, then re-point `ALLOWED_ORIGINS`, `APP_BASE_URL`,
 - **DB:** `alembic downgrade <rev>` run manually via a one-off shell on the web
   service. Treat schema rollbacks as deliberate, data-loss-aware operations.
 
-## 11. Cost & limits
+## 11. Observability setup (Issue 326)
+
+CreatorClip uses a two-vendor observability stack: **Sentry** for error/exception
+capture and **Grafana Cloud** for unified logs + metrics + traces.
+
+### 11a. Sentry (error tracking)
+
+1. Create a Sentry project at [sentry.io](https://sentry.io) (free Developer plan
+   is sufficient for the beta).
+2. Copy the DSN from **Settings > Client Keys**.
+3. In the `creatorclip-beta-env` group set `SENTRY_DSN` to that value.
+
+Both `creatorclip-web` and `creatorclip-worker` call `init_sentry()` at startup —
+exceptions from the API and from Celery tasks will appear in the same project.
+
+### 11b. Grafana Cloud (traces + metrics + logs via OTel)
+
+1. Create a free Grafana Cloud account at [grafana.com/products/cloud](https://grafana.com/products/cloud/).
+2. In **My Account → Stack details**, copy your **OTLP endpoint URL** — it looks
+   like `https://otlp-gateway-prod-us-east-0.grafana.net/otlp`.
+3. Under the same page, generate an **OTLP token** (or re-use the Grafana API key
+   with `MetricsPublisher` role).  The Basic-auth value is
+   `base64(<instanceID>:<token>)` — Grafana Cloud shows the exact command.
+4. In the `creatorclip-beta-env` group set:
+   - `OTEL_EXPORTER_OTLP_ENDPOINT` = the OTLP gateway URL from step 2.
+   - `OTEL_EXPORTER_OTLP_HEADERS` = `Authorization=Basic <base64(instanceID:token)>`.
+
+The OTel SDK (init_otel) is a strict **no-op when the endpoint is unset** — local
+dev and CI run without any OTel packages imported or network calls made.
+
+#### What you get
+
+| Signal | Destination | How |
+|--------|-------------|-----|
+| **Traces** | Grafana Cloud Tempo | Auto-instrumentation: FastAPI, Celery, SQLAlchemy, Redis, httpx (Deepgram/Voyage/YouTube/Anthropic), botocore (R2) |
+| **Metrics** | Grafana Cloud Metrics | OTLP push (in addition to `/metrics` Prometheus endpoint) |
+| **LLM spans** | Grafana Cloud Tempo | OpenLLMetry `AnthropicInstrumentor` — token counts only, **content capture OFF** (`TRACELOOP_TRACE_CONTENT=false`) |
+
+### 11c. Logs — Render syslog drain (recommended, zero code)
+
+The simplest way to get Render stdout into Grafana Cloud Loki:
+
+1. In Grafana Cloud, go to **Connections → Add new connection → Hosted Logs**.
+2. Create a Loki datasource and note the **syslog drain URL** or use the generic
+   Grafana Cloud Loki endpoint.
+3. In Render: **Dashboard → your service → Logs → Add Log Drain**, paste the
+   syslog URL, select `syslog` format.
+4. Repeat for each service (web, worker, beat).
+
+This approach ships all structured-JSON log lines to Loki with zero in-process
+overhead.  Enable `OTEL_LOGS_ENABLED=true` only if you explicitly prefer
+in-process OTLP log shipping over the syslog drain.
+
+## 13. Cost & limits
 
 - **Plans:** `starter` web/worker/beat; `basic-256mb` Postgres; `starter` Key Value.
   Bump web/worker to `standard` if uvicorn workers or ffmpeg renders need more headroom.

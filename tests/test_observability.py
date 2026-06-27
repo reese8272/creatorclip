@@ -392,6 +392,125 @@ def test_sentry_before_send_passes_event_with_no_sensitive_fields() -> None:
     assert result["request"]["data"]["action"] == "build_dna"
 
 
+# ── Issue 326: init_otel no-op + idempotency ────────────────────────────────
+
+
+def test_init_otel_is_noop_when_endpoint_empty() -> None:
+    """init_otel must be a strict no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+
+    Specifically:
+    - It must return without importing any opentelemetry.* module.
+    - It must not set the _otel_initialized flag (so a later configured call
+      still works).
+    - It must raise nothing.
+
+    This mirrors the init_sentry no-op contract.
+    """
+    import sys
+    import unittest.mock as _mock
+
+    import observability
+
+    # Reset the idempotency flag to ensure a clean slate for this test.
+    original_flag = observability._otel_initialized
+    observability._otel_initialized = False
+    try:
+        # Record which OTel modules were in sys.modules before the call.
+        otel_modules_before = {k for k in sys.modules if k.startswith("opentelemetry")}
+
+        with _mock.patch("config.settings") as mock_settings:
+            mock_settings.OTEL_EXPORTER_OTLP_ENDPOINT = ""
+            observability.init_otel()
+
+        # Must not have imported any new opentelemetry.* module.
+        otel_modules_after = {k for k in sys.modules if k.startswith("opentelemetry")}
+        new_otel_imports = otel_modules_after - otel_modules_before
+        assert not new_otel_imports, (
+            f"init_otel with empty endpoint must import no OTel modules; got: {new_otel_imports}"
+        )
+
+        # The idempotency flag must remain False so a later configured call works.
+        assert observability._otel_initialized is False, (
+            "_otel_initialized must stay False when endpoint is empty"
+        )
+    finally:
+        observability._otel_initialized = original_flag
+
+
+def test_init_otel_idempotent_when_called_twice() -> None:
+    """Calling init_otel twice must not double-instrument.
+
+    The _otel_initialized guard must cause the second call to return immediately
+    without calling any instrumentor a second time.
+    """
+    import unittest.mock as _mock
+
+    import observability
+
+    original_flag = observability._otel_initialized
+    # Pre-set the flag to simulate an already-initialised state.
+    observability._otel_initialized = True
+    try:
+        with _mock.patch("config.settings") as mock_settings:
+            mock_settings.OTEL_EXPORTER_OTLP_ENDPOINT = "https://otel.example.com/otlp"
+            # If the guard is missing, this would try to import OTel packages and
+            # fail (they are not installed in the unit-test environment).  With
+            # the guard, it returns immediately with no imports.
+            observability.init_otel()  # must not raise
+    finally:
+        observability._otel_initialized = original_flag
+
+
+def test_instrument_fastapi_app_is_noop_when_otel_not_initialised() -> None:
+    """instrument_fastapi_app must be a no-op when _otel_initialized is False."""
+    import unittest.mock as _mock
+
+    import observability
+
+    original_flag = observability._otel_initialized
+    observability._otel_initialized = False
+    try:
+        fake_app = _mock.MagicMock()
+        # Must not raise and must not call FastAPIInstrumentor.
+        observability.instrument_fastapi_app(fake_app)
+        # FastAPIInstrumentor would have been imported and called if the guard failed.
+        # The absence of an ImportError (OTel not installed) proves the guard held.
+    finally:
+        observability._otel_initialized = original_flag
+
+
+def test_parse_otlp_headers_empty_string() -> None:
+    """_parse_otlp_headers('') must return an empty dict."""
+    from observability import _parse_otlp_headers
+
+    assert _parse_otlp_headers("") == {}
+
+
+def test_parse_otlp_headers_single_pair() -> None:
+    """_parse_otlp_headers parses a single key=value pair."""
+    from observability import _parse_otlp_headers
+
+    result = _parse_otlp_headers("Authorization=Basic dXNlcjpwYXNz")
+    assert result == {"Authorization": "Basic dXNlcjpwYXNz"}
+
+
+def test_parse_otlp_headers_multiple_pairs() -> None:
+    """_parse_otlp_headers parses comma-separated key=value pairs."""
+    from observability import _parse_otlp_headers
+
+    result = _parse_otlp_headers("Authorization=Basic abc,X-Scope-OrgID=1234")
+    assert result == {"Authorization": "Basic abc", "X-Scope-OrgID": "1234"}
+
+
+def test_parse_otlp_headers_ignores_malformed_pair() -> None:
+    """_parse_otlp_headers skips pairs with no '=' sign rather than raising."""
+    from observability import _parse_otlp_headers
+
+    result = _parse_otlp_headers("Authorization=Bearer tok,BadPair")
+    # BadPair has no '=' so it is skipped; Authorization is parsed.
+    assert result == {"Authorization": "Bearer tok"}
+
+
 def test_sentry_init_is_noop_when_dsn_empty() -> None:
     """init_sentry must be a no-op when SENTRY_DSN is empty — no SDK initialization."""
     import sys

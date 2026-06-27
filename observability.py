@@ -461,6 +461,186 @@ def init_sentry(
     )
 
 
+# ── OpenTelemetry (Issue 326) ────────────────────────────────────────────────
+# All OTel imports are LAZY (inside init_otel / helpers) so the module never
+# touches opentelemetry.* at import time.  When OTEL_EXPORTER_OTLP_ENDPOINT is
+# empty the entire block is bypassed — zero OTel packages imported, zero network
+# calls — mirroring the init_sentry no-op pattern exactly.
+
+_otel_initialized: bool = False
+
+
+def _parse_otlp_headers(raw: str) -> dict[str, str]:
+    """Convert the OTel-standard 'key=value,key2=value2' header string into a dict.
+
+    This is the format accepted by OTEL_EXPORTER_OTLP_HEADERS and by the
+    OTLPSpanExporter / OTLPMetricExporter headers kwarg.
+
+    Args:
+        raw: Comma-separated key=value pairs.  Empty string → empty dict.
+
+    Returns:
+        A mapping of header names to values.
+    """
+    if not raw:
+        return {}
+    headers: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if "=" in pair:
+            key, _, value = pair.partition("=")
+            headers[key.strip()] = value.strip()
+    return headers
+
+
+def init_otel(service_name: str | None = None) -> None:
+    """Initialise the OpenTelemetry SDK with OTLP/HTTP exporters for Grafana Cloud.
+
+    Call once at process startup — in main.py for the API process and in
+    worker/celery_app.py for the Celery worker.  When
+    OTEL_EXPORTER_OTLP_ENDPOINT is empty the function is a strict no-op: it
+    imports nothing, sets no global state, and makes no network calls.  This
+    preserves the dev/CI offline guarantee.
+
+    All opentelemetry.* imports are inside this function (lazy).  The function
+    is idempotent — a second call is silently skipped so a misconfigured boot
+    sequence cannot double-instrument.
+
+    Auto-instrumentation registered here:
+    - CeleryInstrumentor       — task publish/run spans
+    - SQLAlchemyInstrumentor   — global engine patch (safe with recreate_engine)
+    - RedisInstrumentor        — Redis command spans
+    - HTTPXClientInstrumentor  — outbound calls (Anthropic, Deepgram, Voyage, YouTube)
+    - BotocoreInstrumentor     — R2/S3 object operations
+    - AnthropicInstrumentor    — LLM token spans (OpenLLMetry; content capture OFF)
+
+    FastAPI is instrumented separately via instrument_fastapi_app(app) because
+    it requires the FastAPI application object, which is created after startup.
+
+    Args:
+        service_name: The ``service.name`` OTel resource attribute for this
+            process.  Defaults to ``settings.OTEL_SERVICE_NAME`` ("creatorclip").
+            Pass "creatorclip-web" from main.py and "creatorclip-worker" from
+            celery_app.py so Grafana Cloud separates the two signal streams.
+
+    (Issue 326; Grafana Cloud OTLP/HTTP; opentelemetry-sdk 1.43.0)
+    """
+    global _otel_initialized
+    if _otel_initialized:
+        return
+
+    # Lazy import so config is not pulled in at module level.
+    from config import settings
+
+    endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT
+    if not endpoint:
+        return  # OTel disabled — strict no-op, no imports, no side effects.
+
+    # Mark as initialised *before* the heavy imports so a re-entrant call from a
+    # signal handler (unlikely but possible) doesn't race past the guard.
+    _otel_initialized = True
+
+    import logging as _logging
+    import os as _os
+
+    from opentelemetry import metrics as _metrics
+    from opentelemetry import trace as _trace
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+    _svc = service_name or settings.OTEL_SERVICE_NAME
+    resource = Resource(attributes={SERVICE_NAME: _svc})
+    headers = _parse_otlp_headers(settings.OTEL_EXPORTER_OTLP_HEADERS)
+
+    # ── Traces ────────────────────────────────────────────────────────────────
+    # ParentBased sampler: respects the parent context (so cross-service
+    # propagation works) and falls back to TraceIdRatioBased for root spans.
+    sampler = ParentBased(root=TraceIdRatioBased(settings.OTEL_TRACES_SAMPLE_RATE))
+    tracer_provider = TracerProvider(resource=resource, sampler=sampler)
+    # OTLPSpanExporter auto-appends /v1/traces to the base endpoint.
+    span_exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+    tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    _trace.set_tracer_provider(tracer_provider)
+
+    # ── Metrics ───────────────────────────────────────────────────────────────
+    # Push path only — prometheus-client stays for local /metrics scraping.
+    # Do NOT create a second prometheus-client bridge here; that would
+    # double-count. OTel metrics are independent spans/instruments.
+    if settings.OTEL_METRICS_ENABLED:
+        metric_exporter = OTLPMetricExporter(endpoint=endpoint, headers=headers)
+        reader = PeriodicExportingMetricReader(metric_exporter)
+        meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+        _metrics.set_meter_provider(meter_provider)
+
+    # ── Logs (optional, default OFF) ─────────────────────────────────────────
+    # The preferred logs path on Render is a syslog drain to Grafana Cloud
+    # Loki (no code, see docs/RENDER_DEPLOY.md §12).  Enable this handler path
+    # only when in-process log shipping is explicitly preferred.
+    if settings.OTEL_LOGS_ENABLED:
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+        log_exporter = OTLPLogExporter(endpoint=endpoint, headers=headers)
+        logger_provider = LoggerProvider(resource=resource)
+        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+        set_logger_provider(logger_provider)
+        _otel_log_handler = LoggingHandler(level=_logging.NOTSET, logger_provider=logger_provider)
+        _logging.getLogger().addHandler(_otel_log_handler)
+
+    # ── Auto-instrumentation ──────────────────────────────────────────────────
+    from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
+    from opentelemetry.instrumentation.celery import CeleryInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+    CeleryInstrumentor().instrument()
+    # Global SQLAlchemy patch — do NOT pass engine=... here.  The Celery worker
+    # calls db.recreate_engine() in worker_process_init, producing a fresh engine
+    # per-process.  The global patch intercepts every engine created after this
+    # point, which is the correct behaviour for both the API and worker processes.
+    SQLAlchemyInstrumentor().instrument()
+    RedisInstrumentor().instrument()
+    HTTPXClientInstrumentor().instrument()
+    BotocoreInstrumentor().instrument()
+
+    # Anthropic (OpenLLMetry) — the instrumentor reads TRACELOOP_TRACE_CONTENT
+    # to decide whether to capture prompt/completion text in span attributes.
+    # We MUST keep this OFF unconditionally: prompts can contain creator tokens
+    # and personal data (PII/token no-leak boundary, docs/COMPLIANCE.md).
+    _os.environ.setdefault("TRACELOOP_TRACE_CONTENT", "false")
+    from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
+
+    AnthropicInstrumentor().instrument()
+
+
+def instrument_fastapi_app(app: Any) -> None:
+    """Attach FastAPI auto-instrumentation to an already-created FastAPI app.
+
+    Must be called AFTER ``app = FastAPI(...)`` and AFTER ``init_otel()``.  If
+    OTel was not initialised (empty endpoint) this function is a no-op so it is
+    safe to call unconditionally from main.py.
+
+    Args:
+        app: The FastAPI application instance.
+
+    (Issue 326)
+    """
+    if not _otel_initialized:
+        return
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app)
+
+
 def install_celery_observability() -> None:
     """Wire signal handlers that carry the request id across the publish→run boundary
     and record Celery task golden signals (duration + terminal-state counts).
