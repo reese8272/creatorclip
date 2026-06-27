@@ -98,14 +98,27 @@ def _deepgram_client() -> Any:
     return _DEEPGRAM_CLIENT
 
 
-def _transcribe_deepgram(audio_path: str) -> dict:
+def _deepgram_prerecorded_options() -> Any:
+    """Build the PrerecordedOptions for a nova-3 prerecorded transcription.
+
+    Extracted as a named helper so a test can validate these kwargs against the
+    REAL deepgram-sdk. The mocked transcribe tests replace PrerecordedOptions with
+    a MagicMock, so they can't catch an invalid option name — `words=True` was NOT
+    a valid request param and raised TypeError on every prod upload. Word-level
+    timings need no request flag; Deepgram always returns them in
+    `channels[].alternatives[].words` (and inside each utterance).
+    """
     try:
         from deepgram import PrerecordedOptions
     except ImportError as exc:
         raise ImportError("deepgram-sdk not installed. Run: pip install deepgram-sdk") from exc
 
+    return PrerecordedOptions(model="nova-3", smart_format=True, utterances=True)
+
+
+def _transcribe_deepgram(audio_path: str) -> dict:
     client = _deepgram_client()
-    opts = PrerecordedOptions(model="nova-3", smart_format=True, utterances=True, words=True)
+    opts = _deepgram_prerecorded_options()
     # Issue 251 — opt creator audio out of Deepgram's Model Improvement Partnership
     # Program (MIP). deepgram-sdk v3 does NOT accept mip_opt_out as a named constructor
     # kwarg on PrerecordedOptions (raises TypeError — confirmed via SDK issue #474 at

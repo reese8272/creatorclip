@@ -37,6 +37,22 @@ def test_default_transcription_backend_sdk_is_installed():
         )
     importlib.import_module(sdk_module)  # raises ImportError if the SDK isn't installed
 
+
+def test_deepgram_prerecorded_options_use_valid_sdk_kwargs():
+    """Build the REAL PrerecordedOptions to catch an invalid option kwarg.
+
+    Regression: `words=True` is not a valid Deepgram request param and raised
+    TypeError('unexpected keyword argument words') on every prod upload. The
+    mocked transcribe tests below can't see it — they replace PrerecordedOptions
+    with a MagicMock that swallows any kwargs. This builds it for real."""
+    pytest.importorskip("deepgram")
+    from ingestion.transcribe import _deepgram_prerecorded_options
+
+    opts = _deepgram_prerecorded_options()  # TypeErrors here if a kwarg is invalid
+    assert opts.model == "nova-3"
+    assert opts.smart_format is True
+    assert opts.utterances is True
+
 # ── mip_opt_out enforcement ───────────────────────────────────────────────────
 
 
