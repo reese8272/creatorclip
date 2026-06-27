@@ -5,6 +5,36 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-27 — Issue 326 observability activates on the VM (deploy.yml secret-sync), not render.yaml
+
+**What changed.** Issue 326's brief was written to activate observability on **Render**
+(`render.yaml` env keys). On investigation the live app does **not** run on Render — it runs on
+the **VM** (docker-compose behind a Cloudflare tunnel); the Render Postgres is empty and was never
+cut over. Activation was therefore wired into the **VM deploy path** instead: the
+`.github/workflows/deploy.yml` guarded secret-sync now propagates `SENTRY_DSN`,
+`OTEL_EXPORTER_OTLP_ENDPOINT`, and `OTEL_EXPORTER_OTLP_HEADERS` from GitHub secrets to the VM `.env`
+(skipped when the secret is unset, so a fresh VM can't drift and nothing activates prematurely), plus
+`IMAGE_SHA` (the deployed commit) so Sentry/OTel attribute events to the exact build.
+
+**Why.** The OTel/Sentry code (`e837979`) is host-agnostic — it only needs its env vars present on
+the *live* host. Wiring `render.yaml` would have armed a host that serves no traffic. The VM
+`deploy.yml` secret-sync is the same mechanism already used for `R2_*`/AI keys (see the
+2026-06-26 R2 entry, item 2), so this reuses an established, documented pattern rather than inventing
+one. No `docker-compose.prod.yml` change was needed: `app`/`worker`/`beat` all use `env_file: .env`,
+so synced keys reach every service; adding explicit `environment:` blocks would risk empty-string
+overrides that defeat the no-op gate. The four non-secret OTEL_* tunables keep their `config.py`
+defaults and are intentionally not synced. The `render.yaml` keys remain in place as the documented
+path for the future Render beta, if the product ever cuts over.
+
+**Source / evidence.** Live topology confirmed this session via SSH to `creatorclip-vm` + the empty
+Render `creatorclip-db` (0 tables); `docker-compose.prod.yml` `env_file: .env` on all services;
+`config.py` no-op gate on empty `OTEL_EXPORTER_OTLP_ENDPOINT`. Cross-ref memory
+`project_live_deployment_topology` and `LEFT_OFF.md`.
+
+**Date:** 2026-06-27
+
+---
+
 ## 2026-06-26 — Object storage (R2) is mandatory in production; storage misconfig is now fail-fast and observable
 
 **What changed.** A live prod upload silently went to `FAILED`. Root cause: the prod

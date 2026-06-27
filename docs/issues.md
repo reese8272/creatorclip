@@ -2481,15 +2481,24 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 - `docs/RUNBOOKS.md` / `docs/RENDER_DEPLOY.md` — Grafana Cloud + Sentry setup steps; log-drain note
 - `tests/test_observability.py` — assert `init_otel` is a no-op on empty config and instruments once when configured
 
+> **ACTIVATION HOST CORRECTION (2026-06-27).** This brief was written Render-centric, but the
+> live app runs on the **VM** (docker-compose behind a Cloudflare tunnel) — Render was never cut
+> over (its DB is empty). Activation was therefore wired into the **VM deploy path**
+> (`.github/workflows/deploy.yml` guarded secret-sync — `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+> `OTEL_EXPORTER_OTLP_HEADERS`, plus `IMAGE_SHA` for release tagging), **not** `render.yaml`.
+> No `docker-compose.prod.yml` change is needed — all services use `env_file: .env`, so synced keys
+> reach app/worker/beat. The `render.yaml` keys remain as the documented future-Render-beta path.
+> See `docs/DECISIONS.md` (2026-06-27). Remaining external gates wait on the SaaS accounts/creds.
+
 **Acceptance criteria**
-- [ ] `SENTRY_DSN` set in Render → exceptions from API + worker land in Sentry
-- [ ] OTel traces correlate an inbound HTTP request to its Celery task spans (HTTP→queue→worker), visible in Grafana Cloud Tempo
-- [ ] Outbound spans captured for Anthropic (with token attrs, content OFF), Deepgram, Voyage, YouTube (httpx) and R2 (botocore)
-- [ ] App golden-signal metrics reach Grafana Cloud via OTLP push (prometheus-client retained for local)
-- [ ] Render logs are searchable/retained off-box (Grafana Cloud Loki or a Render syslog drain)
-- [ ] All OTel/Sentry exporters are no-ops when their env is unset (dev/CI green, no network)
-- [ ] Layer-0 gates stay green
-- [ ] The original "why no clips" question is answered from a live trace (or a one-off DB read of `clips.render_status`)
+- [x] Code wired: `SENTRY_DSN` / `OTEL_*` synced to the live host (VM `deploy.yml`) — exceptions land in Sentry **once `SENTRY_DSN` GitHub secret is set** *(external: needs Sentry project)*
+- [ ] OTel traces correlate an inbound HTTP request to its Celery task spans (HTTP→queue→worker), visible in Grafana Cloud Tempo *(external: needs Grafana Cloud)*
+- [ ] Outbound spans captured for Anthropic (with token attrs, content OFF), Deepgram, Voyage, YouTube (httpx) and R2 (botocore) *(external)*
+- [ ] App golden-signal metrics reach Grafana Cloud via OTLP push (prometheus-client retained for local) *(external)*
+- [ ] Live logs searchable/retained off-box via Grafana Cloud (the ephemeral VM `docker compose logs` is the gap this closes) *(external)*
+- [x] All OTel/Sentry exporters are no-ops when their env is unset (dev/CI green, no network) — 42/42 observability tests pass
+- [x] Layer-0 gates stay green
+- [x] The original "why no clips" question is answered (one-off DB read via `scripts/clip_pipeline_state.py`: clips rest at `render_status=pending`; render is user-triggered — not a bug)
 
 **`[DEC]` DECISIONS.md** — Records: (a) reversal of the 2026-05-29 beta-OTel deferral for the Render beta; (b) Grafana Cloud (managed, unified) chosen over self-hosted Loki-on-GKE (#240) for the beta, with the GKE self-host kept as the documented scale option; (c) Sentry SaaS for errors; (d) the decision matrix + sources.
 

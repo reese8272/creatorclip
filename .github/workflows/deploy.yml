@@ -59,6 +59,20 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          # Observability (Issue 326) — guarded like the rest. Until these GitHub
+          # secrets are set, the sync is a no-op and OTel/Sentry stay dormant
+          # (init_otel returns immediately on an empty OTEL_EXPORTER_OTLP_ENDPOINT;
+          # the Sentry SDK no-ops on an empty SENTRY_DSN). The HEADERS value carries
+          # the Grafana Cloud auth token — secret, never logged. The four non-secret
+          # OTEL_* tunables (service name, sample rate, metrics/logs toggles) keep
+          # their config.py defaults and are intentionally not synced here.
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          # Stamp the deployed commit so Sentry/OTel attribute events to this build.
+          # head_sha is the exact commit "Docker publish" built; fall back to the
+          # ref SHA on a manual workflow_dispatch. Non-secret — rewritten every deploy.
+          IMAGE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           sync_secret() {
             key="$1"; val="$2"
@@ -81,6 +95,11 @@ jobs:
           sync_secret R2_ACCESS_KEY_ID     "$R2_ACCESS_KEY_ID"
           sync_secret R2_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY"
           sync_secret R2_BUCKET            "$R2_BUCKET"
+          sync_secret SENTRY_DSN                  "$SENTRY_DSN"
+          sync_secret OTEL_EXPORTER_OTLP_ENDPOINT "$OTEL_EXPORTER_OTLP_ENDPOINT"
+          sync_secret OTEL_EXPORTER_OTLP_HEADERS  "$OTEL_EXPORTER_OTLP_HEADERS"
+          # IMAGE_SHA always has a value (commit SHA), so this stamps every deploy.
+          sync_secret IMAGE_SHA                   "$IMAGE_SHA"
           # Pin STORAGE_BACKEND=r2 AUTHORITATIVELY (not a guarded default): with the
           # multi-container prod topology, local-disk storage is a broken backend —
           # the worker can't read the app container's disk. Rewrite any existing

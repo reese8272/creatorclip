@@ -1,148 +1,103 @@
-# LEFT_OFF — upload→clips pipeline LIVE-verified end-to-end; LLM lane live; prod self-sufficient
+# LEFT_OFF — backend observability (Issue 326) built; live app is the VM, not Render
 
 > **Read this first.** Living "where we are right now" handoff for a fresh session with zero memory.
 > Source-of-truth docs live in `docs/`; this file orients and points to them — it is NOT a source of truth.
 
 **Last updated:** 2026-06-27
-**Checked out:** `main` @ `705cb56` (== `origin/main` == `origin/staging`; **0 ahead / 0 behind**).
-**Working tree:** clean except unrelated screenshot churn + this file. **Worktrees:** only the main checkout.
-**Last prod deploy:** `705cb56` → autoclip.studio **succeeded** (Docker publish + Deploy: secret-sync →
-doctor preflight → migrations → rollout → smoke, no rollback). Prod `/health` =
-`{"status":"ok","postgres":"ok","redis":"ok","storage":"ok","version":"dev"}`.
+**Checked out:** `main` @ `e837979` — **1 commit AHEAD of `origin/main`** (Issue 326 is committed locally, **NOT pushed**).
+**Working tree:** clean except screenshot churn (`Screenshot *.png` — ignore) + one untracked helper `scripts/clip_pipeline_state.py` (not yet committed).
+**CI:** all green. **Last prod deploy:** `705cb56` → autoclip.studio succeeded. `e837979` has **not** deployed (not pushed).
+
+> ⚠️ **Pushing `main` auto-deploys to the VM** (Docker publish → "Deploy to production"). `e837979` is safe to push — the new OpenTelemetry code is a **strict no-op** until `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and that env var is **not** set anywhere yet.
 
 ---
 
 ## CURRENT FOCUS
 
-**E2E stress testing on autoclip.studio.** The code is production-ready for the ≤100-user beta and fully
-deployed; BOTH the **upload→clips pipeline** AND the LLM feature surfaces are now **live-verified end-to-end**
-(not just mocked) — see "WHAT WORKS NOW". Remaining work is exercising the rest of the funnel under load and
-watching logs — a **user-driven** activity (needs a logged-in creator + real videos), not a code task.
+**Give the live backend full observability ("see every detail") — Issue 326.** Research + design + code are done and committed; what remains is (a) extending the wiring to the **actually-live VM host**, and (b) creating the SaaS accounts + setting creds so it lights up.
 
-**→ NEXT ACTION (resume here):**
-1. **Continue walking the funnel on autoclip.studio** (Google OAuth) — the core ingest→clips path is proven;
-   now exercise the remaining live-LLM surfaces on the 6 clips just generated: Review a clip (per-clip AI
-   titles + hook-rewrite #322, caption/overlay-text #323, "explain this clip" #325) · Analyze a video ·
-   Title/Thumbnail/Hook suggestions · Assistant chat (#324 tools) · render a clip (9:16 reframe) · publish.
-2. **Watch verbose logs while testing** (SSH alias `creatorclip-vm`, dir `/opt/autoclip`):
-   `docker compose -f docker-compose.prod.yml logs -f app worker`.
-   Expect `*_tokens: in=… cached_read=… out=…` per LLM call and `HTTP Request: POST …/v1/messages 200`.
-   For the upload path: `ingest_video_done` → `Transcribing via deepgram` + `POST api.deepgram.com/v1/listen …200`
-   → `build_signals_done` → `Generated N ranked clips` → `clips_ready` notification.
-3. **(Optional, recommended) Activate the nightly live-LLM check:** the `ANTHROPIC_API_KEY` GitHub secret
-   now exists, so `gh workflow run llm-e2e-nightly.yml` (or wait for the 03:00 UTC cron) runs the 22-check
-   live suite automatically.
-4. **(Optional nits, offered — not done):** (a) inject the deployed commit SHA into `IMAGE_SHA` so
-   `/health` `"version"` stops reading `"dev"`; (b) commit a refresh of this file + `docs/PROJECT_STATE.md`.
+### → NEXT ACTION (pick up here)
 
-**To re-run the live LLM harness locally any time** (needs the key in `.env` + local Redis):
-```
-cd /home/reese/workspace/Youtube-Video-AI-Editor && \
-export ANTHROPIC_API_KEY="$(grep -E '^[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*=' .env | head -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')" RUN_LLM_LIVE=1 && \
-.venv/bin/python scripts/llm_e2e.py
-```
+1. **Decide push timing for `e837979`.** It's safe now (no-op without OTel env). Either `git push origin main` (will redeploy the VM with the dormant OTel code) or hold until the VM wiring (step 2) is also ready and push together.
+2. **✅ DONE (uncommitted) — Extend Issue 326 to the VM.** The OTel code is host-agnostic; it just needed the env vars to reach the VM. Wired the deploy **secret-sync** step (`.github/workflows/deploy.yml`) — same guarded mechanism as `R2_*`/AI keys, so a fresh VM can't drift:
+   - Added guarded `sync_secret` for the 3 credential/env-specific keys: `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`. Until the matching **GitHub Actions secrets** are set, each sync is a no-op and OTel/Sentry stay dormant.
+   - Also stamps `IMAGE_SHA` (deployed commit) every deploy so Sentry/OTel attribute events to the exact build (config field existed, nothing set it before).
+   - **No `docker-compose.prod.yml` change needed:** `app`/`worker`/`beat` all use `env_file: .env`, so synced keys propagate to all three automatically. (Adding explicit `environment:` blocks would risk empty-string overrides that defeat the no-op gate.)
+   - The 4 non-secret OTEL_* tunables (`OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLE_RATE`, `OTEL_METRICS_ENABLED`, `OTEL_LOGS_ENABLED`) keep their `config.py` defaults — intentionally not synced.
+   - **Remaining for this step:** set the 3 GitHub Actions secrets (step 3) — the wiring is ready and waits on them.
+3. **Create the SaaS accounts + set creds** (user step — see `docs/RENDER_DEPLOY.md` §11, which also applies conceptually to the VM): Sentry project → `SENTRY_DSN`; Grafana Cloud stack → OTLP endpoint + Basic-auth token → `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`.
+4. **Verify live** once creds are set: reproduce one upload→clip flow, confirm an HTTP→Celery trace appears in Grafana Cloud Tempo and exceptions in Sentry. Then close Issue 326 (Verify: external) + update `docs/PROJECT_STATE.md`.
+5. **Commit `scripts/clip_pipeline_state.py`** if keeping it (read-only DB diagnostic, sibling to the committed `scripts/r2_inspect.py`).
+
+### Lower-priority follow-ups (raised this session, not yet done)
+- **Render DB cleanup:** remove the temporary **IP allowlist entry** added to Render `creatorclip-db` during debugging (that DB is empty/unused).
+- **Re-run a failed-transcription video** to confirm the Deepgram fix holds (3 of 4 test uploads failed transcription *before* the fix; the latest succeeded — strongly indicates resolved).
+- **~20 YouTube-linked videos stuck at `ingest_status=pending`** — confirm that's "linked but never queued" (expected per Issue 317) and not a stuck queue.
 
 ---
 
-## WHAT WORKS NOW (verified this session — don't re-investigate)
+## WHAT WORKS NOW (don't re-investigate)
 
-- **The UPLOAD→CLIPS pipeline works END-TO-END in prod (verified 2026-06-27).** A real upload ran the full
-  chain live: `ingest_video` (reads source from R2) → `transcribe_video` (Deepgram nova-3, `POST
-  api.deepgram.com/v1/listen …200`, `mip_opt_out=true`) → `build_signals` → `generate_clips` (Anthropic
-  `POST /v1/messages 200`, `clip_scoring tokens in=… cached_write=…`) → **"Generated 6 ranked clips"** →
-  `clips_ready` email. Getting here required fixing **3 stacked prod bugs the mocked suite hid** (full writeup
-  in `~/.claude/ISSUES_LOG.md` ISSUE-2026-06-27-01): (1) `STORAGE_BACKEND=local` on the VM → worker (separate
-  container, no shared volume) couldn't read uploads from R2 [`7f775e1`]; (2) `deepgram-sdk` was commented out
-  of `requirements.txt` while it's the default backend → `ImportError` [`8db5c3c`]; (3) `words=True` is an
-  invalid `PrerecordedOptions` kwarg → `TypeError` [`705cb56`]. Each is now boot-blocked/guarded by a test.
-- **Storage is now mandatory + observable in prod (`7f775e1`).** Config fails fast unless `STORAGE_BACKEND=r2`
-  + all `R2_*` set; deploy pins `=r2` and syncs `R2_*` from GH secrets; `doctor.py` FAILs on prod+backend≠r2;
-  `/health` has an R2 bucket-HEAD `"storage"` probe; `videos.failure_reason` (migration `0036`) puts a
-  humanized, secret-safe reason on the dashboard badge instead of a bare `FAILED`. ⚠️ **The 4 `R2_*` GitHub
-  secrets are NOT set yet** — the VM's existing `.env` creds carried the deploy; add them (`gh secret set
-  R2_…`) so a fresh VM / rotation can't drift back to the broken state.
-- **The LLM works END-TO-END against the real API.** `scripts/llm_e2e.py` ran **22 passed / 0 failed** live
-  (real `POST /v1/messages 200`, real token usage, `cache_read_input_tokens > 0` = server prompt-cache landing).
-  The live run caught + fixed **3 real bugs mocks missed** (all deployed): `hooks` was 400-ing in prod
-  (Haiku 4.5 can't use `web_search_20260209` dynamic filtering → fixed with `allowed_callers=["direct"]`);
-  `titles`/`thumbnails` JSON parse failed on fenced/preamble output → `extract_json_block` helper + direct caller.
-- **L20 "LLM Features & Hardening" (#318–325) shipped + deployed.** W0: model-per-task registry (no hardcoded
-  model IDs), live-API E2E harness + nightly CI, SDK conformance test, usage-ledger guard + brief quota.
-  W1: per-clip titles/hook-rewrite, caption/overlay-text, chat clip/outcome tools, "explain this clip".
-- **Prod is self-sufficient for all AI functionality.** All 4 AI keys are GitHub secrets and the deploy's
-  `Sync secrets to .env` step syncs them (guarded; never blanks a VM value): `ANTHROPIC_API_KEY`,
-  `DEEPGRAM_API_KEY`, `VOYAGE_API_KEY`, `YOUTUBE_API_V3_KEY` (+ existing `STRIPE_SECRET_KEY`). Verified in the
-  deploy log (`synced …`).
-- **Verbose logging is wired.** `LOG_LEVEL` setting (default `INFO`) feeds both the API and worker
-  `configure_logging`. INFO logs every LLM call's tokens + httpx request line + pipeline stages.
-- **Scope is locked to a ≤100-user private beta** (2026-06-26): build-for-10k infra (Lane L12 K8s/GKE/KEDA,
-  most of L13 scale/load, Batch API #219) is DESCOPED. Trunk green, gates: backend unit lane **1617 passed /
-  0 failed**, frontend `tsc -b`+`vite` clean + vitest **207 passed**.
+- **Upload→clips pipeline is live-verified end-to-end on the VM.** Latest upload (`01fa0601…`) ran ingest→transcribe→signals→`generate_clips` and produced **6 clip candidates**. The earlier transcribe failures were the now-fixed Deepgram bugs (`8db5c3c`, `705cb56`).
+- **"Why are there no `clips/` objects in R2?" — ANSWERED, not a bug.** `render_clip` is **user-triggered** (enqueued from `routers/clips.py:419`, the set-style+render endpoint), never auto-chained after `generate_clips`. Clips rest at `render_status=pending` until a user clicks render. R2 `clips/` is empty simply because no one has rendered yet. To produce a rendered 9:16 clip in R2, hit render on one of the 6 candidates in the app.
+- **R2 (`autoclip-studio`) is healthy:** 8 objects (4 `source/`, 4 `audio/`), ~172 MB. Inspect with `python3.12 scripts/r2_inspect.py` (needs `R2_*` in local `.env`).
+- **Issue 326 code (committed `e837979`):** `init_otel()`/`instrument_fastapi_app()` in `observability.py` (lazy imports, strict no-op when endpoint unset, idempotent), wired into `main.py` + `worker/celery_app.py`; auto-instruments Celery/SQLAlchemy/Redis/httpx/botocore + Anthropic (OpenLLMetry, content capture forced OFF for PII). 42/42 observability tests pass; no-op import verified. Deps pinned in `requirements.txt`.
+- **LLM lane (#318–325) shipped + deployed.** Prod is self-sufficient for AI (keys synced from GH secrets on deploy).
 
 ---
 
-## THE ARC THAT LED HERE
+## THE ARC THAT LED HERE (how this session unfolded)
 
-1. User: change scope to <100 users; want more functionality + LLM; run an issue workflow with Sonnet 4.6.
-2. Locked the ≤100-user scope (descoped the 10k infra); defined a new lane **L20** (issues 318–325) and ran it
-   as two Sonnet-4.6 build waves (W0 hardening, W1 features) → merged to `main`.
-3. Cleaned the repo (removed all stale wave worktrees/branches → only `main`+`staging`; parked #279 work as a tag),
-   pushed `main` (auto-deploy), synced `staging`.
-4. User wanted to **actually test the LLM live**. Ran `scripts/llm_e2e.py` with the real key → caught 3 prod bugs,
-   fixed them, re-ran to **22/22**, deployed.
-5. User's final ask: make GH Actions carry everything for prod, ensure all functionality runs on autoclip.studio
-   for E2E stress testing, with verbose logging. Done: AI keys → GH secrets + guarded deploy sync; `LOG_LEVEL` knob.
-6. **(2026-06-27) First real upload on prod hit `FAILED`.** Watched worker logs across three deploys and peeled
-   3 stacked bugs the mocks hid — storage backend (`local`→`r2`), missing `deepgram-sdk`, invalid `words=True`
-   kwarg — each fix exposing the next stage. Hardened storage to be boot-blocking + observable (`/health`
-   `storage`, doctor gate, `failure_reason` badge) along the way. A real re-upload then ran clean to **6 clips +
-   `clips_ready`**. Logged as ISSUE-2026-06-27-01; DECISIONS 2026-06-27 records the R2-mandatory contract.
+1. **User asked to "check the R2 and other storage logs to understand the app as it's working."** Inspected the `autoclip-studio` R2 bucket (wrote `scripts/r2_inspect.py`): found only `source/` + `audio/` objects, **no `clips/`** — surfacing the question "why are no clips being produced?"
+2. **User escalated:** "check worker logs to see why clips aren't rendering, and make sure you have **complete visibility** on the backend — logging, tracing, third-party API capture, etc."
+3. **Audited existing observability:** strong foundation (structured JSON logs + request-id correlation HTTP→Celery, prometheus-client golden signals, Sentry SDK wired). Gaps: `SENTRY_DSN` unset (no error capture), Render logs ephemeral/unsearchable, nothing scrapes `/metrics`, **no distributed tracing at all**, third-party calls only partially metered.
+4. **User: "do this the most robust, production-standard way — research it, issue-workflow it."** Ran `best-practices` (Phase-1 CHECK gate) + an industry-standards research pass (2026-current, sourced).
+5. **Decided (user-approved):** keep the foundation, layer **OpenTelemetry → managed Grafana Cloud** (unified logs+metrics+traces) + **Sentry SaaS** (errors). Filed **Issue 326** in `docs/issues.md` (L08 Observability lane), recorded the decision in `docs/DECISIONS.md` (2026-06-26 — reverses the 2026-05-29 beta-OTel deferral; Grafana Cloud managed chosen over self-hosted Loki-on-GKE #240).
+6. **Built it** (python-senior-engineer agent + my review): committed `e837979`. Included an off-course fix — `response_class=Response` on three 204 routes (`routers/{activity,auth,chat}.py`) that tripped a FastAPI assertion blocking the local test suite (logged in `docs/OFF_COURSE_BUGS.md`).
+7. **Went to answer the original "why no clips" against the prod DB.** User provided the Render `creatorclip-db` external URL → **it was empty (0 tables, PG18, no pgvector, no `alembic_version`)**. This exposed the big finding: **the live app does NOT run on Render.**
+8. **Traced the real topology (`docs/DEPLOYMENT.md` + `docker-compose.prod.yml`):** autoclip.studio runs on a **single VM via docker-compose behind a Cloudflare tunnel**, with its own `postgres` container holding the real data. Render is a **half-finished future beta host** that was never cut over (no `creatorclip-web` deploy ever migrated the DB).
+9. **User granted SSH to the VM** (`creatorclip-vm`) → queried the live DB directly: confirmed the pipeline works (6 clips generated, `render_status=pending`), confirmed render is user-triggered, and that the 3 transcription failures were the earlier fixed bugs. **Mystery resolved.**
+10. **Now:** Issue 326's code targets `render.yaml` (not the live host), so the remaining work is extending it to the VM + creating the SaaS accounts — see NEXT ACTION.
 
 ---
 
 ## KEY COORDINATES & FACTS
 
-| Item | Value |
-|------|-------|
-| Trunk | `main` == `origin/main` == `origin/staging` == `staging` @ `c7e3752`; 0/0 ahead-behind |
-| Prod | `autoclip.studio` (self-managed VM = `VPS_HOST`, docker-compose, self-hosted GH runner) |
-| Deploy trigger | push `main` → "Docker publish" (GHCR) → "Deploy to production" (secret-sync → migrations → rollout → smoke + auto-rollback) |
-| Watch a run | `gh run list --limit 5`; `gh run watch <id> --exit-status` |
-| Prod health | `curl -s https://autoclip.studio/health` (note: `"version":"dev"` — IMAGE_SHA not injected; cosmetic) |
-| Backend tests | `.venv/bin/python -m pytest -m "not integration" -q` (needs local Redis; use `.venv`) |
-| Frontend gates | `cd frontend && npm run build` · `npx vitest run` |
-| Live-LLM harness | `RUN_LLM_LIVE=1 ANTHROPIC_API_KEY=… .venv/bin/python scripts/llm_e2e.py` (also nightly `llm-e2e-nightly.yml`) |
-| GitHub secrets (names only) | `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, `VOYAGE_API_KEY`, `YOUTUBE_API_V3_KEY`, `STRIPE_SECRET_KEY`, `GHCR_TOKEN`, `PRODUCTION_URL`, `VPS_HOST/PORT/USER/SSH_KEY` |
-| VM-managed secrets (names only) | `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET_KEY`, `TOKEN_ENCRYPTION_KEY`, OAuth client id/secret, `OAUTH_REDIRECT_URI`, R2 keys, `MAILING_ADDRESS` (in the prod VM `.env`, not GH) |
-| Parked work | tag `parked/issue-279-cosign` (descoped K8s supply-chain signing) |
-| Beta host (alt, chosen) | **Render** — `render.yaml` at root; runbook `docs/RENDER_DEPLOY.md` |
-| Open external launch gate | **Issue 29** — Google OAuth app verification (required for YouTube scopes, any user count) |
+| Thing | Value |
+|---|---|
+| Live prod host | **VM** — SSH alias `creatorclip-vm`, dir `/opt/autoclip`, `docker-compose.prod.yml`, served via Cloudflare tunnel (`cloudflared` svc) |
+| Live DB | VM `postgres` container — `pgvector/pgvector:pg16`, db `creatorclip`, user `creatorclip` (inspect: `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml exec -T postgres psql -U creatorclip -d creatorclip'`) |
+| Live logs | `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml logs -f app worker'` (ephemeral — the reason Issue 326 exists) |
+| Image | `ghcr.io/reese8272/creatorclip:latest` |
+| R2 bucket | `autoclip-studio` (creds by name: `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`) |
+| Render (NOT live) | blueprint `render.yaml`; `creatorclip-db` = empty PG18 instance `dpg-d8vkcuu8bjmc738cvm6g-a` — unmigrated, unused |
+| Branch / HEAD | `main` @ `e837979`, 1 ahead of `origin/main` (unpushed) |
+| Test creator (this session) | `eb9af967-5d2f-4063-a05e-9f4f070ce840` |
+| Active issue | **#326** (`docs/issues.md`, L08 Observability) — code-complete, Verify: external |
+| Secrets (names only) | `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `R2_*`, `DATABASE_URL`, AI keys — live in the VM `.env` + GH Actions secrets; **never in this repo** |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Pushing `main` auto-deploys PROD** (and runs migrations). Branch first if you don't intend to deploy.
-  Convention: keep `origin/staging` == `origin/main` (push `main:staging` after every `main` push).
-- **Secrets are write-only in GitHub** (you can `gh secret list` names, never read values). To rotate an AI key:
-  `printf '%s' "$NEWKEY" | gh secret set ANTHROPIC_API_KEY`, then redeploy. Prod also keeps a copy in the VM `.env`.
-- **Do NOT run prod at `LOG_LEVEL=DEBUG` standing:** httpx logs request HEADERS at DEBUG, which include the
-  Anthropic `x-api-key`. INFO is the verbose-and-safe level. DEBUG only for short, local diagnosis.
-- **This dev box has NO Docker / Postgres / ffmpeg.** Local = unit lane + frontend + the live-LLM harness only.
-  Full-app E2E happens on prod (autoclip.studio); the integration lane + render path run on CI/staging.
-- **Local `.env` uses `KEY = value` with spaces** (the harness command handles it); the prod VM `.env` /
-  docker `env_file` is strict `KEY=value`.
-- **Issue HEADERS in `docs/issues.md` can read "open" even when DONE** — trust the `## Completed` section +
-  `docs/PROJECT_STATE.md` + git log, not the headers. Never squash-merge the tracker docs.
+- **Render ≠ live.** Do not query/trust the Render `creatorclip-db` for prod data — it's empty. The live data is on the VM. (Memory: `project_live_deployment_topology`.)
+- **Pushing `main` deploys to the VM.** Verify intent before `git push`. `e837979` is no-op-safe, but any future OTel env wiring will activate exporters on deploy.
+- **OTel/Sentry are no-ops without env.** `init_otel` returns immediately and imports nothing when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty; Sentry no-ops on empty `SENTRY_DSN`. Dev/CI stay offline-clean by design.
+- **PII boundary:** LLM span content is forced OFF (`TRACELOOP_TRACE_CONTENT=false` in `init_otel`). Don't re-enable.
+- **`render_clip` is user-triggered** — a `pending` clip is normal, not a failure. Don't "fix" it.
+- **Secrets are write-only on GH / live only in the VM `.env`** — reference by name; never echo values.
+- **Local box has no Docker**; tests run via `python3.12` / `.venv` (see memory `local_dev_test_env`).
+- **`httpx2` vs `httpx`:** the app's TestClient uses `httpx2`; outbound clients (YouTube/Deepgram/Anthropic) use stock `httpx`, so `HTTPXClientInstrumentor` binds them correctly.
 
 ---
 
-## POINTERS (the real source-of-truth docs)
+## POINTERS
 
-- `docs/PROJECT_STATE.md` — status; the three 2026-06-26 notes record the scope lock, L20 delivery, and the
-  live-LLM run (22/22) + 3 fixes.
-- `docs/issues.md` — work queue (Lane×Wave matrix; L20 briefs #318–325; descoped lanes annotated).
-- `docs/DECISIONS.md` — two 2026-06-26 entries at top (scope lock + LLM track).
-- `docs/SOT.md` — architecture/stack (per-task model registry, new clip endpoints). `docs/COMPLIANCE.md` — ToS/privacy.
-- `CLAUDE.md` — project rules (research current standard first; CHECK→APPROVE→BUILD→REVIEW per issue).
-- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/`.
+- `docs/issues.md` — Issue **#326** brief (L08 Observability lane) + full roadmap
+- `docs/DECISIONS.md` — 2026-06-26 entry: observability stack decision + sources
+- `docs/RENDER_DEPLOY.md` §11 — observability setup steps (Sentry + Grafana Cloud)
+- `docs/DEPLOYMENT.md` — VM/single-host deploy mechanics; `docs/SOT.md`, `docs/PROJECT_STATE.md` — architecture + progress
+- `docs/OFF_COURSE_BUGS.md` — the 204-route fix logged this session
+- `CLAUDE.md` — project rules (Read Order, issue workflow, standards)
+- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` — esp. `project_live_deployment_topology.md` (this session's key finding)
+- Session helpers: `scripts/r2_inspect.py` (committed), `scripts/clip_pipeline_state.py` (untracked)
