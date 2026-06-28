@@ -52,7 +52,13 @@ describe('ClipPlayer render states', () => {
   })
 
   it('offers a manual render button when pending, and POSTs on click', async () => {
-    const fetchMock = vi.fn(async () => ({ status: 202, ok: true, json: async () => ({}) }))
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+        status: 202,
+        ok: true,
+        json: async () => ({}),
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     renderPlayer({ ...BASE, render_status: 'pending', render_uri: null })
 
@@ -61,7 +67,7 @@ describe('ClipPlayer render states', () => {
 
     await waitFor(() => {
       const called = fetchMock.mock.calls.some(
-        (c) => String(c[0]).endsWith('/clips/c1/render') && (c[1] as RequestInit)?.method === 'POST',
+        (c) => String(c[0]).endsWith('/clips/c1/render') && c[1]?.method === 'POST',
       )
       expect(called).toBe(true)
     })
