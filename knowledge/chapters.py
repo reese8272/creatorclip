@@ -16,6 +16,7 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
+from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -226,4 +227,5 @@ def generate_chapters(
         usage["cache_creation"],
         usage["output_tokens"],
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_CHAPTERS, usage)
     return final_text, usage

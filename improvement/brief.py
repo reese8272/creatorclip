@@ -20,6 +20,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
+from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,7 @@ def generate_improvement_brief(
             usage["cache_creation"],
             usage["output_tokens"],
         )
+        record_llm_metric(settings.ANTHROPIC_MODEL_IMPROVEMENT, usage)
         # web_search interleaves text + tool_use blocks under streaming too;
         # stream_and_emit returns the LAST text block (the synthesised
         # answer), matching the Issue 69 pattern the .create() path uses.
@@ -200,6 +202,7 @@ def generate_improvement_brief(
         "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
     }
+    record_llm_metric(settings.ANTHROPIC_MODEL_IMPROVEMENT, _usage)
     # web_search interleaves blocks (preamble text → tool_use → final answer); the
     # FINAL text block is the synthesised brief, not the "let me search…" preamble. (Issue 69)
     return text_blocks[-1].text + _DISCLAIMER, _usage

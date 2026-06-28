@@ -25,6 +25,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
+from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ def analyze_thumbnail_patterns(
         response.usage.input_tokens,
         response.usage.output_tokens,
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_THUMBNAILS, response.usage)
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     try:
@@ -330,4 +332,5 @@ def generate_thumbnail_concepts(
         usage["cache_creation"],
         usage["output_tokens"],
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_THUMBNAILS, usage)
     return final_text, usage

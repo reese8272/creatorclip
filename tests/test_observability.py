@@ -24,6 +24,7 @@ from observability import (
     collect_saturation_gauges,
     configure_logging,
     install_celery_observability,
+    record_llm_metric,
     record_llm_tokens,
     request_id_ctx,
 )
@@ -268,6 +269,77 @@ def test_record_llm_tokens_skips_zero_cache_kinds() -> None:
             provider="anthropic", model="zero-cache-model", kind="cache_read"
         )._value.get()
         == before_read
+    )
+
+
+# ── Issue 332: record_llm_metric dual-shape adapter ──────────────────────────
+class _Usage:
+    """Stand-in for an Anthropic Usage object (attribute access)."""
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def test_record_llm_metric_from_usage_object() -> None:
+    before = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="obj-model", kind="input"
+    )._value.get()
+    usage = _Usage(
+        input_tokens=70,
+        output_tokens=20,
+        cache_read_input_tokens=11,
+        cache_creation_input_tokens=0,
+    )
+    record_llm_metric("obj-model", usage)
+    assert (
+        LLM_TOKENS_TOTAL.labels(provider="anthropic", model="obj-model", kind="input")._value.get()
+        == before + 70
+    )
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="obj-model", kind="cache_read"
+        )._value.get()
+        == 11
+    )
+
+
+def test_record_llm_metric_from_stream_dict() -> None:
+    before = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="dict-model", kind="output"
+    )._value.get()
+    usage = {
+        "input_tokens": 5,
+        "output_tokens": 9,
+        "cache_read": 3,
+        "cache_creation": 4,
+    }
+    record_llm_metric("dict-model", usage)
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="dict-model", kind="output"
+        )._value.get()
+        == before + 9
+    )
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="dict-model", kind="cache_creation"
+        )._value.get()
+        == 4
+    )
+
+
+def test_record_llm_metric_tolerates_missing_fields() -> None:
+    # Older SDK / no-cache call: missing attrs coerce to 0, no crash.
+    before = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="sparse-model", kind="input"
+    )._value.get()
+    record_llm_metric("sparse-model", _Usage(input_tokens=2, output_tokens=1))
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="sparse-model", kind="input"
+        )._value.get()
+        == before + 2
     )
 
 

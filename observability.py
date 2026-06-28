@@ -193,6 +193,38 @@ def record_llm_tokens(
         LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_creation").inc(_cc)
 
 
+def record_llm_metric(model: str, usage: Any, *, provider: str = "anthropic") -> None:
+    """Increment ``llm_tokens_total`` from either Anthropic usage shape (Issue 332).
+
+    The codebase carries token usage in two shapes and the Prometheus counter was
+    only being incremented at ~half the LLM call sites — leaving the cost-by-feature
+    dashboard blind to the heaviest consumers (scoring, DNA brief, most knowledge
+    features). This adapter normalizes both shapes so every LLM module can record
+    the metric with one DRY call placed next to its existing billing-ledger write:
+
+      * an Anthropic ``Usage`` object (non-streaming ``.create()`` path) exposing
+        ``input_tokens`` / ``output_tokens`` / ``cache_read_input_tokens`` /
+        ``cache_creation_input_tokens``;
+      * the ``stream_and_emit()`` ``usage`` dict with keys ``input_tokens`` /
+        ``output_tokens`` / ``cache_read`` / ``cache_creation``.
+
+    Missing fields coerce to 0 (older SDKs / no cache this call). This only touches
+    the metric — billing (``record_llm_usage``) and the per-call token log lines are
+    unchanged.
+    """
+    if isinstance(usage, dict):
+        _in = usage.get("input_tokens", 0)
+        _out = usage.get("output_tokens", 0)
+        _cr = usage.get("cache_read", 0)
+        _cc = usage.get("cache_creation", 0)
+    else:
+        _in = getattr(usage, "input_tokens", 0)
+        _out = getattr(usage, "output_tokens", 0)
+        _cr = getattr(usage, "cache_read_input_tokens", 0)
+        _cc = getattr(usage, "cache_creation_input_tokens", 0)
+    record_llm_tokens(provider, model, _in, _out, _cr, _cc)
+
+
 # ── Structured logging ───────────────────────────────────────────────────────
 class RequestIDLogFilter(logging.Filter):
     """Inject the current `request_id` onto every record so all logs are correlatable."""

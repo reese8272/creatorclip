@@ -54,8 +54,15 @@ the silent-pass behavior.
 
 ## Issue 327: Cross-cutting malformed-geometry validation + property tests
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local`
+**Status** `DONE` (2026-06-28) · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local`
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `ingestion/signals.py`, `clip_engine/window.py`, `clip_engine/candidates.py`
+**Shipped:** `ingestion/signals.py::_event_geometry_is_valid` + a sanitize pass in `build_signal_timeline`
+that drops inverted/negative/non-finite/out-of-bounds events at the build boundary with a WARNING +
+dropped-count; defense-in-depth `if i1 <= i0: continue` guard in `clip_engine/window.py`;
+`tests/test_geometry_validation.py` (13-case predicate table + boundary/log/regression + window guard).
+Deterministic adversarial tests used instead of adding a Hypothesis dependency pre-launch. The
+downstream candidates/scoring invariant asserts (`setup<peak<end`, `compute_features` logging) remain
+in **Issue 328**.
 
 **Problem.** See the systemic finding above. Malformed timestamps are accepted silently across the
 signal/geometry layer.
@@ -161,8 +168,17 @@ in logs from an empty response. _(assessment P0 #1.)_
 
 ## Issue 332: Prometheus `record_llm_tokens` coverage + unified result-logging helper
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
+**Status** `DONE` (2026-06-28) · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
 **Coordinate** `observability.py`, `clip_engine/scoring.py`, `dna/brief.py`, `knowledge/*`, `analysis/brief.py`, `improvement/brief.py`
+**Shipped:** `observability.record_llm_metric(model, usage)` — a dual-shape adapter normalizing the
+Anthropic `Usage` object (non-streaming) and the `stream_and_emit` usage dict (streaming) onto
+`record_llm_tokens`, wired into the 10 previously-blind LLM modules (scoring, dna/brief, analysis,
+improvement, titles, thumbnails, chapters, clip_titles, clip_captions, clip_explain) next to each
+existing billing-ledger write; `tests/test_llm_metrics_coverage.py` (source guard over all 13 LLM
+modules, mirrors `test_usage_coverage.py`) + 3 adapter unit tests in `test_observability.py`.
+**Scope note:** this shipped the *metric coverage* half. The `stop_reason == "max_tokens"` truncation
+warning stays in **Issue 331** (could later fold into a single `log_llm_result` over this adapter — the
+helper was kept single-responsibility to avoid coupling the metric to truncation logging).
 
 **Problem.** `record_llm_tokens` (the `llm_tokens_total` counter) is called in `chat/intake`, `chat/runner`,
 `knowledge/hooks`, `routers/insights`, `routers/clips` — **but not** in `scoring.py`, `dna/brief.py`,

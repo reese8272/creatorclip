@@ -44,6 +44,12 @@ def build_signal_array(
 
         i0 = max(0, int(start_s / resolution_s))
         i1 = min(n, int(end_s / resolution_s) + 1)
+        # Defense-in-depth (Issue 327): events are sanitized at the signal-build
+        # boundary, but guard here too so an inverted window (i1 <= i0) can never
+        # silently write a reversed/empty slice. max(0.0, value_scale) keeps a
+        # stray negative magnitude from inverting a positive event's contribution.
+        if i1 <= i0:
+            continue
         signal[i0:i1] += weight * max(0.0, value_scale)
 
     return times, signal
