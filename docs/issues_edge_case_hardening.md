@@ -88,8 +88,17 @@ a **property-based test** (Hypothesis) feeding random/adversarial timelines.
 
 ## Issue 328: clip_engine geometry / scoring-features / ranking edge suite
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local`
+**Status** `DONE` (2026-06-28) · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local`
 **Coordinate** `tests/test_clip_engine.py`, `tests/test_scoring.py`
+**Shipped:** real fix — `clip_engine/ranking.py::_safe_score` maps NaN/inf/None/garbage scores to
+`-inf` so `rank_candidates` is deterministic (NaN can't float to rank 1), plus a non-finite guard in
+`rerank_with_preference` that falls back to the DNA ranking (same honest behavior as a predict
+exception). `candidates.py` gained a DEBUG breadcrumb (`peaks→pre_nms→after_nms→final`) for "why N
+clips?" debugging. `tests/test_clip_engine_edges.py` (safe-score table, NaN-sort determinism,
+compute_features inverted/empty-window finiteness, extract_candidates post-snap invariants
+`setup<peak<end` & `≥MIN_CLIP_S` with adversarial words) + a NaN-rerank case in
+`test_preference_rerank.py`. _Verified earlier and left as-is (already guarded, not live bugs): NMS
+`union>0` divide-by-zero guard, render punch-in `0≤offset≤duration` guard._
 
 **Acceptance criteria**
 - [ ] `extract_candidates`: empty signal, no peaks, single peak, all candidates < `MIN_CLIP_S` → `[]` (each distinctly asserted) and a DEBUG breadcrumb (`peaks=… after_nms=… filtered=…`).
@@ -149,8 +158,16 @@ a **property-based test** (Hypothesis) feeding random/adversarial timelines.
 
 ## Issue 331: LLM `stop_reason == "max_tokens"` truncation detection
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
+**Status** `DONE` (2026-06-28) · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
 **Coordinate** `worker/anthropic_stream.py`, `clip_engine/scoring.py`, `dna/brief.py`, `chat/runner.py`, `chat/intake.py`, knowledge/*
+**Shipped:** `observability.warn_if_truncated(model, stop_reason, *, task)` — logs a WARNING (returns
+True) when `stop_reason == "max_tokens"`. Wired into `stream_and_emit` + `stream_message` (one place
+covers **all** streaming callers: dna/titles/thumbnails-concepts/chapters/analysis/improvement/hooks +
+chat via `stream_message`) and into every non-streaming `.create()` JSON site (scoring, clip_titles,
+clip_captions, clip_explain, thumbnails-patterns, dna/analysis/improvement non-stream, chat intake).
+`tests/test_llm_truncation.py` (helper truth-table + `stream_and_emit` warns-on-truncation /
+quiet-when-complete via a fake stream). `chat/runner` already exits the loop on `stop_reason != tool_use`,
+so `stream_message`'s warning is sufficient for the agentic path.
 
 **Problem.** `stop_reason` is inspected only in `chat/runner.py:98` for `"tool_use"`. Every JSON/text
 call truncates silently on overflow; scoring/titles then fail JSON parse and fall back — indistinguishable
@@ -309,8 +326,17 @@ the three can never drift again (DRY). Add a coverage test mirroring `test_usage
 
 ## Issue 338: preference model / decay / features / train edge suite
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
+**Status** `DONE` (2026-06-28) · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
 **Coordinate** `tests/test_preference.py`, `test_preference_rerank.py`, `test_retrain_preference_integration.py`
+**Shipped:** three real fixes — (1) `preference/model.py::predict_score` now selects the positive-class
+(label 1) column via `classes_` instead of assuming a 2-column `[neg, pos]` proba, so a single-class
+model no longer `IndexError`s (P(positive)=0.0 when label 1 was never seen); (2) `preference/features.py`
+coerces a NaN/inf `dna_match` to 0.0 so it can't poison the rerank sort; (3) `config.py` field-validators
+fail fast on `DECAY_HALF_LIFE_DAYS<=0` (was a ZeroDivisionError at `decay.py` import) /
+`PERSONALIZATION_THRESHOLD_LABELS<=0` / `PREFERENCE_WEIGHT_CAP∉(0,1]`. `tests/test_preference_edges.py`
+covers predict_score (binary / single-class up+down / reversed class order), clip_features NaN/None,
+decay half-life & outcome-multiplier (None vs False vs True), the three config validators, and
+`from_bytes` corrupt-blob rejection.
 
 **Acceptance criteria**
 - [ ] `predict_score`: single-class / multi-class model → `proba[0][1]` assumption guarded (don't `IndexError`). **[BUG? — confirm binary-only]**

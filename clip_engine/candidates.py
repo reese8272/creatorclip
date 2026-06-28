@@ -10,10 +10,14 @@ to the nearest sentence boundary (terminal punctuation or silence gap) so clips
 never start or end mid-sentence.
 """
 
+import logging
+
 import numpy as np
 from scipy.signal import find_peaks
 
 from clip_engine.window import RESOLUTION_S, build_signal_array
+
+logger = logging.getLogger(__name__)
 
 WINDOW_S = 75.0  # max lookback from peak to find setup
 POST_PEAK_S = 20.0  # seconds to include after peak
@@ -309,6 +313,17 @@ def extract_candidates(
     # Strip internal NMS metadata and sort chronologically for the caller.
     candidates = [{k: v for k, v in c.items() if k != "_prominence"} for c in kept]
     candidates.sort(key=lambda c: c["setup_start_s"])
+
+    # Breadcrumb for "why did I get N clips?" debugging (Issue 328): peaks found →
+    # survived the MIN_CLIP_S length filter → survived NMS dedup → final count.
+    logger.debug(
+        "extract_candidates: peaks=%d pre_nms=%d after_nms=%d final=%d (duration_s=%.1f)",
+        len(peak_indices),
+        len(pre_nms),
+        len(kept),
+        len(candidates),
+        duration_s,
+    )
 
     # Principle #12 — Clean Context Boundary: snap both cut points to the nearest
     # sentence boundary so clips never start or end mid-sentence. Only runs when

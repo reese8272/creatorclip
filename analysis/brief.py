@@ -26,7 +26,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
-from observability import record_llm_metric
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -214,4 +214,5 @@ def generate_video_analysis(
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
     }
     record_llm_metric(settings.ANTHROPIC_MODEL_ANALYSIS, _usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_ANALYSIS, getattr(response, "stop_reason", None))
     return text_blocks[-1].text + _DISCLAIMER, _usage

@@ -20,7 +20,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
-from observability import record_llm_metric
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +203,7 @@ def generate_improvement_brief(
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
     }
     record_llm_metric(settings.ANTHROPIC_MODEL_IMPROVEMENT, _usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_IMPROVEMENT, getattr(response, "stop_reason", None))
     # web_search interleaves blocks (preamble text → tool_use → final answer); the
     # FINAL text block is the synthesised brief, not the "let me search…" preamble. (Issue 69)
     return text_blocks[-1].text + _DISCLAIMER, _usage

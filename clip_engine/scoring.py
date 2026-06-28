@@ -32,7 +32,7 @@ from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from observability import record_llm_metric
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +330,7 @@ async def score_candidates(
         combined_chars,
     )
     record_llm_metric(settings.ANTHROPIC_MODEL_SCORING, response.usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_SCORING, getattr(response, "stop_reason", None))
 
     if creator_id is not None and session is not None:
         try:

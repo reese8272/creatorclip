@@ -2,6 +2,8 @@
 Feature vector per clip for the preference model.
 """
 
+import math
+
 
 def clip_features(
     signal_density: float = 0.0,
@@ -17,11 +19,14 @@ def clip_features(
     Return a fixed-length feature vector for one clip.
     Feature order must stay stable between training runs.
     """
+    # Treat NaN/inf dna_match as "absent" (0.0): a non-finite value would otherwise
+    # propagate through the model and poison the rerank sort order. (Issue 338)
+    dna = dna_match if (dna_match is not None and math.isfinite(dna_match)) else 0.0
     return [
         signal_density,
         hook_energy,
         silence_ratio,
-        dna_match if dna_match is not None else 0.0,
+        dna,
         clip_duration_s,
         setup_length_s,
         1.0 if has_retention_spike else 0.0,
