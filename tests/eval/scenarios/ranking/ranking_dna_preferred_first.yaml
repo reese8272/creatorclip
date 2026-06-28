@@ -1,0 +1,15 @@
+scenario: ranking_dna_preferred_first
+description: >
+  Ranking-aware fixture (Issue 199): given recorded/stubbed scores — NOT a live
+  Anthropic call — the DNA-preferred candidate (the one whose blended DNA+signal
+  score is highest) must rank #1 after the production rank_candidates() sort. Guards
+  the "ranking reflects DNA fit" contract independent of the geometry harness.
+  Principle: "Audience-fit over generic virality".
+
+# In a subdir so the geometry scenario glob (scenarios/*.yaml) does not load this —
+# it has no timeline; it is exercised by test_ranking_dna_preferred_ranks_first.
+candidates:
+  - {id: weak_signal_only, score: 0.41, dna_match: 0.20}
+  - {id: dna_preferred,    score: 0.88, dna_match: 0.91}
+  - {id: mid_fit,          score: 0.55, dna_match: 0.50}
+expected_top_id: dna_preferred

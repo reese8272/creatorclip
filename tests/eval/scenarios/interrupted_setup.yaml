@@ -1,0 +1,27 @@
+scenario: interrupted_setup
+description: >
+  Adversarial scenario: a clean silence lead-in at 48–51s opens the setup, then the
+  energy dips and resumes (a talk-over gap between two energy spikes) before the peak
+  at ~89s. The setup must anchor to the lead-in silence boundary (51s), NOT to the
+  mid-setup energy gap — the engine starts the clip at the opening of the thought,
+  not at an interruption within it.
+  Principle: "Clip the setup, not the aftermath".
+
+input:
+  timeline:
+    version: 1
+    duration_s: 150.0
+    events:
+      - {type: silence,         start_s: 48.0, end_s: 51.0}
+      - {type: energy_spike,    start_s: 51.0, end_s: 60.0, value: 0.9}
+      - {type: energy_spike,    start_s: 66.0, end_s: 90.0, value: 0.9}
+      - {type: retention_spike, start_s: 88.0, end_s: 91.0, value: 1.5}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 85.0
+      peak_s_max: 92.0
+      # Anchors to the lead-in silence end (51s), proving the talk-over gap between
+      # the two energy spikes does not pull the setup forward.
+      setup_start_s_max: 51.5

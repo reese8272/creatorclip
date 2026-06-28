@@ -1,0 +1,29 @@
+scenario: dead_air_midclip
+description: >
+  Adversarial scenario: a long silence (64–72s, 8s of dead air) falls INSIDE the
+  clip window, after the peak (~56s) but before the end (~76s). The engine still
+  emits a single coherent candidate anchored to the lead-in silence (41s); the
+  mid-window dead air is captured by the silence_ratio feature (high) for the
+  downstream scorer rather than splitting the clip.
+  Principle: "Dead-air elimination" (silence_ratio surfaces the gap to scoring).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 120.0
+    events:
+      - {type: silence,         start_s: 38.0, end_s: 41.0}
+      - {type: energy_spike,    start_s: 41.0, end_s: 58.0, value: 1.0}
+      - {type: retention_spike, start_s: 55.0, end_s: 58.0, value: 1.7}
+      # 8s of dead air after the peak, within [setup, end].
+      - {type: silence,         start_s: 64.0, end_s: 72.0}
+
+expected:
+  min_candidates: 1
+  all_setup_before_peak: true
+  candidates:
+    - peak_s_min: 53.0
+      peak_s_max: 60.0
+      # Anchors to the lead-in silence (41s); the post-peak dead air does not become
+      # the setup boundary (it is after the peak).
+      setup_start_s_max: 41.5

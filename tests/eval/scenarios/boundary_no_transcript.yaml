@@ -1,0 +1,26 @@
+scenario: boundary_no_transcript
+description: >
+  Adversarial scenario: a normal peak where NO word-level transcript is available
+  (words=None), so sentence-boundary snapping (principle #12) is skipped entirely.
+  The engine must degrade gracefully — all geometry invariants still hold (a clip is
+  produced, setup precedes peak, length >= MIN_CLIP_S) using the silence/energy
+  boundaries alone.
+  Principle: "Clean Context Boundary" (graceful degradation when transcript absent).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 120.0
+    events:
+      - {type: silence,         start_s: 40.0, end_s: 43.0}
+      - {type: energy_spike,    start_s: 43.0, end_s: 70.0, value: 0.9}
+      - {type: retention_spike, start_s: 67.0, end_s: 70.0, value: 1.6}
+
+expected:
+  min_candidates: 1
+  all_setup_before_peak: true
+  candidates:
+    - peak_s_min: 65.0
+      peak_s_max: 72.0
+      # Snapping skipped (no words) → setup anchors to the silence end (43s).
+      setup_start_s_max: 43.5

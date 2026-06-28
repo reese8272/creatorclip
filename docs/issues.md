@@ -1074,7 +1074,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 199: Adversarial clip-quality scenarios + aggregate pass-rate
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (2026-06-27) — 8 adversarial geometry fixtures (false_peak_single_spike, cold_open_no_silence_lead, interrupted_setup, very_long_setup, laughter_then_second_joke, aftermath_louder_than_setup, dead_air_midclip, boundary_no_transcript) each guarding its named failure mode; a ranking-aware fixture asserting the DNA-preferred candidate ranks #1 via `rank_candidates` (recorded scores, no live Anthropic); aggregate `test_eval_scenario_pass_rate` asserting 100%; `SCENARIO_FLOOR` raised 6→14; the "eval harness hardened" gate reconciled across CLAUDE.md + PROJECT_STATE.md. Full clip_engine suite 51 passed. · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `local`  
 **Src** `08 / 173b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** #198 · **Coordinate (hot files)** `clip_engine/candidates.py`, `clip_engine/scoring.py`, `tests/test_clip_engine.py`  
 

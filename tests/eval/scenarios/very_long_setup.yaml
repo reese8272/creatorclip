@@ -1,0 +1,27 @@
+scenario: very_long_setup
+description: >
+  Adversarial scenario: a slow ~90s build whose only silence boundary (5–8s) is
+  older than the WINDOW_S=75s lookback from the peak (~97.5s). With no content
+  boundary inside the lookback window, the setup is capped at peak - WINDOW_S. This
+  documents the WINDOW_S cap as INTENTIONAL: a Short never opens more than 75s
+  before its peak, even if the on-screen setup ran longer.
+  Principle: "Native length over generic length" (the 75s lookback cap is by design).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 150.0
+    events:
+      - {type: silence,         start_s: 5.0,  end_s: 8.0}
+      - {type: energy_spike,    start_s: 8.0,  end_s: 98.0, value: 0.8}
+      - {type: retention_spike, start_s: 97.0, end_s: 99.0, value: 1.7}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 96.0
+      peak_s_max: 99.0
+      # setup == peak - WINDOW_S (≈ 22.5): the lookback cap, not the 5–8s silence
+      # (which is older than the 75s window).
+      setup_start_s_min: 21.5
+      setup_start_s_max: 23.0

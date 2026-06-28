@@ -282,7 +282,7 @@ docker compose logs --tail 100 app worker
 - Google OAuth app verification completed
 - ✅ Account deletion (right-to-erasure: token revocation + media purge) — endpoint `DELETE /auth/me` plus the Profile "Danger zone" UI affordance (Issue 158)
 - Billing + plan-tier wired (usage-based tiers — pricing research pending)
-- Eval harness hardened with adversarial/edge cases
+- ✅ Eval harness hardened with adversarial/edge cases — Issue 199: 8 adversarial geometry scenarios (false-peak/cold-open/interrupted-setup/very-long-setup/two-beats/loud-aftermath/dead-air/no-transcript) + a ranking-aware fixture, an aggregate 100%-pass-rate gate, and `SCENARIO_FLOOR=14` (`tests/eval/scenarios/`, `tests/test_clip_engine.py`)
 
 ---
 

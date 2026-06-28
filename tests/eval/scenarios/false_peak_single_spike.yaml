@@ -1,0 +1,19 @@
+scenario: false_peak_single_spike
+description: >
+  Adversarial scenario: a single isolated low-energy spike with no retention or
+  laughter and no surrounding context. The prominence floor (find_peaks prominence
+  >= 0.5 in candidates.py) must REJECT it as noise rather than emit a clip around a
+  one-off blip. Guards against false positives on flat, low-signal videos.
+  Principle: "Retention curve is ground truth" (no real signal → no clip).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 60.0
+    events:
+      # weight(energy_spike)=1.5 × value 0.2 = 0.3 composite — below the 0.5
+      # prominence floor, so no peak is detected.
+      - {type: energy_spike, start_s: 30.0, end_s: 30.5, value: 0.2}
+
+expected:
+  min_candidates: 0

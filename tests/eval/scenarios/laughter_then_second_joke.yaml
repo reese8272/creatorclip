@@ -1,0 +1,31 @@
+scenario: laughter_then_second_joke
+description: >
+  Adversarial scenario: two distinct comedic beats — a laugh peak at ~60s and a
+  separate setup+peak at ~110s, each with its own silence lead-in. NMS (IoU > 0.5)
+  must keep BOTH as distinct candidates rather than merging them, because their
+  [setup, end] windows do not overlap. Each clip still starts at its setup, not its
+  laugh aftermath.
+  Principle: "One idea per Short" (distinct beats stay distinct).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 160.0
+    events:
+      - {type: silence,         start_s: 38.0,  end_s: 41.0}
+      - {type: energy_spike,    start_s: 41.0,  end_s: 62.0,  value: 0.9}
+      - {type: laughter,        start_s: 58.0,  end_s: 62.0,  value: 0.9}
+      - {type: silence,         start_s: 88.0,  end_s: 91.0}
+      - {type: energy_spike,    start_s: 91.0,  end_s: 112.0, value: 0.9}
+      - {type: retention_spike, start_s: 109.0, end_s: 112.0, value: 1.5}
+
+expected:
+  min_candidates: 2
+  all_setup_before_peak: true
+  candidates:
+    - peak_s_min: 56.0
+      peak_s_max: 64.0
+      setup_start_s_max: 41.5
+    - peak_s_min: 106.0
+      peak_s_max: 113.0
+      setup_start_s_max: 91.5

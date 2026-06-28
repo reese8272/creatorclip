@@ -1,0 +1,22 @@
+scenario: cold_open_no_silence_lead
+description: >
+  Adversarial scenario: a strong retention peak early in the video with NO silence
+  or energy lead-in before it. With no content boundary to anchor to, the backward
+  setup search falls back to the window floor (max(0, peak - WINDOW_S)) = 0, so the
+  clip opens at the very start and is still at least MIN_CLIP_S long.
+  Principle: "Clip the setup, not the aftermath" (graceful boundary fallback).
+
+input:
+  timeline:
+    version: 1
+    duration_s: 60.0
+    events:
+      - {type: retention_spike, start_s: 20.0, end_s: 23.0, value: 1.7}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 18.0
+      peak_s_max: 25.0
+      # No lead-in boundary → setup falls back to 0 (the video start).
+      setup_start_s_max: 0.5

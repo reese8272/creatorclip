@@ -21,6 +21,7 @@ from clip_engine.candidates import (
     extract_candidates,
     snap_to_sentence_boundary,
 )
+from clip_engine.ranking import rank_candidates
 from clip_engine.window import RESOLUTION_S, build_signal_array
 
 # ── build_signal_array ─────────────────────────────────────────────────────────
@@ -194,8 +195,8 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # The minimum number of scenario files that must exist. CI enforces this floor so a
 # silent deletion (or @skip-piling) cannot hollow out the eval harness without
 # raising a visible failure. Raise this number whenever a new scenario is added;
-# never lower it. (Issue 265)
-SCENARIO_FLOOR = 6
+# never lower it. (Issue 265; raised 6 → 14 when the adversarial scenarios landed — Issue 199)
+SCENARIO_FLOOR = 14
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename
@@ -252,11 +253,9 @@ def test_eval_scenario_no_unapproved_skip_markers() -> None:
     )
 
 
-@pytest.mark.parametrize("scenario_path", _load_scenarios())
-def test_eval_scenario(scenario_path):
-    with open(scenario_path) as f:
-        scenario = yaml.safe_load(f)
-
+def _assert_scenario(scenario: dict) -> None:
+    """Run all geometry assertions for one loaded scenario. Raises AssertionError on
+    any violation. Shared by the per-scenario test and the aggregate pass-rate gate."""
     timeline = scenario["input"]["timeline"]
     expected = scenario.get("expected", {})
     candidates = extract_candidates(timeline, max_candidates=8)
@@ -320,6 +319,57 @@ def test_eval_scenario(scenario_path):
                 f"[{scenario['scenario']}] setup_start_s={matched['setup_start_s']} "
                 f"< expected min {exp_c['setup_start_s_min']} — clip starts before video begins"
             )
+
+
+@pytest.mark.parametrize("scenario_path", _load_scenarios())
+def test_eval_scenario(scenario_path):
+    with open(scenario_path) as f:
+        scenario = yaml.safe_load(f)
+    _assert_scenario(scenario)
+
+
+def test_eval_scenario_pass_rate():
+    """Aggregate clip-quality gate (Issue 199): every geometry scenario must pass.
+
+    Per-scenario failures are also caught individually by test_eval_scenario, but this
+    reports the harness as a single ratchet-able number — a 100% pass-rate is the
+    pre-launch 'eval harness hardened' gate. If a scenario regresses, this names every
+    failing fixture at once rather than stopping at the first.
+    """
+    scenarios = _load_scenarios()
+    failures: list[str] = []
+    for param in scenarios:
+        path = param.values[0]
+        stem = os.path.splitext(os.path.basename(path))[0]
+        with open(path) as f:
+            scenario = yaml.safe_load(f)
+        try:
+            _assert_scenario(scenario)
+        except AssertionError as exc:
+            failures.append(f"{stem}: {exc}")
+    pass_rate = (len(scenarios) - len(failures)) / len(scenarios) if scenarios else 0.0
+    assert pass_rate == 1.0, (
+        f"Geometry scenario pass-rate {pass_rate:.0%} (< 100%). Failing scenarios:\n"
+        + "\n".join(failures)
+    )
+
+
+def test_ranking_dna_preferred_ranks_first():
+    """Ranking-aware fixture (Issue 199): with recorded/stubbed scores (no live
+    Anthropic), the production rank_candidates() sort must place the DNA-preferred
+    candidate at rank #1. Pins 'ranking reflects DNA fit' independent of geometry."""
+    path = os.path.join(SCENARIOS_DIR, "ranking", "ranking_dna_preferred_first.yaml")
+    with open(path) as f:
+        fx = yaml.safe_load(f)
+    ranked = rank_candidates([dict(c) for c in fx["candidates"]])
+    assert ranked[0]["id"] == fx["expected_top_id"], (
+        f"expected {fx['expected_top_id']!r} at rank 1, got {ranked[0]['id']!r}"
+    )
+    assert ranked[0]["rank"] == 1
+    # Ranks are assigned in descending score order (1 = best).
+    assert [c["rank"] for c in ranked] == list(range(1, len(ranked) + 1))
+    scores = [c["score"] for c in ranked]
+    assert scores == sorted(scores, reverse=True)
 
 
 # ── Issue 127: Sentence-boundary snapping ────────────────────────────────────

@@ -1,0 +1,27 @@
+scenario: aftermath_louder_than_setup
+description: >
+  The core differentiator under maximum pressure: a quiet setup after a silence
+  lead-in (81s), then ALL the loud signal — retention spike, laughter, and a second
+  energy spike — stacked AFTER the peak (~104s). A naive "clip the loudest moment"
+  ranker would open at the aftermath; the engine must instead anchor the clip to the
+  quiet setup boundary (81s), well before the loud payoff.
+  Principle: "Clip the setup, not the aftermath".
+
+input:
+  timeline:
+    version: 1
+    duration_s: 180.0
+    events:
+      - {type: silence,         start_s: 78.0,  end_s: 81.0}
+      - {type: energy_spike,    start_s: 81.0,  end_s: 104.0, value: 0.5}
+      - {type: retention_spike, start_s: 103.0, end_s: 106.0, value: 1.0}
+      - {type: laughter,        start_s: 104.0, end_s: 110.0, value: 1.0}
+      - {type: energy_spike,    start_s: 104.0, end_s: 112.0, value: 1.0}
+
+expected:
+  min_candidates: 1
+  candidates:
+    - peak_s_min: 100.0
+      peak_s_max: 108.0
+      # Setup anchors to the quiet lead-in silence (81s), NOT the loud aftermath.
+      setup_start_s_max: 81.5
