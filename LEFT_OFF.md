@@ -1,61 +1,68 @@
-# LEFT_OFF — backend observability (Issue 326) built; live app is the VM, not Render
+# LEFT_OFF — observability + DR + the "moat" eval batch shipped; all that remains is the staging/external verification pass
 
 > **Read this first.** Living "where we are right now" handoff for a fresh session with zero memory.
 > Source-of-truth docs live in `docs/`; this file orients and points to them — it is NOT a source of truth.
 
-**Last updated:** 2026-06-27
-**Checked out:** `main` @ `d83da76` — **pushed to `origin/main`**; `staging` fast-forwarded to match (both in line). Issue 326 (code + VM activation wiring) is committed AND pushed.
-**Working tree:** clean. Screenshot churn removed this session; `.gitignore` now has a working `Screenshot *.png` glob so it won't recur.
-**CI:** all green. **Last prod deploy:** pushing `d83da76` triggers a VM deploy (Docker publish → "Deploy to production"). The OTel code remains a **strict no-op** until the SaaS secrets are set, so this deploy changes prod behavior **not at all** yet.
+**Last updated:** 2026-06-28
+**Checked out:** `main` @ `47a1f44` — **pushed to `origin/main`** (in sync, 0/0); `staging` fast-forwarded to match. Everything below is committed, pushed, AND deployed to the VM.
+**Working tree:** clean. (Dev screenshots are now gitignored via a `Screenshot *.png` glob.)
+**CI / deploy:** all green. The last push deployed to the VM successfully; **migration 0037 reached head on the live DB** (`alembic_version=0037`, `clip_impressions` table live with RLS enabled), app `/health` = `{"status":"ok", postgres/redis/storage ok}`.
 
-> ⚠️ **Pushing `main` auto-deploys to the VM.** Already done for `d83da76` — safe because OTel/Sentry stay dormant until `OTEL_EXPORTER_OTLP_ENDPOINT` / `SENTRY_DSN` GitHub secrets exist (still unset). The **next** push that matters is after those secrets are set — that one actually arms the exporters.
+> ⚠️ **Pushing `main` auto-deploys to the VM** (Docker publish → "Deploy to production", self-hosted runner). Nothing is pending to push right now.
 
 ---
 
 ## CURRENT FOCUS
 
-**Give the live backend full observability ("see every detail") — Issue 326.** Research + design + code + **VM activation wiring are all done, committed, and pushed.** All that remains is a **user/external** step: create the SaaS accounts, set 3 GitHub secrets, then verify it lights up live.
+**There is NO pending code work.** This session took five tracks from idea → code → tests → committed → pushed → deployed. **Everything remaining is a single staging/external verification pass on the live host** (create SaaS accounts, set secrets, run the live/real-data checks). The code for all of it is live and dormant-safe.
 
-### ✅ DONE this session (code-side complete)
-- **Issue 326 code** (`e837979`) — `init_otel()`/instrumentation in `observability.py`, wired into `main.py` + `worker/celery_app.py`, no-op until env set; 42/42 obs tests green.
-- **VM activation wiring** (`d83da76`) — `.github/workflows/deploy.yml` guarded secret-sync now propagates `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` to the VM `.env` (skipped while unset → no drift, no premature activation), and stamps `IMAGE_SHA` for release attribution. No `docker-compose.prod.yml` change (all services `env_file: .env`). 4 non-secret OTEL_* tunables keep `config.py` defaults. Logged in `docs/DECISIONS.md` (2026-06-27).
-- **`scripts/clip_pipeline_state.py`** committed (read-only DB diagnostic, sibling to `scripts/r2_inspect.py`).
-- **Pushed `main` → `origin/main`; `staging` fast-forwarded to match.**
+### ✅ SHIPPED this session (all on `origin/main`, all deployed)
 
-### → NEXT ACTION (pick up here — all EXTERNAL/USER)
-1. **Create the SaaS accounts + set creds** (see `docs/RENDER_DEPLOY.md` §11 — applies conceptually to the VM): Sentry project → `SENTRY_DSN`; Grafana Cloud stack → OTLP endpoint + Basic-auth token → `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`. Set all 3 as **GitHub Actions secrets** (the deploy secret-sync picks them up automatically).
-2. **Trigger a deploy** (push any commit to `main`, or re-run the "Deploy to production" workflow) so the secrets sync into the VM `.env` and the exporters arm.
-3. **Verify live:** reproduce one upload→clip flow, confirm an HTTP→Celery trace appears in Grafana Cloud Tempo and exceptions in Sentry. Then check off Issue 326's external ACs (`docs/issues.md`) + flip its `docs/PROJECT_STATE.md` row to ✅ Done.
+1. **Observability on the VM — Issue 326** (`e837979` + `d83da76`). OTel + Sentry code (`observability.py` → `main.py`/`worker/celery_app.py`, auto-instruments Celery/SQLAlchemy/Redis/httpx/botocore + Anthropic, LLM content forced OFF for PII). VM activation wired into `deploy.yml`'s guarded secret-sync (`SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` + `IMAGE_SHA`). **Strict no-op until the 3 secrets exist** (they don't yet). 42/42 obs tests.
+2. **Tracker reconciliation** (`b8838af`). Closed stale duplicate OPEN entries (#226/229/230/232 were already done; #241 superseded by #326); annotated #326. Open-issue count is now trustworthy.
+3. **Disaster-Recovery batch — Issues 255–258** (`ab7a675`). `scripts/backup_pg.sh` (streamed pg_dump→gzip→openssl AES-256→separate R2 bucket; secret-hygiene-hardened, no client deletes), `BACKUP_*` config, gated pre-migration dump in **both** deploy paths (#257), full DR runbook (escrow/restore-drill/4 failure modes), two-leg key-escrow doc (#255), R2 Object-Lock Compliance-mode decision (#258). 11 local tests.
+4. **The "moat" eval batch — Issues 198–202** (`d7eeab1`, `a51b3b3`, `47a1f44`):
+   - **#198** efficacy harness — `tests/eval/metrics.py` (pure NDCG@5/MAP@5/MRR/Kendall-τ/chrono-split/paired-bootstrap) + `tests/eval/efficacy.py` (3 rankings: random / generic-signal / DNA+preference) + `scripts/eval_efficacy.py`. 16 local tests.
+   - **#199 ✅ FULLY DONE** — 8 adversarial geometry fixtures + ranking-aware fixture + aggregate 100%-pass-rate gate (`SCENARIO_FLOOR=14`); "eval harness hardened" pre-launch gate reconciled CLAUDE.md ↔ PROJECT_STATE.
+   - **#200** recency half-life parameterized (`DECAY_HALF_LIFE_DAYS`, default 30).
+   - **#201** `performed_well` baseline fixed to comparable **Shorts** (was full-video median → flipped nearly every Short to False); 3× recency multiplier kept over hard dominance.
+   - **#202** `clip_impressions` log (model + migration 0037 + RLS + best-effort write in `list_clips`) — LIVE on prod.
 
-### Lower-priority follow-ups (raised this session, not yet done)
-- **Render DB cleanup:** remove the temporary **IP allowlist entry** added to Render `creatorclip-db` during debugging (that DB is empty/unused).
-- **Re-run a failed-transcription video** to confirm the Deepgram fix holds (3 of 4 test uploads failed transcription *before* the fix; the latest succeeded — strongly indicates resolved).
-- **~20 YouTube-linked videos stuck at `ingest_status=pending`** — confirm that's "linked but never queued" (expected per Issue 317) and not a stuck queue.
+### → NEXT ACTION — the staging/external verification pass (no code; needs live-host/account access)
+
+Do these in one sitting on the VM / in the SaaS consoles. Grouped by area:
+
+**A. Observability (#326) — light it up**
+1. Create a **Sentry** project → `SENTRY_DSN`; a **Grafana Cloud** stack → OTLP endpoint + Basic-auth token → `OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_EXPORTER_OTLP_HEADERS`. (See `docs/RENDER_DEPLOY.md` §11 — applies to the VM.)
+2. Set all 3 as **GitHub Actions secrets** → push any commit (or re-run "Deploy to production") so the secret-sync writes them to the VM `.env` and the exporters arm.
+3. Verify: run one upload→clip flow; confirm an HTTP→Celery trace in Grafana Cloud Tempo + an exception in Sentry. Then close #326's external ACs.
+
+**B. Disaster Recovery (#255–258) — arm the safety net** (runbook: `docs/RUNBOOKS.md` → Disaster Recovery)
+1. **#255 (do FIRST):** escrow `TOKEN_ENCRYPTION_KEY` + `JWT_SECRET_KEY` + a `/opt/autoclip/.env` snapshot to **two** legs (1Password + GCP Secret Manager). A restore is useless without the key.
+2. **#256:** create the **separate** `creatorclip-backups` R2 bucket; set `BACKUP_R2_BUCKET` + `BACKUP_ENCRYPTION_KEY` in VM `.env` + GH secrets; install `awscli` on the VM; add the nightly cron; **run the restore drill** (the load-bearing AC).
+3. **#258:** apply R2 **Object Lock (Compliance mode, ≥14d)** on the backup bucket + lifecycle rules (daily/weekly/predeploy + source/ + clips/).
+4. Once #256 backups exist, the **#257 pre-migration dump gate stops skipping** and starts protecting every deploy automatically.
+
+**C. The moat (#198/#200/#201/#202) — run on real data** (all need Postgres; `alembic upgrade head` already brought 0037)
+1. Run `python3 scripts/eval_efficacy.py` on the VM → the pooled/per-creator NDCG table (#198).
+2. Half-life sweep {15,30,60,90} via the harness; change `DECAY_HALF_LIFE_DAYS` default ONLY if a value clears the incumbent's CI (#200).
+3. Measure `performed_well` label-bias before/after the Shorts-baseline fix (#201).
+4. Run the `clip_impressions` RLS integration test against real PG (#202); the per-retrain standing-report emission is deferred to here + Issue 265's ratchet.
+
+### Lower-priority follow-ups (raised earlier, still open)
+- **Render DB cleanup:** remove the temporary IP-allowlist entry on the (empty, unused) Render `creatorclip-db`.
+- **Re-run a failed-transcription video** to confirm the Deepgram fix holds.
+- **~20 YouTube-linked videos at `ingest_status=pending`** — confirm "linked but never queued" (expected per Issue 317), not a stuck queue.
 
 ---
 
 ## WHAT WORKS NOW (don't re-investigate)
 
-- **Upload→clips pipeline is live-verified end-to-end on the VM.** Latest upload (`01fa0601…`) ran ingest→transcribe→signals→`generate_clips` and produced **6 clip candidates**. The earlier transcribe failures were the now-fixed Deepgram bugs (`8db5c3c`, `705cb56`).
-- **"Why are there no `clips/` objects in R2?" — ANSWERED, not a bug.** `render_clip` is **user-triggered** (enqueued from `routers/clips.py:419`, the set-style+render endpoint), never auto-chained after `generate_clips`. Clips rest at `render_status=pending` until a user clicks render. R2 `clips/` is empty simply because no one has rendered yet. To produce a rendered 9:16 clip in R2, hit render on one of the 6 candidates in the app.
-- **R2 (`autoclip-studio`) is healthy:** 8 objects (4 `source/`, 4 `audio/`), ~172 MB. Inspect with `python3.12 scripts/r2_inspect.py` (needs `R2_*` in local `.env`).
-- **Issue 326 code (committed `e837979`):** `init_otel()`/`instrument_fastapi_app()` in `observability.py` (lazy imports, strict no-op when endpoint unset, idempotent), wired into `main.py` + `worker/celery_app.py`; auto-instruments Celery/SQLAlchemy/Redis/httpx/botocore + Anthropic (OpenLLMetry, content capture forced OFF for PII). 42/42 observability tests pass; no-op import verified. Deps pinned in `requirements.txt`.
-- **LLM lane (#318–325) shipped + deployed.** Prod is self-sufficient for AI (keys synced from GH secrets on deploy).
-
----
-
-## THE ARC THAT LED HERE (how this session unfolded)
-
-1. **User asked to "check the R2 and other storage logs to understand the app as it's working."** Inspected the `autoclip-studio` R2 bucket (wrote `scripts/r2_inspect.py`): found only `source/` + `audio/` objects, **no `clips/`** — surfacing the question "why are no clips being produced?"
-2. **User escalated:** "check worker logs to see why clips aren't rendering, and make sure you have **complete visibility** on the backend — logging, tracing, third-party API capture, etc."
-3. **Audited existing observability:** strong foundation (structured JSON logs + request-id correlation HTTP→Celery, prometheus-client golden signals, Sentry SDK wired). Gaps: `SENTRY_DSN` unset (no error capture), Render logs ephemeral/unsearchable, nothing scrapes `/metrics`, **no distributed tracing at all**, third-party calls only partially metered.
-4. **User: "do this the most robust, production-standard way — research it, issue-workflow it."** Ran `best-practices` (Phase-1 CHECK gate) + an industry-standards research pass (2026-current, sourced).
-5. **Decided (user-approved):** keep the foundation, layer **OpenTelemetry → managed Grafana Cloud** (unified logs+metrics+traces) + **Sentry SaaS** (errors). Filed **Issue 326** in `docs/issues.md` (L08 Observability lane), recorded the decision in `docs/DECISIONS.md` (2026-06-26 — reverses the 2026-05-29 beta-OTel deferral; Grafana Cloud managed chosen over self-hosted Loki-on-GKE #240).
-6. **Built it** (python-senior-engineer agent + my review): committed `e837979`. Included an off-course fix — `response_class=Response` on three 204 routes (`routers/{activity,auth,chat}.py`) that tripped a FastAPI assertion blocking the local test suite (logged in `docs/OFF_COURSE_BUGS.md`).
-7. **Went to answer the original "why no clips" against the prod DB.** User provided the Render `creatorclip-db` external URL → **it was empty (0 tables, PG18, no pgvector, no `alembic_version`)**. This exposed the big finding: **the live app does NOT run on Render.**
-8. **Traced the real topology (`docs/DEPLOYMENT.md` + `docker-compose.prod.yml`):** autoclip.studio runs on a **single VM via docker-compose behind a Cloudflare tunnel**, with its own `postgres` container holding the real data. Render is a **half-finished future beta host** that was never cut over (no `creatorclip-web` deploy ever migrated the DB).
-9. **User granted SSH to the VM** (`creatorclip-vm`) → queried the live DB directly: confirmed the pipeline works (6 clips generated, `render_status=pending`), confirmed render is user-triggered, and that the 3 transcription failures were the earlier fixed bugs. **Mystery resolved.**
-10. **Now:** Issue 326's code targets `render.yaml` (not the live host), so the remaining work is extending it to the VM + creating the SaaS accounts — see NEXT ACTION.
+- **Upload→clips pipeline is live-verified E2E on the VM** (ingest→transcribe→signals→`generate_clips` → 6 candidates). Transcribe failures were the now-fixed Deepgram bugs (`8db5c3c`, `705cb56`).
+- **`render_clip` is user-triggered** — a clip at `render_status=pending` is NORMAL, not a failure. R2 `clips/` is empty only because nobody has clicked render. Don't "fix" it.
+- **R2 (`autoclip-studio`) is healthy** — inspect with `python3.12 scripts/r2_inspect.py`; pipeline state with `python3.12 scripts/clip_pipeline_state.py` (both read-only; need `R2_*`/`DATABASE_URL` in local `.env`).
+- **The whole session's code is deployed and dormant-safe:** OTel/Sentry no-op until their secrets exist; the pre-migration dump gate skips until backups are configured; the `performed_well` poll defers when <3 comparable Shorts; the impression write can't break the read path. Migration 0037 is at head with RLS live.
+- **Tests:** full unit lane green (~1670); ruff + mypy clean. DB-backed parts of the DR + moat batches are written with `integration`-marked tests that run on staging (no Docker/PG on the local box).
 
 ---
 
@@ -63,39 +70,39 @@
 
 | Thing | Value |
 |---|---|
-| Live prod host | **VM** — SSH alias `creatorclip-vm`, dir `/opt/autoclip`, `docker-compose.prod.yml`, served via Cloudflare tunnel (`cloudflared` svc) |
-| Live DB | VM `postgres` container — `pgvector/pgvector:pg16`, db `creatorclip`, user `creatorclip` (inspect: `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml exec -T postgres psql -U creatorclip -d creatorclip'`) |
-| Live logs | `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml logs -f app worker'` (ephemeral — the reason Issue 326 exists) |
+| Live prod host | **VM** — SSH alias `creatorclip-vm`, dir `/opt/autoclip`, `docker-compose.prod.yml`, Cloudflare tunnel (`cloudflared`) |
+| Live DB | VM `postgres` container — `pgvector/pgvector:pg16`, db/user `creatorclip`. Now at `alembic_version=0037`. Inspect: `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml exec -T postgres psql -U creatorclip -d creatorclip'` |
+| Live logs | `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml logs -f app worker'` (ephemeral — the reason #326 exists) |
+| Deploy pipeline | push `main` → "Docker publish" → "Deploy to production" (self-hosted runner on the VM). Watch: `gh run list` / `gh run watch`. `scripts/deploy.sh` is the manual mirror. |
 | Image | `ghcr.io/reese8272/creatorclip:latest` |
-| R2 bucket | `autoclip-studio` (creds by name: `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`) |
-| Render (NOT live) | blueprint `render.yaml`; `creatorclip-db` = empty PG18 instance `dpg-d8vkcuu8bjmc738cvm6g-a` — unmigrated, unused |
-| Branch / HEAD | `main` @ `e837979`, 1 ahead of `origin/main` (unpushed) |
-| Test creator (this session) | `eb9af967-5d2f-4063-a05e-9f4f070ce840` |
-| Active issue | **#326** (`docs/issues.md`, L08 Observability) — code-complete, Verify: external |
-| Secrets (names only) | `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `R2_*`, `DATABASE_URL`, AI keys — live in the VM `.env` + GH Actions secrets; **never in this repo** |
+| R2 (media) | `autoclip-studio` (`R2_*` creds). **Backups (#256) go to a SEPARATE `creatorclip-backups` bucket — not yet created.** |
+| Render (NOT live) | blueprint `render.yaml`; `creatorclip-db` empty/unused. **Do not trust it for prod data.** |
+| Branch / HEAD | `main` @ `47a1f44`, in sync with `origin/main`; `staging` in sync |
+| Secrets (names only) | live: `R2_*`, `DATABASE_URL`, AI keys (synced on deploy). **Not yet set:** `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `BACKUP_R2_BUCKET`, `BACKUP_ENCRYPTION_KEY`. Reference by name; never echo values. |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Render ≠ live.** Do not query/trust the Render `creatorclip-db` for prod data — it's empty. The live data is on the VM. (Memory: `project_live_deployment_topology`.)
-- **Pushing `main` deploys to the VM.** Verify intent before `git push`. `e837979` is no-op-safe, but any future OTel env wiring will activate exporters on deploy.
-- **OTel/Sentry are no-ops without env.** `init_otel` returns immediately and imports nothing when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty; Sentry no-ops on empty `SENTRY_DSN`. Dev/CI stay offline-clean by design.
-- **PII boundary:** LLM span content is forced OFF (`TRACELOOP_TRACE_CONTENT=false` in `init_otel`). Don't re-enable.
-- **`render_clip` is user-triggered** — a `pending` clip is normal, not a failure. Don't "fix" it.
-- **Secrets are write-only on GH / live only in the VM `.env`** — reference by name; never echo values.
-- **Local box has no Docker**; tests run via `python3.12` / `.venv` (see memory `local_dev_test_env`).
-- **`httpx2` vs `httpx`:** the app's TestClient uses `httpx2`; outbound clients (YouTube/Deepgram/Anthropic) use stock `httpx`, so `HTTPXClientInstrumentor` binds them correctly.
+- **Render ≠ live.** The live data is on the VM; the Render DB is empty. (Memory: `project_live_deployment_topology`.)
+- **Pushing `main` deploys to the VM.** Verify intent before `git push`. All current code is dormant-safe, but setting the observability/backup secrets + next deploy ARMS those subsystems.
+- **OTel/Sentry no-op without env** (`OTEL_EXPORTER_OTLP_ENDPOINT` / `SENTRY_DSN`). **PII boundary:** LLM span content forced OFF (`TRACELOOP_TRACE_CONTENT=false`) — don't re-enable.
+- **`scripts/backup_pg.sh` secret hygiene** (#256): DB creds stay container-side, passphrase via `openssl -pass env:` (never argv), refuses to run if backup bucket == media bucket, never deletes (retention via R2 lifecycle). **The encryption key must NEVER be stored inside the backup it protects** (circular dependency).
+- **R2 Object Lock must be Compliance mode**, not Governance (Governance is admin-overridable). R2 has no GA versioning — Object Lock is the only delete-protection.
+- **`performed_well` is Shorts-vs-Shorts now** (#201) — judged against the median of the creator's published Shorts, deferred below 3 comparable Shorts. Don't revert it to the full-video median.
+- **Local box has no Docker/Postgres** — tests run via `python3.12` / `.venv`; DB-backed tests are `integration`-marked and run on staging. (Memory: `local_dev_test_env`.)
+- **Secrets are write-only on GH / live only in the VM `.env`** — reference by name.
 
 ---
 
 ## POINTERS
 
-- `docs/issues.md` — Issue **#326** brief (L08 Observability lane) + full roadmap
-- `docs/DECISIONS.md` — 2026-06-26 entry: observability stack decision + sources
-- `docs/RENDER_DEPLOY.md` §11 — observability setup steps (Sentry + Grafana Cloud)
-- `docs/DEPLOYMENT.md` — VM/single-host deploy mechanics; `docs/SOT.md`, `docs/PROJECT_STATE.md` — architecture + progress
-- `docs/OFF_COURSE_BUGS.md` — the 204-route fix logged this session
+- `docs/issues.md` — per-issue briefs + statuses (#198–202, #255–258, #326) + full roadmap
+- `docs/DECISIONS.md` — 2026-06-26/27 entries: observability stack, DR batch, eval methodology, performed_well baseline, impression log
+- `docs/RUNBOOKS.md` → **Disaster Recovery** — escrow setup + restore drill + 4 failure modes (the #255–258 operator checklist)
+- `docs/RENDER_DEPLOY.md` §11 — Sentry + Grafana Cloud setup steps (apply to the VM)
+- `docs/COMPLIANCE.md` — data-classes table (now incl. backups + clip_impressions)
+- `docs/PROJECT_STATE.md` — progress rows for everything shipped this session
 - `CLAUDE.md` — project rules (Read Order, issue workflow, standards)
-- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` — esp. `project_live_deployment_topology.md` (this session's key finding)
-- Session helpers: `scripts/r2_inspect.py` (committed), `scripts/clip_pipeline_state.py` (untracked)
+- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` — esp. `project_live_deployment_topology.md`
+- Session helpers (committed): `scripts/r2_inspect.py`, `scripts/clip_pipeline_state.py`, `scripts/backup_pg.sh`, `scripts/eval_efficacy.py`
