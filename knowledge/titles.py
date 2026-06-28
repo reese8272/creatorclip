@@ -25,6 +25,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
+from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -249,4 +250,5 @@ def generate_title_suggestions(
         usage["cache_creation"],
         usage["output_tokens"],
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_TITLES, usage)
     return final_text, usage

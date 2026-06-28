@@ -24,7 +24,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from knowledge.util import extract_transcript_text as _extract_transcript_text
+from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,7 @@ def generate_clip_caption_hooks(
         usage_dict["cache_creation"],
         usage_dict["output_tokens"],
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_CLIP_CAPTIONS, usage_dict)
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     result = _parse_result(raw)
