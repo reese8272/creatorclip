@@ -4,6 +4,33 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-28 — Clips auto-render on generation (fixes "nothing ever renders")
+
+**Root cause of the reported bug.** A user's Review screen showed a clip stuck at "Not yet
+rendered" (which *looked* like a 12-hour stuck render) alongside the unrelated "0/20 ratings
+collected" personalization band. Investigation: rendering was **never automatic** — the only UI
+trigger for `POST /clips/{id}/render` lived in the Editor (`CaptionStylePanel`); the Review screen
+had **no render affordance at all**, and the pipeline (`_generate_clips_async`) only ranked
+candidates, never rendered them. So clips sat un-rendered unless the user found the Editor path.
+"0/20" is the preference-model cold-start counter (climbs as you Keep/Drop), not render progress;
+"50 min" is the credit balance.
+
+**Fix (auto-render, user-directed: "upload = consent to spend").**
+- **Worker:** `_generate_clips_async` now enqueues `render_clip` per generated clip, seeding each
+  clip's `style_preset` from the creator's brand kit. New settings `AUTO_RENDER_CLIPS` (default
+  `true`) + `AUTO_RENDER_TOP_N` (default `0` = all). Best-effort enqueue (logged `auto_render_enqueued`,
+  never raises → no spurious refund). Billing-safe: minutes are charged once at ingest, so render
+  adds **zero** spend; `render_clip` is idempotent + retry-safe.
+- **Frontend:** `ClipPlayer`/`Review` show live render status (spinner → player), poll while any
+  clip is in flight, and expose a manual **Render / Retry** fallback button.
+- **Gates:** backend unit lane **1669 passed** (1 pre-existing failure: `deepgram` SDK not
+  installed in this venv — env, not code); ruff + mypy clean on changed files; frontend
+  `tsc -b` + `vite build` clean, vitest **211 passed** (+4 new `ClipPlayer.test.tsx`, +2 new
+  worker auto-render tests). Integration lane unrunnable on this box (PG auth mismatch — logged in
+  OFF_COURSE_BUGS). See `docs/DECISIONS.md` 2026-06-28.
+
+---
+
 ## 2026-06-26 — Live LLM E2E run (Issue 319) — 22/22 PASS; caught + fixed 3 real bugs
 
 Ran `scripts/llm_e2e.py` against the **real Anthropic API** (`RUN_LLM_LIVE=1`, the user's key) — the first

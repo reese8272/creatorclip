@@ -5,6 +5,45 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-28 — Clips auto-render on generation (upload = consent to spend)
+
+**What changed.** Clip generation no longer ends at *ranked-but-unrendered*. At the end of
+`_generate_clips_async`, the worker now enqueues a `render_clip` job for each freshly generated
+clip (`worker/tasks.py`), seeding each clip's `style_preset` from the creator's saved brand kit
+first. Gated by two new settings: `AUTO_RENDER_CLIPS` (default `true`) and `AUTO_RENDER_TOP_N`
+(default `0` = all generated candidates; `>0` renders only the top-N by rank immediately). The
+Review screen (`ClipPlayer.tsx` / `Review.tsx`) now shows live render status (`rendering…` spinner
+→ player) and polls while any clip is in flight, with a manual **Render / Retry** fallback button.
+
+**Why.** The actual failure mode the user hit was *not* a stuck render — it was that **rendering
+was never triggered**: the only UI affordance that called `POST /clips/{id}/render` lived in the
+Editor (`CaptionStylePanel`), and nothing auto-rendered after generation. A clip therefore sat
+"Not yet rendered" on the Review screen indefinitely, which reads as "frozen for 12 hours." This
+contradicts the North Star ("ready when you open it"). The user directive: *uploading a video is
+the permission to spend those minutes — clips should be ready with zero clicks.*
+
+**Why it's billing-safe (the load-bearing fact).** Minutes are deducted **once at ingest** for the
+full video duration (`billing/ledger.py::deduct_for_video`, idempotent on `UNIQUE(video_id)`).
+**Rendering charges no additional minutes.** So auto-rendering every candidate spends nothing the
+upload didn't already consent to and pay for — it's pure pre-paid compute. `render_clip` is already
+idempotent (skips clips already `done`) and retry-safe, so a generate retry re-enqueues harmlessly.
+
+**Industry standard checked.** Auto-render-on-ingest of the top candidates is the norm for
+clip tools (Opus Clip, Klap, etc.); manual render-on-demand is the outlier. Confirmed against
+current product behavior 2026-06-28.
+
+**Alternatives ruled out.** (a) Manual-only (the status quo — the bug). (b) Auto-render top-N only
+by default — kept available via `AUTO_RENDER_TOP_N` but defaulted to *all*, since minutes are
+already paid and the user asked for the whole queue ready. (c) Charging per render — rejected;
+double-charges the same source minutes.
+
+**Failure posture.** Auto-render enqueue is best-effort: an enqueue exception is logged
+(`auto_render_enqueued` event on success) and never raised, so it cannot fail clip generation or
+trigger a refund. A clip stuck `pending` (e.g. enqueue failed, or `AUTO_RENDER_CLIPS=false`) shows
+the manual Render button on Review rather than an infinite spinner.
+
+---
+
 ## 2026-06-27 — performed_well baseline unit + impression/position log (Issues 201, 202)
 
 **What changed.**

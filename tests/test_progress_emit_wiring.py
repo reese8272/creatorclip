@@ -192,10 +192,19 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
 
     mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
+    fake_clips = []
+    for i in range(3):
+        c = MagicMock()
+        c.id = uuid.uuid4()
+        c.rank = i + 1
+        c.style_preset = None
+        fake_clips.append(c)
     mocker.patch(
         "clip_engine.ranking.generate_and_rank_clips",
-        AsyncMock(return_value=[MagicMock(), MagicMock(), MagicMock()]),
+        AsyncMock(return_value=fake_clips),
     )
+    # Auto-render (auto-render): the success path now enqueues a render per clip.
+    delay_mock = mocker.patch("worker.tasks.render_clip.delay")
 
     await tasks._generate_clips_async(video_id)
 
@@ -216,6 +225,96 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     done_calls = [c for c in fake_emit.call_args_list if c.args[1] == "done"]
     assert len(done_calls) == 1
     assert done_calls[0].kwargs.get("clip_count") == 3
+    # One auto-render enqueued per generated clip, by clip id.
+    assert delay_mock.call_count == 3
+    enqueued = {c.args[0] for c in delay_mock.call_args_list}
+    assert enqueued == {str(c.id) for c in fake_clips}
+
+
+def _generate_clips_scaffold(mocker, *, clips, brand_kit_style=None):
+    """Shared fakes for the auto-render generate-clips tests.
+
+    Returns (video_id, fake_emit). ``session.scalar`` answers the existing-done
+    probe (None) then, if a brand kit is supplied, the CreatorStyle read.
+    """
+    from config import settings as _settings
+
+    video_id = str(uuid.uuid4())
+    fake_emit = AsyncMock()
+    mocker.patch("worker.progress.aemit", fake_emit)
+
+    video_stub = MagicMock()
+    video_stub.id = uuid.UUID(video_id)
+    video_stub.creator_id = uuid.uuid4()
+    creator_stub = MagicMock()
+    creator_stub.channel_title = "Test Channel"
+    signals_stub = MagicMock()
+    signals_stub.timeline_jsonb = {}
+
+    fake_session = AsyncMock()
+    fake_session.get = AsyncMock(side_effect=[video_stub, creator_stub, signals_stub, None])
+    if brand_kit_style is not None:
+        style_row = MagicMock()
+        style_row.style = brand_kit_style
+        fake_session.scalar = AsyncMock(side_effect=[None, style_row])
+    else:
+        fake_session.scalar = AsyncMock(return_value=None)
+    fake_session.commit = AsyncMock()
+    fake_session_cm = MagicMock()
+    fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
+    fake_session_cm.__aexit__ = AsyncMock(return_value=None)
+    mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
+    mocker.patch("clip_engine.ranking.generate_and_rank_clips", AsyncMock(return_value=clips))
+    # Keep the real defaults discoverable to the tests that override them.
+    assert hasattr(_settings, "AUTO_RENDER_CLIPS")
+    return video_id, fake_emit
+
+
+@pytest.mark.asyncio
+async def test_generate_clips_async_skips_auto_render_when_disabled(mocker):
+    """AUTO_RENDER_CLIPS=False leaves clips pending — no render is enqueued."""
+    from config import settings
+    from worker import tasks
+
+    mocker.patch.object(settings, "AUTO_RENDER_CLIPS", False)
+    clips = [MagicMock(id=uuid.uuid4(), rank=1, style_preset=None)]
+    video_id, _ = _generate_clips_scaffold(mocker, clips=clips)
+    delay_mock = mocker.patch("worker.tasks.render_clip.delay")
+
+    await tasks._generate_clips_async(video_id)
+
+    delay_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_clips_async_seeds_brand_kit_and_caps_top_n(mocker):
+    """Auto-render seeds each clip's style from the brand kit and honors
+    AUTO_RENDER_TOP_N — only the top-N by rank render immediately, and a clip
+    that already carries a style_preset is never overwritten."""
+    from config import settings
+    from worker import tasks
+
+    mocker.patch.object(settings, "AUTO_RENDER_CLIPS", True)
+    mocker.patch.object(settings, "AUTO_RENDER_TOP_N", 2)
+    kit = {"subtitle": "bold_pop", "captions_enabled": True}
+
+    # Deliberately out of rank order; one clip already has a style.
+    c_rank3 = MagicMock(id=uuid.uuid4(), rank=3, style_preset=None)
+    c_rank1 = MagicMock(id=uuid.uuid4(), rank=1, style_preset=None)
+    c_rank2 = MagicMock(id=uuid.uuid4(), rank=2, style_preset={"subtitle": "minimal"})
+    clips = [c_rank3, c_rank1, c_rank2]
+    video_id, _ = _generate_clips_scaffold(mocker, clips=clips, brand_kit_style=kit)
+    delay_mock = mocker.patch("worker.tasks.render_clip.delay")
+
+    await tasks._generate_clips_async(video_id)
+
+    # Top-2 by rank (ranks 1 and 2) enqueue; rank-3 does not.
+    enqueued = {c.args[0] for c in delay_mock.call_args_list}
+    assert enqueued == {str(c_rank1.id), str(c_rank2.id)}
+    # rank-1 had no style → seeded from the kit; rank-2 kept its own choice.
+    assert c_rank1.style_preset == kit
+    assert c_rank2.style_preset == {"subtitle": "minimal"}
 
 
 @pytest.mark.asyncio
