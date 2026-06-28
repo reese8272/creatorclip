@@ -2,7 +2,7 @@ import logging
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError, field_validator, model_validator
+from pydantic import ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -592,6 +592,36 @@ class Settings(BaseSettings):
     # (welcome / nudge / re-engagement) and only logs the skip. Set this to a real
     # address before enabling lifecycle email in production.
     MAILING_ADDRESS: str = ""
+
+    @field_validator(
+        "PERSONALIZATION_THRESHOLD_LABELS",
+        "DECAY_HALF_LIFE_DAYS",
+    )
+    @classmethod
+    def _positive_preference_ints(cls, v: int, info: ValidationInfo) -> int:
+        """Fail fast on non-positive preference tunables (Issue 338).
+
+        ``DECAY_HALF_LIFE_DAYS`` feeds ``λ = ln(2)/H`` at import in
+        ``preference/decay.py`` — H=0 raises ZeroDivisionError at import and H<0
+        inverts the decay (older feedback weighted *more*). A non-positive
+        personalization threshold breaks the cold-start ramp. Catch both here with
+        a clear message instead of a cryptic downstream failure.
+        """
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be > 0 (got {v})")
+        return v
+
+    @field_validator("PREFERENCE_WEIGHT_CAP")
+    @classmethod
+    def _weight_cap_in_unit_range(cls, v: float) -> float:
+        """The preference blend weight must stay in (0, 1] (Issue 338).
+
+        ``score = (1-w)*dna + w*pref`` — a cap outside (0, 1] would over- or
+        under-weight personalization and can push blended scores out of range.
+        """
+        if not (0.0 < v <= 1.0):
+            raise ValueError(f"PREFERENCE_WEIGHT_CAP must be in (0, 1] (got {v})")
+        return v
 
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":

@@ -4,6 +4,7 @@ Rank scored clip candidates and persist them to the clips table.
 
 import asyncio
 import logging
+import math
 import uuid
 
 from sqlalchemy import select
@@ -16,9 +17,23 @@ from models import Clip, ClipFormat, RenderStatus
 logger = logging.getLogger(__name__)
 
 
+def _safe_score(value: object) -> float:
+    """Coerce a clip score to a sortable float, mapping NaN/None/garbage to -inf.
+
+    Python's sort places NaN unpredictably (comparisons return False), so a single
+    NaN score makes the whole ranking order undefined. Sorting NaN/missing scores to
+    the bottom deterministically keeps a broken score from leaking to rank 1. (Issue 328)
+    """
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("-inf")
+    return f if math.isfinite(f) else float("-inf")
+
+
 def rank_candidates(candidates: list[dict]) -> list[dict]:
     """Sort by score descending, assign rank (1 = best). Pure function."""
-    ranked = sorted(candidates, key=lambda c: c.get("score", 0.0), reverse=True)
+    ranked = sorted(candidates, key=lambda c: _safe_score(c.get("score", 0.0)), reverse=True)
     for i, c in enumerate(ranked):
         c["rank"] = i + 1
     return ranked
@@ -69,10 +84,20 @@ async def rerank_with_preference(
         logger.warning("Preference rerank failed (%s) — keeping DNA ranking", exc)
         return clips
 
+    # A non-finite prediction (NaN/inf) would blend into clip.score and make the
+    # subsequent sort order undefined. Treat it as a broken model and fall back to
+    # the DNA ranking untouched — the same honest behavior as a predict exception.
+    if not all(math.isfinite(s) for s in pref_scores):
+        logger.warning(
+            "Preference model produced a non-finite score for creator %s — keeping DNA ranking",
+            creator_id,
+        )
+        return clips
+
     for clip, pref_score in zip(clips, pref_scores, strict=True):
         clip.score = (1.0 - weight) * (clip.score or 0.0) + weight * pref_score
 
-    clips.sort(key=lambda c: c.score or 0.0, reverse=True)
+    clips.sort(key=lambda c: _safe_score(c.score), reverse=True)
     for i, clip in enumerate(clips):
         clip.rank = i + 1
 

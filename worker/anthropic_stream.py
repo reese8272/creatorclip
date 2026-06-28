@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from observability import warn_if_truncated
 from worker.progress import sync_emit
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ def stream_and_emit(
                 logger.warning("stream_and_emit: forward failed task=%s err=%s", task_id, exc)
         final = stream.get_final_message()
 
+    warn_if_truncated(model, getattr(final, "stop_reason", None), task=task_id)
     text_blocks = [b for b in final.content if getattr(b, "type", None) == "text"]
     if not text_blocks:
         raise RuntimeError("Claude returned no text block in streaming response")
@@ -138,6 +140,7 @@ def stream_message(
                 logger.warning("stream_message: forward failed task=%s err=%s", task_id, exc)
         final = stream.get_final_message()
 
+    warn_if_truncated(model, getattr(final, "stop_reason", None), task=task_id)
     usage = final.usage
     usage_dict = {
         "input_tokens": getattr(usage, "input_tokens", 0),

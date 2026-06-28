@@ -27,7 +27,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from observability import record_llm_metric
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +258,7 @@ def generate_clip_explanation(
         usage_dict["output_tokens"],
     )
     record_llm_metric(settings.ANTHROPIC_MODEL_CLIP_EXPLAIN, usage_dict)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_CLIP_EXPLAIN, getattr(response, "stop_reason", None))
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     result = _parse_result(raw)

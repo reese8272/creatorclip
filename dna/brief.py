@@ -19,7 +19,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from observability import record_llm_metric
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -200,5 +200,6 @@ def generate_brief(
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
     }
     record_llm_metric(settings.ANTHROPIC_MODEL_DNA_BRIEF, _usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_DNA_BRIEF, getattr(response, "stop_reason", None))
     # Final text block is the answer (consistent with the web_search path). (Issue 69)
     return text_blocks[-1].text + _DISCLAIMER, _usage

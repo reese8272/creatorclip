@@ -31,13 +31,13 @@ import uuid
 from typing import Any
 
 import httpx
-from anthropic import AsyncAnthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from chat.prompt import HONESTY_CONSTRAINT
 from config import settings
 from dna import identity as identity_module
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
-from observability import record_llm_tokens
+from observability import record_llm_tokens, warn_if_truncated
 from youtube.categories import NICHE_OPTIONS
 
 logger = logging.getLogger(__name__)
@@ -202,6 +202,11 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
         usage = getattr(message, "usage", None)
         total_in += getattr(usage, "input_tokens", 0) or 0
         total_out += getattr(usage, "output_tokens", 0) or 0
+        warn_if_truncated(
+            settings.ANTHROPIC_MODEL_INTAKE,
+            getattr(message, "stop_reason", None),
+            task=str(creator_id),
+        )
 
         tool_use = next(
             (

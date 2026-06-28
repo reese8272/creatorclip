@@ -225,6 +225,27 @@ def record_llm_metric(model: str, usage: Any, *, provider: str = "anthropic") ->
     record_llm_tokens(provider, model, _in, _out, _cr, _cc)
 
 
+def warn_if_truncated(model: str, stop_reason: Any, *, task: str | None = None) -> bool:
+    """Log a WARNING when an LLM response was cut off at the token cap (Issue 331).
+
+    Anthropic sets ``stop_reason == "max_tokens"`` when the output hit ``max_tokens``.
+    Most JSON-producing call sites then fail to parse and fall back silently, making a
+    truncated response indistinguishable in logs from a model that legitimately
+    returned nothing. Surfacing it lets ops raise ``max_tokens`` for the offending
+    task (or shorten the prompt). Returns True when truncation was detected so
+    callers/tests can branch on it.
+    """
+    if stop_reason == "max_tokens":
+        logging.getLogger(__name__).warning(
+            "LLM output truncated at max_tokens (model=%s task=%s) — raise max_tokens "
+            "for this task or shorten the prompt",
+            model,
+            task if task is not None else "-",
+        )
+        return True
+    return False
+
+
 # ── Structured logging ───────────────────────────────────────────────────────
 class RequestIDLogFilter(logging.Filter):
     """Inject the current `request_id` onto every record so all logs are correlatable."""
