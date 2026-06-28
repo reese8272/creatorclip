@@ -1797,7 +1797,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 226: Retire or lock down the legacy static UI output sink
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (2026-06-23, shipped on `wave0/security-platform`; duplicate of the summary entry above — see `docs/PROJECT_STATE.md`) · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
 **Src** `09 / 174c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/09_llm_content_safety_prompt_injection.md`  
 **Blocked by** nothing — **ready now** · **Enables** #148 · **Coordinate (hot files)** `main.py`, `tests/test_static.py`  
 
@@ -1875,7 +1875,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 229: HTTP security-headers middleware
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (2026-06-23, shipped on `wave0/security-platform`; duplicate of the summary entry above — see `docs/PROJECT_STATE.md`) · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
 **Src** `04 / D (+ 09 / Q3)` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/04_security_scalability.md`  
 **Blocked by** nothing — **ready now** · **Enables** #287 · **Coordinate (hot files)** `main.py`, `tests/test_static.py`  
 
@@ -1906,7 +1906,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 230: CSRF defense-in-depth on state-changing routes
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (2026-06-23, shipped on `wave0/security-platform`; duplicate of the summary entry above — see `docs/PROJECT_STATE.md`) · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
 **Src** `04 / F` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/04_security_scalability.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `auth.py`, `main.py`, `routers/auth.py`, `tests/test_security_baselines.py`  
 
@@ -1981,7 +1981,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 232: Early Content-Length upload rejection + session-revocation note
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
+**Status** `DONE` (2026-06-23, shipped on `wave0/security-platform`; duplicate of the summary entry above — see `docs/PROJECT_STATE.md`) · **Wave** W0 · **Lane** Security — Platform · **Size** `S` · **Verify** `local`  
 **Src** `04 / K` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/04_security_scalability.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `auth.py`, `routers/auth.py`, `routers/videos.py`  
 
@@ -2198,7 +2198,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 241: OpenTelemetry distributed tracing
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `L` · **Verify** `external`  
+**Status** `DONE` (code) — **superseded by #326**, which shipped the OTel SDK + auto-instrumentation (`e837979`) and the VM activation wiring (`d83da76`). Remaining live-trace verification is tracked under #326's external gate, not here. · **Wave** W0 · **Lane** Observability · **Size** `L` · **Verify** `external`  
 **Src** `05 / 173` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `main.py`, `observability.py`, `worker/celery_app.py`  
 
@@ -2462,7 +2462,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 326: Beta observability activation on Render — Grafana Cloud (unified logs+metrics+traces) + Sentry + OTel
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `L` · **Verify** `external`  
+**Status** `OPEN — code-complete; external-verify pending` (2026-06-27: code `e837979` + VM activation wiring `d83da76` shipped; only the live SaaS verify remains) · **Wave** W0 · **Lane** Observability · **Size** `L` · **Verify** `external`  
 **Brings forward (beta-scoped):** #281 (Sentry DSN activation), #241 (OpenTelemetry distributed tracing), #240 (log aggregation — managed Grafana Cloud for beta, NOT self-hosted Loki-on-GKE), #236 (resolves its open managed-vs-self-hosted question → managed). Reverses the 2026-05-29 "defer OTel for the single-VM beta" decision **for the Render beta** — see `docs/DECISIONS.md` (2026-06-26).  
 **Coordinate (hot files)** `main.py`, `observability.py`, `worker/celery_app.py`, `config.py`, `requirements.txt`, `render.yaml`, `.env.example`
 
