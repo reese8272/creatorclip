@@ -5,6 +5,59 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-27 — Personalization efficacy: offline ranking-eval methodology + recency-decay parameterization (Issues 198, 200)
+
+**What changed.** Built the offline efficacy harness (Issue 198) that turns "tests pass" into
+"the model is measured against real creator labels", and parameterized the recency-decay
+half-life (Issue 200) so it can be calibrated by that harness instead of hardcoded.
+
+**Methodology decisions (Issue 198), confirmed against current standard:**
+1. **Metrics:** NDCG@5 is the primary rank-quality metric (graded relevance, position-discounted —
+   Järvelin & Kekäläinen 2002). Also report **MRR** (does the best clip surface first?) and
+   **Kendall's tau-b** (full-list order). **MAP@5** is kept (it's in the AC) though NDCG supersedes
+   it for graded labels. Metrics are computed over the FULL ~6-candidate set — never sampled
+   negatives, which distort (Krichene & Rendle 2020). k=5 on ~6 candidates is defensible.
+2. **Chronological held-out split** (train on older feedback, eval on newer) — NEVER random; a
+   random split leaks future labels into the past (Koren 2009).
+3. **Three rankings:** random (floor) → generic-signal (`clip_engine.scoring._signal_score`, the
+   honest non-personalized stand-in) → DNA+preference (the production blend). The non-personalized
+   baseline is the load-bearing comparison (Dacrema 2019, "are we really making progress").
+4. **Stats:** paired bootstrap with 95% CIs; a ranker beats another iff the CI of the per-query
+   delta excludes 0. A t-test is mis-calibrated for bounded, non-normal NDCG (Sakai 2014).
+5. **min-N = 30** labeled clips before per-creator metrics are trustworthy; below that report the
+   **pooled micro-average** as the primary number, per-creator as a secondary breakdown with a
+   coverage note (Gunawardana & Shani 2015).
+6. **Graded relevance:** `performed_well` = 2 (strongest), `upvote`/`trim` = 1, `downvote` = 0;
+   **`skip` excluded** (matches training; position-bias-confounded — IPS correction deferred to v2,
+   Joachims 2017, once impression/position logging from Issue 202 exists).
+7. The metric library (`tests/eval/metrics.py`) is **pure Python, zero deps** so it runs anywhere
+   and is reusable by Issues 199/200/201/202.
+
+**Issue 200 — recency half-life parameterized.** Moved the hardcoded `_LAMBDA = ln(2)/30` out of
+`preference/decay.py` into `DECAY_HALF_LIFE_DAYS` (config, default 30); `_LAMBDA` is derived at
+import. Default unchanged for now — published domain half-lives span 43–150d, so the eval harness
+will grid-search {15,30,60,90} by held-out NDCG@5 (with a concept-pivot scenario as the directional
+"decay actually reweights" check) and the default moves ONLY if a value clears the incumbent's CI
+(staging experiment). The DNA builder keeps its SEPARATE 90-day half-life — intentionally not unified.
+
+**Why.** The moat ("the only AI editor that truly knows your channel") was asserted by architecture,
+never measured — `grep ndcg|map|kendall` over the repo returned nothing. This is the instrument that
+proves personalization adds value over a generic ranker.
+
+**Scope note.** Verified locally: the metric library + the harness ranking/training logic (incl. the
+real `fit()`→`predict_score` path) + the decay-config derivation. The DB-backed end-to-end run
+(`scripts/eval_efficacy.py`, the integration test, and the half-life sweep on real labels) is
+`staging` — this dev box has no Postgres.
+
+**Source / evidence.** Järvelin & Kekäläinen 2002 (NDCG); Koren 2009 (temporal split); Dacrema 2019
+(baseline necessity); Sakai 2014 + Smucker 2007 (bootstrap over t-test); Gunawardana & Shani 2015
+(min-N / pooled); Joachims 2017 (IPS deferral). Researched 2026-06-27 via industry-standards-researcher.
+Cross-ref `docs/research/findings/08_personalization_efficacy_eval.md`.
+
+**Date:** 2026-06-27
+
+---
+
 ## 2026-06-27 — Disaster-recovery batch: key escrow, encrypted PG backups, pre-migration dump, R2 immutability (Issues 255–258)
 
 **What changed.** The live VM had no recovery posture (no backups, no off-box key copy, no

@@ -996,7 +996,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 198: Personalization efficacy harness — NDCG/MAP/Kendall (the moat)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `L` · **Verify** `staging`  
+**Status** `OPEN — core complete & locally verified; staging run pending` (2026-06-27: `tests/eval/metrics.py` pure NDCG@5/MAP@5/MRR/Kendall-τ/chrono-split/paired-bootstrap [12 tests], `tests/eval/efficacy.py` 3-ranking harness + `scripts/eval_efficacy.py` [4 local tests incl. real fit→predict], DECISIONS methodology entry. **Remaining (staging):** DB integration test seeding clip_feedback/clip_outcomes + the real-data pooled/per-creator run) · **Wave** W0 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `L` · **Verify** `staging`  
 **Src** `08 / 173a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** nothing — **ready now** · **Enables** #199, #200, #201, #202 · **Coordinate (hot files)** `clip_engine/ranking.py`, `clip_engine/scoring.py`, `preference/model.py`, `tests/eval/efficacy.py`  
 
@@ -1116,7 +1116,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 200: Recency-decay half-life calibration + parameterize
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `staging`  
+**Status** `OPEN — parameterization complete & verified; calibration sweep pending` (2026-06-27: `_LAMBDA` now derived from `DECAY_HALF_LIFE_DAYS` config (default 30), `.env.example` + decay test updated to read config [28 preference tests pass], DECISIONS entry. **Remaining (staging):** the {15,30,60,90} held-out NDCG@5 sweep + concept-pivot scenario on real data, change default only if it clears the incumbent CI) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `staging`  
 **Src** `08 / 173d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** #198 · **Enables** #109 · **Coordinate (hot files)** `preference/decay.py`, `tests/eval/efficacy.py`, `tests/test_preference.py`  
 

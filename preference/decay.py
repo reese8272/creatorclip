@@ -1,18 +1,24 @@
 """
 Recency-weighted sample weights for preference model training.
 
-Half-life is 30 days — feedback adapts faster than channel identity (DNA uses 90 days).
+Half-life is configurable via DECAY_HALF_LIFE_DAYS (default 30) — feedback adapts faster
+than channel identity (the DNA builder keeps its SEPARATE 90-day half-life; the two are
+intentionally not unified). Parameterized in Issue 200 so the efficacy harness (Issue 198)
+can grid-search the half-life on a held-out NDCG@5 split rather than editing this constant.
 Clips with performed_well=True receive an additional 3× outcome multiplier.
 """
 
 import math
 from datetime import UTC, datetime
 
-_LAMBDA = math.log(2) / 30  # 30-day half-life
+from config import settings
+
+# Derived at import from the configured half-life. λ = ln(2)/H so that recency_weight(H)=0.5.
+_LAMBDA = math.log(2) / settings.DECAY_HALF_LIFE_DAYS
 
 
 def recency_weight(feedback_age_days: float) -> float:
-    """Exponential recency decay: w = e^(-λ * age_days), λ = ln(2)/30."""
+    """Exponential recency decay: w = e^(-λ * age_days), λ = ln(2)/DECAY_HALF_LIFE_DAYS."""
     return math.exp(-_LAMBDA * max(0.0, feedback_age_days))
 
 

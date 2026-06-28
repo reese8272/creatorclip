@@ -338,6 +338,13 @@ class Settings(BaseSettings):
     STYLE_LEARN_THRESHOLD: int = 5
 
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
+    # Recency-decay half-life (days) for preference-model sample weights. Was a
+    # hardcoded ln(2)/30 in preference/decay.py; parameterized (Issue 200) so the
+    # eval harness (Issue 198) can grid-search {15,30,60,90} on a held-out NDCG@5
+    # split. Default 30 is a reasonable prior, but published domain half-lives span
+    # 43–150d — change the default ONLY if a value clears the incumbent's CI. The
+    # DNA builder keeps its SEPARATE 90-day half-life; do not unify them. (Issue 200)
+    DECAY_HALF_LIFE_DAYS: int = 30
     # Max weight the preference model gets in the rerank blend once mature. Below
     # PERSONALIZATION_THRESHOLD_LABELS the weight is 0 (honest DNA-only fallback);
     # it ramps linearly to this cap by 2× the threshold. (Issue 60)

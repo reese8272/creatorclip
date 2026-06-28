@@ -47,9 +47,15 @@ def test_recency_weight_older_feedback_lower_weight():
     assert recency_weight(5.0) > recency_weight(25.0)
 
 
-def test_recency_weight_half_life_is_30():
-    """Half-life is 30 days — distinct from DNA builder's 90-day half-life."""
-    assert pytest.approx(math.log(2) / 30) == _LAMBDA
+def test_recency_weight_half_life_derives_from_config():
+    """_LAMBDA is derived from DECAY_HALF_LIFE_DAYS (Issue 200 parameterization) and
+    equals the configured half-life — distinct from the DNA builder's 90-day half-life."""
+    from config import settings
+
+    assert pytest.approx(math.log(2) / settings.DECAY_HALF_LIFE_DAYS) == _LAMBDA
+    # At the configured half-life the weight is exactly 0.5 (the definition of half-life)
+    # — pins the derivation so a wrong λ formula can't slip through.
+    assert recency_weight(settings.DECAY_HALF_LIFE_DAYS) == pytest.approx(0.5, abs=1e-9)
 
 
 # ── feedback_age_days ─────────────────────────────────────────────────────────
