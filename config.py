@@ -221,6 +221,24 @@ class Settings(BaseSettings):
     R2_SECRET_ACCESS_KEY: str = ""
     R2_BUCKET: str = ""
     SOURCE_MEDIA_RETENTION_HOURS: int = 72
+    # ── Disaster-recovery backups (Issue 256) ─────────────────────────────────
+    # Nightly encrypted pg_dump is uploaded to a SEPARATE R2 bucket (3-2-1 rule:
+    # a media-bucket mistake or compromised media credential must not be able to
+    # touch backups). These settings give the backup tooling a typed, documented
+    # home; the actual run is scripts/backup_pg.sh on host cron. They are NOT in
+    # _require_prod_secrets on purpose — the API/worker serving traffic must not
+    # fail to boot because a cron-only setting drifted; backup_pg.sh validates its
+    # own required env at runtime instead (DECISIONS 2026-06-27).
+    BACKUP_R2_BUCKET: str = ""
+    # age/openssl symmetric passphrase for the dump. NEVER logged, never in argv.
+    # The dump carries Fernet *ciphertext* tokens, so it is useless without the
+    # separately-escrowed TOKEN_ENCRYPTION_KEY (Issue 255) even if this leaks —
+    # and this passphrase must NOT be escrowed inside the backup it protects.
+    BACKUP_ENCRYPTION_KEY: str = ""
+    # Retention stays <= 30 days for the analytics rows the dump carries, to honor
+    # the YouTube 30-day staleness rule (COMPLIANCE.md).
+    BACKUP_RETENTION_DAILY: int = 14
+    BACKUP_RETENTION_WEEKLY: int = 8
     # Issue 250 — GDPR Art. 5(1)(e) storage-limitation for behavioral telemetry.
     # 90-day rolling window is the industry-standard default for SaaS event logs
     # (common range: 60–180 days). No PII is stored in event_logs (_redact() at

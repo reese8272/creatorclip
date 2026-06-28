@@ -5,6 +5,74 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-27 — Disaster-recovery batch: key escrow, encrypted PG backups, pre-migration dump, R2 immutability (Issues 255–258)
+
+**What changed.** The live VM had no recovery posture (no backups, no off-box key copy, no
+pre-migration snapshot, no R2 delete-protection). This batch adds the tooling + runbooks. Key
+design decisions, with the alternatives considered:
+
+1. **[DEC #256] Logical `pg_dump` over physical/PITR (pgBackRest/wal-g/barman).** For a single
+   small Postgres node at beta scale with a 24h RPO, nightly logical `pg_dump` is the defensible,
+   low-ops standard; PITR is warranted only at larger scale / tighter RPO. Documented upgrade path.
+
+2. **[DEC #256] `openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -pass env:` over `age`/`gpg`.**
+   Research favored `age` (modern, authenticated). But `age`'s **symmetric passphrase mode is
+   interactive-only** (no env/file passphrase by design), which is hostile to a cron script; the
+   scriptable `age` path needs an identity *key pair*, adding key-management surface. `openssl enc`
+   reads the passphrase from the **environment via `-pass env:`** (never argv/`ps`/logs) with a
+   strong KDF, and needs **zero new VM dependency**. Accepted trade-off: CBC is not AEAD, so
+   integrity rests on R2's stored checksum + the restore-drill verification rather than an AEAD tag.
+   Revisit with `age` recipient (asymmetric) encryption when graduating to PITR.
+
+3. **[DEC #256] Retention via R2 Lifecycle rule, NOT client-side deletes.** `backup_pg.sh` only
+   uploads (daily/ + weekly/ prefixes); it never issues `aws s3 rm`. This means a bug in the backup
+   script can never mass-delete backups, and it never collides with the bucket's Object Lock. Daily
+   retention stays **≤30 days** to respect the YouTube analytics-staleness rule for the rows the
+   dump carries.
+
+4. **[DEC #256] Separate bucket (`creatorclip-backups`) from media (`R2_BUCKET`).** 3-2-1 rule; the
+   script hard-refuses to run if the two buckets are equal. Same R2 account/creds are acceptable for
+   beta (separate creds is the documented hardening step).
+
+5. **[DEC #256] Backup config is decoupled from app-boot validation.** `BACKUP_*` are NOT in
+   `_require_prod_secrets` — the API/worker serving traffic must not crash-loop over a cron-only
+   setting. `backup_pg.sh` validates its own env at runtime (fail-fast, names the missing var).
+
+6. **[DEC #255] Two-leg secret escrow: GCP Secret Manager + a personal password manager.** The
+   Fernet `TOKEN_ENCRYPTION_KEY` is irreplaceable (authenticated encryption — no recovery path), so
+   even a perfect DB restore is useless without it. Two *independent* legs guard against a single
+   cloud-account/billing-lapse failure. GCP Secret Manager is the already-chosen prod backend
+   (`docs/DEPLOYMENT.md`), so adopting it now de-risks the eventual K8s migration. **Load-bearing
+   constraint:** the encryption passphrase / Fernet key must **never** be stored inside the
+   encrypted backup it protects — circular dependency (you'd need the key to open the backup that
+   holds the key). Escrow is the only path to the key.
+
+7. **[DEC #257] Pre-migration dump reuses `backup_pg.sh` (predeploy/ prefix), gated.** Both deploy
+   paths dump before `alembic upgrade head`. The gate **skips with a warning when backups aren't yet
+   configured** and **hard-aborts the deploy when they are configured but the dump fails** — so the
+   safety net never bricks the deploys needed before Issue 256 is activated, but is mandatory once it
+   is. deploy.sh and deploy.yml stay mirrored (guarded by `tests/test_ci_config.py`).
+
+8. **[DEC #258] R2 Object Lock in *Compliance* mode (not Governance) for delete-protection.** R2 has
+   **no GA object versioning**, so an accidental/malicious delete is otherwise unrecoverable. Object
+   Lock is the lever; **Governance mode can be overridden by an account admin, Compliance cannot** —
+   Compliance is required for real ransomware/compromised-credential protection. Lock window must be
+   reconciled with right-to-erasure (Issue 254) so it doesn't pin a creator's clips past a defensible
+   deletion deadline.
+
+**Why.** A live multi-user product with no tested restore is the single highest-impact data-loss
+risk; "an untested backup is not a backup" — the restore drill (Issue 256) is load-bearing, not
+optional.
+
+**Source / evidence.** PostgreSQL backup docs (logical vs physical); OpenSSL `enc`/`age` capability
+review (age symmetric = interactive-only); Cloudflare R2 docs (no GA versioning; Object Lock
+Governance vs Compliance); the 3-2-1(-1-0) backup rule. Researched 2026-06-27 via
+industry-standards-researcher. Cross-ref `docs/research/findings/10_disaster_recovery_durability.md`.
+
+**Date:** 2026-06-27
+
+---
+
 ## 2026-06-27 — Issue 326 observability activates on the VM (deploy.yml secret-sync), not render.yaml
 
 **What changed.** Issue 326's brief was written to activate observability on **Render**

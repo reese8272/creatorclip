@@ -161,7 +161,9 @@ means tokens stay readable under either key throughout — **no maintenance wind
 
 - [ ] Read access to the production database; write access to the secrets store (`.env`
       at `/opt/autoclip/.env` chmod 600, or the Kubernetes Secret) — keys live there, never in git
-- [ ] A database backup has been taken (belt-and-suspenders; the re-encrypt is atomic)
+- [ ] A database backup exists (belt-and-suspenders; the re-encrypt is atomic). The nightly
+      `scripts/backup_pg.sh` (Issue 256) covers this; to force a fresh one now, run it manually
+      on the VM — see **Disaster Recovery → (b) Database loss**.
 
 ---
 
@@ -200,6 +202,11 @@ back and exits non-zero — **do not change the primary key; investigate.**
 
 Set `TOKEN_ENCRYPTION_KEY=<NEW_KEY>` and **clear** `TOKEN_ENCRYPTION_KEY_PREVIOUS=` (so a
 leaked old key can no longer decrypt anything), then restart `app worker beat`.
+
+**Re-escrow (Issue 255 — do not skip).** A rotated key makes the off-box escrow copies stale,
+so a disaster restore would recover the DB but not be able to decrypt it. Immediately update
+**both** escrow legs (GCP Secret Manager + password manager) with `<NEW_KEY>` and the new
+`/opt/autoclip/.env` snapshot. See **Disaster Recovery → (a) Key loss** below.
 
 ### Step 5 — Verify
 
@@ -553,3 +560,92 @@ database — use a separate encrypted document store or password manager).
 - EDPB guidelines on breach notification (WP250 rev.01)
 - docs/SUBPROCESSORS.md — vendor breach-notify chain and DPA details
 - docs/COMPLIANCE.md — data classes and retention policy
+
+---
+
+## Disaster Recovery (Issues 255–258)
+
+The live app runs on a single VM (`/opt/autoclip`, docker-compose) with one `postgres`
+container and R2 object storage. This section covers the four data-loss failure modes and
+their recovery paths. **`[DEC]` rationale: `docs/DECISIONS.md` 2026-06-27 (DR batch).**
+
+### One-time setup (operator — required to ACTIVATE these protections)
+
+These are the external steps that arm the tooling shipped in this batch:
+
+1. **Key escrow (Issue 255) — do this FIRST.** Copy three irreplaceable values off-box to
+   **two independent legs**: (1) a personal password manager (1Password/Bitwarden) and
+   (2) GCP Secret Manager:
+   - `TOKEN_ENCRYPTION_KEY` (Fernet — authenticated encryption, no recovery path if lost)
+   - `JWT_SECRET_KEY`
+   - a snapshot of `/opt/autoclip/.env`
+   ⚠️ **Never** commit these to git/CI logs, and **never** store them inside the DB backup
+   they protect (circular dependency). Re-escrow after every key rotation (see that runbook).
+2. **Backup bucket (Issue 256).** Create a **separate** R2 bucket `creatorclip-backups`
+   (distinct from the media `R2_BUCKET`). Set `BACKUP_R2_BUCKET`, `BACKUP_ENCRYPTION_KEY`
+   (a strong passphrase, escrowed off-box — NOT inside the backup) in the VM `.env` and as
+   GitHub Actions secrets. Install `awscli` on the VM.
+3. **R2 immutability (Issue 258).** On `creatorclip-backups` enable an **Object Lock in
+   Compliance mode** (≥14d) so a compromised VM credential cannot delete backups
+   (Governance mode is admin-overridable — do not use it). Add R2 **Lifecycle** rules:
+   `daily/` expires at `BACKUP_RETENTION_DAILY` days, `weekly/` at ~56d, `predeploy/` short.
+   On the **media** bucket: a short Object Lock on `clips/` and a lifecycle on `source/`
+   matching `SOURCE_MEDIA_RETENTION_HOURS`. Reconcile lock windows with right-to-erasure
+   (Issue 254).
+4. **Schedule (Issue 256).** Add the nightly cron on the VM:
+   ```
+   7 3 * * *  cd /opt/autoclip && ./scripts/backup_pg.sh >> /var/log/creatorclip-backup.log 2>&1
+   ```
+   Optionally set `BACKUP_HEALTHCHECK_URL` for dead-man's-switch alerting.
+
+### (a) Key loss — the encryption key is gone
+
+- **With escrow:** retrieve `TOKEN_ENCRYPTION_KEY` from either escrow leg, restore it to the
+  VM `.env`, restart `app worker beat`. Stored tokens decrypt normally.
+- **Without escrow (fallback):** the ciphertext in `youtube_tokens` is permanently
+  unrecoverable. Clear the affected token columns and **force every creator to re-OAuth**
+  (re-populates `youtube_tokens` under a new key). Billing/DNA/preference data is unaffected.
+
+### (b) Database loss — disk/volume gone
+
+1. Stand up a throwaway Postgres (or rebuild the VM `postgres` container).
+2. Pull the latest dump from R2 and decrypt+restore:
+   ```bash
+   AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY \
+     aws s3 cp s3://creatorclip-backups/daily/<OBJECT>.sql.gz.enc - \
+       --endpoint-url https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com \
+   | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:BACKUP_ENCRYPTION_KEY \
+   | gunzip \
+   | docker compose -f docker-compose.prod.yml exec -T postgres \
+       sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+   ```
+3. Restore `TOKEN_ENCRYPTION_KEY` from escrow (step a) — **the restore is useless without it.**
+
+#### Restore drill (quarterly — "an untested backup is not a backup")
+
+Run against a throwaway target, record the result + measured RTO:
+- [ ] `/health` returns `ok`
+- [ ] one creator's token `decrypt()`s with no `TokenDecryptError`
+- [ ] precious-table row counts match expectation (`preference_models`, `clip_outcomes`,
+      `creator_dna`, billing ledgers)
+- [ ] measured **RTO** recorded here: ________
+
+### (c) R2 data lost / wrongly deleted
+
+- **Within the Object Lock (Compliance) window:** the object was never deletable — restore by
+  re-fetching it; investigate the erroneous `delete_prefix` (`worker/storage.py`).
+- **Outside the window:** R2 has no GA versioning, so a deleted render is gone. Re-render from
+  source **only if** the source is still within its 72h retention; otherwise it is unrecoverable.
+
+### (d) Bad migration
+
+- A pre-migration dump is taken automatically before `alembic upgrade head` in both deploy
+  paths (Issue 257), under the `predeploy/` prefix. To roll back a bad schema change, restore
+  the most recent `predeploy/` dump using the procedure in **(b)**, then redeploy the prior
+  image (see the rollback note in `deploy.yml` / Issue 271).
+
+### Sources
+
+- PostgreSQL backup & restore: https://www.postgresql.org/docs/current/backup.html
+- Cloudflare R2 Object Lock: https://developers.cloudflare.com/r2/buckets/object-lock/
+- 3-2-1 backup rule (CISA): https://www.cisa.gov/

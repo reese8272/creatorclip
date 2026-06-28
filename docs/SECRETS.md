@@ -42,6 +42,27 @@ A given value may need to be set in more than one place. This is the second sour
 (production) and your local `.env` (dev), and is **never** put in a GitHub Actions secret unless CI
 itself needs it. Only the deploy/CI credentials (`VPS_*`, `GHCR_TOKEN`) live in GitHub secrets.
 
+### Off-box escrow of irreplaceable secrets (Issue 255)
+
+The VM `.env` at `/opt/autoclip/.env` (chmod `600`) is the **only** copy of several secrets on
+Earth. Two of them are *irreplaceable*: `TOKEN_ENCRYPTION_KEY` (Fernet — authenticated encryption,
+**no cryptographic recovery path** if lost: every `*_encrypted` token becomes permanently
+undecryptable, so even a perfect DB restore yields useless ciphertext) and `JWT_SECRET_KEY`. They
+**must** be escrowed off-box in **two independent locations**:
+
+1. A personal password manager (1Password / Bitwarden), and
+2. **GCP Secret Manager** (the chosen prod secrets backend — `docs/DEPLOYMENT.md`).
+
+Escrow the two keys **plus** a snapshot of the full `/opt/autoclip/.env`. Constraints:
+- Neither escrow copy may appear in git, any CI log, or any backup-tool log.
+- The DB backup encryption passphrase (`BACKUP_ENCRYPTION_KEY`) is escrowed the same way, and
+  **must not** be stored inside the backup it protects (circular dependency).
+- **Re-escrow after every key rotation** — the rotation runbook has a mandatory re-escrow step.
+
+Recovery procedure: see `docs/RUNBOOKS.md` → **Disaster Recovery → (a) Key loss** (restore from
+escrow, or the no-escrow fallback of forcing every creator to re-OAuth). `[DEC]` rationale:
+`docs/DECISIONS.md` 2026-06-27.
+
 ---
 
 ## 2. Application config & secrets (`.env`)

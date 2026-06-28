@@ -2996,7 +2996,7 @@ Key escrow, encrypted PG backup + restore drill, pre-migration dump, R2 durabili
 
 ### Issue 255: Off-box escrow of `TOKEN_ENCRYPTION_KEY` / `JWT_SECRET_KEY` / `.env`
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Disaster Recovery & Infra · **Size** `S` · **Verify** `external`  
+**Status** `OPEN — docs/runbooks complete; external escrow action pending` (2026-06-27: RUNBOOKS DR section + re-escrow step, SECRETS escrow doc, DECISIONS entry, doc-presence test shipped; copying the 3 secrets to 1Password + GCP Secret Manager is the remaining out-of-band step) · **Wave** W0 · **Lane** Disaster Recovery & Infra · **Size** `S` · **Verify** `external`  
 **Src** `10 / 175a` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/10_disaster_recovery_durability.md`  
 **Blocked by** nothing — **ready now** · **Enables** #256  
 
@@ -3028,7 +3028,7 @@ Key escrow, encrypted PG backup + restore drill, pre-migration dump, R2 durabili
 
 ### Issue 258: R2 durability hardening — Bucket Lock + lifecycle
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Disaster Recovery & Infra · **Size** `M` · **Verify** `external`  
+**Status** `OPEN — docs/decision complete; external R2 config pending` (2026-06-27: DECISIONS records R2 no-GA-versioning → Object Lock **Compliance mode**, COMPLIANCE + RUNBOOKS document the clips/ lock + source/ lifecycle + backup-bucket lock; applying the locks/lifecycle in the R2 dashboard is the remaining out-of-band step) · **Wave** W0 · **Lane** Disaster Recovery & Infra · **Size** `M` · **Verify** `external`  
 **Src** `10 / 175d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/10_disaster_recovery_durability.md`  
 **Blocked by** nothing — **ready now** · **Enables** #254, #293 · **Coordinate (hot files)** `worker/storage.py`  
 
@@ -3061,7 +3061,7 @@ Key escrow, encrypted PG backup + restore drill, pre-migration dump, R2 durabili
 
 ### Issue 256: Nightly encrypted Postgres backup to a separate R2 bucket + tested restore
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Disaster Recovery & Infra · **Size** `L` · **Verify** `staging`  
+**Status** `OPEN — code-complete; staging restore-drill + bucket/lock/cron pending` (2026-06-27: `scripts/backup_pg.sh`, config + `.env.example`, secret-hygiene + config tests, COMPLIANCE/RUNBOOKS/DECISIONS shipped; create `creatorclip-backups` bucket + Object Lock + cron + run the restore drill to close) · **Wave** W1 · **Lane** Disaster Recovery & Infra · **Size** `L` · **Verify** `staging`  
 **Src** `10 / 175b` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/10_disaster_recovery_durability.md`  
 **Blocked by** #255 · **Enables** #254, #257  
 
@@ -3120,7 +3120,7 @@ Key escrow, encrypted PG backup + restore drill, pre-migration dump, R2 durabili
 
 ### Issue 257: Pre-migration safety dump in the deploy pipeline
 
-**Status** `OPEN` · **Wave** W2 · **Lane** Disaster Recovery & Infra · **Size** `S` · **Verify** `staging`  
+**Status** `OPEN — code-complete; staging verify pending` (2026-06-27: gated pre-migration dump added to BOTH `deploy.yml` + `deploy.sh` reusing `backup_pg.sh` (predeploy/ prefix), `test_ci_config.py` extended to pin dump-before-migrate ordering; activates once Issue 256 backups are configured — staging deploy verify remains) · **Wave** W2 · **Lane** Disaster Recovery & Infra · **Size** `S` · **Verify** `staging`  
 **Src** `10 / 175c` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/10_disaster_recovery_durability.md`  
 **Blocked by** #256 · **Enables** #296 · **Coordinate (hot files)** `.github/workflows/deploy.yml`, `scripts/deploy.sh`  
 

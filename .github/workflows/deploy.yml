@@ -137,6 +137,24 @@ jobs:
       - name: Preflight check
         run: docker compose -f docker-compose.prod.yml run --rm app python scripts/doctor.py
 
+      - name: Pre-migration safety dump (Issue 257)
+        # Take an encrypted pg_dump BEFORE alembic so a bad/destructive migration has
+        # an undo (the billing ledgers + trained-taste tables are irreplaceable).
+        # Reuses scripts/backup_pg.sh (Issue 256) with a separate predeploy/ prefix.
+        # GATE: if backups ARE configured (BACKUP_R2_BUCKET set) a dump failure aborts
+        # the deploy before migrating; if backups are NOT yet configured (Issue 256 not
+        # activated) we skip with a loud warning rather than brick every deploy.
+        run: |
+          if grep -qE '^BACKUP_R2_BUCKET=.+' .env 2>/dev/null; then
+            echo "Taking pre-migration safety dump (predeploy/)..."
+            BACKUP_PREFIX=predeploy/ \
+            COMPOSE_FILE=/opt/autoclip/docker-compose.prod.yml \
+            ENV_FILE=/opt/autoclip/.env \
+            bash "${{ github.workspace }}/scripts/backup_pg.sh"
+          else
+            echo "::warning::No BACKUP_R2_BUCKET configured — skipping pre-migration dump (Issue 256 not yet activated). Migrating WITHOUT a safety dump."
+          fi
+
       - name: Run migrations
         run: docker compose -f docker-compose.prod.yml run --rm app alembic upgrade head
 

@@ -69,6 +69,39 @@ def test_docker_publish_triggers_deploy_workflow() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "path,migrate_marker",
+    [
+        (_WORKFLOWS / "deploy.yml", "alembic upgrade head"),
+        (_REPO_ROOT / "scripts" / "deploy.sh", "alembic upgrade head"),
+    ],
+)
+def test_pre_migration_dump_runs_before_alembic(path, migrate_marker) -> None:
+    """Both deploy paths must take a pg_dump (via backup_pg.sh, Issue 257) BEFORE
+    `alembic upgrade head`, so a bad migration has a restore point. They must stay
+    behavior-identical (the deploy.sh ⇄ deploy.yml mirror contract)."""
+    src = path.read_text()
+    assert "backup_pg.sh" in src, (
+        f"{path.name} must invoke scripts/backup_pg.sh for the pre-migration safety "
+        f"dump (Issue 257) — do not reimplement pg_dump logic."
+    )
+    assert "BACKUP_PREFIX=predeploy/" in src, (
+        f"{path.name} pre-migration dump must use the predeploy/ prefix so it is "
+        f"retained separately from the nightly dailies."
+    )
+    dump_at = src.index("backup_pg.sh")
+    migrate_at = src.index(migrate_marker)
+    assert dump_at < migrate_at, (
+        f"{path.name}: the backup_pg.sh dump must run BEFORE '{migrate_marker}', "
+        f"otherwise a bad migration has no restore point."
+    )
+    # The gate must hard-fail the deploy when backups ARE configured but the dump fails.
+    assert "BACKUP_R2_BUCKET=.+" in src, (
+        f"{path.name}: the dump must be gated on BACKUP_R2_BUCKET being configured "
+        f"(run-and-abort-on-failure when set; skip-with-warning when unset)."
+    )
+
+
 def test_notify_backend_is_console_in_test_env() -> None:
     """NOTIFY_BACKEND must default to 'console' so tests (and CI) never call Resend.
 

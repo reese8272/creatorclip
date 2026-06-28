@@ -96,7 +96,8 @@ the ToS would result in API access revocation, destroying the product.
 | Audience activity | day/hour activity windows | Refresh per YouTube policy | |
 | Demographics | Aggregated payload JSON | Refresh per YouTube policy | |
 | Source media | Raw video bytes | Purged `SOURCE_MEDIA_RETENTION_HOURS` (default 72h) after ingest completion (`videos.ingest_done_at`), not upload time — see Issue 43 | Never stored longer than needed for processing |
-| Rendered clips | 9:16 Short output | Until creator deletes | Stored in R2 |
+| Rendered clips | 9:16 Short output | Until creator deletes | Stored in R2 (media bucket). Delete-protected by a short R2 Object Lock window on `clips/` (Issue 258) reconciled with right-to-erasure (Issue 254). |
+| Encrypted DB backups (Issue 256) | Nightly encrypted `pg_dump` (the full Postgres slice — incl. creator emails + aggregated demographics, all as in-DB) stored in the **separate** `creatorclip-backups` R2 bucket | **`daily/` ≤ 14 days** (within the 30-day YouTube analytics-staleness ceiling for the analytics rows it carries); `weekly/` ~56d for the non-analytics precious slice; `predeploy/` short. Enforced by R2 Lifecycle rules. | PII-bearing → at-rest encrypted (openssl AES-256), Object Lock (Compliance mode) to resist deletion, separate bucket from media. OAuth tokens are carried as Fernet **ciphertext** (useless without the separately-escrowed key, Issue 255). **Right-to-erasure:** a creator's rows leave the live DB immediately on `DELETE /auth/me`; backups age out within the windows above (documented "beyond use" stance, coordinated with Issue 254). |
 | Transcripts | Word-level segments | Until video deleted | Derived from source; not YouTube-origin data |
 | Creator DNA | Pattern profiles, brief text | Until creator deletes | Creator-owned derivative data |
 | Feedback labels | upvote/downvote/skip/trim | Until creator deletes | Creator-owned |

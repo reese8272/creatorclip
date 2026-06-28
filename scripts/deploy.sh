@@ -15,6 +15,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST="147.182.136.107"
 USER="${VPS_USER:-root}"
 PORT="${VPS_PORT:-22}"
@@ -32,6 +33,13 @@ SSH_OPTS="-i $KEY -p $PORT -o StrictHostKeyChecking=no -o BatchMode=yes"
 echo "==> Copying compose file to server..."
 scp $SSH_OPTS "$COMPOSE_FILE" "${USER}@${HOST}:${REMOTE_DIR}/${COMPOSE_FILE}"
 
+# Ship the backup script so the pre-migration safety dump (Issue 257) can run on the
+# VM host (it calls `docker compose exec` + `aws`, so it must run on the host, not in
+# a container). Mirrors deploy.yml, where the self-hosted runner already has the repo.
+echo "==> Copying backup script to server..."
+ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p ${REMOTE_DIR}/scripts"
+scp $SSH_OPTS "${SCRIPT_DIR}/backup_pg.sh" "${USER}@${HOST}:${REMOTE_DIR}/scripts/backup_pg.sh"
+
 echo "==> Deploying..."
 # Pass GHCR_TOKEN via env so it never appears in the heredoc body (no shell history leakage).
 ssh $SSH_OPTS -o SendEnv=GHCR_TOKEN "${USER}@${HOST}" << 'REMOTE'
@@ -46,6 +54,20 @@ docker compose -f docker-compose.prod.yml pull
 
 echo "  Preflight check..."
 docker compose -f docker-compose.prod.yml run --rm app python scripts/doctor.py
+
+# Pre-migration safety dump (Issue 257) — mirrors deploy.yml. Take an encrypted
+# pg_dump BEFORE alembic so a bad migration has an undo. If backups are configured
+# a dump failure aborts the deploy (set -e); if not yet configured (Issue 256), skip
+# with a warning rather than block the deploy.
+if grep -qE '^BACKUP_R2_BUCKET=.+' .env 2>/dev/null; then
+  echo "  Taking pre-migration safety dump (predeploy/)..."
+  BACKUP_PREFIX=predeploy/ \
+  COMPOSE_FILE=/opt/autoclip/docker-compose.prod.yml \
+  ENV_FILE=/opt/autoclip/.env \
+  bash /opt/autoclip/scripts/backup_pg.sh
+else
+  echo "  WARNING: No BACKUP_R2_BUCKET configured — skipping pre-migration dump (Issue 256 not yet activated). Migrating WITHOUT a safety dump."
+fi
 
 echo "  Running migrations..."
 docker compose -f docker-compose.prod.yml run --rm app alembic upgrade head
