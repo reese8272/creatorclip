@@ -4,6 +4,38 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-28 — Pre-production assessment + Lane L21 edge-case hardening (Issues 327/328/331/332/338)
+
+**Branch** `claude/llm-rendering-video-assessment-81dy8o` (pushed to origin; **NOT merged to main, NOT deployed**).
+
+**Context.** A logic + observability assessment of the LLM / rendering / video-creation pipeline
+(`docs/assessment/LLM_RENDER_VIDEO_ASSESSMENT.md`), which seeded a whole-project **edge-case test
+backlog** — Lane **L21** (`docs/issues_edge_case_hardening.md`, Issues **327–340**), cross-referenced
+against the existing `tests/*.py` so every item is a genuine gap. Five W0/`local` foundational issues
+were then built; each surfaced + fixed a real latent defect.
+
+**Shipped (each = real fix + regression tests):**
+- **#327** — malformed-geometry validation at the signal-build boundary (`ingestion/signals.py` drops
+  inverted/negative/non-finite/out-of-bounds events with a WARNING + count; `window.py` `i1<=i0` guard).
+- **#332** — Prometheus `record_llm_metric` dual-shape adapter wired into the 10 LLM modules that wrote
+  the billing ledger but never incremented `llm_tokens_total` (cost-by-feature dashboard was blind).
+- **#331** — `warn_if_truncated` surfaces `stop_reason=="max_tokens"`; wired into the streaming wrapper
+  (all streaming callers + chat) + every non-streaming `.create()` JSON site.
+- **#328** — `ranking._safe_score` (NaN/garbage → −inf, deterministic rank) + non-finite rerank guard;
+  `candidates.py` DEBUG breadcrumb.
+- **#338** — `predict_score` positive-class-column selection (single-class model no longer `IndexError`s);
+  `clip_features` NaN/inf `dna_match` → 0.0; `config.py` fail-fast validators for
+  `DECAY_HALF_LIFE_DAYS`/`PERSONALIZATION_THRESHOLD_LABELS`/`PREFERENCE_WEIGHT_CAP`.
+
+**Gates.** Full unit lane **1735 passed** (+34 new), ruff + mypy clean on all touched files. The single
+failure is the pre-existing `deepgram`-SDK-not-installed env gap already in `docs/OFF_COURSE_BUGS.md`.
+
+**Remaining in L21** (not started): #330 (`local`), #334 (`local`+render-env), #335/#336/#337/#339/#340
+(mostly `integration` — need real PG/Redis). #336 carries two confirmable suspected defects
+(`generate_clips` RefundOnFailureTask, ingest WAV-integrity short-circuit).
+
+---
+
 ## 2026-06-28 — Clips auto-render on generation (fixes "nothing ever renders")
 
 **Root cause of the reported bug.** A user's Review screen showed a clip stuck at "Not yet
