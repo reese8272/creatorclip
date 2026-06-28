@@ -5745,6 +5745,17 @@ as an expandable "Why this clip" explanation. Reuse the cached DNA prefix.
 
 ---
 
+## Lane L21 — Edge-Case Hardening (pre-production test sweep)
+
+Whole-project edge-case **test** backlog (Issues **327–340**) to maximize coverage before launch and
+flush out latent defects. Cross-referenced against the existing `tests/*.py` so every item is a genuine
+gap. Full lane (per-issue ACs + the systemic malformed-geometry finding + the suspected-defect table)
+lives in **`docs/issues_edge_case_hardening.md`**; findings folded in from
+`docs/assessment/LLM_RENDER_VIDEO_ASSESSMENT.md`. W0/`local` issues (327–333, 338, 340-unit) are
+startable on the dev box today; the rest need staging/render-env/recorded fixtures.
+
+---
+
 *Generated 2026-06-22 from `docs/research/findings/` + source-verified extraction of every open issue
 + a six-dimension production-gap research pass. Prior priority-tier backlog archived at
 `docs/archive/issues_pre_roadmap_2026-06-22.md`; finished work at `docs/archive/issues_snapshot_2026-06-22.md`.*
