@@ -696,6 +696,34 @@ class ClipOutcome(Base):
     clip: Mapped["Clip"] = relationship("Clip", back_populates="outcome")
 
 
+class ClipImpression(Base):
+    """Per-creator impression/position log (Issue 202).
+
+    Records what RANK each clip was shown at, and WHEN, every time a creator's clip
+    list is served. This is the position record that counterfactual/IPS evaluation
+    needs; capturing it now is cheap insurance — it cannot be reconstructed later.
+
+    No PII, no YouTube-origin data — only internal ids, an integer rank, and a
+    timestamp. Per-creator isolation is enforced by the ``tenant_isolation`` RLS
+    policy on ``creator_id`` (migration 0037); the FK cascade purges rows on account
+    deletion (right-to-erasure).
+    """
+
+    __tablename__ = "clip_impressions"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    clip_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("clips.id", ondelete="CASCADE"), nullable=False
+    )
+    rank: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    shown_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class ClipPublication(Base):
     """A YouTube publish attempt or scheduled publication for a clip (Issues 195/196).
 

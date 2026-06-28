@@ -28,6 +28,7 @@ from models import (
     ChatRole,
     Clip,
     ClipFeedback,
+    ClipFormat,
     ClipOutcome,
     ClipPublication,
     Creator,
@@ -1744,12 +1745,34 @@ async def _sweep_scheduled_publications_async() -> None:
             await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
 
 
+# Minimum number of comparable published Shorts before we'll judge performed_well.
+# Below this the format-matched median is too noisy to trust, so we defer the judgment
+# (leave performed_well=None) rather than mislabel — honest "not enough data yet". (Issue 201)
+_MIN_COMPARABLE_SHORTS = 3
+
+
+def _shorts_baseline_median(shorts_views: list[int]) -> float | None:
+    """Format-matched baseline for `performed_well` (Issue 201): the median of the
+    creator's published SHORT view counts (Shorts-vs-Shorts).
+
+    Returns None when fewer than `_MIN_COMPARABLE_SHORTS` comparable Shorts exist — an
+    honest "can't judge yet" instead of comparing a Short against a 1–2 sample median or
+    (the original bug) the full-video VideoMetrics.views median, which sits on a wildly
+    different view scale and marked nearly every Short performed_well=False.
+    """
+    if len(shorts_views) < _MIN_COMPARABLE_SHORTS:
+        return None
+    import statistics
+
+    return statistics.median(shorts_views)
+
+
 async def _poll_clip_outcomes_async() -> None:
     """
     Find published clips past the 48h or 7d checkpoints, fetch their YouTube stats,
-    and set performed_well = views >= channel_median_views for that creator.
+    and set performed_well = views >= median of the creator's COMPARABLE published Shorts
+    (format-matched — Issue 201; not the full-video view median).
     """
-    import statistics
     from collections import defaultdict
     from datetime import datetime, timedelta
 
@@ -1812,18 +1835,15 @@ async def _poll_clip_outcomes_async() -> None:
                     logger.warning("Cannot get token for creator %s: %s", creator_id, exc)
                     continue
 
-                views_result = await session.execute(
-                    select(VideoMetrics.views)
-                    .join(Video, Video.id == VideoMetrics.video_id)
-                    .where(Video.creator_id == creator_id, VideoMetrics.views.isnot(None))
-                )
-                all_views = [r[0] for r in views_result.all()]
-                channel_median = statistics.median(all_views) if all_views else 0
+                # Whether each row qualified via the 7d (terminal) checkpoint — captured
+                # BEFORE we overwrite fetched_at. (Issue 70)
+                terminal = {o.clip_id: o.fetched_at < cutoff_7d for o in outcomes}
 
+                # Pass 1 — fetch + record views for this creator's due outcomes. We set
+                # views first so the comparable-Shorts baseline below can include this
+                # batch (autoflush makes the updates visible to the next SELECT).
+                fetched: list[ClipOutcome] = []
                 for outcome in outcomes:
-                    # Whether this row qualified via the 7d (terminal) checkpoint —
-                    # captured BEFORE we overwrite fetched_at. (Issue 70)
-                    is_terminal_poll = outcome.fetched_at < cutoff_7d
                     try:
                         stats = await get_video_stats(access_token, outcome.published_youtube_id)
                     except Exception as exc:
@@ -1837,17 +1857,41 @@ async def _poll_clip_outcomes_async() -> None:
                     views = stats.get("views")
                     if views is not None:
                         outcome.views = views
-                        outcome.performed_well = views >= channel_median
+                    fetched.append(outcome)
+
+                # Comparable-unit baseline (Issue 201): median over the creator's published
+                # SHORT outcome views — Shorts-vs-Shorts — NOT the full-video VideoMetrics
+                # median (wrong unit). Includes this batch's freshly-set views via autoflush.
+                shorts_views_result = await session.execute(
+                    select(ClipOutcome.views)
+                    .join(Clip, Clip.id == ClipOutcome.clip_id)
+                    .where(
+                        Clip.creator_id == creator_id,
+                        Clip.format == ClipFormat.short,
+                        ClipOutcome.views.isnot(None),
+                    )
+                )
+                shorts_views = [r[0] for r in shorts_views_result.all()]
+                channel_median = _shorts_baseline_median(shorts_views)
+
+                # Pass 2 — judge + finalize. Below the comparable-Shorts floor we DEFER
+                # the verdict (leave performed_well as-is/None) rather than mislabel.
+                for outcome in fetched:
+                    if outcome.views is not None and channel_median is not None:
+                        outcome.performed_well = outcome.views >= channel_median
                     outcome.fetched_at = now
-                    if is_terminal_poll:
+                    if terminal[outcome.clip_id]:
                         # 7d checkpoint recorded — never poll this outcome again.
                         outcome.final = True
                     logger.info(
-                        "ClipOutcome clip=%s views=%s performed_well=%s final=%s",
+                        "ClipOutcome clip=%s views=%s performed_well=%s final=%s "
+                        "(comparable_shorts=%d, baseline=%s)",
                         outcome.clip_id,
-                        views,
+                        outcome.views,
                         outcome.performed_well,
                         outcome.final,
+                        len(shorts_views),
+                        channel_median,
                     )
 
                 # Commit per creator so a slow YouTube call can't hold one transaction

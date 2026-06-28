@@ -1152,7 +1152,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 201: `performed_well` baseline-unit fix (Shorts vs long-form)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `staging`  
+**Status** `OPEN — code-complete & core locally verified; staging measurement pending` (2026-06-27: baseline now the median of the creator's published **Shorts** (format-matched, `Clip.format==short`), not the full-video `VideoMetrics.views` median; sparse case (`<3` comparable Shorts) defers the verdict via pure helper `_shorts_baseline_median` [3 unit tests]; the 3× recency-aware outcome_multiplier kept over hard dominance — both recorded in DECISIONS. **Remaining (staging):** before/after label-bias measurement via the #198 harness on real data) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `staging`  
 **Src** `08 / 173e` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** #198 · **Coordinate (hot files)** `preference/decay.py`, `tests/test_preference.py`, `worker/tasks.py`  
 
@@ -1188,7 +1188,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 202: Continuous eval — impression/position logging + standing report
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `L` · **Verify** `staging`  
+**Status** `OPEN — impression log complete; standing-report emission deferred` (2026-06-27: `ClipImpression` model + migration 0037 (RLS `tenant_isolation`, indexed) + best-effort write in `list_clips` (never breaks the read path); integration test asserts field capture + cross-tenant isolation; DECISIONS + COMPLIANCE updated. **Remaining (staging + #265):** the per-retrain pooled-NDCG@5 emission + regression ratchet — deferred to when the #198 harness runs on staging and #265's ratchet mechanics exist) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `L` · **Verify** `staging`  
 **Src** `08 / 173f` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** #198 · **Coordinate (hot files)** Alembic revision chain, `routers/clips.py`, `tests/eval/efficacy.py`, `worker/tasks.py`  
 

@@ -20,9 +20,9 @@ from billing.ledger import check_balance_for_minutes, check_positive_balance, vi
 from config import settings
 from db import get_session
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
-from observability import record_llm_tokens
 from models import (
     Clip,
+    ClipImpression,
     Creator,
     CreatorStyle,
     IngestStatus,
@@ -32,6 +32,7 @@ from models import (
     Video,
     VideoKind,
 )
+from observability import record_llm_tokens
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
 from worker.storage import presigned_download_url, upload_file
 from youtube.data_api import classify_video_kind
@@ -308,6 +309,32 @@ async def list_clips(
         .limit(_LIST_LIMIT)
     )
     clips = list(result.scalars())
+
+    # Impression/position log (Issue 202): record what rank each clip was shown at,
+    # and when, so later counterfactual/IPS evaluation is possible (it cannot be
+    # reconstructed retroactively). Best-effort — a logging failure must never break
+    # the listing. Per-creator isolation holds (creator_id stamped; RLS-gated table).
+    if clips:
+        from datetime import UTC, datetime
+
+        shown_at = datetime.now(UTC)
+        try:
+            session.add_all(
+                [
+                    ClipImpression(
+                        creator_id=creator.id,
+                        clip_id=c.id,
+                        rank=c.rank if c.rank is not None else 0,
+                        shown_at=shown_at,
+                    )
+                    for c in clips
+                ]
+            )
+            await session.commit()
+        except Exception:  # noqa: BLE001 — telemetry must never break the read path
+            await session.rollback()
+            logger.warning("impression logging failed for video %s", video_id)
+
     items = [_clip_response(c) for c in clips]
     state = build_envelope_state(len(items))
     message: str | None = None

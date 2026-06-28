@@ -5,6 +5,53 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-27 — performed_well baseline unit + impression/position log (Issues 201, 202)
+
+**What changed.**
+
+**[DEC #201] `performed_well` is now judged against COMPARABLE Shorts, not the full-video
+view median.** The strongest training label was miscalibrated: `_poll_clip_outcomes_async`
+compared a published **Short's** views against the median of the creator's **full-length**
+`VideoMetrics.views` — wildly different view scales, so nearly every Short was marked
+`performed_well=False`, injecting a systematic negative bias into the highest-weighted label.
+Fix: the baseline is the median of the creator's published **Short** outcome views
+(`Clip.format == short`, format-matched), computed via a pure helper `_shorts_baseline_median`.
+**Sparse-case handling:** below `_MIN_COMPARABLE_SHORTS = 3` comparable Shorts the helper returns
+None and the poll **defers** the verdict (leaves `performed_well = None`) rather than judging
+against a 1–2 sample median — an honest "not enough data yet" instead of a mislabel.
+
+**[DEC #201] Outcome weight stays the recency-aware 3× multiplier — NOT hard dominance.** The
+issue asked whether a published-clip outcome must *always* outweigh any explicit vote (Issue 13's
+"strongest label" intent) vs the current `recency_weight × 3.0`. **Resolved: keep the 3×
+multiplier.** Hard dominance would let a stale outcome-positive permanently outweigh fresh
+explicit feedback, directly fighting the recency-decay design (Issue 200) — the whole point of
+which is that recent signal wins. A recent outcome already dominates (≈3× a same-day vote); a
+stale one correctly decays like everything else. The previously-undocumented 3× choice is now on
+the record.
+
+**[DEC #202] Impression/position log (`clip_impressions`) — cheap insurance for IPS eval.** We
+stored each clip's final rank but never logged what ORDER the creator actually saw, with
+timestamps — the record counterfactual/IPS evaluation (deferred to v2 per the Issue-198 decision)
+requires and which cannot be reconstructed retroactively. New RLS-gated table (creator_id, clip_id,
+rank, shown_at; migration 0037) written **best-effort** at serve time in `list_clips` (a logging
+failure never breaks the read path). **Retention/privacy posture:** no PII and no YouTube-origin
+data — only internal ids, an integer rank, and a timestamp; the `creator_id` FK cascades on account
+deletion (right-to-erasure); a rolling-purge (à la event_logs 90-day) can be added later if volume
+warrants. **Scope:** the impression LOG (the data capture) is landed; the standing-report emission
+(pooled NDCG@5 per retrain + regression ratchet) is deferred to when the Issue-198 harness runs on
+staging and Issue 265's ratchet mechanics exist — do not duplicate that here.
+
+**Why.** The strongest label feeding the preference model was systematically wrong (#201), and
+without impression logging now, position-debiased evaluation is impossible later (#202).
+
+**Source / evidence.** `worker/tasks.py::_poll_clip_outcomes_async` (the full-video median bug);
+`preference/decay.py::sample_weight` (the 3× multiplier); the RLS pattern mirrors migration
+0010/0026. Cross-ref `docs/research/findings/08_personalization_efficacy_eval.md`.
+
+**Date:** 2026-06-27
+
+---
+
 ## 2026-06-27 — Personalization efficacy: offline ranking-eval methodology + recency-decay parameterization (Issues 198, 200)
 
 **What changed.** Built the offline efficacy harness (Issue 198) that turns "tests pass" into
