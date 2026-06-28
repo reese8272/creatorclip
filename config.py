@@ -314,6 +314,15 @@ class Settings(BaseSettings):
     REFRAME_SAMPLE_FPS: float = 5.0
 
     CLIPS_PER_VIDEO_DEFAULT: int = 8
+    # Auto-render generated clips the moment clip generation finishes, so the
+    # Review queue is watch-ready with zero manual steps (the upload already
+    # consented to — and was charged — the minutes; render adds no extra spend).
+    # When False, clips stay pending until the creator triggers a render. (auto-render)
+    AUTO_RENDER_CLIPS: bool = True
+    # Cap on how many of the ranked clips auto-render per video. 0 = all
+    # generated candidates (≤ CLIPS_PER_VIDEO_DEFAULT). Set >0 to render only
+    # the top-N highest-fit clips immediately and leave the rest on demand.
+    AUTO_RENDER_TOP_N: int = 0
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
     # YouTube raised the Shorts maximum to 180s in October 2024

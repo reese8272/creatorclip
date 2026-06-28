@@ -203,7 +203,9 @@ def ingest_video(self, video_id: str) -> str:
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
         raise
     except Exception as exc:
-        run_async(_set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest")))
+        run_async(
+            _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest"))
+        )
         raise self.retry(exc=exc) from exc
     log_event(
         "ingest_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
@@ -758,9 +760,7 @@ async def _creator_id_for_clip(clip_id: str) -> str | None:
         return None
 
 
-async def _set_status(
-    video_id: str, status: IngestStatus, *, reason: str | None = None
-) -> None:
+async def _set_status(video_id: str, status: IngestStatus, *, reason: str | None = None) -> None:
     async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
@@ -1909,6 +1909,22 @@ async def _poll_clip_outcomes_async() -> None:
             )
 
 
+async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
+    """Return the creator's saved brand-kit render style, or ``{}`` if none.
+
+    Used to seed auto-rendered clips (auto-render) so captions / aspect / background
+    match the creator's chosen style without a manual pick. Mirrors the brand-kit
+    read in ``routers/clips.py::render_clip``; a copy is returned so the caller can
+    assign it onto a clip without aliasing the ORM-tracked ``CreatorStyle.style``.
+    """
+    from sqlalchemy import select
+
+    from models import CreatorStyle
+
+    row = await session.scalar(select(CreatorStyle).where(CreatorStyle.creator_id == creator_id))
+    return dict(row.style) if row and isinstance(row.style, dict) else {}
+
+
 async def _generate_clips_async(video_id: str) -> None:
     """Generate ranked clip candidates for a fully-ingested video.
 
@@ -1936,6 +1952,10 @@ async def _generate_clips_async(video_id: str) -> None:
         clip_creator_id: uuid.UUID | None = None
         clip_video_title: str | None = None
         clip_creator_name: str | None = None
+        # Clip ids to auto-render once generation commits (auto-render). Captured
+        # inside the session so post-commit attribute expiry can't trigger a lazy
+        # refresh after it closes; the actual enqueue happens after the session.
+        auto_render_clip_ids: list[str] = []
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, video_uuid)
@@ -2000,6 +2020,35 @@ async def _generate_clips_async(video_id: str) -> None:
 
             logger.info("Generated %d clips for video %s", len(clips), video_id)
 
+            # Auto-render (auto-render): uploading the video already consented to —
+            # and was charged — the minutes (deduct_for_video at ingest), so the
+            # Review queue should be watch-ready with zero manual steps. Seed each
+            # clip's render style from the creator's saved brand kit, then enqueue a
+            # render below. render_clip is idempotent (skips clips already done) and
+            # charges no additional minutes. AUTO_RENDER_TOP_N caps how many of the
+            # ranked clips render immediately (0 = all generated candidates).
+            if settings.AUTO_RENDER_CLIPS and clips:
+                kit_style = await _brand_kit_style(session, video.creator_id)
+                top_n = settings.AUTO_RENDER_TOP_N
+                # Only sort when we actually cap — the default (render all) path
+                # renders every clip regardless of order, so skip the sort.
+                if top_n and top_n > 0:
+                    ordered = sorted(
+                        clips, key=lambda c: c.rank if c.rank is not None else 1_000_000
+                    )[:top_n]
+                else:
+                    ordered = clips
+                seeded = False
+                for clip in ordered:
+                    # Never clobber a style the creator already chose — only seed
+                    # when the clip has no preset yet.
+                    if kit_style and not clip.style_preset:
+                        clip.style_preset = kit_style
+                        seeded = True
+                    auto_render_clip_ids.append(str(clip.id))
+                if seeded:
+                    await session.commit()
+
         # Terminal event — the upload-to-clips pipeline is now done.
         # Sets TTL on the stream so a creator who comes back later can still see it.
         await aemit(
@@ -2009,6 +2058,29 @@ async def _generate_clips_async(video_id: str) -> None:
             message=f"Generated {len(clips)} clip(s).",
             clip_count=len(clips),
         )
+
+        # Enqueue auto-renders AFTER the session commits + the terminal `done`
+        # fires. Commit-before-enqueue (same posture as sweep_scheduled_publications)
+        # so the seeded style writes persist even if the broker is briefly down. An
+        # enqueue failure is logged, never raised — it must not fail clip generation
+        # or trigger a refund; the creator can still render on demand from Review.
+        for clip_id in auto_render_clip_ids:
+            try:
+                render_clip.delay(clip_id)
+            except Exception as enqueue_exc:  # noqa: BLE001 — best-effort enqueue
+                logger.warning(
+                    "auto-render enqueue failed video=%s clip=%s err=%s",
+                    video_id,
+                    clip_id,
+                    type(enqueue_exc).__name__,
+                )
+        if auto_render_clip_ids:
+            log_event(
+                "auto_render_enqueued",
+                creator_id=str(clip_creator_id) if clip_creator_id else None,
+                video_id=video_id,
+                count=len(auto_render_clip_ids),
+            )
 
         # Trigger 1: clips-ready notification (Issue 244 / delivers #193).
         # entity_id = video_id so dedupe prevents duplicate notifications on retry.
@@ -2347,9 +2419,7 @@ async def _run_lifecycle_scan_async() -> None:
         nudge_cutoff = now - timedelta(days=settings.LIFECYCLE_NUDGE_AFTER_DAYS)
         has_video = exists().where(Video.creator_id == Creator.id)
         nudge_rows = await session.execute(
-            select(Creator.id)
-            .where(Creator.created_at <= nudge_cutoff)
-            .where(~has_video)
+            select(Creator.id).where(Creator.created_at <= nudge_cutoff).where(~has_video)
         )
         for (cid,) in nudge_rows.all():
             if await _lifecycle_capped(session, cid, now):
@@ -2373,8 +2443,7 @@ async def _run_lifecycle_scan_async() -> None:
         period_window = now.toordinal() // settings.LIFECYCLE_INACTIVITY_DAYS
         period_bucket = f"reengage-{period_window}"
         recent_feedback = exists().where(
-            (ClipFeedback.creator_id == Creator.id)
-            & (ClipFeedback.created_at >= inactivity_cutoff)
+            (ClipFeedback.creator_id == Creator.id) & (ClipFeedback.created_at >= inactivity_cutoff)
         )
         reengage_rows = await session.execute(
             select(Creator.id)
@@ -2611,9 +2680,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 # 300-unit/day allowance mid-onboarding. charge_sub_budget=False keeps
                 # only the global daily cap in force on this path (Issue 260).
                 await _emit("step", label="fetch_uploads", stage="catalog_sync")
-                await sync_video_catalog(
-                    session, creator, access_token, charge_sub_budget=False
-                )
+                await sync_video_catalog(session, creator, access_token, charge_sub_budget=False)
                 await session.commit()
 
                 # Phase 2 — fetch metrics for any video that doesn't have them yet.
@@ -4314,9 +4381,7 @@ async def _send_notification_async(
             if is_lifecycle:
                 from config import settings as _settings
 
-                unsub_url = (
-                    f"{_settings.APP_BASE_URL}/unsubscribe/{prefs.unsubscribe_token}"
-                )
+                unsub_url = f"{_settings.APP_BASE_URL}/unsubscribe/{prefs.unsubscribe_token}"
                 email_headers = {
                     "List-Unsubscribe": f"<{unsub_url}>",
                     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",

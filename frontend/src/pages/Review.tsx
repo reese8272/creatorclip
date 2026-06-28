@@ -115,6 +115,16 @@ export function Review() {
     queryKey: ['review-clips', videoId],
     queryFn: () => api<ReviewClipListResponse>(`/videos/${videoId}/clips`),
     enabled: !!videoId,
+    // Auto-render runs in the background after clip generation; poll while any
+    // clip is still queued/rendering so the player swaps from "Rendering…" to the
+    // playable video without a manual refresh. Stops polling once all are settled.
+    refetchInterval: (query) => {
+      const clips = query.state.data?.clips ?? []
+      const inFlight = clips.some(
+        (c) => c.render_status === 'pending' || c.render_status === 'running',
+      )
+      return inFlight ? 4000 : false
+    },
   })
 
   const clips = data?.clips ?? []
