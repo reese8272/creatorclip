@@ -207,6 +207,15 @@ def generate_clip_title_suggestions(
     transcript_excerpt = clip_transcript[:_TRANSCRIPT_MAX_CHARS]
     system, messages = _build_request(channel_title, dna_brief, transcript_excerpt)
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "clip_title_suggestions",
+        model=settings.ANTHROPIC_MODEL_CLIP_TITLES,
+        max_tokens=1024,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_CLIP_TITLES,
@@ -217,6 +226,7 @@ def generate_clip_title_suggestions(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("clip_title_suggestions LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("clip_title_suggestions", response=response)
 
     usage_dict = {
         "input_tokens": response.usage.input_tokens,

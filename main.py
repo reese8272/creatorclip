@@ -56,7 +56,10 @@ from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
 configure_logging(
-    json_logs=settings.LOG_JSON, level=settings.log_level_int, log_dir=settings.LOG_DIR
+    json_logs=settings.LOG_JSON,
+    level=settings.log_level_int,
+    log_dir=settings.LOG_DIR,
+    verbose=settings.verbose_logging_enabled,
 )
 init_sentry(
     dsn=settings.SENTRY_DSN,

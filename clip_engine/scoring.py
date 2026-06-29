@@ -295,6 +295,15 @@ async def score_candidates(
     if prefix_clears_floor:
         dna_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "clip_scoring",
+        model=settings.ANTHROPIC_MODEL_SCORING,
+        max_tokens=1200,
+        system=[{"type": "text", "text": static_text}, dna_block],
+        messages=[{"role": "user", "content": user_text}],
+    )
     try:
         response = await _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_SCORING,
@@ -306,8 +315,11 @@ async def score_candidates(
             messages=[{"role": "user", "content": user_text}],
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("clip_scoring LLM error creator=%s exc_type=%s", creator_id, type(exc).__name__)
+        logger.error(
+            "clip_scoring LLM error creator=%s exc_type=%s", creator_id, type(exc).__name__
+        )
         raise
+    vlog_llm_response("clip_scoring", response=response)
 
     # anthropic>=0.105 exposes per-TTL cache-write tiers on usage.cache_creation;
     # cached_write_1h lets us confirm the ttl:"1h" breakpoint actually lands in

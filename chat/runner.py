@@ -89,7 +89,19 @@ async def run_chat_turn(
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
             logger.error(
                 "chat_turn LLM error creator=%s round=%d exc_type=%s",
-                creator_id, i, type(exc).__name__,
+                creator_id,
+                i,
+                type(exc).__name__,
+            )
+            from verbose import vlog
+
+            vlog(
+                "chat_turn_error",
+                creator_id=str(creator_id),
+                task_id=task_id,
+                round=i,
+                exc_type=type(exc).__name__,
+                error=repr(exc),
             )
             raise
         for k in total:

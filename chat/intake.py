@@ -184,7 +184,18 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
 
     # At most one validation-correction round, so a bad propose_profile can
     # self-correct once without looping.
+    from verbose import vlog_llm_request, vlog_llm_response
+
     for attempt in range(2):
+        vlog_llm_request(
+            "intake_turn",
+            model=settings.ANTHROPIC_MODEL_INTAKE,
+            max_tokens=settings.CHAT_MAX_TOKENS,
+            system=system,
+            messages=messages,
+            tools=tools,
+            attempt=attempt,
+        )
         try:
             message = await _ANTHROPIC.messages.create(
                 model=settings.ANTHROPIC_MODEL_INTAKE,
@@ -196,9 +207,11 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
             logger.error(
                 "intake_turn LLM error creator=%s exc_type=%s",
-                creator_id, type(exc).__name__,
+                creator_id,
+                type(exc).__name__,
             )
             raise
+        vlog_llm_response("intake_turn", response=message)
         usage = getattr(message, "usage", None)
         total_in += getattr(usage, "input_tokens", 0) or 0
         total_out += getattr(usage, "output_tokens", 0) or 0
