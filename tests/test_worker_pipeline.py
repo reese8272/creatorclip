@@ -291,6 +291,56 @@ async def test_render_clip_async_retried_does_not_duplicate(db_session):
         await _cleanup_creator(db_session, creator.id)
 
 
+@pytest.mark.asyncio
+async def test_render_video_clips_downloads_source_once(db_session):
+    """The batch render fetches the source from R2 exactly ONCE for N clips and
+    renders them all to done — the redundant per-clip download is gone."""
+    from worker.tasks import _render_video_clips_async
+
+    creator = await _seed_creator(db_session, sub_prefix="batchrender")
+    video = await _seed_video(db_session, creator_id=creator.id, duration_s=300.0)
+    clip_a = await _seed_clip(
+        db_session, video_id=video.id, creator_id=creator.id, start_s=10.0, end_s=50.0
+    )
+    clip_b = await _seed_clip(
+        db_session, video_id=video.id, creator_id=creator.id, start_s=60.0, end_s=100.0
+    )
+
+    download_calls = 0
+
+    @asynccontextmanager
+    async def _counting_local_path(_source_uri):
+        nonlocal download_calls
+        download_calls += 1
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
+            yield Path(tmp.name)
+
+    try:
+        with (
+            patch("worker.storage.alocal_path", _counting_local_path),
+            patch("clip_engine.render.render_clip_file", side_effect=lambda *_a, **_k: None),
+            patch("worker.storage.upload_file", side_effect=lambda _p, key: f"s3://test/{key}"),
+        ):
+            await _render_video_clips_async(str(video.id), [str(clip_a.id), str(clip_b.id)])
+
+        # The whole point of the batch task: one source download, two clips.
+        assert download_calls == 1
+
+        engine = create_async_engine(settings.DATABASE_URL)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            clips = (
+                (await s.execute(select(Clip).where(Clip.video_id == video.id))).scalars().all()
+            )
+        await engine.dispose()
+
+        assert len(clips) == 2
+        assert {c.render_status for c in clips} == {RenderStatus.done}
+        assert all(c.render_uri for c in clips)
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
 # ── AC3: generate_clips retry after partial success preserves done ────────────
 
 
