@@ -5,6 +5,44 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-29 — Auto-render downloads the source ONCE per video (batch render task)
+
+**What changed.** The auto-render path no longer enqueues N independent `render_clip` jobs (one
+per generated clip). `_generate_clips_async` now enqueues a single `render_video_clips(video_id,
+clip_ids)` task that downloads the source from R2 **once** and reuses that one local file across
+every clip's encode. `_render_clip_async` was refactored into `_load_clip_render_plan` (lock +
+done-check + snapshot, unchanged idempotency/`with_for_update` semantics) and `_encode_and_upload_clip`
+(ffmpeg + upload from an already-local source); it gained an optional `src` arg so the batch passes
+the shared download. The manual `POST /clips/{id}/render` endpoint is unchanged — it still uses the
+single-clip `render_clip` task (one clip → one download, no redundancy to remove there).
+
+**Why.** Each `render_clip` call re-downloaded the **entire** source video via `alocal_path`
+(`worker/storage.py`, no cache) before ffmpeg. A video that generates N clips therefore pulled the
+full source from R2 N times — the dominant, avoidable cost for multi-clip videos and a direct cause
+of the owner-reported "clips take a while to render" on the Render beta (worker is `--concurrency=2`
+on the `starter` plan, so those redundant downloads serialize behind the encodes). Downloading once
+per video removes (N−1) full-source transfers with no change to billing (minutes are still deducted
+once at ingest; rendering charges nothing).
+
+**Per-clip failure isolation.** A permanent per-clip error (`ValueError`/`FileNotFoundError`) marks
+that clip `failed` and continues the batch; a transient per-clip error re-enqueues the single-clip
+`render_clip` so its existing backoff/retry path applies — neither aborts the batch nor re-downloads
+the shared source for siblings. A failure to obtain the source itself propagates to the task wrapper,
+which classifies it the same way `render_clip` does (missing source = terminal; transient = retry the
+whole batch, with the per-clip done-check skipping any already rendered).
+
+**Industry standard checked.** Fetch-source-once / fan-out-derivatives is the standard pattern for
+media transform pipelines (one asset download → many renditions); per-rendition re-fetch of the
+master is the anti-pattern. **Alternatives ruled out:** a shared on-disk source cache keyed by URI
+(needs a cross-task lock + TTL/size eviction, and risks filling the small `starter` ephemeral disk);
+left as a future option if manual single-clip renders ever batch.
+
+**Evidence.** New integration test `test_render_video_clips_downloads_source_once`
+(`tests/test_worker_pipeline.py`) asserts exactly one `alocal_path` call for two clips and both reach
+`done`; auto-render wiring tests updated to assert the single batch enqueue.
+
+---
+
 ## 2026-06-29 — Full-content verbose logging sink (pre-prod debugging, hard-gated off in prod)
 
 **What changed.** Added an opt-in `VERBOSE_LOGGING` flag and a dedicated `verbose` logger

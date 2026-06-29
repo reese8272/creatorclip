@@ -203,8 +203,9 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
         "clip_engine.ranking.generate_and_rank_clips",
         AsyncMock(return_value=fake_clips),
     )
-    # Auto-render (auto-render): the success path now enqueues a render per clip.
-    delay_mock = mocker.patch("worker.tasks.render_clip.delay")
+    # Auto-render (auto-render): the success path enqueues ONE batch task that
+    # renders every clip from a single source download.
+    delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
 
     await tasks._generate_clips_async(video_id)
 
@@ -225,9 +226,10 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     done_calls = [c for c in fake_emit.call_args_list if c.args[1] == "done"]
     assert len(done_calls) == 1
     assert done_calls[0].kwargs.get("clip_count") == 3
-    # One auto-render enqueued per generated clip, by clip id.
-    assert delay_mock.call_count == 3
-    enqueued = {c.args[0] for c in delay_mock.call_args_list}
+    # A single batch enqueue carrying (video_id, [all clip ids]).
+    delay_mock.assert_called_once()
+    assert delay_mock.call_args.args[0] == video_id
+    enqueued = set(delay_mock.call_args.args[1])
     assert enqueued == {str(c.id) for c in fake_clips}
 
 
@@ -280,7 +282,7 @@ async def test_generate_clips_async_skips_auto_render_when_disabled(mocker):
     mocker.patch.object(settings, "AUTO_RENDER_CLIPS", False)
     clips = [MagicMock(id=uuid.uuid4(), rank=1, style_preset=None)]
     video_id, _ = _generate_clips_scaffold(mocker, clips=clips)
-    delay_mock = mocker.patch("worker.tasks.render_clip.delay")
+    delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
 
     await tasks._generate_clips_async(video_id)
 
@@ -305,12 +307,13 @@ async def test_generate_clips_async_seeds_brand_kit_and_caps_top_n(mocker):
     c_rank2 = MagicMock(id=uuid.uuid4(), rank=2, style_preset={"subtitle": "minimal"})
     clips = [c_rank3, c_rank1, c_rank2]
     video_id, _ = _generate_clips_scaffold(mocker, clips=clips, brand_kit_style=kit)
-    delay_mock = mocker.patch("worker.tasks.render_clip.delay")
+    delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
 
     await tasks._generate_clips_async(video_id)
 
-    # Top-2 by rank (ranks 1 and 2) enqueue; rank-3 does not.
-    enqueued = {c.args[0] for c in delay_mock.call_args_list}
+    # Top-2 by rank (ranks 1 and 2) enqueue in the single batch; rank-3 does not.
+    delay_mock.assert_called_once()
+    enqueued = set(delay_mock.call_args.args[1])
     assert enqueued == {str(c_rank1.id), str(c_rank2.id)}
     # rank-1 had no style → seeded from the kit; rank-2 kept its own choice.
     assert c_rank1.style_preset == kit
