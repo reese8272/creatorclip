@@ -208,6 +208,28 @@ function ActionCell({
     )
   }
 
+  // Failed: give the creator a way to act on the "please try again" message
+  // instead of leaving the row to linger as terminal clutter. Re-queue restarts
+  // the pipeline (POST /videos/{id}/queue now accepts a failed video). A failed
+  // video with no stored source can't be re-run — point at the upload path.
+  if (video.ingest_status === 'failed') {
+    if (!video.clippable) {
+      return (
+        <span
+          title={SOURCE_NEEDED_HELP}
+          className="cursor-help border-b border-dotted border-default text-sm text-subtle"
+        >
+          Upload source file to clip
+        </span>
+      )
+    }
+    return (
+      <Button variant="secondary" size="sm" disabled={busy} onClick={onQueue}>
+        {label ?? 'Retry'}
+      </Button>
+    )
+  }
+
   if (video.ingest_status === 'done') {
     if (!clipInfo || clipInfo.loading) {
       return <span className="text-sm text-subtle">…</span>

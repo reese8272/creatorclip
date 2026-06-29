@@ -58,8 +58,23 @@ def test_enabled_when_flag_on_and_not_production(monkeypatch):
     assert verbose.verbose_enabled() is True
 
 
-def test_hard_gated_off_in_production_even_when_flag_on(monkeypatch):
+def test_gated_off_in_production_without_prod_optin(monkeypatch):
     monkeypatch.setattr(settings, "VERBOSE_LOGGING", True)
+    monkeypatch.setattr(settings, "VERBOSE_LOGGING_ALLOW_PROD", False)
+    monkeypatch.setattr(settings, "ENV", "production")
+    assert settings.verbose_logging_enabled is False
+
+
+def test_enabled_in_production_only_with_explicit_prod_optin(monkeypatch):
+    monkeypatch.setattr(settings, "VERBOSE_LOGGING", True)
+    monkeypatch.setattr(settings, "VERBOSE_LOGGING_ALLOW_PROD", True)
+    monkeypatch.setattr(settings, "ENV", "production")
+    assert settings.verbose_logging_enabled is True
+
+
+def test_prod_optin_alone_is_inert_without_verbose_flag(monkeypatch):
+    monkeypatch.setattr(settings, "VERBOSE_LOGGING", False)
+    monkeypatch.setattr(settings, "VERBOSE_LOGGING_ALLOW_PROD", True)
     monkeypatch.setattr(settings, "ENV", "production")
     assert settings.verbose_logging_enabled is False
 

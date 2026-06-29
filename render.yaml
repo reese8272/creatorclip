@@ -31,6 +31,17 @@ envVarGroups:
       # on every deploy/restart. Keep LOG_JSON=true (config default).
       - key: LOG_DIR
         value: ""
+      # Full-content verbose logging for the private beta (docs/DECISIONS.md
+      # 2026-06-29). VERBOSE_LOGGING_ALLOW_PROD is the REQUIRED second opt-in that
+      # unlocks the verbose sink while ENV=production — without it VERBOSE_LOGGING
+      # alone is inert in prod, so a routine deploy can't leak content by accident.
+      # With LOG_DIR="" the verbose lines go to stdout, which Render aggregates —
+      # NOTE: raw prompts/responses/transcripts (incl. PII) will appear in the
+      # Render log stream while these are on. Set BOTH to false before public launch.
+      - key: VERBOSE_LOGGING
+        value: "true"
+      - key: VERBOSE_LOGGING_ALLOW_PROD
+        value: "true"
       # The exact production origin. Set to the live Render web URL after the
       # first deploy (https://creatorclip-web.onrender.com), then to the custom
       # domain once attached. ALLOWED_ORIGINS must NOT contain a wildcard or

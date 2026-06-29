@@ -211,12 +211,8 @@ async def list_catalog(
     limit = max(1, min(limit, _CATALOG_PAGE_MAX))
     offset = max(0, offset)
     # Per-creator isolation enforced on BOTH the count and the page query.
-    base = select(Video).where(
-        Video.creator_id == creator.id, Video.origin == VideoOrigin.catalog
-    )
-    total = (
-        await session.execute(select(func.count()).select_from(base.subquery()))
-    ).scalar_one()
+    base = select(Video).where(Video.creator_id == creator.id, Video.origin == VideoOrigin.catalog)
+    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     result = await session.execute(
         base.order_by(Video.created_at.desc()).limit(limit).offset(offset)
     )
@@ -530,10 +526,20 @@ async def queue_video_for_analysis(
                 "video file (e.g. from Google Takeout) to generate clips."
             ),
         )
-    if video.ingest_status != IngestStatus.pending:
-        # Already in flight or terminal — nothing to do; return current state
-        # so the caller can refresh its row without seeing a 4xx.
+    if video.ingest_status not in (IngestStatus.pending, IngestStatus.failed):
+        # Running or done — nothing to do; return current state so the caller can
+        # refresh its row without seeing a 4xx.
         return {"video_id": str(video.id), "status": video.ingest_status.value, "queued": False}
+
+    if video.ingest_status == IngestStatus.failed:
+        # Manual retry of a failed video (the "please try again" path the dashboard
+        # now surfaces — Issue: stale-failed-jobs 2026-06-29). Reset to pending so
+        # the pipeline re-runs and the row leaves the terminal 'failed' state instead
+        # of lingering as clutter. Re-deduction is idempotent via MinuteDeduction's
+        # UNIQUE(video_id), so a retry never double-charges.
+        video.ingest_status = IngestStatus.pending
+        video.failure_reason = None
+        await session.commit()
 
     # Issue 313: stamp ownership BEFORE start_pipeline, exactly as the upload
     # path does (see queue_video_upload above). start_pipeline emits stage
