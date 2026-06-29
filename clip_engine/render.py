@@ -68,12 +68,28 @@ _OUTPUT_W, _OUTPUT_H = OUTPUT_PRESETS[_DEFAULT_FORMAT]
 
 
 def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
+    from verbose import now_ms, vlog
+
+    vlog("ffmpeg_start", label=label, cmd=cmd, timeout_s=timeout_s)
+    _t0 = now_ms()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
+        vlog("ffmpeg_timeout", label=label, cmd=cmd, timeout_s=timeout_s)
         raise RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s") from exc
     if result.returncode != 0:
+        # Full (untruncated) stderr to the verbose sink; the raised error keeps the
+        # 500-char cap so it stays log/UI-safe.
+        vlog(
+            "ffmpeg_failed",
+            label=label,
+            cmd=cmd,
+            returncode=result.returncode,
+            stderr=result.stderr,
+            duration_ms=int(now_ms() - _t0),
+        )
         raise RuntimeError(f"ffmpeg {label} failed: {result.stderr[:500]}")
+    vlog("ffmpeg_done", label=label, duration_ms=int(now_ms() - _t0))
 
 
 # ── Loudness normalization (Issue 181) ────────────────────────────────────────

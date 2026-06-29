@@ -170,6 +170,16 @@ def generate_improvement_brief(
         return final_text + _DISCLAIMER, usage
 
     # web_search tool can take 60-120s; override the default 60s timeout per-call.
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "improvement_brief",
+        model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
+        max_tokens=2000,
+        system=system,
+        messages=messages,
+        tools=tools,
+    )
     try:
         response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
             model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
@@ -181,6 +191,7 @@ def generate_improvement_brief(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("improvement_brief LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("improvement_brief", response=response)
 
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens

@@ -5,6 +5,46 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-29 — Full-content verbose logging sink (pre-prod debugging, hard-gated off in prod)
+
+**What changed.** Added an opt-in `VERBOSE_LOGGING` flag and a dedicated `verbose` logger
+(`verbose.py`, wired in `observability.configure_logging`) that, when enabled, writes a COMPLETE
+record of every load-bearing operation — raw LLM prompts/responses (all 9 non-streaming call sites
++ both streaming wrappers), full transcripts, full ffmpeg commands + untruncated stderr, and every
+Celery task's args/kwargs/retry-reason/traceback (via `task_prerun`/`task_retry`/`task_failure`/
+`task_success` signals) — to `<LOG_DIR>/verbose-{app,worker}.log`. The sink uses a NON-scrubbing
+JSON formatter (`JsonLogFormatter(scrub=False)`) so content survives verbatim, and `propagate=False`
+so it never bleeds into `app.log`/`worker.log` or existing root-logger assertions.
+
+**Why.** Requested by the owner to capture "every single detail every time something is done" during
+the private beta, motivated by three field failures (render retry-storm, chat "Connection lost", and
+persistent transcription failures) that the metadata-only logs could not fully explain. The normal
+logs deliberately never carry prompt/response content (docs/COMPLIANCE.md + `redact.py`); aggressive
+content logging is the fastest way to root-cause these in beta.
+
+**Deviation + guard.** This is a deliberate, scoped deviation from the PII/secret no-content logging
+boundary. It is acceptable ONLY off-prod, so `settings.verbose_logging_enabled` returns False whenever
+`ENV == "production"` regardless of the flag — content logging cannot be switched on in prod by config
+alone. Every helper in `verbose.py` is a no-op when disabled (zero overhead on the default path). To
+be turned OFF before public launch (CLAUDE.md → Pre-Public-Launch Requirements: "Every log line and
+every LLM prompt reviewed for token/PII leakage").
+
+**Industry standard checked (2026).** Matches the standard "debug/trace sink, separate from
+operational logs, disabled in production" pattern (OWASP Logging Cheat Sheet: keep verbose/debug
+logging out of prod; 12-factor: log to streams, gate verbosity by env). Content capture for LLM spans
+is exactly what OpenLLMetry gates behind `TRACELOOP_TRACE_CONTENT` (kept OFF in `init_otel`) — this
+sink is the in-house, env-gated equivalent for file logs.
+
+**Alternatives ruled out.** Global `LOG_LEVEL=DEBUG` (leaks the Anthropic `x-api-key` via httpx
+header logging — already called out in config; and still wouldn't log prompt/response *bodies*);
+logging content through the existing scrubbed JSON formatter (defeats the purpose — content is the
+point); a third-party tracing vendor (overkill + sends content off-box, worse for PII than a local
+file that never leaves the VM).
+
+**Date:** 2026-06-29
+
+---
+
 ## 2026-06-28 — Clips auto-render on generation (upload = consent to spend)
 
 **What changed.** Clip generation no longer ends at *ranked-but-unrendered*. At the end of

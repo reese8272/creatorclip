@@ -256,7 +256,17 @@ class RequestIDLogFilter(logging.Filter):
 
 
 class JsonLogFormatter(logging.Formatter):
-    """Emit one JSON object per record, including request_id and any `extra` fields."""
+    """Emit one JSON object per record, including request_id and any `extra` fields.
+
+    ``scrub`` (default True) applies the PII/secret blocklist to extra fields. The
+    dedicated verbose-logging sink sets ``scrub=False`` so full prompt/response
+    content survives verbatim — that sink is hard-gated to non-prod (see
+    ``settings.verbose_logging_enabled`` / docs/DECISIONS.md 2026-06-29).
+    """
+
+    def __init__(self, *args: Any, scrub: bool = True, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._scrub = scrub
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -271,7 +281,7 @@ class JsonLogFormatter(logging.Formatter):
             for key, value in record.__dict__.items()
             if key not in _RESERVED_LOGRECORD and not key.startswith("_")
         }
-        payload.update(scrub_dict(extra))
+        payload.update(scrub_dict(extra) if self._scrub else extra)
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
@@ -307,12 +317,55 @@ def log_event(event: str, **fields: Any) -> None:
         _event_logger.info(" ".join(msg_parts), extra=extra)
 
 
+def _configure_verbose_logger(log_dir: str, filename: str) -> None:
+    """Wire the dedicated full-content `verbose` logger (pre-prod debugging).
+
+    Hard-gated by the caller (only invoked when ``settings.verbose_logging_enabled``).
+    Its handlers use a NON-scrubbing JSON formatter so raw prompt/response/transcript
+    content survives. ``propagate=False`` keeps it out of app.log / worker.log and the
+    root-logger stream so existing log assertions are untouched. Idempotent.
+    """
+    from verbose import VERBOSE_LOGGER_NAME
+
+    vlogger = logging.getLogger(VERBOSE_LOGGER_NAME)
+    vlogger.setLevel(logging.INFO)
+    vlogger.propagate = False
+    for handler in list(vlogger.handlers):
+        vlogger.removeHandler(handler)
+
+    raw_fmt = JsonLogFormatter(scrub=False)
+    rid_filter = RequestIDLogFilter()
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.addFilter(rid_filter)
+    stream_handler.setFormatter(raw_fmt)
+    vlogger.addHandler(stream_handler)
+
+    if log_dir:
+        # Distinct file per co-hosted process (verbose-app.log / verbose-worker.log)
+        # so RotatingFileHandler rotation never corrupts a shared file (same reason
+        # the API/worker split app.log vs worker.log).
+        stem = filename.rsplit(".", 1)[0]
+        log_path = Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path / f"verbose-{stem}.log",
+            maxBytes=50 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.addFilter(rid_filter)
+        file_handler.setFormatter(JsonLogFormatter(scrub=False))
+        vlogger.addHandler(file_handler)
+
+
 def configure_logging(
     *,
     json_logs: bool,
     level: int = logging.INFO,
     log_dir: str = "",
     filename: str = "app.log",
+    verbose: bool = False,
 ) -> None:
     """Install the request-id filter + (optionally) JSON formatting on the root logger.
 
@@ -357,6 +410,11 @@ def configure_logging(
         file_handler.addFilter(rid_filter)
         file_handler.setFormatter(JsonLogFormatter())
         root.addHandler(file_handler)
+
+    # Full-content verbose sink (pre-prod debugging) — only when explicitly enabled
+    # AND non-prod. Wired on its own logger so it never touches the root handlers above.
+    if verbose:
+        _configure_verbose_logger(log_dir, filename)
 
 
 # ── Request-id helpers ───────────────────────────────────────────────────────
@@ -694,9 +752,79 @@ def instrument_fastapi_app(app: Any) -> None:
     FastAPIInstrumentor.instrument_app(app)
 
 
+# ── Verbose Celery lifecycle logging (pre-prod) ──────────────────────────────
+# These fire on EVERY task and write a full-content record (args, kwargs, retry
+# reason, full traceback) to the verbose sink. Each is a no-op unless verbose
+# logging is enabled — the `vlog` gate short-circuits before any work — so they are
+# always safe to connect. This is the leverage point that makes the render
+# retry-storm and transcription failures fully visible without touching task bodies.
+def _vlog_task_prerun(
+    task_id: Any = None, task: Any = None, args: Any = None, kwargs: Any = None, **_: Any
+) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_start",
+        task=getattr(task, "name", None),
+        task_id=task_id,
+        args=args,
+        kwargs=kwargs,
+        retries=getattr(getattr(task, "request", None), "retries", 0),
+    )
+
+
+def _vlog_task_retry(
+    sender: Any = None, request: Any = None, reason: Any = None, einfo: Any = None, **_: Any
+) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_retry",
+        task=getattr(sender, "name", None),
+        task_id=getattr(request, "id", None),
+        retries=getattr(request, "retries", None),
+        reason=repr(reason) if reason is not None else None,
+        traceback=str(einfo) if einfo is not None else None,
+    )
+
+
+def _vlog_task_failure(
+    task_id: Any = None,
+    exception: Any = None,
+    args: Any = None,
+    kwargs: Any = None,
+    einfo: Any = None,
+    sender: Any = None,
+    **_: Any,
+) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_failure",
+        task=getattr(sender, "name", None),
+        task_id=task_id,
+        exception=repr(exception) if exception is not None else None,
+        args=args,
+        kwargs=kwargs,
+        traceback=str(einfo) if einfo is not None else None,
+    )
+
+
+def _vlog_task_success(sender: Any = None, result: Any = None, **_: Any) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_success",
+        task=getattr(sender, "name", None),
+        task_id=getattr(getattr(sender, "request", None), "id", None),
+        result=result,
+    )
+
+
 def install_celery_observability() -> None:
     """Wire signal handlers that carry the request id across the publish→run boundary
-    and record Celery task golden signals (duration + terminal-state counts).
+    and record Celery task golden signals (duration + terminal-state counts), plus the
+    verbose full-content lifecycle handlers (no-op unless verbose logging is enabled).
 
     `weak=False` is required: Celery connects receivers weakly by default, so a
     handler held by no other reference would be garbage-collected and never fire.
@@ -706,3 +834,10 @@ def install_celery_observability() -> None:
     signals.before_task_publish.connect(_stamp_request_id, weak=False)
     signals.task_prerun.connect(_bind_request_id, weak=False)
     signals.task_postrun.connect(_record_task_and_clear, weak=False)
+
+    # Verbose lifecycle (pre-prod full-content). Connected unconditionally; each
+    # handler self-gates via the vlog() no-op when verbose logging is off.
+    signals.task_prerun.connect(_vlog_task_prerun, weak=False)
+    signals.task_retry.connect(_vlog_task_retry, weak=False)
+    signals.task_failure.connect(_vlog_task_failure, weak=False)
+    signals.task_success.connect(_vlog_task_success, weak=False)

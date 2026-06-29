@@ -459,6 +459,28 @@ class Settings(BaseSettings):
 
         return _logging.getLevelNamesMapping().get(self.LOG_LEVEL.upper(), _logging.INFO)
 
+    # ── Verbose full-content logging (pre-production debugging) ────────────────
+    # When true AND ENV != "production", every load-bearing operation writes a
+    # COMPLETE record — raw prompt/response/transcript content, full request bodies,
+    # full ffmpeg commands, and full tracebacks — to a dedicated `verbose` logger
+    # (<LOG_DIR>/verbose.log). This deliberately bypasses the PII/secret redaction
+    # that governs the normal logs (docs/COMPLIANCE.md), so it is HARD-GATED off in
+    # production by `verbose_logging_enabled` regardless of this flag. Intended for
+    # the private beta: capture every detail of every render / LLM / transcription /
+    # chat / task operation until launch, then turn off. (docs/DECISIONS.md 2026-06-29)
+    VERBOSE_LOGGING: bool = False
+
+    @property
+    def verbose_logging_enabled(self) -> bool:
+        """True only when VERBOSE_LOGGING is set AND we are not in production.
+
+        The production guard is unconditional: raw full-content logging is a
+        deliberate compliance deviation acceptable only in dev/staging, so it can
+        never be switched on in prod by config alone — flipping ENV to "production"
+        disables it even if VERBOSE_LOGGING stays true.
+        """
+        return self.VERBOSE_LOGGING and self.ENV != "production"
+
     # Inbound header carrying a correlation id from an upstream proxy/gateway. If
     # absent or malformed, the middleware mints a UUID4. Echoed back on the response.
     REQUEST_ID_HEADER: str = "X-Request-ID"

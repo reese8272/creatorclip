@@ -124,8 +124,7 @@ def _build_request(
 
     score_text = f"{clip_score:.2f}" if clip_score is not None else "not scored"
     timing_text = (
-        f"{clip_start_s:.1f}s – {clip_end_s:.1f}s "
-        f"(duration: {clip_end_s - clip_start_s:.1f}s)"
+        f"{clip_start_s:.1f}s – {clip_end_s:.1f}s (duration: {clip_end_s - clip_start_s:.1f}s)"
     )
 
     system: list[dict] = [
@@ -176,8 +175,7 @@ def _parse_result(raw_json: str) -> dict:
     cited = str(data.get("cited_principle", "")).strip()
     if cited not in VALID_PRINCIPLES:
         raise ValueError(
-            f"Model cited unknown principle {cited!r}. "
-            f"Must be one of: {sorted(VALID_PRINCIPLES)}"
+            f"Model cited unknown principle {cited!r}. Must be one of: {sorted(VALID_PRINCIPLES)}"
         )
 
     return {
@@ -233,6 +231,15 @@ def generate_clip_explanation(
         transcript_excerpt,
     )
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "clip_explain",
+        model=settings.ANTHROPIC_MODEL_CLIP_EXPLAIN,
+        max_tokens=512,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_CLIP_EXPLAIN,
@@ -243,6 +250,7 @@ def generate_clip_explanation(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("clip_explain LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("clip_explain", response=response)
 
     usage_dict = {
         "input_tokens": response.usage.input_tokens,

@@ -185,6 +185,15 @@ def generate_video_analysis(
         record_llm_metric(settings.ANTHROPIC_MODEL_ANALYSIS, usage)
         return final_text + _DISCLAIMER, usage
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "video_analysis",
+        model=settings.ANTHROPIC_MODEL_ANALYSIS,
+        max_tokens=2000,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
             model=settings.ANTHROPIC_MODEL_ANALYSIS,
@@ -195,6 +204,7 @@ def generate_video_analysis(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("video_analysis LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("video_analysis", response=response)
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens
     logger.info(

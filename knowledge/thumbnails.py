@@ -142,6 +142,14 @@ def analyze_thumbnail_patterns(
         }
     )
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "thumbnail_patterns",
+        model=settings.ANTHROPIC_MODEL_THUMBNAILS,
+        max_tokens=512,
+        messages=[{"role": "user", "content": content}],
+    )
     try:
         response = _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_THUMBNAILS,
@@ -151,6 +159,7 @@ def analyze_thumbnail_patterns(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("thumbnail_patterns LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("thumbnail_patterns", response=response)
 
     logger.info(
         "thumbnail_patterns tokens: in=%d out=%d",

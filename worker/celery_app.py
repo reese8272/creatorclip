@@ -17,6 +17,7 @@ configure_logging(
     level=settings.log_level_int,
     log_dir=settings.LOG_DIR,
     filename="worker.log",
+    verbose=settings.verbose_logging_enabled,
 )
 init_sentry(
     dsn=settings.SENTRY_DSN,

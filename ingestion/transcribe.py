@@ -68,14 +68,39 @@ def _guard_audio_size(audio_path: str | Path) -> None:
 
 
 def transcribe_audio(audio_path: str | Path) -> dict[str, Any]:
+    from verbose import now_ms, vlog
+
     backend = settings.TRANSCRIPTION_BACKEND
     logger.info("Transcribing via %s", backend)
+    vlog("transcribe_start", backend=backend, audio_path=str(audio_path))
     _guard_audio_size(audio_path)
-    if backend == "deepgram":
-        return _transcribe_deepgram(str(audio_path))
-    if backend == "assemblyai":
-        return _transcribe_assemblyai(str(audio_path))
-    return _transcribe_whisperx(str(audio_path))
+    _t0 = now_ms()
+    try:
+        if backend == "deepgram":
+            result = _transcribe_deepgram(str(audio_path))
+        elif backend == "assemblyai":
+            result = _transcribe_assemblyai(str(audio_path))
+        else:
+            result = _transcribe_whisperx(str(audio_path))
+    except Exception as exc:
+        vlog(
+            "transcribe_failed",
+            backend=backend,
+            audio_path=str(audio_path),
+            error=repr(exc),
+            duration_ms=int(now_ms() - _t0),
+        )
+        raise
+    segments = result.get("segments", [])
+    vlog(
+        "transcribe_done",
+        backend=backend,
+        audio_path=str(audio_path),
+        segment_count=len(segments),
+        transcript=" ".join(s.get("text", "") for s in segments),
+        duration_ms=int(now_ms() - _t0),
+    )
+    return result
 
 
 # ── Deepgram ──────────────────────────────────────────────────────────────────

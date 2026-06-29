@@ -167,6 +167,15 @@ def generate_clip_caption_hooks(
     hook_excerpt = clip_hook[:_TRANSCRIPT_MAX_CHARS]
     system, messages = _build_request(channel_title, dna_brief, hook_excerpt)
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "clip_caption_hooks",
+        model=settings.ANTHROPIC_MODEL_CLIP_CAPTIONS,
+        max_tokens=512,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_CLIP_CAPTIONS,
@@ -177,6 +186,7 @@ def generate_clip_caption_hooks(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("clip_caption_hooks LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("clip_caption_hooks", response=response)
 
     usage_dict = {
         "input_tokens": response.usage.input_tokens,
@@ -192,7 +202,9 @@ def generate_clip_caption_hooks(
         usage_dict["output_tokens"],
     )
     record_llm_metric(settings.ANTHROPIC_MODEL_CLIP_CAPTIONS, usage_dict)
-    warn_if_truncated(settings.ANTHROPIC_MODEL_CLIP_CAPTIONS, getattr(response, "stop_reason", None))
+    warn_if_truncated(
+        settings.ANTHROPIC_MODEL_CLIP_CAPTIONS, getattr(response, "stop_reason", None)
+    )
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     result = _parse_result(raw)

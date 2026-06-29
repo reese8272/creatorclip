@@ -91,7 +91,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── db.py                       # SQLAlchemy async engine + session (Issue 2)
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
 ├── crypto.py                   # Fernet helpers for token columns
-├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
+├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f). Also wires the verbose sink + Celery lifecycle vlog handlers
+├── verbose.py                  # Full-content verbose logging sink (DECISIONS 2026-06-29). VERBOSE_LOGGING + non-prod only → raw prompts/responses/transcripts/ffmpeg/task-args to verbose-{app,worker}.log via a NON-scrubbing formatter. No-op when off; hard-gated off in production
 ├── event_log.py                # Beta telemetry sink → event_logs table (Issue 151). Isolated engine (LOGS_DATABASE_URL), boundary PII/token redaction, best-effort writes
 │   # NOTE: there is no central clients.py. External API clients are MODULE-LEVEL
 │   # singletons in the modules that use them (Issue 37 lifecycle rule): Anthropic in

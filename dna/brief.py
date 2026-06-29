@@ -154,9 +154,7 @@ def generate_brief(
                 messages=messages,
             )
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-            logger.error(
-                "dna_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__
-            )
+            logger.error("dna_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
             raise
         logger.info(
             "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
@@ -168,6 +166,15 @@ def generate_brief(
         record_llm_metric(settings.ANTHROPIC_MODEL_DNA_BRIEF, usage)
         return final_text + _DISCLAIMER, usage
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "dna_brief",
+        model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
+        max_tokens=2000,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
@@ -178,6 +185,7 @@ def generate_brief(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("dna_brief LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("dna_brief", response=response)
 
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens
