@@ -23,11 +23,21 @@ logs deliberately never carry prompt/response content (docs/COMPLIANCE.md + `red
 content logging is the fastest way to root-cause these in beta.
 
 **Deviation + guard.** This is a deliberate, scoped deviation from the PII/secret no-content logging
-boundary. It is acceptable ONLY off-prod, so `settings.verbose_logging_enabled` returns False whenever
-`ENV == "production"` regardless of the flag — content logging cannot be switched on in prod by config
-alone. Every helper in `verbose.py` is a no-op when disabled (zero overhead on the default path). To
-be turned OFF before public launch (CLAUDE.md → Pre-Public-Launch Requirements: "Every log line and
-every LLM prompt reviewed for token/PII leakage").
+boundary. Off-prod it follows `VERBOSE_LOGGING`. In production it is default-OFF and requires a SECOND
+explicit opt-in, `VERBOSE_LOGGING_ALLOW_PROD=true` — so `VERBOSE_LOGGING` alone (or a copied `.env`)
+can never enable content logging in prod, and a routine deploy can't leak by accident. Every helper in
+`verbose.py` is a no-op when disabled (zero overhead on the default path).
+
+**Update 2026-06-29 (beta opt-in).** The private beta deploys as `ENV=production` on Render, so the
+original hard `ENV != "production"` gate would have kept verbose off exactly where the owner needs it
+to debug live render/chat/transcription failures. Resolved by adding `VERBOSE_LOGGING_ALLOW_PROD`
+(set true alongside `VERBOSE_LOGGING` in `render.yaml`) rather than relaxing the gate wholesale or
+flipping `ENV` to `staging` (which also drives Stripe live-mode / secure-cookie / required-secret
+behavior). On Render `LOG_DIR=""`, so verbose content lands in the aggregated stdout log stream —
+raw prompts/responses/transcripts (incl. PII) are therefore visible to anyone with Render log access
+while this is on. Accepted for the ≤100-user beta as an informed owner decision; BOTH flags must be
+set false before public launch (CLAUDE.md → Pre-Public-Launch Requirements: "Every log line and every
+LLM prompt reviewed for token/PII leakage").
 
 **Industry standard checked (2026).** Matches the standard "debug/trace sink, separate from
 operational logs, disabled in production" pattern (OWASP Logging Cheat Sheet: keep verbose/debug

@@ -298,14 +298,37 @@ def generate_clips(self, video_id: str) -> str:
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_clip")
 def render_clip(self, clip_id: str) -> str:
-    """Render a clip to 9:16 and upload to storage."""
+    """Render a clip to 9:16 and upload to storage.
+
+    Permanent failures (missing clip/source, invalid timing range — raised as
+    ``ValueError``/``FileNotFoundError``) are TERMINAL: set the clip to ``failed``
+    and re-raise WITHOUT retry. Previously every failure went through
+    ``self.retry`` (max_retries=3, 60s apart), so a deterministically-broken clip
+    burned ~3 minutes of retries while the UI sat on "Rendering…" — the retry-storm
+    the owner reported. Transient failures (R2/network, an ffmpeg blip) still retry
+    with backoff. Mirrors ``build_dna``'s ValueError-is-permanent convention.
+    """
     creator_id = run_async(_creator_id_for_clip(clip_id))
     log_event(
         "render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id
     )
     try:
         run_async(_render_clip_async(clip_id))
+    except (ValueError, FileNotFoundError) as exc:
+        # Permanent — retrying cannot conjure a missing clip/source or fix a bad range.
+        run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
+        log_event(
+            "render_clip_failed_permanent",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=clip_id,
+            exc_type=type(exc).__name__,
+        )
+        raise
     except Exception as exc:
+        # Transient — set failed (so a UI poll between attempts shows a terminal
+        # state, and the final MaxRetriesExceededError leaves it failed) then retry.
         run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
         RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
         raise self.retry(exc=exc) from exc
@@ -1219,11 +1242,15 @@ async def _render_clip_async(clip_id: str) -> None:
         logger.info("Clip %s rendered → %s", clip_id, render_uri)
         await aemit(clip_id, "done", stage="render", message="Clip ready.")
     except Exception as exc:
+        # Don't promise a retry here — whether render_clip retries depends on the
+        # error class (permanent ValueError/FileNotFoundError are terminal). Keep
+        # the user-facing message neutral; the clip's render_status is the source
+        # of truth the UI polls.
         await aemit(
             clip_id,
             "error",
             stage="render",
-            message="Render failed; retrying.",
+            message="Render failed.",
             exc_type=type(exc).__name__,
         )
         raise

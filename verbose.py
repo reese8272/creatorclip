@@ -1,17 +1,18 @@
 """Verbose full-content logging sink for pre-production debugging.
 
-Every helper here is a NO-OP unless ``settings.verbose_logging_enabled`` is True —
-that is, ``VERBOSE_LOGGING=true`` AND ``ENV != "production"``. When active, each
-load-bearing operation writes a COMPLETE record (raw prompt/response/transcript
-content, full request bodies, full ffmpeg commands, full tracebacks) to the
-dedicated ``verbose`` logger.
+Every helper here is a NO-OP unless ``settings.verbose_logging_enabled`` is True.
+Off-prod that means ``VERBOSE_LOGGING=true``; in production it additionally requires
+the explicit ``VERBOSE_LOGGING_ALLOW_PROD=true`` opt-in (the private-beta case — see
+config). When active, each load-bearing operation writes a COMPLETE record (raw
+prompt/response/transcript content, full request bodies, full ffmpeg commands, full
+tracebacks) to the dedicated ``verbose`` logger.
 
-That logger writes ``<LOG_DIR>/verbose.log`` through a NON-scrubbing JSON formatter
-(see ``observability.configure_logging``) so content survives verbatim — this is a
-deliberate, documented deviation from the PII/secret redaction boundary
-(docs/COMPLIANCE.md), acceptable only off-prod and recorded in docs/DECISIONS.md
-(2026-06-29). The production guard lives in ``settings.verbose_logging_enabled``;
-this module trusts that single gate so callers never have to.
+That logger writes ``<LOG_DIR>/verbose-*.log`` (or stdout when ``LOG_DIR=""``) through
+a NON-scrubbing JSON formatter (see ``observability.configure_logging``) so content
+survives verbatim — this is a deliberate, documented deviation from the PII/secret
+redaction boundary (docs/COMPLIANCE.md), recorded in docs/DECISIONS.md (2026-06-29).
+The whole gate lives in ``settings.verbose_logging_enabled``; this module trusts that
+single check so callers never have to.
 
 The logger has ``propagate=False`` and its own handlers, so verbose output never
 bleeds into ``app.log`` / ``worker.log`` or the existing root-logger assertions.
