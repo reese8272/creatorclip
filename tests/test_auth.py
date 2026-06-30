@@ -323,6 +323,9 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
     fake_session.flush = AsyncMock()
     fake_session.commit = AsyncMock()
     fake_session.rollback = AsyncMock()  # awaited by the callback's error path
+    # The callback sets the per-creator RLS GUC via `await session.execute(...)`
+    # after the flush (see routers/auth._exchange_and_persist); must be awaitable.
+    fake_session.execute = AsyncMock()
 
     monkeypatch.setattr(
         "routers.auth.exchange_code",
@@ -380,6 +383,50 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
         yield fake_session
 
     app.dependency_overrides[get_session] = _noop_session
+    return fake_creator, fake_session
+
+
+def test_callback_sets_creator_rls_context_before_tenant_writes(client, monkeypatch):
+    """Regression (prod sign-in outage, 2026-06-30): after the Issue 343 role split
+    the app connects as the non-BYPASSRLS ``creatorclip_app`` role, so the callback's
+    writes to RLS-FORCED tenant tables (youtube_tokens, minute_packs) fail the
+    ``tenant_isolation`` WITH CHECK unless ``app.creator_id`` is set. The callback runs
+    pre-auth (no GUC from db.py's listener), so _exchange_and_persist must emit
+    ``set_config('app.creator_id', <creator.id>)`` itself, after the flush and before
+    the tenant writes. This proves the GUC is set; the integration lane proves it under
+    the real role (tests/test_rls_isolation_integration.py)."""
+    from db import get_session
+    from main import app
+
+    fake_creator, fake_session = _oauth_callback_mocks(monkeypatch, is_new=True)
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=test_code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302, got {resp.status_code}: {resp.text}"
+
+    # Find the set_config call among session.execute invocations.
+    set_config_calls = [
+        call
+        for call in fake_session.execute.await_args_list
+        if "set_config" in str(call.args[0]).lower()
+        and "app.creator_id" in str(call.args[0]).lower()
+    ]
+    assert set_config_calls, (
+        "callback must emit set_config('app.creator_id', ...) so tenant-table writes "
+        "satisfy the RLS tenant_isolation policy under the creatorclip_app role"
+    )
+    # The GUC must be scoped to the just-created creator's id, not NULL/empty.
+    params = set_config_calls[0].args[1]
+    assert params.get("cid") == str(fake_creator.id), (
+        f"RLS GUC must be the creator's id; got {params.get('cid')!r}"
+    )
 
 
 def test_callback_new_creator_redirects_to_walkthrough(client, monkeypatch):

@@ -401,3 +401,58 @@ async def test_rls_deny_by_default_unset_context(admin_engine, db_session):
                 )
     finally:
         await _cleanup(db_session, [creator.id])
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_tenant_write_requires_guc(admin_engine, db_session):
+    """Regression for the 2026-06-30 prod sign-in outage (oauth_failed).
+
+    The OAuth ``/callback`` runs PRE-auth: it creates the creator (``creators`` is
+    RLS-exempt) and then, in the SAME transaction, writes RLS-FORCED tenant tables
+    (``youtube_tokens`` via store_or_update_tokens, ``minute_packs`` via
+    grant_minutes). There is no ``get_current_creator`` in this path, so db.py's
+    ``after_begin`` listener never sets ``app.creator_id``. After the Issue 343 role
+    split (app connects as non-BYPASSRLS ``creatorclip_app``) those writes hit the
+    ``tenant_isolation`` WITH CHECK with the GUC unset → SQLSTATE 42501 →
+    ProgrammingError → swallowed as ``oauth_failed``, breaking every sign-in.
+
+    The fix: ``_exchange_and_persist`` emits ``set_config('app.creator_id', creator.id)``
+    after the flush. This test proves the GUC is load-bearing — the write FAILS without
+    it and SUCCEEDS with it — under the real role.
+    """
+    from sqlalchemy.exc import DBAPIError
+
+    creator = await _seed_creator(db_session, label="oauth_cb")
+
+    def _token() -> YoutubeToken:
+        return YoutubeToken(
+            creator_id=creator.id,
+            access_token_encrypted="enc-at",
+            refresh_token_encrypted="enc-rt",
+            scope="https://www.googleapis.com/auth/youtube.readonly",
+            expires_at=datetime.now(UTC),
+        )
+
+    factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        # (a) WITHOUT the GUC: the pre-fix behaviour — RLS rejects the insert.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            s.add(_token())
+            with pytest.raises(DBAPIError) as exc_info:
+                await s.flush()
+            assert "row-level security" in str(exc_info.value).lower(), (
+                f"expected an RLS violation, got: {exc_info.value}"
+            )
+
+        # (b) WITH the GUC set to the new creator's id (what the fix does): succeeds.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await s.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(creator.id)},
+            )
+            s.add(_token())
+            await s.flush()  # must not raise
+    finally:
+        await _cleanup(db_session, [creator.id])
