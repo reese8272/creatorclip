@@ -77,12 +77,19 @@ def _load_env(path: str) -> bool:
 
 
 def _normalize_pg(url: str) -> str:
-    """psycopg wants a plain postgresql:// URL; strip any SQLAlchemy driver
-    suffix and require TLS for non-local hosts (managed Postgres needs it)."""
+    """psycopg wants a plain postgresql:// URL; strip any SQLAlchemy driver suffix.
+
+    For non-local hosts add ``sslmode=prefer`` (not ``require``): the harness runs
+    in two places — locally against a managed Postgres that needs TLS, AND inside
+    the prod container against the internal Postgres on the Docker network, which
+    does NOT support SSL. ``prefer`` negotiates TLS when the server offers it and
+    falls back to plaintext when it doesn't, so the one string works in both. An
+    explicit ``sslmode`` already in the URL is preserved.
+    """
     for suffix in ("+asyncpg", "+psycopg", "+psycopg2"):
         url = url.replace(suffix, "")
     if "sslmode=" not in url and "localhost" not in url and "127.0.0.1" not in url:
-        url += ("&" if "?" in url else "?") + "sslmode=require"
+        url += ("&" if "?" in url else "?") + "sslmode=prefer"
     return url
 
 
@@ -180,6 +187,11 @@ def _seed(res: Results) -> None:
             "ON CONFLICT (id) DO UPDATE SET channel_title = EXCLUDED.channel_title",
             (CANARY_CREATOR_ID, CANARY_GOOGLE_SUB, CANARY_CHANNEL),
         )
+        # Set the canary's RLS context for the connection so the tenant-scoped
+        # inserts below pass the per-creator WITH CHECK policy when the app role
+        # has RLS enforced. Harmless when the role bypasses RLS (table owner).
+        # `creators` is RLS-exempt, so the insert above did not need it.
+        cur.execute("SELECT set_config('app.creator_id', %s, false)", (str(CANARY_CREATOR_ID),))
         cur.execute(
             "INSERT INTO videos (id, creator_id, title, kind, duration_s, source_uri, "
             "origin, ingest_status, created_at, ingest_done_at) "
@@ -495,11 +507,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     env_file = ".env" if args.target == "prod" else ".env.staging"
-    if not _load_env(env_file):
-        print(f"live_smoke.py: env file {env_file!r} for --target {args.target} not found.",
-              file=sys.stderr)
+    loaded = _load_env(env_file)
+    if loaded:
+        logger.info("live_smoke: target=%s env=%s", args.target, env_file)
+    elif os.environ.get("DATABASE_URL"):
+        # In a container the env is injected directly (no .env file on disk).
+        # Fall back to the ambient environment rather than hard-failing.
+        logger.info(
+            "live_smoke: target=%s env=ambient (no %s on disk; using injected environment)",
+            args.target,
+            env_file,
+        )
+    else:
+        print(
+            f"live_smoke.py: env file {env_file!r} not found for --target {args.target} "
+            "and DATABASE_URL is not in the environment.",
+            file=sys.stderr,
+        )
         return 1
-    logger.info("live_smoke: target=%s env=%s", args.target, env_file)
 
     res = Results()
 

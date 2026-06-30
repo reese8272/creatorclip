@@ -93,10 +93,25 @@ def test_results_honesty_detects_disclaimer() -> None:
 
 
 # ── Postgres URL normalization ────────────────────────────────────────────────
-def test_normalize_pg_strips_driver_and_adds_ssl_for_remote() -> None:
+def test_normalize_pg_strips_driver_and_prefers_ssl_for_remote() -> None:
+    # sslmode=prefer (not require) so the same string works against a managed DB
+    # AND the internal Docker Postgres that doesn't support SSL.
     out = live_smoke._normalize_pg("postgresql+asyncpg://u:p@db.example.com:5432/app")
     assert "+asyncpg" not in out
+    assert "sslmode=prefer" in out
+    assert "sslmode=require" not in out
+
+
+def test_normalize_pg_internal_docker_host_gets_prefer_not_require() -> None:
+    # The bug the VM run surfaced: a non-local Docker host was forced to require SSL.
+    out = live_smoke._normalize_pg("postgresql+psycopg://creatorclip:p@172.18.0.2:5432/creatorclip")
+    assert "sslmode=prefer" in out
+
+
+def test_normalize_pg_preserves_explicit_sslmode() -> None:
+    out = live_smoke._normalize_pg("postgresql://u:p@db.example.com/app?sslmode=require")
     assert "sslmode=require" in out
+    assert "sslmode=prefer" not in out
 
 
 def test_normalize_pg_leaves_local_untouched() -> None:
