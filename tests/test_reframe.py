@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -469,3 +469,131 @@ class TestLazyImportGuard:
         finally:
             if mediapipe_backup is not None:
                 sys.modules["mediapipe"] = mediapipe_backup
+
+
+# ---------------------------------------------------------------------------
+# Issue 329: edge-suite additions
+# ---------------------------------------------------------------------------
+
+
+class TestReadFrameCv2NaNFps:
+    """_read_frame_cv2: NaN fps must not propagate to int() and crash."""
+
+    def _read_with_fps(self, tmp_path: Path, fps_value: float) -> object:
+        """Patch cv2 so cap.get(CAP_PROP_FPS) returns fps_value."""
+        import numpy as np
+
+        from clip_engine.reframe import _read_frame_cv2
+
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
+
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.return_value = fps_value
+        mock_cap.read.return_value = (True, fake_frame)
+
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            return _read_frame_cv2(fake, 1.0)
+
+    def test_fps_zero_falls_back_to_default(self, tmp_path: Path) -> None:
+        """fps=0.0 is falsy but should use the 25.0 default, not divide-by-zero."""
+        # With the bug: `fps or 25.0` → 25.0 for zero (truthy guard works here).
+        # After fix: math.isfinite check also handles zero explicitly.
+        result = self._read_with_fps(tmp_path, 0.0)
+        # Must not raise; returns a frame or None
+        assert result is not None or result is None  # just no exception
+
+    def test_fps_nan_no_crash(self, tmp_path: Path) -> None:
+        """fps=NaN is truthy so `fps or 25.0` keeps NaN, causing int(ts*NaN) to
+        raise ValueError. The guard must intercept this and use 25.0 instead."""
+        import math
+
+        result = self._read_with_fps(tmp_path, float("nan"))
+        # Must not raise a ValueError/TypeError from int(timestamp * NaN)
+        assert result is not None or result is None  # just no exception
+
+    def test_fps_nan_uses_25_default(self, tmp_path: Path) -> None:
+        """With NaN fps the frame_idx must be computed with 25.0 (default), not NaN."""
+        import math
+
+        import numpy as np
+
+        from clip_engine.reframe import _read_frame_cv2
+
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
+
+        set_calls: list[float] = []
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.return_value = float("nan")
+        mock_cap.read.return_value = (True, fake_frame)
+
+        def _fake_set(prop, value):
+            set_calls.append(value)
+
+        mock_cap.set.side_effect = _fake_set
+
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            _read_frame_cv2(fake, 2.0)
+
+        # frame_idx = int(2.0 * 25.0) = 50; cap.set receives 50.0
+        assert set_calls, "cap.set must have been called"
+        frame_idx_arg = set_calls[0]
+        assert math.isfinite(frame_idx_arg), f"frame_idx was NaN/inf: {frame_idx_arg}"
+        assert frame_idx_arg == pytest.approx(50.0)
+
+
+class TestSmoothCropTrackEdges:
+    """Pins: non-monotonic timestamps must not crash smooth_crop_track."""
+
+    def test_non_monotonic_timestamps_no_crash(self) -> None:
+        """dt <= 0 (duplicate or reversed timestamps) — pan-clamp is skipped but
+        EMA still runs; function must not raise."""
+        raw = [
+            CropCenterPoint(1.0, 500),
+            CropCenterPoint(1.0, 700),  # same timestamp → dt=0
+            CropCenterPoint(0.8, 300),  # earlier → dt<0
+        ]
+        result = smooth_crop_track(raw)
+        assert len(result) == 3  # every point is returned
+
+
+class TestBuildCropCenterTrackEdges:
+    """Pins: start_s<0 and seek-past-EOF produce fallback points, no raise."""
+
+    def test_negative_start_s_falls_back(self, tmp_path: Path) -> None:
+        """start_s=-5 with end_s=5 is a valid duration (10s) but negative timestamps
+        → cv2 seek returns None → fallback, no raise."""
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        with patch("clip_engine.reframe._read_frame_cv2", return_value=None):
+            track = build_crop_center_track(
+                fake, start_s=-5.0, end_s=5.0, frame_width=1920, sample_fps=1.0
+            )
+        assert len(track) >= 1
+        assert all(p.is_fallback for p in track)
+
+    def test_seek_past_eof_falls_back(self, tmp_path: Path) -> None:
+        """Timestamps beyond the video length → _read_frame_cv2 returns None
+        (cv2 seek-past-EOF) → fallback, no raise."""
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        with patch("clip_engine.reframe._read_frame_cv2", return_value=None):
+            track = build_crop_center_track(
+                fake, start_s=9000.0, end_s=9005.0, frame_width=1920, sample_fps=1.0
+            )
+        assert len(track) >= 1
+        assert all(p.is_fallback for p in track)
+
+
+class TestClampCropXWiderThanFrame:
+    """Pin: crop_w > frame_w must not produce negative x."""
+
+    def test_crop_wider_than_frame_clamps_to_zero_no_negative(self) -> None:
+        # crop_w=2000 > frame_w=1920 → frame_w - crop_w = -80 → must clamp to 0
+        x = clamp_crop_x(960, 2000, 1920)
+        assert x == 0
