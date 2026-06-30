@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid
 
 import pytest
 
@@ -145,3 +146,60 @@ def test_extract_bearer_empty_token_returns_none():
     through to a hash lookup."""
     assert _extract_bearer(_FakeRequest({"authorization": "Bearer "})) is None
     assert _extract_bearer(_FakeRequest({"authorization": "Bearer    "})) is None
+
+
+# ── Hashing edge cases (Issue 340a) ───────────────────────────────────────────
+
+
+def test_hash_api_key_unicode_input():
+    """hash_api_key encodes via 'utf-8' — a key that contains multi-byte
+    Unicode characters must produce a stable hex hash consistent with
+    hashlib.sha256(raw.encode('utf-8')). (Issue 340a)"""
+    # Contrived key with a non-ASCII char to exercise the encode("utf-8") path
+    raw = _PREFIX + "cafétest12345678901234"  # é = U+00E9, 2 bytes in UTF-8
+    h = hash_api_key(raw)
+    expected = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    assert h == expected
+    assert len(h) == 64
+
+
+# ── Dependency: orphaned CreatorApiKey → 401 (Issue 340a) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_current_creator_via_api_key_orphaned_row_returns_401():
+    """A valid API key whose owning Creator was deleted must return 401, not 500.
+    The FK ON DELETE CASCADE makes this structurally impossible in practice, but the
+    explicit guard in get_current_creator_via_api_key exists for defence-in-depth
+    and must be exercised. (Issue 340a)"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from api_key import get_current_creator_via_api_key
+    from models import CreatorApiKey as CreatorApiKeyModel
+
+    raw_key = generate_api_key()
+
+    # Minimal stand-in that satisfies `request.headers.get(...)` and `.state`
+    class _Req:
+        headers = {"authorization": f"Bearer {raw_key}"}
+        state = type("S", (), {})()
+
+    # Session: CreatorApiKey row found, but Creator.get returns None (deleted)
+    mock_row = MagicMock(spec=CreatorApiKeyModel)
+    mock_row.creator_id = uuid.uuid4()
+    mock_row.revoked_at = None
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_row
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.get = AsyncMock(return_value=None)  # Creator row gone
+
+    with pytest.raises(HTTPException) as exc:
+        await get_current_creator_via_api_key(_Req(), mock_session)
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Invalid or revoked API key"
