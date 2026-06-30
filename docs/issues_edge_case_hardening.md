@@ -116,7 +116,7 @@ compute_features inverted/empty-window finiteness, extract_candidates post-snap 
 
 ## Issue 329: render.py + reframe.py edge suite (ffmpeg + crop geometry)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local` (logic) + `render-env` (real ffmpeg)
+**Status** `DONE` (2026-06-30) · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local` (logic) + `render-env` (real ffmpeg)
 **Coordinate** `tests/test_render.py`, `tests/test_reframe.py`
 
 **Acceptance criteria**
@@ -230,7 +230,7 @@ the three can never drift again (DRY). Add a coverage test mirroring `test_usage
 
 ## Issue 333: LLM robustness edge suite (parse / injection / errors / cache / loop bounds)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local`
+**Status** `DONE` (2026-06-30) · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local`
 **Coordinate** `tests/test_scoring.py`, `test_chat.py`, `test_titles.py`, `test_hooks.py`, `test_chapters.py`, `test_prompt_safety.py`
 
 **Acceptance criteria**
@@ -249,7 +249,7 @@ the three can never drift again (DRY). Add a coverage test mirroring `test_usage
 
 ## Issue 334: ingestion edge suite (transcribe / audio / signals)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local` + `render-env` (real ffmpeg/librosa)
+**Status** `DONE` (2026-06-30) · **Wave** W0 · **Lane** L21 · **Size** `M` · **Verify** `local` + `render-env` (real ffmpeg/librosa)
 **Coordinate** `tests/ingestion/test_transcribe.py`, `tests/test_signals.py`, `tests/test_ingest.py`
 
 **Acceptance criteria**
@@ -268,7 +268,7 @@ the three can never drift again (DRY). Add a coverage test mirroring `test_usage
 
 ## Issue 335: youtube edge suite (oauth / analytics / data_api / ingest)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` (recorded fixtures) + `integration`
+**Status** `DONE` (2026-06-30) · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` (recorded fixtures) + `integration`
 **Coordinate** `tests/test_oauth_lifecycle.py`, `test_analytics.py`, `test_data_api.py`, `test_youtube_errors.py`
 
 **Acceptance criteria**
@@ -291,7 +291,7 @@ the three can never drift again (DRY). Add a coverage test mirroring `test_usage
 
 ## Issue 336: worker pipeline task edge suite (retry / timeout / idempotency / refund)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` + `integration`
+**Status** `DONE` (2026-06-30) · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` + `integration`
 **Coordinate** `tests/test_worker_pipeline.py`, `test_issue_105_worker_idempotency.py`, `test_generate_clips_retry_integration.py`
 
 **Suspected defects to confirm**
@@ -315,7 +315,7 @@ the three can never drift again (DRY). Add a coverage test mirroring `test_usage
 
 ## Issue 337: observability / progress / event_log / redact / health-metrics edge suite
 
-**Status** `OPEN` · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` + `integration`
+**Status** `DONE` (2026-06-30) · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` + `integration`
 **Coordinate** `tests/test_observability.py`, `test_progress.py`, `test_event_log.py`, `test_health.py`
 
 **Acceptance criteria**
@@ -366,7 +366,7 @@ decay half-life & outcome-multiplier (None vs False vs True), the three config v
 
 ## Issue 339: API router surface edge suite (clips / review / publications / SSE)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` (TestClient) + `integration`
+**Status** `DONE` (2026-06-30) · **Wave** W1 · **Lane** L21 · **Size** `M` · **Verify** `local` (TestClient) + `integration`
 **Coordinate** `tests/test_clips.py`, `test_review.py`, `test_publish.py`, `test_scheduled_publish.py`, `test_tasks_sse.py`
 
 **Acceptance criteria**
@@ -386,7 +386,7 @@ decay half-life & outcome-multiplier (None vs False vs True), the three config v
 
 ## Issue 340: security / auth / crypto / billing / compliance / isolation edge suite
 
-**Status** `OPEN` · **Wave** W0 (unit) / W1 (RLS integration) · **Lane** L21 · **Size** `L` · **Verify** `local` + `integration` (RLS needs real PG)
+**Status** `DONE` (2026-06-30) · **Wave** W0 (unit) / W1 (RLS integration) · **Lane** L21 · **Size** `L` · **Verify** `local` + `integration` (RLS needs real PG)
 **Coordinate** `tests/test_auth.py`, `test_crypto.py`, `test_billing*.py`, `test_rls_isolation_integration.py`, `test_consent.py`
 
 > Highest priority — security is load-bearing per CLAUDE.md. Several items are explicit-attack tests

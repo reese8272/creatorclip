@@ -10171,3 +10171,63 @@ metrics-streams docs; Sentry / Grafana Cloud / New Relic / Axiom / Honeycomb
 pricing pages (all verified 2026-06). Coral­ogix OTel-vs-Prometheus adoption stats.
 
 **Date:** 2026-06-26
+
+---
+
+## 2026-06-30 — L21 Edge-Case Hardening Wave (Issues 329, 333, 334, 335, 336, 337, 339, 340)
+
+Built as a parallel plan→build→review wave (per-issue research/CHECK → isolated-worktree
+build on Sonnet → Opus review+merge). Every issue's edge suite surfaced ≥1 real latent
+defect. Design decisions that diverged from "tests only":
+
+**Issue 329 (render/reframe).** `render_cleaned_clip_file` now **normalizes** unsorted/overlapping
+`keep_ranges` (sort+merge, logs when an edge moves) rather than rejecting — the cut-list generator
+can emit ranges out of order or touching at splice points; normalizing is the robust, industry-standard
+range-list handling. `clip_id` was NOT added to `render_clip_file`'s signature (kept it a pure file
+utility; the clip-id-in-log requirement is satisfied at the worker layer). `_run` now raises with the
+**tail** of stderr (`stderr[-500:]`, where ffmpeg prints the actual error) + `shlex.join(cmd)`, and
+catches `OSError` (binary-missing). New `render-env` pytest marker for future real-ffmpeg cases.
+
+**Issue 334 (ingestion).** Over-cap audio (`> AUDIO_ANALYSIS_MAX_DURATION_S`, default 14400s/4h) is
+**truncated + warned**, not hard-rejected — a 4h stream/podcast is valid and the heuristics work on the
+first 4h; the cap is an OOM guard, configurable. Fixed a confirmed `_normalize_assemblyai` `None`-timestamp
+`TypeError`. Waveform timeout now scales with duration.
+
+**Issue 335 (youtube).** `parse_duration_seconds` keeps its `0.0` default on malformed ISO-8601 but now
+emits a **WARNING** (observability without breaking resilient catalog sync). Defensive `expires_at IS NULL`
+guard. Most `[BUG?]` items were already-correct (coverage-only).
+
+**Issue 336 (worker pipeline).** `render_clip` `SoftTimeLimitExceeded` is now **terminal** (mark failed +
+re-raise, no retry) — a soft-timeout would just time out again, a retry-storm; logs the timeout-vs-limit
+mismatch. WAV-skip short-circuit now probes integrity (zero-byte/unprobeable → re-extract). `_load_clip_render_plan`
+logs the anomalous running-with-render_uri state (keeps re-render). Publish quota-asymmetry + done-but-NULL-id logs.
+
+**Issue 337 (observability).** Two confirmed fixes: `_sentry_before_send` guards non-dict `extra` (a PII-scrub
+path that crashed → forwarded unredacted); `JsonLogFormatter` skips reserved output keys (`ts`/`level`/`logger`)
+so an extra field can't clobber the structured envelope. `/metrics` route wrapped so a gauge-collection error
+never 500s the scrape.
+
+**Issue 333 (LLM robustness).** `parse_candidates`/`parse_hook_report`/`parse_concepts` now catch
+`JSONDecodeError` and re-raise a contextful `ValueError` (graceful-degrade parity with `scoring`), instead of
+an opaque 500 on truncated output — pre-existing `test_hooks::test_parse_hook_report_invalid_json` was
+reconciled to the new contract. New shared `observability.log_llm_error(logger, exc, **ctx)` surfaces
+`status_code` + `retry-after` (DRY across the LLM call sites). Cache-floor (4096-char) + loop-bound guards
+were already correct (coverage-only).
+
+**Issue 340 (security/auth/crypto/isolation).** JWT `decode_session_token` now **requires `exp`**
+(`options={"require":["exp"]}`) and applies a 60s `leeway` on exp/iat (RFC 7519 NTP tolerance; rejects
+far-future `iat`). `channel_title` from YouTube is **clamped at ingestion** (`clamp_ingest_field`,
+`MAX_INGESTED_CHANNEL_TITLE_CHARS=200`) since it flows into every LLM system prompt (OWASP LLM01). RLS
+**deny-by-default unset-context** proof added (under `creatorclip_app` with no `app.creator_id` GUC, every
+RLS-gated tenant table returns zero rows). **Surfaced an open security gap** (`OFF_COURSE_BUGS.md`,
+2026-06-30): `improvement_briefs` + `creator_insights` lack RLS entirely — needs a migration.
+
+**Issue 339 (API routers).** `review.submit_feedback` gained trim/note validation (Pydantic
+`model_validator` + `feedback_note` max-length + clip-bounds check → 422) — it previously persisted
+unvalidated input into the preference-model feedback. List endpoints (`list_clips`, `list_publications`)
+now return an additive **`truncated: bool`** envelope field (limit+1 query, no COUNT round-trip) so silent
+top-N truncation is signaled. 404-vs-422 non-UUID inconsistency locked as intentional.
+
+**Source/evidence.** Per-issue industry-standard research (Anthropic prompt-injection + caching docs,
+OWASP LLM01/A09:2025/JWT cheat sheets, Celery idempotency doctrine, FastAPI TestClient patterns, ffmpeg-python
+test patterns, PostgreSQL RLS docs) — captured in each issue's CHECK brief. **Date:** 2026-06-30
