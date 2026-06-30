@@ -139,8 +139,19 @@ compute_features inverted/empty-window finiteness, extract_candidates post-snap 
 
 ## Issue 330: captions / filler / edits cut-list edge suite
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
+**Status** `DONE` (2026-06-30) · **Wave** W0 · **Lane** L21 · **Size** `S` · **Verify** `local`
 **Coordinate** `tests/test_captions.py`, `tests/test_filler.py`, `tests/test_edits.py`
+**Shipped:** two confirmed defects fixed + locked — (1) `captions._to_ms` crashed on a NaN/inf word
+timestamp (`int(round(nan))`→ValueError / `int(round(inf))`→OverflowError), taking down the whole
+caption render for one malformed word → finite guard + `_iter_clipped_words` now drops non-finite/inverted
+words at the source; (2) `edits.validate_user_cuts` leaked a bare `ValueError`/`TypeError`/`IndexError` on
+non-numeric input → now wrapped as `CutValidationError("invalid_segment")` (→422, not 500). Observability:
+`build_ass_subtitles`' three silent `None` returns now log the skip reason with context; the `edits`
+right-edge clamp logs when it moves the edge; NaN check switched to `math.isnan`. Defense-in-depth:
+`filler.detect_cut_segments` got an explicit `phrase_dur <= 0` skip; `±inf` cut bounds are rejected
+(out_of_bounds). Verified NOT live bugs (locked anyway): `filler` clip-window/emission guards,
+`percent_removed` merges-before-summing (no double-count), `_invert_cuts` adjacent/overlapping defensive
+cursor. `tests/test_cutlist_edges.py` (31 cases; real pysubs2 ASS write+reparse, no mocks).
 
 **Acceptance criteria**
 - [ ] `captions.build_ass_subtitles`: empty segments, no overlap with clip window, all-empty word text → returns `None` **and logs the skip with context** (today it's silent).

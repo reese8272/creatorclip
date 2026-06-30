@@ -35,6 +35,7 @@ References (Phase-1 research, ``docs/DECISIONS.md`` 2026-06-07):
 from __future__ import annotations
 
 import logging
+import math
 import string
 from collections import Counter
 from collections.abc import Iterator
@@ -192,6 +193,12 @@ def build_ass_subtitles(
         logger.warning("captions: unknown style %r — no subtitles generated", style)
         return None
     if not segments or clip_duration_s <= 0:
+        logger.info(
+            "captions: no subtitles — empty segments or non-positive duration "
+            "(segments=%d, clip_duration_s=%.3f)",
+            len(segments or []),
+            clip_duration_s,
+        )
         return None
 
     clip_end_s = clip_start_s + clip_duration_s
@@ -202,6 +209,11 @@ def build_ass_subtitles(
         if seg.get("end", 0.0) > clip_start_s and seg.get("start", 0.0) < clip_end_s
     ]
     if not clipped:
+        logger.info(
+            "captions: no subtitles — no transcript segments overlap clip window [%.3f, %.3f]",
+            clip_start_s,
+            clip_end_s,
+        )
         return None
 
     if style == "bold_pop":
@@ -214,6 +226,13 @@ def build_ass_subtitles(
         events = _build_minimal(clipped, clip_start_s, clip_end_s)
 
     if not events:
+        logger.info(
+            "captions: no subtitles — style %r produced no events for clip window "
+            "[%.3f, %.3f] (all words empty or zero-length)",
+            style,
+            clip_start_s,
+            clip_end_s,
+        )
         return None
 
     subs = pysubs2.SSAFile()
@@ -264,6 +283,12 @@ def _base_style(style: str, play_res_y: int = _PLAY_RES_Y) -> pysubs2.SSAStyle:
 
 
 def _to_ms(seconds: float) -> int:
+    # A non-finite (NaN/inf) word timestamp from a malformed transcript would crash
+    # int(round(...)) (ValueError/OverflowError) and take down the whole caption
+    # render. Treat it as 0 so the resulting zero-length event is dropped by the
+    # start<end guards instead. (Defense-in-depth; _iter_clipped_words also filters.)
+    if not math.isfinite(seconds):
+        return 0
     return max(0, int(round(seconds * 1000)))
 
 
@@ -276,7 +301,13 @@ def _iter_clipped_words(
 ) -> Iterator[dict]:
     for seg in segments:
         for w in seg.get("words") or []:
-            if w.get("end", 0.0) <= clip_start_s or w.get("start", 0.0) >= clip_end_s:
+            start = w.get("start", 0.0)
+            end = w.get("end", 0.0)
+            # Drop non-finite or inverted (end < start) word times at the source so
+            # event builders never emit malformed ASS timestamps.
+            if not (math.isfinite(start) and math.isfinite(end)) or end < start:
+                continue
+            if end <= clip_start_s or start >= clip_end_s:
                 continue
             yield w
 
