@@ -48,6 +48,7 @@ _ALLOWLIST: list[str] = [
     "never promise virality",
     "not promise virality",
     "not guaranteed",
+    "cannot guarantee",  # explicit negation in our Python disclaimers (Issue 340c)
     "No virality predictions made here",
     "Audience-fit over generic virality",
     "viral is not guaranteed",
