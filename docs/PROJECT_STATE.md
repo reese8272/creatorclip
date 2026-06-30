@@ -4,6 +4,28 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-30 — Issue 330 (L21): captions / filler / edits cut-list edge suite (2 confirmed defects fixed)
+
+**Branch** `claude/issue-workflows-test-coverage-59e15u`. First L21 edge issue after the lane repair.
+
+**Two confirmed latent defects fixed + locked:**
+- **`captions._to_ms` crashed on a non-finite word timestamp** — a single NaN/inf word from a malformed
+  transcript raised `ValueError`/`OverflowError` and killed the whole caption render. Added a `math.isfinite`
+  guard in `_to_ms` and a non-finite/inverted-word drop in `_iter_clipped_words`.
+- **`edits.validate_user_cuts` leaked a bare `ValueError`** on non-numeric input — would surface as a 500
+  instead of the typed `CutValidationError("invalid_segment")` → 422. Now wrapped.
+
+**Observability / hardening:** `build_ass_subtitles`' three silent `None` returns log the skip reason;
+the `edits` right-edge clamp logs when it moves the edge; NaN check uses `math.isnan`; `filler` got an
+explicit `phrase_dur <= 0` guard; `±inf` cut bounds rejected. Locked the already-correct paths
+(`percent_removed` merge-before-sum, `_invert_cuts` defensive cursor) with direct tests.
+
+**Gates.** `tests/test_cutlist_edges.py` — 31 cases, real pysubs2 ASS write+reparse (no mocks; these
+modules have no external deps). Unit lane **1805 passed, 0 failed**; clip eval gate 18/18; ruff + mypy
+clean on `clip_engine/{captions,filler,edits}.py`.
+
+---
+
 ## 2026-06-30 — Issue 344: live integration lane repaired + made order-independent (21→0 failures; 1 real compliance fix)
 
 **Branch** `claude/issue-workflows-test-coverage-59e15u`. **Directive:** no-mocks/live testing for

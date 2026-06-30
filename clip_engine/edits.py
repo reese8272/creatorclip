@@ -23,7 +23,11 @@ Other invariants:
 
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 # Minimum keep-segment duration (one frame at 25 fps). A keep segment below
 # this would generate a zero/sub-frame ``trim=start=X:end=Y`` that crashes
@@ -94,26 +98,38 @@ def validate_user_cuts(
 
     normalised: list[tuple[float, float]] = []
     for raw in segments:
-        if isinstance(raw, dict):
-            start = float(raw.get("start_s", raw.get("start", 0.0)))
-            end = float(raw.get("end_s", raw.get("end", 0.0)))
-        else:
-            start = float(raw[0])
-            end = float(raw[1])
-        if not (start == start and end == end):  # NaN check
+        # Non-numeric / malformed input must surface as a typed CutValidationError
+        # (→ 422 at the router), never a bare ValueError/TypeError/IndexError leaking
+        # as a 500. ``float("abc")`` and ``raw[0]`` on a non-sequence both raise here.
+        try:
+            if isinstance(raw, dict):
+                start = float(raw.get("start_s", raw.get("start", 0.0)))
+                end = float(raw.get("end_s", raw.get("end", 0.0)))
+            else:
+                start = float(raw[0])
+                end = float(raw[1])
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise CutValidationError(
+                "invalid_segment", f"non-numeric segment bounds: {raw!r}"
+            ) from exc
+        if math.isnan(start) or math.isnan(end):
             raise CutValidationError("invalid_segment", "NaN in segment bounds")
         if end <= start:
             raise CutValidationError(
                 "invalid_segment", f"segment end ({end}) must exceed start ({start})"
             )
         # Permissive right-edge bounds — allow up to one frame past clip duration.
+        # (±inf is rejected here: +inf trips this bound, -inf trips start < 0.)
         if start < 0 or end > clip_duration_s + MIN_KEEP_SEGMENT_S:
             raise CutValidationError(
                 "out_of_bounds",
                 f"segment ({start}, {end}) outside [0, {clip_duration_s}]",
             )
-        # Clamp end to the clip boundary so downstream math is exact.
-        end = min(end, clip_duration_s)
+        # Clamp end to the clip boundary so downstream math is exact. Log when the
+        # clamp actually moves the edge so a silent right-edge shrink is visible.
+        if end > clip_duration_s:
+            logger.debug("clamping cut end %.3f to clip duration %.3f", end, clip_duration_s)
+            end = clip_duration_s
         normalised.append((start, end))
 
     normalised.sort(key=lambda s: s[0])

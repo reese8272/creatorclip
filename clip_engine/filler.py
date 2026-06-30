@@ -148,6 +148,10 @@ def detect_cut_segments(
             phrase_start = float(in_window[i]["start"])
             phrase_end = float(in_window[j - 1]["end"])
             phrase_dur = phrase_end - phrase_start
+            # Explicit non-positive guard: an inverted/zero phrase span (malformed
+            # word times) must not slip past the positive-only `> max_dur` check.
+            if phrase_dur <= 0:
+                continue
             if phrase_dur > tier2_max_dur_s:
                 continue
             # Flank-gap test: gap >= flank_gap_s on at least one side.
