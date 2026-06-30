@@ -256,6 +256,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── test_upload_intel.py
 │   ├── test_model_config.py    # Issue 318 — per-task model key registry + literal ban (always runs)
 │   ├── test_llm_live.py        # Issue 319 — flag-gated live API tests (requires RUN_LLM_LIVE=1; mark: llm_live)
+│   ├── test_live_smoke.py      # Issue 341 — live smoke harness pure-logic tests (guard/fixture/args/result framework; always runs)
 │   ├── test_llm_conformance.py # Issue 320 — SDK conformance: singleton/timeout, typed exceptions, cache floors
 │   ├── test_usage_coverage.py  # Issue 321 — usage ledger coverage guard (all LLM tasks call record_llm_usage)
 │   ├── test_brief_quota.py     # Issue 321 — per-creator brief daily quota (BRIEF_DAILY_LIMIT_PER_CREATOR)
@@ -265,7 +266,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── scripts/
 │   ├── doctor.py               # Preflight secrets validator (presence/format/live, redacted) — deploy gate
 │   ├── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
-│   └── llm_e2e.py              # Live-API LLM verification harness (Issue 319); RUN_LLM_LIVE=1 guard
+│   ├── llm_e2e.py              # Live-API LLM verification harness (Issue 319); RUN_LLM_LIVE=1 guard
+│   └── live_smoke.py           # Live-in-isolation smoke harness (Issue 341, L22); RUN_LIVE_SMOKE=1 guard, --target/--only/--with-llm/--publish-live, synthetic canary
 │
 └── docs/
     ├── README.md              # ← START HERE: full documentation index (Issue 146)
