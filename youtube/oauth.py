@@ -23,6 +23,7 @@ from crypto import decrypt, encrypt
 from models import Creator, OnboardingState, YoutubeToken
 from youtube import _http
 from youtube._redis import get_redis_client
+from youtube.data_api import clamp_ingest_field
 
 logger = logging.getLogger(__name__)
 
@@ -170,11 +171,16 @@ async def fetch_creator_identity(access_token: str) -> dict:
         await _call_youtube_channels(access_token),
     )
     channel = (channels.get("items") or [{}])[0]
+    # Issue 340c: clamp channel_title at ingest boundary so adversarially-crafted
+    # YouTube channel names cannot act as prompt-injection payloads in LLM calls.
+    raw_channel_title: str | None = channel.get("snippet", {}).get("title")
     return {
         "google_sub": user_info["id"],
         "email": user_info.get("email"),
         "channel_id": channel.get("id"),
-        "channel_title": channel.get("snippet", {}).get("title"),
+        "channel_title": clamp_ingest_field(
+            raw_channel_title, settings.MAX_INGESTED_CHANNEL_TITLE_CHARS
+        ),
     }
 
 

@@ -25,7 +25,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
-from observability import record_llm_metric, warn_if_truncated
+from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def analyze_thumbnail_patterns(
             messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]  # SDK stub doesn't model a locally-built list[dict] of content blocks as valid content
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("thumbnail_patterns LLM error exc_type=%s", type(exc).__name__)
+        log_llm_error(logger, exc)
         raise
     vlog_llm_response("thumbnail_patterns", response=response)
 
@@ -276,7 +276,13 @@ def parse_concepts(raw_json: str) -> list[dict]:
     Returns up to CONCEPT_SURFACE_N concepts. Raises ValueError on malformed
     JSON or missing required fields so the caller can surface an error event.
     """
-    data = json.loads(extract_json_block(raw_json))
+    try:
+        data = json.loads(extract_json_block(raw_json))
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "thumbnails.parse_concepts: malformed JSON from LLM (truncated response?): %s", exc
+        )
+        raise ValueError(f"Malformed JSON from LLM (truncated response?): {exc}") from exc
     concepts = data.get("concepts")
     if not isinstance(concepts, list) or not concepts:
         raise ValueError("Claude response missing 'concepts' list")
@@ -333,9 +339,7 @@ def generate_thumbnail_concepts(
             tools=tools,
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error(
-            "thumbnail_concepts LLM error task=%s exc_type=%s", task_id, type(exc).__name__
-        )
+        log_llm_error(logger, exc, task=task_id)
         raise
     logger.info(
         "thumbnail_concepts tokens: in=%d cached_read=%d cached_write=%d out=%d",

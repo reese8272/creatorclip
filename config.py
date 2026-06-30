@@ -298,6 +298,15 @@ class Settings(BaseSettings):
     # ingestion is added later the guard is already in place and cannot be forgotten.
     # The clamp uses the same word-boundary rsplit pattern as titles (clamp_ingest_field).
     MAX_INGESTED_DESC_CHARS: int = 10000
+
+    # Issue 340c — ingest length clamp for YouTube channel titles.
+    # YouTube's published channel name limit is 100 characters (support.google.com/youtube/answer).
+    # 200 chars is a 2× safety margin. channel_title enters every LLM system prompt as factual
+    # context (knowledge/titles, hooks, thumbnails, scoring) — a malicious or pathologically
+    # long value could act as an injection payload (OWASP LLM01) or inflate token costs.
+    # Applied at the OAuth callback boundary (youtube/oauth.py::upsert_creator) and in the
+    # prompt-assembly path so injection cannot reach the LLM regardless of DB content.
+    MAX_INGESTED_CHANNEL_TITLE_CHARS: int = 200
     # ── Per-frame active-speaker reframe (Issue 189) ──────────────────────────
     # Gated off by default: the per-frame MediaPipe + sendcmd path has NEVER
     # been verified on a real render environment (ffmpeg + real multi-speaker
