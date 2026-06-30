@@ -356,3 +356,115 @@ def test_publish_outcome_updates_youtube_id_when_not_final():
     assert existing_outcome.published_youtube_id == vid
     assert existing_outcome.fetched_at == original_fetched
     success_session.add.assert_not_called()
+
+
+# ── Issue 336: quota asymmetry log on permanent upload failure ────────────────
+
+
+def test_publish_quota_asymmetry_logged_on_permanent_failure(caplog):
+    """When upload_video raises YouTubeUploadError after quota has already been
+    consumed, a WARNING about the quota asymmetry must be emitted. (Issue 336)"""
+    import logging
+
+    from worker.tasks import _publish_to_youtube_async
+    from youtube.publish import YouTubeUploadError
+
+    cid = uuid.uuid4()
+
+    clip_mock = MagicMock()
+    clip_mock.render_uri = "/tmp/c.mp4"
+    clip_mock.creator_id = uuid.uuid4()
+    clip_mock.video_id = uuid.uuid4()
+
+    video_mock = MagicMock()
+    video_mock.title = "Clip"
+
+    # Setup session: no existing publication, clip + video present.
+    setup_session = MagicMock()
+    setup_session.flush = AsyncMock()
+    setup_session.commit = AsyncMock()
+    setup_session.add = MagicMock()
+    no_existing_result = MagicMock()
+    no_existing_result.scalar_one_or_none = MagicMock(return_value=None)
+    setup_session.execute = AsyncMock(return_value=no_existing_result)
+    pub_row = MagicMock()
+    pub_row.id = uuid.uuid4()
+    setup_session.get = AsyncMock(side_effect=[clip_mock, video_mock])
+    setup_session.add.side_effect = lambda obj: setattr(obj, "id", pub_row.id)
+
+    # Failure session (marks pub as failed)
+    fail_session = MagicMock()
+    fail_session.commit = AsyncMock()
+    fail_row = MagicMock()
+    fail_session.get = AsyncMock(return_value=fail_row)
+
+    sessions_iter = iter([setup_session, fail_session])
+
+    local_path_cm = MagicMock()
+    local_path_cm.__aenter__ = AsyncMock(return_value=MagicMock())
+    local_path_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(next(sessions_iter))),
+        patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
+        patch("worker.storage.alocal_path", return_value=local_path_cm),
+        patch(
+            "youtube.publish.upload_video",
+            AsyncMock(side_effect=YouTubeUploadError(403, "forbidden by audit")),
+        ),
+        patch("youtube.quota.consume", AsyncMock()),
+        patch("config.settings") as mock_settings,
+        caplog.at_level(logging.WARNING, logger="worker.tasks"),
+    ):
+        mock_settings.YOUTUBE_PUBLISH_PRIVACY = "private"
+        with pytest.raises(YouTubeUploadError):
+            asyncio.run(_publish_to_youtube_async("task-asymmetry", str(cid)))
+
+    assert any(
+        "QUOTA ASYMMETRY" in record.message
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    ), "A QUOTA ASYMMETRY warning must be logged when upload fails after quota consumed"
+
+
+def test_publish_done_null_youtube_video_id_logs_warning(caplog):
+    """A ClipPublication row that is 'done' but has a NULL youtube_video_id bypasses
+    the idempotency guard (the task re-runs). A WARNING must be logged to alert
+    operators to this anomalous state. (Issue 336)"""
+    import logging
+
+    from worker.tasks import _publish_to_youtube_async
+
+    cid = uuid.uuid4()
+
+    # Existing publication: done but missing youtube_video_id (anomalous).
+    done_null = MagicMock()
+    done_null.status = PublishStatus.done
+    done_null.youtube_video_id = None
+
+    session = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=done_null)
+    session.get = AsyncMock(return_value=MagicMock())
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+    session.add = MagicMock()
+
+    # Provide a second session for the access-token + upload path.
+    # The task will proceed past the guard; raise ValueError on the next get so we
+    # stop early without needing to stub the whole upload chain.
+    session.get = AsyncMock(side_effect=ValueError("stop early — guard was bypassed"))
+
+    with (
+        patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(session)),
+        caplog.at_level(logging.WARNING, logger="worker.tasks"),
+    ):
+        with pytest.raises(ValueError, match="stop early"):
+            asyncio.run(_publish_to_youtube_async("task-null-yt", str(cid)))
+
+    assert any(
+        "youtube_video_id is NULL" in record.message
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    ), "A warning about done+NULL youtube_video_id must be logged"
