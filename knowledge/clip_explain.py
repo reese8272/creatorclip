@@ -26,7 +26,7 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,21 @@ VALID_PRINCIPLES: frozenset[str] = frozenset(
         "Clean Context Boundary",
     ]
 )
+
+# Native structured-output schema (Issue 342) — fence-free, schema-valid JSON so
+# `json.loads` can't crash on a markdown fence (Issue 341 finding). No web_search
+# here, so output_config.format is compatible. `cited_principle` is constrained to
+# the canonical enum, so the model cannot hallucinate a principle name at the API
+# layer (the `_parse_result` check below stays as defense-in-depth).
+_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "explanation": {"type": "string"},
+        "cited_principle": {"type": "string", "enum": sorted(VALID_PRINCIPLES)},
+    },
+    "required": ["explanation", "cited_principle"],
+    "additionalProperties": False,
+}
 
 # Block 1: static — byte-identical across all calls. Embeds the principle list so
 # the model can only cite a real principle from CLIPPING_PRINCIPLES.md.
@@ -166,7 +181,9 @@ def _parse_result(raw_json: str) -> dict:
     Raises ValueError on malformed JSON, missing fields, or an unknown principle —
     this prevents the model from hallucinating principle names.
     """
-    data = json.loads(raw_json)
+    # extract_json_block tolerates a fence/preamble as defense-in-depth even
+    # though output_config.format already constrains the response (Issue 342).
+    data = json.loads(extract_json_block(raw_json))
 
     explanation = str(data.get("explanation", "")).strip()
     if not explanation:
@@ -241,11 +258,12 @@ def generate_clip_explanation(
         messages=messages,
     )
     try:
-        response = _ANTHROPIC.messages.create(
+        response = _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_CLIP_EXPLAIN,
             max_tokens=512,
-            system=system,  # type: ignore[arg-type]
-            messages=messages,  # type: ignore[arg-type]
+            system=system,
+            messages=messages,
+            output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("clip_explain LLM error exc_type=%s", type(exc).__name__)

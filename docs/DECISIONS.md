@@ -5,6 +5,102 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-29 — Structured outputs vs robust extraction for JSON LLM responses (Issue 342)
+
+**What was decided.** Every JSON-returning LLM generator must guarantee a parseable response. Two
+mechanisms, chosen **per-site** by whether the call uses the web_search tool:
+- **No web_search → native structured outputs** (`output_config={"format":{"type":"json_schema",
+  "schema":…}}` on `messages.create`). Applied to `clip_titles`, `clip_captions`, `clip_explain`. The
+  API constrains the response to fence-free, schema-valid JSON — the markdown-fence parse crash becomes
+  structurally impossible. `clip_explain` additionally constrains `cited_principle` to the canonical
+  enum, blocking principle hallucination at the API layer.
+- **Uses web_search/citations → `extract_json_block` (robust extraction)**, because `output_config.format`
+  **400s when citations are enabled** (confirmed: `/claude-api` skill + the existing `knowledge/util.py`
+  docstring). Applied to `hooks` (web_search), and to `chapters`, `scoring`, `thumbnails` as the uniform
+  robustness layer. The three structured-output generators **also** route their parse through
+  `extract_json_block` as defense-in-depth (harmless when output is already fence-free; survives a future
+  SDK/flag change).
+
+**Why (the trigger).** The Issue 341 live smoke harness, on its first `--with-llm` run, caught
+`claude-sonnet-4-6` returning valid JSON wrapped in a ` ```json ` fence; the generators did a bare
+`json.loads(raw)` → `JSONDecodeError`. This broke the **deployed** Review features (322/323/325)
+intermittently. Mocked unit tests missed it (mocks return clean JSON). `knowledge/util.py:extract_json_block`
+already existed and its docstring described this exact failure — the crashing sites just never called it.
+
+**Deviation from the Issue 342 CHECK brief (logged here per CLAUDE.md).** The approved brief put `scoring`
+and `chapters` in Track A (structured outputs). Shipped them in Track B (`extract_json_block`) instead, to
+bound schema-authoring risk in this PR and because `scoring` is the core ranking path (higher stakes —
+defer the schema). Extraction fully eliminates the crash class at those sites; structured outputs can be
+layered on later. Net coverage of the bug is unchanged.
+
+**Industry standard checked (verified 2026-06-29, `/claude-api` skill + live test at SDK 0.105.2).** Native
+structured outputs is the current Anthropic best practice for guaranteed-parseable JSON; GA on Sonnet 4.6;
+requires `additionalProperties:false` on every object; **incompatible with citations** and assistant prefill
+(prefill 400s on the 4.6+ family). Does **not** guarantee conformance on `stop_reason` refusal/`max_tokens`
+— so it composes with, not replaces, Issue 331's truncation handling.
+
+**Alternatives ruled out.** `extract_json_block` everywhere (simpler, uniform) — kept only where citations
+forbid structured outputs, since extraction is best-effort (a truncated `{"titles":[{"title":"…` still
+fails after fence-strip, whereas structured outputs prevents it). Forced `tool_use` — works but adds tool
+indirection for a pure JSON return. Assistant prefill — 400s on 4.6+.
+
+**Evidence.** `tests/test_llm_fence_parsing.py` (6 tests: fenced JSON through each parser, previously a
+crash). Live: the Issue 341 harness `--with-llm --only {title,caption,explain}` now passes (was 0/1 fail).
+Full unit lane 1778 passed / 0 failed; ruff + mypy clean on all touched files.
+
+---
+
+## 2026-06-29 — Live-in-isolation smoke harness: flag-gated synthetic canary (Issue 341, Lane L22)
+
+**What was decided.** A new `scripts/live_smoke.py` exercises the real pipeline capabilities against a
+**deployed** target (Postgres + R2 + ffmpeg + Anthropic), one capability at a time, isolated to a
+synthetic `__smoke_canary__` creator with deterministic `uuid5` ids. It is the post-deploy "does it
+actually still work?" check that the mocked unit lane and the LLM-only `scripts/llm_e2e.py` cannot
+answer. Filed as a new lane **L22 — Live Smoke** (Issue 341) to keep it distinct from the L21
+edge-case unit/integration lane and the L20 LLM track.
+
+**Capability separability (the design question).** The pipeline is a data-dependency DAG: one
+indivisible upstream chain (`ingest→transcribe→build_signals→generate_clips`) plus a fan-out of
+**independent** leaf operations (render, clean, cuts, title, caption, explain, publish). The leaves are
+NOT too interrelated to separate — they all fan out from a saved clip and depend only on that clip +
+its transcript/source. They are isolated by operating on a **persistent seeded canary fixture**, so
+each runs standalone (`--only render`). Tier-1 is therefore one checkpointed E2E read (assert each
+stage boundary); Tier-2 is six independent checks sharing the canary.
+
+**Why these specific safety choices.**
+- **Flag-selectable target (`--target prod|staging`)** is the synthetic-monitoring standard: the same
+  checks run as a staging pre-promotion gate AND as post-deploy production checks, with the hard rule
+  that production checks stay read-only or run against an isolated test account.
+- **Publish is a destructive "unsafe synthetic transaction"** → dry-run / pre-flight only by default;
+  a real upload requires `--publish-live` AND `--target staging` (a throwaway channel) and is *refused
+  on prod*. There is no safe "test value" override for a real `videos.insert`.
+- **Metered LLM checks are gated behind `--with-llm`** (off by default) so the free, deterministic core
+  (db/isolation/pipeline/render/clean) runs without token spend and without duplicating Issue 319's
+  nightly LLM coverage.
+- **Run guard `RUN_LIVE_SMOKE=1`** mirrors `RUN_LLM_LIVE` — the harness exits 0 immediately when unset,
+  so it can never fire from the default unit lane.
+
+**Industry standard checked (verified 2026-06-29).** Synthetic / post-deploy smoke monitoring:
+[Datadog — smoke testing with synthetic monitoring](https://www.datadoghq.com/blog/smoke-testing-synthetic-monitoring/),
+[BugRaptors — smoke testing in staging & production](https://www.bugraptors.com/blog/smoke-testing-in-production-staging),
+[Harness — CI/CD smoke testing](https://www.harness.io/harness-devops-academy/integrating-smoke-testing-into-your-ci-cd-pipeline-what-devops-needs-to-know);
+unsafe-synthetic-transaction handling (dry-run / test-value override / dedicated test account + cleanup):
+[Martin Fowler — Synthetic Monitoring](https://martinfowler.com/bliki/SyntheticMonitoring.html),
+[Checkly](https://www.checklyhq.com/blog/what-is-monitoring/).
+
+**Alternatives ruled out.** Promote the L21 `integration` tests to "live" — they need Docker/PG we
+don't have locally and never touch R2/ffmpeg/the deployed surface. Extend `llm_e2e.py` — it is
+LLM-scoped; the render/R2/pipeline assertions don't belong there. A pure read-only prod healthcheck —
+can't verify render or clip *generation*, which is the product.
+
+**Verification.** The harness's pure logic is unit-tested offline (`tests/test_live_smoke.py`: run
+guard, deterministic fixture, arg parsing, result framework, PG-URL normalization, publish
+safety-refusal — 13 tests). The *live* assertions (DB/R2/ffmpeg/Anthropic) are **staging-pending**:
+they run only against a deployed target with `RUN_LIVE_SMOKE=1`, exactly like Issue 319's external
+lane. `scripts/` is outside the Layer-0 coverage source set and bandit scan, so no gate regression.
+
+---
+
 ## 2026-06-29 — Auto-render downloads the source ONCE per video (batch render task)
 
 **What changed.** The auto-render path no longer enqueues N independent `render_clip` jobs (one

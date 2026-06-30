@@ -23,7 +23,7 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,45 @@ Rules:
   - Return valid JSON ONLY."""
 
 
+# Native structured-output schema (Issue 342). Constrains the response to
+# fence-free, schema-valid JSON so a `json.loads` can never crash on a markdown
+# fence — the failure the Issue 341 live smoke harness surfaced. No web_search /
+# citations here, so output_config.format is compatible. Every object carries
+# `additionalProperties: false` (required by the json_schema format).
+_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "titles": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "ctr_signal": {"type": "string", "enum": ["up", "neutral", "down"]},
+                },
+                "required": ["title", "rationale", "ctr_signal"],
+                "additionalProperties": False,
+            },
+        },
+        "hook_rewrites": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "rewrite": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["rewrite", "rationale"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["titles", "hook_rewrites"],
+    "additionalProperties": False,
+}
+
+
 def _build_request(
     channel_title: str,
     dna_brief: str | None,
@@ -135,7 +174,9 @@ def _parse_result(raw_json: str) -> dict:
     ``hook_rewrites`` (list, 1–2 items). Raises ValueError on malformed JSON or
     schema violations so the caller can surface a 502 error cleanly.
     """
-    data = json.loads(raw_json)
+    # extract_json_block tolerates a markdown fence / preamble as defense-in-depth
+    # even though output_config.format already constrains the response (Issue 342).
+    data = json.loads(extract_json_block(raw_json))
 
     raw_titles = data.get("titles")
     if not isinstance(raw_titles, list) or not raw_titles:
@@ -217,11 +258,12 @@ def generate_clip_title_suggestions(
         messages=messages,
     )
     try:
-        response = _ANTHROPIC.messages.create(
+        response = _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_CLIP_TITLES,
             max_tokens=1024,
-            system=system,  # type: ignore[arg-type]
-            messages=messages,  # type: ignore[arg-type]
+            system=system,
+            messages=messages,
+            output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("clip_title_suggestions LLM error exc_type=%s", type(exc).__name__)

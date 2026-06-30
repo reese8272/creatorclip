@@ -129,7 +129,8 @@ deduped from 32 raw gaps)** and **13 decision recommendations** folded into the 
 | **QA & Release Engineering** | 265 266 267 269 270 271 273 274 | 268 272 294 295 297 | 298 | 296 | 303 | · |
 | **Deploy Gates (Launch Track)** | 24 25 26 | 28 | · | · | · | 30 |
 | **Carry-over & Cleanup** | 73 75 76 82 132 150 | 151 | 78 109 | · | · | · |
-| **LLM Features & Hardening** _(NEW — active beta track)_ | 318 319 320 321 | 322 323 324 325 | · | · | · | · |
+| **LLM Features & Hardening** _(NEW — active beta track)_ | 318 319 320 321 342 | 322 323 324 325 | · | · | · | · |
+| **Live Smoke** _(L22 — post-deploy canary)_ | 341 | · | · | · | · | · |
 
 *138 open issues across 19 lanes and 6 waves, plus the new **L20 LLM Features & Hardening** lane (318–325).
 **Scope (2026-06-26):** the build-for-10k infra is DESCOPED for the ≤100-user beta — Lane **L12** in full and
@@ -5721,6 +5722,46 @@ as an expandable "Why this clip" explanation. Reuse the cached DNA prefix.
 
 **Verification** — `local`: mocked SDK + DB; live behavior via 319.
 
+### Issue 342: Force structured outputs on JSON-returning LLM generators (kill the markdown-fence parse crash)
+
+**Status** `DONE` (2026-06-29; LIVE-verified via the 341 harness) · **Wave** W0 · **Lane** L20 · **Size** `M` · **Verify** `local` (fenced-JSON regression) + `external` (live via 341/319)
+**Found by** Issue 341 live smoke harness (2026-06-29); logged in `docs/OFF_COURSE_BUGS.md`
+**Coordinate (hot files)** `knowledge/clip_titles.py`, `knowledge/clip_captions.py`, `knowledge/clip_explain.py`,
+`knowledge/chapters.py`, `knowledge/hooks.py`, `clip_engine/scoring.py`, `knowledge/util.py`
+
+**Problem.** The per-clip LLM generators crash on the **real** API: `claude-sonnet-4-6` returns valid JSON
+wrapped in a ` ```json ` markdown fence and the generators do a bare `json.loads(raw)` →
+`JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. This breaks the **deployed** Review features
+(Issues 322/323/325) intermittently (fencing is stochastic → "AI suggestions temporarily unavailable").
+Mocked unit tests never caught it (mocks return clean JSON). `knowledge/util.py:extract_json_block` already
+exists and its docstring describes this exact failure — but the crashing sites don't call it.
+
+**Two-track fix (per-site, because structured outputs is incompatible with web_search citations).**
+- **Track A — no web_search → native structured outputs** (`output_config={"format":{"type":"json_schema",
+  "schema":…}}` on `messages.create`, GA on Sonnet 4.6): `clip_titles`, `clip_captions`, `clip_explain`,
+  `chapters`, `scoring`. Hard API guarantee — fence-free, schema-valid; eliminates the failure class.
+- **Track B — uses web_search/citations (structured output 400s with citations) → route through
+  `extract_json_block`**: `hooks` (currently bare = the same latent bug). `titles`/`thumbnails:277` already
+  do this; audit `thumbnails:174`.
+- Regression: a unit test feeding **fenced** JSON through each generator (so the unit lane catches this
+  class next time — the gap that let it ship). Compose with Issue 331 (`stop_reason` refusal/`max_tokens`
+  still handled — structured outputs doesn't guarantee conformance on truncation/refusal).
+
+**Acceptance criteria**
+- [x] Track-A generators (`clip_titles`/`clip_captions`/`clip_explain`) use `output_config.format`; fenced response no longer crashes; output schema-valid (`clip_explain` enum-constrains `cited_principle`)
+- [x] Track-B generators (`hooks` web_search, `chapters`, `scoring`, `thumbnails:174`) route JSON through `extract_json_block`; clip_* trio also routes through it (defense-in-depth)
+- [x] Per-generator unit regression: a `` ```json ``-fenced response parses cleanly (`tests/test_llm_fence_parsing.py`, 6 tests) — was a crash
+- [x] `additionalProperties:false` on every schema; refusal/`max_tokens` path still falls back gracefully (331 unchanged)
+- [x] Live re-run via the 341 harness (`--with-llm`) passes title/caption/explain (was 0/1 fail → now title 3/3, caption 3/3, explain 2/2)
+- [x] `docs/OFF_COURSE_BUGS.md` row flipped to fixed; `docs/DECISIONS.md` records the two-track rule + citation incompatibility + the scoring/chapters deviation
+- [~] **Deviation:** `scoring`/`chapters` shipped via `extract_json_block` (Track B), not structured outputs — structured outputs deferrable; see DECISIONS 2026-06-29
+
+**`[DEC]` DECISIONS.md** — record: structured outputs is the standard for JSON responses, but
+web_search+citations endpoints must use `extract_json_block` (output_config.format 400s with citations).
+
+**Verification** — `local`: fenced-JSON regression in the unit lane (mocked). `external`: the live
+title/caption/explain pass is confirmed by the Issue 341 harness with `--with-llm`.
+
 ---
 
 ## Deferred parking lot (explicitly out of v1)
@@ -5753,6 +5794,47 @@ gap. Full lane (per-issue ACs + the systemic malformed-geometry finding + the su
 lives in **`docs/issues_edge_case_hardening.md`**; findings folded in from
 `docs/assessment/LLM_RENDER_VIDEO_ASSESSMENT.md`. W0/`local` issues (327–333, 338, 340-unit) are
 startable on the dev box today; the rest need staging/render-env/recorded fixtures.
+
+---
+
+## Lane L22 — Live Smoke (post-deploy synthetic canary)
+
+Per-capability **live** smoke checks against a deployed target, isolated to a synthetic canary creator
+— the post-deploy "does it actually still work?" lane the mocked unit lane and the LLM-only
+`scripts/llm_e2e.py` cannot cover. Design + safety rationale in `docs/DECISIONS.md` (2026-06-29).
+
+### Issue 341: Live-in-isolation smoke-test harness
+
+**Status** `DONE (offline-verified; live assertions staging-pending)` (2026-06-29) · **Wave** W0 ·
+**Lane** L22 · **Size** `M` · **Verify** `external` (live target) + `local` (pure-logic unit tests)
+**Coordinate (new files)** `scripts/live_smoke.py`, `tests/test_live_smoke.py`
+
+**Problem.** Nothing exercises the real pipeline (DB + R2 + ffmpeg + Anthropic) end-to-end against the
+deployed VM. After a deploy we can't answer "can a creator still upload→get clips→render→caption→title?"
+without manual poking.
+
+**Approach.** `scripts/live_smoke.py` (flag-gated `RUN_LIVE_SMOKE=1`, mirroring `llm_e2e.py`) on the
+synthetic-canary pattern. `--seed` installs a deterministic `__smoke_canary__` creator + video + clip.
+Checks: **Tier-1** `pipeline` (checkpointed read of ingest→transcript→signals→clip) + `db` + `isolation`
+(RLS cross-tenant proof) + `r2`; **Tier-2** independent leaves `render`, `clean`, `title`, `caption`,
+`explain`, `publish` — each runnable standalone via `--only`. `--target prod|staging` selects the env
+file; `--with-llm` gates metered checks; publish is dry-run unless `--publish-live` + `--target staging`
+(refused on prod); `--teardown` purges the canary. Every write is confined to the canary namespace.
+
+**Acceptance criteria**
+- [x] `--seed`/`--teardown`/`--only`/`--with-llm`/`--publish-live`/`--target` wired; `RUN_LIVE_SMOKE`
+      guard exits 0 when unset (no live calls from the default lane)
+- [x] Deterministic `uuid5` canary fixture; render writes namespaced to `smoke/<creator>/`
+- [x] Tier-1 checkpointed pipeline read + live RLS isolation assertion
+- [x] Tier-2 leaf checks (render/clean via real ffmpeg; title/caption/explain via the real generators)
+- [x] Publish dry-run by default; real upload refused on a non-staging target
+- [x] `tests/test_live_smoke.py` — run guard, fixture determinism, arg parsing, result framework,
+      PG-URL normalization, publish safety-refusal (13 tests; offline)
+- [ ] **Staging-pending:** run the live assertions against a deployed target (`RUN_LIVE_SMOKE=1`)
+- [ ] **Open follow-up:** wire a real staging publish (dedicated throwaway channel + OAuth) — out of v1 scope
+
+**`[DEC]` DECISIONS.md** — recorded 2026-06-29 (flag-gated synthetic canary, target flag, publish
+dry-run, LLM gating, capability-separability DAG).
 
 ---
 

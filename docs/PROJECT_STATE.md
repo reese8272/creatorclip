@@ -4,6 +4,62 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-29 — Issue 342: structured outputs kill the markdown-fence LLM parse crash (caught by the 341 harness)
+
+**Branch** continues on `claude/llm-rendering-video-assessment-81dy8o` (feature branch; **NOT merged, NOT deployed**).
+
+**Context.** The Issue 341 live smoke harness, on its first `--with-llm` run against the real API, caught a
+**deployed** bug: `claude-sonnet-4-6` wraps JSON in a ` ```json ` fence and the generators did a bare
+`json.loads(raw)` → `JSONDecodeError`, breaking the Review per-clip features (322/323/325) intermittently.
+Mocked tests missed it. Filed + fixed as **Issue 342** (L20) through the CHECK→APPROVE→BUILD workflow.
+
+**Shipped.**
+- **Track A — native structured outputs** (`output_config.format`) on `clip_titles`, `clip_captions`,
+  `clip_explain` (no web_search). `clip_explain` enum-constrains `cited_principle` (no principle
+  hallucination). Live-verified at SDK 0.105.2: fence-free, `json.loads` clean.
+- **Track B — `extract_json_block`** on `hooks` (web_search → structured output 400s with citations),
+  `chapters`, `scoring`, `thumbnails`; the clip_* trio also routes through it as defense-in-depth.
+- `tests/test_llm_fence_parsing.py` — 6 regression tests feeding fenced JSON to each parser (the unit-lane
+  gap). Docs: `DECISIONS.md` (two-track rule + citation incompatibility + scoring/chapters deviation),
+  `issues.md` (342 DONE), `OFF_COURSE_BUGS.md` (row → fixed).
+
+**Gates.** Full unit lane **1778 passed, 0 failed** (+6). ruff + mypy clean on all 7 touched files.
+**Live:** 341 harness `--with-llm` → title 3/3, caption 3/3, explain 2/2 (was 0 passed / 1 fail).
+
+**Deviation (logged).** `scoring`/`chapters` shipped via `extract_json_block` rather than structured
+outputs (brief had them in Track A) — bounds schema-authoring risk; structured outputs deferrable.
+
+---
+
+## 2026-06-29 — Lane L22 Live Smoke: live-in-isolation smoke harness (Issue 341)
+
+**Branch** continues on `claude/llm-rendering-video-assessment-81dy8o` (feature branch; **NOT merged, NOT deployed**).
+
+**Context.** Added a new lane **L22 — Live Smoke** for post-deploy synthetic-canary checks the mocked
+unit lane and the LLM-only `scripts/llm_e2e.py` cannot cover. The pipeline is a DAG: one indivisible
+upstream chain (`ingest→transcribe→signals→generate_clips`) plus a fan-out of **independent** leaf
+operations — so the capabilities separate cleanly when isolated to a persistent seeded canary.
+
+**Shipped (Issue 341).**
+- `scripts/live_smoke.py` — `RUN_LIVE_SMOKE=1`-gated harness (mirrors `llm_e2e.py`). Deterministic
+  `__smoke_canary__` fixture (`uuid5`). Checks: `db`, `isolation` (live RLS cross-tenant proof),
+  `pipeline` (Tier-1 checkpointed read), `render`/`clean` (real ffmpeg), `title`/`caption`/`explain`
+  (real generators), `publish` (dry-run), `r2`. `--target prod|staging`, `--only`, `--with-llm`,
+  `--publish-live` (refused off staging), `--seed`/`--teardown` (canary-namespaced writes only).
+- `tests/test_live_smoke.py` — 13 offline tests: run guard, fixture determinism, arg parsing, result
+  framework, PG-URL normalization, publish safety-refusal.
+- Docs: `DECISIONS.md` (flag-gated synthetic canary + safety rationale + sources), `issues.md` (L22 +
+  Issue 341), `SOT.md`, `.env.example` (`RUN_LIVE_SMOKE`).
+
+**Gates.** Full unit lane **1772 passed, 0 failed** (+13 new); ruff + mypy clean on the new files.
+`scripts/` is outside the Layer-0 coverage source set and bandit scan → no gate regression.
+
+**Staging-pending.** The *live* assertions (DB/R2/ffmpeg/Anthropic) run only against a deployed target
+with `RUN_LIVE_SMOKE=1` — same external posture as Issue 319. A real staging publish (dedicated
+throwaway channel + OAuth) is an explicit out-of-v1-scope follow-up.
+
+---
+
 ## 2026-06-28 — Pre-production assessment + Lane L21 edge-case hardening (Issues 327/328/331/332/338)
 
 **Branch** `claude/llm-rendering-video-assessment-81dy8o` (pushed to origin; **NOT merged to main, NOT deployed**).

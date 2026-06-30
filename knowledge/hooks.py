@@ -19,7 +19,7 @@ import numpy as np
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block
 from observability import record_llm_tokens
 
 logger = logging.getLogger(__name__)
@@ -131,7 +131,10 @@ def parse_hook_report(raw_json: str) -> dict:
     Returns a dict with all required HookReport fields.
     Raises ValueError on malformed JSON or missing required fields.
     """
-    data = json.loads(raw_json)
+    # hooks uses the web_search tool (citations), so output_config.format is NOT
+    # available here (it 400s with citations) — extract_json_block is the correct
+    # layer to tolerate a markdown fence / preamble around the JSON (Issue 342).
+    data = json.loads(extract_json_block(raw_json))
     required = {"diagnosis", "rewrite_suggestion", "honesty_disclaimer", "transcript_at_drop"}
     missing = required - set(data.keys())
     if missing:

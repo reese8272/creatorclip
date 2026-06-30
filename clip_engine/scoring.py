@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
@@ -373,7 +373,10 @@ async def score_candidates(
 
     text = next((b.text for b in response.content if b.type == "text"), "[]")
     try:
-        scored = json.loads(text)
+        # extract_json_block strips a markdown fence / preamble the live API may
+        # emit (Issue 342); without it a fenced response silently fell back to
+        # signal-only scores instead of using the LLM ranks.
+        scored = json.loads(extract_json_block(text))
     except json.JSONDecodeError:
         logger.warning("Claude scoring returned non-JSON; falling back to signal scores")
         scored = []

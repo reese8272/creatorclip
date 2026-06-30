@@ -171,7 +171,9 @@ def analyze_thumbnail_patterns(
 
     raw = next((b.text for b in response.content if b.type == "text"), "")
     try:
-        return json.loads(raw)
+        # extract_json_block strips a markdown fence / preamble (Issue 342) so a
+        # fenced vision response is parsed instead of silently returning empty.
+        return json.loads(extract_json_block(raw))
     except (json.JSONDecodeError, ValueError):
         logger.warning("thumbnail_patterns: could not parse Claude response; returning empty")
         return _empty_patterns()
