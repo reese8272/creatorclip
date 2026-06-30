@@ -1,40 +1,63 @@
-# LEFT_OFF — smoke harness (#341) → caught 2 prod issues → fixed (#342 fence crash, #343 RLS)
+# LEFT_OFF — live-testing push: repaired the bit-rotted integration lane (#344) + L21 #330 cut-list edges
 
 > **Read this first.** Living "where we are right now" handoff for a fresh session with zero memory.
 > Source-of-truth docs live in `docs/`; this file orients and points to them — it is NOT a source of truth.
 
-> **🔒 #343 (SEV1) FIXED + VERIFIED LIVE (2026-06-30):** prod RLS tenant isolation is now enforced — the
-> app connects as `creatorclip_app` (no BYPASSRLS); `DATABASE_MIGRATION_URL` = superuser `creatorclip` for
-> Alembic + worker sweeps. Verified: wrong-tenant→0 rows, real creator→their rows, app+worker healthy.
-> Rollback = VM `.env.bak-pre-rls*` → `DATABASE_URL` back to `creatorclip` + recreate. **Deferred:** the
-> optional full ownership transfer to a dedicated `creatorclip_migrate` (DECISIONS 2026-06-30).
+> **Directive this session (user):** *NO MOCKS — live testing only* for everything we can control/reach
+> (real Postgres/Redis/ffmpeg here; Anthropic/Voyage/Stripe/YouTube need the VM's keys, so those stay
+> live-capable + flag-gated, never silently mocked). "Fix the integration lane first, then the L21 edges."
 
 **Last updated:** 2026-06-30
-**Branch / HEAD:** `main` @ **`34b231f`** — **in sync with `origin/main`** (0 ahead / 0 behind).
-**Working tree:** clean except untracked `notes_for_issues.txt` (the user's scratch notes — leave it).
-**CI / deploy:** ✅ This work is **merged to `main` and DEPLOYED to the live VM** — `Docker publish`
-(`28413024753`) + `Deploy to production` (`28413071745`) both **success** (2026-06-30).
+**Branch / HEAD:** `claude/issue-workflows-test-coverage-59e15u` @ **`a3fc965`** — pushed to origin,
+**2 commits ahead of `main`** (`337f52d` #344, `a3fc965` #330). **NOT merged to `main`, NOT deployed.**
+**Working tree:** clean.
+**CI / deploy:** not yet PR'd. CI already runs `pytest -m integration` on every PR (job exists in
+`.github/workflows/ci.yml`) — it was sitting red/unenforced, which is how the lane rotted; it is now green.
+
+> **Note:** prior session's #341/#342/#343 work (smoke harness, LLM fence fix, prod RLS role split) is on
+> `main` and DEPLOYED — unchanged by this branch. RLS tenant isolation remains enforced in prod
+> (`creatorclip_app`, no BYPASSRLS). This branch is purely test-fidelity + 2 edge-case product fixes.
 
 ---
 
-## CURRENT FOCUS — this session (DONE & shipped)
+## CURRENT FOCUS — this session (DONE on the branch; awaiting PR)
 
-Built a **live-in-isolation smoke-test harness** (Issue **341**, new Lane **L22 — Live Smoke**); on its
-first live run it **caught a deployed bug** (LLM generators crashed on the real API's markdown-fenced
-JSON); filed + fixed that as Issue **342** and deployed the repair. Both are on `main` and live.
+The integration (`-m integration`) lane had **bit-rotted to 21/134 failing** — CI's integration job sat
+red/unenforced and nothing ran it locally. Provisioned the live services this box was missing (PG16 role
++ db + pgvector + `alembic upgrade head`, Redis, ffmpeg) and drove it green.
+
+- **Issue 344 — integration-lane repair (21→0):** conformed stale LLM mock stubs to the real
+  `(text, usage)` contract; seeded the minutes gate + Issue-206 `payment_status` webhook guard the
+  fixtures predated; **1 real compliance fix** — `AuditLog.before/after_jsonb` stored the JSONB `'null'`
+  literal not SQL NULL (`JSONB(none_as_null=True)`, no DDL), so the never-purged `creator.deleted` audit
+  again satisfies Issue 247's "no PII payload" invariant; rewrote the per-creator-median test around
+  Issue 201's ≥3 comparable-Shorts baseline. **Systemic:** autouse per-integration-test DB isolation
+  (TRUNCATE domain tables + clear leaked session-level advisory locks) so the lane is order-independent.
+  **134 integration passed** (deterministic + random seeds 1/42).
+- **Issue 330 (L21) — captions/filler/edits cut-list edges:** 2 confirmed defects fixed — `captions._to_ms`
+  crashed the whole render on a NaN/inf word timestamp; `edits.validate_user_cuts` leaked a bare
+  `ValueError` (500 vs typed 422). Plus logged silent skip-paths + defense-in-depth guards.
+  `tests/test_cutlist_edges.py` (31 cases, real pysubs2 ASS write+reparse, no mocks).
+
+**Gates green:** unit lane **1805 passed / 0 failed**; integration **134 passed**; clip eval 18/18; ruff +
+mypy clean on all touched files.
 
 ### → NEXT ACTION (pick one — nothing is blocked)
 
-1. **Run the full harness against the live VM** (the checks that can't run on the dev box — no creds /
-   no ffmpeg here): on a box with the prod `.env` (or on the VM),
-   `RUN_LIVE_SMOKE=1 python3.12 scripts/live_smoke.py --target prod --seed` then drop `--seed` for
-   subsequent runs. `db / isolation(RLS) / pipeline / render / clean / r2` only run there;
-   `title/caption/explain` (`--with-llm`) + `publish` (dry-run) are already green from the dev box.
-   **Teardown after:** `--teardown` (purges the `__smoke_canary__` creator + its `smoke/<id>/` R2 prefix).
-2. **Identify the next batch of smoke checks** (user's "identify more smoke testing"): account
-   deletion/erasure, billing deduct/refund, real-staging publish path, SSE task stream.
-3. **Optional follow-up on #342:** layer native structured outputs onto `scoring`/`chapters` too (they
-   shipped via `extract_json_block` — the logged deviation; see `docs/DECISIONS.md` 2026-06-30).
+1. **Continue Lane L21 — recommended next is #340** (security/auth/crypto/billing/RLS — flagged
+   highest-priority, has explicit attack tests that don't exist yet: JWT `alg:none`, RLS missing-context
+   isolation). The RLS half is now runnable here against the live Postgres + the new per-test isolation
+   fixture. Alternative: **#333** (LLM robustness — parse/injection/errors/cache, pure `local`).
+2. **Open a PR** for this branch (#344 + #330) and let CI's now-meaningful integration gate run it.
+3. **Product follow-up logged in `OFF_COURSE_BUGS.md` (2026-06-30):** the Beat-task `pg_advisory_lock`
+   release can be skipped if the `finally` rollback raises on a dead-loop connection → a leaked lock makes
+   later polls skip until pool recycle. Test lane is protected; triage the product fix
+   (`pg_advisory_xact_lock` or unlock-on-fresh-connection + a skip metric).
+
+### Remaining L21 (after #330)
+- `local`-runnable: **329** (logic), **333**, **340** (unit half).
+- `integration`/`render-env`: **334, 335, 336, 337, 339**, **340** (RLS), **329** (real ffmpeg).
+- See `docs/issues_edge_case_hardening.md`. DONE so far: 327, 328, 330, 331, 332, 338.
 
 ### Outstanding on `main` (prior sessions — unchanged, still pending external setup)
 
@@ -46,13 +69,8 @@ The observability/DR/"moat" work is deployed but still needs its one-sitting liv
   Lock (Compliance ≥14d). Runbook: `docs/RUNBOOKS.md` → Disaster Recovery.
 - **The moat (#198/#200/#201/#202):** run `scripts/eval_efficacy.py` on real PG; half-life sweep;
   `performed_well` bias before/after; `clip_impressions` RLS integration test.
-
-### Lower-priority follow-ups (still open)
-- **Lane L21 edge-case hardening:** Issues **329, 330, 333, 334** (`local`-runnable) + **335–340**
-  (`integration`/render-env) still OPEN — `docs/issues_edge_case_hardening.md`.
-- **Render DB cleanup:** remove the temporary IP-allowlist entry on the (empty) Render `creatorclip-db`.
-- **~20 YouTube-linked videos at `ingest_status=pending`** — confirm "linked but never queued" (expected
-  per Issue 317), not a stuck queue.
+- **Live smoke harness (#341):** run the full harness against the VM
+  (`RUN_LIVE_SMOKE=1 python3.12 scripts/live_smoke.py --target prod --seed`, then `--teardown`).
 
 ---
 
