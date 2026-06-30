@@ -36,6 +36,13 @@ def probe_duration_s(path: str | Path) -> float | None:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
+        if result.returncode != 0:
+            logger.warning(
+                "ffprobe probe failed for %s (rc=%d): %s",
+                path,
+                result.returncode,
+                result.stderr[:500],
+            )
     except Exception as exc:
         logger.warning("ffprobe duration probe failed for %s: %s", path, exc)
     return None
