@@ -70,6 +70,12 @@ _RESERVED_LOGRECORD = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__
     "taskName",
 }
 
+# Output-key names written directly into the payload by JsonLogFormatter.format().
+# Extra fields carrying these names must be skipped so they cannot clobber the
+# structured log envelope (ts / level / logger are formatter artifacts, not
+# LogRecord attributes, so they do NOT appear in _RESERVED_LOGRECORD).
+_RESERVED_OUTPUT_KEYS: frozenset[str] = frozenset({"ts", "level", "logger"})
+
 
 # ── Metrics (golden signals) ─────────────────────────────────────────────────
 # Latency (histogram) + traffic/errors (the histogram's _count, labelled by
@@ -279,7 +285,9 @@ class JsonLogFormatter(logging.Formatter):
         extra: dict[str, Any] = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in _RESERVED_LOGRECORD and not key.startswith("_")
+            if key not in _RESERVED_LOGRECORD
+            and key not in _RESERVED_OUTPUT_KEYS
+            and not key.startswith("_")
         }
         payload.update(scrub_dict(extra) if self._scrub else extra)
         if record.exc_info:
@@ -517,7 +525,7 @@ def _sentry_before_send(event: Event, hint: dict[str, Any]) -> Event | None:
     (`cast`) since scrub_dict is structural and the keys we touch are dynamic.
     """
     data = cast("dict[str, Any]", event)
-    if "extra" in data:
+    if "extra" in data and isinstance(data["extra"], dict):
         data["extra"] = scrub_dict(data["extra"])
     try:
         req_data = data.get("request", {}).get("data")

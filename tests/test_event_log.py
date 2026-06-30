@@ -250,3 +250,72 @@ def test_redact_regression_after_extraction():
     assert out["api_key"] == "[redacted]"
     assert out["creator_id"] == "uuid-123"
     assert out["count"] == 42
+
+
+# ── Issue 337: record_event non-UUID creator_id + write-failure contract ──────
+
+
+def test_record_event_non_uuid_creator_id_writes_with_cid_none(monkeypatch) -> None:
+    """Non-UUID creator_id is coerced to None; the row is still written.
+
+    "anonymous" actors and programmatic callers that pass arbitrary strings must
+    not crash record_event — the row lands with creator_id=NULL.
+    """
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    added_rows: list = []
+    session = MagicMock()
+    session.add = lambda row: added_rows.append(row)
+    session.commit = AsyncMock()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: lambda: _CM())
+
+    asyncio.run(
+        event_log.record_event(
+            source="test",
+            event="non_uuid_creator_test",
+            creator_id="not-a-valid-uuid",
+        )
+    )
+
+    assert len(added_rows) == 1, "A row must be written even with a non-UUID creator_id"
+    assert added_rows[0].creator_id is None, (
+        "Non-UUID creator_id must be stored as NULL (cid=None)"
+    )
+
+
+def test_record_event_write_failure_swallowed(monkeypatch) -> None:
+    """A DB write failure during record_event must be swallowed — never propagated.
+
+    Telemetry is best-effort; a broken logs DB must not abort the request it is
+    describing.
+    """
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+
+    session = MagicMock()
+    session.add = MagicMock(side_effect=RuntimeError("DB is down"))
+    session.commit = AsyncMock()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: lambda: _CM())
+
+    # Must not raise — the caller (e.g. HTTP middleware) must not be affected.
+    asyncio.run(
+        event_log.record_event(
+            source="test",
+            event="write_failure_test",
+        )
+    )

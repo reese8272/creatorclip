@@ -7,7 +7,9 @@ runs don't collide.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import uuid
 
 import pytest
@@ -255,3 +257,121 @@ def test_serialize_handles_non_json_values() -> None:
     # Should not raise — default=str converts non-JSON types
     data = json.loads(payload["data"])
     assert data == {"when": "2026-05-30"}
+
+
+# ── Issue 337: partial-failure — XADD ok, EXPIRE raises ─────────────────────
+
+
+def test_sync_emit_expire_failure_event_survives(
+    task_id: str, _cleanup_keys: None, monkeypatch, caplog
+) -> None:
+    """XADD succeeds, EXPIRE raises → event is in the stream, warning logged.
+
+    Progress is observational so a partial Redis failure must not silently drop
+    the already-written event — the XADD landed before the exception.
+    """
+    real_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+    class _PartialClient:
+        """Delegates XADD to real Redis; raises on EXPIRE."""
+
+        def xadd(self, *a, **kw):
+            return real_client.xadd(*a, **kw)
+
+        def expire(self, *a, **kw):
+            raise redis.ConnectionError("expire simulated failure")
+
+    monkeypatch.setattr(progress, "_sync_client", lambda: _PartialClient())
+
+    with caplog.at_level(logging.WARNING, logger="worker.progress"):
+        progress.sync_emit(task_id, "done", result="ok")  # "done" is terminal → EXPIRE called
+
+    # Event must still be in the stream (XADD ran before the EXPIRE exception).
+    entries = real_client.xrange(f"task:{task_id}:events", "-", "+")
+    assert len(entries) == 1, "Event must survive even if EXPIRE fails"
+    assert entries[0][1]["type"] == "done"
+
+    # A warning must have been emitted.
+    assert any("sync_emit failed" in r.message for r in caplog.records), (
+        "A warning must be logged when EXPIRE raises"
+    )
+
+
+# ── Issue 337: concurrent INCR/EXPIRE at cap → overflow ≤1 ───────────────────
+
+
+async def test_aacquire_slot_concurrent_at_cap_overflow_bounded(
+    creator_id: str, _cleanup_keys: None
+) -> None:
+    """Two concurrent acquire calls when at cap-1 allow at most 1 new slot.
+
+    The INCR-before-check pattern can temporarily exceed the cap by 1 in a
+    race, but the DECR corrects it so the net counter stays ≤ max_concurrent.
+    """
+    max_concurrent = 3
+    # Fill to cap - 1
+    for _ in range(max_concurrent - 1):
+        assert await progress.aacquire_slot(creator_id, max_concurrent=max_concurrent)
+
+    # Two concurrent attempts to grab the last slot (and a third to probe overflow)
+    results = await asyncio.gather(
+        progress.aacquire_slot(creator_id, max_concurrent=max_concurrent),
+        progress.aacquire_slot(creator_id, max_concurrent=max_concurrent),
+        progress.aacquire_slot(creator_id, max_concurrent=max_concurrent),
+    )
+
+    successes = sum(results)
+    # At most 1 of the 3 should succeed (only 1 slot remaining).
+    assert successes <= 1, (
+        f"At most 1 overflow allowed when at cap; got {successes} successes: {results}"
+    )
+
+    # Counter must not permanently exceed cap (DECRs must have corrected any overshoot).
+    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    final = int(client.get(f"sse:count:{creator_id}") or 0)
+    assert final <= max_concurrent, (
+        f"Counter must not permanently exceed max_concurrent={max_concurrent}; got {final}"
+    )
+
+
+# ── Issue 337: arelease underflow is safe ────────────────────────────────────
+
+
+async def test_arelease_slot_underflow_safe(
+    creator_id: str, _cleanup_keys: None
+) -> None:
+    """arelease_slot on a zero (never-acquired) counter must not raise.
+
+    Redis DECR on a non-existent key initialises it to 0 and decrements to -1.
+    aacquire_slot's EXPIRE will reset the negative value naturally; the caller
+    should never see an exception from a spurious release.
+    """
+    # No prior acquire — counter does not exist.
+    await progress.arelease_slot(creator_id)  # must not raise
+
+    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    val = int(client.get(f"sse:count:{creator_id}") or 0)
+    assert val == -1, (
+        f"DECR on non-existent key must produce -1 (Redis documented behaviour); got {val}"
+    )
+
+
+# ── Issue 337: non-owner aget_owner mismatch is detectable ───────────────────
+
+
+async def test_aget_owner_mismatch_detectable(
+    task_id: str, creator_id: str, _cleanup_keys: None
+) -> None:
+    """aget_owner returns the real owner so a non-owner can detect the mismatch.
+
+    The SSE endpoint uses this as: owner = await aget_owner(task_id); if owner
+    != requesting_creator_id: deny.  This test locks that contract.
+    """
+    other_creator = f"other-{uuid.uuid4()}"
+    await progress.aset_owner(task_id, creator_id)
+
+    owner = await progress.aget_owner(task_id)
+    assert owner == creator_id, "aget_owner must return the stored owner"
+    assert owner != other_creator, (
+        "A non-owner must be able to detect the mismatch via aget_owner"
+    )
