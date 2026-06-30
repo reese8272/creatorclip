@@ -109,8 +109,14 @@ def _make_webhook_event(
     creator_id: str | None = None,
     pack_id: str | None = None,
     include_metadata: bool = True,
+    payment_status: str | None = "paid",
 ) -> dict:
-    """Build a minimal checkout.session.completed event dict."""
+    """Build a minimal checkout.session.completed event dict.
+
+    ``payment_status`` defaults to ``"paid"`` to satisfy the Issue 206
+    fulfillment guard (``routers/billing.py`` rejects anything other than
+    ``"paid"``). Pass ``None`` / ``"unpaid"`` to exercise the ignore path.
+    """
     meta: dict = {}
     if include_metadata:
         if creator_id is not None:
@@ -118,15 +124,17 @@ def _make_webhook_event(
         if pack_id is not None:
             meta["pack_id"] = pack_id
 
+    obj: dict = {
+        "id": stripe_session_id,
+        "customer": None,
+        "metadata": meta if include_metadata else None,
+    }
+    if payment_status is not None:
+        obj["payment_status"] = payment_status
+
     return {
         "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": stripe_session_id,
-                "customer": None,
-                "metadata": meta if include_metadata else None,
-            }
-        },
+        "data": {"object": obj},
     }
 
 

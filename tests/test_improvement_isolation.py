@@ -45,12 +45,16 @@ async def _seed_creator(
     suffix: str,
     avg_views: int,
     n_videos: int = 5,
+    minutes_balance: int = 100,
 ) -> Creator:
     creator = Creator(
         google_sub=f"test_iso_{suffix}_{uuid.uuid4().hex[:8]}",
         channel_id=f"UC_iso_{suffix}",
         channel_title=f"Channel {suffix}",
         onboarding_state=OnboardingState.active,
+        # POST pre-flights check_positive_balance — 0 minutes → 402 before the
+        # isolation/data path runs.
+        minutes_balance=minutes_balance,
     )
     session.add(creator)
     await session.flush()
@@ -97,7 +101,7 @@ async def test_improvement_brief_is_scoped_to_requesting_creator(
     def _capture(*, channel_title, analytics, dna_brief, task_id=None):
         captured["channel_title"] = channel_title
         captured["analytics"] = analytics
-        return "stubbed brief text"
+        return "stubbed brief text", {}
 
     mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_capture)
     fake_task = MagicMock()
@@ -133,6 +137,9 @@ async def test_improvement_brief_zero_data_returns_400(db_session: AsyncSession,
         channel_id="UC_zero",
         channel_title="Zero Channel",
         onboarding_state=OnboardingState.active,
+        # Positive balance so the request reaches the data-sufficiency 400, not
+        # the minutes-gate 402.
+        minutes_balance=100,
     )
     db_session.add(creator)
     await db_session.commit()

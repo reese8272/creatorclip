@@ -48,12 +48,17 @@ async def _seed_creator(
     suffix: str,
     avg_views: int = 1_000,
     n_videos: int = 3,
+    minutes_balance: int = 100,
 ) -> Creator:
     creator = Creator(
         google_sub=f"test_brief_{suffix}_{uuid.uuid4().hex[:8]}",
         channel_id=f"UC_brief_{suffix}",
         channel_title=f"Channel {suffix}",
         onboarding_state=OnboardingState.active,
+        # The POST endpoint pre-flights ``check_positive_balance`` (routers/
+        # improvement.py): a creator with 0 minutes is gated at 402 before the
+        # data-sufficiency check, so the brief flow needs a positive balance.
+        minutes_balance=minutes_balance,
     )
     session.add(creator)
     await session.flush()
@@ -151,6 +156,9 @@ async def test_post_no_metrics_returns_400(db_session, client):
         channel_id="UC_brief_nodata",
         channel_title="No Data",
         onboarding_state=OnboardingState.active,
+        # Positive balance so the request reaches the data-sufficiency check
+        # (400) rather than tripping the minutes gate (402) first.
+        minutes_balance=100,
     )
     db_session.add(creator)
     await db_session.commit()
@@ -185,9 +193,11 @@ async def test_get_returns_none_then_ready(db_session, client, mocker):
         mocker.patch("worker.tasks.generate_improvement_brief.delay", return_value=fake_task)
         client.post("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
 
+        # generate_improvement_brief returns (text, usage_dict) — the worker
+        # unpacks both and records the usage to the cost ledger.
         mocker.patch(
             "improvement.brief.generate_improvement_brief",
-            return_value="Your hooks land best in the first 3 seconds.",
+            return_value=("Your hooks land best in the first 3 seconds.", {}),
         )
         from worker.tasks import _generate_improvement_brief_async
 
@@ -247,7 +257,7 @@ async def test_task_is_scoped_to_requesting_creator(db_session, client, mocker):
     def _capture(*, channel_title, analytics, dna_brief, task_id=None):
         captured["channel_title"] = channel_title
         captured["analytics"] = analytics
-        return "stubbed brief text"
+        return "stubbed brief text", {}
 
     mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_capture)
 
@@ -279,7 +289,7 @@ async def test_task_idempotent_on_redelivery(db_session, client, mocker):
     try:
         client.post("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
         build = mocker.patch(
-            "improvement.brief.generate_improvement_brief", return_value="first brief"
+            "improvement.brief.generate_improvement_brief", return_value=("first brief", {})
         )
         from worker.tasks import _generate_improvement_brief_async
 

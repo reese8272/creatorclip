@@ -143,6 +143,52 @@ def _isolate_app_state(client):
     client.cookies.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clean_db_for_integration(request):
+    """Integration-lane DB isolation: give every ``integration`` test a clean
+    domain DB so order-dependent tests are deterministic instead of silently
+    coupled to rows other tests leave behind.
+
+    Why TRUNCATE and not a rolled-back transaction: the code under test manages
+    its own sessions and commits (the Celery task helpers open their own
+    ``AdminSessionLocal`` and ``commit()``), so a transaction-rollback fixture on
+    the test's session can't isolate writes that already committed on a different
+    connection. Tests like analytics-fairness (iterates *all* creators),
+    per-creator-median, and outcome-polling read global table state, so leftover
+    creators from earlier tests flipped their results (e.g. "Starting analytics
+    refresh for 59 creator(s)" when the test seeded 5). A clean slate before each
+    integration test makes execution order irrelevant — the same guarantee the
+    ``_isolate_app_state`` fixture gives for app/limiter state.
+
+    ``creators ... CASCADE`` clears every creator-FK'd domain table; ``audit_log``
+    and ``event_log`` are not FK'd to creators (``entity_id`` is a bare UUID) so
+    they're listed explicitly. Unit-lane tests (no ``integration`` marker; DB
+    mocked/absent) are untouched.
+    """
+    if request.node.get_closest_marker("integration") is None:
+        yield
+        return
+    import psycopg
+
+    dsn = os.environ["DATABASE_URL"].replace("+psycopg", "").replace("+asyncpg", "")
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute("TRUNCATE creators, audit_log, event_logs RESTART IDENTITY CASCADE")
+        # Clear any session-level advisory lock leaked by an earlier test. The Beat
+        # task helpers (poll_clip_outcomes, refresh_youtube_analytics, …) take
+        # ``pg_try_advisory_lock`` on their AdminSessionLocal connection and release
+        # it in a ``finally``; if that release is skipped (e.g. the rollback on a
+        # dead-event-loop connection raises), the lock survives on the pooled
+        # backend and the NEXT test's task logs "advisory lock held — skipping" and
+        # no-ops, so its assertions fail. Terminating the holding backend frees the
+        # lock; both engines use pool_pre_ping so the dead connection is transparently
+        # replaced on next checkout. (Tracked as a product concern in OFF_COURSE_BUGS.)
+        conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_locks "
+            "WHERE locktype = 'advisory' AND pid <> pg_backend_pid()"
+        )
+    yield
+
+
 @pytest.fixture()
 def creator_cookie() -> dict[str, str]:
     """Issue 267: per-test session cookie with a unique creator ID.

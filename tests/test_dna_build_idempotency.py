@@ -89,6 +89,9 @@ _STUB_PATTERNS: dict = {
 }
 
 _STUB_BRIEF = "This creator excels at short-form storytelling."
+# generate_brief returns (text, usage_dict); the worker unpacks both and records
+# usage to the cost ledger. The stub must match that contract.
+_STUB_BRIEF_RESULT = (_STUB_BRIEF, {})
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -109,7 +112,7 @@ async def test_voyage_failure_leaves_no_orphan_draft(db_session: AsyncSession):
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF),
+            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
             # embed_patterns raises on first call — simulates Voyage HTTP error.
             patch(
                 "dna.embeddings.embed_patterns",
@@ -145,7 +148,7 @@ async def test_retry_after_voyage_failure_produces_exactly_one_draft(db_session:
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF),
+            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
             patch(
                 "dna.embeddings.embed_patterns",
                 side_effect=RuntimeError("Voyage API unavailable"),
@@ -166,7 +169,7 @@ async def test_retry_after_voyage_failure_produces_exactly_one_draft(db_session:
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF),
+            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
         ):
             from worker.tasks import _build_dna_async
 
@@ -205,7 +208,7 @@ async def test_successful_build_commits_draft_and_embeddings_together(db_session
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF),
+            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
         ):
             from worker.tasks import _build_dna_async
 
