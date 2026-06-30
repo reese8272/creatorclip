@@ -329,9 +329,7 @@ async def test_render_video_clips_downloads_source_once(db_session):
         engine = create_async_engine(settings.DATABASE_URL)
         factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with factory() as s:
-            clips = (
-                (await s.execute(select(Clip).where(Clip.video_id == video.id))).scalars().all()
-            )
+            clips = (await s.execute(select(Clip).where(Clip.video_id == video.id))).scalars().all()
         await engine.dispose()
 
         assert len(clips) == 2
@@ -383,32 +381,56 @@ async def test_generate_clips_async_retry_preserves_done_clip(db_session):
 
 @pytest.mark.asyncio
 async def test_poll_clip_outcomes_uses_per_creator_median(db_session):
-    """Two creators, same fetched views (100). Creator A median=500 → False;
-    Creator B median=20 → True. A global-median computation would yield identical
-    labels — the asymmetry proves per-creator scoping."""
+    """Two creators, same fetched views (100). Creator A's comparable-Shorts
+    median sits well above 100 → False; Creator B's sits well below → True. A
+    global-median computation would yield identical labels — the asymmetry proves
+    per-creator scoping.
+
+    Issue 201: ``performed_well`` is judged against the median of the creator's
+    COMPARABLE published Shorts (Shorts-vs-Shorts, NOT the full-video
+    VideoMetrics median), and is DEFERRED until at least ``_MIN_COMPARABLE_SHORTS``
+    (3) such Shorts exist. So each creator needs a real comparable-Shorts baseline.
+    """
     from worker.tasks import _poll_clip_outcomes_async
 
     creator_a = await _seed_creator(db_session, sub_prefix="medA")
     creator_b = await _seed_creator(db_session, sub_prefix="medB")
     now = datetime.now(UTC)
 
-    # Creator A: three videos with views 100/500/900 → median 500
     a_vid = await _seed_video(db_session, creator_id=creator_a.id, duration_s=300.0)
-    await _seed_video_metrics(db_session, a_vid.id, 100)
-    a_vid2 = await _seed_video(db_session, creator_id=creator_a.id, duration_s=300.0)
-    await _seed_video_metrics(db_session, a_vid2.id, 500)
-    a_vid3 = await _seed_video(db_session, creator_id=creator_a.id, duration_s=300.0)
-    await _seed_video_metrics(db_session, a_vid3.id, 900)
-
-    # Creator B: three videos with views 10/20/30 → median 20
     b_vid = await _seed_video(db_session, creator_id=creator_b.id, duration_s=300.0)
-    await _seed_video_metrics(db_session, b_vid.id, 10)
-    b_vid2 = await _seed_video(db_session, creator_id=creator_b.id, duration_s=300.0)
-    await _seed_video_metrics(db_session, b_vid2.id, 20)
-    b_vid3 = await _seed_video(db_session, creator_id=creator_b.id, duration_s=300.0)
-    await _seed_video_metrics(db_session, b_vid3.id, 30)
 
-    # One clip + ClipOutcome per creator, both with stale fetched_at and no label yet.
+    async def _seed_comparable_short(creator_id, video_id, views, yt_id):
+        """A finalized published Short — counts toward the creator's baseline
+        (views set, format=short) but is excluded from re-polling (final=True)."""
+        clip = await _seed_clip(
+            db_session,
+            video_id=video_id,
+            creator_id=creator_id,
+            render_status=RenderStatus.done,
+        )
+        db_session.add(
+            ClipOutcome(
+                clip_id=clip.id,
+                published_youtube_id=yt_id,
+                views=views,
+                performed_well=True,
+                final=True,
+                fetched_at=now,
+            )
+        )
+        await db_session.commit()
+
+    # Creator A baseline {500,600,700}; Creator B baseline {10,20,30}. Three each
+    # clears the _MIN_COMPARABLE_SHORTS=3 floor so the verdict is no longer deferred.
+    for i, v in enumerate((500, 600, 700)):
+        await _seed_comparable_short(creator_a.id, a_vid.id, v, f"yt_a_base_{i}")
+    for i, v in enumerate((10, 20, 30)):
+        await _seed_comparable_short(creator_b.id, b_vid.id, v, f"yt_b_base_{i}")
+
+    # Target clip + ClipOutcome per creator: stale fetched_at and no label yet →
+    # polled, fetched views=100, then judged against the baseline (which now also
+    # includes this freshly-set 100 via autoflush).
     a_clip = await _seed_clip(
         db_session,
         video_id=a_vid.id,
@@ -462,10 +484,11 @@ async def test_poll_clip_outcomes_uses_per_creator_median(db_session):
             b_outcome = await s.get(ClipOutcome, b_clip.id)
         await engine.dispose()
 
-        # 100 < median(500) → A is False
+        # A baseline median over {500,600,700,100} = 550 → 100 < 550 → False
         assert a_outcome.performed_well is False
-        # 100 >= median(20) → B is True. (Global median over all 6 = 65 would give
-        # both clips True — the divergence proves per-creator scoping.)
+        # B baseline median over {10,20,30,100} = 25 → 100 >= 25 → True. (A global
+        # median over both creators' Shorts would not diverge like this — the
+        # asymmetry proves per-creator scoping.)
         assert b_outcome.performed_well is True
     finally:
         await _cleanup_creator(db_session, creator_a.id)

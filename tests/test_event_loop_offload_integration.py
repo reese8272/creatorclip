@@ -89,7 +89,7 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
     await db_session.commit()
 
     brief_mock = mocker.patch(
-        "improvement.brief.generate_improvement_brief", return_value="stub brief"
+        "improvement.brief.generate_improvement_brief", return_value=("stub brief", {})
     )
     calls, fake_to_thread = _offload_recorder()
     mocker.patch("asyncio.to_thread", new=fake_to_thread)

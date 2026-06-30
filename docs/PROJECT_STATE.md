@@ -4,6 +4,44 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-30 — Issue 344: live integration lane repaired + made order-independent (21→0 failures; 1 real compliance fix)
+
+**Branch** `claude/issue-workflows-test-coverage-59e15u`. **Directive:** no-mocks/live testing for
+everything controllable; fix the integration lane first, then the L21 edge suites.
+
+**Context.** Provisioned the live backing services this session was missing (the SessionStart hook's
+Postgres role-creation had silently failed) — `creatorclip` PG16 role + db + pgvector + `alembic upgrade
+head`, Redis, ffmpeg — and ran the **integration lane for the first time**. It was bit-rotted: **21/134
+failing**, because CI's `integration` job had sat red/unenforced and nothing ran it locally (the exact
+"main-only integration sat red for 9 days" failure mode the CI header warns about).
+
+**Fixed (all live-verified against real Postgres):**
+- **Stale mock stubs** drifted from the real signature — `dna.brief.generate_brief` /
+  `improvement.brief.generate_improvement_brief` return `(text, usage)`, but stubs returned a bare string
+  → `ValueError: too many values to unpack`. Conformed every stub to the real contract (6 test files).
+- **Un-seeded gates** added after the tests were written: the improvement-brief **minutes gate**
+  (`check_positive_balance` → 402) and the **Issue 206 `payment_status=='paid'`** webhook guard
+  (→ `ignored`). Seeded `minutes_balance` / `payment_status` in the fixtures.
+- **Real compliance bug (product fix):** `AuditLog.before_jsonb/after_jsonb` stored the JSONB `'null'`
+  literal instead of SQL NULL (SQLAlchemy `JSON` default), so the never-purged `creator.deleted` audit
+  failed the Issue 247 "no PII payload retained" `IS NULL` assertion → `JSONB(none_as_null=True)` on both
+  columns (no DDL change).
+- **Obsolete test premise:** `test_poll_clip_outcomes_uses_per_creator_median` asserted the full-video
+  `VideoMetrics` median; Issue 201 moved `performed_well` to a ≥3 **comparable-Shorts** baseline — rewrote
+  it to seed a real comparable-Shorts baseline.
+- **Order-dependence (test-infra):** added an autouse, integration-only `tests/conftest.py` fixture that
+  TRUNCATEs the domain tables and clears leaked session-level advisory locks before each test, so the
+  lane is deterministic regardless of order (a leftover-creators leak had flipped the analytics-fairness /
+  median / poll-outcome assertions). Surfaced a real prod concern (Beat-task advisory-lock release can be
+  skipped) → logged in `OFF_COURSE_BUGS.md` for triage.
+
+**Gates.** Integration lane **134 passed, 0 failed** (deterministic + random seeds 1/42). Unit lane
+**1774 passed, 0 failed**. ruff + mypy clean on all touched files. Resolves 2 open `OFF_COURSE_BUGS`
+rows (integration-creds, median event-loop). CI already runs `pytest -m integration` on every PR — now
+green, so the gate is meaningful again.
+
+---
+
 ## 2026-06-30 — Issue 343: RLS role split ACTIVATED — tenant isolation now enforced in prod (SEV1, caught by 341)
 
 **Branch/deploy:** the prod DB role + VM `.env` change is **applied + verified live**; repo doc/harness
