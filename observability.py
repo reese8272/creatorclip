@@ -70,6 +70,12 @@ _RESERVED_LOGRECORD = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__
     "taskName",
 }
 
+# Output-key names written directly into the payload by JsonLogFormatter.format().
+# Extra fields carrying these names must be skipped so they cannot clobber the
+# structured log envelope (ts / level / logger are formatter artifacts, not
+# LogRecord attributes, so they do NOT appear in _RESERVED_LOGRECORD).
+_RESERVED_OUTPUT_KEYS: frozenset[str] = frozenset({"ts", "level", "logger"})
+
 
 # ── Metrics (golden signals) ─────────────────────────────────────────────────
 # Latency (histogram) + traffic/errors (the histogram's _count, labelled by
@@ -225,6 +231,47 @@ def record_llm_metric(model: str, usage: Any, *, provider: str = "anthropic") ->
     record_llm_tokens(provider, model, _in, _out, _cr, _cc)
 
 
+def log_llm_error(log: logging.Logger, exc: BaseException, **ctx: Any) -> None:
+    """Log an LLM error with exc_type, status_code, and retry_after when present.
+
+    Extracts ``status_code`` and ``retry-after`` from the response headers of
+    ``RateLimitError`` / ``APIStatusError`` so every LLM error log carries
+    actionable ops context (raise-time triage + back-pressure awareness).
+
+    Args:
+        log: The module-level logger to emit to.
+        exc: The caught exception (RateLimitError, APIStatusError, APIConnectionError, …).
+        **ctx: Arbitrary key=value context (e.g. task=task_id, creator=creator_id).
+               Included in the log message so failed calls are correlatable.
+
+    Usage at call sites (replaces bare `logger.error("... exc_type=%s", type(exc).__name__)`):
+
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            log_llm_error(logger, exc, task=task_id)
+            raise
+    """
+    # Lazy import to avoid circular deps; anthropic is always available at call time.
+    from anthropic import APIStatusError as _APIStatusError
+
+    status_code: int | None = getattr(exc, "status_code", None)
+    retry_after: str | None = None
+    if isinstance(exc, _APIStatusError):
+        resp = getattr(exc, "response", None)
+        headers = getattr(resp, "headers", {}) if resp is not None else {}
+        retry_after = (
+            headers.get("retry-after") or headers.get("Retry-After") or None
+        )
+
+    ctx_str = " ".join(f"{k}={v}" for k, v in ctx.items())
+    log.error(
+        "LLM error %s exc_type=%s status_code=%s retry_after=%s",
+        ctx_str,
+        type(exc).__name__,
+        status_code,
+        retry_after,
+    )
+
+
 def warn_if_truncated(model: str, stop_reason: Any, *, task: str | None = None) -> bool:
     """Log a WARNING when an LLM response was cut off at the token cap (Issue 331).
 
@@ -279,7 +326,9 @@ class JsonLogFormatter(logging.Formatter):
         extra: dict[str, Any] = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in _RESERVED_LOGRECORD and not key.startswith("_")
+            if key not in _RESERVED_LOGRECORD
+            and key not in _RESERVED_OUTPUT_KEYS
+            and not key.startswith("_")
         }
         payload.update(scrub_dict(extra) if self._scrub else extra)
         if record.exc_info:
@@ -517,7 +566,7 @@ def _sentry_before_send(event: Event, hint: dict[str, Any]) -> Event | None:
     (`cast`) since scrub_dict is structural and the keys we touch are dynamic.
     """
     data = cast("dict[str, Any]", event)
-    if "extra" in data:
+    if "extra" in data and isinstance(data["extra"], dict):
         data["extra"] = scrub_dict(data["extra"])
     try:
         req_data = data.get("request", {}).get("data")

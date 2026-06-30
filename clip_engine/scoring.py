@@ -32,7 +32,7 @@ from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
-from observability import record_llm_metric, warn_if_truncated
+from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -315,9 +315,7 @@ async def score_candidates(
             messages=[{"role": "user", "content": user_text}],
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error(
-            "clip_scoring LLM error creator=%s exc_type=%s", creator_id, type(exc).__name__
-        )
+        log_llm_error(logger, exc, creator=creator_id)
         raise
     vlog_llm_response("clip_scoring", response=response)
 

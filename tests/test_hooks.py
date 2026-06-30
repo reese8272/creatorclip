@@ -100,9 +100,10 @@ def test_parse_hook_report_missing_fields() -> None:
 
 
 def test_parse_hook_report_invalid_json() -> None:
-    import json
-
-    with pytest.raises(json.JSONDecodeError):
+    # Issue 333: malformed/truncated LLM output is caught and re-raised as a
+    # contextful ValueError (graceful-degrade parity with scoring), not a bare
+    # JSONDecodeError surfacing as an opaque 500.
+    with pytest.raises(ValueError, match="Malformed JSON"):
         parse_hook_report("not json")
 
 

@@ -11,6 +11,8 @@ Integration tests (require docker compose up + alembic upgrade head):
   token auto-refresh, cross-creator isolation.
 """
 
+import base64
+import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -19,7 +21,13 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 
-from auth import SESSION_COOKIE, create_session_token, decode_session_token, get_current_creator
+from auth import (
+    _JWT_LEEWAY,
+    SESSION_COOKIE,
+    create_session_token,
+    decode_session_token,
+    get_current_creator,
+)
 from config import settings
 from youtube.oauth import PUBLISH_SCOPE, build_authorization_url, has_publish_scope
 
@@ -65,6 +73,70 @@ def test_decode_session_token_wrong_key_raises():
     token = jwt.encode(payload, "wrong_secret", algorithm="HS256")
     with pytest.raises(jwt.InvalidSignatureError):
         decode_session_token(token)
+
+
+# ── JWT security edge-case tests (Issue 340a) ─────────────────────────────────
+
+
+def test_decode_session_token_alg_none_rejected():
+    """Regression: alg='none' tokens must be rejected — algorithms=["HS256"] already
+    pins the allowed set and PyJWT raises InvalidAlgorithmError for any other value.
+    This test documents the guarantee so a future 'simplify jwt.decode' PR
+    cannot silently regress it. (Issue 340a)"""
+    # Craft a token manually — jwt.encode() won't accept alg=none in PyJWT 2.x.
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=")
+    payload_data = {
+        "sub": str(uuid.uuid4()),
+        "iat": int(datetime.now(UTC).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+    }
+    payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).rstrip(b"=")
+    none_token = f"{header.decode()}.{payload.decode()}."
+
+    with pytest.raises(jwt.exceptions.InvalidAlgorithmError):
+        decode_session_token(none_token)
+
+
+def test_decode_session_token_missing_exp_rejected():
+    """A token with no 'exp' claim must be rejected after the options={'require': ['exp']}
+    hardening — previously it decoded as non-expiring. (Issue 340a)"""
+    payload = {"sub": str(uuid.uuid4()), "iat": datetime.now(UTC)}
+    no_exp_token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    with pytest.raises(jwt.exceptions.MissingRequiredClaimError):
+        decode_session_token(no_exp_token)
+
+
+def test_decode_session_token_far_future_iat_rejected():
+    """A token whose 'iat' is well beyond the leeway window must be rejected.
+    PyJWT validates iat by default; leeway only widens the acceptance window,
+    not the rejection window for far-future values. (Issue 340a)"""
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "iat": datetime.now(UTC) + timedelta(hours=2),  # far future — suspicious
+        "exp": datetime.now(UTC) + timedelta(hours=3),
+    }
+    future_iat_token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    with pytest.raises(jwt.exceptions.ImmatureSignatureError):
+        decode_session_token(future_iat_token)
+
+
+def test_decode_session_token_within_leeway_iat_accepted():
+    """A token whose 'iat' is within the _JWT_LEEWAY window must be accepted —
+    NTP clock drift of a few seconds between issuer and verifier is normal.
+    (Issue 340a)"""
+    leeway_s = int(_JWT_LEEWAY.total_seconds())
+    # iat half the leeway ahead — well within tolerance
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "iat": datetime.now(UTC) + timedelta(seconds=leeway_s // 2),
+        "exp": datetime.now(UTC) + timedelta(hours=1),
+    }
+    slight_future_token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    result = decode_session_token(slight_future_token)
+    assert "sub" in result
 
 
 # ── OAuth URL unit tests ──────────────────────────────────────────────────────

@@ -92,11 +92,15 @@ def transcribe_audio(audio_path: str | Path) -> dict[str, Any]:
         )
         raise
     segments = result.get("segments", [])
+    word_count = sum(len(s.get("words", [])) for s in segments)
+    transcript_duration_s = segments[-1]["end"] if segments else 0.0
     vlog(
         "transcribe_done",
         backend=backend,
         audio_path=str(audio_path),
         segment_count=len(segments),
+        word_count=word_count,
+        transcript_duration_s=transcript_duration_s,
         transcript=" ".join(s.get("text", "") for s in segments),
         duration_ms=int(now_ms() - _t0),
     )
@@ -248,9 +252,15 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
 
 
 def _normalize_assemblyai(transcript: Any) -> dict:
+    # Filter words with None start/end before dividing by 1000 — the AssemblyAI SDK
+    # can return None timestamps for unaligned words (e.g. music-only passages or
+    # utterances at the very end of the file where alignment fails). Without the guard,
+    # ``None / 1000.0`` raises TypeError and kills the ingestion job. Deepgram applies
+    # the same filter; this brings AssemblyAI to parity. (Issue 334)
     words = [
         {"word": w.text, "start": w.start / 1000.0, "end": w.end / 1000.0}
         for w in (transcript.words or [])
+        if w.start is not None and w.end is not None
     ]
     segments = (
         [

@@ -23,6 +23,7 @@ from crypto import decrypt, encrypt
 from models import Creator, OnboardingState, YoutubeToken
 from youtube import _http
 from youtube._redis import get_redis_client
+from youtube.data_api import clamp_ingest_field
 
 logger = logging.getLogger(__name__)
 
@@ -170,11 +171,16 @@ async def fetch_creator_identity(access_token: str) -> dict:
         await _call_youtube_channels(access_token),
     )
     channel = (channels.get("items") or [{}])[0]
+    # Issue 340c: clamp channel_title at ingest boundary so adversarially-crafted
+    # YouTube channel names cannot act as prompt-injection payloads in LLM calls.
+    raw_channel_title: str | None = channel.get("snippet", {}).get("title")
     return {
         "google_sub": user_info["id"],
         "email": user_info.get("email"),
         "channel_id": channel.get("id"),
-        "channel_title": channel.get("snippet", {}).get("title"),
+        "channel_title": clamp_ingest_field(
+            raw_channel_title, settings.MAX_INGESTED_CHANNEL_TITLE_CHARS
+        ),
     }
 
 
@@ -320,7 +326,7 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
     if row is None:
         raise HTTPException(401, "No OAuth tokens found — please reconnect your YouTube account")
 
-    if row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
+    if row.expires_at is not None and row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
         # Token is still valid — fast path, no Redis involved.
         return decrypt(row.access_token_encrypted)
 
@@ -371,7 +377,7 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
                 raise HTTPException(
                     401, "No OAuth tokens found — please reconnect your YouTube account"
                 )
-            if fresh_row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
+            if fresh_row.expires_at is not None and fresh_row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
                 return decrypt(fresh_row.access_token_encrypted)
             logger.debug(
                 "Token still expired for creator %s after retry %d/%d",

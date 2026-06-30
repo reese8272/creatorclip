@@ -5,10 +5,11 @@ Each action persists to clip_feedback and is used by the preference model.
 
 import asyncio
 import logging
+import math
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,9 @@ class FeedbackOut(BaseModel):
     action: str
 
 
+_FEEDBACK_NOTE_MAX_LEN = 2000
+
+
 class FeedbackRequest(BaseModel):
     action: FeedbackAction
     trim_start_s: float | None = None
@@ -43,12 +47,34 @@ class FeedbackRequest(BaseModel):
     # Deny tags:   "editing_mismatch", "off_brand_topic", "bad_hook", "wrong_length"
     feedback_tags: list[str] | None = None
     # Free-text "Other" note captured alongside tags.
-    feedback_note: str | None = None
+    # Issue 339: max 2000 chars so no unbounded text is persisted without a cap.
+    feedback_note: str | None = Field(default=None, max_length=_FEEDBACK_NOTE_MAX_LEN)
 
     @field_validator("action", mode="before")
     @classmethod
     def coerce_action(cls, v: str) -> FeedbackAction:
         return FeedbackAction(v)
+
+    @model_validator(mode="after")
+    def validate_trim(self) -> "FeedbackRequest":
+        """Issue 339: reject non-finite, negative, or inverted trim windows.
+
+        Clip-bounds validation (trim within [clip.start_s, clip.end_s]) is
+        performed in the route handler after the clip is fetched from the DB.
+        """
+        s, e = self.trim_start_s, self.trim_end_s
+        if s is None and e is None:
+            return self  # no trim supplied — nothing to validate
+        for val, label in ((s, "trim_start_s"), (e, "trim_end_s")):
+            if val is not None and not math.isfinite(val):
+                raise ValueError(f"{label} must be a finite number")
+        if s is not None and s < 0:
+            raise ValueError("trim_start_s must be >= 0")
+        if e is not None and e < 0:
+            raise ValueError("trim_end_s must be >= 0")
+        if s is not None and e is not None and s >= e:
+            raise ValueError("trim_start_s must be less than trim_end_s")
+        return self
 
 
 async def _is_first_keep(session: AsyncSession, creator_id: uuid.UUID) -> bool:
@@ -84,6 +110,21 @@ async def submit_feedback(
     clip = await session.get(Clip, clip_id)
     if not clip or clip.creator_id != creator.id:
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Issue 339: validate trim values against the clip's actual window.
+    # clip.start_s and clip.end_s are video-absolute timestamps.
+    if body.trim_start_s is not None or body.trim_end_s is not None:
+        s, e = body.trim_start_s, body.trim_end_s
+        clip_start = clip.start_s
+        clip_end = clip.end_s
+        if s is not None and s < clip_start:
+            raise HTTPException(
+                status_code=422, detail="trim_start_s is before the clip start"
+            )
+        if e is not None and e > clip_end:
+            raise HTTPException(
+                status_code=422, detail="trim_end_s is past the clip end"
+            )
 
     # Issue 235 — check idempotency BEFORE the commit so the new row is not
     # included in the existence query (the session hasn't flushed yet).

@@ -25,7 +25,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from knowledge.util import extract_transcript_text as _extract_transcript_text
-from observability import record_llm_metric
+from observability import log_llm_error, record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,13 @@ def parse_candidates(raw_json: str) -> list[dict]:
     Returns top SURFACE_N candidates. Raises ValueError on malformed JSON or
     missing required fields so the caller can surface an error event.
     """
-    data = json.loads(extract_json_block(raw_json))
+    try:
+        data = json.loads(extract_json_block(raw_json))
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "titles.parse_candidates: malformed JSON from LLM (truncated response?): %s", exc
+        )
+        raise ValueError(f"Malformed JSON from LLM (truncated response?): {exc}") from exc
     candidates = data.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         raise ValueError("Claude response missing 'candidates' list")
@@ -241,7 +247,7 @@ def generate_title_suggestions(
             tools=tools,
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("title_suggestions LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
+        log_llm_error(logger, exc, task=task_id)
         raise
     logger.info(
         "title_suggestions tokens: in=%d cached_read=%d cached_write=%d out=%d",

@@ -4,6 +4,34 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-30 — L21 Edge-Case Hardening WAVE complete: Issues 329, 333, 334, 335, 336, 337, 339, 340 (8 issues, parallel build)
+
+**Branch** `l21-wave-a` (8 issue branches merged; not yet merged to main — awaiting review). Ran the L21
+lane as a parallel **plan→build→review wave**: per-issue research/CHECK (Opus) → isolated-worktree build
+(Sonnet, each on its own cloned Postgres DB + Redis index) → review + conflict-aware merge + full-suite
+verification (Opus). This **closes the L21 lane** (327, 328, 330, 331, 332, 338 were already done).
+
+**Every issue surfaced ≥1 real latent defect.** Highlights:
+- **329** render/reframe: `_run` raised the *head* of stderr (ffmpeg's error is at the tail) + unhandled `OSError`; NaN-FPS `ValueError` collapsing the crop track; silent quality-loss fallbacks now logged; unsorted `keep_ranges` normalized.
+- **333** LLM robustness: `titles/hooks/thumbnails` parse raised `JSONDecodeError`→500 on truncated output → graceful `ValueError` degrade; new shared `log_llm_error` surfaces `status_code`/`retry-after`.
+- **334** ingestion: confirmed `_normalize_assemblyai` `None`-timestamp `TypeError` (zero prior coverage) fixed; unbounded `librosa.load` OOM → duration cap.
+- **336** worker: WAV short-circuit had no integrity check (silent data corruption); `render_clip` soft-timeout retry-storm → terminal.
+- **337** observability: `_sentry_before_send` crashed on non-dict `extra` (a PII-scrub path → forwarded unredacted); `JsonLogFormatter` reserved-key clobber.
+- **339** routers: `review.submit_feedback` had **zero** trim/note validation (fed the preference model) → 422 validator; list endpoints gained a `truncated` envelope field.
+- **340** security: JWT now requires `exp` + iat leeway; `channel_title` clamped at ingestion (LLM01); RLS deny-by-default unset-context proof added.
+
+**⚠️ Open security finding (logged in `OFF_COURSE_BUGS.md`, 2026-06-30):** `improvement_briefs` +
+`creator_insights` carry `creator_id` but have **RLS disabled** (omitted from migration 0010's tenant set).
+With the Issue 343 role split active, they have no deny-by-default backstop — needs a follow-up migration.
+**Promote to a security issue.**
+
+**Gates.** Full suite (unit + integration, real PG16+pgvector+Redis) — **2156 passed, 64 skipped, 0 failed**
+(+210 tests vs pre-wave). ruff clean on all changed source. DECISIONS.md updated (consolidated wave entry).
+Local test infra: a native PG16 + pgvector cluster was stood up this session (no Docker) so the integration
+lane runs locally — see the local-dev memory.
+
+---
+
 ## 2026-06-30 — Issue 330 (L21): captions / filler / edits cut-list edge suite (2 confirmed defects fixed)
 
 **Branch** `claude/issue-workflows-test-coverage-59e15u`. First L21 edge issue after the lane repair.

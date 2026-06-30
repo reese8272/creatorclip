@@ -27,6 +27,14 @@ _MIN_SILENCE_DURATION_S = 0.3
 _MIN_LAUGHTER_DURATION_S = 0.5
 
 
+_EMPTY_EVENTS: dict = {
+    "duration_s": 0.0,
+    "energy_spikes": [],
+    "silences": [],
+    "laughter": [],
+}
+
+
 def extract_audio_events(audio_path: str | Path) -> dict:
     """
     Returns:
@@ -39,12 +47,52 @@ def extract_audio_events(audio_path: str | Path) -> dict:
     """
     import librosa
 
+    from config import settings
+
     hop = 512
-    # Resample to 16 kHz on load (Issue 74): the RMS/ZCR energy/silence/laughter
-    # heuristics need no more fidelity, and sr=None decoded at the native rate
-    # (e.g. 48 kHz) held ~3× the samples in memory — an OOM vector for long videos
-    # across concurrent workers.
-    y, sr = librosa.load(str(audio_path), sr=16000, mono=True)
+    cap_s: int = settings.AUDIO_ANALYSIS_MAX_DURATION_S
+
+    # Check the file's duration before loading (reads the container header only —
+    # no audio data decoded) so we can truncate pathologically long files instead of
+    # loading the entire WAV array into RAM (OOM vector for multi-hour videos under
+    # concurrent workers). (Issue 334)
+    try:
+        file_duration_s = librosa.get_duration(path=str(audio_path))
+    except Exception:
+        file_duration_s = None
+
+    if file_duration_s is not None and cap_s > 0 and file_duration_s > cap_s:
+        logger.warning(
+            "Audio %.0fs exceeds AUDIO_ANALYSIS_MAX_DURATION_S=%d; "
+            "truncating analysis to first %ds. (Issue 334)",
+            file_duration_s,
+            cap_s,
+            cap_s,
+        )
+        # Resample to 16 kHz on load (Issue 74): the RMS/ZCR energy/silence/laughter
+        # heuristics need no more fidelity, and sr=None decoded at the native rate
+        # (e.g. 48 kHz) held ~3× the samples in memory — an OOM vector for long videos
+        # across concurrent workers.
+        y, sr = librosa.load(str(audio_path), sr=16000, mono=True, duration=float(cap_s))
+    else:
+        y, sr = librosa.load(str(audio_path), sr=16000, mono=True)
+
+    # Guard: pathological WAV with too few samples for any frame-level analysis
+    # (zero-sample or single-sample). librosa.feature.rms on a 1-sample array
+    # returns a degenerate 1-frame result that breaks downstream math. Return
+    # empty events cleanly instead of propagating an error. (Issue 334)
+    if len(y) < 2:
+        logger.warning(
+            "Audio file has only %d sample(s) — returning empty events. (Issue 334)",
+            len(y),
+        )
+        return {
+            "duration_s": float(len(y) / sr) if sr else 0.0,
+            "energy_spikes": [],
+            "silences": [],
+            "laughter": [],
+        }
+
     duration_s = float(len(y) / sr)
     frame_dur = hop / sr
 
@@ -81,6 +129,7 @@ def generate_waveform_image(
     height: int = 200,
     fg_color: str = "0x6699cc",
     bg_color: str = "0x1a1a1a",
+    duration_s: float | None = None,
 ) -> Path:
     """Generate a waveform PNG via ffmpeg ``showwavespic`` (Issue 188).
 
@@ -97,6 +146,9 @@ def generate_waveform_image(
         height: Output image height in pixels.
         fg_color: ffmpeg color string for the waveform (hex ``0xRRGGBB``).
         bg_color: ffmpeg color string for the background.
+        duration_s: Known audio duration in seconds.  When provided the
+            subprocess timeout is scaled up proportionally — the base
+            ``WAVEFORM_TIMEOUT_S`` config value is used when omitted. (Issue 334)
 
     Raises:
         RuntimeError: When ffmpeg is not found on PATH or the showwavespic
@@ -105,11 +157,23 @@ def generate_waveform_image(
     """
     import shutil
 
+    from config import settings
+
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg not found on PATH — waveform image skipped")
 
     output_path = Path(output_path)
     audio_path = Path(audio_path)
+
+    # Scale the timeout with the known audio duration so that long-form videos
+    # (e.g. 4-hour podcasts) don't time-out ffmpeg showwavespic on slow hardware.
+    # Formula: base + 5 s per minute of audio.  Without duration_s the caller
+    # falls back to the WAVEFORM_TIMEOUT_S config default (Issue 334).
+    base_timeout: int = settings.WAVEFORM_TIMEOUT_S
+    if duration_s is not None and duration_s > 0:
+        timeout = max(base_timeout, int(base_timeout + duration_s / 60 * 5))
+    else:
+        timeout = base_timeout
 
     cmd = [
         "ffmpeg",
@@ -127,7 +191,7 @@ def generate_waveform_image(
         cmd,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout,
     )
     if result.returncode != 0:
         raise RuntimeError(

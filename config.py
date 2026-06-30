@@ -215,6 +215,16 @@ class Settings(BaseSettings):
     # than realtime; this only kills a wedged/hung ffmpeg so it can't tie up a worker
     # slot indefinitely (probe already uses timeout=30). (Issue A / Issue 76)
     FFMPEG_EXTRACT_TIMEOUT_S: int = 1800
+    # Cap audio analysis (extract_audio_events) at this many seconds of audio to avoid
+    # librosa loading a multi-hour WAV entirely into RAM (OOM vector under concurrent
+    # workers). Audio beyond the cap is silently truncated; a WARNING is emitted.
+    # Default: 4 hours — covers any realistic YouTube video with headroom. (Issue 334)
+    AUDIO_ANALYSIS_MAX_DURATION_S: int = 14400
+    # Timeout (seconds) for the ffmpeg showwavespic subprocess in generate_waveform_image.
+    # The old hardcoded 60 s was insufficient for very long source files; callers that
+    # know the audio duration can scale the timeout further via the duration_s kwarg.
+    # (Issue 334)
+    WAVEFORM_TIMEOUT_S: int = 300
     STORAGE_BACKEND: str = "local"
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""
@@ -298,6 +308,15 @@ class Settings(BaseSettings):
     # ingestion is added later the guard is already in place and cannot be forgotten.
     # The clamp uses the same word-boundary rsplit pattern as titles (clamp_ingest_field).
     MAX_INGESTED_DESC_CHARS: int = 10000
+
+    # Issue 340c — ingest length clamp for YouTube channel titles.
+    # YouTube's published channel name limit is 100 characters (support.google.com/youtube/answer).
+    # 200 chars is a 2× safety margin. channel_title enters every LLM system prompt as factual
+    # context (knowledge/titles, hooks, thumbnails, scoring) — a malicious or pathologically
+    # long value could act as an injection payload (OWASP LLM01) or inflate token costs.
+    # Applied at the OAuth callback boundary (youtube/oauth.py::upsert_creator) and in the
+    # prompt-assembly path so injection cannot reach the LLM regardless of DB content.
+    MAX_INGESTED_CHANNEL_TITLE_CHARS: int = 200
     # ── Per-frame active-speaker reframe (Issue 189) ──────────────────────────
     # Gated off by default: the per-frame MediaPipe + sendcmd path has NEVER
     # been verified on a real render environment (ffmpeg + real multi-speaker

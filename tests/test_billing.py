@@ -3,7 +3,9 @@ Tests for the billing module: packs, ledger, endpoints, and webhook fulfillment.
 """
 
 import json
+import re
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +13,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from billing.ledger import (
+    _trial_ended_402_detail,
+    _trial_expired,
     check_balance_for_minutes,
     check_positive_balance,
     grant_minutes,
@@ -122,6 +126,72 @@ def test_margin_floor_at_cheapest_pack():
 )
 def test_video_minutes(duration_s: float, expected: int):
     assert video_minutes(duration_s) == expected
+
+
+def test_video_minutes_negative_duration_returns_1():
+    """Negative duration (corrupt metadata) returns 1 — max(1, ceil(negative)) == 1.
+    Intentional: the floor charge is 1 minute regardless of input sign. (Issue 340a)"""
+    assert video_minutes(-60.0) == 1
+    assert video_minutes(-1.0) == 1
+    assert video_minutes(-0.001) == 1
+
+
+# ── Ledger edge cases (Issue 340a) ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_grant_minutes_empty_string_stripe_session_id_triggers_idempotency_check():
+    """stripe_session_id='' is not None → the fast-path idempotency scalar() runs.
+    When an existing MinutePack is found for stripe_session_id='', the grant is
+    skipped — idempotency holds even for the empty-string key. (Issue 340a)"""
+    creator_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.add = MagicMock()
+    # scalar() returns a non-None id → "already granted" fast-path fires
+    session.scalar = AsyncMock(return_value=uuid.uuid4())
+
+    await grant_minutes(creator_id, 60, "stripe", session, stripe_session_id="")
+
+    session.scalar.assert_called_once()  # idempotency check ran
+    session.add.assert_not_called()  # grant was skipped
+
+
+@pytest.mark.asyncio
+async def test_trial_expired_strict_less_than_boundary():
+    """_trial_expired uses strict '<' not '<=': trial_ends_at in the future
+    means the trial is still active. (Issue 340a)"""
+    creator_id = uuid.uuid4()
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=datetime.now(UTC) + timedelta(seconds=5))
+
+    assert await _trial_expired(creator_id, session) is False
+
+
+@pytest.mark.asyncio
+async def test_trial_expired_naive_datetime_treated_as_utc():
+    """A naive (tzinfo=None) trial_ends_at from the DB is assumed UTC and
+    compared correctly — no TypeError from mixing aware/naive datetimes.
+    (Issue 340a)"""
+    creator_id = uuid.uuid4()
+    session = AsyncMock()
+    # Naive datetime in the past — must be treated as expired
+    naive_past = (datetime.now(UTC) - timedelta(days=1)).replace(tzinfo=None)
+    session.scalar = AsyncMock(return_value=naive_past)
+
+    assert await _trial_expired(creator_id, session) is True
+
+
+def test_trial_ended_402_detail_does_not_leak_trial_end_date():
+    """The trial-ended 402 copy must not include any date or timestamp —
+    leaking trial_ends_at would allow probing account state. (Issue 340a)"""
+    detail = _trial_ended_402_detail()
+    # No YYYY-MM-DD, ISO 8601, or epoch timestamps should appear
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", detail), (
+        "402 detail must not include a date string"
+    )
+    assert not re.search(r"\d{10,}", detail), (
+        "402 detail must not include an epoch timestamp"
+    )
 
 
 # ── Ledger — grant and deduct ─────────────────────────────────────────────────

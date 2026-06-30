@@ -583,6 +583,225 @@ def test_parse_otlp_headers_ignores_malformed_pair() -> None:
     assert result == {"Authorization": "Bearer tok"}
 
 
+# ── Issue 337: Bug 1 regression — _sentry_before_send non-dict extra ─────────
+
+
+def test_sentry_before_send_non_dict_extra_list_no_crash() -> None:
+    """_sentry_before_send must NOT crash when event['extra'] is a list (not a dict).
+
+    The Sentry SDK populates extra from arbitrary exception context; it is not
+    always a dict.  The isinstance guard ensures scrub_dict is only called on
+    actual dict payloads.
+    """
+    event: dict = {
+        "extra": ["context-a", "context-b"],  # list, not dict
+        "request": {"data": {}},
+    }
+    result = _sentry_before_send(event, {})
+    assert result is not None
+    # The list must be left intact — we only scrub dicts.
+    assert result["extra"] == ["context-a", "context-b"]
+
+
+def test_sentry_before_send_non_dict_extra_string_no_crash() -> None:
+    """_sentry_before_send must NOT crash when event['extra'] is a plain string."""
+    event: dict = {"extra": "some-string-context"}
+    result = _sentry_before_send(event, {})
+    assert result is not None
+    assert result["extra"] == "some-string-context"
+
+
+# ── Issue 337: Bug 2 regression — JsonLogFormatter reserved output key clobber ──
+
+
+def test_json_formatter_reserved_output_key_ts_not_clobbered() -> None:
+    """An extra field named 'ts' must NOT clobber the formatter's structured 'ts' key.
+
+    Before the fix, payload.update(scrub_dict(extra)) ran after the reserved
+    payload keys were set, so an extra 'ts' overwrote the ISO timestamp.
+    """
+    record = logging.LogRecord("t", logging.INFO, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    record.ts = "evil-timestamp"  # type: ignore[attr-defined]
+    out = json.loads(JsonLogFormatter().format(record))
+    # The real formatter timestamp must be present and not overwritten.
+    assert out["ts"] != "evil-timestamp", "'ts' extra must not clobber the log envelope"
+    # The ISO-format timestamp must be parseable.
+    assert "T" in out["ts"]
+
+
+def test_json_formatter_reserved_output_key_level_not_clobbered() -> None:
+    """An extra field named 'level' must NOT clobber the formatter's level key."""
+    record = logging.LogRecord("t", logging.WARNING, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    record.level = "FAKE"  # type: ignore[attr-defined]
+    out = json.loads(JsonLogFormatter().format(record))
+    assert out["level"] == "WARNING", "'level' extra must not clobber the log envelope"
+
+
+def test_json_formatter_reserved_output_key_logger_not_clobbered() -> None:
+    """An extra field named 'logger' must NOT clobber the formatter's logger key."""
+    record = logging.LogRecord("real-logger", logging.INFO, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    record.logger = "fake-logger"  # type: ignore[attr-defined]
+    out = json.loads(JsonLogFormatter().format(record))
+    assert out["logger"] == "real-logger", "'logger' extra must not clobber the log envelope"
+
+
+# ── Issue 337: parametrized full-blocklist suite across all three sinks ───────
+
+_FULL_BLOCKLIST_KEYS = [
+    "token",
+    "email",
+    "secret",
+    "password",
+    "authorization",
+    "cookie",
+    "session",
+    "jwt",
+    "bearer",
+    "api_key",
+    "raw_key",
+    "refresh",
+    "access_key",
+    "credential",
+]
+
+
+@pytest.mark.parametrize("key", _FULL_BLOCKLIST_KEYS)
+def test_all_sinks_redact_blocklist_key(key: str) -> None:
+    """Each blocklist key must be scrubbed in JsonLogFormatter, event_log._redact,
+    and _sentry_before_send — asserting all three sinks in one parametrized suite
+    prevents the blocklist from diverging silently."""
+    from event_log import _redact
+
+    # ── Sink 1: JsonLogFormatter ───────────────────────────────────────────────
+    record = logging.LogRecord("t", logging.INFO, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    setattr(record, key, "sensitive-value")
+    fmt_out = json.loads(JsonLogFormatter().format(record))
+    assert fmt_out[key] == "[redacted]", (
+        f"JsonLogFormatter must redact key '{key}'"
+    )
+
+    # ── Sink 2: event_log._redact ──────────────────────────────────────────────
+    el_out = _redact({key: "sensitive-value", "creator_id": "uuid-safe"})
+    assert el_out is not None
+    assert el_out[key] == "[redacted]", (
+        f"event_log._redact must redact key '{key}'"
+    )
+    assert el_out["creator_id"] == "uuid-safe"
+
+    # ── Sink 3: _sentry_before_send ───────────────────────────────────────────
+    event: dict = {"extra": {key: "sensitive-value", "creator_id": "uuid-safe"}}
+    sentry_out = _sentry_before_send(event, {})
+    assert sentry_out is not None
+    assert sentry_out["extra"][key] == "[redacted]", (
+        f"_sentry_before_send must redact key '{key}' in extra"
+    )
+    assert sentry_out["extra"]["creator_id"] == "uuid-safe"
+
+
+def test_all_sinks_preserve_non_sensitive_key() -> None:
+    """A safe key (creator_id) must pass through all three sinks unchanged."""
+    from event_log import _redact
+
+    record = logging.LogRecord("t", logging.INFO, "f", 1, "msg", (), None)
+    record.request_id = "-"
+    record.creator_id = "uuid-abc"  # type: ignore[attr-defined]
+    fmt_out = json.loads(JsonLogFormatter().format(record))
+    assert fmt_out["creator_id"] == "uuid-abc"
+
+    el_out = _redact({"creator_id": "uuid-abc"})
+    assert el_out is not None
+    assert el_out["creator_id"] == "uuid-abc"
+
+    event: dict = {"extra": {"creator_id": "uuid-abc"}}
+    sentry_out = _sentry_before_send(event, {})
+    assert sentry_out is not None
+    assert sentry_out["extra"]["creator_id"] == "uuid-abc"
+
+
+# ── Issue 337: record_llm_tokens None / non-int cache coercion ────────────────
+
+
+def test_record_llm_tokens_none_cache_coerced_to_zero() -> None:
+    """None cache fields must coerce to 0 and not increment the counter."""
+    before_read = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="none-cache-model", kind="cache_read"
+    )._value.get()
+    before_create = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="none-cache-model", kind="cache_creation"
+    )._value.get()
+
+    record_llm_tokens(
+        provider="anthropic",
+        model="none-cache-model",
+        input_tokens=5,
+        output_tokens=3,
+        cache_read_tokens=None,  # type: ignore[arg-type]
+        cache_creation_tokens=None,  # type: ignore[arg-type]
+    )
+
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="none-cache-model", kind="cache_read"
+        )._value.get()
+        == before_read
+    ), "None cache_read_tokens must not increment"
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="none-cache-model", kind="cache_creation"
+        )._value.get()
+        == before_create
+    ), "None cache_creation_tokens must not increment"
+
+
+def test_record_llm_tokens_non_int_str_cache_coerced_to_zero() -> None:
+    """Non-numeric string cache fields must coerce to 0 without raising."""
+    before_read = LLM_TOKENS_TOTAL.labels(
+        provider="anthropic", model="str-cache-model", kind="cache_read"
+    )._value.get()
+
+    record_llm_tokens(
+        provider="anthropic",
+        model="str-cache-model",
+        input_tokens=1,
+        output_tokens=1,
+        cache_read_tokens="x",  # type: ignore[arg-type]
+        cache_creation_tokens="y",  # type: ignore[arg-type]
+    )
+
+    assert (
+        LLM_TOKENS_TOTAL.labels(
+            provider="anthropic", model="str-cache-model", kind="cache_read"
+        )._value.get()
+        == before_read
+    ), "Non-numeric string cache_read_tokens must coerce to 0"
+
+
+# ── Issue 337: /metrics 200 when collect_saturation_gauges raises ─────────────
+
+
+def test_metrics_returns_200_when_collect_saturation_raises(
+    client: TestClient, monkeypatch
+) -> None:
+    """The /metrics route must return 200 even when collect_saturation_gauges raises.
+
+    collect_saturation_gauges is internally defensive, but the route wraps the
+    outer call too so any unexpected error never 500s the Prometheus scrape.
+    """
+    import main as main_module
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated gauge failure")
+
+    monkeypatch.setattr(main_module, "collect_saturation_gauges", _boom)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert "http_request_duration_seconds" in resp.text
+
+
 def test_sentry_init_is_noop_when_dsn_empty() -> None:
     """init_sentry must be a no-op when SENTRY_DSN is empty — no SDK initialization."""
     import sys

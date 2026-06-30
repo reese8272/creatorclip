@@ -14,6 +14,7 @@ API, ffmpeg, WhisperX) are mocked at their entry points; the established
 codebase pattern is to never hit real external services from tests.
 """
 
+import logging
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
@@ -525,4 +526,151 @@ async def test_build_dna_below_threshold_raises_without_retry(db_session):
         )
         assert n_dna == 0
     finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+# ── Issue 336: _load_clip_render_plan anomaly log for running+render_uri ──────
+
+
+@pytest.mark.asyncio
+async def test_load_clip_render_plan_logs_anomaly_running_with_render_uri(
+    db_session, caplog
+):
+    """When a clip is in 'running' state but already has a render_uri set, the
+    function must emit a WARNING-level log before re-rendering. This state
+    arises when a prior render uploaded the file but crashed before committing
+    the done status — a belt-and-suspenders anomaly detector. (Issue 336)"""
+    from worker.tasks import _load_clip_render_plan
+
+    creator = await _seed_creator(db_session, sub_prefix="anomaly")
+    video = await _seed_video(db_session, creator_id=creator.id, duration_s=300.0)
+    clip = await _seed_clip(
+        db_session,
+        video_id=video.id,
+        creator_id=creator.id,
+        render_status=RenderStatus.running,
+    )
+
+    # Set render_uri directly to simulate the anomalous state: running + render_uri set.
+    clip.render_uri = f"s3://test/clips/{clip.id}_prior.mp4"
+    await db_session.commit()
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="worker.tasks"):
+            with (
+                patch("worker.storage.alocal_path", _dummy_local_path),
+                patch("worker.progress.aemit", new_callable=AsyncMock),
+            ):
+                # _load_clip_render_plan opens its own AdminSessionLocal — drive it
+                # directly; the function returns the render plan (not None) since the
+                # clip is 'running', not 'done'.
+                plan = await _load_clip_render_plan(str(clip.id))
+
+        assert plan is not None, "_load_clip_render_plan must return a plan (not skip)"
+        assert any(
+            "anomalous state" in record.message
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+        ), "A WARNING about the anomalous running+render_uri state must be logged"
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+# ── Issue 336: _build_dna_async same job_id → idempotent no-op ───────────────
+
+
+@pytest.mark.asyncio
+async def test_build_dna_same_job_id_is_idempotent_noop(db_session):
+    """_build_dna_async called with a job_id that already exists in CreatorDna
+    must return cleanly without inserting a second row or calling any paid API.
+    The idempotency check runs UNDER the advisory lock to close the double-spend
+    race. (Issue 63 / Issue 76 / Issue 336)"""
+    from worker.tasks import _build_dna_async
+
+    creator = await _seed_creator(db_session, sub_prefix="dnajob")
+    job_id = str(uuid.uuid4())
+
+    # Pre-insert a CreatorDna row simulating a completed prior build with this job_id.
+    db_session.add(
+        CreatorDna(
+            creator_id=creator.id,
+            version=1,
+            brief_text="pre-built brief",
+            patterns_jsonb={},
+            build_job_id=job_id,
+        )
+    )
+    await db_session.commit()
+
+    try:
+        # Second delivery of the same job_id: must short-circuit under the advisory
+        # lock without calling build_patterns, generate_brief, or embed_*.
+        await _build_dna_async(str(creator.id), job_id=job_id)
+
+        # Verify only one DNA row exists — no duplicate was created.
+        n = await db_session.scalar(
+            select(func.count(CreatorDna.id)).where(CreatorDna.creator_id == creator.id)
+        )
+        assert n == 1, f"expected exactly 1 DNA row after idempotent second build; got {n}"
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+# ── Issue 336: advisory lock contention — sweep + sync no-op ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_sweep_scheduled_publications_noop_when_lock_held(db_session):
+    """If another connection holds the advisory lock for sweep_scheduled_publications,
+    the sweep must return immediately without committing anything — the lock is
+    always released in the finally clause. (Issue 336 / Issue 196)"""
+    from worker.tasks import _sweep_scheduled_publications_async
+
+    lock_key = "sweep_scheduled_publications"
+    # Acquire the lock on the test session's connection (simulates a concurrent sweep).
+    held = (
+        await db_session.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
+        )
+    ).scalar_one()
+    assert held, "test fixture must be able to acquire the advisory lock"
+
+    try:
+        # The sweep opens a NEW connection and tries pg_try_advisory_lock which
+        # returns False (lock held by our test session). Must not raise.
+        await _sweep_scheduled_publications_async()
+    finally:
+        await db_session.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
+        )
+        await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_sync_channel_catalog_noop_when_lock_held(db_session):
+    """If the per-creator advisory lock is held, _sync_channel_catalog_async must
+    return immediately. The lock is released in the finally clause even on error.
+    (Issue 336 / Issue 87)"""
+    from worker.tasks import _sync_channel_catalog_async
+
+    creator = await _seed_creator(db_session, sub_prefix="locktest")
+    lock_key = f"catalog-sync:{creator.id}"
+
+    held = (
+        await db_session.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
+        )
+    ).scalar_one()
+    assert held, "test fixture must be able to acquire the per-creator advisory lock"
+
+    try:
+        # _sync_channel_catalog_async opens its own connection, tries the same lock,
+        # gets False, and returns early — must not raise or attempt any YouTube API call.
+        with patch("youtube.oauth.get_valid_access_token", new_callable=AsyncMock):
+            await _sync_channel_catalog_async(str(creator.id))
+    finally:
+        await db_session.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
+        )
+        await db_session.commit()
         await _cleanup_creator(db_session, creator.id)

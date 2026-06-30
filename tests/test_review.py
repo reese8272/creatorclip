@@ -88,9 +88,10 @@ def test_submit_trim_with_times():
     clip = _make_clip(creator.id)
     client = _build_client(creator, clip)
 
+    # trim values must be within [clip.start_s=10.0, clip.end_s=70.0].
     resp = client.post(
         f"/clips/{clip.id}/feedback",
-        json={"action": "trim", "trim_start_s": 5.0, "trim_end_s": 55.0},
+        json={"action": "trim", "trim_start_s": 15.0, "trim_end_s": 55.0},
     )
     assert resp.status_code == 201
     assert resp.json()["action"] == "trim"
@@ -151,3 +152,125 @@ def test_feedback_clip_not_found_returns_404():
     client = TestClient(app, raise_server_exceptions=True)
     resp = client.post(f"/clips/{uuid.uuid4()}/feedback", json={"action": "upvote"})
     assert resp.status_code == 404
+
+
+# ── Issue 339: trim / feedback_note validation ────────────────────────────────
+
+
+def test_trim_negative_start_rejected():
+    """trim_start_s < 0 → 422 (Pydantic model validator)."""
+    creator = _make_creator()
+    clip = _make_clip(creator.id)
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": -1.0, "trim_end_s": 50.0},
+    )
+    assert resp.status_code == 422
+
+
+def test_trim_inverted_rejected():
+    """trim_start_s > trim_end_s → 422 (inverted trim window)."""
+    creator = _make_creator()
+    clip = _make_clip(creator.id)
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": 50.0, "trim_end_s": 10.0},
+    )
+    assert resp.status_code == 422
+
+
+def test_trim_start_equals_end_rejected():
+    """trim_start_s == trim_end_s → 422 (zero-width window)."""
+    creator = _make_creator()
+    clip = _make_clip(creator.id)
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": 30.0, "trim_end_s": 30.0},
+    )
+    assert resp.status_code == 422
+
+
+def test_trim_nonfinite_rejected_at_model_level():
+    """NaN and inf trim values are rejected by the model validator.
+
+    These non-finite floats cannot be tested via standard JSON (the error
+    response serialization also fails on nan/inf). Testing at the Pydantic
+    model level is the correct approach — it's where the validator runs.
+    """
+    import math
+
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from routers.review import FeedbackRequest
+
+    with _pytest.raises(ValidationError):
+        FeedbackRequest(action="trim", trim_start_s=math.nan, trim_end_s=50.0)
+
+    with _pytest.raises(ValidationError):
+        FeedbackRequest(action="trim", trim_start_s=math.inf, trim_end_s=50.0)
+
+    with _pytest.raises(ValidationError):
+        FeedbackRequest(action="trim", trim_start_s=10.0, trim_end_s=math.inf)
+
+
+def test_trim_outside_clip_window_rejected():
+    """Trim values outside [clip.start_s, clip.end_s] → 422.
+
+    clip.start_s = 10.0, clip.end_s = 70.0.  trim_start = 5.0 is before
+    clip start; trim_end = 80.0 is past clip end — both invalid.
+    """
+    creator = _make_creator()
+    clip = _make_clip(creator.id)  # start_s=10.0, end_s=70.0
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": 5.0, "trim_end_s": 80.0},
+    )
+    assert resp.status_code == 422
+
+
+def test_trim_within_clip_window_accepted():
+    """Trim values within [clip.start_s, clip.end_s] → 201 (happy path)."""
+    creator = _make_creator()
+    clip = _make_clip(creator.id)  # start_s=10.0, end_s=70.0
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": 15.0, "trim_end_s": 60.0},
+    )
+    assert resp.status_code == 201
+
+
+def test_feedback_note_over_max_length_rejected():
+    """feedback_note > 2000 chars → 422 (Pydantic max_length constraint)."""
+    creator = _make_creator()
+    clip = _make_clip(creator.id)
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "upvote", "feedback_note": "x" * 2001},
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_note_at_max_length_accepted():
+    """feedback_note exactly 2000 chars → 201 (boundary is inclusive)."""
+    creator = _make_creator()
+    clip = _make_clip(creator.id)
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "upvote", "feedback_note": "x" * 2000},
+    )
+    assert resp.status_code == 201

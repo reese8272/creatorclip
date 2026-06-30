@@ -668,6 +668,217 @@ def test_reframe_flag_enabled_includes_sendcmd_in_vf(tmp_path):
     assert "crop=" in vf
 
 
+# ── Issue 329: new edge-suite tests ───────────────────────────────────────────
+
+
+# ─── 1. _run: stderr tail (not head) in RuntimeError ─────────────────────────
+
+
+def test_run_stderr_tail_in_error_message():
+    """Non-zero exit: error message must contain the END of stderr, not the head.
+
+    Structure: <HEAD_ONLY_MARKER> + 2000 padding chars + <TAIL_ONLY_MARKER>
+    Last 500 chars contains TAIL_ONLY_MARKER but not HEAD_ONLY_MARKER.
+    """
+    head_marker = "HEAD_ONLY_MARKER"
+    tail_marker = "TAIL_ONLY_MARKER"
+    long_stderr = head_marker + "X" * 2000 + tail_marker
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr=long_stderr)
+        with pytest.raises(RuntimeError) as exc_info:
+            _run(["ffmpeg", "-version"], "test")
+
+    err = str(exc_info.value)
+    assert tail_marker in err, "tail marker must appear — error must use stderr[-500:]"
+    assert head_marker not in err, "head marker must NOT appear — head is beyond the 500-char tail"
+
+
+# ─── 2. _run: OSError / FileNotFoundError / PermissionError → RuntimeError ───
+
+
+@pytest.mark.parametrize(
+    "exc_cls",
+    [OSError, FileNotFoundError, PermissionError],
+)
+def test_run_wraps_subprocess_os_errors(exc_cls):
+    """subprocess.run raising OS-level errors must be wrapped in RuntimeError."""
+    with patch("subprocess.run", side_effect=exc_cls("ffmpeg not found")):
+        with pytest.raises(RuntimeError, match="ffmpeg"):
+            _run(["ffmpeg", "-version"], "test label")
+
+
+# ─── 3. render_clip_file: start_s<0 and end_s>source_duration guards ─────────
+
+
+def test_render_clip_file_raises_on_negative_start(tmp_path):
+    """start_s < 0 must raise ValueError before any ffmpeg call."""
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+    with pytest.raises(ValueError, match="start_s"):
+        render_clip_file(src, start_s=-1.0, end_s=10.0, out_path=out)
+
+
+def test_render_clip_file_raises_when_end_past_source_duration(tmp_path):
+    """end_s > source duration must raise ValueError before ffmpeg shell-out."""
+    import clip_engine.render as render_mod
+
+    src = tmp_path / "v.mp4"
+    src.touch()
+    out = tmp_path / "out.mp4"
+    with patch.object(render_mod, "_source_duration_s", return_value=30.0):
+        with pytest.raises(ValueError, match="end_s"):
+            render_clip_file(src, start_s=0.0, end_s=60.0, out_path=out)
+
+
+# ─── 4. _detect_face_center_x: distinct INFO log lines ───────────────────────
+
+
+def test_detect_face_center_x_logs_corrupt_frame(tmp_path, caplog):
+    """cv2.imread→None logs an INFO 'corrupt frame' message."""
+    import logging
+
+    kf = tmp_path / "kf.jpg"
+    kf.touch()
+    with caplog.at_level(logging.INFO, logger="clip_engine.render"):
+        with patch("cv2.imread", return_value=None):
+            cx = _detect_face_center_x(kf, 1920)
+    assert cx == 960
+    assert any("corrupt" in r.message.lower() for r in caplog.records)
+
+
+def test_detect_face_center_x_logs_no_face(tmp_path, caplog):
+    """detectMultiScale→[] logs an INFO 'no face' message."""
+    import logging
+
+    import numpy as np
+
+    kf = tmp_path / "kf.jpg"
+    kf.touch()
+    fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
+    with caplog.at_level(logging.INFO, logger="clip_engine.render"):
+        with (
+            patch("cv2.imread", return_value=fake_img),
+            patch("cv2.CascadeClassifier") as mock_cc,
+        ):
+            mock_cc.return_value.detectMultiScale.return_value = []
+            cx = _detect_face_center_x(kf, 1920)
+    assert cx == 960
+    assert any("no face" in r.message.lower() for r in caplog.records)
+
+
+# ─── 5. _frame_dimensions: WARNING log on parse failure ──────────────────────
+
+
+def test_frame_dimensions_logs_warning_on_bad_output(tmp_path, caplog):
+    """Unparseable ffprobe output must emit a WARNING before returning the default."""
+    import logging
+
+    fake = tmp_path / "v.mp4"
+    fake.touch()
+    with caplog.at_level(logging.WARNING, logger="clip_engine.render"):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="garbage", stderr="")
+            w, h = _frame_dimensions(fake)
+    assert w == 1920 and h == 1080
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+# ─── 6. render_cleaned_clip_file: normalize unsorted / overlapping ranges ─────
+
+
+def test_render_cleaned_clip_file_accepts_unsorted_ranges(tmp_path):
+    """Unsorted keep_ranges are normalized (sorted) rather than rejected."""
+    captured: dict = {}
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        captured["cmd"] = cmd
+
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+    ):
+        # ranges in wrong order — should succeed, not raise
+        render_cleaned_clip_file(
+            source_path=Path("/fake/src.mp4"),
+            keep_ranges=[(5.0, 8.0), (0.0, 3.0)],
+            out_path=tmp_path / "out.mp4",
+        )
+    assert "cmd" in captured  # ffmpeg was called → succeeded
+
+
+def test_render_cleaned_clip_file_merges_overlapping_ranges(tmp_path):
+    """Overlapping keep_ranges are merged into one segment and ffmpeg is called."""
+    captured: dict = {}
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        script = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+        captured["script"] = script
+
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+    ):
+        render_cleaned_clip_file(
+            source_path=Path("/fake/src.mp4"),
+            keep_ranges=[(0.0, 5.0), (3.0, 8.0)],  # overlap at 3–5
+            out_path=tmp_path / "out.mp4",
+        )
+
+    script = captured["script"]
+    # Merged to (0.0, 8.0) → only one video trim segment
+    assert script.count("[0:v]trim=") == 1
+    assert "start=0.000" in script
+    assert "end=8.000" in script
+
+
+def test_render_cleaned_clip_file_logs_when_normalization_moves_edge(tmp_path, caplog):
+    """When ranges are reordered or merged, an INFO log must be emitted."""
+    import logging
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        pass
+
+    with caplog.at_level(logging.INFO, logger="clip_engine.render"):
+        with (
+            patch("clip_engine.render._run", _fake_run),
+            patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+        ):
+            render_cleaned_clip_file(
+                source_path=Path("/fake/src.mp4"),
+                keep_ranges=[(5.0, 8.0), (0.0, 3.0)],  # unsorted → normalised
+                out_path=tmp_path / "out.mp4",
+            )
+
+    assert any("normaliz" in r.message.lower() for r in caplog.records)
+
+
+def test_render_cleaned_clip_file_warns_on_loudnorm_unparseable(tmp_path, caplog):
+    """When loudnorm stats are unparseable the render proceeds flat with a WARNING."""
+    import logging
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        pass
+
+    # _measure_loudnorm_filter calls subprocess.run internally; return garbage stderr.
+    with caplog.at_level(logging.WARNING, logger="clip_engine.render"):
+        with (
+            patch("clip_engine.render._run", _fake_run),
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(returncode=0, stdout="", stderr="not json"),
+            ),
+        ):
+            render_cleaned_clip_file(
+                source_path=Path("/fake/src.mp4"),
+                keep_ranges=[(0.0, 5.0)],
+                out_path=tmp_path / "out.mp4",
+            )
+
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
 def test_reframe_flag_enabled_sendcmd_file_cleaned_up(tmp_path):
     """The sendcmd temp file must be removed after render, even on success."""
     import config as _config_mod

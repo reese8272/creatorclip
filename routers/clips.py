@@ -98,6 +98,10 @@ class ClipListOut(BaseModel):
     (from ``clip_engine/candidates.py``) so the frontend can render an honest
     "why not clipped" explanation instead of a generic empty state.
     The label is sourced from ``CLIPPING_PRINCIPLES.md``; no virality language.
+
+    ``truncated`` was added in Issue 339 — set to True when the response has
+    been hard-capped at ``_LIST_LIMIT`` and additional clips exist beyond that
+    cap. Additive / backward-compatible: default is False.
     """
 
     clips: list[ClipOut]
@@ -107,6 +111,7 @@ class ClipListOut(BaseModel):
     personalization: PersonalizationStatus | None = None
     skip_reason: str | None = None
     skip_reason_label: str | None = None
+    truncated: bool = False
 
 
 class VideoClipCount(BaseModel):
@@ -301,14 +306,18 @@ async def list_clips(
         raise HTTPException(status_code=404, detail="Video not found")
 
     # Hard cap to prevent unbounded scans as clip counts grow. (Issue 76)
+    # Issue 339: query for _LIST_LIMIT+1 so we can distinguish "exactly 100
+    # clips" from "100+ clips" without a separate COUNT query.
     _LIST_LIMIT = 100
     result = await session.execute(
         select(Clip)
         .where(Clip.video_id == video_id, Clip.creator_id == creator.id)
         .order_by(Clip.rank)
-        .limit(_LIST_LIMIT)
+        .limit(_LIST_LIMIT + 1)
     )
-    clips = list(result.scalars())
+    clips_raw = list(result.scalars())
+    truncated = len(clips_raw) > _LIST_LIMIT
+    clips = clips_raw[:_LIST_LIMIT]
 
     # Impression/position log (Issue 202): record what rank each clip was shown at,
     # and when, so later counterfactual/IPS evaluation is possible (it cannot be
@@ -380,6 +389,7 @@ async def list_clips(
         "personalization": personalization.model_dump(),
         "skip_reason": skip_reason,
         "skip_reason_label": skip_reason_label_text,
+        "truncated": truncated,
     }
 
 

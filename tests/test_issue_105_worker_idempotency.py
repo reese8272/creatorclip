@@ -97,11 +97,17 @@ async def test_signals_short_circuits_when_already_done() -> None:
 
 @pytest.mark.asyncio
 async def test_ingest_short_circuits_when_source_uri_endswith_wav() -> None:
-    """_ingest_async returns immediately when video.source_uri already ends in .wav.
+    """_ingest_async returns immediately when video.source_uri already ends in .wav
+    AND the WAV has non-zero bytes — happy-path of the integrity short-circuit.
 
-    This indicates the prior run's final commit (source_uri = audio_uri) landed —
-    the orphan-mp4 short-circuit per AWS Lambda idempotent-retry doctrine.
+    The prior run's final commit (source_uri = audio_uri) has landed and the WAV
+    exists with content — re-extracting is unnecessary (AWS Lambda idempotent-retry
+    doctrine). (Issue 105 Fix 2 / Issue 336 integrity hardening)
     """
+    import tempfile
+    from contextlib import asynccontextmanager
+    from pathlib import Path
+
     from models import Video
 
     video_id = str(uuid.uuid4())
@@ -115,9 +121,20 @@ async def test_ingest_short_circuits_when_source_uri_endswith_wav() -> None:
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
+    @asynccontextmanager
+    async def _valid_wav(_uri):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(b"RIFF\x00\x00\x00\x00WAVEfmt ")  # non-zero content
+            tmp = Path(f.name)
+        try:
+            yield tmp
+        finally:
+            tmp.unlink(missing_ok=True)
+
     with (
         patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
         patch("worker.progress.aemit", new_callable=AsyncMock),
+        patch("worker.storage.alocal_path", _valid_wav),
         patch("worker.tasks.asyncio.to_thread") as mock_to_thread,
     ):
         from worker.tasks import _ingest_async
@@ -126,6 +143,67 @@ async def test_ingest_short_circuits_when_source_uri_endswith_wav() -> None:
 
     # No ffmpeg / audio-extract work should have been dispatched.
     mock_to_thread.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ingest_wav_zero_byte_falls_through() -> None:
+    """_ingest_async must NOT short-circuit when the WAV at source_uri is zero bytes.
+
+    A prior run that uploaded an empty WAV (interrupted extraction) must not be
+    silently reused — the integrity probe detects the empty file and falls through
+    to re-extract, preventing a corrupt WAV from stalling transcription. (Issue 336)
+    """
+    import tempfile
+    from contextlib import asynccontextmanager
+    from pathlib import Path
+
+    from models import IngestStatus, Video
+
+    video_id = str(uuid.uuid4())
+    mock_video = MagicMock(spec=Video)
+    mock_video.source_uri = f"s3://bucket/audio/{video_id}.wav"
+    mock_video.ingest_status = IngestStatus.running
+
+    mock_session = AsyncMock()
+    mock_session.get = AsyncMock(return_value=mock_video)
+    mock_session.commit = AsyncMock()
+
+    mock_session_cm = AsyncMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    probe_calls: list[str] = []
+
+    @asynccontextmanager
+    async def _zero_byte_wav(_uri):
+        probe_calls.append(_uri)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            tmp = Path(f.name)  # 0 bytes — no write
+        try:
+            yield tmp
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    with (
+        patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
+        patch("worker.progress.aemit", new_callable=AsyncMock),
+        patch("worker.storage.alocal_path", _zero_byte_wav),
+        patch("worker.tasks.asyncio.to_thread") as mock_to_thread,
+    ):
+        # The zero-byte WAV causes the short-circuit to be skipped; the function
+        # proceeds to the extraction path and calls asyncio.to_thread (probe_duration_s).
+        # Raise here so we don't need to stub the entire extraction chain.
+        mock_to_thread.side_effect = RuntimeError("probe_called — short-circuit bypassed")
+
+        from worker.tasks import _ingest_async
+
+        with pytest.raises(RuntimeError, match="short-circuit bypassed"):
+            await _ingest_async(video_id)
+
+    # alocal_path was called (at least once for the probe), confirming the function
+    # did NOT return early before reaching the extraction path.
+    assert probe_calls, "alocal_path must be called for the WAV integrity probe"
+    assert mock_to_thread.called, "asyncio.to_thread must be called — short-circuit was skipped"
 
 
 # ── Fix 3: generate_clips uses RefundOnFailureTask as base ────────────────────

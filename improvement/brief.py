@@ -20,7 +20,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
-from observability import record_llm_metric, warn_if_truncated
+from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -152,9 +152,7 @@ def generate_improvement_brief(
                 tools=tools,
             )
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-            logger.error(
-                "improvement_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__
-            )
+            log_llm_error(logger, exc, task=task_id)
             raise
         logger.info(
             "improvement_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
@@ -189,7 +187,7 @@ def generate_improvement_brief(
             messages=messages,
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("improvement_brief LLM error exc_type=%s", type(exc).__name__)
+        log_llm_error(logger, exc)
         raise
     vlog_llm_response("improvement_brief", response=response)
 

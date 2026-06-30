@@ -19,7 +19,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from observability import record_llm_metric, warn_if_truncated
+from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ def generate_brief(
                 messages=messages,
             )
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-            logger.error("dna_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
+            log_llm_error(logger, exc, task=task_id)
             raise
         logger.info(
             "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
@@ -183,7 +183,7 @@ def generate_brief(
             messages=messages,  # type: ignore[arg-type]  # list[dict] → MessageParam at runtime
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("dna_brief LLM error exc_type=%s", type(exc).__name__)
+        log_llm_error(logger, exc)
         raise
     vlog_llm_response("dna_brief", response=response)
 

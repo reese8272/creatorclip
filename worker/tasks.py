@@ -327,6 +327,18 @@ def render_clip(self, clip_id: str) -> str:
             exc_type=type(exc).__name__,
         )
         raise
+    except SoftTimeLimitExceeded:
+        # Terminal — the task ran past its Celery soft time limit. A retry would time
+        # out again, compounding the wasted render minutes. Mark failed and re-raise
+        # immediately so RefundOnFailureTask.on_failure fires (no retry). (Issue 336)
+        logger.warning(
+            "render_clip soft-timeout for clip %s (task %s) — terminal, not retrying",
+            clip_id,
+            self.request.id,
+        )
+        run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
+        raise
     except Exception as exc:
         # Transient — set failed (so a UI poll between attempts shows a terminal
         # state, and the final MaxRetriesExceededError leaves it failed) then retry.
@@ -442,15 +454,23 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         existing = (
             await session.execute(select(ClipPublication).where(ClipPublication.task_id == task_id))
         ).scalar_one_or_none()
-        if (
-            existing is not None
-            and existing.status == PublishStatus.done
-            and existing.youtube_video_id
-        ):
-            logger.info(
-                "Clip %s already published (%s) — skipping", clip_id, existing.youtube_video_id
+        if existing is not None and existing.status == PublishStatus.done:
+            if existing.youtube_video_id:
+                logger.info(
+                    "Clip %s already published (%s) — skipping",
+                    clip_id,
+                    existing.youtube_video_id,
+                )
+                return existing.youtube_video_id
+            # done-but-NULL youtube_video_id: the prior run likely uploaded successfully
+            # but crashed before the success-path commit wrote youtube_video_id. The
+            # idempotency guard is bypassed so the task re-runs, consuming quota again.
+            # Log the asymmetry so operators can investigate if it recurs. (Issue 336)
+            logger.warning(
+                "Clip %s publication row is done but youtube_video_id is NULL — "
+                "idempotency guard bypassed, task will re-run and consume quota",
+                clip_id,
             )
-            return existing.youtube_video_id
 
         clip = await session.get(Clip, cid)
         if not clip or not clip.render_uri:
@@ -497,7 +517,17 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
                 row.status = PublishStatus.failed
                 row.error = str(exc)[:500]
                 await session.commit()
-        logger.warning("Publish %s failed permanently: %s", clip_id, type(exc).__name__)
+        # QUOTA ASYMMETRY: consume() already deducted COST_DATA_VIDEOS_INSERT units
+        # from the daily quota before the upload failed. Those units are gone — the
+        # YouTube API does not refund on upload error. Log so operators can track
+        # partial quota consumption during outages or audit spikes. (Issue 336)
+        logger.warning(
+            "Publish %s failed permanently (%s) — QUOTA ASYMMETRY: %d quota units"
+            " consumed before upload failure; units are non-refundable",
+            clip_id,
+            type(exc).__name__,
+            COST_DATA_VIDEOS_INSERT,
+        )
         raise
 
     # Store the returned video id + done, then wire the clip into the outcome loop
@@ -889,19 +919,19 @@ async def _ingest_async(video_id: str) -> None:
             # DB commit (source_uri = audio_uri) is the durable progress marker per
             # AWS Lambda's idempotent-retry doctrine — make progress persistent and
             # detectable, skip work that is already persisted.
+            # Issue 336: probe size first — zero-byte or unprobeable WAV re-extracts.
             if video.source_uri.endswith(".wav"):
-                logger.info(
-                    "Video %s source_uri already points to WAV — ingest already completed",
-                    video_id,
-                )
-                await aemit(
-                    video_id,
-                    "step",
-                    label="ingest_skipped",
-                    stage="ingest",
-                    reason="already_done",
-                )
-                return
+                _wav_ok = False
+                try:
+                    async with alocal_path(video.source_uri) as _wav_p:
+                        _wav_ok = _wav_p.stat().st_size > 0
+                except Exception:
+                    pass
+                if _wav_ok:
+                    logger.info("Video %s WAV ingest already done — skipping", video_id)
+                    await aemit(video_id, "step", label="ingest_skipped", stage="ingest", reason="already_done")
+                    return
+                logger.warning("Video %s WAV zero-byte or unprobeable — re-extracting", video_id)
 
             source_uri = video.source_uri
             # Capture the original blob key BEFORE we overwrite source_uri with
@@ -1221,6 +1251,16 @@ async def _load_clip_render_plan(clip_id: str) -> _ClipRenderPlan | None:
             logger.info("Clip %s already rendered — skipping", clip_id)
             await aemit(clip_id, "done", stage="render", message="Clip already rendered.")
             return None
+        if clip.render_status == RenderStatus.running and clip.render_uri:
+            # Anomalous state: the clip has a render_uri but is not marked done. This
+            # can occur if a prior render uploaded the file but crashed before setting
+            # the status to done. Re-rendering is safe (idempotent upload key); log
+            # the anomaly so an operator can investigate if it recurs. (Issue 336)
+            logger.warning(
+                "Clip %s is running with existing render_uri=%s — re-rendering (anomalous state)",
+                clip_id,
+                clip.render_uri,
+            )
         video = await session.get(Video, clip.video_id)
         if not video or not video.source_uri:
             raise ValueError(f"Source video not available for clip {clip_id}")

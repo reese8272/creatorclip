@@ -58,6 +58,10 @@ def check_not_cross_site(request: Request) -> None:
 
 SESSION_COOKIE = "cc_session"
 _ALGORITHM = "HS256"
+# 60-second leeway absorbs NTP clock drift between issuer and verifier for
+# both exp (tolerates a token expired < 60 s ago) and iat (tolerates a token
+# issued < 60 s in the future from a clock-skewed peer). RFC 7519 §4.1.6/7.
+_JWT_LEEWAY = timedelta(seconds=60)
 
 
 def create_session_token(creator_id: uuid.UUID) -> str:
@@ -87,7 +91,16 @@ def create_session_token(creator_id: uuid.UUID) -> str:
 
 
 def decode_session_token(token: str) -> dict[str, Any]:
-    return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[_ALGORITHM])
+    # `require: ["exp"]` rejects tokens that omit the expiry claim — a hand-crafted
+    # token without exp would otherwise decode as non-expiring (Issue 340a).
+    # `leeway` grants _JWT_LEEWAY of clock-skew tolerance on both exp and iat.
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET_KEY,
+        algorithms=[_ALGORITHM],
+        options={"require": ["exp"]},
+        leeway=_JWT_LEEWAY,
+    )
 
 
 def creator_id_from_cookie(request: Request) -> uuid.UUID | None:

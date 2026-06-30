@@ -33,12 +33,16 @@ from models import (
     ClipFormat,
     Creator,
     CreatorDna,
+    CreatorInsight,
     Demographics,
     DnaEmbedding,
     DnaEmbeddingKind,
     DnaStatus,
     FeedbackAction,
+    ImprovementBrief,
+    ImprovementBriefStatus,
     IngestStatus,
+    InsightType,
     MinuteDeduction,
     MinutePack,
     OnboardingState,
@@ -172,6 +176,21 @@ async def _seed_all_tenant_rows(session: AsyncSession, creator_id: uuid.UUID) ->
         )
     )
     session.add(Usage(creator_id=creator_id, period=now.strftime("%Y-%m")))
+    # The two tables migration 0010 missed; their RLS landed in 0038.
+    session.add(
+        ImprovementBrief(
+            creator_id=creator_id,
+            status=ImprovementBriefStatus.ready,
+            brief_text="x",
+        )
+    )
+    session.add(
+        CreatorInsight(
+            creator_id=creator_id,
+            insight_type=InsightType.recommendation,
+            content="x",
+        )
+    )
     await session.commit()
 
 
@@ -198,15 +217,19 @@ async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
     await session.commit()
 
 
-# The 12 tenant-owned tables with direct creator_id columns (matches the
-# migration's _TENANT_TABLES tuple).
+# The tenant-owned tables with direct creator_id columns. The first 12 match
+# migration 0010's _TENANT_TABLES; improvement_briefs + creator_insights were the
+# two stragglers that 0010 missed (added their RLS policy in migration 0038 after the
+# Issue 340b sweep found them unprotected — see docs/OFF_COURSE_BUGS.md 2026-06-30).
 _TENANT_TABLES = (
     "audience_activity",
     "clip_feedback",
     "clips",
     "creator_dna",
+    "creator_insights",
     "demographics",
     "dna_embeddings",
+    "improvement_briefs",
     "minute_deductions",
     "minute_packs",
     "preference_models",
@@ -333,5 +356,48 @@ async def test_rls_creators_table_remains_visible_for_auth_bootstrap(admin_engin
             row = result.scalar_one_or_none()
         assert row is not None, "creators table must NOT be gated by RLS"
         assert row.id == creator.id
+    finally:
+        await _cleanup(db_session, [creator.id])
+
+
+@pytest.mark.asyncio
+async def test_rls_deny_by_default_unset_context(admin_engine, db_session):
+    """Issue 340b — deny-by-default proof: with ``app.creator_id`` UNSET under the
+    ``creatorclip_app`` role, every RLS-gated tenant table returns zero rows.
+
+    ``current_setting('app.creator_id', true)`` returns NULL when the GUC has
+    never been set. The RLS predicate
+    ``creator_id = current_setting('app.creator_id', true)::uuid``
+    evaluates to ``creator_id = NULL`` which is always false/NULL in SQL — so
+    no rows pass the policy, regardless of what data exists in the table.
+
+    This is the structural guarantee that the application CANNOT accidentally
+    leak cross-tenant data if it forgets to set the GUC before querying.
+    """
+    # Seed ONE creator with data in all tenant tables so we have rows to *not* see.
+    creator = await _seed_creator(db_session, label="deny_default")
+    try:
+        await _seed_all_tenant_rows(db_session, creator.id)
+
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            # Deliberately do NOT set app.creator_id — simulating missing GUC context.
+            # Verify current_setting returns NULL (the ''missing_ok'' form).
+            guc_val = (
+                await s.execute(text("SELECT current_setting('app.creator_id', true)"))
+            ).scalar()
+            assert guc_val is None or guc_val == "", (
+                "app.creator_id should be unset at this point in the test"
+            )
+
+            for table in _TENANT_TABLES:
+                rows = (await s.execute(text(f"SELECT creator_id FROM {table}"))).all()  # noqa: S608
+                assert len(rows) == 0, (
+                    f"RLS deny-by-default FAILED on {table}: "
+                    f"{len(rows)} rows visible with no app.creator_id GUC set. "
+                    "This means the tenant_isolation policy is not enforced when the "
+                    "GUC is unset — a data-leakage risk."
+                )
     finally:
         await _cleanup(db_session, [creator.id])
