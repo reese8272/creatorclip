@@ -260,6 +260,63 @@ async def test_rls_blocks_cross_tenant_unfiltered_select(admin_engine, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_get_current_creator_sets_guc_for_same_transaction_write(admin_engine, db_session):
+    """Regression for Issue 344 (prod upload 500s after the RLS role split).
+
+    The real ``auth.get_current_creator`` resolves the creator with a SELECT that
+    auto-begins the request transaction — ``after_begin`` fires before
+    ``session.info['creator_id']`` is set, so it emits no GUC. The endpoint's
+    writes commit in that SAME transaction, so the dependency must set
+    ``app.creator_id`` on the live transaction itself; otherwise the INSERT hits
+    the RLS ``WITH CHECK`` with the GUC unset and 500s.
+
+    The prior RLS tests set the GUC by hand (masking this gap). This one drives
+    the real dependency end-to-end under the ``creatorclip_app`` role and asserts
+    an INSERT into a tenant table then succeeds in the same transaction.
+    """
+    from starlette.requests import Request
+
+    from auth import SESSION_COOKIE, create_session_token, get_current_creator
+
+    creator = await _seed_creator(db_session, label="guc")
+
+    try:
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            # Drop to the non-BYPASSRLS app role for the rest of this transaction,
+            # exactly as the prod app connects. This also auto-begins T1.
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+
+            token = create_session_token(creator.id)
+            scope = {
+                "type": "http",
+                "headers": [(b"cookie", f"{SESSION_COOKIE}={token}".encode())],
+                "state": {},
+            }
+            request = Request(scope)
+
+            # Real dependency: bootstrap SELECT + GUC injection on the live txn.
+            resolved = await get_current_creator(request=request, session=s)
+            assert resolved.id == creator.id
+
+            # The write that 500'd in prod: an INSERT into a tenant-owned table
+            # committed in the SAME transaction the auth SELECT began. Passes
+            # only because the GUC is now set on this transaction.
+            s.add(
+                Video(
+                    creator_id=creator.id,
+                    kind=VideoKind.long,
+                    duration_s=300.0,
+                    source_uri="s3://test/source/guc.mp4",
+                    ingest_status=IngestStatus.pending,
+                )
+            )
+            await s.flush()
+    finally:
+        await _cleanup(db_session, [creator.id])
+
+
+@pytest.mark.asyncio
 async def test_rls_creators_table_remains_visible_for_auth_bootstrap(admin_engine, db_session):
     """The ``creators`` table is exempt from RLS (Issue 56) so the FastAPI auth
     dependency can resolve ``current_creator`` from the JWT before

@@ -4,7 +4,7 @@ from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -134,6 +134,17 @@ async def get_current_creator(
     # `SET LOCAL app.creator_id = :cid` on every subsequent transaction,
     # gating RLS policies on tenant-owned tables (Issue 79).
     session.info["creator_id"] = creator.id
+    # Issue 344: the Creator lookup above already auto-began this request's
+    # transaction, so `after_begin` fired before `session.info["creator_id"]`
+    # was set and emitted no GUC. The endpoint's writes commit in that SAME
+    # transaction (no intervening commit/rollback), so without this the INSERT
+    # would hit the RLS WITH CHECK with `app.creator_id` unset and 500. Set the
+    # GUC on the live transaction now; `is_local=true` clears it at commit,
+    # matching the listener's semantics for any later transactions this request.
+    await session.execute(
+        text("SELECT set_config('app.creator_id', :cid, true)"),
+        {"cid": str(creator.id)},
+    )
     # Stash on request.state so creator_key() in limiter.py can read the
     # already-resolved identity without re-decoding the JWT. (Issue 104)
     request.state.creator_id = creator.id
