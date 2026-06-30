@@ -106,11 +106,17 @@ class PublicationOut(BaseModel):
 
 
 class PublicationListOut(BaseModel):
-    """Envelope for GET /clips/{clip_id}/publications."""
+    """Envelope for GET /clips/{clip_id}/publications.
+
+    ``truncated`` was added in Issue 339 — set to True when the hard cap of
+    50 rows has been reached and additional publications may exist beyond it.
+    Additive / backward-compatible: default is False.
+    """
 
     publications: list[PublicationOut]
     suggested_windows: list[dict]
     privacy_note: str
+    truncated: bool = False
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -221,13 +227,17 @@ async def list_publications(
     """
     clip = await _get_owned_clip(clip_id, creator, session)
 
+    # Issue 339: query limit+1 to detect truncation without a separate COUNT.
+    _PUB_LIST_LIMIT = 50
     pubs_result = await session.execute(
         select(ClipPublication)
         .where(ClipPublication.clip_id == clip.id)
         .order_by(ClipPublication.created_at.desc())
-        .limit(50)
+        .limit(_PUB_LIST_LIMIT + 1)
     )
-    pubs = list(pubs_result.scalars())
+    pubs_raw = list(pubs_result.scalars())
+    pubs_truncated = len(pubs_raw) > _PUB_LIST_LIMIT
+    pubs = pubs_raw[:_PUB_LIST_LIMIT]
 
     # Fetch audience activity for upload-window suggestions.
     _LIST_LIMIT = 200  # 7*24 = 168 max rows; cap defensively
@@ -241,6 +251,7 @@ async def list_publications(
         publications=[PublicationOut.from_pub(p) for p in pubs],
         suggested_windows=windows,
         privacy_note=_PRIVACY_NOTE,
+        truncated=pubs_truncated,
     )
 
 
