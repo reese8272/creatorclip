@@ -5,6 +5,56 @@ from cryptography.fernet import Fernet
 
 from crypto import TokenDecryptError, decrypt, encrypt, generate_key
 
+# ── Config / key-shape boundary tests (Issue 340a) ───────────────────────────
+
+
+def test_config_requires_token_encryption_key():
+    """TOKEN_ENCRYPTION_KEY is declared as a bare `str` with no default —
+    pydantic-settings raises ValidationError at startup if it is unset.
+    This test pins that the field stays required so a future refactor that
+    adds a default (e.g. '' or None) is caught. (Issue 340a)"""
+    from pydantic_core import PydanticUndefined
+
+    from config import Settings
+
+    field = Settings.model_fields.get("TOKEN_ENCRYPTION_KEY")
+    assert field is not None, "TOKEN_ENCRYPTION_KEY must be declared in Settings"
+    assert field.default is PydanticUndefined, (
+        "TOKEN_ENCRYPTION_KEY must have NO default — pydantic fails fast if unset"
+    )
+
+
+def test_malformed_fernet_key_raises_value_error(monkeypatch):
+    """A TOKEN_ENCRYPTION_KEY that is not valid Fernet material raises ValueError
+    from Fernet() inside _fernet(). This is a CONFIGURATION error, not a data
+    error — it correctly surfaces as ValueError (not TokenDecryptError). Pinning
+    this boundary so any future 'wrap everything in TokenDecryptError' PR is a
+    deliberate, discussed change. (Issue 340a)"""
+    from config import settings
+
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "not_a_valid_fernet_key")
+    with pytest.raises(ValueError):
+        encrypt("anything")
+
+
+def test_previous_key_empty_string_treated_as_no_previous_key(monkeypatch):
+    """TOKEN_ENCRYPTION_KEY_PREVIOUS='' is falsy — the truthiness check
+    `if settings.TOKEN_ENCRYPTION_KEY_PREVIOUS:` skips it, treating '' identically
+    to None. Tokens encrypted with only the primary key must decrypt correctly
+    in both states. (Issue 340a)"""
+    from config import settings
+
+    key_primary = Fernet.generate_key().decode()
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", key_primary)
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY_PREVIOUS", "")  # falsy
+
+    ciphertext = encrypt("edge_case_data")
+    assert decrypt(ciphertext) == "edge_case_data"
+
+    # Verify None produces identical behaviour (the '' ≡ None equivalence)
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY_PREVIOUS", None)
+    assert decrypt(ciphertext) == "edge_case_data"
+
 
 def test_encrypt_decrypt_roundtrip():
     plaintext = "ya29.some_real_looking_oauth_token"
