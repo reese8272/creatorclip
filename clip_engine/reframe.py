@@ -229,7 +229,9 @@ def _read_frame_cv2(video_path: Path, timestamp_s: float) -> object | None:
         if not cap.isOpened():
             logger.warning("cv2 could not open %s", video_path)
             return None
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        raw_fps = cap.get(cv2.CAP_PROP_FPS)
+        # NaN is truthy so `raw_fps or 25.0` would keep NaN; guard explicitly.
+        fps = raw_fps if math.isfinite(raw_fps) and raw_fps > 0 else 25.0
         frame_idx = int(timestamp_s * fps)
         cap.set(cv2.CAP_PROP_POS_FRAMES, float(frame_idx))
         ok, frame = cap.read()
