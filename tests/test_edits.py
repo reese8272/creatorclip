@@ -240,29 +240,32 @@ def test_post_cuts_happy_path_returns_202(client):
 
 
 @pytest.mark.parametrize(
-    "segments, expected_code",
+    "segments, expected_code, duration_s",
     [
-        ([], "empty"),
-        ([{"start_s": 3.0, "end_s": 2.0}], "invalid_segment"),
-        ([{"start_s": -1.0, "end_s": 2.0}], "out_of_bounds"),
+        ([], "empty", 10.0),
+        ([{"start_s": 3.0, "end_s": 2.0}], "invalid_segment", 10.0),
+        ([{"start_s": -1.0, "end_s": 2.0}], "out_of_bounds", 10.0),
         (
             [
                 {"start_s": 2.0, "end_s": 5.0},
                 {"start_s": 4.0, "end_s": 7.0},
             ],
             "overlap",
+            10.0,
         ),
-        ([{"start_s": 0.0, "end_s": 6.0}], "kept_too_short"),
+        ([{"start_s": 0.0, "end_s": 6.0}], "kept_too_short", 10.0),
+        # ≤85%-removed rule: 90s clip, cut 83s → 7s kept (≥5s floor), 92% removed → too much.
+        ([{"start_s": 0.0, "end_s": 83.0}], "removed_too_much", 90.0),
     ],
 )
-def test_post_cuts_validation_returns_422_with_code(client, segments, expected_code):
+def test_post_cuts_validation_returns_422_with_code(client, segments, expected_code, duration_s):
     from auth import get_current_creator
     from billing.ledger import check_positive_balance
     from db import get_session
     from main import app
 
     creator = _mock_creator()
-    clip = _mock_clip(creator.id, duration_s=10.0)
+    clip = _mock_clip(creator.id, duration_s=duration_s)
 
     async def _session():
         s = AsyncMock()
