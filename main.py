@@ -400,8 +400,14 @@ if settings.METRICS_ENABLED:
         # Collect saturation gauges before rendering the scrape payload (Issue 238).
         # Reuses the existing module-level engine + _health_redis singleton — zero
         # new connections. On any error the gauge retains its last value.
+        # collect_saturation_gauges is internally defensive (each sub-check has its
+        # own try/except), but we wrap the outer call too so any unexpected
+        # programming error never 500s the Prometheus scrape.
         if _health_redis is not None:
-            await collect_saturation_gauges(engine, _health_redis)
+            try:
+                await collect_saturation_gauges(engine, _health_redis)
+            except Exception:
+                logger.warning("collect_saturation_gauges raised unexpectedly")
         payload, content_type = metrics_response()
         return Response(content=payload, media_type=content_type)
 

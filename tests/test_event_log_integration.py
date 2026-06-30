@@ -106,6 +106,66 @@ async def test_http_request_recorded_by_middleware(client, db_session):
 
 
 @pytest.mark.integration
+async def test_record_event_non_uuid_creator_writes_cid_none(db_session):
+    """record_event with a non-UUID creator_id writes a row with creator_id=NULL.
+
+    The row must be persisted (telemetry is not silently dropped) and the
+    creator_id column must be NULL (cid coerced from the invalid string).
+    """
+    import event_log as el
+
+    unique_event = f"non_uuid_{uuid.uuid4().hex[:8]}"
+    await el.record_event(
+        source="test",
+        event=unique_event,
+        creator_id="not-a-valid-uuid-at-all",
+    )
+
+    row = (
+        (
+            await db_session.execute(
+                select(EventLog).where(EventLog.event == unique_event)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert row is not None, "Row must be persisted even when creator_id is not a UUID"
+    assert row.creator_id is None, (
+        "Non-UUID creator_id must be stored as NULL in the DB"
+    )
+
+
+@pytest.mark.integration
+async def test_record_event_row_carries_creator_id(db_session):
+    """record_event with a valid UUID creator_id stores it on the row (RLS context)."""
+    import event_log as el
+
+    creator = await _seed_creator(db_session)
+    unique_event = f"creator_ctx_{uuid.uuid4().hex[:8]}"
+    await el.record_event(
+        source="test",
+        event=unique_event,
+        creator_id=str(creator.id),
+    )
+
+    row = (
+        (
+            await db_session.execute(
+                select(EventLog).where(
+                    EventLog.event == unique_event,
+                    EventLog.creator_id == creator.id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert row is not None, "Row must have the correct creator_id"
+    assert row.creator_id == creator.id
+
+
+@pytest.mark.integration
 async def test_logs_me_isolated_per_creator(client, db_session):
     a = await _seed_creator(db_session)
     b = await _seed_creator(db_session)
