@@ -215,6 +215,16 @@ class Settings(BaseSettings):
     # than realtime; this only kills a wedged/hung ffmpeg so it can't tie up a worker
     # slot indefinitely (probe already uses timeout=30). (Issue A / Issue 76)
     FFMPEG_EXTRACT_TIMEOUT_S: int = 1800
+    # Cap audio analysis (extract_audio_events) at this many seconds of audio to avoid
+    # librosa loading a multi-hour WAV entirely into RAM (OOM vector under concurrent
+    # workers). Audio beyond the cap is silently truncated; a WARNING is emitted.
+    # Default: 4 hours — covers any realistic YouTube video with headroom. (Issue 334)
+    AUDIO_ANALYSIS_MAX_DURATION_S: int = 14400
+    # Timeout (seconds) for the ffmpeg showwavespic subprocess in generate_waveform_image.
+    # The old hardcoded 60 s was insufficient for very long source files; callers that
+    # know the audio duration can scale the timeout further via the duration_s kwarg.
+    # (Issue 334)
+    WAVEFORM_TIMEOUT_S: int = 300
     STORAGE_BACKEND: str = "local"
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""
