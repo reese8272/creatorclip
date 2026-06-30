@@ -33,12 +33,16 @@ from models import (
     ClipFormat,
     Creator,
     CreatorDna,
+    CreatorInsight,
     Demographics,
     DnaEmbedding,
     DnaEmbeddingKind,
     DnaStatus,
     FeedbackAction,
+    ImprovementBrief,
+    ImprovementBriefStatus,
     IngestStatus,
+    InsightType,
     MinuteDeduction,
     MinutePack,
     OnboardingState,
@@ -172,6 +176,21 @@ async def _seed_all_tenant_rows(session: AsyncSession, creator_id: uuid.UUID) ->
         )
     )
     session.add(Usage(creator_id=creator_id, period=now.strftime("%Y-%m")))
+    # The two tables migration 0010 missed; their RLS landed in 0038.
+    session.add(
+        ImprovementBrief(
+            creator_id=creator_id,
+            status=ImprovementBriefStatus.ready,
+            brief_text="x",
+        )
+    )
+    session.add(
+        CreatorInsight(
+            creator_id=creator_id,
+            insight_type=InsightType.recommendation,
+            content="x",
+        )
+    )
     await session.commit()
 
 
@@ -198,15 +217,19 @@ async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
     await session.commit()
 
 
-# The 12 tenant-owned tables with direct creator_id columns (matches the
-# migration's _TENANT_TABLES tuple).
+# The tenant-owned tables with direct creator_id columns. The first 12 match
+# migration 0010's _TENANT_TABLES; improvement_briefs + creator_insights were the
+# two stragglers that 0010 missed (added their RLS policy in migration 0038 after the
+# Issue 340b sweep found them unprotected — see docs/OFF_COURSE_BUGS.md 2026-06-30).
 _TENANT_TABLES = (
     "audience_activity",
     "clip_feedback",
     "clips",
     "creator_dna",
+    "creator_insights",
     "demographics",
     "dna_embeddings",
+    "improvement_briefs",
     "minute_deductions",
     "minute_packs",
     "preference_models",
