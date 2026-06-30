@@ -290,6 +290,10 @@ def check_pipeline(res: Results) -> None:
     ingest+Deepgram+ffmpeg) is intentionally NOT auto-triggered here — it is
     metered/destructive; trigger it deliberately on staging."""
     with _pg_connect() as conn, conn.cursor() as cur:
+        # videos/clips are RLS-protected; set the canary's tenant context so these
+        # reads return its rows once the app role enforces RLS (transcripts/signals
+        # are child tables without a policy, but the GUC is harmless for them).
+        cur.execute("SELECT set_config('app.creator_id', %s, false)", (str(CANARY_CREATOR_ID),))
         cur.execute(
             "SELECT ingest_status FROM videos WHERE id = %s", (CANARY_VIDEO_ID,)
         )

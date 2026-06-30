@@ -168,6 +168,41 @@ non-`ok` + 503 when a backing service is down).
 
 ## RLS one-time setup (Issue 79)
 
+> ✅ **ACTIVATED in prod 2026-06-30 (Issue 343).** The app now connects as
+> `creatorclip_app` (no BYPASSRLS); `DATABASE_MIGRATION_URL` points at the superuser
+> `creatorclip` (BYPASSRLS) for Alembic + worker cross-tenant sweeps. We used the
+> **simplified path below** for an already-migrated DB: set the `creatorclip_app`
+> password + re-grant, repoint `DATABASE_URL`, recreate app+worker — and **kept the
+> superuser as the migrate role** (did NOT transfer table ownership to
+> `creatorclip_migrate`; that remains optional future hardening). Verified via the
+> Issue 341 smoke harness `isolation` check. Rollback: `.env.bak-pre-rls*` on the VM.
+> The full pre-0010 runbook below is retained for reference / a clean rebuild.
+
+### Simplified activation on an already-migrated DB (what was actually run)
+
+```sql
+-- As the superuser owner (creatorclip):
+ALTER ROLE creatorclip_app LOGIN PASSWORD '<app-password>';
+GRANT USAGE ON SCHEMA public TO creatorclip_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO creatorclip_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO creatorclip_app;
+```
+```
+# /opt/autoclip/.env  (chmod 600) — keep host/db, swap the role:
+DATABASE_URL=postgresql+psycopg://creatorclip_app:<app-password>@postgres:5432/creatorclip
+DATABASE_MIGRATION_URL=postgresql+psycopg://creatorclip:<POSTGRES_PASSWORD>@postgres:5432/creatorclip
+```
+```bash
+# Cut over, then verify with the smoke harness (isolation must be green):
+ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps app worker'
+ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml exec -T app sh -c "RUN_LIVE_SMOKE=1 python3.12 scripts/live_smoke.py --target prod --seed --only isolation"'
+# Rollback: restore .env DATABASE_URL -> creatorclip and recreate.
+```
+
+---
+
+### Original pre-0010 runbook (reference)
+
 Alembic migration `0010_rls_policies` introduces Postgres Row-Level Security
 on 12 tenant-owned tables. The application connects as `creatorclip_app`
 (no `BYPASSRLS`); migrations and Celery worker tasks connect as

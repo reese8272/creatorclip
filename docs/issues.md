@@ -129,7 +129,7 @@ deduped from 32 raw gaps)** and **13 decision recommendations** folded into the 
 | **QA & Release Engineering** | 265 266 267 269 270 271 273 274 | 268 272 294 295 297 | 298 | 296 | 303 | · |
 | **Deploy Gates (Launch Track)** | 24 25 26 | 28 | · | · | · | 30 |
 | **Carry-over & Cleanup** | 73 75 76 82 132 150 | 151 | 78 109 | · | · | · |
-| **LLM Features & Hardening** _(NEW — active beta track)_ | 318 319 320 321 342 | 322 323 324 325 | · | · | · | · |
+| **LLM Features & Hardening** _(NEW — active beta track)_ | 318 319 320 321 342 343 | 322 323 324 325 | · | · | · | · |
 | **Live Smoke** _(L22 — post-deploy canary)_ | 341 | · | · | · | · | · |
 
 *138 open issues across 19 lanes and 6 waves, plus the new **L20 LLM Features & Hardening** lane (318–325).
@@ -5761,6 +5761,36 @@ web_search+citations endpoints must use `extract_json_block` (output_config.form
 
 **Verification** — `local`: fenced-JSON regression in the unit lane (mocked). `external`: the live
 title/caption/explain pass is confirmed by the Issue 341 harness with `--with-llm`.
+
+### Issue 343: Activate the Issue 79 RLS role split — enforce tenant isolation in prod (SEV1)
+
+**Status** `DONE` (2026-06-30; VERIFIED live on prod) · **Wave** W0 · **Lane** L20 (security) · **Size** `M` · **Verify** `external` (prod DB) + `local` (harness unit tests)
+**Found by** Issue 341 smoke harness `isolation` check; logged SEV1 in `docs/OFF_COURSE_BUGS.md`
+**Coordinate** prod DB roles + VM `/opt/autoclip/.env` (ops), `docs/DEPLOYMENT.md`, `scripts/live_smoke.py`
+
+**Problem.** The prod app DB role `creatorclip` is the superuser/owner with `BYPASSRLS=true`, which overrides
+the correctly-`FORCE`d RLS (migration 0010). Tenant isolation had no DB backstop — confirmed when the harness
+`isolation` check showed a different creator's RLS context still returning the canary's clip.
+
+**Approach (config-only, reversible — see DECISIONS 2026-06-30).** Activate the already-created
+`creatorclip_app` (no BYPASSRLS, already DML-granted by 0010): set its password + re-grant idempotently,
+point `DATABASE_URL` at it, point `DATABASE_MIGRATION_URL` at the superuser `creatorclip` for Alembic + the
+worker's 50 `AdminSessionLocal` cross-tenant sweeps. Skipped the runbook's ownership transfer to
+`creatorclip_migrate` (high blast radius, unnecessary). Recreate app+worker. `scripts/live_smoke.py`
+`check_pipeline` updated to set the canary RLS context (it read tenant tables without one).
+
+**Acceptance criteria**
+- [x] App connects as a non-BYPASSRLS role; `creatorclip_app bypassrls=false`
+- [x] Harness `isolation` check green — "a different creator sees ZERO canary clips" PASS (was FAIL)
+- [x] Correct per-tenant filtering verified: no-context→0, wrong-tenant→0, real creator under context→1049
+- [x] `creators` (RLS-exempt) still visible → auth bootstrap works; app+worker `healthy` post-cutover
+- [x] Privileged path intact: `DATABASE_MIGRATION_URL`→superuser; the 1 worker app-session already sets `creator_id`
+- [x] Reversible: `.env.bak-pre-rls*` on the VM; rollback = `DATABASE_URL`→`creatorclip` + recreate
+- [x] Docs: `DEPLOYMENT.md` runbook annotated activated; `DECISIONS.md`; `OFF_COURSE_BUGS.md` row → fixed
+- [~] **Deferred:** full ownership transfer to a dedicated `creatorclip_migrate` (optional hardening)
+
+**Verification** — `external`: verified live on prod as `creatorclip_app` (counts above). `local`: harness
+unit lane 15 green; ruff + mypy clean.
 
 ---
 

@@ -5,6 +5,49 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-06-30 — Activate the RLS role split via the app role only; keep the superuser as the migrate role (Issue 343)
+
+**What was decided.** Production now enforces per-creator RLS by having the app connect as the
+non-BYPASSRLS role **`creatorclip_app`** (`DATABASE_URL`), with **`DATABASE_MIGRATION_URL` pointed at the
+existing superuser `creatorclip`** (which bypasses RLS) for Alembic + the Celery worker's cross-tenant
+`AdminSessionLocal` sweeps. We did **NOT** perform the `docs/DEPLOYMENT.md` runbook's full ownership
+transfer to `creatorclip_migrate`.
+
+**Why (the trigger).** The Issue 341 smoke harness `isolation` check failed on prod: a different creator's
+RLS context still saw the canary's clip. Root cause: the app role `creatorclip` is the superuser/owner with
+`BYPASSRLS=true`, which overrides even the correctly-`FORCE`d RLS policies (migration 0010) — so tenant
+isolation had no DB backstop. The roles/grants/policies already existed (0010); only activation was missing.
+
+**Why the app-role-only path (deviation from the runbook).** The runbook assumed activation *before* the
+first 0010 upgrade and transfers table ownership to `creatorclip_migrate`. The prod DB is already at 0037
+owned by `creatorclip`. Transferring ownership of every table on a live DB is high-blast-radius and
+unnecessary to close the gap: pointing `DATABASE_URL` at `creatorclip_app` (no BYPASSRLS, already granted
+DML by 0010 + ALTER DEFAULT PRIVILEGES) enforces RLS for the app, while keeping the privileged path on the
+existing superuser avoids touching ownership/migrations. The change is **config-only and reversible**
+(swap `DATABASE_URL` back to `creatorclip`, recreate). The full ownership transfer to a dedicated
+`creatorclip_migrate` remains an optional future hardening.
+
+**Industry standard checked (2026-06-30).** Non-owner, non-BYPASSRLS app role + a separate owner/admin role
+for migrations & cross-tenant is the documented Postgres RLS architecture; granting BYPASSRLS to the app
+role "defeats the entire feature," and an owner with RLS-not-forced silently ignores policies — our exact
+footgun. Sources: [PostgreSQL §5.9 Row Security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html),
+[Bytebase — RLS footguns](https://www.bytebase.com/blog/postgres-row-level-security-footguns/),
+[Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
+
+**Alternatives ruled out.** Bare `ALTER ROLE creatorclip NOBYPASSRLS` — breaks the 50 worker
+`AdminSessionLocal` cross-tenant sweeps + Alembic. Full ownership transfer now — deferred (above).
+App-level `creator_id` filters alone — the status quo with no backstop; RLS is the defense-in-depth.
+
+**Evidence (verified live as `creatorclip_app`).** no-context → `videos=0` (fail-closed); wrong-tenant
+canary → `0` (harness `isolation` PASS, was FAIL); real creator under context → `1049` videos (correct
+per-tenant filtering); `creators` (RLS-exempt) visible for the auth bootstrap; app+worker `healthy` with a
+clean startup post-cutover; canary torn down. The one worker `AsyncSessionLocal` site (`worker/tasks.py`
+improvement-brief) already stamps `session.info["creator_id"]`. Harness `check_pipeline` was updated to set
+the canary RLS context (it read tenant tables without one). Rollback: `.env` backups
+`.env.bak-pre-rls*` on the VM; revert `DATABASE_URL` → `creatorclip` + recreate.
+
+---
+
 ## 2026-06-29 — Structured outputs vs robust extraction for JSON LLM responses (Issue 342)
 
 **What was decided.** Every JSON-returning LLM generator must guarantee a parseable response. Two

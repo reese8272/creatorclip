@@ -4,6 +4,37 @@ Updated after every issue closes.
 
 ---
 
+## 2026-06-30 — Issue 343: RLS role split ACTIVATED — tenant isolation now enforced in prod (SEV1, caught by 341)
+
+**Branch/deploy:** the prod DB role + VM `.env` change is **applied + verified live**; repo doc/harness
+changes pending commit (see below).
+
+**Context.** Running the Issue 341 harness on the prod VM, the `isolation` check failed: a different
+creator's RLS context still saw the canary clip. Root cause (verified on the live DB): the app role
+`creatorclip` is the superuser/owner with `BYPASSRLS=true`, which overrides the correctly-`FORCE`d RLS
+(migration 0010) — so per-creator isolation had **no DB backstop**. Filed SEV1 (`OFF_COURSE_BUGS.md`),
+fixed via the issue-workflow as **Issue 343**.
+
+**What was done (config-only, reversible).** Activated the already-created `creatorclip_app` (no BYPASSRLS):
+set its password + re-grants, pointed `DATABASE_URL` at it and `DATABASE_MIGRATION_URL` at the superuser
+`creatorclip` (Alembic + the worker's 50 `AdminSessionLocal` cross-tenant sweeps), recreated app+worker.
+Kept the superuser as the migrate role (skipped the runbook's ownership transfer — DECISIONS 2026-06-30).
+
+**Verified live as `creatorclip_app`:** no-context → 0 videos (fail-closed); wrong-tenant canary → 0
+(**harness `isolation` PASS**, was FAIL); real creator under context → 1049 (correct per-tenant); `creators`
+(RLS-exempt) visible → auth bootstrap OK; app+worker `healthy`, clean startup. Rollback: `.env.bak-pre-rls*`
+on the VM → revert `DATABASE_URL` to `creatorclip` + recreate.
+
+**Harness fix (Issue 341 follow-up):** `scripts/live_smoke.py check_pipeline` now sets the canary RLS
+context (it read tenant tables without one → would fail under enforced RLS). 15 unit tests green; ruff+mypy
+clean.
+
+**Pending commit (docs + harness, dormant-safe):** `DEPLOYMENT.md` (runbook annotated activated +
+simplified path), `issues.md` (343 DONE), `DECISIONS.md`, `OFF_COURSE_BUGS.md` (SEV1 → fixed), this file,
+`scripts/live_smoke.py`.
+
+---
+
 ## 2026-06-29 — Issue 342: structured outputs kill the markdown-fence LLM parse crash (caught by the 341 harness)
 
 **Branch** continues on `claude/llm-rendering-video-assessment-81dy8o` (feature branch; **NOT merged, NOT deployed**).

@@ -1,87 +1,91 @@
-# LEFT_OFF — pre-prod assessment + Lane L21 edge-case hardening (5 issues shipped on a feature branch)
+# LEFT_OFF — smoke harness (#341) → caught 2 prod issues → fixed (#342 fence crash, #343 RLS)
 
 > **Read this first.** Living "where we are right now" handoff for a fresh session with zero memory.
 > Source-of-truth docs live in `docs/`; this file orients and points to them — it is NOT a source of truth.
 
-**Last updated:** 2026-06-28
-**Checked out:** `claude/llm-rendering-video-assessment-81dy8o` — **pushed to `origin/<that branch>`** (in sync). **NOT `main`. NOT merged. NOT deployed.**
-**Working tree:** clean, all work committed + pushed.
-**CI / deploy:** N/A for this branch — only `main` auto-deploys. No PR was opened (not requested). To ship this work: open a PR → merge to `main` (which then auto-deploys the VM).
+> **🔒 #343 (SEV1) FIXED + VERIFIED LIVE (2026-06-30):** prod RLS tenant isolation is now enforced — the
+> app connects as `creatorclip_app` (no BYPASSRLS); `DATABASE_MIGRATION_URL` = superuser `creatorclip` for
+> Alembic + worker sweeps. Verified: wrong-tenant→0 rows, real creator→their rows, app+worker healthy.
+> Rollback = VM `.env.bak-pre-rls*` → `DATABASE_URL` back to `creatorclip` + recreate. **Deferred:** the
+> optional full ownership transfer to a dedicated `creatorclip_migrate` (DECISIONS 2026-06-30).
 
-> ⚠️ **This is a feature branch — pushing it does NOT deploy.** The prior session's `main`-side work
-> (observability/DR/moat, below) is already on `main` + deployed; the staging/external verification pass
-> for it is still outstanding and unchanged.
+**Last updated:** 2026-06-30
+**Branch / HEAD:** `main` @ **`34b231f`** — **in sync with `origin/main`** (0 ahead / 0 behind).
+**Working tree:** clean except untracked `notes_for_issues.txt` (the user's scratch notes — leave it).
+**CI / deploy:** ✅ This work is **merged to `main` and DEPLOYED to the live VM** — `Docker publish`
+(`28413024753`) + `Deploy to production` (`28413071745`) both **success** (2026-06-30).
 
 ---
 
-## CURRENT FOCUS — this session (feature branch)
+## CURRENT FOCUS — this session (DONE & shipped)
 
-Took the LLM/rendering/video pipeline through **assess → backlog → build** for the production push. Two
-deliverables + five shipped hardening issues, all committed + pushed to the feature branch.
+Built a **live-in-isolation smoke-test harness** (Issue **341**, new Lane **L22 — Live Smoke**); on its
+first live run it **caught a deployed bug** (LLM generators crashed on the real API's markdown-fenced
+JSON); filed + fixed that as Issue **342** and deployed the repair. Both are on `main` and live.
 
-### ✅ SHIPPED this session (on `origin/claude/llm-rendering-video-assessment-81dy8o`)
+### → NEXT ACTION (pick one — nothing is blocked)
 
-1. **Assessment** — `docs/assessment/LLM_RENDER_VIDEO_ASSESSMENT.md`: logic + observability review of the
-   LLM/render/video pipeline. Headline: structurally sound; gaps cluster in **silent failures** +
-   **asymmetric observability** (verified-vs-reported tagged).
-2. **Lane L21 edge-case test backlog** — `docs/issues_edge_case_hardening.md` (Issues **327–340**), a
-   whole-project edge-case test catalog cross-referenced against existing `tests/*.py` so each item is a
-   genuine gap; pointer added in `docs/issues.md`. Includes the systemic "inverted/OOB-timestamps pass
-   silently" finding + a suspected-defect table.
-3. **Five W0/`local` foundational issues built — each fixed a real latent defect:**
-   - **#327** geometry validation at the signal boundary (`ingestion/signals.py` drops malformed events
-     w/ WARNING+count; `window.py` `i1<=i0` guard) — `tests/test_geometry_validation.py`.
-   - **#332** `observability.record_llm_metric` dual-shape adapter wired into the 10 LLM modules that were
-     **invisible to the `llm_tokens_total` cost dashboard** — `tests/test_llm_metrics_coverage.py`.
-   - **#331** `observability.warn_if_truncated` surfaces `stop_reason=="max_tokens"` (silent truncation);
-     wired into the streaming wrapper + all non-streaming `.create()` JSON sites — `tests/test_llm_truncation.py`.
-   - **#328** `ranking._safe_score` (NaN→−inf deterministic rank) + non-finite rerank guard +
-     `candidates.py` DEBUG breadcrumb — `tests/test_clip_engine_edges.py`.
-   - **#338** `predict_score` positive-class-column selection (single-class model no longer `IndexError`s);
-     `clip_features` NaN→0.0; `config.py` fail-fast validators (`DECAY_HALF_LIFE_DAYS` etc.) —
-     `tests/test_preference_edges.py`.
+1. **Run the full harness against the live VM** (the checks that can't run on the dev box — no creds /
+   no ffmpeg here): on a box with the prod `.env` (or on the VM),
+   `RUN_LIVE_SMOKE=1 python3.12 scripts/live_smoke.py --target prod --seed` then drop `--seed` for
+   subsequent runs. `db / isolation(RLS) / pipeline / render / clean / r2` only run there;
+   `title/caption/explain` (`--with-llm`) + `publish` (dry-run) are already green from the dev box.
+   **Teardown after:** `--teardown` (purges the `__smoke_canary__` creator + its `smoke/<id>/` R2 prefix).
+2. **Identify the next batch of smoke checks** (user's "identify more smoke testing"): account
+   deletion/erasure, billing deduct/refund, real-staging publish path, SSE task stream.
+3. **Optional follow-up on #342:** layer native structured outputs onto `scoring`/`chapters` too (they
+   shipped via `extract_json_block` — the logged deviation; see `docs/DECISIONS.md` 2026-06-30).
 
-**Gates:** full unit lane **1735 passed** (+34 new), ruff + mypy clean on all touched files. One
-pre-existing failure (`deepgram` SDK not installed in this venv) — env, not code; already in
-`docs/OFF_COURSE_BUGS.md`.
+### Outstanding on `main` (prior sessions — unchanged, still pending external setup)
 
-### → NEXT ACTION (pick one)
-
-1. **Merge this branch** — open a PR for `claude/llm-rendering-video-assessment-81dy8o` → `main`
-   (merging auto-deploys the VM; the L21 changes are additive guards + tests, dormant-safe).
-2. **Continue Lane L21** — remaining issues, all still OPEN in `docs/issues_edge_case_hardening.md`:
-   - `local`-verifiable now: **#330** (captions/filler/edits), **#334** (ingestion; some render-env).
-   - need the `integration` lane (real PG/Redis, unconfigured on this box): **#335** (youtube), **#336**
-     (worker pipeline — carries 2 confirmable suspected defects: `generate_clips` RefundOnFailureTask +
-     ingest WAV-integrity short-circuit), **#337** (observability/health), **#339** (router surface),
-     **#340** (security/auth/billing — highest priority).
-
-### Outstanding on `main` (prior session — unchanged, still pending)
-
-The observability/DR/"moat" external verification pass is **already deployed** and still needs its
-one-sitting live-host/account setup. Unchanged by this branch. Summary:
-- **Observability (#326):** create Sentry + Grafana Cloud, set `SENTRY_DSN` / `OTEL_EXPORTER_OTLP_*` as GH
+The observability/DR/"moat" work is deployed but still needs its one-sitting live-host/account pass:
+- **Observability (#326):** create Sentry + Grafana Cloud; set `SENTRY_DSN` / `OTEL_EXPORTER_OTLP_*` GH
   secrets → redeploy arms the exporters (no-op until then). Verify a trace + an exception.
 - **Disaster Recovery (#255–258):** escrow keys (2 legs) **first**; create the separate
-  `creatorclip-backups` R2 bucket + `BACKUP_*` secrets + nightly cron + **restore drill**; R2 Object Lock
-  (Compliance ≥14d). Runbook: `docs/RUNBOOKS.md` → Disaster Recovery.
+  `creatorclip-backups` R2 bucket + `BACKUP_*` secrets + nightly cron + **restore drill**; R2 Object
+  Lock (Compliance ≥14d). Runbook: `docs/RUNBOOKS.md` → Disaster Recovery.
 - **The moat (#198/#200/#201/#202):** run `scripts/eval_efficacy.py` on real PG; half-life sweep;
   `performed_well` bias before/after; `clip_impressions` RLS integration test.
 
-### Lower-priority follow-ups (raised earlier, still open)
-- **Render DB cleanup:** remove the temporary IP-allowlist entry on the (empty, unused) Render `creatorclip-db`.
-- **Re-run a failed-transcription video** to confirm the Deepgram fix holds.
-- **~20 YouTube-linked videos at `ingest_status=pending`** — confirm "linked but never queued" (expected per Issue 317), not a stuck queue.
+### Lower-priority follow-ups (still open)
+- **Lane L21 edge-case hardening:** Issues **329, 330, 333, 334** (`local`-runnable) + **335–340**
+  (`integration`/render-env) still OPEN — `docs/issues_edge_case_hardening.md`.
+- **Render DB cleanup:** remove the temporary IP-allowlist entry on the (empty) Render `creatorclip-db`.
+- **~20 YouTube-linked videos at `ingest_status=pending`** — confirm "linked but never queued" (expected
+  per Issue 317), not a stuck queue.
 
 ---
 
 ## WHAT WORKS NOW (don't re-investigate)
 
-- **Upload→clips pipeline is live-verified E2E on the VM** (ingest→transcribe→signals→`generate_clips` → 6 candidates). Transcribe failures were the now-fixed Deepgram bugs (`8db5c3c`, `705cb56`).
-- **`render_clip` is user-triggered** — a clip at `render_status=pending` is NORMAL, not a failure. R2 `clips/` is empty only because nobody has clicked render. Don't "fix" it.
-- **R2 (`autoclip-studio`) is healthy** — inspect with `python3.12 scripts/r2_inspect.py`; pipeline state with `python3.12 scripts/clip_pipeline_state.py` (both read-only; need `R2_*`/`DATABASE_URL` in local `.env`).
-- **The whole session's code is deployed and dormant-safe:** OTel/Sentry no-op until their secrets exist; the pre-migration dump gate skips until backups are configured; the `performed_well` poll defers when <3 comparable Shorts; the impression write can't break the read path. Migration 0037 is at head with RLS live.
-- **Tests:** full unit lane green (**1735**, incl. this branch's +34); ruff + mypy clean. DB-backed parts (DR + moat + L21 #335–340) are `integration`-marked and run on staging (no Docker/PG on the local box). 1 pre-existing `deepgram`-SDK env failure is logged in `docs/OFF_COURSE_BUGS.md`.
+- **Issue 342 fix is LIVE-verified.** `claude-sonnet-4-6` wraps JSON in a ` ```json ` fence; the
+  generators did a bare `json.loads` → `JSONDecodeError`, breaking the deployed Review per-clip features
+  (322/323/325). Fixed two-track: **structured outputs** (`output_config.format`) on
+  `clip_titles/clip_captions/clip_explain` (no web_search), **`extract_json_block`** on `hooks`
+  (web_search → citations 400s structured outputs), `chapters`, `scoring`, `thumbnails`. Verified against
+  the **real API** at the pinned `anthropic==0.105.2`: harness `--with-llm` → title 3/3, caption 3/3,
+  explain 2/2 (was 0 passed / 1 fail). Regression locked: `tests/test_llm_fence_parsing.py` (6 tests).
+- **Issue 341 harness is dormant-safe.** `scripts/live_smoke.py` exits 0 unless `RUN_LIVE_SMOKE=1`; no
+  effect on prod until run manually. `tests/test_live_smoke.py` (13 offline tests) green.
+- **Upload→clips pipeline is live-verified E2E on the VM** (ingest→transcribe→signals→generate_clips).
+- **`render_clip` is user-triggered** — a clip at `render_status=pending` is NORMAL, not a failure.
+- **Tests:** full unit lane **1778 passed, 0 failed** (+19 this session); ruff + mypy clean on all touched
+  files. DB-backed parts are `integration`-marked and run on staging (no Docker/PG on the dev box).
+  1 pre-existing `deepgram`-SDK env failure logged in `docs/OFF_COURSE_BUGS.md`.
+
+---
+
+## THE ARC THAT LED HERE
+
+1. User asked for the current issues + a way to **test live in isolation** (upload/render? clip/save?
+   caption? title?) — "or are they too interrelated to separate?"
+2. Mapped the pipeline DAG: one indivisible upstream chain + a fan-out of independent leaf ops →
+   **not** too interrelated; isolate the leaves with a persistent seeded **canary** fixture.
+3. Ran the issue-workflow → built **Issue 341** (harness, Lane L22), flag-gated like `llm_e2e.py`.
+4. First live `--with-llm` run **caught a real deployed bug** → the markdown-fence JSON crash.
+5. Filed **Issue 342**, researched the fix via `/claude-api` (native structured outputs is GA on
+   Sonnet 4.6, incompatible with citations), built the two-track fix, live-verified, regression-tested.
+6. Committed both → merged to `main` → pushed → **deployed to the live VM** (all green).
 
 ---
 
@@ -89,41 +93,43 @@ one-sitting live-host/account setup. Unchanged by this branch. Summary:
 
 | Thing | Value |
 |---|---|
-| Live prod host | **VM** — SSH alias `creatorclip-vm`, dir `/opt/autoclip`, `docker-compose.prod.yml`, Cloudflare tunnel (`cloudflared`) |
-| Live DB | VM `postgres` container — `pgvector/pgvector:pg16`, db/user `creatorclip`. Now at `alembic_version=0037`. Inspect: `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml exec -T postgres psql -U creatorclip -d creatorclip'` |
-| Live logs | `ssh creatorclip-vm 'cd /opt/autoclip && docker compose -f docker-compose.prod.yml logs -f app worker'` (ephemeral — the reason #326 exists) |
-| Deploy pipeline | push `main` → "Docker publish" → "Deploy to production" (self-hosted runner on the VM). Watch: `gh run list` / `gh run watch`. `scripts/deploy.sh` is the manual mirror. |
+| Live prod host | **VM** — SSH alias `creatorclip-vm`, dir `/opt/autoclip`, `docker-compose.prod.yml`, Cloudflare tunnel |
+| Live DB | VM `postgres` container — `pgvector/pgvector:pg16`, db/user `creatorclip` (alembic at `0037`) |
+| Deploy pipeline | push `main` → `Docker publish` → `Deploy to production` (self-hosted runner on the VM). Watch: `gh run list` / `gh run watch`. **Pushing `main` DEPLOYS to prod.** |
 | Image | `ghcr.io/reese8272/creatorclip:latest` |
-| R2 (media) | `autoclip-studio` (`R2_*` creds). **Backups (#256) go to a SEPARATE `creatorclip-backups` bucket — not yet created.** |
-| Render (NOT live) | blueprint `render.yaml`; `creatorclip-db` empty/unused. **Do not trust it for prod data.** |
-| Branch / HEAD | **`claude/llm-rendering-video-assessment-81dy8o`** (this session), pushed + in sync with origin. **NOT merged to `main`.** `main` is still @ `47a1f44` + deployed. |
-| Secrets (names only) | live: `R2_*`, `DATABASE_URL`, AI keys (synced on deploy). **Not yet set:** `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `BACKUP_R2_BUCKET`, `BACKUP_ENCRYPTION_KEY`. Reference by name; never echo values. |
+| R2 (media) | `autoclip-studio` (`R2_*` creds). Smoke canary writes are namespaced under `smoke/<creator_id>/`. |
+| New this session | `scripts/live_smoke.py` (harness), `tests/test_live_smoke.py`, `tests/test_llm_fence_parsing.py` |
+| Smoke canary | deterministic `uuid5` ids; creator `__smoke_canary__`, `google_sub=live-smoke-canary` (in `scripts/live_smoke.py`) |
+| Local merged branch | `claude/live-smoke-and-structured-outputs` (fast-forwarded into `main`; local-only, safe to delete) |
+| Anthropic SDK | pinned `anthropic==0.105.2` — `output_config.format` structured outputs **confirmed working** at this version |
+| Secrets (names only) | live: `R2_*`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, AI keys. **Not yet set:** `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_*`, `BACKUP_*`. Reference by name; never echo values. |
 
 ---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Render ≠ live.** The live data is on the VM; the Render DB is empty. (Memory: `project_live_deployment_topology`.)
-- **Pushing `main` deploys to the VM.** Verify intent before `git push`. All current code is dormant-safe, but setting the observability/backup secrets + next deploy ARMS those subsystems.
-- **OTel/Sentry no-op without env** (`OTEL_EXPORTER_OTLP_ENDPOINT` / `SENTRY_DSN`). **PII boundary:** LLM span content forced OFF (`TRACELOOP_TRACE_CONTENT=false`) — don't re-enable.
-- **`scripts/backup_pg.sh` secret hygiene** (#256): DB creds stay container-side, passphrase via `openssl -pass env:` (never argv), refuses to run if backup bucket == media bucket, never deletes (retention via R2 lifecycle). **The encryption key must NEVER be stored inside the backup it protects** (circular dependency).
-- **R2 Object Lock must be Compliance mode**, not Governance (Governance is admin-overridable). R2 has no GA versioning — Object Lock is the only delete-protection.
-- **`performed_well` is Shorts-vs-Shorts now** (#201) — judged against the median of the creator's published Shorts, deferred below 3 comparable Shorts. Don't revert it to the full-video median.
-- **Local box has no Docker/Postgres** — tests run via `python3.12` / `.venv`; DB-backed tests are `integration`-marked and run on staging. (Memory: `local_dev_test_env`.)
+- **Pushing `main` auto-deploys the live VM.** Verify intent + green tests before `git push origin main`.
+- **`scripts/live_smoke.py` needs the full prod `.env` + ffmpeg** for the db/r2/render/pipeline checks —
+  the dev box has neither (only `ANTHROPIC_API_KEY`), so only the LLM + publish-dry-run checks run here.
+  The dev box's `.env` uses `KEY = value` spacing — the harness/helpers tolerate it; raw `export $(grep …)`
+  does **not**.
+- **Structured outputs is incompatible with web_search citations** (400s) — that's why `hooks`/`titles`/
+  `thumbnails` use `extract_json_block` instead. Don't "upgrade" those to `output_config.format`.
+- **Render ≠ live.** The live data is on the VM; the Render DB is empty/unmigrated. (Memory: `project_live_deployment_topology`.)
+- **Local box has no Docker/Postgres** — unit lane via `python3.12`/`.venv`; DB-backed tests are `integration`-marked.
 - **Secrets are write-only on GH / live only in the VM `.env`** — reference by name.
 
 ---
 
 ## POINTERS
 
-- `docs/assessment/LLM_RENDER_VIDEO_ASSESSMENT.md` — this session's LLM/render/observability assessment
-- `docs/issues_edge_case_hardening.md` — **Lane L21** edge-case test backlog (Issues 327–340; 327/328/331/332/338 DONE)
-- `docs/issues.md` — per-issue briefs + statuses (#198–202, #255–258, #326) + full roadmap + L21 pointer
-- `docs/DECISIONS.md` — 2026-06-26/27 entries: observability stack, DR batch, eval methodology, performed_well baseline, impression log
-- `docs/RUNBOOKS.md` → **Disaster Recovery** — escrow setup + restore drill + 4 failure modes (the #255–258 operator checklist)
-- `docs/RENDER_DEPLOY.md` §11 — Sentry + Grafana Cloud setup steps (apply to the VM)
-- `docs/COMPLIANCE.md` — data-classes table (now incl. backups + clip_impressions)
-- `docs/PROJECT_STATE.md` — progress rows for everything shipped this session
-- `CLAUDE.md` — project rules (Read Order, issue workflow, standards)
-- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` — esp. `project_live_deployment_topology.md`
-- Session helpers (committed): `scripts/r2_inspect.py`, `scripts/clip_pipeline_state.py`, `scripts/backup_pg.sh`, `scripts/eval_efficacy.py`
+- `scripts/live_smoke.py` — the L22 harness (this session). Helpers: `scripts/llm_e2e.py` (LLM-only, #319),
+  `scripts/r2_inspect.py`, `scripts/clip_pipeline_state.py` (read-only DB/R2 diagnostics).
+- `docs/issues.md` — Lane **L22** (#341) + **L20** (#342 DONE) + full roadmap + the L21 pointer.
+- `docs/issues_edge_case_hardening.md` — Lane **L21** edge-case backlog (327–340).
+- `docs/DECISIONS.md` — 2026-06-30 entries: live-smoke canary (341); structured-outputs vs extraction (342).
+- `docs/OFF_COURSE_BUGS.md` — the fence-crash row is now ✅ fixed in #342.
+- `docs/PROJECT_STATE.md` — session rows for 341 + 342.
+- `docs/SOT.md` — architecture; notes the new live-smoke lane.
+- `CLAUDE.md` — project rules (Read Order, issue workflow, standards).
+- Memory: `~/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` — esp. `project_live_deployment_topology.md`.
