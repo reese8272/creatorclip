@@ -50,8 +50,15 @@ export function ClipPlayer({
         await queryClient.invalidateQueries({ queryKey: ['review-clips'] })
       } else {
         setRenderError(e instanceof ApiError ? e.message : 'Render failed — try again.')
-        setRequesting(false)
       }
+    } finally {
+      // Clear the optimistic flag once the request settles. From here the spinner is
+      // driven by server state (render_status === 'running' set by the worker), so a
+      // render that fails fast — e.g. the source media was purged — surfaces as
+      // "Render failed" + retry instead of spinning forever. Previously `requesting`
+      // was only reset on the error path, so a 202/409 latched the spinner permanently
+      // whenever no render_uri ever landed (the "render loop").
+      setRequesting(false)
     }
   }
 

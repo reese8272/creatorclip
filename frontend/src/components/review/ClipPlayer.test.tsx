@@ -78,4 +78,24 @@ describe('ClipPlayer render states', () => {
     expect(screen.getByText(/Render failed/)).toBeInTheDocument()
     expect(screen.getByText(/Retry render/)).toBeInTheDocument()
   })
+
+  it('does not latch the spinner after a render request settles (the render-loop bug)', async () => {
+    // Regression: a render that can never produce a render_uri (e.g. source media
+    // purged → render_status stays 'failed') must NOT spin forever. Previously
+    // triggerRender set `requesting=true` and never reset it on the 202/409 path,
+    // so the "Rendering your clip…" spinner latched permanently.
+    const fetchMock = vi.fn(async () => ({ status: 202, ok: true, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    // Server truth for this clip is terminal-failed (source gone); render_uri never lands.
+    renderPlayer({ ...BASE, render_status: 'failed', render_uri: null })
+
+    await userEvent.click(screen.getByText(/Retry render/))
+
+    // Once the request settles, the spinner clears and the server's failed state shows
+    // through again — not a perpetual "Rendering…".
+    await waitFor(() => {
+      expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
+    })
+    expect(screen.getByText(/Render failed/)).toBeInTheDocument()
+  })
 })
