@@ -74,17 +74,48 @@ def test_transient_error_retries(render_harness):
     assert statuses == [RenderStatus.failed]
 
 
-def test_success_marks_no_failure(render_harness):
+def test_success_marks_no_failure(render_harness, monkeypatch):
     tasks, statuses, retry_calls, _ = render_harness
 
     async def _ok(clip_id):
         return None
 
-    import worker.tasks as t
-
-    t._render_clip_async = _ok  # type: ignore[assignment]
+    monkeypatch.setattr(tasks, "_render_clip_async", _ok)
     result = tasks.render_clip("clip-1")
 
     assert result == "clip-1"
     assert statuses == []
     assert retry_calls == []
+
+
+def test_render_clip_soft_timeout_is_terminal(render_harness):
+    """SoftTimeLimitExceeded inside render_clip must be re-raised WITHOUT retry —
+    re-rendering a clip that already exceeded the soft limit would time out again.
+    The clip must be marked failed so on_failure can fire. (Issue 336)"""
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    tasks, statuses, retry_calls, set_render_async = render_harness
+    set_render_async(SoftTimeLimitExceeded())
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        tasks.render_clip("clip-1")
+
+    assert retry_calls == [], "SoftTimeLimitExceeded must not retry"
+    assert RenderStatus.failed in statuses, "clip must be marked failed on soft-timeout"
+
+
+def test_base_exception_not_caught_by_render_clip(render_harness, monkeypatch):
+    """KeyboardInterrupt / SystemExit are BaseExceptions, not Exceptions — they must
+    propagate out of render_clip without being swallowed by either the permanent or
+    transient except branches. This pins the 'no catch BaseException' contract."""
+    tasks, statuses, retry_calls, _ = render_harness
+
+    async def _raises_keyboard(_clip_id):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tasks, "_render_clip_async", _raises_keyboard)
+
+    with pytest.raises(KeyboardInterrupt):
+        tasks.render_clip("clip-1")
+
+    assert retry_calls == [], "KeyboardInterrupt must not trigger retry"

@@ -15,15 +15,17 @@ Three regressions to guard against:
 Marked `integration` so it only runs against a live Postgres (see pytest.ini).
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from billing.ledger import deduct_for_video
 from config import settings
 from models import (
     Clip,
@@ -31,6 +33,7 @@ from models import (
     ClipOutcome,
     Creator,
     IngestStatus,
+    MinutePack,
     OnboardingState,
     RenderStatus,
     Signals,
@@ -307,3 +310,94 @@ async def test_poll_clip_outcomes_excludes_clips_older_than_cap(db_session):
         # Tidy the orphaned Signals nothing seeded — none here, but be safe.
         await db_session.execute(delete(Signals).where(Signals.video_id == video.id))
         await db_session.commit()
+
+
+# ── Issue 336: generate_clips terminal failure → refund fires exactly once ────
+
+
+def test_generate_clips_terminal_failure_refunds_exactly_once() -> None:
+    """End-to-end (real Postgres, no async harness): generate_clips.on_failure
+    triggers a real DB refund that is idempotent on double-invocation.
+
+    This test is intentionally synchronous so that on_failure → run_async →
+    asyncio.run() works without conflicting with a running pytest-asyncio loop.
+    The refund is confirmed by inspecting the minute_packs table directly.
+    """
+    from worker.tasks import generate_clips
+
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def _setup() -> tuple[uuid.UUID, uuid.UUID]:
+        async with factory() as s:
+            creator = Creator(
+                google_sub=f"test_i336_refund_{uuid.uuid4().hex[:8]}",
+                channel_id=f"UC_i336_{uuid.uuid4().hex[:6]}",
+                channel_title="Issue 336 Refund Test",
+                onboarding_state=OnboardingState.active,
+                minutes_balance=50,
+            )
+            s.add(creator)
+            await s.flush()
+            video = Video(
+                creator_id=creator.id,
+                youtube_video_id=f"yt_i336_{uuid.uuid4().hex[:8]}",
+                kind=VideoKind.long,
+                ingest_status=IngestStatus.failed,
+                duration_s=300.0,
+            )
+            s.add(video)
+            await s.commit()
+            # Deduct minutes (simulating successful ingest before generate_clips)
+            await deduct_for_video(video.id, creator.id, 300.0, s)
+            await s.commit()
+            return creator.id, video.id
+
+    creator_id, video_id = asyncio.run(_setup())
+
+    try:
+        # First on_failure: should create the refund row (MinutePack with reason=refund).
+        generate_clips.on_failure(
+            exc=RuntimeError("LLM score loop failed"),
+            task_id="i336-gc-task-a",
+            args=(str(video_id),),
+            kwargs={},
+            einfo=None,
+        )
+        # Second on_failure (Celery at-least-once redelivery of the failure signal):
+        # must be idempotent — no second refund row.
+        generate_clips.on_failure(
+            exc=RuntimeError("LLM score loop failed"),
+            task_id="i336-gc-task-b",
+            args=(str(video_id),),
+            kwargs={},
+            einfo=None,
+        )
+
+        async def _check() -> list[MinutePack]:
+            async with factory() as s:
+                return list(
+                    (
+                        await s.execute(
+                            select(MinutePack).where(
+                                MinutePack.pack_id == f"refund:{video_id}",
+                                MinutePack.reason == "refund",
+                            )
+                        )
+                    ).scalars()
+                )
+
+        packs = asyncio.run(_check())
+        assert len(packs) == 1, (
+            f"exactly one refund pack must exist even after double on_failure; got {len(packs)}"
+        )
+        assert packs[0].minutes_granted == 5, f"300 s → 5 min; got {packs[0].minutes_granted}"
+    finally:
+        async def _cleanup() -> None:
+            async with factory() as s:
+                await s.execute(delete(MinutePack).where(MinutePack.creator_id == creator_id))
+                await s.execute(delete(Creator).where(Creator.id == creator_id))
+                await s.commit()
+            await engine.dispose()
+
+        asyncio.run(_cleanup())
