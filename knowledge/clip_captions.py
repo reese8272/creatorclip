@@ -23,8 +23,8 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
-from knowledge.util import extract_transcript_text as _extract_transcript_text
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,31 @@ Rules:
   - Return valid JSON ONLY."""
 
 
+# Native structured-output schema (Issue 342) — constrains the response to
+# fence-free, schema-valid JSON so `json.loads` can't crash on a markdown fence
+# (the failure the Issue 341 live smoke harness surfaced). No web_search here, so
+# output_config.format is compatible; every object sets additionalProperties: false.
+_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "options": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["text", "rationale"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["options"],
+    "additionalProperties": False,
+}
+
+
 def _build_request(
     channel_title: str,
     dna_brief: str | None,
@@ -117,7 +142,9 @@ def _parse_result(raw_json: str) -> dict:
     Returns a dict with ``options`` (list of up to SURFACE_N items) and
     ``disclaimer``. Raises ValueError on malformed JSON or empty options list.
     """
-    data = json.loads(raw_json)
+    # extract_json_block tolerates a fence/preamble as defense-in-depth even
+    # though output_config.format already constrains the response (Issue 342).
+    data = json.loads(extract_json_block(raw_json))
     raw_options = data.get("options")
     if not isinstance(raw_options, list) or not raw_options:
         raise ValueError("Response missing 'options' list")
@@ -167,16 +194,27 @@ def generate_clip_caption_hooks(
     hook_excerpt = clip_hook[:_TRANSCRIPT_MAX_CHARS]
     system, messages = _build_request(channel_title, dna_brief, hook_excerpt)
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "clip_caption_hooks",
+        model=settings.ANTHROPIC_MODEL_CLIP_CAPTIONS,
+        max_tokens=512,
+        system=system,
+        messages=messages,
+    )
     try:
-        response = _ANTHROPIC.messages.create(
+        response = _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_CLIP_CAPTIONS,
             max_tokens=512,
-            system=system,  # type: ignore[arg-type]
-            messages=messages,  # type: ignore[arg-type]
+            system=system,
+            messages=messages,
+            output_config={"format": {"type": "json_schema", "schema": _OUTPUT_SCHEMA}},
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("clip_caption_hooks LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("clip_caption_hooks", response=response)
 
     usage_dict = {
         "input_tokens": response.usage.input_tokens,
@@ -190,6 +228,10 @@ def generate_clip_caption_hooks(
         usage_dict["cache_read"],
         usage_dict["cache_creation"],
         usage_dict["output_tokens"],
+    )
+    record_llm_metric(settings.ANTHROPIC_MODEL_CLIP_CAPTIONS, usage_dict)
+    warn_if_truncated(
+        settings.ANTHROPIC_MODEL_CLIP_CAPTIONS, getattr(response, "stop_reason", None)
     )
 
     raw = next((b.text for b in response.content if b.type == "text"), "")

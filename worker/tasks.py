@@ -13,6 +13,7 @@ import logging
 import tempfile
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -203,7 +204,9 @@ def ingest_video(self, video_id: str) -> str:
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
         raise
     except Exception as exc:
-        run_async(_set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest")))
+        run_async(
+            _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest"))
+        )
         raise self.retry(exc=exc) from exc
     log_event(
         "ingest_video_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
@@ -296,19 +299,102 @@ def generate_clips(self, video_id: str) -> str:
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_clip")
 def render_clip(self, clip_id: str) -> str:
-    """Render a clip to 9:16 and upload to storage."""
+    """Render a clip to 9:16 and upload to storage.
+
+    Permanent failures (missing clip/source, invalid timing range — raised as
+    ``ValueError``/``FileNotFoundError``) are TERMINAL: set the clip to ``failed``
+    and re-raise WITHOUT retry. Previously every failure went through
+    ``self.retry`` (max_retries=3, 60s apart), so a deterministically-broken clip
+    burned ~3 minutes of retries while the UI sat on "Rendering…" — the retry-storm
+    the owner reported. Transient failures (R2/network, an ffmpeg blip) still retry
+    with backoff. Mirrors ``build_dna``'s ValueError-is-permanent convention.
+    """
     creator_id = run_async(_creator_id_for_clip(clip_id))
     log_event(
         "render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id
     )
     try:
         run_async(_render_clip_async(clip_id))
+    except (ValueError, FileNotFoundError) as exc:
+        # Permanent — retrying cannot conjure a missing clip/source or fix a bad range.
+        run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
+        log_event(
+            "render_clip_failed_permanent",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=clip_id,
+            exc_type=type(exc).__name__,
+        )
+        raise
+    except SoftTimeLimitExceeded:
+        # Terminal — the task ran past its Celery soft time limit. A retry would time
+        # out again, compounding the wasted render minutes. Mark failed and re-raise
+        # immediately so RefundOnFailureTask.on_failure fires (no retry). (Issue 336)
+        logger.warning(
+            "render_clip soft-timeout for clip %s (task %s) — terminal, not retrying",
+            clip_id,
+            self.request.id,
+        )
+        run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
+        raise
     except Exception as exc:
+        # Transient — set failed (so a UI poll between attempts shows a terminal
+        # state, and the final MaxRetriesExceededError leaves it failed) then retry.
         run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
         RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
         raise self.retry(exc=exc) from exc
     log_event("render_clip_done", creator_id=creator_id, task_id=self.request.id, video_id=clip_id)
     return clip_id
+
+
+@celery.task(
+    bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_video_clips"
+)
+def render_video_clips(self, video_id: str, clip_ids: list[str]) -> str:
+    """Render a batch of clips from one video, downloading the source ONCE.
+
+    The auto-render path enqueues this instead of N ``render_clip`` tasks so a
+    multi-clip video fetches its (often large) source from R2 a single time
+    rather than once per clip. Per-clip failures are isolated inside
+    ``_render_video_clips_async``; only a failure to obtain the shared source
+    reaches here. Missing source is permanent (mark the batch failed, no retry);
+    a transient R2/network error retries the whole batch with backoff — mirrors
+    ``render_clip``'s ValueError-is-permanent convention.
+    """
+    log_event(
+        "render_video_clips_started",
+        task_id=self.request.id,
+        video_id=video_id,
+        count=len(clip_ids),
+    )
+    try:
+        run_async(_render_video_clips_async(video_id, clip_ids))
+    except (ValueError, FileNotFoundError) as exc:
+        # Permanent shared failure (no source) — every clip is unrenderable.
+        for clip_id in clip_ids:
+            run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_video_clips").inc()
+        log_event(
+            "render_video_clips_failed_permanent",
+            task_id=self.request.id,
+            video_id=video_id,
+            exc_type=type(exc).__name__,
+        )
+        raise
+    except Exception as exc:
+        # Transient shared failure (R2/network on the single download) — retry
+        # the whole batch; the per-clip done-check skips any already rendered.
+        RENDER_FAILURES_TOTAL.labels(task="render_video_clips").inc()
+        raise self.retry(exc=exc) from exc
+    log_event(
+        "render_video_clips_done",
+        task_id=self.request.id,
+        video_id=video_id,
+        count=len(clip_ids),
+    )
+    return video_id
 
 
 @celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.clean_clip")
@@ -368,15 +454,23 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         existing = (
             await session.execute(select(ClipPublication).where(ClipPublication.task_id == task_id))
         ).scalar_one_or_none()
-        if (
-            existing is not None
-            and existing.status == PublishStatus.done
-            and existing.youtube_video_id
-        ):
-            logger.info(
-                "Clip %s already published (%s) — skipping", clip_id, existing.youtube_video_id
+        if existing is not None and existing.status == PublishStatus.done:
+            if existing.youtube_video_id:
+                logger.info(
+                    "Clip %s already published (%s) — skipping",
+                    clip_id,
+                    existing.youtube_video_id,
+                )
+                return existing.youtube_video_id
+            # done-but-NULL youtube_video_id: the prior run likely uploaded successfully
+            # but crashed before the success-path commit wrote youtube_video_id. The
+            # idempotency guard is bypassed so the task re-runs, consuming quota again.
+            # Log the asymmetry so operators can investigate if it recurs. (Issue 336)
+            logger.warning(
+                "Clip %s publication row is done but youtube_video_id is NULL — "
+                "idempotency guard bypassed, task will re-run and consume quota",
+                clip_id,
             )
-            return existing.youtube_video_id
 
         clip = await session.get(Clip, cid)
         if not clip or not clip.render_uri:
@@ -423,7 +517,17 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
                 row.status = PublishStatus.failed
                 row.error = str(exc)[:500]
                 await session.commit()
-        logger.warning("Publish %s failed permanently: %s", clip_id, type(exc).__name__)
+        # QUOTA ASYMMETRY: consume() already deducted COST_DATA_VIDEOS_INSERT units
+        # from the daily quota before the upload failed. Those units are gone — the
+        # YouTube API does not refund on upload error. Log so operators can track
+        # partial quota consumption during outages or audit spikes. (Issue 336)
+        logger.warning(
+            "Publish %s failed permanently (%s) — QUOTA ASYMMETRY: %d quota units"
+            " consumed before upload failure; units are non-refundable",
+            clip_id,
+            type(exc).__name__,
+            COST_DATA_VIDEOS_INSERT,
+        )
         raise
 
     # Store the returned video id + done, then wire the clip into the outcome loop
@@ -758,9 +862,7 @@ async def _creator_id_for_clip(clip_id: str) -> str | None:
         return None
 
 
-async def _set_status(
-    video_id: str, status: IngestStatus, *, reason: str | None = None
-) -> None:
+async def _set_status(video_id: str, status: IngestStatus, *, reason: str | None = None) -> None:
     async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
@@ -811,41 +913,36 @@ async def _ingest_async(video_id: str) -> None:
             if not video.source_uri:
                 raise ValueError(f"Video {video_id} has no source_uri — upload the file first")
 
-            # Idempotency short-circuit (Issue 105 — Fix 2): if source_uri ends in
-            # ".wav" the prior run already completed the audio-extract + upload step
-            # and committed the WAV key. Returning here is safe because the final
-            # DB commit (source_uri = audio_uri) is the durable progress marker per
-            # AWS Lambda's idempotent-retry doctrine — make progress persistent and
-            # detectable, skip work that is already persisted.
-            if video.source_uri.endswith(".wav"):
-                logger.info(
-                    "Video %s source_uri already points to WAV — ingest already completed",
-                    video_id,
+            # Idempotency short-circuit (Issue 105 — Fix 2; updated migration 0039):
+            # a prior run that finished the audio-extract + upload set `audio_uri`.
+            # Returning here is safe — `audio_uri` is the durable progress marker
+            # (AWS Lambda idempotent-retry doctrine: make progress persistent and
+            # detectable, skip work already persisted). `source_uri` now stays the
+            # ORIGINAL VIDEO (the renderer needs it), so we key the probe off
+            # `audio_uri`, not a `.wav` suffix on source_uri.
+            # Issue 336: probe size first — zero-byte or unprobeable WAV re-extracts.
+            if video.audio_uri:
+                _wav_ok = False
+                try:
+                    async with alocal_path(video.audio_uri) as _wav_p:
+                        _wav_ok = _wav_p.stat().st_size > 0
+                except Exception:
+                    pass
+                if _wav_ok:
+                    logger.info("Video %s audio ingest already done — skipping", video_id)
+                    await aemit(
+                        video_id,
+                        "step",
+                        label="ingest_skipped",
+                        stage="ingest",
+                        reason="already_done",
+                    )
+                    return
+                logger.warning(
+                    "Video %s audio WAV zero-byte or unprobeable — re-extracting", video_id
                 )
-                await aemit(
-                    video_id,
-                    "step",
-                    label="ingest_skipped",
-                    stage="ingest",
-                    reason="already_done",
-                )
-                return
 
             source_uri = video.source_uri
-            # Capture the original blob key BEFORE we overwrite source_uri with
-            # the audio key on the final commit. After commit, the original mp4
-            # has no SQL row pointing at it — `_purge_stale_source_media_async`
-            # iterates `Video.source_uri` to find purgeables and would never
-            # see the orphan. Delete it explicitly post-commit. Guard with the
-            # `source/` prefix + `.mp4` suffix because the Issue-105 `.wav`
-            # short-circuit at function entry should already prevent a retry
-            # from re-entering with audio_uri here, but the prefix check is
-            # the canonical retry-safe shape (AWS Lambda idempotent-retry
-            # doctrine) in case a future ingest path skips the short-circuit.
-            # (Issue 110 — closes the Issue-105 misread on first-run orphan;
-            # R2 bucket lifecycle on `source/` is the documented
-            # belt-and-suspenders, see DECISIONS.)
-            prior_source_uri = source_uri
             video.ingest_status = IngestStatus.running
             await session.commit()
 
@@ -876,7 +973,12 @@ async def _ingest_async(video_id: str) -> None:
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if video:
-                video.source_uri = audio_uri
+                # Store the audio derivative on its own column; LEAVE source_uri as
+                # the original video so the renderer can extract keyframes. The video
+                # is retained for SOURCE_MEDIA_RETENTION_HOURS and purged by
+                # `purge_stale_source_media` (migration 0039 — fixes the broken render
+                # loop where source_uri was overwritten with audio + the mp4 deleted).
+                video.audio_uri = audio_uri
                 if duration_s and not video.duration_s:
                     video.duration_s = duration_s
                 if duration_s:
@@ -886,25 +988,11 @@ async def _ingest_async(video_id: str) -> None:
                     await deduct_for_video(video.id, video.creator_id, duration_s, session)
                 await session.commit()
 
-        # Post-commit orphan cleanup: the original mp4 is now unreferenced.
-        # Prefix guard makes this safe under Celery redelivery — only fires
-        # when prior_source_uri is the expected `source/...mp4` shape.
-        # adelete_file is idempotent (no-op on missing key), so a crash
-        # between commit and this call leaks an orphan that the R2
-        # `source/` lifecycle rule eventually sweeps (belt-and-suspenders).
-        # (Issue 110)
-        if prior_source_uri.startswith("source/") and prior_source_uri.endswith(".mp4"):
-            from worker.storage import adelete_file
-
-            try:
-                await adelete_file(prior_source_uri)
-            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
-                logger.warning(
-                    "_ingest_async: prior-mp4 cleanup failed video=%s uri=%s err=%s",
-                    video_id,
-                    prior_source_uri,
-                    type(exc).__name__,
-                )
+        # NB: the original video is deliberately NOT deleted here anymore. The
+        # renderer needs it (9:16 active-speaker reframe extracts keyframes), so it
+        # is retained under `source_uri` for the render window and purged by
+        # `purge_stale_source_media` at SOURCE_MEDIA_RETENTION_HOURS after
+        # `ingest_done_at` — the documented COMPLIANCE.md posture. (migration 0039)
     except Exception as exc:
         # Safe message — exception args may carry internal detail. The
         # generic shape matches the data-gate emit policy in _build_dna_async.
@@ -930,7 +1018,7 @@ async def _transcribe_async(video_id: str) -> None:
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
-            if not video or not video.source_uri:
+            if not video or not video.audio_uri:
                 raise ValueError(f"Video {video_id} not ready for transcription")
 
             # Idempotency probe (Issue 105 — Fix 1): if a Transcript row already
@@ -957,9 +1045,9 @@ async def _transcribe_async(video_id: str) -> None:
                 )
                 return
 
-            source_uri = video.source_uri
+            audio_uri = video.audio_uri
 
-        async with alocal_path(source_uri) as audio_path:
+        async with alocal_path(audio_uri) as audio_path:
             # transcribe_audio dispatches to sync Deepgram / AssemblyAI / WhisperX
             # SDKs — offload to a thread so the event loop is free during the
             # multi-second transcription round-trip (Issue 38 Wave 1). Bounded by
@@ -1023,7 +1111,7 @@ async def _signals_async(video_id: str) -> None:
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
-            if not video or not video.source_uri:
+            if not video or not video.audio_uri:
                 raise ValueError(f"Video {video_id} not ready for signal extraction")
 
             # Idempotency probe (Issue 105 — Fix 1): if a Signals row already exists
@@ -1044,13 +1132,13 @@ async def _signals_async(video_id: str) -> None:
                 )
                 return
 
-            source_uri = video.source_uri
+            audio_uri = video.audio_uri
             retention_result = await session.execute(
                 select(RetentionCurve).where(RetentionCurve.video_id == video.id)
             )
             retention_points = list(retention_result.scalars())
 
-        async with alocal_path(source_uri) as audio_path:
+        async with alocal_path(audio_uri) as audio_path:
             # extract_audio_events is librosa-backed (sync, CPU + IO heavy).
             # Offload so the event loop stays responsive (Issue 38 Wave 1).
             await aemit(video_id, "step", label="extract_audio_events", stage="signals")
@@ -1111,122 +1199,246 @@ def _render_start_for(clip: Clip) -> float:
     return clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
 
 
-async def _render_clip_async(clip_id: str) -> None:
+@dataclass(frozen=True)
+class _ClipRenderPlan:
+    """The fields needed to encode one clip, snapshotted out of the DB session.
+
+    Snapshotting into a plain object means the session can close before the
+    multi-second encode/upload, and lets several clips of the same video share a
+    single downloaded source (``source_uri`` is identical across them).
+    """
+
+    source_uri: str
+    setup_start_s: float | None
+    start_s: float
+    end_s: float
+    peak_s: float | None
+    clip_duration_s: float
+    style_preset: dict | None
+    transcript_segments: list[dict] | None
+
+
+async def _load_clip_render_plan(clip_id: str) -> _ClipRenderPlan | None:
+    """Lock the clip row, flip it to ``running``, and snapshot its render plan.
+
+    Returns ``None`` (and emits the terminal ``done`` event) when the clip is
+    already rendered — the idempotent skip under at-least-once delivery
+    (Issue 62). ``with_for_update`` serializes concurrent redeliveries of the
+    same clip at the Postgres row level so two deliveries cannot both pass the
+    done-check and double-encode (Issue 76).
+    """
+    from worker.progress import aemit
+
+    async with db.AdminSessionLocal() as session:
+        clip = await session.get(Clip, uuid.UUID(clip_id), with_for_update=True)
+        if not clip:
+            raise ValueError(f"Clip {clip_id} not found")
+        if clip.render_status == RenderStatus.done and clip.render_uri:
+            logger.info("Clip %s already rendered — skipping", clip_id)
+            await aemit(clip_id, "done", stage="render", message="Clip already rendered.")
+            return None
+        if clip.render_status == RenderStatus.running and clip.render_uri:
+            # Anomalous state: the clip has a render_uri but is not marked done. This
+            # can occur if a prior render uploaded the file but crashed before setting
+            # the status to done. Re-rendering is safe (idempotent upload key); log
+            # the anomaly so an operator can investigate if it recurs. (Issue 336)
+            logger.warning(
+                "Clip %s is running with existing render_uri=%s — re-rendering (anomalous state)",
+                clip_id,
+                clip.render_uri,
+            )
+        video = await session.get(Video, clip.video_id)
+        if not video or not video.source_uri:
+            raise ValueError(f"Source video not available for clip {clip_id}")
+        # Snapshot the timing fields into locals — session closes at the end of
+        # this with-block, after which `clip.start_s` would emit an implicit
+        # SELECT to refresh the expired attribute (Issue 38 Wave 1).
+        setup_start_s = clip.setup_start_s
+        start_s = clip.start_s
+        end_s = clip.end_s
+        peak_s = clip.peak_s  # for the opt-in auto-zoom punch-in (Issue 184)
+        clip.render_status = RenderStatus.running
+        style_preset = clip.style_preset  # snapshot before session closes
+        # Transcript segments only needed when style_preset selects a caption
+        # style — skip the load otherwise (Issue 133). Gate off the single
+        # source of truth so new styles (e.g. bold_pop_highlight, Issue 183)
+        # don't silently render captionless.
+        from clip_engine.captions import VALID_STYLES as _CAPTION_STYLES
+
+        transcript_segments: list[dict] | None = None
+        if style_preset and style_preset.get("subtitle") in _CAPTION_STYLES:
+            transcript = await session.get(Transcript, video.id)
+            if transcript and isinstance(transcript.segments_jsonb, dict):
+                segments = transcript.segments_jsonb.get("segments")
+                if isinstance(segments, list):
+                    transcript_segments = segments
+        await session.commit()
+        return _ClipRenderPlan(
+            source_uri=video.source_uri,
+            setup_start_s=setup_start_s,
+            start_s=start_s,
+            end_s=end_s,
+            peak_s=peak_s,
+            clip_duration_s=end_s - (setup_start_s if setup_start_s is not None else start_s),
+            style_preset=style_preset,
+            transcript_segments=transcript_segments,
+        )
+
+
+async def _encode_and_upload_clip(clip_id: str, src: Path, plan: _ClipRenderPlan) -> None:
+    """Encode one clip from an already-downloaded ``src`` and mark it ``done``.
+
+    Split out of the download so several clips of one video can reuse a single
+    source file (auto-render fans a video into N clips — see
+    ``_render_video_clips_async``). The caller owns ``src``'s lifetime.
+    """
+    import tempfile
+
+    from clip_engine.render import render_clip_file
+    from worker.progress import aemit
+    from worker.storage import aupload_file
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        out_path = Path(tmp.name)
+    try:
+        # render_clip_file shells out to ffmpeg via subprocess.run; upload_file
+        # is sync boto3. Both go to a worker thread so the event loop stays
+        # free during the multi-second render + upload (Issue 38 Wave 1).
+        # Render from the computed setup boundary (CLIPPING_PRINCIPLE #2 —
+        # "clip the setup, not the aftermath"), NOT the fixed peak−window
+        # `start_s` fallback. setup_start_s is nullable; fall back to start_s
+        # only if it was never computed so a legacy clip still renders a
+        # valid range. (Issue 59)
+        await aemit(
+            clip_id,
+            "step",
+            label="ffmpeg_encode",
+            stage="render",
+            clip_duration_s=plan.clip_duration_s,
+        )
+        await asyncio.to_thread(
+            render_clip_file,
+            source_path=src,
+            start_s=plan.setup_start_s if plan.setup_start_s is not None else plan.start_s,
+            end_s=plan.end_s,
+            out_path=out_path,
+            style_preset=plan.style_preset,
+            transcript_segments=plan.transcript_segments,
+            peak_s=plan.peak_s,
+        )
+        await aemit(clip_id, "step", label="upload_r2", stage="render")
+        render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
+    finally:
+        out_path.unlink(missing_ok=True)
+
+    async with db.AdminSessionLocal() as session:
+        clip = await session.get(Clip, uuid.UUID(clip_id))
+        if clip:
+            clip.render_uri = render_uri
+            clip.render_status = RenderStatus.done
+            await session.commit()
+
+    logger.info("Clip %s rendered → %s", clip_id, render_uri)
+    await aemit(clip_id, "done", stage="render", message="Clip ready.")
+
+
+async def _render_clip_async(clip_id: str, src: Path | None = None) -> None:
     """Render a clip. Issue 92 progress wired — uses ``clip_id`` as the
     SSE stream key for the same deterministic-lookup reason as the upload
     chain. Per-frame ffmpeg progress is intentionally NOT parsed here (the
     encode runs as a single ``asyncio.to_thread`` shell-out); we emit
     step-level boundaries instead — start/encode/upload/done.
+
+    ``src`` lets a caller pass an already-downloaded source file so a batch of
+    clips from one video shares a single R2 download (see
+    ``_render_video_clips_async``). When ``None`` the source is downloaded here
+    for the single-clip path (the manual ``POST /clips/{id}/render`` endpoint).
     """
-    from clip_engine.render import render_clip_file
     from worker.progress import aemit
-    from worker.storage import alocal_path, aupload_file
+    from worker.storage import alocal_path
 
     try:
         await aemit(clip_id, "step", label="render_start", stage="render")
-
-        async with db.AdminSessionLocal() as session:
-            # with_for_update serializes concurrent Celery redeliveries at the Postgres row
-            # level so two concurrent deliveries of the same clip_id cannot both pass the
-            # done-check and trigger a double-encode. (Issue 76)
-            clip = await session.get(Clip, uuid.UUID(clip_id), with_for_update=True)
-            if not clip:
-                raise ValueError(f"Clip {clip_id} not found")
-            # Idempotent under at-least-once delivery (Issue 62): a redelivered render
-            # must not re-encode and last-writer-win the URI. Skip if already done.
-            if clip.render_status == RenderStatus.done and clip.render_uri:
-                logger.info("Clip %s already rendered — skipping", clip_id)
-                await aemit(
-                    clip_id,
-                    "done",
-                    stage="render",
-                    message="Clip already rendered.",
-                )
-                return
-            video = await session.get(Video, clip.video_id)
-            if not video or not video.source_uri:
-                raise ValueError(f"Source video not available for clip {clip_id}")
-            source_uri = video.source_uri
-            # Snapshot the timing fields into locals — session closes at the end of
-            # this with-block, after which `clip.start_s` would emit an implicit
-            # SELECT to refresh the expired attribute (Issue 38 Wave 1).
-            setup_start_s = clip.setup_start_s
-            start_s = clip.start_s
-            end_s = clip.end_s
-            peak_s = clip.peak_s  # for the opt-in auto-zoom punch-in (Issue 184)
-            clip_duration_s = end_s - (setup_start_s if setup_start_s is not None else start_s)
-            clip.render_status = RenderStatus.running
-            style_preset = clip.style_preset  # snapshot before session closes
-            # Transcript segments only needed when style_preset selects a caption
-            # style — skip the load otherwise (Issue 133). Gate off the single
-            # source of truth so new styles (e.g. bold_pop_highlight, Issue 183)
-            # don't silently render captionless.
-            from clip_engine.captions import VALID_STYLES as _CAPTION_STYLES
-
-            transcript_segments: list[dict] | None = None
-            if style_preset and style_preset.get("subtitle") in _CAPTION_STYLES:
-                transcript = await session.get(Transcript, video.id)
-                if transcript and isinstance(transcript.segments_jsonb, dict):
-                    segments = transcript.segments_jsonb.get("segments")
-                    if isinstance(segments, list):
-                        transcript_segments = segments
-            await session.commit()
-
-        await aemit(clip_id, "step", label="download_source", stage="render")
-        async with alocal_path(source_uri) as src:
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-                out_path = Path(tmp.name)
-            try:
-                # render_clip_file shells out to ffmpeg via subprocess.run; upload_file
-                # is sync boto3. Both go to a worker thread so the event loop stays
-                # free during the multi-second render + upload (Issue 38 Wave 1).
-                # Render from the computed setup boundary (CLIPPING_PRINCIPLE #2 —
-                # "clip the setup, not the aftermath"), NOT the fixed peak−window
-                # `start_s` fallback. setup_start_s is nullable; fall back to start_s
-                # only if it was never computed so a legacy clip still renders a
-                # valid range. (Issue 59)
-                await aemit(
-                    clip_id,
-                    "step",
-                    label="ffmpeg_encode",
-                    stage="render",
-                    clip_duration_s=clip_duration_s,
-                )
-                await asyncio.to_thread(
-                    render_clip_file,
-                    source_path=src,
-                    start_s=setup_start_s if setup_start_s is not None else start_s,
-                    end_s=end_s,
-                    out_path=out_path,
-                    style_preset=style_preset,
-                    transcript_segments=transcript_segments,
-                    peak_s=peak_s,
-                )
-                await aemit(clip_id, "step", label="upload_r2", stage="render")
-                render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
-            finally:
-                out_path.unlink(missing_ok=True)
-
-        async with db.AdminSessionLocal() as session:
-            clip = await session.get(Clip, uuid.UUID(clip_id))
-            if clip:
-                clip.render_uri = render_uri
-                clip.render_status = RenderStatus.done
-                await session.commit()
-
-        logger.info("Clip %s rendered → %s", clip_id, render_uri)
-        await aemit(clip_id, "done", stage="render", message="Clip ready.")
+        plan = await _load_clip_render_plan(clip_id)
+        if plan is None:  # already rendered — skip emitted by the loader
+            return
+        if src is not None:
+            await _encode_and_upload_clip(clip_id, src, plan)
+        else:
+            await aemit(clip_id, "step", label="download_source", stage="render")
+            async with alocal_path(plan.source_uri) as downloaded:
+                await _encode_and_upload_clip(clip_id, downloaded, plan)
     except Exception as exc:
+        # Don't promise a retry here — whether render_clip retries depends on the
+        # error class (permanent ValueError/FileNotFoundError are terminal). Keep
+        # the user-facing message neutral; the clip's render_status is the source
+        # of truth the UI polls.
         await aemit(
             clip_id,
             "error",
             stage="render",
-            message="Render failed; retrying.",
+            message="Render failed.",
             exc_type=type(exc).__name__,
         )
         raise
+
+
+async def _render_video_clips_async(video_id: str, clip_ids: list[str]) -> None:
+    """Render every clip in ``clip_ids`` (all from ``video_id``) downloading the
+    source from R2 exactly ONCE.
+
+    Auto-render fans one upload into N clips; rendering them as N independent
+    ``render_clip`` tasks re-downloaded the full source N times (the dominant
+    cost for multi-clip videos). Here the source is fetched once and reused
+    across every clip's encode.
+
+    Per-clip failures are isolated: a permanent error marks that clip ``failed``
+    and moves on; a transient error re-enqueues the single-clip ``render_clip``
+    so its existing backoff/retry path applies — neither aborts the batch nor
+    re-downloads the source for its siblings. A failure to obtain the source
+    itself propagates so the task wrapper can classify + retry the whole batch.
+    """
+    from worker.storage import alocal_path
+
+    if not clip_ids:
+        return
+    async with db.AdminSessionLocal() as session:
+        video = await session.get(Video, uuid.UUID(video_id))
+        if not video or not video.source_uri:
+            raise ValueError(f"Source video not available for video {video_id}")
+        source_uri = video.source_uri
+
+    async with alocal_path(source_uri) as src:
+        for clip_id in clip_ids:
+            try:
+                await _render_clip_async(clip_id, src=src)
+            except (ValueError, FileNotFoundError) as exc:
+                # Permanent for THIS clip (bad range / missing row) — retrying
+                # cannot fix it. Mark failed and keep rendering the siblings.
+                await _set_clip_render_status(clip_id, RenderStatus.failed)
+                RENDER_FAILURES_TOTAL.labels(task="render_video_clips").inc()
+                log_event(
+                    "render_video_clip_failed_permanent",
+                    video_id=video_id,
+                    clip_id=clip_id,
+                    exc_type=type(exc).__name__,
+                )
+            except Exception as exc:  # noqa: BLE001 — isolate per-clip transient errors
+                # Transient (ffmpeg/upload blip) — hand THIS clip to the
+                # single-clip task so its backoff/retry applies, without
+                # re-downloading the shared source for the rest of the batch.
+                await _set_clip_render_status(clip_id, RenderStatus.failed)
+                RENDER_FAILURES_TOTAL.labels(task="render_video_clips").inc()
+                log_event(
+                    "render_video_clip_retry_enqueued",
+                    video_id=video_id,
+                    clip_id=clip_id,
+                    exc_type=type(exc).__name__,
+                )
+                try:
+                    render_clip.delay(clip_id)
+                except Exception:  # noqa: BLE001 — best-effort re-enqueue
+                    logger.warning("render retry enqueue failed clip=%s", clip_id)
 
 
 async def _clean_clip_async(clip_id: str) -> None:
@@ -1909,6 +2121,22 @@ async def _poll_clip_outcomes_async() -> None:
             )
 
 
+async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
+    """Return the creator's saved brand-kit render style, or ``{}`` if none.
+
+    Used to seed auto-rendered clips (auto-render) so captions / aspect / background
+    match the creator's chosen style without a manual pick. Mirrors the brand-kit
+    read in ``routers/clips.py::render_clip``; a copy is returned so the caller can
+    assign it onto a clip without aliasing the ORM-tracked ``CreatorStyle.style``.
+    """
+    from sqlalchemy import select
+
+    from models import CreatorStyle
+
+    row = await session.scalar(select(CreatorStyle).where(CreatorStyle.creator_id == creator_id))
+    return dict(row.style) if row and isinstance(row.style, dict) else {}
+
+
 async def _generate_clips_async(video_id: str) -> None:
     """Generate ranked clip candidates for a fully-ingested video.
 
@@ -1936,6 +2164,10 @@ async def _generate_clips_async(video_id: str) -> None:
         clip_creator_id: uuid.UUID | None = None
         clip_video_title: str | None = None
         clip_creator_name: str | None = None
+        # Clip ids to auto-render once generation commits (auto-render). Captured
+        # inside the session so post-commit attribute expiry can't trigger a lazy
+        # refresh after it closes; the actual enqueue happens after the session.
+        auto_render_clip_ids: list[str] = []
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, video_uuid)
@@ -2000,6 +2232,35 @@ async def _generate_clips_async(video_id: str) -> None:
 
             logger.info("Generated %d clips for video %s", len(clips), video_id)
 
+            # Auto-render (auto-render): uploading the video already consented to —
+            # and was charged — the minutes (deduct_for_video at ingest), so the
+            # Review queue should be watch-ready with zero manual steps. Seed each
+            # clip's render style from the creator's saved brand kit, then enqueue a
+            # render below. render_clip is idempotent (skips clips already done) and
+            # charges no additional minutes. AUTO_RENDER_TOP_N caps how many of the
+            # ranked clips render immediately (0 = all generated candidates).
+            if settings.AUTO_RENDER_CLIPS and clips:
+                kit_style = await _brand_kit_style(session, video.creator_id)
+                top_n = settings.AUTO_RENDER_TOP_N
+                # Only sort when we actually cap — the default (render all) path
+                # renders every clip regardless of order, so skip the sort.
+                if top_n and top_n > 0:
+                    ordered = sorted(
+                        clips, key=lambda c: c.rank if c.rank is not None else 1_000_000
+                    )[:top_n]
+                else:
+                    ordered = clips
+                seeded = False
+                for clip in ordered:
+                    # Never clobber a style the creator already chose — only seed
+                    # when the clip has no preset yet.
+                    if kit_style and not clip.style_preset:
+                        clip.style_preset = kit_style
+                        seeded = True
+                    auto_render_clip_ids.append(str(clip.id))
+                if seeded:
+                    await session.commit()
+
         # Terminal event — the upload-to-clips pipeline is now done.
         # Sets TTL on the stream so a creator who comes back later can still see it.
         await aemit(
@@ -2009,6 +2270,32 @@ async def _generate_clips_async(video_id: str) -> None:
             message=f"Generated {len(clips)} clip(s).",
             clip_count=len(clips),
         )
+
+        # Enqueue the auto-render batch AFTER the session commits + the terminal
+        # `done` fires. Commit-before-enqueue (same posture as
+        # sweep_scheduled_publications) so the seeded style writes persist even if
+        # the broker is briefly down. One batch task (render_video_clips) renders
+        # every clip from a single source download instead of N tasks each
+        # re-downloading the full source — the dominant cost for multi-clip videos.
+        # An enqueue failure is logged, never raised — it must not fail clip
+        # generation or trigger a refund; the creator can still render on demand.
+        if auto_render_clip_ids:
+            try:
+                render_video_clips.delay(video_id, auto_render_clip_ids)
+            except Exception as enqueue_exc:  # noqa: BLE001 — best-effort enqueue
+                logger.warning(
+                    "auto-render enqueue failed video=%s count=%d err=%s",
+                    video_id,
+                    len(auto_render_clip_ids),
+                    type(enqueue_exc).__name__,
+                )
+        if auto_render_clip_ids:
+            log_event(
+                "auto_render_enqueued",
+                creator_id=str(clip_creator_id) if clip_creator_id else None,
+                video_id=video_id,
+                count=len(auto_render_clip_ids),
+            )
 
         # Trigger 1: clips-ready notification (Issue 244 / delivers #193).
         # entity_id = video_id so dedupe prevents duplicate notifications on retry.
@@ -2048,7 +2335,7 @@ async def _generate_clips_async(video_id: str) -> None:
 async def _purge_stale_source_media_async() -> None:
     from datetime import timedelta
 
-    from sqlalchemy import and_, select, text, update
+    from sqlalchemy import and_, or_, select, text, update
 
     from config import settings
     from worker.storage import adelete_file
@@ -2076,19 +2363,20 @@ async def _purge_stale_source_media_async() -> None:
             return
         try:
             result = await session.execute(
-                select(Video.id, Video.source_uri).where(
+                select(Video.id, Video.source_uri, Video.audio_uri).where(
                     and_(
-                        Video.source_uri.isnot(None),
+                        or_(Video.source_uri.isnot(None), Video.audio_uri.isnot(None)),
                         Video.ingest_done_at.is_not(None),
                         Video.ingest_done_at < cutoff,
                     )
                 )
             )
-            # `.all()` returns Sequence[Row[...]] which is Row-iterable and
-            # unpacks to (uuid, str|None) per row. Untyped because Row's
-            # bracketed type doesn't equal `tuple[...]` in the eyes of mypy.
-            # The WHERE clause filters `source_uri.isnot(None)`; the loop below
-            # still skips defensive None so type-narrowing stays trivial.
+            # `.all()` returns Sequence[Row[...]] which is Row-iterable and unpacks
+            # to (uuid, str|None, str|None) per row. Untyped because Row's bracketed
+            # type doesn't equal `tuple[...]` in the eyes of mypy. Both the video
+            # (source_uri) and its extracted audio (audio_uri) are purged once the
+            # video is past its retention window — the audio derivative isn't needed
+            # after signals ran (migration 0039). The loop skips defensive None.
             targets = result.all()
         finally:
             await session.execute(
@@ -2099,23 +2387,43 @@ async def _purge_stale_source_media_async() -> None:
     if not targets:
         return
 
-    purged_ids: list[uuid.UUID] = []
-    for video_id, source_uri in targets:
-        if source_uri is None:
-            continue
-        try:
-            await adelete_file(source_uri)
-            purged_ids.append(video_id)
-        except Exception as exc:
-            logger.warning("Failed to purge source media for video %s: %s", video_id, exc)
+    # Purge each blob independently and only null the column whose file we actually
+    # deleted, so a transient R2 error on one leaves the other's pointer intact for
+    # the next sweep (retry-safe; the R2 `source/` lifecycle rule sweeps any orphan).
+    src_purged: list[uuid.UUID] = []
+    audio_purged: list[uuid.UUID] = []
+    for video_id, source_uri, audio_uri in targets:
+        if source_uri is not None:
+            try:
+                await adelete_file(source_uri)
+                src_purged.append(video_id)
+            except Exception as exc:
+                logger.warning("Failed to purge source media for video %s: %s", video_id, exc)
+        if audio_uri is not None:
+            try:
+                await adelete_file(audio_uri)
+                audio_purged.append(video_id)
+            except Exception as exc:
+                logger.warning("Failed to purge audio media for video %s: %s", video_id, exc)
 
-    if not purged_ids:
+    if not src_purged and not audio_purged:
         return
 
     async with db.AdminSessionLocal() as session:
-        await session.execute(update(Video).where(Video.id.in_(purged_ids)).values(source_uri=None))
+        if src_purged:
+            await session.execute(
+                update(Video).where(Video.id.in_(src_purged)).values(source_uri=None)
+            )
+        if audio_purged:
+            await session.execute(
+                update(Video).where(Video.id.in_(audio_purged)).values(audio_uri=None)
+            )
         await session.commit()
-        logger.info("Purged source media for %d video(s)", len(purged_ids))
+        logger.info(
+            "Purged media: %d source video(s), %d audio file(s)",
+            len(src_purged),
+            len(audio_purged),
+        )
 
 
 async def _purge_stale_youtube_analytics_async() -> None:
@@ -2347,9 +2655,7 @@ async def _run_lifecycle_scan_async() -> None:
         nudge_cutoff = now - timedelta(days=settings.LIFECYCLE_NUDGE_AFTER_DAYS)
         has_video = exists().where(Video.creator_id == Creator.id)
         nudge_rows = await session.execute(
-            select(Creator.id)
-            .where(Creator.created_at <= nudge_cutoff)
-            .where(~has_video)
+            select(Creator.id).where(Creator.created_at <= nudge_cutoff).where(~has_video)
         )
         for (cid,) in nudge_rows.all():
             if await _lifecycle_capped(session, cid, now):
@@ -2373,8 +2679,7 @@ async def _run_lifecycle_scan_async() -> None:
         period_window = now.toordinal() // settings.LIFECYCLE_INACTIVITY_DAYS
         period_bucket = f"reengage-{period_window}"
         recent_feedback = exists().where(
-            (ClipFeedback.creator_id == Creator.id)
-            & (ClipFeedback.created_at >= inactivity_cutoff)
+            (ClipFeedback.creator_id == Creator.id) & (ClipFeedback.created_at >= inactivity_cutoff)
         )
         reengage_rows = await session.execute(
             select(Creator.id)
@@ -2611,9 +2916,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 # 300-unit/day allowance mid-onboarding. charge_sub_budget=False keeps
                 # only the global daily cap in force on this path (Issue 260).
                 await _emit("step", label="fetch_uploads", stage="catalog_sync")
-                await sync_video_catalog(
-                    session, creator, access_token, charge_sub_budget=False
-                )
+                await sync_video_catalog(session, creator, access_token, charge_sub_budget=False)
                 await session.commit()
 
                 # Phase 2 — fetch metrics for any video that doesn't have them yet.
@@ -4058,7 +4361,10 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
     history_turns = settings.CHAT_HISTORY_TURNS
 
     try:
-        async with db.AdminSessionLocal() as session:
+        async with db.AsyncSessionLocal() as session:
+            # Set the per-creator GUC so RLS policies on chat_conversations and
+            # chat_messages (via conversation subquery) apply to this session.
+            session.info["creator_id"] = str(cid)
             conv = await session.get(ChatConversation, conv_uuid)
             if conv is None or conv.creator_id != cid:
                 # Ownership re-check in the worker (defense in depth — the router
@@ -4303,52 +4609,31 @@ async def _send_notification_async(
             )
             return
 
-        # ── 6. Render and send email ─────────────────────────────────────────
-        # Only send email when the creator has an email address and the channel
-        # is not opted-out. We prefer the event_type as the template name.
-        to_email = creator.email
-        if to_email and prefs.email_transactional:
+        # ── 6. Build email send context while the session is still open ─────────
+        # Capture everything needed for the mailer call BEFORE committing, so
+        # ORM attributes on creator/prefs are accessible. The actual send happens
+        # AFTER the session closes (step 8) to avoid holding the DB connection
+        # open while the Resend API call blocks. (Issue 349)
+        delivery_id = delivery.id  # populated by flush() above; needed for failure update
+        send_to: str | None = creator.email if prefs.email_transactional else None
+        email_context: dict | None = None
+        email_headers: dict[str, str] | None = None
+        if send_to:
             # RFC 8058 one-click unsubscribe headers on LIFECYCLE sends only.
-            # Transactional sends pass no such headers (legally always-on).
-            email_headers: dict[str, str] | None = None
+            unsub_url: str | None = None
             if is_lifecycle:
-                from config import settings as _settings
-
-                unsub_url = (
-                    f"{_settings.APP_BASE_URL}/unsubscribe/{prefs.unsubscribe_token}"
-                )
+                unsub_url = f"{_settings.APP_BASE_URL}/unsubscribe/{prefs.unsubscribe_token}"
                 email_headers = {
                     "List-Unsubscribe": f"<{unsub_url}>",
                     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
                 }
-            try:
-                mailer_send(
-                    to=to_email,
-                    template=event_type,
-                    context={"creator": creator, "unsubscribe_url": unsub_url, **payload}
-                    if is_lifecycle
-                    else {"creator": creator, **payload},
-                    idempotency_key=dedupe_key,
-                    headers=email_headers,
-                )
-                logger.info(
-                    "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
-                    event_type,
-                    creator_id,
-                    dedupe_key,
-                )
-            except Exception as exc:
-                # Template missing or Resend error: mark delivery failed so we
-                # don't retry infinite-loop; log and continue to in-app row.
-                delivery.status = NotificationDeliveryStatus.failed
-                logger.error(
-                    "send_notification: email send failed event_type=%s creator=%s: %s",
-                    event_type,
-                    creator_id,
-                    exc,
-                )
+            email_context = (
+                {"creator": creator, "unsubscribe_url": unsub_url, **payload}
+                if is_lifecycle
+                else {"creator": creator, **payload}
+            )
         else:
-            # No email address on record or email opted out — in-app only.
+            # No email address or opted out — in-app delivery only.
             delivery.channel = NotificationChannel.inapp
 
         # ── 7. Insert in-app notification row ────────────────────────────────
@@ -4356,7 +4641,47 @@ async def _send_notification_async(
             notification = _build_inapp_notification(cid, event_type, payload)
             session.add(notification)
 
+        # Commit now — before the blocking mailer call — to free the DB connection.
         await session.commit()
+
+    # ── 8. Send email outside the session ────────────────────────────────────
+    # asyncio.wait_for + asyncio.to_thread give a Python-level timeout around
+    # the blocking sync mailer call. On timeout or any send error we open a
+    # fresh session to mark the delivery row failed (the commit in step 7 already
+    # persisted it as NotificationDeliveryStatus.sent). (Issue 349)
+    if send_to and email_context is not None:
+        import asyncio
+
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    mailer_send,
+                    to=send_to,
+                    template=event_type,
+                    context=email_context,
+                    idempotency_key=dedupe_key,
+                    headers=email_headers,
+                ),
+                timeout=_settings.RESEND_TIMEOUT_S,
+            )
+            logger.info(
+                "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
+                event_type,
+                creator_id,
+                dedupe_key,
+            )
+        except Exception as exc:
+            logger.error(
+                "send_notification: email send failed event_type=%s creator=%s: %s",
+                event_type,
+                creator_id,
+                exc,
+            )
+            async with db.AdminSessionLocal() as fail_session:
+                fail_delivery = await fail_session.get(NotificationDelivery, delivery_id)
+                if fail_delivery is not None:
+                    fail_delivery.status = NotificationDeliveryStatus.failed
+                await fail_session.commit()
 
 
 def _build_inapp_notification(

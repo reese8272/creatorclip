@@ -4,6 +4,289 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-01 — W0 SEV1 beta-gate fixes: Issues 348, 349, 350 (3 issues)
+
+**Branch** `fix/retain-source-video-for-render` (same branch as prior session).
+
+Completed the remaining three W0 SEV1s that gate the ≤100-user paid beta:
+
+- **348** chat BYPASSRLS — switched `_chat_respond_async` from `AdminSessionLocal` to `AsyncSessionLocal` with
+  `session.info["creator_id"] = str(cid)` set before the first query; created migration `0040_rls_chat_child_tables`
+  with subquery-based `tenant_isolation` policies on `video_metrics`, `retention_curves`, `transcripts`,
+  `clip_outcomes`, `chat_messages` (no direct `creator_id` on these tables → subquery through parent). DECISIONS.md entry added.
+- **349** Resend no-timeout — restructured `_send_notification_async` to commit before mailer_send; blocking
+  `mailer.send` now runs outside the session via `asyncio.wait_for(asyncio.to_thread(…), timeout=RESEND_TIMEOUT_S)`.
+  Added `RESEND_TIMEOUT_S: int = 10` to `config.py` and `.env.example`. On failure, a fresh session marks
+  `delivery.status = failed`. Two new unit tests verify ordering (commit before send) and failure path. DECISIONS.md entry added.
+- **350** web_search pause_turn — added `max_uses: 5` to `web_search` tool in `_build_request`; both `.create()`
+  and streaming paths now loop when `stop_reason == "pause_turn"` (up to 5 rounds); streaming path switched
+  from `stream_and_emit` to `stream_message` which returns the full `Message` with `stop_reason` accessible.
+  Tests updated (`test_improvement_brief_streaming_path_passes_tools_to_stream_message`, `test_improvement_brief_pause_turn_loop_continues_on_web_search`, `test_improvement_brief_tool_max_uses_is_set`). DECISIONS.md entry added.
+
+**All W0 SEV1s (345–351) are now DONE.** Beta deployment unblocked pending migration `0040` on prod.
+
+---
+
+## 2026-07-01 — W0 SEV1 beta-gate fixes: Issues 345, 346, 347, 351 (4 issues)
+
+**Branch** `fix/retain-source-video-for-render` (post-merge; these changes staged for a follow-up PR).
+
+Worked the four W0 SEV1s that gate the ≤100-user paid beta. All are S-size, file-disjoint, and now DONE
+(347 needs a load-confirm on staging to fully validate PgBouncer sizing, but the code and budget docs are
+correct):
+
+- **345** billing — `stripe.max_network_retries` was a module-global no-op under Stripe v8; moved to
+  `StripeClient(max_network_retries=3)` constructor. Test updated to check `_requestor._options`. DECISIONS.md entry added.
+- **346** frontend — added `errorElement: <RootError />` to the root route in `App.tsx` (catches any render
+  throw in any child, shows branded reload/back-to-dashboard UI); added `onUncaughtError` + `onRecoverableError`
+  to `createRoot` in `main.tsx` for console telemetry. TypeScript build clean.
+- **347** _root_infra — `event_log.py` pool pinned to `pool_size=2,max_overflow=3` (5 conns, was 15). Added
+  event-log engine to the fleet connection-budget inequality in `docs/DEPLOYMENT.md`. DECISIONS.md entry added.
+- **351** Layer-0 gates restored — ruff 21→0 (10 auto-fixed + 12 hand-fixed: B007, E741, SIM117×9, SIM102);
+  mypy 2→0 (filter `None` from `youtube_ids` list; `or ""` coerce in insights.py). `test_stripe_max_retries`
+  updated to match new attribute path. 1996 unit tests pass, 0 fail.
+
+**Gates:** ruff 0 · mypy 0 · coverage 79.06 · bandit clean. pip_audit 6 = pre-existing venv drift (baseline).
+
+**Remaining beta-gate SEV1s:** Issues 348 (chat BYPASSRLS), 349 (Resend timeout+conn-hold), 350
+(web_search pause_turn). These are the next W0 items.
+
+---
+
+## 2026-06-30 — L21 Edge-Case Hardening WAVE complete: Issues 329, 333, 334, 335, 336, 337, 339, 340 (8 issues, parallel build)
+
+**Branch** `l21-wave-a` (8 issue branches merged; not yet merged to main — awaiting review). Ran the L21
+lane as a parallel **plan→build→review wave**: per-issue research/CHECK (Opus) → isolated-worktree build
+(Sonnet, each on its own cloned Postgres DB + Redis index) → review + conflict-aware merge + full-suite
+verification (Opus). This **closes the L21 lane** (327, 328, 330, 331, 332, 338 were already done).
+
+**Every issue surfaced ≥1 real latent defect.** Highlights:
+- **329** render/reframe: `_run` raised the *head* of stderr (ffmpeg's error is at the tail) + unhandled `OSError`; NaN-FPS `ValueError` collapsing the crop track; silent quality-loss fallbacks now logged; unsorted `keep_ranges` normalized.
+- **333** LLM robustness: `titles/hooks/thumbnails` parse raised `JSONDecodeError`→500 on truncated output → graceful `ValueError` degrade; new shared `log_llm_error` surfaces `status_code`/`retry-after`.
+- **334** ingestion: confirmed `_normalize_assemblyai` `None`-timestamp `TypeError` (zero prior coverage) fixed; unbounded `librosa.load` OOM → duration cap.
+- **336** worker: WAV short-circuit had no integrity check (silent data corruption); `render_clip` soft-timeout retry-storm → terminal.
+- **337** observability: `_sentry_before_send` crashed on non-dict `extra` (a PII-scrub path → forwarded unredacted); `JsonLogFormatter` reserved-key clobber.
+- **339** routers: `review.submit_feedback` had **zero** trim/note validation (fed the preference model) → 422 validator; list endpoints gained a `truncated` envelope field.
+- **340** security: JWT now requires `exp` + iat leeway; `channel_title` clamped at ingestion (LLM01); RLS deny-by-default unset-context proof added.
+
+**⚠️ Open security finding (logged in `OFF_COURSE_BUGS.md`, 2026-06-30):** `improvement_briefs` +
+`creator_insights` carry `creator_id` but have **RLS disabled** (omitted from migration 0010's tenant set).
+With the Issue 343 role split active, they have no deny-by-default backstop — needs a follow-up migration.
+**Promote to a security issue.**
+
+**Gates.** Full suite (unit + integration, real PG16+pgvector+Redis) — **2156 passed, 64 skipped, 0 failed**
+(+210 tests vs pre-wave). ruff clean on all changed source. DECISIONS.md updated (consolidated wave entry).
+Local test infra: a native PG16 + pgvector cluster was stood up this session (no Docker) so the integration
+lane runs locally — see the local-dev memory.
+
+---
+
+## 2026-06-30 — Issue 330 (L21): captions / filler / edits cut-list edge suite (2 confirmed defects fixed)
+
+**Branch** `claude/issue-workflows-test-coverage-59e15u`. First L21 edge issue after the lane repair.
+
+**Two confirmed latent defects fixed + locked:**
+- **`captions._to_ms` crashed on a non-finite word timestamp** — a single NaN/inf word from a malformed
+  transcript raised `ValueError`/`OverflowError` and killed the whole caption render. Added a `math.isfinite`
+  guard in `_to_ms` and a non-finite/inverted-word drop in `_iter_clipped_words`.
+- **`edits.validate_user_cuts` leaked a bare `ValueError`** on non-numeric input — would surface as a 500
+  instead of the typed `CutValidationError("invalid_segment")` → 422. Now wrapped.
+
+**Observability / hardening:** `build_ass_subtitles`' three silent `None` returns log the skip reason;
+the `edits` right-edge clamp logs when it moves the edge; NaN check uses `math.isnan`; `filler` got an
+explicit `phrase_dur <= 0` guard; `±inf` cut bounds rejected. Locked the already-correct paths
+(`percent_removed` merge-before-sum, `_invert_cuts` defensive cursor) with direct tests.
+
+**Gates.** `tests/test_cutlist_edges.py` — 31 cases, real pysubs2 ASS write+reparse (no mocks; these
+modules have no external deps). Unit lane **1805 passed, 0 failed**; clip eval gate 18/18; ruff + mypy
+clean on `clip_engine/{captions,filler,edits}.py`.
+
+---
+
+## 2026-06-30 — Issue 344: live integration lane repaired + made order-independent (21→0 failures; 1 real compliance fix)
+
+**Branch** `claude/issue-workflows-test-coverage-59e15u`. **Directive:** no-mocks/live testing for
+everything controllable; fix the integration lane first, then the L21 edge suites.
+
+**Context.** Provisioned the live backing services this session was missing (the SessionStart hook's
+Postgres role-creation had silently failed) — `creatorclip` PG16 role + db + pgvector + `alembic upgrade
+head`, Redis, ffmpeg — and ran the **integration lane for the first time**. It was bit-rotted: **21/134
+failing**, because CI's `integration` job had sat red/unenforced and nothing ran it locally (the exact
+"main-only integration sat red for 9 days" failure mode the CI header warns about).
+
+**Fixed (all live-verified against real Postgres):**
+- **Stale mock stubs** drifted from the real signature — `dna.brief.generate_brief` /
+  `improvement.brief.generate_improvement_brief` return `(text, usage)`, but stubs returned a bare string
+  → `ValueError: too many values to unpack`. Conformed every stub to the real contract (6 test files).
+- **Un-seeded gates** added after the tests were written: the improvement-brief **minutes gate**
+  (`check_positive_balance` → 402) and the **Issue 206 `payment_status=='paid'`** webhook guard
+  (→ `ignored`). Seeded `minutes_balance` / `payment_status` in the fixtures.
+- **Real compliance bug (product fix):** `AuditLog.before_jsonb/after_jsonb` stored the JSONB `'null'`
+  literal instead of SQL NULL (SQLAlchemy `JSON` default), so the never-purged `creator.deleted` audit
+  failed the Issue 247 "no PII payload retained" `IS NULL` assertion → `JSONB(none_as_null=True)` on both
+  columns (no DDL change).
+- **Obsolete test premise:** `test_poll_clip_outcomes_uses_per_creator_median` asserted the full-video
+  `VideoMetrics` median; Issue 201 moved `performed_well` to a ≥3 **comparable-Shorts** baseline — rewrote
+  it to seed a real comparable-Shorts baseline.
+- **Order-dependence (test-infra):** added an autouse, integration-only `tests/conftest.py` fixture that
+  TRUNCATEs the domain tables and clears leaked session-level advisory locks before each test, so the
+  lane is deterministic regardless of order (a leftover-creators leak had flipped the analytics-fairness /
+  median / poll-outcome assertions). Surfaced a real prod concern (Beat-task advisory-lock release can be
+  skipped) → logged in `OFF_COURSE_BUGS.md` for triage.
+
+**Gates.** Integration lane **134 passed, 0 failed** (deterministic + random seeds 1/42). Unit lane
+**1774 passed, 0 failed**. ruff + mypy clean on all touched files. Resolves 2 open `OFF_COURSE_BUGS`
+rows (integration-creds, median event-loop). CI already runs `pytest -m integration` on every PR — now
+green, so the gate is meaningful again.
+
+---
+
+## 2026-06-30 — Issue 343: RLS role split ACTIVATED — tenant isolation now enforced in prod (SEV1, caught by 341)
+
+**Branch/deploy:** the prod DB role + VM `.env` change is **applied + verified live**; repo doc/harness
+changes pending commit (see below).
+
+**Context.** Running the Issue 341 harness on the prod VM, the `isolation` check failed: a different
+creator's RLS context still saw the canary clip. Root cause (verified on the live DB): the app role
+`creatorclip` is the superuser/owner with `BYPASSRLS=true`, which overrides the correctly-`FORCE`d RLS
+(migration 0010) — so per-creator isolation had **no DB backstop**. Filed SEV1 (`OFF_COURSE_BUGS.md`),
+fixed via the issue-workflow as **Issue 343**.
+
+**What was done (config-only, reversible).** Activated the already-created `creatorclip_app` (no BYPASSRLS):
+set its password + re-grants, pointed `DATABASE_URL` at it and `DATABASE_MIGRATION_URL` at the superuser
+`creatorclip` (Alembic + the worker's 50 `AdminSessionLocal` cross-tenant sweeps), recreated app+worker.
+Kept the superuser as the migrate role (skipped the runbook's ownership transfer — DECISIONS 2026-06-30).
+
+**Verified live as `creatorclip_app`:** no-context → 0 videos (fail-closed); wrong-tenant canary → 0
+(**harness `isolation` PASS**, was FAIL); real creator under context → 1049 (correct per-tenant); `creators`
+(RLS-exempt) visible → auth bootstrap OK; app+worker `healthy`, clean startup. Rollback: `.env.bak-pre-rls*`
+on the VM → revert `DATABASE_URL` to `creatorclip` + recreate.
+
+**Harness fix (Issue 341 follow-up):** `scripts/live_smoke.py check_pipeline` now sets the canary RLS
+context (it read tenant tables without one → would fail under enforced RLS). 15 unit tests green; ruff+mypy
+clean.
+
+**Pending commit (docs + harness, dormant-safe):** `DEPLOYMENT.md` (runbook annotated activated +
+simplified path), `issues.md` (343 DONE), `DECISIONS.md`, `OFF_COURSE_BUGS.md` (SEV1 → fixed), this file,
+`scripts/live_smoke.py`.
+
+---
+
+## 2026-06-29 — Issue 342: structured outputs kill the markdown-fence LLM parse crash (caught by the 341 harness)
+
+**Branch** continues on `claude/llm-rendering-video-assessment-81dy8o` (feature branch; **NOT merged, NOT deployed**).
+
+**Context.** The Issue 341 live smoke harness, on its first `--with-llm` run against the real API, caught a
+**deployed** bug: `claude-sonnet-4-6` wraps JSON in a ` ```json ` fence and the generators did a bare
+`json.loads(raw)` → `JSONDecodeError`, breaking the Review per-clip features (322/323/325) intermittently.
+Mocked tests missed it. Filed + fixed as **Issue 342** (L20) through the CHECK→APPROVE→BUILD workflow.
+
+**Shipped.**
+- **Track A — native structured outputs** (`output_config.format`) on `clip_titles`, `clip_captions`,
+  `clip_explain` (no web_search). `clip_explain` enum-constrains `cited_principle` (no principle
+  hallucination). Live-verified at SDK 0.105.2: fence-free, `json.loads` clean.
+- **Track B — `extract_json_block`** on `hooks` (web_search → structured output 400s with citations),
+  `chapters`, `scoring`, `thumbnails`; the clip_* trio also routes through it as defense-in-depth.
+- `tests/test_llm_fence_parsing.py` — 6 regression tests feeding fenced JSON to each parser (the unit-lane
+  gap). Docs: `DECISIONS.md` (two-track rule + citation incompatibility + scoring/chapters deviation),
+  `issues.md` (342 DONE), `OFF_COURSE_BUGS.md` (row → fixed).
+
+**Gates.** Full unit lane **1778 passed, 0 failed** (+6). ruff + mypy clean on all 7 touched files.
+**Live:** 341 harness `--with-llm` → title 3/3, caption 3/3, explain 2/2 (was 0 passed / 1 fail).
+
+**Deviation (logged).** `scoring`/`chapters` shipped via `extract_json_block` rather than structured
+outputs (brief had them in Track A) — bounds schema-authoring risk; structured outputs deferrable.
+
+---
+
+## 2026-06-29 — Lane L22 Live Smoke: live-in-isolation smoke harness (Issue 341)
+
+**Branch** continues on `claude/llm-rendering-video-assessment-81dy8o` (feature branch; **NOT merged, NOT deployed**).
+
+**Context.** Added a new lane **L22 — Live Smoke** for post-deploy synthetic-canary checks the mocked
+unit lane and the LLM-only `scripts/llm_e2e.py` cannot cover. The pipeline is a DAG: one indivisible
+upstream chain (`ingest→transcribe→signals→generate_clips`) plus a fan-out of **independent** leaf
+operations — so the capabilities separate cleanly when isolated to a persistent seeded canary.
+
+**Shipped (Issue 341).**
+- `scripts/live_smoke.py` — `RUN_LIVE_SMOKE=1`-gated harness (mirrors `llm_e2e.py`). Deterministic
+  `__smoke_canary__` fixture (`uuid5`). Checks: `db`, `isolation` (live RLS cross-tenant proof),
+  `pipeline` (Tier-1 checkpointed read), `render`/`clean` (real ffmpeg), `title`/`caption`/`explain`
+  (real generators), `publish` (dry-run), `r2`. `--target prod|staging`, `--only`, `--with-llm`,
+  `--publish-live` (refused off staging), `--seed`/`--teardown` (canary-namespaced writes only).
+- `tests/test_live_smoke.py` — 13 offline tests: run guard, fixture determinism, arg parsing, result
+  framework, PG-URL normalization, publish safety-refusal.
+- Docs: `DECISIONS.md` (flag-gated synthetic canary + safety rationale + sources), `issues.md` (L22 +
+  Issue 341), `SOT.md`, `.env.example` (`RUN_LIVE_SMOKE`).
+
+**Gates.** Full unit lane **1772 passed, 0 failed** (+13 new); ruff + mypy clean on the new files.
+`scripts/` is outside the Layer-0 coverage source set and bandit scan → no gate regression.
+
+**Staging-pending.** The *live* assertions (DB/R2/ffmpeg/Anthropic) run only against a deployed target
+with `RUN_LIVE_SMOKE=1` — same external posture as Issue 319. A real staging publish (dedicated
+throwaway channel + OAuth) is an explicit out-of-v1-scope follow-up.
+
+---
+
+## 2026-06-28 — Pre-production assessment + Lane L21 edge-case hardening (Issues 327/328/331/332/338)
+
+**Branch** `claude/llm-rendering-video-assessment-81dy8o` (pushed to origin; **NOT merged to main, NOT deployed**).
+
+**Context.** A logic + observability assessment of the LLM / rendering / video-creation pipeline
+(`docs/assessment/LLM_RENDER_VIDEO_ASSESSMENT.md`), which seeded a whole-project **edge-case test
+backlog** — Lane **L21** (`docs/issues_edge_case_hardening.md`, Issues **327–340**), cross-referenced
+against the existing `tests/*.py` so every item is a genuine gap. Five W0/`local` foundational issues
+were then built; each surfaced + fixed a real latent defect.
+
+**Shipped (each = real fix + regression tests):**
+- **#327** — malformed-geometry validation at the signal-build boundary (`ingestion/signals.py` drops
+  inverted/negative/non-finite/out-of-bounds events with a WARNING + count; `window.py` `i1<=i0` guard).
+- **#332** — Prometheus `record_llm_metric` dual-shape adapter wired into the 10 LLM modules that wrote
+  the billing ledger but never incremented `llm_tokens_total` (cost-by-feature dashboard was blind).
+- **#331** — `warn_if_truncated` surfaces `stop_reason=="max_tokens"`; wired into the streaming wrapper
+  (all streaming callers + chat) + every non-streaming `.create()` JSON site.
+- **#328** — `ranking._safe_score` (NaN/garbage → −inf, deterministic rank) + non-finite rerank guard;
+  `candidates.py` DEBUG breadcrumb.
+- **#338** — `predict_score` positive-class-column selection (single-class model no longer `IndexError`s);
+  `clip_features` NaN/inf `dna_match` → 0.0; `config.py` fail-fast validators for
+  `DECAY_HALF_LIFE_DAYS`/`PERSONALIZATION_THRESHOLD_LABELS`/`PREFERENCE_WEIGHT_CAP`.
+
+**Gates.** Full unit lane **1735 passed** (+34 new), ruff + mypy clean on all touched files. The single
+failure is the pre-existing `deepgram`-SDK-not-installed env gap already in `docs/OFF_COURSE_BUGS.md`.
+
+**Remaining in L21** (not started): #330 (`local`), #334 (`local`+render-env), #335/#336/#337/#339/#340
+(mostly `integration` — need real PG/Redis). #336 carries two confirmable suspected defects
+(`generate_clips` RefundOnFailureTask, ingest WAV-integrity short-circuit).
+
+---
+
+## 2026-06-28 — Clips auto-render on generation (fixes "nothing ever renders")
+
+**Root cause of the reported bug.** A user's Review screen showed a clip stuck at "Not yet
+rendered" (which *looked* like a 12-hour stuck render) alongside the unrelated "0/20 ratings
+collected" personalization band. Investigation: rendering was **never automatic** — the only UI
+trigger for `POST /clips/{id}/render` lived in the Editor (`CaptionStylePanel`); the Review screen
+had **no render affordance at all**, and the pipeline (`_generate_clips_async`) only ranked
+candidates, never rendered them. So clips sat un-rendered unless the user found the Editor path.
+"0/20" is the preference-model cold-start counter (climbs as you Keep/Drop), not render progress;
+"50 min" is the credit balance.
+
+**Fix (auto-render, user-directed: "upload = consent to spend").**
+- **Worker:** `_generate_clips_async` now enqueues `render_clip` per generated clip, seeding each
+  clip's `style_preset` from the creator's brand kit. New settings `AUTO_RENDER_CLIPS` (default
+  `true`) + `AUTO_RENDER_TOP_N` (default `0` = all). Best-effort enqueue (logged `auto_render_enqueued`,
+  never raises → no spurious refund). Billing-safe: minutes are charged once at ingest, so render
+  adds **zero** spend; `render_clip` is idempotent + retry-safe.
+- **Frontend:** `ClipPlayer`/`Review` show live render status (spinner → player), poll while any
+  clip is in flight, and expose a manual **Render / Retry** fallback button.
+- **Gates:** backend unit lane **1669 passed** (1 pre-existing failure: `deepgram` SDK not
+  installed in this venv — env, not code); ruff + mypy clean on changed files; frontend
+  `tsc -b` + `vite build` clean, vitest **211 passed** (+4 new `ClipPlayer.test.tsx`, +2 new
+  worker auto-render tests). Integration lane unrunnable on this box (PG auth mismatch — logged in
+  OFF_COURSE_BUGS). See `docs/DECISIONS.md` 2026-06-28.
+
+---
+
 ## 2026-06-26 — Live LLM E2E run (Issue 319) — 22/22 PASS; caught + fixed 3 real bugs
 
 Ran `scripts/llm_e2e.py` against the **real Anthropic API** (`RUN_LLM_LIVE=1`, the user's key) — the first

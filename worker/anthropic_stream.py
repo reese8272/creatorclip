@@ -28,6 +28,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from observability import warn_if_truncated
+from verbose import now_ms, vlog_llm_request, vlog_llm_response
 from worker.progress import sync_emit
 
 logger = logging.getLogger(__name__)
@@ -75,16 +77,33 @@ def stream_and_emit(
     if tools is not None:
         stream_kwargs["tools"] = tools
 
-    with client.messages.stream(**stream_kwargs) as stream:
-        for event in stream:
-            try:
-                _forward_event(task_id, event)
-            except Exception as exc:
-                # Per /claude-api guidance: a hiccup forwarding one event must
-                # NOT abort iteration — losing the final_text would be worse.
-                logger.warning("stream_and_emit: forward failed task=%s err=%s", task_id, exc)
-        final = stream.get_final_message()
+    vlog_llm_request(
+        f"stream:{task_id}",
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=messages,
+        tools=tools,
+        streaming=True,
+    )
+    _t0 = now_ms()
+    try:
+        with client.messages.stream(**stream_kwargs) as stream:
+            for event in stream:
+                try:
+                    _forward_event(task_id, event)
+                except Exception as exc:
+                    # Per /claude-api guidance: a hiccup forwarding one event must
+                    # NOT abort iteration — losing the final_text would be worse.
+                    logger.warning("stream_and_emit: forward failed task=%s err=%s", task_id, exc)
+            final = stream.get_final_message()
+    except Exception as exc:
+        vlog_llm_response(
+            f"stream:{task_id}", model=model, error=repr(exc), duration_ms=int(now_ms() - _t0)
+        )
+        raise
 
+    warn_if_truncated(model, getattr(final, "stop_reason", None), task=task_id)
     text_blocks = [b for b in final.content if getattr(b, "type", None) == "text"]
     if not text_blocks:
         raise RuntimeError("Claude returned no text block in streaming response")
@@ -97,6 +116,14 @@ def stream_and_emit(
         "cache_read": getattr(usage, "cache_read_input_tokens", 0),
         "cache_creation": getattr(usage, "cache_creation_input_tokens", 0),
     }
+    vlog_llm_response(
+        f"stream:{task_id}",
+        model=model,
+        text=final_text,
+        usage=usage_dict,
+        stop_reason=getattr(final, "stop_reason", None),
+        duration_ms=int(now_ms() - _t0),
+    )
     return final_text, usage_dict
 
 
@@ -130,14 +157,31 @@ def stream_message(
     if tools is not None:
         stream_kwargs["tools"] = tools
 
-    with client.messages.stream(**stream_kwargs) as stream:
-        for event in stream:
-            try:
-                _forward_event(task_id, event)
-            except Exception as exc:
-                logger.warning("stream_message: forward failed task=%s err=%s", task_id, exc)
-        final = stream.get_final_message()
+    vlog_llm_request(
+        f"stream:{task_id}",
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=messages,
+        tools=tools,
+        streaming=True,
+    )
+    _t0 = now_ms()
+    try:
+        with client.messages.stream(**stream_kwargs) as stream:
+            for event in stream:
+                try:
+                    _forward_event(task_id, event)
+                except Exception as exc:
+                    logger.warning("stream_message: forward failed task=%s err=%s", task_id, exc)
+            final = stream.get_final_message()
+    except Exception as exc:
+        vlog_llm_response(
+            f"stream:{task_id}", model=model, error=repr(exc), duration_ms=int(now_ms() - _t0)
+        )
+        raise
 
+    warn_if_truncated(model, getattr(final, "stop_reason", None), task=task_id)
     usage = final.usage
     usage_dict = {
         "input_tokens": getattr(usage, "input_tokens", 0),
@@ -145,6 +189,12 @@ def stream_message(
         "cache_read": getattr(usage, "cache_read_input_tokens", 0),
         "cache_creation": getattr(usage, "cache_creation_input_tokens", 0),
     }
+    vlog_llm_response(
+        f"stream:{task_id}",
+        response=final,
+        usage=usage_dict,
+        duration_ms=int(now_ms() - _t0),
+    )
     return final, usage_dict
 
 

@@ -70,6 +70,12 @@ _RESERVED_LOGRECORD = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__
     "taskName",
 }
 
+# Output-key names written directly into the payload by JsonLogFormatter.format().
+# Extra fields carrying these names must be skipped so they cannot clobber the
+# structured log envelope (ts / level / logger are formatter artifacts, not
+# LogRecord attributes, so they do NOT appear in _RESERVED_LOGRECORD).
+_RESERVED_OUTPUT_KEYS: frozenset[str] = frozenset({"ts", "level", "logger"})
+
 
 # ── Metrics (golden signals) ─────────────────────────────────────────────────
 # Latency (histogram) + traffic/errors (the histogram's _count, labelled by
@@ -193,6 +199,100 @@ def record_llm_tokens(
         LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_creation").inc(_cc)
 
 
+def record_llm_metric(model: str, usage: Any, *, provider: str = "anthropic") -> None:
+    """Increment ``llm_tokens_total`` from either Anthropic usage shape (Issue 332).
+
+    The codebase carries token usage in two shapes and the Prometheus counter was
+    only being incremented at ~half the LLM call sites — leaving the cost-by-feature
+    dashboard blind to the heaviest consumers (scoring, DNA brief, most knowledge
+    features). This adapter normalizes both shapes so every LLM module can record
+    the metric with one DRY call placed next to its existing billing-ledger write:
+
+      * an Anthropic ``Usage`` object (non-streaming ``.create()`` path) exposing
+        ``input_tokens`` / ``output_tokens`` / ``cache_read_input_tokens`` /
+        ``cache_creation_input_tokens``;
+      * the ``stream_and_emit()`` ``usage`` dict with keys ``input_tokens`` /
+        ``output_tokens`` / ``cache_read`` / ``cache_creation``.
+
+    Missing fields coerce to 0 (older SDKs / no cache this call). This only touches
+    the metric — billing (``record_llm_usage``) and the per-call token log lines are
+    unchanged.
+    """
+    if isinstance(usage, dict):
+        _in = usage.get("input_tokens", 0)
+        _out = usage.get("output_tokens", 0)
+        _cr = usage.get("cache_read", 0)
+        _cc = usage.get("cache_creation", 0)
+    else:
+        _in = getattr(usage, "input_tokens", 0)
+        _out = getattr(usage, "output_tokens", 0)
+        _cr = getattr(usage, "cache_read_input_tokens", 0)
+        _cc = getattr(usage, "cache_creation_input_tokens", 0)
+    record_llm_tokens(provider, model, _in, _out, _cr, _cc)
+
+
+def log_llm_error(log: logging.Logger, exc: BaseException, **ctx: Any) -> None:
+    """Log an LLM error with exc_type, status_code, and retry_after when present.
+
+    Extracts ``status_code`` and ``retry-after`` from the response headers of
+    ``RateLimitError`` / ``APIStatusError`` so every LLM error log carries
+    actionable ops context (raise-time triage + back-pressure awareness).
+
+    Args:
+        log: The module-level logger to emit to.
+        exc: The caught exception (RateLimitError, APIStatusError, APIConnectionError, …).
+        **ctx: Arbitrary key=value context (e.g. task=task_id, creator=creator_id).
+               Included in the log message so failed calls are correlatable.
+
+    Usage at call sites (replaces bare `logger.error("... exc_type=%s", type(exc).__name__)`):
+
+        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+            log_llm_error(logger, exc, task=task_id)
+            raise
+    """
+    # Lazy import to avoid circular deps; anthropic is always available at call time.
+    from anthropic import APIStatusError as _APIStatusError
+
+    status_code: int | None = getattr(exc, "status_code", None)
+    retry_after: str | None = None
+    if isinstance(exc, _APIStatusError):
+        resp = getattr(exc, "response", None)
+        headers = getattr(resp, "headers", {}) if resp is not None else {}
+        retry_after = (
+            headers.get("retry-after") or headers.get("Retry-After") or None
+        )
+
+    ctx_str = " ".join(f"{k}={v}" for k, v in ctx.items())
+    log.error(
+        "LLM error %s exc_type=%s status_code=%s retry_after=%s",
+        ctx_str,
+        type(exc).__name__,
+        status_code,
+        retry_after,
+    )
+
+
+def warn_if_truncated(model: str, stop_reason: Any, *, task: str | None = None) -> bool:
+    """Log a WARNING when an LLM response was cut off at the token cap (Issue 331).
+
+    Anthropic sets ``stop_reason == "max_tokens"`` when the output hit ``max_tokens``.
+    Most JSON-producing call sites then fail to parse and fall back silently, making a
+    truncated response indistinguishable in logs from a model that legitimately
+    returned nothing. Surfacing it lets ops raise ``max_tokens`` for the offending
+    task (or shorten the prompt). Returns True when truncation was detected so
+    callers/tests can branch on it.
+    """
+    if stop_reason == "max_tokens":
+        logging.getLogger(__name__).warning(
+            "LLM output truncated at max_tokens (model=%s task=%s) — raise max_tokens "
+            "for this task or shorten the prompt",
+            model,
+            task if task is not None else "-",
+        )
+        return True
+    return False
+
+
 # ── Structured logging ───────────────────────────────────────────────────────
 class RequestIDLogFilter(logging.Filter):
     """Inject the current `request_id` onto every record so all logs are correlatable."""
@@ -203,7 +303,17 @@ class RequestIDLogFilter(logging.Filter):
 
 
 class JsonLogFormatter(logging.Formatter):
-    """Emit one JSON object per record, including request_id and any `extra` fields."""
+    """Emit one JSON object per record, including request_id and any `extra` fields.
+
+    ``scrub`` (default True) applies the PII/secret blocklist to extra fields. The
+    dedicated verbose-logging sink sets ``scrub=False`` so full prompt/response
+    content survives verbatim — that sink is hard-gated to non-prod (see
+    ``settings.verbose_logging_enabled`` / docs/DECISIONS.md 2026-06-29).
+    """
+
+    def __init__(self, *args: Any, scrub: bool = True, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._scrub = scrub
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -216,9 +326,11 @@ class JsonLogFormatter(logging.Formatter):
         extra: dict[str, Any] = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in _RESERVED_LOGRECORD and not key.startswith("_")
+            if key not in _RESERVED_LOGRECORD
+            and key not in _RESERVED_OUTPUT_KEYS
+            and not key.startswith("_")
         }
-        payload.update(scrub_dict(extra))
+        payload.update(scrub_dict(extra) if self._scrub else extra)
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
@@ -254,12 +366,55 @@ def log_event(event: str, **fields: Any) -> None:
         _event_logger.info(" ".join(msg_parts), extra=extra)
 
 
+def _configure_verbose_logger(log_dir: str, filename: str) -> None:
+    """Wire the dedicated full-content `verbose` logger (pre-prod debugging).
+
+    Hard-gated by the caller (only invoked when ``settings.verbose_logging_enabled``).
+    Its handlers use a NON-scrubbing JSON formatter so raw prompt/response/transcript
+    content survives. ``propagate=False`` keeps it out of app.log / worker.log and the
+    root-logger stream so existing log assertions are untouched. Idempotent.
+    """
+    from verbose import VERBOSE_LOGGER_NAME
+
+    vlogger = logging.getLogger(VERBOSE_LOGGER_NAME)
+    vlogger.setLevel(logging.INFO)
+    vlogger.propagate = False
+    for handler in list(vlogger.handlers):
+        vlogger.removeHandler(handler)
+
+    raw_fmt = JsonLogFormatter(scrub=False)
+    rid_filter = RequestIDLogFilter()
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.addFilter(rid_filter)
+    stream_handler.setFormatter(raw_fmt)
+    vlogger.addHandler(stream_handler)
+
+    if log_dir:
+        # Distinct file per co-hosted process (verbose-app.log / verbose-worker.log)
+        # so RotatingFileHandler rotation never corrupts a shared file (same reason
+        # the API/worker split app.log vs worker.log).
+        stem = filename.rsplit(".", 1)[0]
+        log_path = Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path / f"verbose-{stem}.log",
+            maxBytes=50 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.addFilter(rid_filter)
+        file_handler.setFormatter(JsonLogFormatter(scrub=False))
+        vlogger.addHandler(file_handler)
+
+
 def configure_logging(
     *,
     json_logs: bool,
     level: int = logging.INFO,
     log_dir: str = "",
     filename: str = "app.log",
+    verbose: bool = False,
 ) -> None:
     """Install the request-id filter + (optionally) JSON formatting on the root logger.
 
@@ -304,6 +459,11 @@ def configure_logging(
         file_handler.addFilter(rid_filter)
         file_handler.setFormatter(JsonLogFormatter())
         root.addHandler(file_handler)
+
+    # Full-content verbose sink (pre-prod debugging) — only when explicitly enabled
+    # AND non-prod. Wired on its own logger so it never touches the root handlers above.
+    if verbose:
+        _configure_verbose_logger(log_dir, filename)
 
 
 # ── Request-id helpers ───────────────────────────────────────────────────────
@@ -406,7 +566,7 @@ def _sentry_before_send(event: Event, hint: dict[str, Any]) -> Event | None:
     (`cast`) since scrub_dict is structural and the keys we touch are dynamic.
     """
     data = cast("dict[str, Any]", event)
-    if "extra" in data:
+    if "extra" in data and isinstance(data["extra"], dict):
         data["extra"] = scrub_dict(data["extra"])
     try:
         req_data = data.get("request", {}).get("data")
@@ -641,9 +801,79 @@ def instrument_fastapi_app(app: Any) -> None:
     FastAPIInstrumentor.instrument_app(app)
 
 
+# ── Verbose Celery lifecycle logging (pre-prod) ──────────────────────────────
+# These fire on EVERY task and write a full-content record (args, kwargs, retry
+# reason, full traceback) to the verbose sink. Each is a no-op unless verbose
+# logging is enabled — the `vlog` gate short-circuits before any work — so they are
+# always safe to connect. This is the leverage point that makes the render
+# retry-storm and transcription failures fully visible without touching task bodies.
+def _vlog_task_prerun(
+    task_id: Any = None, task: Any = None, args: Any = None, kwargs: Any = None, **_: Any
+) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_start",
+        task=getattr(task, "name", None),
+        task_id=task_id,
+        args=args,
+        kwargs=kwargs,
+        retries=getattr(getattr(task, "request", None), "retries", 0),
+    )
+
+
+def _vlog_task_retry(
+    sender: Any = None, request: Any = None, reason: Any = None, einfo: Any = None, **_: Any
+) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_retry",
+        task=getattr(sender, "name", None),
+        task_id=getattr(request, "id", None),
+        retries=getattr(request, "retries", None),
+        reason=repr(reason) if reason is not None else None,
+        traceback=str(einfo) if einfo is not None else None,
+    )
+
+
+def _vlog_task_failure(
+    task_id: Any = None,
+    exception: Any = None,
+    args: Any = None,
+    kwargs: Any = None,
+    einfo: Any = None,
+    sender: Any = None,
+    **_: Any,
+) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_failure",
+        task=getattr(sender, "name", None),
+        task_id=task_id,
+        exception=repr(exception) if exception is not None else None,
+        args=args,
+        kwargs=kwargs,
+        traceback=str(einfo) if einfo is not None else None,
+    )
+
+
+def _vlog_task_success(sender: Any = None, result: Any = None, **_: Any) -> None:
+    from verbose import vlog
+
+    vlog(
+        "task_success",
+        task=getattr(sender, "name", None),
+        task_id=getattr(getattr(sender, "request", None), "id", None),
+        result=result,
+    )
+
+
 def install_celery_observability() -> None:
     """Wire signal handlers that carry the request id across the publish→run boundary
-    and record Celery task golden signals (duration + terminal-state counts).
+    and record Celery task golden signals (duration + terminal-state counts), plus the
+    verbose full-content lifecycle handlers (no-op unless verbose logging is enabled).
 
     `weak=False` is required: Celery connects receivers weakly by default, so a
     handler held by no other reference would be garbage-collected and never fire.
@@ -653,3 +883,10 @@ def install_celery_observability() -> None:
     signals.before_task_publish.connect(_stamp_request_id, weak=False)
     signals.task_prerun.connect(_bind_request_id, weak=False)
     signals.task_postrun.connect(_record_task_and_clear, weak=False)
+
+    # Verbose lifecycle (pre-prod full-content). Connected unconditionally; each
+    # handler self-gates via the vlog() no-op when verbose logging is off.
+    signals.task_prerun.connect(_vlog_task_prerun, weak=False)
+    signals.task_retry.connect(_vlog_task_retry, weak=False)
+    signals.task_failure.connect(_vlog_task_failure, weak=False)
+    signals.task_success.connect(_vlog_task_success, weak=False)

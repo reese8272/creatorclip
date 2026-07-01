@@ -91,7 +91,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── db.py                       # SQLAlchemy async engine + session (Issue 2)
 ├── auth.py                     # Google OAuth + session JWT; get_current_creator (Issue 3)
 ├── crypto.py                   # Fernet helpers for token columns
-├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f)
+├── observability.py            # Correlation id (ContextVar+ASGI mw), JSON logs, Prometheus golden signals; API→Celery propagation (Issue 75f). Also wires the verbose sink + Celery lifecycle vlog handlers
+├── verbose.py                  # Full-content verbose logging sink (DECISIONS 2026-06-29). VERBOSE_LOGGING + non-prod only → raw prompts/responses/transcripts/ffmpeg/task-args to verbose-{app,worker}.log via a NON-scrubbing formatter. No-op when off; hard-gated off in production
 ├── event_log.py                # Beta telemetry sink → event_logs table (Issue 151). Isolated engine (LOGS_DATABASE_URL), boundary PII/token redaction, best-effort writes
 │   # NOTE: there is no central clients.py. External API clients are MODULE-LEVEL
 │   # singletons in the modules that use them (Issue 37 lifecycle rule): Anthropic in
@@ -255,6 +256,7 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── test_upload_intel.py
 │   ├── test_model_config.py    # Issue 318 — per-task model key registry + literal ban (always runs)
 │   ├── test_llm_live.py        # Issue 319 — flag-gated live API tests (requires RUN_LLM_LIVE=1; mark: llm_live)
+│   ├── test_live_smoke.py      # Issue 341 — live smoke harness pure-logic tests (guard/fixture/args/result framework; always runs)
 │   ├── test_llm_conformance.py # Issue 320 — SDK conformance: singleton/timeout, typed exceptions, cache floors
 │   ├── test_usage_coverage.py  # Issue 321 — usage ledger coverage guard (all LLM tasks call record_llm_usage)
 │   ├── test_brief_quota.py     # Issue 321 — per-creator brief daily quota (BRIEF_DAILY_LIMIT_PER_CREATOR)
@@ -264,7 +266,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 ├── scripts/
 │   ├── doctor.py               # Preflight secrets validator (presence/format/live, redacted) — deploy gate
 │   ├── rotate_token_key.py     # TOKEN_ENCRYPTION_KEY re-encryption (see docs/RUNBOOKS.md)
-│   └── llm_e2e.py              # Live-API LLM verification harness (Issue 319); RUN_LLM_LIVE=1 guard
+│   ├── llm_e2e.py              # Live-API LLM verification harness (Issue 319); RUN_LLM_LIVE=1 guard
+│   └── live_smoke.py           # Live-in-isolation smoke harness (Issue 341, L22); RUN_LIVE_SMOKE=1 guard, --target/--only/--with-llm/--publish-live, synthetic canary
 │
 └── docs/
     ├── README.md              # ← START HERE: full documentation index (Issue 146)
@@ -311,7 +314,11 @@ youtube_tokens
 
 videos
   id, creator_id (FK), youtube_video_id (NULLABLE since Issue 317), title, kind (long/short),
-  published_at, duration_s, source_uri, origin (catalog/link/upload),
+  published_at, duration_s, source_uri, audio_uri (NULLABLE, migration 0039 —
+    the extracted audio WAV; source_uri STAYS the original video so the renderer
+    can extract keyframes. Ingest no longer overwrites source_uri with audio /
+    deletes the mp4; both are purged at 72h by purge_stale_source_media),
+  origin (catalog/link/upload),
   captions_available, ingest_status (pending/running/done/failed),
   failure_reason (NULLABLE, migration 0036 — creator-safe reason set when status=failed,
     surfaced on the dashboard; never holds a raw exception/secret), created_at

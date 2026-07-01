@@ -96,6 +96,57 @@ def test_on_failure_swallows_refund_exception():
         )
 
 
+# ── generate_clips terminal failure wires: on_failure exactly-once (Issue 336) ──
+
+
+def test_generate_clips_on_failure_fires_exactly_once_per_delivery() -> None:
+    """generate_clips.on_failure must call run_async exactly twice per delivery
+    (once for refund_for_video, once for the notification) — not per retry.
+
+    This pins that the on_failure hook is idempotent by construction: each Celery
+    delivery gets exactly one on_failure invocation which dispatches exactly two
+    coroutines via run_async (best-effort). A second invocation with the same video_id
+    also dispatches twice — idempotency of the actual refund is guaranteed by the
+    partial UNIQUE index on pack_id in the DB, not by suppressing the call here.
+    """
+    from worker.tasks import generate_clips
+
+    video_id = str(uuid.uuid4())
+    with patch("worker.tasks.run_async") as mock_run:
+        generate_clips.on_failure(
+            exc=RuntimeError("LLM failed terminally"),
+            task_id="gc-task-1",
+            args=(video_id,),
+            kwargs={},
+            einfo=None,
+        )
+    # refund_for_video + _fire_refund_notification_async = 2 calls
+    assert mock_run.call_count == 2, (
+        "on_failure must dispatch exactly 2 coroutines per delivery: "
+        f"refund + notification; got {mock_run.call_count}"
+    )
+
+
+def test_generate_clips_on_failure_refund_raising_is_swallowed() -> None:
+    """If refund_for_video raises inside on_failure, the exception must be swallowed
+    so the failure-handling path (terminal failure logged, task marked failed) stands.
+    Best-effort semantics: the refund may fail in a degraded DB, but the task's
+    own failure must still be surfaced to Celery. (Issue 336)"""
+    from worker.tasks import generate_clips
+
+    video_id = str(uuid.uuid4())
+    # run_async raises on the first call (refund) but must not propagate.
+    with patch("worker.tasks.run_async", side_effect=RuntimeError("DB unavailable")):
+        # Must not raise — swallowed by the best-effort block.
+        generate_clips.on_failure(
+            exc=RuntimeError("LLM failed"),
+            task_id="gc-task-2",
+            args=(video_id,),
+            kwargs={},
+            einfo=None,
+        )
+
+
 # Note: the refund_for_video idempotency / no-op branches are covered
 # end-to-end against a real Postgres in
 # `tests/test_billing_refund_integration.py` — mock-based async unit tests for

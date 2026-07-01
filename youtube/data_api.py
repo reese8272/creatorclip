@@ -95,6 +95,10 @@ def parse_duration_seconds(iso_duration: str) -> float:
     )
     m = pattern.match(iso_duration)
     if not m:
+        logger.warning(
+            "parse_duration_seconds: unrecognized ISO-8601 duration %r — returning 0.0",
+            iso_duration,
+        )
         return 0.0
     days, hours, minutes, seconds = m.groups(default="0")
     return float(days) * 86400 + float(hours) * 3600 + float(minutes) * 60 + float(seconds)

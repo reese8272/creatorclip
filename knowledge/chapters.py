@@ -16,6 +16,8 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
+from knowledge.util import extract_json_block
+from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +130,9 @@ def parse_chapters(raw_json: str) -> dict:
     Returns dict with 'chapters' (list) and 'description_block' (str).
     Raises ValueError on malformed JSON or missing required fields.
     """
-    data = json.loads(raw_json)
+    # Tolerate a markdown fence / preamble around the JSON the live API emits
+    # (Issue 342 — the failure the Issue 341 smoke harness surfaced).
+    data = json.loads(extract_json_block(raw_json))
     chapters = data.get("chapters")
     if not isinstance(chapters, list) or not chapters:
         raise ValueError("ChapterList missing 'chapters' list")
@@ -226,4 +230,5 @@ def generate_chapters(
         usage["cache_creation"],
         usage["output_tokens"],
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_CHAPTERS, usage)
     return final_text, usage

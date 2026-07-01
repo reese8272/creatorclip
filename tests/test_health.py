@@ -57,3 +57,75 @@ def test_health_status_reflects_services(client):
         assert data["status"] == "ok"
     else:
         assert data["status"] == "degraded"
+
+
+# ── Issue 337: force each component down, verify degraded + correct flag ─────
+
+
+def test_health_postgres_down_returns_degraded(client, monkeypatch) -> None:
+    """Forcing _check_postgres to fail → status 'degraded' with postgres='error'."""
+
+    async def _fail() -> bool:
+        return False
+
+    monkeypatch.setattr(main_module, "_check_postgres", _fail)
+    data = client.get("/health").json()
+    assert data["status"] == "degraded"
+    assert data["postgres"] == "error"
+    assert data["redis"] == "ok"
+    assert data["storage"] == "ok"
+
+
+def test_health_redis_down_returns_degraded(client, monkeypatch) -> None:
+    """Forcing _check_redis to fail → status 'degraded' with redis='error'."""
+
+    async def _fail() -> bool:
+        return False
+
+    monkeypatch.setattr(main_module, "_check_redis", _fail)
+    data = client.get("/health").json()
+    assert data["status"] == "degraded"
+    assert data["postgres"] == "ok"
+    assert data["redis"] == "error"
+    assert data["storage"] == "ok"
+
+
+def test_health_storage_down_returns_degraded(client, monkeypatch) -> None:
+    """Forcing _check_storage to fail → status 'degraded' with storage='error'."""
+
+    async def _fail() -> bool:
+        return False
+
+    monkeypatch.setattr(main_module, "_check_storage", _fail)
+    data = client.get("/health").json()
+    assert data["status"] == "degraded"
+    assert data["postgres"] == "ok"
+    assert data["redis"] == "ok"
+    assert data["storage"] == "error"
+
+
+async def test_check_postgres_catches_timeout(monkeypatch) -> None:
+    """_check_postgres must return False (not raise) when asyncio.TimeoutError fires.
+
+    asyncio.timeout() raises TimeoutError which is a subclass of Exception;
+    the except-Exception clause in _check_postgres must catch it and return False
+    so the /health caller never sees a 500.
+    """
+
+    class _TimeoutConn:
+        async def execute(self, *args: object) -> None:
+            raise TimeoutError()
+
+        async def __aenter__(self) -> "_TimeoutConn":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    class _FakeEngine:
+        def connect(self) -> _TimeoutConn:
+            return _TimeoutConn()
+
+    monkeypatch.setattr(main_module, "engine", _FakeEngine())
+    result = await main_module._check_postgres()
+    assert result is False, "_check_postgres must return False on TimeoutError, not re-raise"

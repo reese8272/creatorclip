@@ -56,7 +56,10 @@ from routers import upload_intel as upload_intel_router
 from routers import videos as videos_router
 
 configure_logging(
-    json_logs=settings.LOG_JSON, level=settings.log_level_int, log_dir=settings.LOG_DIR
+    json_logs=settings.LOG_JSON,
+    level=settings.log_level_int,
+    log_dir=settings.LOG_DIR,
+    verbose=settings.verbose_logging_enabled,
 )
 init_sentry(
     dsn=settings.SENTRY_DSN,
@@ -288,10 +291,19 @@ _CSP_BASE = (
 
 def _build_csp() -> str:
     """Return the Content-Security-Policy value, optionally extended with CSP_EXTRA_SOURCES."""
+    parts = [_CSP_BASE]
+    # Presigned clip URLs redirect to R2, which is a different origin; browsers
+    # block cross-origin media without an explicit media-src allowlist.
+    r2_origin = (
+        f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+        if settings.R2_ACCOUNT_ID
+        else "https://*.r2.cloudflarestorage.com"
+    )
+    parts.append(f"media-src 'self' {r2_origin}")
     extra = settings.CSP_EXTRA_SOURCES.strip()
     if extra:
-        return f"{_CSP_BASE}; {extra}"
-    return _CSP_BASE
+        parts.append(extra)
+    return "; ".join(parts)
 
 
 class SecurityHeadersMiddleware(_BaseHTTPMiddleware):
@@ -397,8 +409,14 @@ if settings.METRICS_ENABLED:
         # Collect saturation gauges before rendering the scrape payload (Issue 238).
         # Reuses the existing module-level engine + _health_redis singleton — zero
         # new connections. On any error the gauge retains its last value.
+        # collect_saturation_gauges is internally defensive (each sub-check has its
+        # own try/except), but we wrap the outer call too so any unexpected
+        # programming error never 500s the Prometheus scrape.
         if _health_redis is not None:
-            await collect_saturation_gauges(engine, _health_redis)
+            try:
+                await collect_saturation_gauges(engine, _health_redis)
+            except Exception:
+                logger.warning("collect_saturation_gauges raised unexpectedly")
         payload, content_type = metrics_response()
         return Response(content=payload, media_type=content_type)
 

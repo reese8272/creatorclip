@@ -2,7 +2,7 @@ import logging
 import sys
 from pathlib import Path
 
-from pydantic import ValidationError, field_validator, model_validator
+from pydantic import ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -215,6 +215,16 @@ class Settings(BaseSettings):
     # than realtime; this only kills a wedged/hung ffmpeg so it can't tie up a worker
     # slot indefinitely (probe already uses timeout=30). (Issue A / Issue 76)
     FFMPEG_EXTRACT_TIMEOUT_S: int = 1800
+    # Cap audio analysis (extract_audio_events) at this many seconds of audio to avoid
+    # librosa loading a multi-hour WAV entirely into RAM (OOM vector under concurrent
+    # workers). Audio beyond the cap is silently truncated; a WARNING is emitted.
+    # Default: 4 hours — covers any realistic YouTube video with headroom. (Issue 334)
+    AUDIO_ANALYSIS_MAX_DURATION_S: int = 14400
+    # Timeout (seconds) for the ffmpeg showwavespic subprocess in generate_waveform_image.
+    # The old hardcoded 60 s was insufficient for very long source files; callers that
+    # know the audio duration can scale the timeout further via the duration_s kwarg.
+    # (Issue 334)
+    WAVEFORM_TIMEOUT_S: int = 300
     STORAGE_BACKEND: str = "local"
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""
@@ -298,6 +308,15 @@ class Settings(BaseSettings):
     # ingestion is added later the guard is already in place and cannot be forgotten.
     # The clamp uses the same word-boundary rsplit pattern as titles (clamp_ingest_field).
     MAX_INGESTED_DESC_CHARS: int = 10000
+
+    # Issue 340c — ingest length clamp for YouTube channel titles.
+    # YouTube's published channel name limit is 100 characters (support.google.com/youtube/answer).
+    # 200 chars is a 2× safety margin. channel_title enters every LLM system prompt as factual
+    # context (knowledge/titles, hooks, thumbnails, scoring) — a malicious or pathologically
+    # long value could act as an injection payload (OWASP LLM01) or inflate token costs.
+    # Applied at the OAuth callback boundary (youtube/oauth.py::upsert_creator) and in the
+    # prompt-assembly path so injection cannot reach the LLM regardless of DB content.
+    MAX_INGESTED_CHANNEL_TITLE_CHARS: int = 200
     # ── Per-frame active-speaker reframe (Issue 189) ──────────────────────────
     # Gated off by default: the per-frame MediaPipe + sendcmd path has NEVER
     # been verified on a real render environment (ffmpeg + real multi-speaker
@@ -314,6 +333,15 @@ class Settings(BaseSettings):
     REFRAME_SAMPLE_FPS: float = 5.0
 
     CLIPS_PER_VIDEO_DEFAULT: int = 8
+    # Auto-render generated clips the moment clip generation finishes, so the
+    # Review queue is watch-ready with zero manual steps (the upload already
+    # consented to — and was charged — the minutes; render adds no extra spend).
+    # When False, clips stay pending until the creator triggers a render. (auto-render)
+    AUTO_RENDER_CLIPS: bool = True
+    # Cap on how many of the ranked clips auto-render per video. 0 = all
+    # generated candidates (≤ CLIPS_PER_VIDEO_DEFAULT). Set >0 to render only
+    # the top-N highest-fit clips immediately and leave the rest on demand.
+    AUTO_RENDER_TOP_N: int = 0
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
     # YouTube raised the Shorts maximum to 180s in October 2024
@@ -450,6 +478,39 @@ class Settings(BaseSettings):
 
         return _logging.getLevelNamesMapping().get(self.LOG_LEVEL.upper(), _logging.INFO)
 
+    # ── Verbose full-content logging (pre-production debugging) ────────────────
+    # When enabled, every load-bearing operation writes a COMPLETE record — raw
+    # prompt/response/transcript content, full request bodies, full ffmpeg commands,
+    # and full tracebacks — to a dedicated `verbose` logger (<LOG_DIR>/verbose-*.log,
+    # or stdout when LOG_DIR=""). This deliberately bypasses the PII/secret redaction
+    # that governs the normal logs (docs/COMPLIANCE.md).
+    #
+    # Default-safe in production: when ENV == "production" it stays OFF unless the
+    # operator ALSO sets VERBOSE_LOGGING_ALLOW_PROD=true. That second flag is the
+    # explicit, deliberate opt-in for the private beta (which deploys as
+    # ENV=production on Render) — it can't be turned on by VERBOSE_LOGGING alone, so
+    # a routine deploy never leaks content by accident. Turn BOTH off before public
+    # launch. (docs/DECISIONS.md 2026-06-29)
+    VERBOSE_LOGGING: bool = False
+    # Required IN ADDITION to VERBOSE_LOGGING to enable the verbose sink when
+    # ENV=production. No effect off-prod (verbose follows VERBOSE_LOGGING there).
+    VERBOSE_LOGGING_ALLOW_PROD: bool = False
+
+    @property
+    def verbose_logging_enabled(self) -> bool:
+        """Whether the full-content verbose sink is active.
+
+        Off-prod: follows ``VERBOSE_LOGGING`` directly. In production: additionally
+        requires ``VERBOSE_LOGGING_ALLOW_PROD`` — raw-content logging is a deliberate
+        compliance deviation, so production demands a second explicit opt-in and can
+        never be enabled by ``VERBOSE_LOGGING`` (or a copied .env) alone.
+        """
+        if not self.VERBOSE_LOGGING:
+            return False
+        if self.ENV == "production":
+            return self.VERBOSE_LOGGING_ALLOW_PROD
+        return True
+
     # Inbound header carrying a correlation id from an upstream proxy/gateway. If
     # absent or malformed, the middleware mints a UUID4. Echoed back on the response.
     REQUEST_ID_HEADER: str = "X-Request-ID"
@@ -572,6 +633,9 @@ class Settings(BaseSettings):
     # Resend API key (https://resend.com — 3k/month free). Required when
     # NOTIFY_BACKEND='resend'. Never log or expose.
     RESEND_API_KEY: str = ""
+    # Timeout in seconds for each Resend API send call. Keeps the notification
+    # worker from holding a DB connection open while the mailer blocks. (Issue 349)
+    RESEND_TIMEOUT_S: int = 10
     # From-address used for all outbound transactional emails. Must match a
     # domain verified in the Resend dashboard (e.g. noreply@autoclip.studio).
     EMAIL_FROM: str = ""
@@ -583,6 +647,36 @@ class Settings(BaseSettings):
     # (welcome / nudge / re-engagement) and only logs the skip. Set this to a real
     # address before enabling lifecycle email in production.
     MAILING_ADDRESS: str = ""
+
+    @field_validator(
+        "PERSONALIZATION_THRESHOLD_LABELS",
+        "DECAY_HALF_LIFE_DAYS",
+    )
+    @classmethod
+    def _positive_preference_ints(cls, v: int, info: ValidationInfo) -> int:
+        """Fail fast on non-positive preference tunables (Issue 338).
+
+        ``DECAY_HALF_LIFE_DAYS`` feeds ``λ = ln(2)/H`` at import in
+        ``preference/decay.py`` — H=0 raises ZeroDivisionError at import and H<0
+        inverts the decay (older feedback weighted *more*). A non-positive
+        personalization threshold breaks the cold-start ramp. Catch both here with
+        a clear message instead of a cryptic downstream failure.
+        """
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be > 0 (got {v})")
+        return v
+
+    @field_validator("PREFERENCE_WEIGHT_CAP")
+    @classmethod
+    def _weight_cap_in_unit_range(cls, v: float) -> float:
+        """The preference blend weight must stay in (0, 1] (Issue 338).
+
+        ``score = (1-w)*dna + w*pref`` — a cap outside (0, 1] would over- or
+        under-weight personalization and can push blended scores out of range.
+        """
+        if not (0.0 < v <= 1.0):
+            raise ValueError(f"PREFERENCE_WEIGHT_CAP must be in (0, 1] (got {v})")
+        return v
 
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":

@@ -1,107 +1,102 @@
-# notify — assessed 2026-06-24
+# notify — assessed 2026-07-01
 
-Slice: `notify/__init__.py`, `notify/copy.py`, `notify/dedupe.py`, `notify/mailer.py`,
-`notify/templates/*` (clips_ready, dna_built, refund_issued, reauth_required,
-trial_ending, balance_low — each `.txt` + `.html`).
+Slice: `notify/copy.py`, `notify/dedupe.py`, `notify/mailer.py`, `notify/__init__.py`,
+`notify/templates/*` (10 `.txt` + 10 `.html`). Traced the real caller
+`worker.tasks.send_notification` → `_send_notification_async` (worker/tasks.py:4441-4660)
+and every `send_notification.delay(...)` call site.
 
-Verification done by reading the sole production caller
-(`worker/tasks.py::_send_notification_async`, lines 3942-4084) and the worker event-loop
-runtime (`worker/celery_app.py:77 run_async`), and by rendering the templates with the
-*exact* context the caller supplies. ruff + mypy pass clean on the slice; `tests/test_mailer.py`
-is 11/11 green — but the tests hand-feed template variables the real caller never passes, so
-they give false confidence (see SEV1 below).
+## Prior findings — RE-VERIFIED against current code
+The 2026-06-24 assessment listed a SEV1 + four SEV2s. Re-checked each against the live code;
+**all five are fixed**:
+- SEV1 (silent `Undefined` → blank subject / "Hi ,") — FIXED. Env now uses
+  `undefined=StrictUndefined` (mailer.py:46) AND the `clips_ready` caller supplies the vars
+  (see below).
+- SEV2 `Subject:` line leaking into body — FIXED. `_strip_subject_line` (mailer.py:122-146)
+  removes it in `_render` (mailer.py:117).
+- SEV2 recipient email logged in prod — FIXED. `_send_resend` logs only `resend_id` +
+  `idempotency_key`, address explicitly omitted (mailer.py:261-266).
+- SEV2 missing `welcome`/`catalog_sync_done` templates — FIXED. Both `.txt`+`.html` now exist.
+
+### clips_ready SEV1 specifically — verified fixed
+The prior blank-subject/host-less-link defect was that `clips_ready`/lifecycle templates
+referenced `creator_name`/`video_title`/`review_url`/`app_url` the caller never passed. Now:
+the real caller passes all four for clips_ready — worker/tasks.py:2304-2315 sends
+`{"clip_count": len(clips), "creator_name": ..., "video_title": ...,
+"review_url": f"{settings.APP_BASE_URL}/app/review"}`, merged at worker/tasks.py:4629
+(`{"creator": creator, **payload}`). `app_url`/`mailing_address` are Jinja globals
+(mailer.py:51/54); `unsubscribe_url` is passed on lifecycle sends (worker/tasks.py:4629);
+`creator` (ORM obj) is always passed. Cross-checked every template's `{{ }}` vars against the
+supplied context — all satisfied. With `StrictUndefined`, any regression would now raise
+`UndefinedError` at render instead of silently shipping a blank. Verified against Jinja2 docs:
+StrictUndefined "barks on print and iteration… you can do nothing with it except checking if
+it's defined", and `str(foo)` raises `jinja2.exceptions.UndefinedError`
+(https://jinja.palletsprojects.com/en/stable/api/#jinja2.StrictUndefined, fetched 2026-07-01).
+
+### Resend SDK call shape — verified correct
+`_send_resend` uses `resend.Emails.send(params, options)` with
+`options = {"idempotency_key": key}` (mailer.py:258-260). Confirmed as the current official
+Python-SDK signature: `options: resend.Emails.SendOptions = {"idempotency_key": ...};
+resend.Emails.send(params, options)`, and custom `headers` go in the SendParams dict — both
+match the code. Sources: https://resend.com/docs/dashboard/emails/idempotency-keys and
+https://pypi.org/project/resend/ (fetched 2026-07-01).
 
 ## Findings
 
-- [SEV1] notify/templates/*.txt+*.html (all 6, esp. clips_ready.txt:1,5,7 and every
-  `{{ app_url }}` ref) — templates reference variables the production caller does not supply.
-  The only live caller is `worker/tasks.py:4056` which renders with
-  `context={"creator": creator, **payload}`; for `clips_ready` the payload is just
-  `{"clip_count": N}` (worker/tasks.py:1930). `clips_ready` templates use `{{ creator_name }}`,
-  `{{ video_title }}`, `{{ review_url }}` (none supplied → empty), and *every* lifecycle
-  template uses `{{ app_url }}` (never supplied → empty). Because the Jinja2 Environment at
-  `notify/mailer.py:37` uses the default silent `Undefined`, these render to empty strings
-  instead of raising. Rendered with the real context, `clips_ready.txt` produces subject
-  "Your clips are ready — " (trailing dash, no title), greeting "Hi ," and link
-  "Review your clips: " (empty); `trial_ending.txt` produces "Add minutes: /pricing" — a
-  host-less relative URL that is unclickable in an email client. Every transactional email
-  ships broken under load. | fix: (a) set `undefined=StrictUndefined` on the Environment
-  (mailer.py:37) so a missing variable fails the render loudly instead of silently shipping a
-  blank; (b) align the caller — pass `app_url=settings.APP_URL` (or the canonical base-URL
-  setting) plus `creator_name`/`video_title`/`review_url` into the `clips_ready` context, and
-  switch the lifecycle templates that say `{{ creator_name }}` vs `{{ creator.channel_title }}`
-  onto one convention; (c) add a render test that uses the *production* context shape
-  (`{"creator": <obj>, "clip_count": N}`), not the hand-fed test context, and asserts the
-  subject and links are non-empty.
+- [SEV2] notify/mailer.py:246-260 — the Resend send has **no HTTP timeout** and is a
+  synchronous, `requests`-backed blocking call executed from inside `async def
+  _send_notification_async` via `run_until_complete` on the worker's singleton event loop
+  (worker/celery_app.py:94-96), with no `asyncio.to_thread` offload. A stalled Resend
+  connection blocks the whole worker process. It is bounded — not infinite — only by Celery's
+  hard `task_time_limit` (~3300s = `CELERY_SOFT_TIME_LIMIT_S` 3000 + 300, config.py:441 +
+  celery_app.py:63), i.e. one hung send can wedge a worker for up to ~55 min. The Resend
+  Python SDK sets timeouts only at the HTTP-client level, never per call. | fix: (a) set an
+  explicit client timeout once in `_init_resend()` (e.g.
+  `resend.default_async_http_client = resend.HTTPXClient(timeout=10)` or the sync-client
+  equivalent), and (b) offload the blocking call: `await asyncio.to_thread(mailer_send, ...)`
+  at worker/tasks.py:4626 so a slow send never holds the loop. Source: timeout is client-level
+  per https://pypi.org/project/resend/ (fetched 2026-07-01).
+  (needs-runtime-confirmation on exact worst-case hang.)
 
-- [SEV2] notify/mailer.py:182 (with :197-209 `_extract_subject`) — the `Subject:` line is
-  parsed out for the header but never removed from the body, so `params["text"]` (and the
-  console preview) ship with a literal `Subject: Your clips are ready — V` as the first line
-  of the message the recipient reads. Confirmed by rendering: first body line is
-  `'Subject: Your clips are ready — V'`. | fix: have `_render` (or `_extract_subject`) return
-  `(subject, body_without_subject_line)` and pass the stripped body to Resend `text`/console;
-  drop the `Subject:` line from the rendered body before send.
+- [SEV2] config.py:687-691 — `_validate_notify_backend` fails fast on a missing
+  `RESEND_API_KEY` when `NOTIFY_BACKEND='resend'` but does **not** validate `EMAIL_FROM`
+  (default `""`, config.py:638). With the resend backend and empty `EMAIL_FROM`, `_send_resend`
+  posts `"from": ""` (mailer.py:250) → Resend 422 → swallowed by the broad `except Exception`
+  at worker/tasks.py:4641, so every transactional email is silently marked `failed` with none
+  delivered and no startup signal. | fix: extend the validator — `if self.NOTIFY_BACKEND ==
+  "resend" and not self.EMAIL_FROM: raise ValueError("NOTIFY_BACKEND='resend' requires
+  EMAIL_FROM")`. (config.py is outside the notify/ dir but is the fail-fast guard this module
+  depends on.)
 
-- [SEV2] notify/mailer.py:189 — the Resend (production) path logs the recipient email at INFO
-  (`"... to=%s ..."` with `to`). Email address is PII; the rubric requires no PII in any log
-  line, and this fires in prod (unlike `_send_console`, which is a dev-only sink). | fix: drop
-  `to` from the resend log line, or hash/redact it (log `resend_id` + `idempotency_key` only,
-  which already correlate the send). Console-path `to`+`body_preview` (line 151) is acceptable
-  as a dev sink but consider gating it behind a debug flag.
+- [cleanup] notify/copy.py:28-99 — the `COPY` dict is **dead production code**: it is imported
+  only by tests (test_mailer.py, test_lifecycle_email.py, test_compliance_no_virality.py),
+  never by the mailer or task. The email path renders Jinja templates; the in-app path uses a
+  *separate* inline `_COPY` dict at worker/tasks.py:4684+. Copy now lives in three
+  unsynchronised sources, and copy.py's docstring (lines 10-18) falsely claims templates do
+  `from notify.copy import COPY; subject = COPY[...]` — they don't. Not a compliance gap:
+  `test_no_virality_in_notification_templates` (tests/test_compliance_no_virality.py:190) does
+  scan the real templates, so the sent artifact is gated. | fix: delete copy.py and repoint
+  those tests at the templates, or make copy.py the single source both render paths consume; at
+  minimum fix the misleading docstring.
 
-- [SEV2] notify/mailer.py:160-188 `_send_resend` — `resend.Emails.send()` is a synchronous,
-  `requests`-backed blocking HTTP call, and it is invoked from inside the worker's coroutine
-  (`worker/tasks.py:4053`, run on the per-worker event loop via
-  `worker/celery_app.py:87 run_until_complete`) with no `asyncio.to_thread` offload. This is
-  the "sync/blocking call inside an async def" anti-pattern the scale rubric flags. With the
-  default prefork-one-task-per-loop model the blast radius is bounded (one task owns the loop
-  for its duration), but it blocks the loop for the full network round-trip and would stall
-  siblings the moment notifications are ever fanned out concurrently on one loop.
-  (loop-contention impact is needs-runtime-confirmation; the blocking call itself is certain.)
-  | fix: at the call site wrap as `await asyncio.to_thread(mailer_send, ...)`, or expose an
-  async `send` that uses an `httpx.AsyncClient` module-level singleton against the Resend REST
-  API instead of the sync SDK.
-
-- [SEV2] notify/copy.py:69-80 vs notify/templates/ — `welcome` and `catalog_sync_done` are
-  defined in `COPY` (and have in-app copy in `worker/tasks.py::_build_inapp_notification`) but
-  have NO paired `.txt`/`.html` template files. If `send_notification` is ever called for
-  those event types with `email_transactional=True`, `_render` raises `jinja2.TemplateNotFound`
-  → caught at worker/tasks.py:4065 → delivery marked `failed`, email silently never sent. No
-  live call site emails them today, so it is latent, not active. | fix: either add
-  `welcome.{txt,html}` + `catalog_sync_done.{txt,html}` templates, or have `send()` fall back
-  to a generic template (and assert in a test that every `COPY` key and every emailable
-  `event_type` has a matching template pair).
-
-- [cleanup] notify/copy.py:28-81 — the `COPY` dict (per-event `subject`+`body`) is not consumed
-  by the mailer at runtime: subjects come from each template's `Subject:` line via
-  `_extract_subject`, and bodies come from the templates. `COPY` is read only by tests
-  (`tests/test_compliance_no_virality.py`, `tests/test_notifications_triggers.py`). It is thus
-  a third, parallel copy source that can drift from the templates and from the in-app `_COPY`
-  in `worker/tasks.py:4108` (the bodies already differ). DRY risk for the honesty constraint,
-  bounded only because the no-virality test scans COPY. | fix: make `COPY` the single source —
-  either render templates from `COPY` (inject `subject`/`body` into the Jinja context) or
-  delete `COPY` and derive the test's no-virality scan from the rendered templates directly.
-
-- [cleanup] notify/mailer.py:90,108 — `_render(template: str, context: dict)` and the public
-  `send(..., context: dict, ...)` use bare `dict` for the template context crossing the public
-  boundary; value type is unparameterized. mypy passes but the rubric asks to flag loose dicts
-  at the surface. | fix: annotate `context: dict[str, Any]` (add `from typing import Any`).
+- [cleanup] notify/mailer.py:102,152,249,258-259 — bare `dict` annotations on `context` (in
+  `_render` and public `send`) and on `params_dict`/`options` drop key/value typing mypy could
+  otherwise check at the public boundary. | fix: `context: dict[str, object]`,
+  `params_dict: dict[str, object]`.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — no DB sessions / file handles / subprocesses in slice; Resend SDK init is a module-level api_key assignment guarded by an idempotent `_init_resend` flag (mailer.py:50-69), correct singleton shape |
-| 2 Concurrency & scale | 1 finding (SEV2) — sync blocking `resend.Emails.send` on the worker loop with no `to_thread`; loop singleton itself is fine |
-| 3 Security & compliance | 1 finding (SEV2 PII: recipient email in prod log). No creator-scoped DB query in this slice (isolation lives in worker/tasks.py, another slice). No OAuth/token handling here — n/a for decrypt. dedupe key correctly contains no PII (dedupe.py). No virality promise: all 6 templates + COPY carry the disclaimer and pass the honesty scan |
+| 1 Resource lifecycle | ok — no DB/file handles here; Resend `api_key` set once via idempotent `_init_resend()` guard (mailer.py:62-81); Jinja env is a module-level singleton |
+| 2 Concurrency & scale | 1 SEV2 — no-timeout, sync-blocking Resend send on the worker loop |
+| 3 Security & compliance | ok — recipient email omitted from prod logs (verified mailer.py:261-266); dedupe key carries no PII (dedupe.py); no virality (templates gated by structural test); no creator-scoped SQL / token handling in this slice |
 | 4 Clip-quality | n/a (not a clip module) |
-| 5 Anthropic SDK | n/a (no LLM call in slice) |
-| 6 Cleanliness & typing | 2 cleanups — unused/parallel `COPY` copy source (DRY); bare `dict` context typing. No TODO/print/debug; ruff + mypy clean |
-| 7 Error handling / API | n/a (no FastAPI router in slice). `send()` correctly validates the idempotency key (mailer.py:77-84) and raises ValueError on unknown backend rather than silently dropping |
-| 8 Config & paths | ok — `_TEMPLATES_DIR` is absolute via `Path(__file__).parent` (mailer.py:36); NOTIFY_BACKEND / RESEND_API_KEY / EMAIL_FROM all present in config.py:397-403 and .env.example:159-165 with descriptions; config fails fast when resend is selected without a key (config.py:405-419) |
+| 5 Anthropic SDK | n/a (no LLM calls) |
+| 6 Cleanliness & typing | 2 cleanup — dead/triplicated `COPY` dict + false docstring; bare `dict` hints. No TODO/print/debug |
+| 7 Error handling / API | n/a (not a router). `send()` validates the idempotency key (mailer.py:89-96) and raises `ValueError` on unknown backend |
+| 8 Config & paths | 1 SEV2 — `EMAIL_FROM` not fail-fast validated; paths absolute (`Path(__file__).parent`, mailer.py:36); NOTIFY_BACKEND/RESEND_API_KEY/EMAIL_FROM/MAILING_ADDRESS all in config.py + .env.example with descriptions |
 
 ## Module verdict
-NEEDS-WORK — no BLOCKER and no cross-tenant leak (the slice does no DB I/O), but a SEV1
-template/caller contract mismatch ships every transactional email with empty subjects and
-host-less links in production (masked by tests that hand-feed the variables), plus a Subject
-line leaking into the body, recipient-email PII in prod logs, a blocking SDK call on the
-worker loop, and two events with no template.
+NEEDS-WORK — no BLOCKER, and every prior finding (incl. the clips_ready SEV1) is genuinely
+fixed; two SEV2s remain: the blocking Resend send has no HTTP timeout so a network stall can
+wedge a worker up to the ~55 min hard limit, and `EMAIL_FROM` is not validated at startup so a
+resend-backend misconfig silently drops all transactional mail.

@@ -46,8 +46,11 @@ export function Chat() {
   const [toolStatus, setToolStatus] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [retryable, setRetryable] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
   const [gated, setGated] = useState(false)
   const conversationId = useRef<string | null>(null)
+  const lastUserText = useRef<string | null>(null)
   const sub = useRef<StreamSubscription | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -67,15 +70,20 @@ export function Chat() {
     }
     setStreamingText('')
     setToolStatus(null)
+    setReconnecting(false)
     setStreaming(true)
     sub.current = subscribeToChatStream(reply.stream_url, {
       onToken: (chunk) => {
         setToolStatus(null)
+        setReconnecting(false)
         setStreamingText((prev) => prev + chunk)
       },
       onStep: (label) => setToolStatus(toolLabel(label)),
+      onReconnecting: () => setReconnecting(true),
+      onReconnected: () => setReconnecting(false),
       onDone: () => {
         setStreaming(false)
+        setReconnecting(false)
         setStreamingText((finalText) => {
           if (finalText) setMessages((m) => [...m, { role: 'assistant', content: finalText }])
           return ''
@@ -84,16 +92,39 @@ export function Chat() {
       },
       onError: (msg) => {
         setStreaming(false)
+        setReconnecting(false)
         setToolStatus(null)
+        // Preserve whatever streamed before the drop so the partial answer isn't
+        // lost; the user can read it and hit Retry for a fresh, complete reply.
+        setStreamingText((partial) => {
+          if (partial) setMessages((m) => [...m, { role: 'assistant', content: partial }])
+          return ''
+        })
         setError(msg)
+        setRetryable(true)
       },
     })
+  }
+
+  // Re-run the last turn after a connection drop. Prefer regenerate (drops any
+  // partial assistant bubble server- and client-side); fall back to resending the
+  // last user message if there's no conversation yet.
+  function retry() {
+    setError(null)
+    setRetryable(false)
+    if (conversationId.current) {
+      regenerate()
+    } else if (lastUserText.current) {
+      send(lastUserText.current)
+    }
   }
 
   async function send(override?: string) {
     const text = (override ?? input).trim()
     if (!text || streaming) return
     setError(null)
+    setRetryable(false)
+    lastUserText.current = text
     setInput('')
     setMessages((m) => [...m, { role: 'user', content: text }])
     try {
@@ -111,6 +142,7 @@ export function Chat() {
   async function regenerate() {
     if (streaming || !conversationId.current) return
     setError(null)
+    setRetryable(false)
     // Drop the last assistant bubble locally; the server drops it too.
     setMessages((m) => (m.length && m[m.length - 1].role === 'assistant' ? m.slice(0, -1) : m))
     try {
@@ -207,15 +239,25 @@ export function Chat() {
           {toolStatus && (
             <p className="px-1 text-xs italic text-muted">…{toolStatus}</p>
           )}
+          {reconnecting && (
+            <p className="px-1 text-xs italic text-muted">Reconnecting…</p>
+          )}
         </div>
 
         {error && (
-          <div className="mb-3 rounded-md border border-[color:var(--color-danger-border)] bg-[color:var(--color-danger-soft)] px-3 py-2 text-sm text-danger">
-            {error}
-            {gated && (
-              <a href="/app/pricing" className="ml-2 font-medium underline">
-                View plans →
-              </a>
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-[color:var(--color-danger-border)] bg-[color:var(--color-danger-soft)] px-3 py-2 text-sm text-danger">
+            <span>
+              {error}
+              {gated && (
+                <a href="/app/pricing" className="ml-2 font-medium underline">
+                  View plans →
+                </a>
+              )}
+            </span>
+            {retryable && !gated && (
+              <Button variant="ghost" size="sm" onClick={retry} className="shrink-0">
+                ↻ Retry
+              </Button>
             )}
           </div>
         )}

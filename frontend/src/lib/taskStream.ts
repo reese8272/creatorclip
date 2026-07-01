@@ -51,18 +51,39 @@ interface ChatStreamHandlers {
   onStep?: (label: string) => void
   onDone?: () => void
   onError?: (message: string) => void
+  /** Transient transport drop — a reconnect is in flight (attempt is 1-based). */
+  onReconnecting?: (attempt: number) => void
+  /** A reconnect succeeded and the stream is live again. */
+  onReconnected?: () => void
 }
+
+// How many transient reconnect attempts before we surface a terminal
+// "Connection lost." The server resumes from the Last-Event-ID cursor on
+// reconnect (routers/tasks.py), so a recovered drop replays missed events.
+const MAX_CHAT_RECONNECTS = 5
+const CHAT_RECONNECT_BASE_MS = 1000
 
 // Chat-specific consumer for the Pro chatbot (Issue 152). Unlike
 // subscribeToTaskStream (which flattens steps + tokens into one buffer for the
 // DNA-rebuild log), this keeps assistant `token` text separate from tool `step`
 // status so the chat bubble shows only the reply, with tool lookups surfaced as
 // a transient indicator.
+//
+// Resilience (2026-06-29): the previous version called es.close() on the FIRST
+// transport `error`, which kills EventSource's built-in auto-reconnect — so any
+// transient blip (a 5G→Wi-Fi handoff, a proxy idle-drop) became a permanent
+// "Connection lost." dead-end. Now a transport drop is treated as transient: the
+// browser's native auto-reconnect (readyState CONNECTING) is allowed to proceed,
+// a CLOSED socket is manually reopened with backoff, and only a server-sent named
+// `error` event or exhausting MAX_CHAT_RECONNECTS surfaces a terminal error.
 export function subscribeToChatStream(
   url: string,
   handlers: ChatStreamHandlers,
 ): StreamSubscription {
-  const es = new EventSource(url, { withCredentials: true })
+  let es: EventSource | null = null
+  let attempts = 0
+  let done = false
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   const parse = (evt: MessageEvent): StreamEvent => {
     try {
@@ -72,26 +93,68 @@ export function subscribeToChatStream(
     }
   }
 
-  es.addEventListener('token', (e) => handlers.onToken(parse(e as MessageEvent).chunk || ''))
-  es.addEventListener('step', (e) => {
-    const label = parse(e as MessageEvent).label
-    if (label) handlers.onStep?.(label)
-  })
-  es.addEventListener('done', () => {
-    handlers.onDone?.()
-    es.close()
-  })
-  es.addEventListener('error', (e) => {
-    // Native EventSource emits an `error` Event (no data) on network drop; the
-    // server emits a named `error` SSE with a message. Distinguish by payload.
-    const msg = (e as MessageEvent).data
-      ? parse(e as MessageEvent).message || 'unknown error'
-      : 'Connection lost.'
+  const giveUp = (msg: string) => {
+    done = true
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    es?.close()
     handlers.onError?.(msg)
-    es.close()
-  })
+  }
 
-  return { close: () => es.close() }
+  const open = () => {
+    es = new EventSource(url, { withCredentials: true })
+
+    es.onopen = () => {
+      // A successful (re)connection clears the transient-failure budget so a
+      // single early blip in a long, healthy stream never counts toward the cap.
+      if (attempts > 0) handlers.onReconnected?.()
+      attempts = 0
+    }
+
+    es.addEventListener('token', (e) => handlers.onToken(parse(e as MessageEvent).chunk || ''))
+    es.addEventListener('step', (e) => {
+      const label = parse(e as MessageEvent).label
+      if (label) handlers.onStep?.(label)
+    })
+    es.addEventListener('done', () => {
+      done = true
+      es?.close()
+      handlers.onDone?.()
+    })
+    es.addEventListener('error', (e) => {
+      if (done) return
+      const me = e as MessageEvent
+      // A server-sent NAMED error event carries data → a real, terminal failure.
+      if (me.data) {
+        giveUp(parse(me).message || 'unknown error')
+        return
+      }
+      // Otherwise it's a transport drop. Bound the attempts so a turn that
+      // finished (or was abandoned) while disconnected can't hang forever.
+      attempts += 1
+      if (attempts > MAX_CHAT_RECONNECTS) {
+        giveUp('Connection lost.')
+        return
+      }
+      handlers.onReconnecting?.(attempts)
+      // readyState CONNECTING → the browser is already auto-reconnecting; let it.
+      // readyState CLOSED → it won't, so reopen manually with linear backoff.
+      if (es?.readyState === EventSource.CLOSED) {
+        es.close()
+        reconnectTimer = setTimeout(() => {
+          if (!done) open()
+        }, CHAT_RECONNECT_BASE_MS * attempts)
+      }
+    })
+  }
+
+  open()
+  return {
+    close: () => {
+      done = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      es?.close()
+    },
+  }
 }
 
 export function subscribeToTaskStream(url: string, handlers: StreamHandlers): StreamSubscription {

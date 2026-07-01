@@ -40,6 +40,7 @@ Near-silent clips are left un-normalized so we never amplify hiss. See
 import json
 import logging
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -68,12 +69,35 @@ _OUTPUT_W, _OUTPUT_H = OUTPUT_PRESETS[_DEFAULT_FORMAT]
 
 
 def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
+    from verbose import now_ms, vlog
+
+    vlog("ffmpeg_start", label=label, cmd=cmd, timeout_s=timeout_s)
+    _t0 = now_ms()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
+        vlog("ffmpeg_timeout", label=label, cmd=cmd, timeout_s=timeout_s)
         raise RuntimeError(f"ffmpeg {label} timed out after {timeout_s}s") from exc
+    except OSError as exc:
+        # FileNotFoundError (binary missing), PermissionError, or generic OS error.
+        vlog("ffmpeg_os_error", label=label, cmd=cmd, exc=str(exc))
+        raise RuntimeError(f"ffmpeg {label} failed to start [{shlex.join(cmd)}]: {exc}") from exc
     if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg {label} failed: {result.stderr[:500]}")
+        # Full (untruncated) stderr to the verbose sink; the raised error carries the
+        # TAIL of stderr (~500 chars) so the meaningful part of long ffmpeg logs is
+        # preserved (ffmpeg prints the failure reason at the end, not the start).
+        vlog(
+            "ffmpeg_failed",
+            label=label,
+            cmd=cmd,
+            returncode=result.returncode,
+            stderr=result.stderr,
+            duration_ms=int(now_ms() - _t0),
+        )
+        raise RuntimeError(
+            f"ffmpeg {label} failed [{shlex.join(cmd)}]: {result.stderr[-500:]}"
+        )
+    vlog("ffmpeg_done", label=label, duration_ms=int(now_ms() - _t0))
 
 
 # ── Loudness normalization (Issue 181) ────────────────────────────────────────
@@ -197,7 +221,38 @@ def _frame_dimensions(source_path: Path) -> tuple[int, int]:
         parts = result.stdout.strip().split(",")
         return int(parts[0]), int(parts[1])
     except (ValueError, IndexError):
+        logger.warning(
+            "_frame_dimensions: unparseable ffprobe output %r — using default 1920×1080",
+            result.stdout[:100],
+        )
         return 1920, 1080  # safe default
+
+
+def _source_duration_s(source_path: Path) -> float:
+    """Return the total duration of ``source_path`` in seconds via ffprobe.
+
+    Returns ``float('inf')`` on any failure so callers can treat unknown
+    duration as "allow through" rather than aborting the render.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+                str(source_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        return float("inf")  # unknown → caller allows through
 
 
 def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
@@ -210,6 +265,10 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
 
         img = cv2.imread(str(keyframe_path))
         if img is None:
+            logger.info(
+                "_detect_face_center_x: corrupt frame — %s could not be decoded, using center",
+                keyframe_path.name,
+            )
             return frame_width // 2
         cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
@@ -217,6 +276,10 @@ def _detect_face_center_x(keyframe_path: Path, frame_width: int) -> int:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         if len(faces) == 0:
+            logger.info(
+                "_detect_face_center_x: no face detected in %s — using frame center",
+                keyframe_path.name,
+            )
             return frame_width // 2
         largest = max(faces, key=lambda f: int(f[2]) * int(f[3]))
         x, w = int(largest[0]), int(largest[2])
@@ -298,6 +361,13 @@ def render_clip_file(
     ``clip_engine.captions``. Missing transcript → caption style is silently
     skipped (the render still succeeds without captions).
     """
+    if start_s < 0:
+        raise ValueError(f"start_s must be non-negative, got {start_s}")
+    src_dur = _source_duration_s(source_path)
+    if src_dur < float("inf") and end_s > src_dur:
+        raise ValueError(
+            f"end_s {end_s}s exceeds source duration {src_dur:.3f}s for {source_path.name}"
+        )
     duration = end_s - start_s
     if duration <= 0:
         raise ValueError(f"Invalid clip range: {start_s}s–{end_s}s")
@@ -572,6 +642,28 @@ def render_cleaned_clip_file(
     for s, e in keep_ranges:
         if e <= s:
             raise ValueError(f"render_cleaned_clip_file: invalid range ({s}, {e})")
+
+    # Normalize: sort by start time, then merge overlapping/adjacent ranges.
+    # Unsorted or overlapping inputs are common when the cut-list generator returns
+    # ranges out of order or with touching boundaries; normalizing here is more robust
+    # than rejecting (DECISIONS.md — Issue 329).
+    _original = list(keep_ranges)
+    _sorted = sorted(keep_ranges, key=lambda r: r[0])
+    _merged: list[tuple[float, float]] = []
+    for _s, _e in _sorted:
+        if _merged and _s <= _merged[-1][1]:
+            _merged[-1] = (_merged[-1][0], max(_merged[-1][1], _e))
+        else:
+            _merged.append((_s, _e))
+    if _merged != _original:
+        logger.info(
+            "render_cleaned_clip_file: keep_ranges normalized (sorted/merged) "
+            "%s → %s for %s",
+            _original,
+            _merged,
+            source_path.name,
+        )
+    keep_ranges = _merged
 
     # Two-pass loudness normalization (Issue 181): measure the *concatenated* kept
     # audio (the loudnorm target is the final clip, not each segment), then apply

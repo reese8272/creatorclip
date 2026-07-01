@@ -102,8 +102,16 @@ class PreferenceScorer:
             raise ValueError(
                 f"feature count {x.shape[1]} does not match model n_features_in_ {expected}"
             )
-        proba = self._model.predict_proba(x)
-        return float(proba[0][1])
+        # Select the positive-class (label 1) column by its position in classes_
+        # rather than assuming a 2-column [neg, pos] layout. A model fit on a single
+        # class (all up- or all down-votes) returns a 1-column proba; the old
+        # ``proba[0][1]`` raised IndexError on it. Honest behavior: if label 1 was
+        # never seen, P(positive) = 0.0. (Issue 338)
+        proba = self._model.predict_proba(x)[0]
+        classes = list(getattr(self._model, "classes_", [0, 1]))
+        if 1 in classes:
+            return float(proba[classes.index(1)])
+        return 0.0
 
     def to_bytes(self) -> bytes:
         """Serialise scorer to bytes using joblib (sklearn's recommended format)."""

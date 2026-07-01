@@ -128,7 +128,7 @@ def test_brief_endpoint_has_daily_limit_decorator(
     # We scan backwards from 'async def <name>' to capture stacked decorators.
     lines = src.splitlines()
     func_def_idx = next(
-        (i for i, l in enumerate(lines) if f"async def {endpoint_name}(" in l),
+        (i for i, line in enumerate(lines) if f"async def {endpoint_name}(" in line),
         None,
     )
     assert func_def_idx is not None, (

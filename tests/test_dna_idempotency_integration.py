@@ -54,7 +54,7 @@ async def test_build_dna_redelivery_is_noop(db_session: AsyncSession):
             "dna.builder.build_patterns",
             new=AsyncMock(return_value=(patterns, [], [], None, None, None)),
         ),
-        patch("dna.brief.generate_brief", return_value="brief") as mock_brief,
+        patch("dna.brief.generate_brief", return_value=("brief", {})) as mock_brief,
         patch("dna.embeddings.embed_patterns", new=AsyncMock()),
         patch("dna.embeddings.embed_brief", new=AsyncMock()),
     ):
@@ -100,7 +100,7 @@ async def test_build_dna_concurrent_redelivery_builds_once(db_session: AsyncSess
         import time
 
         time.sleep(0.2)
-        return "brief"
+        return "brief", {}
 
     with (
         patch(

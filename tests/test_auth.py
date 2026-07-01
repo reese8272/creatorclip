@@ -11,6 +11,8 @@ Integration tests (require docker compose up + alembic upgrade head):
   token auto-refresh, cross-creator isolation.
 """
 
+import base64
+import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -19,7 +21,13 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 
-from auth import SESSION_COOKIE, create_session_token, decode_session_token, get_current_creator
+from auth import (
+    _JWT_LEEWAY,
+    SESSION_COOKIE,
+    create_session_token,
+    decode_session_token,
+    get_current_creator,
+)
 from config import settings
 from youtube.oauth import PUBLISH_SCOPE, build_authorization_url, has_publish_scope
 
@@ -65,6 +73,70 @@ def test_decode_session_token_wrong_key_raises():
     token = jwt.encode(payload, "wrong_secret", algorithm="HS256")
     with pytest.raises(jwt.InvalidSignatureError):
         decode_session_token(token)
+
+
+# ── JWT security edge-case tests (Issue 340a) ─────────────────────────────────
+
+
+def test_decode_session_token_alg_none_rejected():
+    """Regression: alg='none' tokens must be rejected — algorithms=["HS256"] already
+    pins the allowed set and PyJWT raises InvalidAlgorithmError for any other value.
+    This test documents the guarantee so a future 'simplify jwt.decode' PR
+    cannot silently regress it. (Issue 340a)"""
+    # Craft a token manually — jwt.encode() won't accept alg=none in PyJWT 2.x.
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=")
+    payload_data = {
+        "sub": str(uuid.uuid4()),
+        "iat": int(datetime.now(UTC).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+    }
+    payload = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).rstrip(b"=")
+    none_token = f"{header.decode()}.{payload.decode()}."
+
+    with pytest.raises(jwt.exceptions.InvalidAlgorithmError):
+        decode_session_token(none_token)
+
+
+def test_decode_session_token_missing_exp_rejected():
+    """A token with no 'exp' claim must be rejected after the options={'require': ['exp']}
+    hardening — previously it decoded as non-expiring. (Issue 340a)"""
+    payload = {"sub": str(uuid.uuid4()), "iat": datetime.now(UTC)}
+    no_exp_token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    with pytest.raises(jwt.exceptions.MissingRequiredClaimError):
+        decode_session_token(no_exp_token)
+
+
+def test_decode_session_token_far_future_iat_rejected():
+    """A token whose 'iat' is well beyond the leeway window must be rejected.
+    PyJWT validates iat by default; leeway only widens the acceptance window,
+    not the rejection window for far-future values. (Issue 340a)"""
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "iat": datetime.now(UTC) + timedelta(hours=2),  # far future — suspicious
+        "exp": datetime.now(UTC) + timedelta(hours=3),
+    }
+    future_iat_token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    with pytest.raises(jwt.exceptions.ImmatureSignatureError):
+        decode_session_token(future_iat_token)
+
+
+def test_decode_session_token_within_leeway_iat_accepted():
+    """A token whose 'iat' is within the _JWT_LEEWAY window must be accepted —
+    NTP clock drift of a few seconds between issuer and verifier is normal.
+    (Issue 340a)"""
+    leeway_s = int(_JWT_LEEWAY.total_seconds())
+    # iat half the leeway ahead — well within tolerance
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "iat": datetime.now(UTC) + timedelta(seconds=leeway_s // 2),
+        "exp": datetime.now(UTC) + timedelta(hours=1),
+    }
+    slight_future_token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+
+    result = decode_session_token(slight_future_token)
+    assert "sub" in result
 
 
 # ── OAuth URL unit tests ──────────────────────────────────────────────────────
@@ -251,6 +323,9 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
     fake_session.flush = AsyncMock()
     fake_session.commit = AsyncMock()
     fake_session.rollback = AsyncMock()  # awaited by the callback's error path
+    # The callback sets the per-creator RLS GUC via `await session.execute(...)`
+    # after the flush (see routers/auth._exchange_and_persist); must be awaitable.
+    fake_session.execute = AsyncMock()
 
     monkeypatch.setattr(
         "routers.auth.exchange_code",
@@ -308,6 +383,50 @@ def _oauth_callback_mocks(monkeypatch: pytest.MonkeyPatch, *, is_new: bool) -> N
         yield fake_session
 
     app.dependency_overrides[get_session] = _noop_session
+    return fake_creator, fake_session
+
+
+def test_callback_sets_creator_rls_context_before_tenant_writes(client, monkeypatch):
+    """Regression (prod sign-in outage, 2026-06-30): after the Issue 343 role split
+    the app connects as the non-BYPASSRLS ``creatorclip_app`` role, so the callback's
+    writes to RLS-FORCED tenant tables (youtube_tokens, minute_packs) fail the
+    ``tenant_isolation`` WITH CHECK unless ``app.creator_id`` is set. The callback runs
+    pre-auth (no GUC from db.py's listener), so _exchange_and_persist must emit
+    ``set_config('app.creator_id', <creator.id>)`` itself, after the flush and before
+    the tenant writes. This proves the GUC is set; the integration lane proves it under
+    the real role (tests/test_rls_isolation_integration.py)."""
+    from db import get_session
+    from main import app
+
+    fake_creator, fake_session = _oauth_callback_mocks(monkeypatch, is_new=True)
+    state = secrets.token_urlsafe(16)
+    try:
+        resp = client.get(
+            f"/auth/callback?code=test_code&state={state}",
+            cookies={"cc_oauth_state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 302, f"Expected 302, got {resp.status_code}: {resp.text}"
+
+    # Find the set_config call among session.execute invocations.
+    set_config_calls = [
+        call
+        for call in fake_session.execute.await_args_list
+        if "set_config" in str(call.args[0]).lower()
+        and "app.creator_id" in str(call.args[0]).lower()
+    ]
+    assert set_config_calls, (
+        "callback must emit set_config('app.creator_id', ...) so tenant-table writes "
+        "satisfy the RLS tenant_isolation policy under the creatorclip_app role"
+    )
+    # The GUC must be scoped to the just-created creator's id, not NULL/empty.
+    params = set_config_calls[0].args[1]
+    assert params.get("cid") == str(fake_creator.id), (
+        f"RLS GUC must be the creator's id; got {params.get('cid')!r}"
+    )
 
 
 def test_callback_new_creator_redirects_to_walkthrough(client, monkeypatch):

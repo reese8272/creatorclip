@@ -25,7 +25,6 @@ from knowledge.clip_explain import (
 )
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
-
 # ── Structural: cited principle must be from CLIPPING_PRINCIPLES.md ───────────
 
 def test_valid_principles_non_empty() -> None:

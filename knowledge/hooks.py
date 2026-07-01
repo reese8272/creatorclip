@@ -19,8 +19,8 @@ import numpy as np
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY
-from observability import record_llm_tokens
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block
+from observability import log_llm_error, record_llm_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,16 @@ def parse_hook_report(raw_json: str) -> dict:
     Returns a dict with all required HookReport fields.
     Raises ValueError on malformed JSON or missing required fields.
     """
-    data = json.loads(raw_json)
+    # hooks uses the web_search tool (citations), so output_config.format is NOT
+    # available here (it 400s with citations) — extract_json_block is the correct
+    # layer to tolerate a markdown fence / preamble around the JSON (Issue 342).
+    try:
+        data = json.loads(extract_json_block(raw_json))
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "hooks.parse_hook_report: malformed JSON from LLM (truncated response?): %s", exc
+        )
+        raise ValueError(f"Malformed JSON from LLM (truncated response?): {exc}") from exc
     required = {"diagnosis", "rewrite_suggestion", "honesty_disclaimer", "transcript_at_drop"}
     missing = required - set(data.keys())
     if missing:
@@ -230,7 +239,7 @@ def analyze_hook(
             tools=tools,
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("hook_analysis LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
+        log_llm_error(logger, exc, task=task_id)
         raise
     logger.info(
         "hook_analysis tokens: in=%d cached_read=%d cached_write=%d out=%d",

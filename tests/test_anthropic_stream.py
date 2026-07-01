@@ -40,7 +40,9 @@ class _FakeStream:
         return self._final
 
 
-def _build_final_message(text: str, *, in_tok=100, out_tok=50, cr=0, cc=0) -> SimpleNamespace:
+def _build_final_message(
+    text: str, *, in_tok=100, out_tok=50, cr=0, cc=0, stop_reason="end_turn"
+) -> SimpleNamespace:
     text_block = SimpleNamespace(type="text", text=text)
     usage = SimpleNamespace(
         input_tokens=in_tok,
@@ -48,7 +50,7 @@ def _build_final_message(text: str, *, in_tok=100, out_tok=50, cr=0, cc=0) -> Si
         cache_read_input_tokens=cr,
         cache_creation_input_tokens=cc,
     )
-    return SimpleNamespace(content=[text_block], usage=usage, stop_reason="end_turn")
+    return SimpleNamespace(content=[text_block], usage=usage, stop_reason=stop_reason)
 
 
 def test_forwards_message_start_usage_as_cache_event(monkeypatch) -> None:

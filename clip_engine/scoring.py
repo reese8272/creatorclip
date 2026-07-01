@@ -25,13 +25,14 @@ import uuid
 from datetime import UTC, datetime
 
 import httpx
-from anthropic import AsyncAnthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from billing.ledger import _estimate_cost_usd, increment_usage
 from clip_engine.window import RESOLUTION_S, build_signal_array
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
+from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,15 @@ async def score_candidates(
     if prefix_clears_floor:
         dna_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "clip_scoring",
+        model=settings.ANTHROPIC_MODEL_SCORING,
+        max_tokens=1200,
+        system=[{"type": "text", "text": static_text}, dna_block],
+        messages=[{"role": "user", "content": user_text}],
+    )
     try:
         response = await _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_SCORING,
@@ -305,8 +315,9 @@ async def score_candidates(
             messages=[{"role": "user", "content": user_text}],
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("clip_scoring LLM error creator=%s exc_type=%s", creator_id, type(exc).__name__)
+        log_llm_error(logger, exc, creator=creator_id)
         raise
+    vlog_llm_response("clip_scoring", response=response)
 
     # anthropic>=0.105 exposes per-TTL cache-write tiers on usage.cache_creation;
     # cached_write_1h lets us confirm the ttl:"1h" breakpoint actually lands in
@@ -328,6 +339,8 @@ async def score_candidates(
         prefix_clears_floor,
         combined_chars,
     )
+    record_llm_metric(settings.ANTHROPIC_MODEL_SCORING, response.usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_SCORING, getattr(response, "stop_reason", None))
 
     if creator_id is not None and session is not None:
         try:
@@ -358,7 +371,10 @@ async def score_candidates(
 
     text = next((b.text for b in response.content if b.type == "text"), "[]")
     try:
-        scored = json.loads(text)
+        # extract_json_block strips a markdown fence / preamble the live API may
+        # emit (Issue 342); without it a fenced response silently fell back to
+        # signal-only scores instead of using the LLM ranks.
+        scored = json.loads(extract_json_block(text))
     except json.JSONDecodeError:
         logger.warning("Claude scoring returned non-JSON; falling back to signal scores")
         scored = []

@@ -33,12 +33,16 @@ from models import (
     ClipFormat,
     Creator,
     CreatorDna,
+    CreatorInsight,
     Demographics,
     DnaEmbedding,
     DnaEmbeddingKind,
     DnaStatus,
     FeedbackAction,
+    ImprovementBrief,
+    ImprovementBriefStatus,
     IngestStatus,
+    InsightType,
     MinuteDeduction,
     MinutePack,
     OnboardingState,
@@ -172,6 +176,21 @@ async def _seed_all_tenant_rows(session: AsyncSession, creator_id: uuid.UUID) ->
         )
     )
     session.add(Usage(creator_id=creator_id, period=now.strftime("%Y-%m")))
+    # The two tables migration 0010 missed; their RLS landed in 0038.
+    session.add(
+        ImprovementBrief(
+            creator_id=creator_id,
+            status=ImprovementBriefStatus.ready,
+            brief_text="x",
+        )
+    )
+    session.add(
+        CreatorInsight(
+            creator_id=creator_id,
+            insight_type=InsightType.recommendation,
+            content="x",
+        )
+    )
     await session.commit()
 
 
@@ -198,15 +217,19 @@ async def _cleanup(session: AsyncSession, creator_ids: list[uuid.UUID]) -> None:
     await session.commit()
 
 
-# The 12 tenant-owned tables with direct creator_id columns (matches the
-# migration's _TENANT_TABLES tuple).
+# The tenant-owned tables with direct creator_id columns. The first 12 match
+# migration 0010's _TENANT_TABLES; improvement_briefs + creator_insights were the
+# two stragglers that 0010 missed (added their RLS policy in migration 0038 after the
+# Issue 340b sweep found them unprotected — see docs/OFF_COURSE_BUGS.md 2026-06-30).
 _TENANT_TABLES = (
     "audience_activity",
     "clip_feedback",
     "clips",
     "creator_dna",
+    "creator_insights",
     "demographics",
     "dna_embeddings",
+    "improvement_briefs",
     "minute_deductions",
     "minute_packs",
     "preference_models",
@@ -260,6 +283,63 @@ async def test_rls_blocks_cross_tenant_unfiltered_select(admin_engine, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_get_current_creator_sets_guc_for_same_transaction_write(admin_engine, db_session):
+    """Regression for Issue 344 (prod upload 500s after the RLS role split).
+
+    The real ``auth.get_current_creator`` resolves the creator with a SELECT that
+    auto-begins the request transaction — ``after_begin`` fires before
+    ``session.info['creator_id']`` is set, so it emits no GUC. The endpoint's
+    writes commit in that SAME transaction, so the dependency must set
+    ``app.creator_id`` on the live transaction itself; otherwise the INSERT hits
+    the RLS ``WITH CHECK`` with the GUC unset and 500s.
+
+    The prior RLS tests set the GUC by hand (masking this gap). This one drives
+    the real dependency end-to-end under the ``creatorclip_app`` role and asserts
+    an INSERT into a tenant table then succeeds in the same transaction.
+    """
+    from starlette.requests import Request
+
+    from auth import SESSION_COOKIE, create_session_token, get_current_creator
+
+    creator = await _seed_creator(db_session, label="guc")
+
+    try:
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            # Drop to the non-BYPASSRLS app role for the rest of this transaction,
+            # exactly as the prod app connects. This also auto-begins T1.
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+
+            token = create_session_token(creator.id)
+            scope = {
+                "type": "http",
+                "headers": [(b"cookie", f"{SESSION_COOKIE}={token}".encode())],
+                "state": {},
+            }
+            request = Request(scope)
+
+            # Real dependency: bootstrap SELECT + GUC injection on the live txn.
+            resolved = await get_current_creator(request=request, session=s)
+            assert resolved.id == creator.id
+
+            # The write that 500'd in prod: an INSERT into a tenant-owned table
+            # committed in the SAME transaction the auth SELECT began. Passes
+            # only because the GUC is now set on this transaction.
+            s.add(
+                Video(
+                    creator_id=creator.id,
+                    kind=VideoKind.long,
+                    duration_s=300.0,
+                    source_uri="s3://test/source/guc.mp4",
+                    ingest_status=IngestStatus.pending,
+                )
+            )
+            await s.flush()
+    finally:
+        await _cleanup(db_session, [creator.id])
+
+
+@pytest.mark.asyncio
 async def test_rls_creators_table_remains_visible_for_auth_bootstrap(admin_engine, db_session):
     """The ``creators`` table is exempt from RLS (Issue 56) so the FastAPI auth
     dependency can resolve ``current_creator`` from the JWT before
@@ -276,5 +356,103 @@ async def test_rls_creators_table_remains_visible_for_auth_bootstrap(admin_engin
             row = result.scalar_one_or_none()
         assert row is not None, "creators table must NOT be gated by RLS"
         assert row.id == creator.id
+    finally:
+        await _cleanup(db_session, [creator.id])
+
+
+@pytest.mark.asyncio
+async def test_rls_deny_by_default_unset_context(admin_engine, db_session):
+    """Issue 340b — deny-by-default proof: with ``app.creator_id`` UNSET under the
+    ``creatorclip_app`` role, every RLS-gated tenant table returns zero rows.
+
+    ``current_setting('app.creator_id', true)`` returns NULL when the GUC has
+    never been set. The RLS predicate
+    ``creator_id = current_setting('app.creator_id', true)::uuid``
+    evaluates to ``creator_id = NULL`` which is always false/NULL in SQL — so
+    no rows pass the policy, regardless of what data exists in the table.
+
+    This is the structural guarantee that the application CANNOT accidentally
+    leak cross-tenant data if it forgets to set the GUC before querying.
+    """
+    # Seed ONE creator with data in all tenant tables so we have rows to *not* see.
+    creator = await _seed_creator(db_session, label="deny_default")
+    try:
+        await _seed_all_tenant_rows(db_session, creator.id)
+
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            # Deliberately do NOT set app.creator_id — simulating missing GUC context.
+            # Verify current_setting returns NULL (the ''missing_ok'' form).
+            guc_val = (
+                await s.execute(text("SELECT current_setting('app.creator_id', true)"))
+            ).scalar()
+            assert guc_val is None or guc_val == "", (
+                "app.creator_id should be unset at this point in the test"
+            )
+
+            for table in _TENANT_TABLES:
+                rows = (await s.execute(text(f"SELECT creator_id FROM {table}"))).all()  # noqa: S608
+                assert len(rows) == 0, (
+                    f"RLS deny-by-default FAILED on {table}: "
+                    f"{len(rows)} rows visible with no app.creator_id GUC set. "
+                    "This means the tenant_isolation policy is not enforced when the "
+                    "GUC is unset — a data-leakage risk."
+                )
+    finally:
+        await _cleanup(db_session, [creator.id])
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_tenant_write_requires_guc(admin_engine, db_session):
+    """Regression for the 2026-06-30 prod sign-in outage (oauth_failed).
+
+    The OAuth ``/callback`` runs PRE-auth: it creates the creator (``creators`` is
+    RLS-exempt) and then, in the SAME transaction, writes RLS-FORCED tenant tables
+    (``youtube_tokens`` via store_or_update_tokens, ``minute_packs`` via
+    grant_minutes). There is no ``get_current_creator`` in this path, so db.py's
+    ``after_begin`` listener never sets ``app.creator_id``. After the Issue 343 role
+    split (app connects as non-BYPASSRLS ``creatorclip_app``) those writes hit the
+    ``tenant_isolation`` WITH CHECK with the GUC unset → SQLSTATE 42501 →
+    ProgrammingError → swallowed as ``oauth_failed``, breaking every sign-in.
+
+    The fix: ``_exchange_and_persist`` emits ``set_config('app.creator_id', creator.id)``
+    after the flush. This test proves the GUC is load-bearing — the write FAILS without
+    it and SUCCEEDS with it — under the real role.
+    """
+    from sqlalchemy.exc import DBAPIError
+
+    creator = await _seed_creator(db_session, label="oauth_cb")
+
+    def _token() -> YoutubeToken:
+        return YoutubeToken(
+            creator_id=creator.id,
+            access_token_encrypted="enc-at",
+            refresh_token_encrypted="enc-rt",
+            scope="https://www.googleapis.com/auth/youtube.readonly",
+            expires_at=datetime.now(UTC),
+        )
+
+    factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        # (a) WITHOUT the GUC: the pre-fix behaviour — RLS rejects the insert.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            s.add(_token())
+            with pytest.raises(DBAPIError) as exc_info:
+                await s.flush()
+            assert "row-level security" in str(exc_info.value).lower(), (
+                f"expected an RLS violation, got: {exc_info.value}"
+            )
+
+        # (b) WITH the GUC set to the new creator's id (what the fix does): succeeds.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await s.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(creator.id)},
+            )
+            s.add(_token())
+            await s.flush()  # must not raise
     finally:
         await _cleanup(db_session, [creator.id])

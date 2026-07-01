@@ -34,7 +34,9 @@ def _r2():
             endpoint_url=f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
             aws_access_key_id=settings.R2_ACCESS_KEY_ID,
             aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+            region_name="auto",
             config=Config(
+                signature_version="s3v4",
                 retries={"mode": "adaptive", "max_attempts": 5},
                 connect_timeout=10,
                 read_timeout=60,

@@ -28,7 +28,6 @@ from knowledge.clip_titles import (
 )
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
-
 # ── Disclaimer / honesty ──────────────────────────────────────────────────────
 
 def test_disclaimer_present() -> None:

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import ast
 import importlib
-import types
 from pathlib import Path
 
 import pytest

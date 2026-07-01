@@ -31,11 +31,10 @@ def test_anthropic_scoring_singleton_and_timeout() -> None:
 
 
 def test_stripe_max_retries() -> None:
-    import stripe
+    import billing.stripe_client as mod
 
-    import billing.stripe_client  # noqa: F401 — side-effect: sets stripe.max_network_retries
-
-    assert stripe.max_network_retries == 3
+    # Stripe v8 uses per-client config; max_network_retries is in the requestor options.
+    assert mod._STRIPE._requestor._options.max_network_retries == 3
 
 
 def test_stripe_singleton() -> None:

@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import SESSION_COOKIE, create_session_token, get_current_creator
@@ -115,6 +115,22 @@ async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creat
         channel_title=identity.get("channel_title"),
     )
     await session.flush()
+
+    # Set the per-creator RLS context for the remainder of this transaction.
+    # The callback runs on a bare session with no `app.creator_id` GUC (no
+    # creator is authenticated yet), but the writes below (grant_minutes →
+    # minute_packs/minute_deductions, store_or_update_tokens → youtube_tokens)
+    # all target RLS-FORCED tenant tables (migration 0010). With the Issue 343
+    # role split active the app connects as the non-BYPASSRLS `creatorclip_app`
+    # role, so those inserts would fail the `tenant_isolation` WITH CHECK
+    # against a NULL GUC (SQLSTATE 42501). The `creators` table is RLS-exempt,
+    # so upsert_creator above succeeds and gives us the id to scope to here.
+    # `is_local=true` keeps the GUC transaction-scoped (wiped on commit), exactly
+    # like the `after_begin` listener in db.py does for authenticated requests.
+    await session.execute(
+        text("SELECT set_config('app.creator_id', :cid, true)"),
+        {"cid": str(creator.id)},
+    )
 
     if is_new:
         from datetime import UTC, datetime, timedelta

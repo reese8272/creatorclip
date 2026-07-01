@@ -19,6 +19,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +154,7 @@ def generate_brief(
                 messages=messages,
             )
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-            logger.error(
-                "dna_brief LLM error task=%s exc_type=%s", task_id, type(exc).__name__
-            )
+            log_llm_error(logger, exc, task=task_id)
             raise
         logger.info(
             "dna_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
@@ -164,8 +163,18 @@ def generate_brief(
             usage["cache_creation"],
             usage["output_tokens"],
         )
+        record_llm_metric(settings.ANTHROPIC_MODEL_DNA_BRIEF, usage)
         return final_text + _DISCLAIMER, usage
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "dna_brief",
+        model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
+        max_tokens=2000,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
@@ -174,8 +183,9 @@ def generate_brief(
             messages=messages,  # type: ignore[arg-type]  # list[dict] → MessageParam at runtime
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error("dna_brief LLM error exc_type=%s", type(exc).__name__)
+        log_llm_error(logger, exc)
         raise
+    vlog_llm_response("dna_brief", response=response)
 
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens
@@ -197,5 +207,7 @@ def generate_brief(
         "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
     }
+    record_llm_metric(settings.ANTHROPIC_MODEL_DNA_BRIEF, _usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_DNA_BRIEF, getattr(response, "stop_reason", None))
     # Final text block is the answer (consistent with the web_search path). (Issue 69)
     return text_blocks[-1].text + _DISCLAIMER, _usage

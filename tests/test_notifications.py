@@ -395,6 +395,134 @@ class TestSendNotificationDedupeShortCircuit:
         mock_session.commit.assert_not_called()
 
 
+# ── Issue 349: commit before blocking mailer call ────────────────────────────
+
+
+class TestSendNotificationCommitBeforeMailer:
+    """After Issue 349: the DB session commits before mailer_send is called.
+
+    These tests pre-inject a sys.modules stub for notify.mailer so the tests
+    run without jinja2 installed (notify.mailer imports jinja2 at module level;
+    jinja2 is a required prod dep but may not be present in lean dev envs).
+    """
+
+    @pytest.mark.asyncio
+    async def test_commit_happens_before_mailer_send(self) -> None:
+        """Session must commit (freeing the connection) before the external mailer call."""
+        import sys
+
+        from models import NotificationPreference
+
+        cid = uuid.uuid4()
+        prefs = NotificationPreference(
+            creator_id=cid,
+            email_transactional=True,
+            email_lifecycle=False,
+            inapp_enabled=False,
+            push_enabled=False,
+            unsubscribe_token=uuid.uuid4(),
+        )
+
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        call_order: list[str] = []
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
+
+        async def _track_commit() -> None:
+            call_order.append("commit")
+
+        mock_session.commit = _track_commit
+
+        def _track_send(*_a: object, **_kw: object) -> None:
+            call_order.append("send")
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock(side_effect=_track_send)
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        assert call_order == ["commit", "send"], (
+            "DB commit must precede mailer_send so the connection is freed first (Issue 349)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_mailer_failure_marks_delivery_failed(self) -> None:
+        """A mailer exception opens a fresh session and marks the delivery row failed."""
+        import sys
+
+        from models import NotificationDelivery, NotificationDeliveryStatus, NotificationPreference
+
+        cid = uuid.uuid4()
+        prefs = NotificationPreference(
+            creator_id=cid,
+            email_transactional=True,
+            email_lifecycle=False,
+            inapp_enabled=False,
+            push_enabled=False,
+            unsubscribe_token=uuid.uuid4(),
+        )
+
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        # Primary session (steps 1-7 + commit)
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        # Failure session (step 8 error path)
+        fail_delivery = MagicMock(spec=NotificationDelivery)
+        fail_delivery.status = NotificationDeliveryStatus.sent
+        fail_session = AsyncMock()
+        fail_session.get = AsyncMock(return_value=fail_delivery)
+        fail_session.__aenter__ = AsyncMock(return_value=fail_session)
+        fail_session.__aexit__ = AsyncMock(return_value=False)
+        fail_session.commit = AsyncMock()
+
+        call_count = 0
+
+        def _admin_session() -> AsyncMock:
+            nonlocal call_count
+            call_count += 1
+            return mock_session if call_count == 1 else fail_session
+
+        def _failing_send(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("simulated mailer failure")
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock(side_effect=_failing_send)
+
+        with (
+            patch("db.AdminSessionLocal", side_effect=_admin_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        assert fail_delivery.status == NotificationDeliveryStatus.failed
+        fail_session.commit.assert_awaited_once()
+
+
 # ── No-PII assertion on provider payload ────────────────────────────────────
 
 

@@ -5,7 +5,14 @@ import './index.css'
 import App from './App.tsx'
 import { queryClient } from '@/lib/queryClient'
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById('root')!, {
+  onUncaughtError: (error, errorInfo) => {
+    console.error('[React] uncaught error', error, errorInfo)
+  },
+  onRecoverableError: (error, errorInfo) => {
+    console.error('[React] recoverable error', error, errorInfo)
+  },
+}).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <App />

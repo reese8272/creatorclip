@@ -72,14 +72,22 @@ def test_videos_router_has_limit_constant() -> None:
 
 
 def test_clips_router_has_limit_constant() -> None:
-    """routers/clips.py list_clips function contains the _LIST_LIMIT = 100 cap."""
+    """routers/clips.py list_clips function contains the _LIST_LIMIT = 100 cap.
+
+    Issue 339: the query fetches _LIST_LIMIT + 1 rows so the endpoint can
+    detect truncation without a separate COUNT query. The cap constant must
+    still be present and the limit must be applied.
+    """
     import inspect
 
     import routers.clips
 
     source = inspect.getsource(routers.clips.list_clips)
     assert "_LIST_LIMIT" in source, "list_clips must define and use _LIST_LIMIT"
-    assert ".limit(_LIST_LIMIT)" in source, "list_clips must call .limit(_LIST_LIMIT)"
+    # Issue 339: limit is now _LIST_LIMIT + 1 to detect truncation
+    assert ".limit(_LIST_LIMIT + 1)" in source, (
+        "list_clips must call .limit(_LIST_LIMIT + 1) to detect truncation"
+    )
 
 
 def test_upload_intel_router_has_limit_constant() -> None:

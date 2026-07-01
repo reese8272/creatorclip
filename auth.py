@@ -4,7 +4,7 @@ from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -58,6 +58,10 @@ def check_not_cross_site(request: Request) -> None:
 
 SESSION_COOKIE = "cc_session"
 _ALGORITHM = "HS256"
+# 60-second leeway absorbs NTP clock drift between issuer and verifier for
+# both exp (tolerates a token expired < 60 s ago) and iat (tolerates a token
+# issued < 60 s in the future from a clock-skewed peer). RFC 7519 §4.1.6/7.
+_JWT_LEEWAY = timedelta(seconds=60)
 
 
 def create_session_token(creator_id: uuid.UUID) -> str:
@@ -87,7 +91,16 @@ def create_session_token(creator_id: uuid.UUID) -> str:
 
 
 def decode_session_token(token: str) -> dict[str, Any]:
-    return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[_ALGORITHM])
+    # `require: ["exp"]` rejects tokens that omit the expiry claim — a hand-crafted
+    # token without exp would otherwise decode as non-expiring (Issue 340a).
+    # `leeway` grants _JWT_LEEWAY of clock-skew tolerance on both exp and iat.
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET_KEY,
+        algorithms=[_ALGORITHM],
+        options={"require": ["exp"]},
+        leeway=_JWT_LEEWAY,
+    )
 
 
 def creator_id_from_cookie(request: Request) -> uuid.UUID | None:
@@ -134,6 +147,17 @@ async def get_current_creator(
     # `SET LOCAL app.creator_id = :cid` on every subsequent transaction,
     # gating RLS policies on tenant-owned tables (Issue 79).
     session.info["creator_id"] = creator.id
+    # Issue 344: the Creator lookup above already auto-began this request's
+    # transaction, so `after_begin` fired before `session.info["creator_id"]`
+    # was set and emitted no GUC. The endpoint's writes commit in that SAME
+    # transaction (no intervening commit/rollback), so without this the INSERT
+    # would hit the RLS WITH CHECK with `app.creator_id` unset and 500. Set the
+    # GUC on the live transaction now; `is_local=true` clears it at commit,
+    # matching the listener's semantics for any later transactions this request.
+    await session.execute(
+        text("SELECT set_config('app.creator_id', :cid, true)"),
+        {"cid": str(creator.id)},
+    )
     # Stash on request.state so creator_key() in limiter.py can read the
     # already-resolved identity without re-decoding the JWT. (Issue 104)
     request.state.creator_id = creator.id

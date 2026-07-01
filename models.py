@@ -309,6 +309,10 @@ class Video(Base):
     published_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     duration_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     source_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # The extracted audio WAV (transcribe + signals read this). Kept separate from
+    # `source_uri` (the original video) so ingest no longer clobbers the video the
+    # renderer needs — see migration 0039. NULL until ingest extracts audio.
+    audio_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     origin: Mapped[VideoOrigin] = mapped_column(
         sa.Enum(VideoOrigin, name="video_origin_enum"),
         nullable=False,
@@ -892,8 +896,13 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(sa.String(128), nullable=False)
     entity_type: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     entity_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, nullable=True)
-    before_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    after_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null=True so a Python ``None`` payload is stored as SQL NULL, not
+    # the JSONB ``'null'`` literal (the SQLAlchemy JSON default). Without this,
+    # ``before=None``/``after=None`` writes a non-SQL-NULL value, which breaks
+    # ``IS NULL`` filters and — for the never-purged ``creator.deleted`` audit
+    # (Issue 247, GDPR Art. 17) — muddies the "no PII payload retained" invariant.
+    before_jsonb: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    after_jsonb: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
 
 class EventLog(Base):

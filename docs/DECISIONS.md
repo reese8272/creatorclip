@@ -5,6 +5,340 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-07-01 — Stripe v8: `max_network_retries` must be passed to `StripeClient()`, not set as a module global (Issue 345)
+
+**What was decided.** Removed `stripe.max_network_retries = 3` from `billing/stripe_client.py` and moved
+the value into the `StripeClient(max_network_retries=3)` constructor.
+
+**Why.** Stripe Python SDK v8 removed all global-config support — `stripe.max_network_retries` is a no-op
+when the `StripeClient` class is used. The unset default is 0 retries, meaning any transient network blip
+during checkout-session creation surfaces as a user-facing 502. Idempotency keys were already in place, so
+retries are safe.
+
+**Source / evidence.** Stripe "No global configuration" SDK v8 migration note
+(stripe.com/docs/libraries/python — confirmed 2026-07-01 in the `/assess` run).
+
+---
+
+## 2026-07-01 — Issue 348: Chat worker switches to AsyncSessionLocal + GUC; RLS added to 5 child tables (Issue 348)
+
+**What was decided.**
+1. `_chat_respond_async` now uses `db.AsyncSessionLocal()` (app role, no BYPASSRLS) instead of `db.AdminSessionLocal()`, with `session.info["creator_id"] = str(cid)` set before the first query to activate the `_set_app_creator_id` event-listener GUC.
+2. Migration `0040_rls_chat_child_tables.py` enables RLS on 5 child tables (`video_metrics`, `retention_curves`, `transcripts`, `clip_outcomes`, `chat_messages`) via subquery-based `tenant_isolation` policies (since these tables have no direct `creator_id`).
+
+**Why.** The chat worker was using `AdminSessionLocal` (BYPASSRLS), which means any bug in the worker's creator-ownership check would be the sole isolation boundary. Switching to the app role (BYPASSRLS=false) with the GUC set makes the DB the second line of defence. The child-table policies are needed so `chat_messages` (now written by the non-BYPASSRLS session) can read/write its own conversation rows.
+
+**Source / evidence.** PostgreSQL RLS documentation §5.8 (child-table subquery pattern); project `db.py` `_set_app_creator_id` listener; migration 0010 and 0038 as the baseline pattern.
+
+**Date.** 2026-07-01.
+
+---
+
+## 2026-07-01 — Issue 349: Notification mailer call moved outside the DB session with asyncio timeout
+
+**What was decided.** `_send_notification_async` now commits the DB session before calling `mailer_send`, which runs outside the `async with` block via `asyncio.wait_for(asyncio.to_thread(mailer_send, ...), timeout=_settings.RESEND_TIMEOUT_S)`. On failure a fresh `AdminSessionLocal` session marks the delivery row `failed`. `RESEND_TIMEOUT_S: int = 10` added to `config.py`.
+
+**Why.** The original code held the `AdminSessionLocal` connection open while the Resend API call blocked (no timeout). Under pool exhaustion or a slow/unresponsive Resend endpoint this stalls a worker thread and leaks a DB connection for an unbounded duration. `asyncio.to_thread` + `asyncio.wait_for` gives a Python-level timeout around the blocking sync SDK call.
+
+**Source / evidence.** `asyncio.to_thread` docs (Python 3.9+; confirmed available at 3.12); Resend Python SDK (sync `resend.Emails.send`); industry pattern: "release DB connection before making external API calls".
+
+**Date.** 2026-07-01.
+
+---
+
+## 2026-07-01 — Issue 350: improvement brief pause_turn loop + max_uses=5 on web_search
+
+**What was decided.** `improvement/brief.py` now handles `stop_reason == "pause_turn"` in both the `.create()` path and the streaming path. On `pause_turn`, the assistant turn (including tool-use blocks) is appended to `messages` and the call is repeated, up to `_MAX_SEARCH_ROUNDS = 5` times. `max_uses: 5` is added to the `web_search` tool definition. The streaming path switches from `stream_and_emit` (returns only final text) to `stream_message` (returns full `Message` with `stop_reason` visible).
+
+**Why.** Without the loop, if Claude called `web_search` the response would return with `stop_reason=pause_turn` and the final synthesised answer was never produced — the brief would contain only the pre-search preamble ("Let me search…"). `max_uses: 5` bounds total search calls per brief to prevent unbounded token spend.
+
+**Source / evidence.** Anthropic docs "Server-side tools / pause_turn" (confirmed current 2026-07-01); `worker/anthropic_stream.py stream_message` which already returns the full Message.
+
+**Date.** 2026-07-01.
+
+---
+
+## 2026-07-01 — event_log.py pool pinned small; added to DEPLOYMENT.md connection budget (Issue 347)
+
+**What was decided.** `event_log.py:_get_sessionmaker` pool changed from `pool_size=5,max_overflow=10`
+(15 conns) to `pool_size=2,max_overflow=3` (5 conns). The DEPLOYMENT.md fleet budget inequality now
+accounts for the event-log engine per replica.
+
+**Why.** The event-log engine points at the same `DATABASE_URL`/PgBouncer as the primary OLTP engine
+and runs on every non-skipped HTTP request, but was absent from the connection budget — a hidden axis-A
+exhaustion risk. Telemetry is best-effort, so 5 connections/replica is more than sufficient.
+
+**Source / evidence.** SQLAlchemy async engine pool sizing docs (docs.sqlalchemy.org); PgBouncer sidecar
+sizing in `deploy/charts/creatorclip/` (Issue 259). Assessment finding 2026-07-01.
+
+---
+
+## 2026-06-30 — Activate the RLS role split via the app role only; keep the superuser as the migrate role (Issue 343)
+
+**What was decided.** Production now enforces per-creator RLS by having the app connect as the
+non-BYPASSRLS role **`creatorclip_app`** (`DATABASE_URL`), with **`DATABASE_MIGRATION_URL` pointed at the
+existing superuser `creatorclip`** (which bypasses RLS) for Alembic + the Celery worker's cross-tenant
+`AdminSessionLocal` sweeps. We did **NOT** perform the `docs/DEPLOYMENT.md` runbook's full ownership
+transfer to `creatorclip_migrate`.
+
+**Why (the trigger).** The Issue 341 smoke harness `isolation` check failed on prod: a different creator's
+RLS context still saw the canary's clip. Root cause: the app role `creatorclip` is the superuser/owner with
+`BYPASSRLS=true`, which overrides even the correctly-`FORCE`d RLS policies (migration 0010) — so tenant
+isolation had no DB backstop. The roles/grants/policies already existed (0010); only activation was missing.
+
+**Why the app-role-only path (deviation from the runbook).** The runbook assumed activation *before* the
+first 0010 upgrade and transfers table ownership to `creatorclip_migrate`. The prod DB is already at 0037
+owned by `creatorclip`. Transferring ownership of every table on a live DB is high-blast-radius and
+unnecessary to close the gap: pointing `DATABASE_URL` at `creatorclip_app` (no BYPASSRLS, already granted
+DML by 0010 + ALTER DEFAULT PRIVILEGES) enforces RLS for the app, while keeping the privileged path on the
+existing superuser avoids touching ownership/migrations. The change is **config-only and reversible**
+(swap `DATABASE_URL` back to `creatorclip`, recreate). The full ownership transfer to a dedicated
+`creatorclip_migrate` remains an optional future hardening.
+
+**Industry standard checked (2026-06-30).** Non-owner, non-BYPASSRLS app role + a separate owner/admin role
+for migrations & cross-tenant is the documented Postgres RLS architecture; granting BYPASSRLS to the app
+role "defeats the entire feature," and an owner with RLS-not-forced silently ignores policies — our exact
+footgun. Sources: [PostgreSQL §5.9 Row Security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html),
+[Bytebase — RLS footguns](https://www.bytebase.com/blog/postgres-row-level-security-footguns/),
+[Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
+
+**Alternatives ruled out.** Bare `ALTER ROLE creatorclip NOBYPASSRLS` — breaks the 50 worker
+`AdminSessionLocal` cross-tenant sweeps + Alembic. Full ownership transfer now — deferred (above).
+App-level `creator_id` filters alone — the status quo with no backstop; RLS is the defense-in-depth.
+
+**Evidence (verified live as `creatorclip_app`).** no-context → `videos=0` (fail-closed); wrong-tenant
+canary → `0` (harness `isolation` PASS, was FAIL); real creator under context → `1049` videos (correct
+per-tenant filtering); `creators` (RLS-exempt) visible for the auth bootstrap; app+worker `healthy` with a
+clean startup post-cutover; canary torn down. The one worker `AsyncSessionLocal` site (`worker/tasks.py`
+improvement-brief) already stamps `session.info["creator_id"]`. Harness `check_pipeline` was updated to set
+the canary RLS context (it read tenant tables without one). Rollback: `.env` backups
+`.env.bak-pre-rls*` on the VM; revert `DATABASE_URL` → `creatorclip` + recreate.
+
+---
+
+## 2026-06-29 — Structured outputs vs robust extraction for JSON LLM responses (Issue 342)
+
+**What was decided.** Every JSON-returning LLM generator must guarantee a parseable response. Two
+mechanisms, chosen **per-site** by whether the call uses the web_search tool:
+- **No web_search → native structured outputs** (`output_config={"format":{"type":"json_schema",
+  "schema":…}}` on `messages.create`). Applied to `clip_titles`, `clip_captions`, `clip_explain`. The
+  API constrains the response to fence-free, schema-valid JSON — the markdown-fence parse crash becomes
+  structurally impossible. `clip_explain` additionally constrains `cited_principle` to the canonical
+  enum, blocking principle hallucination at the API layer.
+- **Uses web_search/citations → `extract_json_block` (robust extraction)**, because `output_config.format`
+  **400s when citations are enabled** (confirmed: `/claude-api` skill + the existing `knowledge/util.py`
+  docstring). Applied to `hooks` (web_search), and to `chapters`, `scoring`, `thumbnails` as the uniform
+  robustness layer. The three structured-output generators **also** route their parse through
+  `extract_json_block` as defense-in-depth (harmless when output is already fence-free; survives a future
+  SDK/flag change).
+
+**Why (the trigger).** The Issue 341 live smoke harness, on its first `--with-llm` run, caught
+`claude-sonnet-4-6` returning valid JSON wrapped in a ` ```json ` fence; the generators did a bare
+`json.loads(raw)` → `JSONDecodeError`. This broke the **deployed** Review features (322/323/325)
+intermittently. Mocked unit tests missed it (mocks return clean JSON). `knowledge/util.py:extract_json_block`
+already existed and its docstring described this exact failure — the crashing sites just never called it.
+
+**Deviation from the Issue 342 CHECK brief (logged here per CLAUDE.md).** The approved brief put `scoring`
+and `chapters` in Track A (structured outputs). Shipped them in Track B (`extract_json_block`) instead, to
+bound schema-authoring risk in this PR and because `scoring` is the core ranking path (higher stakes —
+defer the schema). Extraction fully eliminates the crash class at those sites; structured outputs can be
+layered on later. Net coverage of the bug is unchanged.
+
+**Industry standard checked (verified 2026-06-29, `/claude-api` skill + live test at SDK 0.105.2).** Native
+structured outputs is the current Anthropic best practice for guaranteed-parseable JSON; GA on Sonnet 4.6;
+requires `additionalProperties:false` on every object; **incompatible with citations** and assistant prefill
+(prefill 400s on the 4.6+ family). Does **not** guarantee conformance on `stop_reason` refusal/`max_tokens`
+— so it composes with, not replaces, Issue 331's truncation handling.
+
+**Alternatives ruled out.** `extract_json_block` everywhere (simpler, uniform) — kept only where citations
+forbid structured outputs, since extraction is best-effort (a truncated `{"titles":[{"title":"…` still
+fails after fence-strip, whereas structured outputs prevents it). Forced `tool_use` — works but adds tool
+indirection for a pure JSON return. Assistant prefill — 400s on 4.6+.
+
+**Evidence.** `tests/test_llm_fence_parsing.py` (6 tests: fenced JSON through each parser, previously a
+crash). Live: the Issue 341 harness `--with-llm --only {title,caption,explain}` now passes (was 0/1 fail).
+Full unit lane 1778 passed / 0 failed; ruff + mypy clean on all touched files.
+
+---
+
+## 2026-06-29 — Live-in-isolation smoke harness: flag-gated synthetic canary (Issue 341, Lane L22)
+
+**What was decided.** A new `scripts/live_smoke.py` exercises the real pipeline capabilities against a
+**deployed** target (Postgres + R2 + ffmpeg + Anthropic), one capability at a time, isolated to a
+synthetic `__smoke_canary__` creator with deterministic `uuid5` ids. It is the post-deploy "does it
+actually still work?" check that the mocked unit lane and the LLM-only `scripts/llm_e2e.py` cannot
+answer. Filed as a new lane **L22 — Live Smoke** (Issue 341) to keep it distinct from the L21
+edge-case unit/integration lane and the L20 LLM track.
+
+**Capability separability (the design question).** The pipeline is a data-dependency DAG: one
+indivisible upstream chain (`ingest→transcribe→build_signals→generate_clips`) plus a fan-out of
+**independent** leaf operations (render, clean, cuts, title, caption, explain, publish). The leaves are
+NOT too interrelated to separate — they all fan out from a saved clip and depend only on that clip +
+its transcript/source. They are isolated by operating on a **persistent seeded canary fixture**, so
+each runs standalone (`--only render`). Tier-1 is therefore one checkpointed E2E read (assert each
+stage boundary); Tier-2 is six independent checks sharing the canary.
+
+**Why these specific safety choices.**
+- **Flag-selectable target (`--target prod|staging`)** is the synthetic-monitoring standard: the same
+  checks run as a staging pre-promotion gate AND as post-deploy production checks, with the hard rule
+  that production checks stay read-only or run against an isolated test account.
+- **Publish is a destructive "unsafe synthetic transaction"** → dry-run / pre-flight only by default;
+  a real upload requires `--publish-live` AND `--target staging` (a throwaway channel) and is *refused
+  on prod*. There is no safe "test value" override for a real `videos.insert`.
+- **Metered LLM checks are gated behind `--with-llm`** (off by default) so the free, deterministic core
+  (db/isolation/pipeline/render/clean) runs without token spend and without duplicating Issue 319's
+  nightly LLM coverage.
+- **Run guard `RUN_LIVE_SMOKE=1`** mirrors `RUN_LLM_LIVE` — the harness exits 0 immediately when unset,
+  so it can never fire from the default unit lane.
+
+**Industry standard checked (verified 2026-06-29).** Synthetic / post-deploy smoke monitoring:
+[Datadog — smoke testing with synthetic monitoring](https://www.datadoghq.com/blog/smoke-testing-synthetic-monitoring/),
+[BugRaptors — smoke testing in staging & production](https://www.bugraptors.com/blog/smoke-testing-in-production-staging),
+[Harness — CI/CD smoke testing](https://www.harness.io/harness-devops-academy/integrating-smoke-testing-into-your-ci-cd-pipeline-what-devops-needs-to-know);
+unsafe-synthetic-transaction handling (dry-run / test-value override / dedicated test account + cleanup):
+[Martin Fowler — Synthetic Monitoring](https://martinfowler.com/bliki/SyntheticMonitoring.html),
+[Checkly](https://www.checklyhq.com/blog/what-is-monitoring/).
+
+**Alternatives ruled out.** Promote the L21 `integration` tests to "live" — they need Docker/PG we
+don't have locally and never touch R2/ffmpeg/the deployed surface. Extend `llm_e2e.py` — it is
+LLM-scoped; the render/R2/pipeline assertions don't belong there. A pure read-only prod healthcheck —
+can't verify render or clip *generation*, which is the product.
+
+**Verification.** The harness's pure logic is unit-tested offline (`tests/test_live_smoke.py`: run
+guard, deterministic fixture, arg parsing, result framework, PG-URL normalization, publish
+safety-refusal — 13 tests). The *live* assertions (DB/R2/ffmpeg/Anthropic) are **staging-pending**:
+they run only against a deployed target with `RUN_LIVE_SMOKE=1`, exactly like Issue 319's external
+lane. `scripts/` is outside the Layer-0 coverage source set and bandit scan, so no gate regression.
+
+---
+
+## 2026-06-29 — Auto-render downloads the source ONCE per video (batch render task)
+
+**What changed.** The auto-render path no longer enqueues N independent `render_clip` jobs (one
+per generated clip). `_generate_clips_async` now enqueues a single `render_video_clips(video_id,
+clip_ids)` task that downloads the source from R2 **once** and reuses that one local file across
+every clip's encode. `_render_clip_async` was refactored into `_load_clip_render_plan` (lock +
+done-check + snapshot, unchanged idempotency/`with_for_update` semantics) and `_encode_and_upload_clip`
+(ffmpeg + upload from an already-local source); it gained an optional `src` arg so the batch passes
+the shared download. The manual `POST /clips/{id}/render` endpoint is unchanged — it still uses the
+single-clip `render_clip` task (one clip → one download, no redundancy to remove there).
+
+**Why.** Each `render_clip` call re-downloaded the **entire** source video via `alocal_path`
+(`worker/storage.py`, no cache) before ffmpeg. A video that generates N clips therefore pulled the
+full source from R2 N times — the dominant, avoidable cost for multi-clip videos and a direct cause
+of the owner-reported "clips take a while to render" on the Render beta (worker is `--concurrency=2`
+on the `starter` plan, so those redundant downloads serialize behind the encodes). Downloading once
+per video removes (N−1) full-source transfers with no change to billing (minutes are still deducted
+once at ingest; rendering charges nothing).
+
+**Per-clip failure isolation.** A permanent per-clip error (`ValueError`/`FileNotFoundError`) marks
+that clip `failed` and continues the batch; a transient per-clip error re-enqueues the single-clip
+`render_clip` so its existing backoff/retry path applies — neither aborts the batch nor re-downloads
+the shared source for siblings. A failure to obtain the source itself propagates to the task wrapper,
+which classifies it the same way `render_clip` does (missing source = terminal; transient = retry the
+whole batch, with the per-clip done-check skipping any already rendered).
+
+**Industry standard checked.** Fetch-source-once / fan-out-derivatives is the standard pattern for
+media transform pipelines (one asset download → many renditions); per-rendition re-fetch of the
+master is the anti-pattern. **Alternatives ruled out:** a shared on-disk source cache keyed by URI
+(needs a cross-task lock + TTL/size eviction, and risks filling the small `starter` ephemeral disk);
+left as a future option if manual single-clip renders ever batch.
+
+**Evidence.** New integration test `test_render_video_clips_downloads_source_once`
+(`tests/test_worker_pipeline.py`) asserts exactly one `alocal_path` call for two clips and both reach
+`done`; auto-render wiring tests updated to assert the single batch enqueue.
+
+---
+
+## 2026-06-29 — Full-content verbose logging sink (pre-prod debugging, hard-gated off in prod)
+
+**What changed.** Added an opt-in `VERBOSE_LOGGING` flag and a dedicated `verbose` logger
+(`verbose.py`, wired in `observability.configure_logging`) that, when enabled, writes a COMPLETE
+record of every load-bearing operation — raw LLM prompts/responses (all 9 non-streaming call sites
++ both streaming wrappers), full transcripts, full ffmpeg commands + untruncated stderr, and every
+Celery task's args/kwargs/retry-reason/traceback (via `task_prerun`/`task_retry`/`task_failure`/
+`task_success` signals) — to `<LOG_DIR>/verbose-{app,worker}.log`. The sink uses a NON-scrubbing
+JSON formatter (`JsonLogFormatter(scrub=False)`) so content survives verbatim, and `propagate=False`
+so it never bleeds into `app.log`/`worker.log` or existing root-logger assertions.
+
+**Why.** Requested by the owner to capture "every single detail every time something is done" during
+the private beta, motivated by three field failures (render retry-storm, chat "Connection lost", and
+persistent transcription failures) that the metadata-only logs could not fully explain. The normal
+logs deliberately never carry prompt/response content (docs/COMPLIANCE.md + `redact.py`); aggressive
+content logging is the fastest way to root-cause these in beta.
+
+**Deviation + guard.** This is a deliberate, scoped deviation from the PII/secret no-content logging
+boundary. Off-prod it follows `VERBOSE_LOGGING`. In production it is default-OFF and requires a SECOND
+explicit opt-in, `VERBOSE_LOGGING_ALLOW_PROD=true` — so `VERBOSE_LOGGING` alone (or a copied `.env`)
+can never enable content logging in prod, and a routine deploy can't leak by accident. Every helper in
+`verbose.py` is a no-op when disabled (zero overhead on the default path).
+
+**Update 2026-06-29 (beta opt-in).** The private beta deploys as `ENV=production` on Render, so the
+original hard `ENV != "production"` gate would have kept verbose off exactly where the owner needs it
+to debug live render/chat/transcription failures. Resolved by adding `VERBOSE_LOGGING_ALLOW_PROD`
+(set true alongside `VERBOSE_LOGGING` in `render.yaml`) rather than relaxing the gate wholesale or
+flipping `ENV` to `staging` (which also drives Stripe live-mode / secure-cookie / required-secret
+behavior). On Render `LOG_DIR=""`, so verbose content lands in the aggregated stdout log stream —
+raw prompts/responses/transcripts (incl. PII) are therefore visible to anyone with Render log access
+while this is on. Accepted for the ≤100-user beta as an informed owner decision; BOTH flags must be
+set false before public launch (CLAUDE.md → Pre-Public-Launch Requirements: "Every log line and every
+LLM prompt reviewed for token/PII leakage").
+
+**Industry standard checked (2026).** Matches the standard "debug/trace sink, separate from
+operational logs, disabled in production" pattern (OWASP Logging Cheat Sheet: keep verbose/debug
+logging out of prod; 12-factor: log to streams, gate verbosity by env). Content capture for LLM spans
+is exactly what OpenLLMetry gates behind `TRACELOOP_TRACE_CONTENT` (kept OFF in `init_otel`) — this
+sink is the in-house, env-gated equivalent for file logs.
+
+**Alternatives ruled out.** Global `LOG_LEVEL=DEBUG` (leaks the Anthropic `x-api-key` via httpx
+header logging — already called out in config; and still wouldn't log prompt/response *bodies*);
+logging content through the existing scrubbed JSON formatter (defeats the purpose — content is the
+point); a third-party tracing vendor (overkill + sends content off-box, worse for PII than a local
+file that never leaves the VM).
+
+**Date:** 2026-06-29
+
+---
+
+## 2026-06-28 — Clips auto-render on generation (upload = consent to spend)
+
+**What changed.** Clip generation no longer ends at *ranked-but-unrendered*. At the end of
+`_generate_clips_async`, the worker now enqueues a `render_clip` job for each freshly generated
+clip (`worker/tasks.py`), seeding each clip's `style_preset` from the creator's saved brand kit
+first. Gated by two new settings: `AUTO_RENDER_CLIPS` (default `true`) and `AUTO_RENDER_TOP_N`
+(default `0` = all generated candidates; `>0` renders only the top-N by rank immediately). The
+Review screen (`ClipPlayer.tsx` / `Review.tsx`) now shows live render status (`rendering…` spinner
+→ player) and polls while any clip is in flight, with a manual **Render / Retry** fallback button.
+
+**Why.** The actual failure mode the user hit was *not* a stuck render — it was that **rendering
+was never triggered**: the only UI affordance that called `POST /clips/{id}/render` lived in the
+Editor (`CaptionStylePanel`), and nothing auto-rendered after generation. A clip therefore sat
+"Not yet rendered" on the Review screen indefinitely, which reads as "frozen for 12 hours." This
+contradicts the North Star ("ready when you open it"). The user directive: *uploading a video is
+the permission to spend those minutes — clips should be ready with zero clicks.*
+
+**Why it's billing-safe (the load-bearing fact).** Minutes are deducted **once at ingest** for the
+full video duration (`billing/ledger.py::deduct_for_video`, idempotent on `UNIQUE(video_id)`).
+**Rendering charges no additional minutes.** So auto-rendering every candidate spends nothing the
+upload didn't already consent to and pay for — it's pure pre-paid compute. `render_clip` is already
+idempotent (skips clips already `done`) and retry-safe, so a generate retry re-enqueues harmlessly.
+
+**Industry standard checked.** Auto-render-on-ingest of the top candidates is the norm for
+clip tools (Opus Clip, Klap, etc.); manual render-on-demand is the outlier. Confirmed against
+current product behavior 2026-06-28.
+
+**Alternatives ruled out.** (a) Manual-only (the status quo — the bug). (b) Auto-render top-N only
+by default — kept available via `AUTO_RENDER_TOP_N` but defaulted to *all*, since minutes are
+already paid and the user asked for the whole queue ready. (c) Charging per render — rejected;
+double-charges the same source minutes.
+
+**Failure posture.** Auto-render enqueue is best-effort: an enqueue exception is logged
+(`auto_render_enqueued` event on success) and never raised, so it cannot fail clip generation or
+trigger a refund. A clip stuck `pending` (e.g. enqueue failed, or `AUTO_RENDER_CLIPS=false`) shows
+the manual Render button on Review rather than an infinite spinner.
+
+---
+
 ## 2026-06-27 — performed_well baseline unit + impression/position log (Issues 201, 202)
 
 **What changed.**
@@ -9905,3 +10239,102 @@ metrics-streams docs; Sentry / Grafana Cloud / New Relic / Axiom / Honeycomb
 pricing pages (all verified 2026-06). Coral­ogix OTel-vs-Prometheus adoption stats.
 
 **Date:** 2026-06-26
+
+---
+
+## 2026-06-30 — L21 Edge-Case Hardening Wave (Issues 329, 333, 334, 335, 336, 337, 339, 340)
+
+Built as a parallel plan→build→review wave (per-issue research/CHECK → isolated-worktree
+build on Sonnet → Opus review+merge). Every issue's edge suite surfaced ≥1 real latent
+defect. Design decisions that diverged from "tests only":
+
+**Issue 329 (render/reframe).** `render_cleaned_clip_file` now **normalizes** unsorted/overlapping
+`keep_ranges` (sort+merge, logs when an edge moves) rather than rejecting — the cut-list generator
+can emit ranges out of order or touching at splice points; normalizing is the robust, industry-standard
+range-list handling. `clip_id` was NOT added to `render_clip_file`'s signature (kept it a pure file
+utility; the clip-id-in-log requirement is satisfied at the worker layer). `_run` now raises with the
+**tail** of stderr (`stderr[-500:]`, where ffmpeg prints the actual error) + `shlex.join(cmd)`, and
+catches `OSError` (binary-missing). New `render-env` pytest marker for future real-ffmpeg cases.
+
+**Issue 334 (ingestion).** Over-cap audio (`> AUDIO_ANALYSIS_MAX_DURATION_S`, default 14400s/4h) is
+**truncated + warned**, not hard-rejected — a 4h stream/podcast is valid and the heuristics work on the
+first 4h; the cap is an OOM guard, configurable. Fixed a confirmed `_normalize_assemblyai` `None`-timestamp
+`TypeError`. Waveform timeout now scales with duration.
+
+**Issue 335 (youtube).** `parse_duration_seconds` keeps its `0.0` default on malformed ISO-8601 but now
+emits a **WARNING** (observability without breaking resilient catalog sync). Defensive `expires_at IS NULL`
+guard. Most `[BUG?]` items were already-correct (coverage-only).
+
+**Issue 336 (worker pipeline).** `render_clip` `SoftTimeLimitExceeded` is now **terminal** (mark failed +
+re-raise, no retry) — a soft-timeout would just time out again, a retry-storm; logs the timeout-vs-limit
+mismatch. WAV-skip short-circuit now probes integrity (zero-byte/unprobeable → re-extract). `_load_clip_render_plan`
+logs the anomalous running-with-render_uri state (keeps re-render). Publish quota-asymmetry + done-but-NULL-id logs.
+
+**Issue 337 (observability).** Two confirmed fixes: `_sentry_before_send` guards non-dict `extra` (a PII-scrub
+path that crashed → forwarded unredacted); `JsonLogFormatter` skips reserved output keys (`ts`/`level`/`logger`)
+so an extra field can't clobber the structured envelope. `/metrics` route wrapped so a gauge-collection error
+never 500s the scrape.
+
+**Issue 333 (LLM robustness).** `parse_candidates`/`parse_hook_report`/`parse_concepts` now catch
+`JSONDecodeError` and re-raise a contextful `ValueError` (graceful-degrade parity with `scoring`), instead of
+an opaque 500 on truncated output — pre-existing `test_hooks::test_parse_hook_report_invalid_json` was
+reconciled to the new contract. New shared `observability.log_llm_error(logger, exc, **ctx)` surfaces
+`status_code` + `retry-after` (DRY across the LLM call sites). Cache-floor (4096-char) + loop-bound guards
+were already correct (coverage-only).
+
+**Issue 340 (security/auth/crypto/isolation).** JWT `decode_session_token` now **requires `exp`**
+(`options={"require":["exp"]}`) and applies a 60s `leeway` on exp/iat (RFC 7519 NTP tolerance; rejects
+far-future `iat`). `channel_title` from YouTube is **clamped at ingestion** (`clamp_ingest_field`,
+`MAX_INGESTED_CHANNEL_TITLE_CHARS=200`) since it flows into every LLM system prompt (OWASP LLM01). RLS
+**deny-by-default unset-context** proof added (under `creatorclip_app` with no `app.creator_id` GUC, every
+RLS-gated tenant table returns zero rows). **Surfaced an open security gap** (`OFF_COURSE_BUGS.md`,
+2026-06-30): `improvement_briefs` + `creator_insights` lack RLS entirely — needs a migration.
+
+**Issue 339 (API routers).** `review.submit_feedback` gained trim/note validation (Pydantic
+`model_validator` + `feedback_note` max-length + clip-bounds check → 422) — it previously persisted
+unvalidated input into the preference-model feedback. List endpoints (`list_clips`, `list_publications`)
+now return an additive **`truncated: bool`** envelope field (limit+1 query, no COUNT round-trip) so silent
+top-N truncation is signaled. 404-vs-422 non-UUID inconsistency locked as intentional.
+
+**Source/evidence.** Per-issue industry-standard research (Anthropic prompt-injection + caching docs,
+OWASP LLM01/A09:2025/JWT cheat sheets, Celery idempotency doctrine, FastAPI TestClient patterns, ffmpeg-python
+test patterns, PostgreSQL RLS docs) — captured in each issue's CHECK brief. **Date:** 2026-06-30
+
+## 2026-07-01 — Retain the source video for rendering; split audio to `audio_uri` (migration 0039) [DEC]
+
+**What changed.** `ingest_video` no longer overwrites `videos.source_uri` with the extracted audio key,
+and no longer deletes the original mp4 immediately after audio extraction. A new nullable column
+`videos.audio_uri` holds the extracted WAV; `source_uri` stays the original **video**. Transcription and
+signals now read `audio_uri`; the renderer keeps reading `source_uri` (the video). `purge_stale_source_media`
+purges **both** the video and audio at `SOURCE_MEDIA_RETENTION_HOURS` (72h) after `ingest_done_at`. This
+**reverses Issue 110 Fix D** (post-commit orphan-mp4 deletion) — with no overwrite there is no orphan.
+
+**Why.** The old design discarded the video at ingest, but the renderer needs the video (the 9:16
+active-speaker reframe extracts keyframes). So *every* uploaded video failed to render
+(`ffmpeg -i …wav -vframes 1 …jpg → "Output file does not contain any stream"`) — the core upload→playable-clip
+loop was non-functional in prod (0/18 clips ever rendered; confirmed live on the rung-4 upload of video
+`8aa28e97`, 6/6 clips failed). This also **realigns code with the already-documented COMPLIANCE.md policy**:
+"Source media (raw video) purged 72h after ingest… never stored longer than needed for processing" — rendering
+IS processing, and auto-render runs within minutes of ingest, comfortably inside the 72h window.
+
+**Industry standard checked.** Retain the original/mezzanine until all downstream renditions/derivatives
+complete, then lifecycle-delete; never delete the source before processing finishes, and never let a failed
+job delete the source. Confirmed against AWS Elemental MediaConvert workflows, the Netflix video-processing
+pipeline (mezzanine retained through all inspections), and Frame.io's mezzanine guidance. Discarding the
+source pre-render is the named anti-pattern.
+
+**Alternatives ruled out.** (a) Deterministic audio key with no new column — works but leaves the
+audio/video split implicit and prevents independent purge; the explicit column is more SOLID. (b) Re-fetch
+the video on demand for render — impossible for `origin=upload` (nothing to refetch) and ToS-forbidden for
+`origin=link`. (c) Render inline during ingest before deleting — couples ingest to render, breaks
+retry/idempotency, and can't serve manual re-render/trim. (d) Keep the video indefinitely — violates the
+72h ToS/storage posture.
+
+**Known limitation (accepted).** Existing clips are unrecoverable — their source videos were already
+deleted by the old code; only new uploads render. Manual re-render/trim after the 72h window will fail
+(source purged) — the UI should surface "source expired, can't re-render" rather than a dead retry button
+(follow-up, tracked with the render-loop UX item).
+
+**Source/evidence.** Best-practices CHECK brief (2026-07-01) with live `web_search`; verified end-to-end via
+`scripts/repro_ingest_render.py` (real ffmpeg ingest → render `done`) + the integration test in
+`tests/test_worker_pipeline.py`. **Date:** 2026-07-01

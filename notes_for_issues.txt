@@ -1,0 +1,4 @@
+- when I do suggest title or suggest caption, it doesn't, how can we isolate and test this?
+- rendering does not render, even when I thought we had fixed it, how can we isolate this?
+- how can I delete video renderings that either failed or didn't have a source video?
+- 

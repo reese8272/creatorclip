@@ -26,6 +26,7 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitEr
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
+from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
@@ -181,8 +182,18 @@ def generate_video_analysis(
             usage["cache_creation"],
             usage["output_tokens"],
         )
+        record_llm_metric(settings.ANTHROPIC_MODEL_ANALYSIS, usage)
         return final_text + _DISCLAIMER, usage
 
+    from verbose import vlog_llm_request, vlog_llm_response
+
+    vlog_llm_request(
+        "video_analysis",
+        model=settings.ANTHROPIC_MODEL_ANALYSIS,
+        max_tokens=2000,
+        system=system,
+        messages=messages,
+    )
     try:
         response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
             model=settings.ANTHROPIC_MODEL_ANALYSIS,
@@ -193,6 +204,7 @@ def generate_video_analysis(
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         logger.error("video_analysis LLM error exc_type=%s", type(exc).__name__)
         raise
+    vlog_llm_response("video_analysis", response=response)
     _tokens_in = response.usage.input_tokens
     _tokens_out = response.usage.output_tokens
     logger.info(
@@ -211,4 +223,6 @@ def generate_video_analysis(
         "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
     }
+    record_llm_metric(settings.ANTHROPIC_MODEL_ANALYSIS, _usage)
+    warn_if_truncated(settings.ANTHROPIC_MODEL_ANALYSIS, getattr(response, "stop_reason", None))
     return text_blocks[-1].text + _DISCLAIMER, _usage

@@ -367,6 +367,56 @@ def test_issue_125_queue_endpoint_idempotent_when_not_pending(client, mocker):
         app.dependency_overrides = original
 
 
+def test_queue_endpoint_retries_failed_video(client, mocker):
+    """A failed video is a manual-retry path (stale-failed-jobs fix, 2026-06-29):
+    /queue resets it to pending, clears failure_reason, and re-runs the pipeline so
+    the row leaves the terminal 'failed' state instead of lingering as clutter."""
+    from auth import get_current_creator
+    from db import get_session
+    from main import app
+    from models import IngestStatus
+
+    creator_id = _uuid.uuid4()
+    video_id = _uuid.uuid4()
+    fake_creator = MagicMock()
+    fake_creator.id = creator_id
+
+    fake_video = MagicMock()
+    fake_video.id = video_id
+    fake_video.creator_id = creator_id
+    fake_video.ingest_status = IngestStatus.failed
+    fake_video.source_uri = "r2://bucket/source.mp4"  # clippable — has stored source
+    fake_video.failure_reason = "Transcription failed. This can be a temporary service issue."
+
+    mock_session = AsyncMock()
+    mock_session.get = AsyncMock(return_value=fake_video)
+
+    async def _fake_session():
+        yield mock_session
+
+    mock_start = mocker.patch("routers.videos.start_pipeline")
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from worker import progress as _progress
+
+    mocker.patch.object(_progress, "aset_owner", new=_AsyncMock())
+
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_creator] = _override_creator(fake_creator)
+    app.dependency_overrides[get_session] = _fake_session
+    try:
+        resp = client.post(f"/videos/{video_id}/queue")
+        assert resp.status_code == 202, resp.text
+        body = resp.json()
+        assert body["queued"] is True
+        # The failed row was reset so the pipeline re-runs and the clutter clears.
+        assert fake_video.ingest_status == IngestStatus.pending
+        assert fake_video.failure_reason is None
+        mock_start.assert_called_once_with(str(video_id))
+    finally:
+        app.dependency_overrides = original
+
+
 def test_issue_125_queue_endpoint_404_on_other_creators_video(client, mocker):
     """Per-creator isolation: an authenticated caller cannot queue someone
     else's video — even by guessing a UUID."""

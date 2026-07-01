@@ -5,12 +5,14 @@ Pure function tests — no DB, no network, no ffmpeg.
 Transcription backend calls are patched at the SDK boundary.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 from ingestion.transcribe import (
+    _normalize_assemblyai,
     _normalize_deepgram,
     _normalize_whisperx,
     transcribe_audio,
@@ -368,3 +370,193 @@ def test_deepgram_normalizer_skips_words_missing_timestamps():
     assert len(result["segments"][0]["words"]) == 2
     assert result["segments"][0]["words"][0]["word"] == "Good"
     assert result["segments"][0]["words"][1]["word"] == "bad"
+
+
+# ── _normalize_assemblyai (Issue 334) ────────────────────────────────────────
+
+
+def _aai_word(text: str, start: int | None, end: int | None) -> SimpleNamespace:
+    """Build a minimal AssemblyAI word object with the same attribute shape as the SDK."""
+    return SimpleNamespace(text=text, start=start, end=end)
+
+
+def _aai_transcript(
+    words: list | None, text: str = "hello world"
+) -> SimpleNamespace:
+    return SimpleNamespace(words=words, text=text)
+
+
+def test_normalize_assemblyai_happy_path():
+    """Valid words produce one segment with correct ms→s conversion."""
+    transcript = _aai_transcript(
+        words=[_aai_word("hello", 0, 500), _aai_word("world", 600, 1200)],
+        text="hello world",
+    )
+    result = _normalize_assemblyai(transcript)
+    assert result["source"] == "assemblyai"
+    assert len(result["segments"]) == 1
+    seg = result["segments"][0]
+    assert seg["start"] == pytest.approx(0.0)
+    assert seg["end"] == pytest.approx(1.2)
+    assert seg["text"] == "hello world"
+    assert seg["words"][0]["word"] == "hello"
+    assert seg["words"][0]["start"] == pytest.approx(0.0)
+    assert seg["words"][1]["start"] == pytest.approx(0.6)
+
+
+def test_normalize_assemblyai_none_timestamps_filtered():
+    """CONFIRMED BUG (Issue 334): w.start/1000.0 when start=None raised TypeError.
+
+    Words with None start or end must be filtered, not passed to the division.
+    After the fix, the valid word survives and the None-timestamp word is dropped.
+    """
+    transcript = _aai_transcript(
+        words=[
+            _aai_word("good", 0, 400),
+            _aai_word("bad", None, None),  # None timestamps — was TypeError before fix
+        ],
+        text="good bad",
+    )
+    result = _normalize_assemblyai(transcript)
+    # Should not raise TypeError.
+    assert result["source"] == "assemblyai"
+    # Only the word with valid timestamps survives.
+    assert len(result["segments"]) == 1
+    assert len(result["segments"][0]["words"]) == 1
+    assert result["segments"][0]["words"][0]["word"] == "good"
+
+
+def test_normalize_assemblyai_all_none_timestamps_gives_empty_segments():
+    """If every word has None timestamps, words list is empty → segments == []."""
+    transcript = _aai_transcript(
+        words=[_aai_word("oops", None, None), _aai_word("nope", None, None)],
+        text="oops nope",
+    )
+    result = _normalize_assemblyai(transcript)
+    assert result["segments"] == []
+
+
+def test_normalize_assemblyai_empty_words_gives_empty_segments():
+    """Empty words list → segments == [] (no IndexError on words[0])."""
+    result = _normalize_assemblyai(_aai_transcript(words=[], text=""))
+    assert result["segments"] == []
+
+
+def test_normalize_assemblyai_none_words_gives_empty_segments():
+    """transcript.words = None → segments == [] (guards or [] fallback)."""
+    result = _normalize_assemblyai(_aai_transcript(words=None, text=None))
+    assert result["segments"] == []
+
+
+def test_normalize_assemblyai_partial_none_start_only():
+    """word.start is None but end is valid → word is still filtered (both required)."""
+    transcript = _aai_transcript(
+        words=[_aai_word("x", None, 500), _aai_word("y", 600, 1000)],
+        text="x y",
+    )
+    result = _normalize_assemblyai(transcript)
+    assert len(result["segments"][0]["words"]) == 1
+    assert result["segments"][0]["words"][0]["word"] == "y"
+
+
+# ── _normalize_whisperx edge: missing timestamps default to 0.0 ───────────────
+
+
+def test_normalize_whisperx_missing_segment_timestamps_defaults_to_zero():
+    """WhisperX segments with no start/end keys default to 0.0 (not KeyError)."""
+    raw = {"segments": [{"text": "no timestamps here", "words": []}]}
+    result = _normalize_whisperx(raw)
+    seg = result["segments"][0]
+    assert seg["start"] == 0.0
+    assert seg["end"] == 0.0
+    assert seg["text"] == "no timestamps here"
+
+
+def test_normalize_whisperx_missing_word_timestamps_defaults_to_zero():
+    """WhisperX words with no start/end keys default to 0.0 (not KeyError)."""
+    raw = {
+        "segments": [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "hi",
+                "words": [{"word": "hi"}],  # no start/end keys
+            }
+        ]
+    }
+    result = _normalize_whisperx(raw)
+    word = result["segments"][0]["words"][0]
+    assert word["start"] == 0.0
+    assert word["end"] == 0.0
+
+
+# ── Deepgram utterance with empty words list keeps segment (Issue 334) ─────────
+
+
+def test_normalize_deepgram_utterance_with_empty_words_list_keeps_segment():
+    """An utterance with words=[] still produces a valid segment (no words filtered
+    out since there were none to begin with).  The segment text is preserved.
+    """
+    raw = {
+        "results": {
+            "utterances": [
+                {
+                    "start": 0.0,
+                    "end": 3.0,
+                    "transcript": "music only",
+                    "words": [],  # empty — no timestamps to filter
+                }
+            ]
+        }
+    }
+    result = _normalize_deepgram(raw)
+    assert len(result["segments"]) == 1
+    assert result["segments"][0]["text"] == "music only"
+    assert result["segments"][0]["words"] == []
+
+
+# ── transcribe_done vlog: word_count + transcript duration_s (Issue 334) ───────
+
+
+def test_transcribe_done_log_includes_word_count_and_duration(tmp_path, monkeypatch):
+    """transcribe_audio must log word_count and transcript_duration_s on success."""
+
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"RIFFxxxx")
+    monkeypatch.setattr("config.settings.TRANSCRIPTION_BACKEND", "deepgram")
+
+    fake_result = {
+        "source": "deepgram",
+        "segments": [
+            {
+                "start": 0.0,
+                "end": 5.0,
+                "text": "hello world foo",
+                "words": [
+                    {"word": "hello", "start": 0.0, "end": 0.5},
+                    {"word": "world", "start": 0.6, "end": 1.0},
+                    {"word": "foo", "start": 1.1, "end": 1.5},
+                ],
+            }
+        ],
+    }
+
+    captured_vlogs: list[dict] = []
+
+    def fake_vlog(event: str, **kwargs: object) -> None:
+        captured_vlogs.append({"event": event, **kwargs})
+
+    # vlog / now_ms are imported inside transcribe_audio via `from verbose import …`
+    # so patch the originals in the verbose module, not in ingestion.transcribe.
+    with (
+        patch("ingestion.transcribe._transcribe_deepgram", return_value=fake_result),
+        patch("verbose.vlog", side_effect=fake_vlog),
+        patch("verbose.now_ms", return_value=0),
+    ):
+        transcribe_audio(str(wav))
+
+    done_logs = [v for v in captured_vlogs if v["event"] == "transcribe_done"]
+    assert done_logs, "no transcribe_done vlog emitted"
+    done = done_logs[0]
+    assert done.get("word_count") == 3
+    assert done.get("transcript_duration_s") == pytest.approx(5.0)

@@ -203,26 +203,32 @@ def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
 # ── Wave-3 Fix A: streaming path also receives web_search tools ──────────────
 
 
-def test_improvement_brief_streaming_path_passes_tools_to_stream_and_emit(mocker):
-    """SEV1 regression: Wave 2 added a streaming branch that silently dropped
-    the ``tools=[web_search]`` argument that the non-streaming branch forwarded.
-    Net effect: every production improvement brief (which now always passes
-    ``task_id``) ran un-grounded — no web search, no current YouTube guidance.
-    Wave-3 Fix A makes ``stream_and_emit`` tools-aware and threads them
-    through. This test pins it: when ``task_id`` is set, ``stream_and_emit``
-    must receive ``tools=[{"type": "web_search_20260209", "name":
-    "web_search"}]``.
+def test_improvement_brief_streaming_path_passes_tools_to_stream_message(mocker):
+    """SEV1 regression: streaming path must pass tools=[web_search] to stream_message.
+    Issue 350 switched the streaming branch from stream_and_emit to stream_message
+    (needed to inspect stop_reason for the pause_turn loop). This test pins the
+    wiring: when task_id is set, stream_message receives tools and the final text
+    block is returned with the honesty disclaimer appended.
     """
     import improvement.brief as b
     from config import settings
 
     captured: dict = {}
 
-    def _fake_stream_and_emit(client, task_id, **kwargs):
+    class _FakeMsg:
+        stop_reason = "end_turn"
+
+        class _Block:
+            type = "text"
+            text = "FINAL ANSWER"
+
+        content = [_Block()]
+
+    def _fake_stream_message(client, task_id, **kwargs):
         captured.update(kwargs)
         captured["task_id"] = task_id
         return (
-            "FINAL ANSWER",
+            _FakeMsg(),
             {
                 "input_tokens": 100,
                 "output_tokens": 50,
@@ -231,31 +237,105 @@ def test_improvement_brief_streaming_path_passes_tools_to_stream_and_emit(mocker
             },
         )
 
-    # Patch at the import path used by improvement.brief (it imports
-    # function-locally inside the streaming branch).
-    mocker.patch("worker.anthropic_stream.stream_and_emit", side_effect=_fake_stream_and_emit)
+    mocker.patch("worker.anthropic_stream.stream_message", side_effect=_fake_stream_message)
 
-    # with_options(...) returns the client we pass into stream_and_emit; just
-    # let the real Anthropic singleton return its real with_options output —
-    # stream_and_emit itself is fully mocked so no actual SDK call fires.
     result, _usage = b.generate_improvement_brief(
         channel_title="Ch",
         analytics={"avg_views": 100},
         task_id="task-w3-fix-a",
     )
 
-    # The streaming path must have been taken.
     assert captured["task_id"] == "task-w3-fix-a"
-    # Tools must be threaded through — the Wave-3 fix.
     assert "tools" in captured, (
-        "Wave-3 Fix A: streaming branch must pass tools=tools to "
-        "stream_and_emit, NOT drop it. Without this the improvement brief "
-        "loses web_search grounding (SEV1)."
+        "streaming branch must pass tools=tools to stream_message — "
+        "without this the improvement brief loses web_search grounding (SEV1)."
     )
     tools = captured["tools"]
     assert len(tools) == 1
     assert tools[0]["name"] == "web_search"
     assert tools[0]["type"] == settings.ANTHROPIC_WEB_SEARCH_TOOL
-    # Disclaimer still appended on streaming path.
     assert "FINAL ANSWER" in result
     assert "does not promise virality" in result
+
+
+# ── Issue 350 — pause_turn loop ───────────────────────────────────────────────
+
+
+def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
+    """When stop_reason == 'pause_turn' the loop re-calls create() with the
+    assistant turn appended and uses the final synthesised answer, not the
+    search-trigger preamble. max_uses=5 is set on the tool definition.
+    """
+    import improvement.brief as b
+
+    class _PausedResp:
+        stop_reason = "pause_turn"
+        usage = type("U", (), {"input_tokens": 10, "output_tokens": 5,
+                                "cache_read_input_tokens": 0,
+                                "cache_creation_input_tokens": 0})()
+
+        class _Block:
+            type = "text"
+            text = "let me search…"
+
+        content = [_Block()]
+
+    class _FinalResp:
+        stop_reason = "end_turn"
+        usage = type("U", (), {"input_tokens": 20, "output_tokens": 30,
+                                "cache_read_input_tokens": 0,
+                                "cache_creation_input_tokens": 0})()
+
+        class _Block:
+            type = "text"
+            text = "SYNTHESISED ANSWER"
+
+        content = [_Block()]
+
+    responses = [_PausedResp(), _FinalResp()]
+    call_args: list = []
+
+    def _create(**kwargs):
+        call_args.append(kwargs)
+        return responses[len(call_args) - 1]
+
+    mock_client = mocker.MagicMock()
+    mock_client.messages.create.side_effect = _create
+    mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
+
+    result, _usage = b.generate_improvement_brief(channel_title="Ch", analytics={})
+
+    assert mock_client.messages.create.call_count == 2, (
+        "pause_turn must trigger exactly one continuation call"
+    )
+    # Second call must have the assistant turn appended to messages
+    second_messages = call_args[1]["messages"]
+    assert len(second_messages) == 2  # original user + assistant with search results
+    assert second_messages[1]["role"] == "assistant"
+    # Final answer is the second response's text, not the search preamble
+    assert "SYNTHESISED ANSWER" in result
+    assert "let me search" not in result
+
+
+def test_improvement_brief_tool_max_uses_is_set(mocker):
+    """max_uses=5 must be present on the web_search tool definition (Issue 350).
+    Without it the model can call web_search unboundedly, blowing token budgets.
+    """
+    import improvement.brief as b
+
+    captured: dict = {}
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _Resp([_Block("text", "FINAL")])
+
+    mock_client = mocker.MagicMock()
+    mock_client.messages.create.side_effect = _create
+    mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
+
+    b.generate_improvement_brief(channel_title="Ch", analytics={})
+
+    tools = captured["tools"]
+    assert tools[0].get("max_uses") == 5, (
+        "web_search tool must carry max_uses=5 to bound unbounded search rounds (Issue 350)"
+    )

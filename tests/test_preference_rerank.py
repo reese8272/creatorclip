@@ -133,3 +133,26 @@ async def test_rerank_falls_back_to_dna_when_scorer_raises():
 
     # Scorer raised → DNA scores left untouched, original order preserved.
     assert [c.score for c in out] == [0.9, 0.1]
+
+
+@pytest.mark.asyncio
+async def test_rerank_falls_back_to_dna_on_non_finite_score():
+    """Issue 328 — a NaN/inf prediction must not corrupt the sort order.
+
+    A non-finite blended score makes Python's sort order undefined (NaN compares
+    False to everything), which could float a broken clip to rank 1. The guard
+    treats it like a broken model and returns the DNA ranking untouched.
+    """
+    from clip_engine.ranking import rerank_with_preference
+
+    a, b = _clip(0.9), _clip(0.1)
+    stub = _StubScorer(
+        label_count=2 * settings.PERSONALIZATION_THRESHOLD_LABELS,
+        scores=[float("nan"), 1.0],
+    )
+    with patch("preference.train.load_latest", new=AsyncMock(return_value=stub)):
+        out = await rerank_with_preference([a, b], MagicMock(), MagicMock())
+
+    # Non-finite pref score → DNA scores untouched, original order preserved.
+    assert [c.score for c in out] == [0.9, 0.1]
+    assert out[0] is a and out[1] is b

@@ -36,7 +36,8 @@ def _normalize(url: str) -> str:
     suffix and add sslmode=require for non-local hosts (managed Postgres needs it)."""
     for suffix in ("+asyncpg", "+psycopg", "+psycopg2"):
         url = url.replace(suffix, "")
-    if "sslmode=" not in url and "localhost" not in url and "127.0.0.1" not in url:
+    _local_hosts = ("localhost", "127.0.0.1", "postgres", "db")
+    if "sslmode=" not in url and not any(h in url for h in _local_hosts):
         url += ("&" if "?" in url else "?") + "sslmode=require"
     return url
 
@@ -83,7 +84,7 @@ def main() -> None:
 
         print(f"{'video':>12}  {'yt_id':<14} {'ingest':<8}  clips (by render_status)")
         print("-" * 78)
-        for vid, yt, ingest, reason, created in videos:
+        for vid, yt, ingest, reason, _created in videos:
             short = str(vid)[:8]
             cl = clip_rows.get(vid, [])
             if cl:

@@ -70,8 +70,8 @@ def _get_sessionmaker() -> async_sessionmaker[AsyncSession]:
         _engine = create_async_engine(
             settings.logs_database_url,
             pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
+            pool_size=2,
+            max_overflow=3,
             pool_recycle=1800,
             connect_args={"prepare_threshold": None},
         )
