@@ -291,10 +291,19 @@ _CSP_BASE = (
 
 def _build_csp() -> str:
     """Return the Content-Security-Policy value, optionally extended with CSP_EXTRA_SOURCES."""
+    parts = [_CSP_BASE]
+    # Presigned clip URLs redirect to R2, which is a different origin; browsers
+    # block cross-origin media without an explicit media-src allowlist.
+    r2_origin = (
+        f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+        if settings.R2_ACCOUNT_ID
+        else "https://*.r2.cloudflarestorage.com"
+    )
+    parts.append(f"media-src 'self' {r2_origin}")
     extra = settings.CSP_EXTRA_SOURCES.strip()
     if extra:
-        return f"{_CSP_BASE}; {extra}"
-    return _CSP_BASE
+        parts.append(extra)
+    return "; ".join(parts)
 
 
 class SecurityHeadersMiddleware(_BaseHTTPMiddleware):
