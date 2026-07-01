@@ -314,7 +314,11 @@ youtube_tokens
 
 videos
   id, creator_id (FK), youtube_video_id (NULLABLE since Issue 317), title, kind (long/short),
-  published_at, duration_s, source_uri, origin (catalog/link/upload),
+  published_at, duration_s, source_uri, audio_uri (NULLABLE, migration 0039 —
+    the extracted audio WAV; source_uri STAYS the original video so the renderer
+    can extract keyframes. Ingest no longer overwrites source_uri with audio /
+    deletes the mp4; both are purged at 72h by purge_stale_source_media),
+  origin (catalog/link/upload),
   captions_available, ingest_status (pending/running/done/failed),
   failure_reason (NULLABLE, migration 0036 — creator-safe reason set when status=failed,
     surfaced on the dashboard; never holds a raw exception/secret), created_at

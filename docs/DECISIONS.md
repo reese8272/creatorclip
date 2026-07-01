@@ -10231,3 +10231,42 @@ top-N truncation is signaled. 404-vs-422 non-UUID inconsistency locked as intent
 **Source/evidence.** Per-issue industry-standard research (Anthropic prompt-injection + caching docs,
 OWASP LLM01/A09:2025/JWT cheat sheets, Celery idempotency doctrine, FastAPI TestClient patterns, ffmpeg-python
 test patterns, PostgreSQL RLS docs) — captured in each issue's CHECK brief. **Date:** 2026-06-30
+
+## 2026-07-01 — Retain the source video for rendering; split audio to `audio_uri` (migration 0039) [DEC]
+
+**What changed.** `ingest_video` no longer overwrites `videos.source_uri` with the extracted audio key,
+and no longer deletes the original mp4 immediately after audio extraction. A new nullable column
+`videos.audio_uri` holds the extracted WAV; `source_uri` stays the original **video**. Transcription and
+signals now read `audio_uri`; the renderer keeps reading `source_uri` (the video). `purge_stale_source_media`
+purges **both** the video and audio at `SOURCE_MEDIA_RETENTION_HOURS` (72h) after `ingest_done_at`. This
+**reverses Issue 110 Fix D** (post-commit orphan-mp4 deletion) — with no overwrite there is no orphan.
+
+**Why.** The old design discarded the video at ingest, but the renderer needs the video (the 9:16
+active-speaker reframe extracts keyframes). So *every* uploaded video failed to render
+(`ffmpeg -i …wav -vframes 1 …jpg → "Output file does not contain any stream"`) — the core upload→playable-clip
+loop was non-functional in prod (0/18 clips ever rendered; confirmed live on the rung-4 upload of video
+`8aa28e97`, 6/6 clips failed). This also **realigns code with the already-documented COMPLIANCE.md policy**:
+"Source media (raw video) purged 72h after ingest… never stored longer than needed for processing" — rendering
+IS processing, and auto-render runs within minutes of ingest, comfortably inside the 72h window.
+
+**Industry standard checked.** Retain the original/mezzanine until all downstream renditions/derivatives
+complete, then lifecycle-delete; never delete the source before processing finishes, and never let a failed
+job delete the source. Confirmed against AWS Elemental MediaConvert workflows, the Netflix video-processing
+pipeline (mezzanine retained through all inspections), and Frame.io's mezzanine guidance. Discarding the
+source pre-render is the named anti-pattern.
+
+**Alternatives ruled out.** (a) Deterministic audio key with no new column — works but leaves the
+audio/video split implicit and prevents independent purge; the explicit column is more SOLID. (b) Re-fetch
+the video on demand for render — impossible for `origin=upload` (nothing to refetch) and ToS-forbidden for
+`origin=link`. (c) Render inline during ingest before deleting — couples ingest to render, breaks
+retry/idempotency, and can't serve manual re-render/trim. (d) Keep the video indefinitely — violates the
+72h ToS/storage posture.
+
+**Known limitation (accepted).** Existing clips are unrecoverable — their source videos were already
+deleted by the old code; only new uploads render. Manual re-render/trim after the 72h window will fail
+(source purged) — the UI should surface "source expired, can't re-render" rather than a dead retry button
+(follow-up, tracked with the render-loop UX item).
+
+**Source/evidence.** Best-practices CHECK brief (2026-07-01) with live `web_search`; verified end-to-end via
+`scripts/repro_ingest_render.py` (real ffmpeg ingest → render `done`) + the integration test in
+`tests/test_worker_pipeline.py`. **Date:** 2026-07-01

@@ -4,8 +4,8 @@ Covers:
 A. /auth/logout rate-limit decorator
 B. /billing/webhook rate-limit decorator
 C. improvement-brief debounce race fix (SELECT FOR UPDATE SKIP LOCKED)
-D. _ingest_async orphan-mp4 cleanup after final commit
-   (Issue-105 misread — .wav short-circuit only fixed retry case)
+D. _ingest_async source retention (migration 0039 supersedes the old orphan-mp4
+   cleanup — source_uri now stays the video, audio goes to audio_uri)
 E. routers/auth.py:131 _logging workaround removed (covered by ruff/grep)
 """
 
@@ -83,43 +83,35 @@ def test_improvement_brief_uses_for_update_skip_locked():
     )
 
 
-# ── Fix D: _ingest_async orphan-mp4 cleanup ───────────────────────────────────
+# ── Fix D (SUPERSEDED by migration 0039 — source video now retained) ─────────────
 
 
-def test_ingest_async_captures_prior_source_uri():
-    """Static guard: _ingest_async must capture prior_source_uri BEFORE the
-    final commit overwrites video.source_uri with the audio key, then call
-    adelete_file on the prior URI after commit (with a prefix guard).
+def test_ingest_async_retains_source_video():
+    """SUPERSEDES Issue 110 Fix D (migration 0039).
 
-    Without this, the original mp4 in R2 is permanently invisible to
-    `_purge_stale_source_media_async` (which iterates Video.source_uri to
-    find purgeables) — ToS retention violation + unbounded storage cost.
-    Issue 105's .wav short-circuit only prevented the RETRY-orphan; the
-    FIRST-run orphan was never cleaned up. (Issue 110 Fix D)
+    The old code overwrote ``video.source_uri`` with the audio key and deleted the
+    original mp4 — Fix D then had to clean up the resulting orphan. But that design
+    broke the renderer (it needs the *video* to extract keyframes for the 9:16
+    reframe), which is the core-loop bug migration 0039 fixes. Ingest must now:
+    store the audio derivative on ``audio_uri``, LEAVE ``source_uri`` as the original
+    video, and NOT delete the mp4 — the video is retained for the render window and
+    purged by ``purge_stale_source_media``. With no overwrite there is no orphan, so
+    Fix D's prior-URI cleanup is intentionally gone.
     """
     src = (pathlib.Path(__file__).parent.parent / "worker" / "tasks.py").read_text()
     idx = src.find("async def _ingest_async(")
     assert idx >= 0, "worker/tasks.py must define _ingest_async"
-    # Take a generous slice to cover the full function body
     body = src[idx : idx + 6000]
-    assert "prior_source_uri = source_uri" in body, (
-        "_ingest_async must capture prior_source_uri before overwriting "
-        "video.source_uri (Issue 110 Fix D)."
+    assert "video.audio_uri = audio_uri" in body, (
+        "_ingest_async must store the extracted audio on audio_uri (migration 0039)."
     )
-    assert "adelete_file(prior_source_uri)" in body, (
-        "_ingest_async must call adelete_file(prior_source_uri) after the "
-        "final commit to close the orphan-mp4 leak (Issue 110 Fix D)."
+    assert "video.source_uri = audio_uri" not in body, (
+        "_ingest_async must NOT overwrite source_uri with the audio key — the "
+        "renderer needs the original video retained (migration 0039)."
     )
-    # Prefix guard — canonical retry-safe shape per AWS Lambda
-    # idempotent-retry doctrine.
-    assert 'prior_source_uri.startswith("source/")' in body, (
-        "_ingest_async prior-URI deletion must guard on the 'source/' "
-        "prefix so Celery redelivery never deletes the audio key by "
-        "mistake (Issue 110 Fix D — retry-safe shape)."
-    )
-    assert 'prior_source_uri.endswith(".mp4")' in body, (
-        "_ingest_async prior-URI deletion must also guard on the '.mp4' "
-        "suffix (Issue 110 Fix D — retry-safe shape)."
+    assert "adelete_file(prior_source_uri)" not in body, (
+        "_ingest_async must NOT delete the source video at ingest — it is retained "
+        "for the render window and purged by purge_stale_source_media (migration 0039)."
     )
 
 
@@ -166,26 +158,26 @@ def test_improvement_brief_debounce_query_has_skip_locked_then_fallback():
     )
 
 
-# ── Fix D: integration-shaped test for the orphan-mp4 deletion ────────────────
+# ── Fix D (SUPERSEDED by 0039): integration-shaped test for source retention ──
 
 
 @pytest.mark.asyncio
-async def test_ingest_async_calls_adelete_file_after_commit():
-    """Belt-and-suspenders integration test: simulate a first-run ingest
-    where source_uri starts as `source/{creator}/{vid}.mp4`, the audio
-    upload commits source_uri to `audio/{vid}.wav`, and assert
-    adelete_file was called exactly once with the original mp4 key.
+async def test_ingest_async_retains_source_video_integration():
+    """Belt-and-suspenders integration test: simulate a first-run ingest where
+    source_uri starts as `source/{creator}/{vid}.mp4`, and assert that after ingest
+    source_uri is UNCHANGED (the video is retained), audio_uri holds the WAV, and
+    adelete_file was NOT called on the source (migration 0039).
 
-    Heavy mocking required — _ingest_async pulls in db, ffmpeg, R2,
-    progress emit, Celery context. We mock the seams, not the
-    contract: we want to verify the call sequence, not the internals.
+    The live version of this is exercised by
+    `tests/test_worker_pipeline.py::test_ingest_async_deducts_minutes_exactly_once`
+    (real Postgres: asserts source_uri retained + audio_uri set) and by the local
+    `scripts/repro_ingest_render.py` harness (real ffmpeg ingest → render).
     """
-    # This is structural enough that the static guard above is the load-bearing
-    # check. Punt the full integration shape to manual verification + the
-    # static guard. Skip with a note so coverage of the contract is honest.
+    # The static guard `test_ingest_async_retains_source_video` above is the
+    # load-bearing check; the real ingest→render contract is proven in the
+    # integration lane + the repro harness. Skip the heavy inline-mock shape.
     pytest.skip(
-        "Full integration shape requires live R2 + Postgres + Celery seams; "
-        "static guard in test_ingest_async_captures_prior_source_uri pins "
-        "the contract. Re-enable when an `integration` lane that can boot "
-        "_ingest_async with mocked R2 + AdminSessionLocal exists."
+        "Real ingest→render retention is covered by the integration test in "
+        "test_worker_pipeline.py + scripts/repro_ingest_render.py; the static guard "
+        "test_ingest_async_retains_source_video pins the code contract."
     )

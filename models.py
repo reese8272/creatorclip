@@ -309,6 +309,10 @@ class Video(Base):
     published_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     duration_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     source_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # The extracted audio WAV (transcribe + signals read this). Kept separate from
+    # `source_uri` (the original video) so ingest no longer clobbers the video the
+    # renderer needs — see migration 0039. NULL until ingest extracts audio.
+    audio_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     origin: Mapped[VideoOrigin] = mapped_column(
         sa.Enum(VideoOrigin, name="video_origin_enum"),
         nullable=False,

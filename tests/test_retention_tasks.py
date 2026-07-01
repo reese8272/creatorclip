@@ -79,7 +79,8 @@ def test_purge_clears_source_uri_past_retention():
     # releases the session during the boto3 delete loop, then reopens a
     # session to issue an UPDATE. Tests assert the new shape.
     select_result = MagicMock()
-    select_result.all.return_value = [(vid_id, "s3://bucket/source/vid.mp4")]
+    # migration 0039: purge now selects (id, source_uri, audio_uri); audio None here.
+    select_result.all.return_value = [(vid_id, "s3://bucket/source/vid.mp4", None)]
     update_result = MagicMock()  # the second session's UPDATE
     execute_calls: list = []
 
@@ -124,6 +125,57 @@ def test_purge_clears_source_uri_past_retention():
     asyncio.run(run())
 
 
+def test_purge_also_clears_audio_uri():
+    """migration 0039: the purge deletes BOTH the source video and its extracted
+    audio WAV once past retention, and nulls both columns."""
+    from worker.tasks import _purge_stale_source_media_async
+
+    vid_id = uuid.uuid4()
+    select_result = MagicMock()
+    select_result.all.return_value = [
+        (vid_id, "s3://bucket/source/vid.mp4", "s3://bucket/audio/vid.wav")
+    ]
+    update_result = MagicMock()
+    execute_calls: list = []
+    advisory_lock_result = MagicMock()
+    advisory_lock_result.scalar_one = MagicMock(return_value=True)
+    advisory_unlock_result = MagicMock()
+
+    async def fake_execute(stmt, params=None):
+        stmt_str = str(stmt)
+        if "pg_try_advisory_lock" in stmt_str:
+            return advisory_lock_result
+        if "pg_advisory_unlock" in stmt_str:
+            return advisory_unlock_result
+        execute_calls.append(stmt)
+        return select_result if len(execute_calls) == 1 else update_result
+
+    deleted: list = []
+
+    async def run():
+        with (
+            patch("db.AdminSessionLocal") as mock_ctx,
+            patch("worker.storage.delete_file", side_effect=lambda uri: deleted.append(uri)),
+        ):
+            session = AsyncMock()
+            session.execute = AsyncMock(side_effect=fake_execute)
+            session.commit = AsyncMock()
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await _purge_stale_source_media_async()
+
+            assert "s3://bucket/source/vid.mp4" in deleted
+            assert "s3://bucket/audio/vid.wav" in deleted
+            # SELECT + one UPDATE for source_uri + one UPDATE for audio_uri.
+            update_sql = " ".join(str(s).lower() for s in execute_calls[1:])
+            assert "source_uri" in update_sql
+            assert "audio_uri" in update_sql
+            session.commit.assert_called_once()
+
+    asyncio.run(run())
+
+
 def test_purge_noop_when_nothing_stale():
     """When the DB query returns no rows, nothing is deleted or committed."""
     from worker.tasks import _purge_stale_source_media_async
@@ -159,8 +211,8 @@ def test_purge_continues_on_delete_error():
 
     select_result = MagicMock()
     select_result.all.return_value = [
-        (vid1_id, "s3://bucket/bad.mp4"),
-        (vid2_id, "s3://bucket/good.mp4"),
+        (vid1_id, "s3://bucket/bad.mp4", None),
+        (vid2_id, "s3://bucket/good.mp4", None),
     ]
     update_result = MagicMock()
     execute_calls: list = []

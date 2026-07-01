@@ -913,41 +913,36 @@ async def _ingest_async(video_id: str) -> None:
             if not video.source_uri:
                 raise ValueError(f"Video {video_id} has no source_uri — upload the file first")
 
-            # Idempotency short-circuit (Issue 105 — Fix 2): if source_uri ends in
-            # ".wav" the prior run already completed the audio-extract + upload step
-            # and committed the WAV key. Returning here is safe because the final
-            # DB commit (source_uri = audio_uri) is the durable progress marker per
-            # AWS Lambda's idempotent-retry doctrine — make progress persistent and
-            # detectable, skip work that is already persisted.
+            # Idempotency short-circuit (Issue 105 — Fix 2; updated migration 0039):
+            # a prior run that finished the audio-extract + upload set `audio_uri`.
+            # Returning here is safe — `audio_uri` is the durable progress marker
+            # (AWS Lambda idempotent-retry doctrine: make progress persistent and
+            # detectable, skip work already persisted). `source_uri` now stays the
+            # ORIGINAL VIDEO (the renderer needs it), so we key the probe off
+            # `audio_uri`, not a `.wav` suffix on source_uri.
             # Issue 336: probe size first — zero-byte or unprobeable WAV re-extracts.
-            if video.source_uri.endswith(".wav"):
+            if video.audio_uri:
                 _wav_ok = False
                 try:
-                    async with alocal_path(video.source_uri) as _wav_p:
+                    async with alocal_path(video.audio_uri) as _wav_p:
                         _wav_ok = _wav_p.stat().st_size > 0
                 except Exception:
                     pass
                 if _wav_ok:
-                    logger.info("Video %s WAV ingest already done — skipping", video_id)
-                    await aemit(video_id, "step", label="ingest_skipped", stage="ingest", reason="already_done")
+                    logger.info("Video %s audio ingest already done — skipping", video_id)
+                    await aemit(
+                        video_id,
+                        "step",
+                        label="ingest_skipped",
+                        stage="ingest",
+                        reason="already_done",
+                    )
                     return
-                logger.warning("Video %s WAV zero-byte or unprobeable — re-extracting", video_id)
+                logger.warning(
+                    "Video %s audio WAV zero-byte or unprobeable — re-extracting", video_id
+                )
 
             source_uri = video.source_uri
-            # Capture the original blob key BEFORE we overwrite source_uri with
-            # the audio key on the final commit. After commit, the original mp4
-            # has no SQL row pointing at it — `_purge_stale_source_media_async`
-            # iterates `Video.source_uri` to find purgeables and would never
-            # see the orphan. Delete it explicitly post-commit. Guard with the
-            # `source/` prefix + `.mp4` suffix because the Issue-105 `.wav`
-            # short-circuit at function entry should already prevent a retry
-            # from re-entering with audio_uri here, but the prefix check is
-            # the canonical retry-safe shape (AWS Lambda idempotent-retry
-            # doctrine) in case a future ingest path skips the short-circuit.
-            # (Issue 110 — closes the Issue-105 misread on first-run orphan;
-            # R2 bucket lifecycle on `source/` is the documented
-            # belt-and-suspenders, see DECISIONS.)
-            prior_source_uri = source_uri
             video.ingest_status = IngestStatus.running
             await session.commit()
 
@@ -978,7 +973,12 @@ async def _ingest_async(video_id: str) -> None:
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if video:
-                video.source_uri = audio_uri
+                # Store the audio derivative on its own column; LEAVE source_uri as
+                # the original video so the renderer can extract keyframes. The video
+                # is retained for SOURCE_MEDIA_RETENTION_HOURS and purged by
+                # `purge_stale_source_media` (migration 0039 — fixes the broken render
+                # loop where source_uri was overwritten with audio + the mp4 deleted).
+                video.audio_uri = audio_uri
                 if duration_s and not video.duration_s:
                     video.duration_s = duration_s
                 if duration_s:
@@ -988,25 +988,11 @@ async def _ingest_async(video_id: str) -> None:
                     await deduct_for_video(video.id, video.creator_id, duration_s, session)
                 await session.commit()
 
-        # Post-commit orphan cleanup: the original mp4 is now unreferenced.
-        # Prefix guard makes this safe under Celery redelivery — only fires
-        # when prior_source_uri is the expected `source/...mp4` shape.
-        # adelete_file is idempotent (no-op on missing key), so a crash
-        # between commit and this call leaks an orphan that the R2
-        # `source/` lifecycle rule eventually sweeps (belt-and-suspenders).
-        # (Issue 110)
-        if prior_source_uri.startswith("source/") and prior_source_uri.endswith(".mp4"):
-            from worker.storage import adelete_file
-
-            try:
-                await adelete_file(prior_source_uri)
-            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
-                logger.warning(
-                    "_ingest_async: prior-mp4 cleanup failed video=%s uri=%s err=%s",
-                    video_id,
-                    prior_source_uri,
-                    type(exc).__name__,
-                )
+        # NB: the original video is deliberately NOT deleted here anymore. The
+        # renderer needs it (9:16 active-speaker reframe extracts keyframes), so it
+        # is retained under `source_uri` for the render window and purged by
+        # `purge_stale_source_media` at SOURCE_MEDIA_RETENTION_HOURS after
+        # `ingest_done_at` — the documented COMPLIANCE.md posture. (migration 0039)
     except Exception as exc:
         # Safe message — exception args may carry internal detail. The
         # generic shape matches the data-gate emit policy in _build_dna_async.
@@ -1032,7 +1018,7 @@ async def _transcribe_async(video_id: str) -> None:
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
-            if not video or not video.source_uri:
+            if not video or not video.audio_uri:
                 raise ValueError(f"Video {video_id} not ready for transcription")
 
             # Idempotency probe (Issue 105 — Fix 1): if a Transcript row already
@@ -1059,9 +1045,9 @@ async def _transcribe_async(video_id: str) -> None:
                 )
                 return
 
-            source_uri = video.source_uri
+            audio_uri = video.audio_uri
 
-        async with alocal_path(source_uri) as audio_path:
+        async with alocal_path(audio_uri) as audio_path:
             # transcribe_audio dispatches to sync Deepgram / AssemblyAI / WhisperX
             # SDKs — offload to a thread so the event loop is free during the
             # multi-second transcription round-trip (Issue 38 Wave 1). Bounded by
@@ -1125,7 +1111,7 @@ async def _signals_async(video_id: str) -> None:
 
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
-            if not video or not video.source_uri:
+            if not video or not video.audio_uri:
                 raise ValueError(f"Video {video_id} not ready for signal extraction")
 
             # Idempotency probe (Issue 105 — Fix 1): if a Signals row already exists
@@ -1146,13 +1132,13 @@ async def _signals_async(video_id: str) -> None:
                 )
                 return
 
-            source_uri = video.source_uri
+            audio_uri = video.audio_uri
             retention_result = await session.execute(
                 select(RetentionCurve).where(RetentionCurve.video_id == video.id)
             )
             retention_points = list(retention_result.scalars())
 
-        async with alocal_path(source_uri) as audio_path:
+        async with alocal_path(audio_uri) as audio_path:
             # extract_audio_events is librosa-backed (sync, CPU + IO heavy).
             # Offload so the event loop stays responsive (Issue 38 Wave 1).
             await aemit(video_id, "step", label="extract_audio_events", stage="signals")
@@ -2349,7 +2335,7 @@ async def _generate_clips_async(video_id: str) -> None:
 async def _purge_stale_source_media_async() -> None:
     from datetime import timedelta
 
-    from sqlalchemy import and_, select, text, update
+    from sqlalchemy import and_, or_, select, text, update
 
     from config import settings
     from worker.storage import adelete_file
@@ -2377,19 +2363,20 @@ async def _purge_stale_source_media_async() -> None:
             return
         try:
             result = await session.execute(
-                select(Video.id, Video.source_uri).where(
+                select(Video.id, Video.source_uri, Video.audio_uri).where(
                     and_(
-                        Video.source_uri.isnot(None),
+                        or_(Video.source_uri.isnot(None), Video.audio_uri.isnot(None)),
                         Video.ingest_done_at.is_not(None),
                         Video.ingest_done_at < cutoff,
                     )
                 )
             )
-            # `.all()` returns Sequence[Row[...]] which is Row-iterable and
-            # unpacks to (uuid, str|None) per row. Untyped because Row's
-            # bracketed type doesn't equal `tuple[...]` in the eyes of mypy.
-            # The WHERE clause filters `source_uri.isnot(None)`; the loop below
-            # still skips defensive None so type-narrowing stays trivial.
+            # `.all()` returns Sequence[Row[...]] which is Row-iterable and unpacks
+            # to (uuid, str|None, str|None) per row. Untyped because Row's bracketed
+            # type doesn't equal `tuple[...]` in the eyes of mypy. Both the video
+            # (source_uri) and its extracted audio (audio_uri) are purged once the
+            # video is past its retention window — the audio derivative isn't needed
+            # after signals ran (migration 0039). The loop skips defensive None.
             targets = result.all()
         finally:
             await session.execute(
@@ -2400,23 +2387,43 @@ async def _purge_stale_source_media_async() -> None:
     if not targets:
         return
 
-    purged_ids: list[uuid.UUID] = []
-    for video_id, source_uri in targets:
-        if source_uri is None:
-            continue
-        try:
-            await adelete_file(source_uri)
-            purged_ids.append(video_id)
-        except Exception as exc:
-            logger.warning("Failed to purge source media for video %s: %s", video_id, exc)
+    # Purge each blob independently and only null the column whose file we actually
+    # deleted, so a transient R2 error on one leaves the other's pointer intact for
+    # the next sweep (retry-safe; the R2 `source/` lifecycle rule sweeps any orphan).
+    src_purged: list[uuid.UUID] = []
+    audio_purged: list[uuid.UUID] = []
+    for video_id, source_uri, audio_uri in targets:
+        if source_uri is not None:
+            try:
+                await adelete_file(source_uri)
+                src_purged.append(video_id)
+            except Exception as exc:
+                logger.warning("Failed to purge source media for video %s: %s", video_id, exc)
+        if audio_uri is not None:
+            try:
+                await adelete_file(audio_uri)
+                audio_purged.append(video_id)
+            except Exception as exc:
+                logger.warning("Failed to purge audio media for video %s: %s", video_id, exc)
 
-    if not purged_ids:
+    if not src_purged and not audio_purged:
         return
 
     async with db.AdminSessionLocal() as session:
-        await session.execute(update(Video).where(Video.id.in_(purged_ids)).values(source_uri=None))
+        if src_purged:
+            await session.execute(
+                update(Video).where(Video.id.in_(src_purged)).values(source_uri=None)
+            )
+        if audio_purged:
+            await session.execute(
+                update(Video).where(Video.id.in_(audio_purged)).values(audio_uri=None)
+            )
         await session.commit()
-        logger.info("Purged source media for %d video(s)", len(purged_ids))
+        logger.info(
+            "Purged media: %d source video(s), %d audio file(s)",
+            len(src_purged),
+            len(audio_purged),
+        )
 
 
 async def _purge_stale_youtube_analytics_async() -> None:
