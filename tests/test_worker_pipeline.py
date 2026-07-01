@@ -230,14 +230,18 @@ async def test_ingest_async_deducts_minutes_exactly_once(db_session):
                 select(func.count(MinuteDeduction.id)).where(MinuteDeduction.video_id == video.id)
             )
             persisted = await s.get(Video, video.id)
-            audio_uri = persisted.source_uri
+            audio_uri = persisted.audio_uri
+            source_uri = persisted.source_uri
             duration_persisted = persisted.duration_s
         await engine.dispose()
 
         # 300 s → ceil(300/60) = 5 min charged once
         assert n_deductions == 1
         assert balance == 95
+        # migration 0039: the extracted audio lands on audio_uri, and the original
+        # video is RETAINED on source_uri (not overwritten) so the renderer can use it.
         assert audio_uri.startswith("s3://test/audio/")
+        assert source_uri == "s3://test/source.mp4"
         assert duration_persisted == 300.0
     finally:
         await _cleanup_creator(db_session, creator.id)
