@@ -633,6 +633,9 @@ class Settings(BaseSettings):
     # Resend API key (https://resend.com — 3k/month free). Required when
     # NOTIFY_BACKEND='resend'. Never log or expose.
     RESEND_API_KEY: str = ""
+    # Timeout in seconds for each Resend API send call. Keeps the notification
+    # worker from holding a DB connection open while the mailer blocks. (Issue 349)
+    RESEND_TIMEOUT_S: int = 10
     # From-address used for all outbound transactional emails. Must match a
     # domain verified in the Resend dashboard (e.g. noreply@autoclip.studio).
     EMAIL_FROM: str = ""

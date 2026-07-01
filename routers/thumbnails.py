@@ -201,8 +201,9 @@ async def get_thumbnail_patterns(
     except ValueError:
         uuid_list = []
 
-    youtube_ids = list(
-        (
+    youtube_ids: list[str] = [
+        uid
+        for uid in (
             await session.execute(
                 select(Video.youtube_video_id).where(
                     Video.id.in_(uuid_list),
@@ -211,7 +212,8 @@ async def get_thumbnail_patterns(
                 )
             )
         ).scalars()
-    )
+        if uid is not None
+    ]
 
     if not youtube_ids:
         raise HTTPException(

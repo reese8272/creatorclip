@@ -1,123 +1,99 @@
-# clip_engine — assessed 2026-06-24
+# clip_engine — assessed 2026-07-01
 
-Slice: `clip_engine/` (10 files: `__init__.py`, `window.py`, `scoring.py`,
-`ranking.py`, `candidates.py`, `captions.py`, `edits.py`, `filler.py`,
-`reframe.py`, `render.py`). Verified call sites in `worker/tasks.py`,
-`routers/clips.py`, and `billing/ledger.py` to settle blocking/isolation claims.
+Slice: candidates.py, captions.py, edits.py, filler.py, ranking.py, reframe.py,
+render.py, scoring.py, window.py, __init__.py.
+
+Method note (per user hard constraint): every best-practice / SDK / library claim
+below is backed by the CURRENT official docs, cited with the URL + date checked.
+Claims about this codebase are cited to `file:line` read directly.
 
 ## Findings
 
-- [SEV2] reframe.py:151 — `FaceDetector.create_from_options(...)` is rebuilt
-  **per sampled frame** inside `_detect_faces_mediapipe`. At `REFRAME_SAMPLE_FPS=5`
-  over a 60–90s clip that is 300–450 BlazeFace detector constructions (model load
-  + graph init) per clip. The inline comment makes this a deliberate thread-safety
-  tradeoff, and the whole path is gated OFF (`ACTIVE_SPEAKER_REFRAME_ENABLED=False`)
-  and runs in a worker thread (not the event loop), so it is a render-cost/latency
-  defect, not a loop-blocker. (needs-runtime-confirmation on actual magnitude) |
-  fix: when the flag is flipped on, build the detector **once** per
-  `build_crop_center_track` call and reuse it across frames (one `FaceDetector`
-  per clip, closed in a `finally`); a per-thread cache is unnecessary since each
-  clip already owns its worker thread. Add a render-env benchmark before launch.
-- [SEV2] candidates.py:189 — `derive_skip_reason` re-runs `build_signal_array` +
-  `find_peaks` with the SAME params as `extract_candidates` (candidates.py:238–249),
-  duplicating the peak-detection work (DRY). Blast radius is tiny: it only fires on
-  the zero-clips path from `routers/clips.py`, so the redundant compute is once-per-
-  empty-video. | fix: have `extract_candidates` optionally return a structured
-  `(candidates, skip_reason)` (or accept a precomputed `peak_indices`) so the skip
-  reason is derived from the single peak pass instead of recomputing it.
-- [cleanup] render.py:434 — `subtitles={ass_path}:fontsdir=...` interpolates the
-  temp ASS path straight into the libass filter arg. `ass_path` is
-  `out_path.with_suffix(...)` where `out_path` is a worker `NamedTemporaryFile`;
-  the inline comment waves off colons "because /tmp". If an operator sets `TMPDIR`
-  to a directory whose name contains `:` `'` or `\`, the filter string breaks the
-  render. Low likelihood, bounded. | fix: escape the path for the filtergraph
-  (libass wants `\:` `\'` escaped) or pass it via the worker's known-safe temp
-  root; at minimum drop the "not a real concern" comment and assert no special
-  chars in `ass_path`.
-- [cleanup] render.py:324,334 — `from config import settings as _settings` and
-  `import clip_engine.reframe as _reframe_mod` are function-local imports. The
-  config import is justified in-comment (circular-dep at module init) and the
-  reframe import is justified (patch-target stability for tests), so both are
-  intentional — flagged only so the next reader does not "tidy" them to module
-  scope and reintroduce the cycle / break the test seam.
-- [cleanup] captions.py:85 / filler.py:35,43 — three hard-coded English
-  stopword/filler lexicons. `_STOPWORDS` (captions) and the Tier-2 filler set
-  (filler) overlap heavily ("like", "okay", "you know"). Not duplicated *within*
-  the slice and they serve different purposes (highlight-suppression vs excision),
-  so KISS says leave them; flagged only as a future-consolidation pointer.
+- [SEV2] clip_engine/ranking.py:127 — the idempotency guard
+  `select(Clip).where(Clip.video_id == video_id)` reads the creator-scoped `clips`
+  table with NO `creator_id` predicate. This is an internal Celery-worker path (not a
+  request handler) and `video_id` is a primary key that maps to exactly one creator, so
+  it is not a live cross-tenant leak — but it violates the "per-creator isolation on
+  EVERY creator-scoped query" rule (rubric §3) and would silently return the wrong
+  creator's clips if the pipeline were ever invoked with a mismatched
+  `(creator_id, video_id)` pair | fix: add `.where(Clip.creator_id == creator_id)` to
+  the guard query so the tenant predicate is structural, matching the always-filter
+  posture the COMPLIANCE log (2026-05-28 Issue 33) mandates. Cheap defense-in-depth,
+  no behavior change on the happy path.
 
-### Verified clean (load-bearing claims traced, not assumed)
+- [SEV2] clip_engine/candidates.py:347-349 — after sentence-boundary snapping, `end_s`
+  is re-extended to `setup_start_s + MIN_CLIP_S` and forward-snapped to a word `end`,
+  but is never re-clamped to the timeline `duration_s`. Transcript word `end` values can
+  marginally exceed the ffprobe container duration (encoder/transcriber rounding), so a
+  clip whose window sits at the tail of the video can emit `end_s > source_duration`.
+  `render.py:367` then raises `ValueError("end_s … exceeds source duration …")` and that
+  clip's render fails | fix: after the snap block clamp
+  `c["end_s"] = min(c["end_s"], duration_s)` (and re-apply the min-clip guard), so the
+  persisted `Clip.end_s` can never fall outside the renderable range. Add an eval
+  scenario with a peak in the final 30s of the video to pin it.
 
-- **Per-creator isolation — PASS.** `ranking.py:101` queries `Clip` by `video_id`
-  only, but the sole caller `routers/clips.py:208 generate_clips` gates
-  `video.creator_id != creator.id` (404) **before** invoking
-  `generate_and_rank_clips`, and the persisted `Clip` row carries `creator_id`
-  (ranking.py:141). Every clip-facing endpoint (`list_clips`, `render_clip`,
-  `clean_*`, `submit_cuts`, `get_clip`, `download_clip`) re-checks
-  `clip.creator_id == creator.id`. No cross-tenant path found.
-- **Blocking-in-async — PASS.** Every `subprocess.run` (render.py: `_run`,
-  `_frame_dimensions`, `_measure_loudnorm_filter`) lives inside
-  `render_clip_file` / `render_cleaned_clip_file`, and all three worker call sites
-  (`worker/tasks.py:1159, 1305, 1392`) wrap them in `asyncio.to_thread`. The CPU
-  candidate-extraction + feature build in `ranking.py:119` / `scoring.py:212` are
-  also offloaded via `asyncio.to_thread`. The remaining on-loop pure-Python work
-  (`detect_cut_segments` in `routers/clips.py:_clip_clean_cuts`) is
-  O(words×phrase_len)≈ a few thousand iterations per clip — sub-millisecond, not a
-  finding.
-- **Anthropic SDK — PASS.** `scoring.py:28` `AsyncAnthropic` is a module-level
-  singleton (timeout + `max_retries=2`). Prompt caching present and correct:
-  static instructions in a leading system block, per-creator DNA in a second block
-  carrying `cache_control ephemeral ttl:"1h"` (stable-first ordering). `max_tokens`
-  set (1200); structured-output JSON-array contract enforced with graceful
-  signal-score fallback on `JSONDecodeError`. Token usage logged after the call
-  (scoring.py:276) including the 1h-tier cache-write tokens, and billed via
-  `_estimate_cost_usd`+`increment_usage` with `cache_write_multiplier=2.0` — i.e.
-  the OFF_COURSE_BUGS 2026-06-24 cache-token under-bill is **already fixed in this
-  module** (cached read/write tiers priced separately).
-- **Untrusted-content / injection — PASS.** Transcript sections routed through
-  `wrap_untrusted` (JSON-encodes each value) and `UNTRUSTED_CONTENT_POLICY` leads
-  the system prefix (scoring.py:178–186, 52–54). `dna_brief` is creator-owned
-  derivative text from `dna_profile.brief_text`.
-- **Resource lifecycle — PASS.** Every render temp file (keyframe, ASS, sendcmd,
-  `.filter`, `.measure.filter`, out_path) is removed in a `finally` /
-  `unlink(missing_ok=True)`. `FaceDetector` opened with a `with` block;
-  `cv2.VideoCapture` released. No DB session is opened in this module (sessions are
-  passed in / owned by the caller).
-- **Idempotency — PASS.** `generate_and_rank_clips` short-circuits when any clip
-  exists for the video (ranking.py:101–110) and deliberately never delete+reinserts
-  (would cascade-destroy feedback/outcomes — Issue 61). Clean/edit worker paths
-  short-circuit on populated `cleaned_render_uri`.
-- **Clip-quality + honesty — PASS.** Setup-start anchored by backward look from
-  peak (`_find_setup_start`, candidates.py:135) + sentence-boundary snapping
-  (principle #12, candidates.py:316–334). Every score path emits a named principle
-  from CLIPPING_PRINCIPLES.md; cold-start = "Retention curve is ground truth", DNA
-  path cites Claude's chosen principle with a safe default. Skip reasons cite
-  principles. No virality language in any string. Below-threshold preference
-  fallback is honest (`rerank_with_preference` returns DNA ranking unchanged at
-  weight 0).
-- **Config & paths — PASS.** `ACTIVE_SPEAKER_REFRAME_ENABLED`, `REFRAME_SAMPLE_FPS`
-  present in `config.py` + `.env.example` with descriptions. All media paths are
-  `Path` objects from the worker's temp/storage layer. No new config introduced by
-  this slice that is missing from `.env.example`.
+- [SEV2] clip_engine/reframe.py:193,197 — `_mediapipe_model_path()` returns the legacy
+  Solutions asset `modules/face_detection/face_detection_short_range.tflite` as the
+  `model_asset_path` for the **Tasks** `FaceDetectorOptions`. The MediaPipe Tasks
+  FaceDetector expects a metadata-bearing `.task`/blaze-face bundle from the model hub,
+  not the raw Solutions `.tflite`; loading the bare graph asset is likely to raise at
+  `create_from_options` and drop the whole track to center-fallback. (needs-runtime-
+  confirmation — the entire per-frame path is gated OFF by
+  `ACTIVE_SPEAKER_REFRAME_ENABLED=False` and the code already marks it
+  "render-env/staging-pending".) | fix: ship the hub `blaze_face_short_range.tflite`
+  (Tasks-compatible) as a pinned asset under a known path (e.g. alongside the Dockerfile
+  fonts) and point `_mediapipe_model_path()` at it; assert `Path(...).exists()` at
+  worker start when the flag is on. Verified param name `min_detection_confidence` is
+  valid on FaceDetectorOptions:
+  https://developers.google.com/mediapipe/api/solutions/python/mp/tasks/vision/FaceDetectorOptions
+  (checked 2026-07-01).
 
-Tests: `tests/test_clip_engine.py test_scoring.py test_render.py test_captions.py
-test_filler.py test_edits.py test_reframe.py test_preference_rerank.py` →
-**222 passed**.
+- [SEV2] clip_engine/reframe.py:151 — `FaceDetector.create_from_options(...)` is invoked
+  **inside `_detect_faces_mediapipe`, i.e. once per sampled frame**. At the default
+  5 fps over a 60–90s clip that is 300–450 detector constructions (each parsing the model
+  asset) per render — an avoidable order-of-magnitude cost that scales with clip length.
+  The inline comment concedes this. (gated OFF today, so not a live regression) | fix:
+  construct the detector once in `build_crop_center_track` and pass it into the per-frame
+  call (BlazeFace IMAGE-mode `.detect()` is safe to reuse serially within one thread);
+  keep the lazy import. Also confirm the `sendcmd` single-timestamp `"<t> [enter] crop x
+  <v>;"` line format on a real ffmpeg build before flipping the flag
+  (needs-runtime-confirmation) — the `crop` filter's `x` IS commandable
+  (ffmpeg-filters.html §crop "Commands", checked 2026-07-01), but the instantaneous
+  interval + `[enter]` flag combo is unverified on real media.
+
+- [cleanup] clip_engine/candidates.py:193-207 — `derive_skip_reason` re-derives the
+  exact `find_peaks(signal, distance=max(1, int(MIN_CLIP_S/resolution_s)),
+  prominence=0.5)` setup that `extract_candidates` (lines 246-253) already owns (DRY). A
+  future tweak to the peak params must be made in two places or the skip-reason will lie
+  | fix: extract a `_detect_peaks(timeline) -> (times, signal, peak_indices, properties)`
+  helper and call it from both.
+
+- [cleanup] clip_engine/reframe.py:50-51 — dead `if TYPE_CHECKING: pass` block (no
+  type-only imports guarded) | fix: delete it. Also line 119: `frame_width` is a
+  parameter of `_detect_faces_mediapipe` but never used in the body | fix: drop the
+  parameter (call site at line 300 passes it positionally — update it) or use it.
+
+- [cleanup] clip_engine/render.py:504 — the burned-in `subtitles={ass_path}:fontsdir=…`
+  filter arg is built by f-string with no libass escaping of `:` `,` `'` `\` in the
+  path. Paths are worker-created temp files today (low risk, no shell — args are a list),
+  but a path containing a filtergraph metacharacter would corrupt the `-vf` chain rather
+  than fail cleanly | fix: use the quoted form `subtitles=filename='…'` with `\`/`:`/`'`
+  escaped, or route the value through a small `_escape_ffmpeg_filter_path()` helper
+  shared with the `sendcmd=f=` path (render.py:467).
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — temp files cleaned in `finally`; detector/capture closed |
-| 2 Concurrency & scale | ok — all blocking subprocess + CPU offloaded to threads; 1 gated per-frame detector-rebuild (SEV2) |
-| 3 Security & compliance | ok — per-creator isolation gated upstream; no PII/token in logs; no raw SQL; honesty held |
-| 4 Clip-quality | ok — setup-anchored, principle-cited, DNA-relative, honest fallback |
-| 5 Anthropic SDK | ok — singleton, prompt-cache (1h TTL), token-logged, max_tokens + structured-output, cache-cost fixed |
-| 6 Cleanliness & typing | 2 cleanup (DRY skip-reason, lexicon overlap) — no print/TODO/dead code; signatures typed |
-| 7 Error handling / API | n/a (no router code in slice — endpoints live in `routers/clips.py`) |
-| 8 Config & paths | ok — flags in `.env.example` w/ descriptions; paths absolute via `Path` |
+| 1 Resource lifecycle | ok — every temp artifact (keyframe, ASS, sendcmd, measure/apply filter scripts) unlinked in a `finally`; `_ANTHROPIC` is a module-level singleton; DB commits/refreshes on the async session are caller-managed |
+| 2 Concurrency & scale | 2 findings — CPU work (`find_peaks`, feature build) correctly offloaded via `asyncio.to_thread`; async Anthropic client awaited; render fns are sync (Celery); detector-per-frame + reframe path gated off |
+| 3 Security & compliance | 1 finding (creator_id defense-in-depth, ranking.py:127) — no OAuth token / PII / secret in any log line; no f-string/`%` SQL (parameterized ORM); no virality language in any skip-reason label or the scoring system prompt (verified strings) |
+| 4 Clip-quality | 1 finding (end-clamp, candidates.py) — setup is anchored by backward look from peak (Principle #2); Clean-Context-Boundary snapping present (#12); every score carries a named principle; DNA-first with honest signal-only cold start; recency decay lives in preference/ (out of slice) |
+| 5 Anthropic SDK | ok — prompt caching used (two-block system, DNA marked `ttl:"1h"` only above the 1024-token floor); tokens + cost logged every call; `max_tokens=1200` set; truncation warned. Verified current docs need NO beta header for the 1h TTL (platform.claude.com/docs prompt-caching, checked 2026-07-01) — code is correct |
+| 6 Cleanliness & typing | 3 cleanups (DRY peak-detect, dead TYPE_CHECKING block + unused param, filter-path escaping) — no TODO/print/debug; signatures typed |
+| 7 Error handling / API | n/a (no router / HTTP surface in this slice) |
+| 8 Config & paths | ok — reframe/render read absolute `Path`s; `ACTIVE_SPEAKER_REFRAME_ENABLED`/`REFRAME_SAMPLE_FPS` gated via settings; no new config introduced here |
 
 ## Module verdict
-NEEDS-WORK — no blockers and no SEV1; ships safely as-is with the gated reframe
-path OFF, but two SEV2s (per-frame detector rebuild before flipping the reframe
-flag; duplicated peak detection in `derive_skip_reason`) plus minor cleanups should
-be cleared before the active-speaker reframe is turned on in production.
+NEEDS-WORK — no blocker; two live SEV2s worth fixing now (add `creator_id` to the
+idempotency guard, clamp post-snap `end_s` to source duration), plus two gated-path
+SEV2s to resolve before `ACTIVE_SPEAKER_REFRAME_ENABLED` is ever flipped on.

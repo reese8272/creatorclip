@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, Outlet, RouterProvider } from 'react-router-dom'
+import { createBrowserRouter, Navigate, Outlet, RouterProvider, useRouteError } from 'react-router-dom'
 import { AuthGate } from '@/components/AuthGate'
 import { AppChrome } from '@/components/AppChrome'
 import { useActivityTelemetry } from '@/hooks/useActivityTelemetry'
@@ -24,6 +24,35 @@ function RootLayout() {
   return <Outlet />
 }
 
+// Catches any render throw in any child route so a crash never blanks the whole
+// SPA — instead shows a branded recovery UI (Issue 346).
+function RootError() {
+  const error = useRouteError()
+  console.error('[RootError]', error)
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-8 text-center text-foreground">
+      <h1 className="text-2xl font-semibold">Something went wrong</h1>
+      <p className="max-w-md text-sm text-muted-foreground">
+        An unexpected error occurred. You can try reloading the page or returning to the dashboard.
+      </p>
+      <div className="flex gap-3">
+        <button
+          onClick={() => window.location.reload()}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Reload
+        </button>
+        <a
+          href="/app/dashboard"
+          className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-accent"
+        >
+          Back to dashboard
+        </a>
+      </div>
+    </div>
+  )
+}
+
 // React Router v7 Data Mode. The SPA mounts under /app (Vite base + FastAPI
 // fallback); `basename` keeps client routes relative to that prefix. Four layout
 // contexts (Issue 85b): protected+chrome (the app), protected+bare (focused
@@ -34,6 +63,7 @@ const router = createBrowserRouter(
   [
     {
       element: <RootLayout />,
+      errorElement: <RootError />,
       children: [
         {
           element: <AuthGate />,

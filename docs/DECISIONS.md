@@ -5,6 +5,74 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-07-01 — Stripe v8: `max_network_retries` must be passed to `StripeClient()`, not set as a module global (Issue 345)
+
+**What was decided.** Removed `stripe.max_network_retries = 3` from `billing/stripe_client.py` and moved
+the value into the `StripeClient(max_network_retries=3)` constructor.
+
+**Why.** Stripe Python SDK v8 removed all global-config support — `stripe.max_network_retries` is a no-op
+when the `StripeClient` class is used. The unset default is 0 retries, meaning any transient network blip
+during checkout-session creation surfaces as a user-facing 502. Idempotency keys were already in place, so
+retries are safe.
+
+**Source / evidence.** Stripe "No global configuration" SDK v8 migration note
+(stripe.com/docs/libraries/python — confirmed 2026-07-01 in the `/assess` run).
+
+---
+
+## 2026-07-01 — Issue 348: Chat worker switches to AsyncSessionLocal + GUC; RLS added to 5 child tables (Issue 348)
+
+**What was decided.**
+1. `_chat_respond_async` now uses `db.AsyncSessionLocal()` (app role, no BYPASSRLS) instead of `db.AdminSessionLocal()`, with `session.info["creator_id"] = str(cid)` set before the first query to activate the `_set_app_creator_id` event-listener GUC.
+2. Migration `0040_rls_chat_child_tables.py` enables RLS on 5 child tables (`video_metrics`, `retention_curves`, `transcripts`, `clip_outcomes`, `chat_messages`) via subquery-based `tenant_isolation` policies (since these tables have no direct `creator_id`).
+
+**Why.** The chat worker was using `AdminSessionLocal` (BYPASSRLS), which means any bug in the worker's creator-ownership check would be the sole isolation boundary. Switching to the app role (BYPASSRLS=false) with the GUC set makes the DB the second line of defence. The child-table policies are needed so `chat_messages` (now written by the non-BYPASSRLS session) can read/write its own conversation rows.
+
+**Source / evidence.** PostgreSQL RLS documentation §5.8 (child-table subquery pattern); project `db.py` `_set_app_creator_id` listener; migration 0010 and 0038 as the baseline pattern.
+
+**Date.** 2026-07-01.
+
+---
+
+## 2026-07-01 — Issue 349: Notification mailer call moved outside the DB session with asyncio timeout
+
+**What was decided.** `_send_notification_async` now commits the DB session before calling `mailer_send`, which runs outside the `async with` block via `asyncio.wait_for(asyncio.to_thread(mailer_send, ...), timeout=_settings.RESEND_TIMEOUT_S)`. On failure a fresh `AdminSessionLocal` session marks the delivery row `failed`. `RESEND_TIMEOUT_S: int = 10` added to `config.py`.
+
+**Why.** The original code held the `AdminSessionLocal` connection open while the Resend API call blocked (no timeout). Under pool exhaustion or a slow/unresponsive Resend endpoint this stalls a worker thread and leaks a DB connection for an unbounded duration. `asyncio.to_thread` + `asyncio.wait_for` gives a Python-level timeout around the blocking sync SDK call.
+
+**Source / evidence.** `asyncio.to_thread` docs (Python 3.9+; confirmed available at 3.12); Resend Python SDK (sync `resend.Emails.send`); industry pattern: "release DB connection before making external API calls".
+
+**Date.** 2026-07-01.
+
+---
+
+## 2026-07-01 — Issue 350: improvement brief pause_turn loop + max_uses=5 on web_search
+
+**What was decided.** `improvement/brief.py` now handles `stop_reason == "pause_turn"` in both the `.create()` path and the streaming path. On `pause_turn`, the assistant turn (including tool-use blocks) is appended to `messages` and the call is repeated, up to `_MAX_SEARCH_ROUNDS = 5` times. `max_uses: 5` is added to the `web_search` tool definition. The streaming path switches from `stream_and_emit` (returns only final text) to `stream_message` (returns full `Message` with `stop_reason` visible).
+
+**Why.** Without the loop, if Claude called `web_search` the response would return with `stop_reason=pause_turn` and the final synthesised answer was never produced — the brief would contain only the pre-search preamble ("Let me search…"). `max_uses: 5` bounds total search calls per brief to prevent unbounded token spend.
+
+**Source / evidence.** Anthropic docs "Server-side tools / pause_turn" (confirmed current 2026-07-01); `worker/anthropic_stream.py stream_message` which already returns the full Message.
+
+**Date.** 2026-07-01.
+
+---
+
+## 2026-07-01 — event_log.py pool pinned small; added to DEPLOYMENT.md connection budget (Issue 347)
+
+**What was decided.** `event_log.py:_get_sessionmaker` pool changed from `pool_size=5,max_overflow=10`
+(15 conns) to `pool_size=2,max_overflow=3` (5 conns). The DEPLOYMENT.md fleet budget inequality now
+accounts for the event-log engine per replica.
+
+**Why.** The event-log engine points at the same `DATABASE_URL`/PgBouncer as the primary OLTP engine
+and runs on every non-skipped HTTP request, but was absent from the connection budget — a hidden axis-A
+exhaustion risk. Telemetry is best-effort, so 5 connections/replica is more than sufficient.
+
+**Source / evidence.** SQLAlchemy async engine pool sizing docs (docs.sqlalchemy.org); PgBouncer sidecar
+sizing in `deploy/charts/creatorclip/` (Issue 259). Assessment finding 2026-07-01.
+
+---
+
 ## 2026-06-30 — Activate the RLS role split via the app role only; keep the superuser as the migrate role (Issue 343)
 
 **What was decided.** Production now enforces per-creator RLS by having the app connect as the

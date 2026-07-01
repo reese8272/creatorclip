@@ -1,197 +1,154 @@
-# _root_infra — assessed 2026-06-24
+# _root_infra — assessed 2026-07-01
 
 Slice: `auth.py`, `config.py`, `crypto.py`, `db.py`, `limiter.py`, `main.py`,
-`models.py`, `api_key.py`, `event_log.py`, `observability.py`, `redact.py`.
+`models.py`, `api_key.py`, `event_log.py`, `observability.py`, `redact.py`, `verbose.py`.
 
-Line numbers are current as of this date. Several SEV2/cleanup items below were
-first raised 2026-06-09 and ticketed (Issues 82/109/228/229/233) but are **still
-live in the code** — re-verified against current line numbers, not assumed fixed.
+All load-bearing claims below were verified against current official docs (cited inline)
+per the "documentation-not-memory" constraint. Package versions read from
+`requirements.txt`: `slowapi==0.1.9`, `sqlalchemy[asyncio]==2.0.36`,
+`psycopg[binary,pool]==3.2.3`, `redis[hiredis]==5.2.0`, `cryptography==48.0.1`,
+`PyJWT==2.13.0`.
 
 ## Findings
 
-- [SEV1] limiter.py:80-83 + main.py:123 — `Limiter(storage_uri=settings.REDIS_URL)`
-  resolves to the **synchronous** `limits.storage.redis.RedisStorage` (confirmed:
-  `storage_from_string('redis://…')` → sync class; slowapi 0.1.9
-  `extension.__evaluate_limits` calls `self.limiter.hit(...)` with no
-  `to_thread`/`run_in_threadpool` — grep count 0 in both middleware.py and
-  extension.py). The check runs in the async dispatch path via `SlowAPIMiddleware`
-  globally **and** on 69 `@limiter.limit(...)` async routes, so every limited
-  request makes a **blocking Redis round-trip on the event-loop thread**. At the
-  hundreds-of-concurrent-users target this serializes request handling on Redis
-  latency and head-of-line-blocks the whole loop whenever Redis stalls (failover /
-  SLOWLOG / blip). One *systemic* finding, not 69. | fix: near-term, append a
-  socket timeout to the limiter storage URI (`redis://…?socket_timeout=0.1`) so a
-  Redis stall degrades one request not the loop; proper fix is the async storage
-  path — construct the Limiter with `async+redis://…` (slowapi 0.1.9 has the
-  async-strategy refs; `limits.aio.storage.RedisStorage` is present) and confirm
-  the moving-window hit is awaited (needs-runtime-confirmation). Record the choice
-  in `docs/DECISIONS.md` (tracked: Issue 82).
+- [SEV1] event_log.py:70-78 — the dedicated event-log engine opens its own pool
+  (`pool_size=5, max_overflow=10` = **15 connections per API replica**) to
+  `settings.logs_database_url`, which **defaults to `DATABASE_URL`** (config.py:63-65),
+  i.e. the SAME Postgres/PgBouncer as the primary engine. The documented per-pod
+  connection budget in db.py:35-38 only accounts for `engine` (15+5=20) and
+  `admin_engine`; this second 15-connection pool is **absent from the inequality**.
+  It is not background load: main.py:374 `await event_log.record_event(...)` runs on
+  **every** non-skipped request, so the event-log pool takes request-rate concurrency.
+  This is exactly scale-checklist axis-A (`QueuePool limit`/PgBouncer exhaustion) hiding
+  in an uncounted engine. | fix: pin the event-log pool small — telemetry is best-effort,
+  one short INSERT/commit — e.g. `pool_size=2, max_overflow=3`, and add it to the
+  `total_db_connections` inequality in docs/DEPLOYMENT.md. (needs-load-confirmation of
+  the total against the 25-conn PgBouncer sidecar sizing).
 
-- [SEV2] config.py:263 — every production fail-fast in `_require_prod_secrets`
-  (Stripe-secrets-required, `/metrics` auto-disable, absolute `LOCAL_MEDIA_DIR`)
-  is gated on the free-string compare `self.ENV == "production"`, but
-  `ENV: str = "development"` accepts ANY value. `ENV=prod`, `ENV=Production`, or a
-  typo silently switches off **all** prod safeguards at once — the app boots
-  "healthy" with unauthenticated `/metrics` and unset Stripe secrets. Same hazard
-  at main.py:116 (`docs_url` exposes `/docs`) and the several `ENV == "production"`
-  middleware gates (main.py:296). Highest-leverage defect in the slice. | fix:
-  `ENV: Literal["development", "test", "staging", "production"]` so pydantic
-  rejects anything else at boot (tracked: Issue 228).
+- [SEV2] config.py:391 — `ENV: str = "development"` is a free string, yet every
+  production security boundary branches on the exact literal `self.ENV == "production"`:
+  prod-secret fail-fast (config.py:719), `/docs` disable (main.py:127), HSTS header
+  (main.py:322), R2-required + metrics-token gate (config.py:730/758), and the
+  verbose-content-logging prod guard (config.py:510). A deploy-time typo (`prod`,
+  `Production`, trailing space) silently runs a PRODUCTION container in dev-mode
+  hardening — no prod-secret enforcement, `/docs` exposed, no HSTS, and verbose raw
+  content logging enabled by `VERBOSE_LOGGING` alone. | fix: constrain to
+  `ENV: Literal["development","staging","production"] = "development"`. pydantic-settings
+  coerces string Literals from env correctly (the known Literal-from-env gap is only for
+  non-string literals like `Literal[False]` — pydantic/pydantic-settings#435), so a typo
+  fails fast at boot.
 
-- [SEV2] config.py:48 — `JWT_SECRET_KEY: str` has no minimum-length validation;
-  an 8-char secret yields a brute-forceable HS256 session signer (hashcat cracks
-  short HS256 secrets in minutes). Fernet key strength is enforced by the library;
-  the JWT secret has no equivalent guard. | fix: add a `model_validator` requiring
-  `len(JWT_SECRET_KEY) >= 32` (256-bit, per RFC 7518 §3.2); fail fast at boot
-  (tracked: Issue 229).
+- [SEV2] config.py:83 — `JWT_SECRET_KEY: str` has no minimum-length validation. HS256
+  requires a key at least as long as the hash output (256 bits / 32 bytes) per RFC 7518
+  §3.2, and weak HS256 secrets are practically brute-forceable
+  (auth0.com/blog/brute-forcing-hs256-is-possible). PyJWT 2.13.0 does **not** enforce
+  this on `encode()` by default. A short/guessable secret lets an attacker forge session
+  cookies (auth.create_session_token) for any `creator_id` → full cross-tenant
+  impersonation. | fix: add a `field_validator("JWT_SECRET_KEY")` asserting
+  `len(v.encode()) >= 32`; fail fast at boot.
 
-- [SEV2] crypto.py:13-29 — `_fernet()` builds a fresh `MultiFernet` (+1-2 `Fernet`)
-  on **every** `encrypt()`/`decrypt()` call, including the per-request OAuth-token
-  decrypt on the YouTube refresh path (violates the module-singleton rule, rubric
-  §1). Side effect: a malformed `TOKEN_ENCRYPTION_KEY` is not detected until the
-  first crypto call instead of at boot. | fix: `@functools.lru_cache(maxsize=1)`
-  on `_fernet` and call it once at import for fail-fast; expose
-  `_fernet.cache_clear()` for `scripts/rotate_token_key.py` (tracked: Issue 233).
+- [SEV2] config.py:82,91 + crypto.py:13-24 — `TOKEN_ENCRYPTION_KEY` (and
+  `_PREVIOUS` during rotation) format is never validated at startup. `_fernet()` builds
+  `Fernet(key.encode())` lazily on the first `encrypt()`/`decrypt()`, and Fernet raises
+  `ValueError: Fernet key must be 32 url-safe base64-encoded bytes` only at that first
+  call — i.e. a malformed key surfaces as a 500 on a creator's OAuth callback in
+  production instead of a boot failure, and a bad `_PREVIOUS` key silently breaks a
+  live rotation window. | fix: validate both in a `field_validator` by attempting
+  `Fernet(v.encode())` at load (fail-fast, CLAUDE.md Production Standards). (Verified:
+  cryptography 48 Fernet requires exactly 32 url-safe base64 bytes.)
 
-- [SEV2] db.py:87-123 — `recreate_engine` guards re-entry with a plain bool
-  (`_recreate_in_progress`), a check-then-set race where the **loser returns
-  immediately while the winner is mid-rebuild** — a second concurrent caller can
-  proceed against a just-`dispose()`d engine. Safe in the documented single-
-  threaded prefork-hook use, but nothing enforces that contract. | fix:
-  `threading.Lock()` with a blocking acquire around the rebuild so the loser waits
-  for the rebuilt engine rather than racing past; add a docstring restricting
-  callers to fork hooks (tracked: Issue 82).
+- [SEV2] requirements.txt — `slowapi==0.1.9` is pinned but its transitive dependency
+  **`limits` is not pinned at all**. The entire Issue-312 event-loop mitigation
+  (limiter.py:83-86, 129-133) depends on two `limits`-internal behaviours: (a)
+  `storage_options` being forwarded verbatim to `redis.from_url()`
+  (confirmed in limits 5.x docs, limits.readthedocs.io/en/stable/storage.html), and
+  (b) sync `RedisStorage.hit()` returning a bool. `limits` restructured storage and
+  added the async `limits.aio` path across the 3.x→5.x line; a silent bump could change
+  the passthrough or `hit()`'s truthiness and **silently disable rate limiting**.
+  CLAUDE.md mandates `==` pins. | fix: pin `limits==<resolved-version>` explicitly and
+  add a smoke test asserting `limiter._storage` is a sync RedisStorage and
+  `pool.connection_kwargs["socket_timeout"] == 0.1`.
 
-- [SEV2] main.py:233 — `headers = dict(response.headers)` in
-  `StaticCacheBustMiddleware.dispatch` collapses duplicate header keys: a
-  `text/html` response carrying two `Set-Cookie` headers silently drops one.
-  Latent today (cookie-setting responses are redirects/JSON, not text/html) but a
-  correctness trap on a middleware that buffers and rebuilds every HTML response. |
-  fix: build the new response from `response.headers.raw` (or copy via
-  `MutableHeaders`) to preserve multi-value headers (tracked: Issue 109).
+- [SEV2] observability.py:516-518 — HTTP latency metric labels by route template
+  (good, bounded) but falls back to the **raw path** when `scope.get("route")` is None
+  — which is exactly the case for every **unmatched (404) request**. A scanner or broken
+  client hitting `/random/<uuid>` paths mints a new `http_request_duration_seconds`
+  time-series per unique path → unbounded Prometheus cardinality / memory growth
+  (the failure this line was trying to avoid, but it leaks on the 404 path). | fix: when
+  `route` is None, use a constant label such as `"__unmatched__"` instead of
+  `scope["path"]`.
 
-- [SEV2] main.py:334-359 — `_log_request_events` `await`s
-  `event_log.record_event(...)` on **every** non-skipped request, which opens a
-  transaction and `COMMIT`s a row on the logs engine inline (event_log.py:108-125,
-  pool_size=5/overflow=10). This adds a full DB write-transaction + logs-pool
-  checkout to the request hot path at every RPS; the code comment itself names "a
-  high-throughput async queue is the documented scale path." | fix: enqueue
-  telemetry to an in-process `asyncio.Queue` drained by a background task
-  (fire-and-forget), keeping the best-effort swallow; or split event_logs onto a
-  separate DB and batch inserts.
+- [SEV2] limiter.py:129-133 (residual, already mitigated — noted, not re-opened) —
+  Verified against slowapi v0.1.9 `extension.py`: `_check_request_limit` is a plain
+  `def` invoked in middleware and calls `self.limiter.hit(lim.limit, *args, cost=cost)`
+  **synchronously, no await** (~line 468). With the sync `RedisStorage` the Redis
+  round-trip therefore executes on the event-loop thread for every rate-limited request.
+  The shipped interim fix (bounded `socket_timeout=0.1`, `socket_connect_timeout=0.25`)
+  correctly caps worst-case blocking at ~100 ms/request rather than eliminating it, and
+  the async-upgrade trigger is documented. Acceptable for the ≤100-user beta; remains a
+  per-request serialized Redis hop on the loop and a throughput ceiling. | fix: none for
+  beta; execute the documented `async+redis://` + `limits.aio` switch when slowapi ships
+  a version that awaits `hit()`. (needs-load-evidence for the ceiling.)
 
-- [SEV2] api_key.py:113-114 — `get_current_creator_via_api_key` issues
-  `UPDATE creator_api_keys SET last_used_at = now()` + `COMMIT` on **every**
-  bearer-authenticated request. The OBS companion / folder-watcher client is
-  chatty (per-clip `/clips/ingest`), so this is per-request write amplification +
-  single-row contention on one key row. | fix: throttle the touch — update only
-  when `last_used_at IS NULL OR last_used_at < now() - interval '5 minutes'`, so
-  steady-state auth is read-only.
+- [SEV2] main.py:360-385 — `_log_request_events` `await`s a full DB INSERT+COMMIT
+  (event_log.record_event) inline before returning the response on every non-static
+  request, coupling every request's p99 latency to the telemetry DB's health. The module
+  docstring itself names "a high-throughput async queue" as the scale path and the code
+  comment states it is awaited deliberately for read-after-write on `/api/logs/me`.
+  Combined with the SEV1 pool finding, a slow logs DB both adds latency to and can starve
+  connections from every request. | fix: if the read-after-write guarantee can be
+  relaxed, dispatch via `asyncio.create_task(...)` (fire-and-forget, already best-effort);
+  otherwise keep the await but MUST shrink the event-log pool (SEV1) so it cannot exhaust
+  the shared bouncer. (needs-load-evidence.)
 
-- [SEV2] observability.py:397-417 + redact.py:46-53 — `scrub_dict` (the
-  formatter / Sentry / event-log "structural backstop") is **shallow**: it masks
-  only sensitive *top-level* keys. A token nested under a non-sensitive key
-  (`extra={"context": {"access_token": "…"}}`) is NOT redacted, and Sentry
-  `breadcrumbs`/`exception` values aren't scrubbed by `_sentry_before_send` at
-  all. With `send_default_pii=False` + SDK integrations this is defense-in-depth,
-  not a proven leak, but it is a gap in the claimed backstop. | fix: make
-  `scrub_dict` recurse into nested dicts/lists (bounded depth ≤4); add a Sentry
-  `event_scrubber`/denylist; unit-test that a nested `access_token` is masked
-  (tracked: Issue 233).
+- [cleanup] config.py:477 — `log_level_int` does `import logging as _logging` inside the
+  property though `logging` is already imported at module top (config.py:1). | fix: drop
+  the local import and use the module-level `logging`.
 
-- [cleanup] limiter.py:30 — `SESSION_COOKIE = "cc_session"` duplicates auth.py:59
-  (DRY; can silently diverge and break per-creator bucketing). | fix:
-  `from auth import SESSION_COOKIE` (no import cycle — auth.py does not import
-  limiter) (tracked: Issue 109).
+- [cleanup] config.py:787,792 — `print(..., file=sys.stderr)` on the boot config-error
+  path. This is the one defensible `print` (logging isn't configured yet and the process
+  is about to `sys.exit(1)`), but CLAUDE.md's "no print()" rule technically flags it.
+  | fix: leave as-is; it is the correct pre-logging bootstrap channel — noted for
+  completeness only.
 
-- [cleanup] db.py:140 — `_set_app_creator_id(session, transaction, connection)`
-  untyped (CLAUDE.md mandates typed signatures). | fix: annotate
-  `(session: Session, transaction: SessionTransaction, connection: Connection)`
-  (tracked: Issue 109).
+## Verified-correct (no finding)
 
-- [cleanup] auth.py:123-124 — the `except (...)` → `raise … from None` drops the
-  exception class from logs entirely; limiter.py:57 logs the class name for the
-  identical decode failure. | fix: `logger.info("session_decode_failed exc=%s",
-  type(exc).__name__)` before the raise (class name only — PII-safe).
-
-- [cleanup] event_log.py:47-49 — `_is_sensitive` is a one-line passthrough around
-  `redact.is_sensitive` with no added behavior (DRY/KISS). | fix: call
-  `is_sensitive` directly at event_log.py:58 and delete the wrapper.
-
-- [cleanup] config.py:485,490 — `print(..., file=sys.stderr)` on the startup
-  config-error path. Defensible (runs before `configure_logging`) and ends in
-  `sys.exit(1)`, so not a real "no print()" violation; flagging only so it isn't
-  re-raised. | fix: none required; optional one-line "pre-logging bootstrap"
-  comment.
-
-## Verified OK (load-bearing checks that passed)
-
-- **Token handling → decrypt()**: `crypto.decrypt` uses `MultiFernet`
-  (primary+previous) and raises a *safe* `TokenDecryptError` (no ciphertext/key in
-  the message). `models.py` declares the encrypted columns with an explicit
-  "always use crypto.encrypt()/decrypt()" contract; no raw-token access in slice.
-- **No PII/token in any log line**: grepped every `logger.*` in all 11 files —
-  none log token/email/secret/cookie/scope/raw_key/ciphertext. limiter.py:57 logs
-  the JWT exception **class name only**; auth.py logs nothing sensitive.
-- **Per-creator isolation**: this slice is schema (`models.py`) + infra. Queries
-  exist only in auth.py (lookup `creators` by id — RLS-exempt bootstrap, correct),
-  api_key.py (lookup by globally-unique `key_hash` on `creator_api_keys`, a
-  non-RLS table — no tenant column to leak), and event_log.py (`event_logs`,
-  intentionally no RLS; purge filters `creator_id`). DB-level RLS is injected by
-  db.py's `after_begin` listener (`SELECT set_config('app.creator_id', :cid,
-  true)`) against the 12 tenant tables in migration 0010 (+ chat 0026 +
-  notifications). Unset GUC ⇒ `current_setting(...,true)` NULL ⇒ `creator_id =
-  NULL` ⇒ 0 rows (fail-closed). No missing `WHERE creator_id` in this slice.
-- **api_key dependency ordering**: the dependency COMMIT (api_key.py:114) ends the
-  txn and wipes the `SET LOCAL` GUC, then `session.info["creator_id"]` is set
-  (line 116) so the route's *next* transaction re-injects it. The `last_used_at`
-  UPDATE hits a non-RLS table, so the pre-info commit is correct (not silently
-  filtered). No isolation defect.
-- **Parameterized SQL**: db.py uses `text(... :cid ...)` bound params; no
-  f-string/`%`-built SQL anywhere in the slice.
-- **Async singletons / lifecycle**: `engine`/`admin_engine` + sessionmakers are
-  module-level singletons; `dispose_engine` closes both pools; `_health_redis` is
-  a lifespan singleton reused by `/health` and the metrics saturation scrape;
-  `get_session` yields inside `async with AsyncSessionLocal()` so close/rollback
-  is guaranteed on every path. Pool math (15+5 app / 2+2 admin / 5+10 logs)
-  documented against the PgBouncer budget; `prepare_threshold=None` correct for
-  PgBouncer txn-pooling; `pool_pre_ping` + `pool_recycle=1800` set.
-- **No blocking call in the db/auth/health async paths**: `_check_postgres`/
-  `_check_redis` use `asyncio.timeout` + async drivers; event_log engine is
-  created lazily precisely to bind the correct loop in a Celery worker. The only
-  loop-blocking call is the slowapi sync storage (SEV1 above).
-- **Config fail-fast & .env.example**: pydantic-settings with required fields +
-  `model_validator`s (prod secrets, metrics-token fail-safe, transcription-timeout
-  invariant `TRANSCRIPTION_TIMEOUT_S < CELERY_SOFT_TIME_LIMIT_S − 30`, absolute
-  LOCAL_MEDIA_DIR in prod). Every sampled newer key (SENTRY_DSN, RESEND_API_KEY,
-  NOTIFY_BACKEND, REDBEAT_REDIS_URL, METRICS_TOKEN, CSRF/CSP, STRIPE_TAX, …) is in
-  `.env.example` with a description.
-- **Paths**: `_STATIC`/`_SPA_DIST` use `Path(__file__).parent`; the SPA catch-all
-  confines candidates to `_SPA_DIST` via `is_relative_to` (traversal-blocked).
-- **/metrics hardening**: bearer-gated with `secrets.compare_digest`; in
-  production an empty `METRICS_TOKEN` fail-SAFE disables the endpoint.
-- **No virality promise**: app description carries the honesty line; no virality
-  string anywhere in the slice.
-- **No Anthropic SDK calls in slice**: `observability.record_llm_tokens` is the
-  metrics sink LLM call sites feed — low-cardinality labels, creator_id
-  deliberately excluded to avoid 10k-creator cardinality blowup.
-- **No TODO/FIXME/debug/breakpoint** in the slice (only the two startup prints).
+- **Pool math / prepared statements (db.py):** `prepare_threshold=None` in `connect_args`
+  is the documented psycopg3 way to disable server-side prepared statements under
+  PgBouncer transaction pooling (psycopg.org/psycopg3/docs/advanced/prepare.html). The
+  scale-checklist's asyncpg `statement_cache_size=0` note is N/A here — this stack uses
+  `postgresql+psycopg` (psycopg3), and the psycopg3 equivalent is correctly applied.
+  `pool_pre_ping=True` + `pool_recycle=1800` present on both engines.
+- **Per-tenant isolation (auth.py / api_key.py / db.py):** the `after_begin` listener
+  emits `SELECT set_config('app.creator_id', :cid, true)` (parameterized — correct, since
+  `SET LOCAL` rejects binds) for RLS. Confirmed against migration 0010 `_TENANT_TABLES`:
+  `creators`, `creator_api_keys`, and `event_logs` are **deliberately** not RLS-gated, so
+  the auth-bootstrap `Creator` lookup (auth.py:141) and the API-key `key_hash` lookup
+  (api_key.py:96, cross-tenant by design — the key IS the credential) resolve correctly
+  before any GUC is set. No missing `WHERE creator_id` in the slice.
+- **Fernet MultiFernet rotation (crypto.py):** `_fernet()` builds
+  `MultiFernet([primary, previous])` so decrypt tries the primary then the previous key —
+  correct zero-downtime rotation semantics. Rebuilding per call is cheap (base64 parse);
+  not worth caching.
+- **Log/PII hygiene:** redact.py blocklist is broad; JsonLogFormatter and
+  `_sentry_before_send` apply `scrub_dict` as a structural backstop; verbose raw-content
+  sink is triple-gated and prod-locked. limiter.py logs only the exception class. No token
+  or PII in any `logger.*`/`log_event` call in the slice.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 2 findings — crypto per-call MultiFernet rebuild; recreate_engine bool race. Singletons/get_session-close/lazy logs engine/lifespan disposal all correct. |
-| 2 Concurrency & scale | 1 SEV1 (sync slowapi Redis storage on the loop) + 2 SEV2 (per-request telemetry commit; per-request last_used_at write) + 1 SEV2 latent (Set-Cookie collapse). Pool math verified. |
-| 3 Security & compliance | 2 findings — ENV free-string gate (disables prod fail-fasts); no JWT_SECRET_KEY length floor; + 1 SEV2 shallow redaction backstop. decrypt() safe, no PII/token in logs, RLS fail-closed, parameterized SQL, honesty line present. |
-| 4 Clip-quality | n/a (infrastructure module) |
-| 5 Anthropic SDK | n/a (no LLM call here; metrics sink only) |
-| 6 Cleanliness & typing | fully typed except db.py:140; 4 cleanup (SESSION_COOKIE dup, untyped listener, silent auth decode, redundant `_is_sensitive`, startup print). |
-| 7 Error handling / API surface | ok — /health and /metrics return safe payloads; 401/403/404 carry no internal detail; rate-limit 429 via slowapi handler. (Request/response Pydantic models live in routers — out of slice.) |
-| 8 Config & paths | 1 finding (ENV gate, also under §3) — required-var fail-fast works, paths absolute where load-bearing, .env.example complete. |
+| 1 Resource lifecycle | 1 SEV1 (uncounted event-log pool) + 1 SEV2 (inline await) |
+| 2 Concurrency & scale | 2 SEV2 (slowapi sync hop residual, request-path DB write) |
+| 3 Security & compliance | 3 SEV2 (ENV gate, JWT min-len, TOKEN key not boot-validated); isolation verified clean |
+| 4 Clip-quality | n/a (not a clip module) |
+| 5 Anthropic SDK | n/a (no LLM calls; verbose/observability only shape usage dicts) |
+| 6 Cleanliness & typing | 2 cleanup |
+| 7 Error handling / API | ok (main.py health/metrics status codes correct; no stack traces to client) |
+| 8 Config & paths | 1 SEV2 (limits unpinned) + config validators otherwise strong; paths absolute |
 
 ## Module verdict
-NEEDS-WORK — no cross-tenant leak and no BLOCKER (RLS is fail-closed, token
-handling is safe), but one systemic SEV1 (synchronous slowapi Redis storage
-blocking the event loop on every rate-limited request) plus the `ENV ==
-"production"` free-string gate, whose single-char typo silently disables every
-production fail-fast safeguard at once.
+NEEDS-WORK — no cross-tenant leak or open BLOCKER, but an uncounted 15-connection
+event-log pool taking request-rate load (SEV1, scale axis A) plus three fail-fast config
+gaps (ENV free-string, JWT/Fernet key validation) and an unpinned `limits` dependency
+should be closed before a load-tested launch.

@@ -4361,7 +4361,10 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
     history_turns = settings.CHAT_HISTORY_TURNS
 
     try:
-        async with db.AdminSessionLocal() as session:
+        async with db.AsyncSessionLocal() as session:
+            # Set the per-creator GUC so RLS policies on chat_conversations and
+            # chat_messages (via conversation subquery) apply to this session.
+            session.info["creator_id"] = str(cid)
             conv = await session.get(ChatConversation, conv_uuid)
             if conv is None or conv.creator_id != cid:
                 # Ownership re-check in the worker (defense in depth — the router
@@ -4606,50 +4609,31 @@ async def _send_notification_async(
             )
             return
 
-        # ── 6. Render and send email ─────────────────────────────────────────
-        # Only send email when the creator has an email address and the channel
-        # is not opted-out. We prefer the event_type as the template name.
-        to_email = creator.email
-        if to_email and prefs.email_transactional:
+        # ── 6. Build email send context while the session is still open ─────────
+        # Capture everything needed for the mailer call BEFORE committing, so
+        # ORM attributes on creator/prefs are accessible. The actual send happens
+        # AFTER the session closes (step 8) to avoid holding the DB connection
+        # open while the Resend API call blocks. (Issue 349)
+        delivery_id = delivery.id  # populated by flush() above; needed for failure update
+        send_to: str | None = creator.email if prefs.email_transactional else None
+        email_context: dict | None = None
+        email_headers: dict[str, str] | None = None
+        if send_to:
             # RFC 8058 one-click unsubscribe headers on LIFECYCLE sends only.
-            # Transactional sends pass no such headers (legally always-on).
-            email_headers: dict[str, str] | None = None
+            unsub_url: str | None = None
             if is_lifecycle:
-                from config import settings as _settings
-
                 unsub_url = f"{_settings.APP_BASE_URL}/unsubscribe/{prefs.unsubscribe_token}"
                 email_headers = {
                     "List-Unsubscribe": f"<{unsub_url}>",
                     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
                 }
-            try:
-                mailer_send(
-                    to=to_email,
-                    template=event_type,
-                    context={"creator": creator, "unsubscribe_url": unsub_url, **payload}
-                    if is_lifecycle
-                    else {"creator": creator, **payload},
-                    idempotency_key=dedupe_key,
-                    headers=email_headers,
-                )
-                logger.info(
-                    "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
-                    event_type,
-                    creator_id,
-                    dedupe_key,
-                )
-            except Exception as exc:
-                # Template missing or Resend error: mark delivery failed so we
-                # don't retry infinite-loop; log and continue to in-app row.
-                delivery.status = NotificationDeliveryStatus.failed
-                logger.error(
-                    "send_notification: email send failed event_type=%s creator=%s: %s",
-                    event_type,
-                    creator_id,
-                    exc,
-                )
+            email_context = (
+                {"creator": creator, "unsubscribe_url": unsub_url, **payload}
+                if is_lifecycle
+                else {"creator": creator, **payload}
+            )
         else:
-            # No email address on record or email opted out — in-app only.
+            # No email address or opted out — in-app delivery only.
             delivery.channel = NotificationChannel.inapp
 
         # ── 7. Insert in-app notification row ────────────────────────────────
@@ -4657,7 +4641,47 @@ async def _send_notification_async(
             notification = _build_inapp_notification(cid, event_type, payload)
             session.add(notification)
 
+        # Commit now — before the blocking mailer call — to free the DB connection.
         await session.commit()
+
+    # ── 8. Send email outside the session ────────────────────────────────────
+    # asyncio.wait_for + asyncio.to_thread give a Python-level timeout around
+    # the blocking sync mailer call. On timeout or any send error we open a
+    # fresh session to mark the delivery row failed (the commit in step 7 already
+    # persisted it as NotificationDeliveryStatus.sent). (Issue 349)
+    if send_to and email_context is not None:
+        import asyncio
+
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    mailer_send,
+                    to=send_to,
+                    template=event_type,
+                    context=email_context,
+                    idempotency_key=dedupe_key,
+                    headers=email_headers,
+                ),
+                timeout=_settings.RESEND_TIMEOUT_S,
+            )
+            logger.info(
+                "send_notification: email sent event_type=%s creator=%s dedupe_key=%s",
+                event_type,
+                creator_id,
+                dedupe_key,
+            )
+        except Exception as exc:
+            logger.error(
+                "send_notification: email send failed event_type=%s creator=%s: %s",
+                event_type,
+                creator_id,
+                exc,
+            )
+            async with db.AdminSessionLocal() as fail_session:
+                fail_delivery = await fail_session.get(NotificationDelivery, delivery_id)
+                if fail_delivery is not None:
+                    fail_delivery.status = NotificationDeliveryStatus.failed
+                await fail_session.commit()
 
 
 def _build_inapp_notification(

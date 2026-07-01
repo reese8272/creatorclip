@@ -44,12 +44,11 @@ def _extract_function_source(tasks_src: str, func_name: str) -> str | None:
     src_lines = tasks_src.splitlines()
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == func_name:
-                # ast gives lineno (1-based) and end_lineno (1-based, inclusive)
-                start = node.lineno - 1  # 0-indexed
-                end = (node.end_lineno or node.lineno) - 1  # 0-indexed, inclusive
-                return "\n".join(src_lines[start : end + 1])
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            # ast gives lineno (1-based) and end_lineno (1-based, inclusive)
+            start = node.lineno - 1  # 0-indexed
+            end = (node.end_lineno or node.lineno) - 1  # 0-indexed, inclusive
+            return "\n".join(src_lines[start : end + 1])
 
     return None  # function not found
 

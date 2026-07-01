@@ -703,9 +703,11 @@ def test_run_stderr_tail_in_error_message():
 )
 def test_run_wraps_subprocess_os_errors(exc_cls):
     """subprocess.run raising OS-level errors must be wrapped in RuntimeError."""
-    with patch("subprocess.run", side_effect=exc_cls("ffmpeg not found")):
-        with pytest.raises(RuntimeError, match="ffmpeg"):
-            _run(["ffmpeg", "-version"], "test label")
+    with (
+        patch("subprocess.run", side_effect=exc_cls("ffmpeg not found")),
+        pytest.raises(RuntimeError, match="ffmpeg"),
+    ):
+        _run(["ffmpeg", "-version"], "test label")
 
 
 # ─── 3. render_clip_file: start_s<0 and end_s>source_duration guards ─────────
@@ -727,9 +729,11 @@ def test_render_clip_file_raises_when_end_past_source_duration(tmp_path):
     src = tmp_path / "v.mp4"
     src.touch()
     out = tmp_path / "out.mp4"
-    with patch.object(render_mod, "_source_duration_s", return_value=30.0):
-        with pytest.raises(ValueError, match="end_s"):
-            render_clip_file(src, start_s=0.0, end_s=60.0, out_path=out)
+    with (
+        patch.object(render_mod, "_source_duration_s", return_value=30.0),
+        pytest.raises(ValueError, match="end_s"),
+    ):
+        render_clip_file(src, start_s=0.0, end_s=60.0, out_path=out)
 
 
 # ─── 4. _detect_face_center_x: distinct INFO log lines ───────────────────────
@@ -741,9 +745,11 @@ def test_detect_face_center_x_logs_corrupt_frame(tmp_path, caplog):
 
     kf = tmp_path / "kf.jpg"
     kf.touch()
-    with caplog.at_level(logging.INFO, logger="clip_engine.render"):
-        with patch("cv2.imread", return_value=None):
-            cx = _detect_face_center_x(kf, 1920)
+    with (
+        caplog.at_level(logging.INFO, logger="clip_engine.render"),
+        patch("cv2.imread", return_value=None),
+    ):
+        cx = _detect_face_center_x(kf, 1920)
     assert cx == 960
     assert any("corrupt" in r.message.lower() for r in caplog.records)
 
@@ -757,13 +763,13 @@ def test_detect_face_center_x_logs_no_face(tmp_path, caplog):
     kf = tmp_path / "kf.jpg"
     kf.touch()
     fake_img = np.zeros((1080, 1920, 3), dtype="uint8")
-    with caplog.at_level(logging.INFO, logger="clip_engine.render"):
-        with (
-            patch("cv2.imread", return_value=fake_img),
-            patch("cv2.CascadeClassifier") as mock_cc,
-        ):
-            mock_cc.return_value.detectMultiScale.return_value = []
-            cx = _detect_face_center_x(kf, 1920)
+    with (
+        caplog.at_level(logging.INFO, logger="clip_engine.render"),
+        patch("cv2.imread", return_value=fake_img),
+        patch("cv2.CascadeClassifier") as mock_cc,
+    ):
+        mock_cc.return_value.detectMultiScale.return_value = []
+        cx = _detect_face_center_x(kf, 1920)
     assert cx == 960
     assert any("no face" in r.message.lower() for r in caplog.records)
 
@@ -777,10 +783,12 @@ def test_frame_dimensions_logs_warning_on_bad_output(tmp_path, caplog):
 
     fake = tmp_path / "v.mp4"
     fake.touch()
-    with caplog.at_level(logging.WARNING, logger="clip_engine.render"):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="garbage", stderr="")
-            w, h = _frame_dimensions(fake)
+    with (
+        caplog.at_level(logging.WARNING, logger="clip_engine.render"),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="garbage", stderr="")
+        w, h = _frame_dimensions(fake)
     assert w == 1920 and h == 1080
     assert any(r.levelno == logging.WARNING for r in caplog.records)
 
@@ -840,16 +848,16 @@ def test_render_cleaned_clip_file_logs_when_normalization_moves_edge(tmp_path, c
     def _fake_run(cmd, label, timeout_s=120.0):
         pass
 
-    with caplog.at_level(logging.INFO, logger="clip_engine.render"):
-        with (
-            patch("clip_engine.render._run", _fake_run),
-            patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
-        ):
-            render_cleaned_clip_file(
-                source_path=Path("/fake/src.mp4"),
-                keep_ranges=[(5.0, 8.0), (0.0, 3.0)],  # unsorted → normalised
-                out_path=tmp_path / "out.mp4",
-            )
+    with (
+        caplog.at_level(logging.INFO, logger="clip_engine.render"),
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+    ):
+        render_cleaned_clip_file(
+            source_path=Path("/fake/src.mp4"),
+            keep_ranges=[(5.0, 8.0), (0.0, 3.0)],  # unsorted → normalised
+            out_path=tmp_path / "out.mp4",
+        )
 
     assert any("normaliz" in r.message.lower() for r in caplog.records)
 
@@ -862,19 +870,19 @@ def test_render_cleaned_clip_file_warns_on_loudnorm_unparseable(tmp_path, caplog
         pass
 
     # _measure_loudnorm_filter calls subprocess.run internally; return garbage stderr.
-    with caplog.at_level(logging.WARNING, logger="clip_engine.render"):
-        with (
-            patch("clip_engine.render._run", _fake_run),
-            patch(
-                "subprocess.run",
-                return_value=MagicMock(returncode=0, stdout="", stderr="not json"),
-            ),
-        ):
-            render_cleaned_clip_file(
-                source_path=Path("/fake/src.mp4"),
-                keep_ranges=[(0.0, 5.0)],
-                out_path=tmp_path / "out.mp4",
-            )
+    with (
+        caplog.at_level(logging.WARNING, logger="clip_engine.render"),
+        patch("clip_engine.render._run", _fake_run),
+        patch(
+            "subprocess.run",
+            return_value=MagicMock(returncode=0, stdout="", stderr="not json"),
+        ),
+    ):
+        render_cleaned_clip_file(
+            source_path=Path("/fake/src.mp4"),
+            keep_ranges=[(0.0, 5.0)],
+            out_path=tmp_path / "out.mp4",
+        )
 
     assert any(r.levelno == logging.WARNING for r in caplog.records)
 

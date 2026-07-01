@@ -84,7 +84,7 @@ def main() -> None:
 
         print(f"{'video':>12}  {'yt_id':<14} {'ingest':<8}  clips (by render_status)")
         print("-" * 78)
-        for vid, yt, ingest, reason, created in videos:
+        for vid, yt, ingest, reason, _created in videos:
             short = str(vid)[:8]
             cl = clip_rows.get(vid, [])
             if cl:
