@@ -13,6 +13,116 @@ structure (waves / lanes / batches) is layered *on top* of that contract, never 
 
 ---
 
+## 🔴 2026-07-01 Production-Assessment findings — TRIAGE FIRST (Issues 345–352)
+
+Filed from the full `/assess` run at commit `f70a857` (report: `docs/assessment/REPORT.md`,
+snapshot `docs/assessment/history/2026-07-01-REPORT.md`). **VERDICT: CONDITIONAL** — 0 BLOCKER ·
+6 SEV1 · ~54 SEV2. Every claim below was doc-verified against the vendor's current documentation
+this run (not from memory). Tenant isolation holds on every query; 2 of the prior 3 SEV1s are
+fixed and a 3rd mitigated. **Actions 345–348 gate a paid ≤100-user beta.** After 345–348 land + the
+gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict flips to YES-for-beta.
+
+### Issue 345: billing — `stripe.max_network_retries` is a silent no-op → checkout runs with 0 retries
+- **Status:** DONE 2026-07-01 · **Wave:** W0 · **Lane:** L07 Billing · **Size:** S · **Verify:** local · **Sev:** SEV1
+- `billing/stripe_client.py:34` sets the module global `stripe.max_network_retries = 3`, but all calls
+  go through `stripe.StripeClient(...)` (v8), which **ignores module globals**; unset → resolves to **0**
+  (traced in SDK source; confirmed vs Stripe "No global config" docs, 2026-07-01). Checkout-session
+  creation + reconciliation run with 0 automatic retries → a transient blip surfaces as a 502
+  (`routers/billing.py:157`). Idempotency keys already present, so retries are safe.
+- **Fix:** delete line 34; pass `max_network_retries=3` to the `StripeClient(...)` constructor. Test that
+  the client's resolved retry count is 3. **[DEC]** note the v8 "no global config" gotcha.
+
+### Issue 346: frontend — no root ErrorBoundary → any render throw blanks the whole SPA
+- **Status:** DONE 2026-07-01 · **Wave:** W0 · **Lane:** L16 UI Core · **Size:** S · **Verify:** local · **Sev:** SEV1
+- `src/App.tsx:33-69` (+ `main.tsx:8`) defines **no route `errorElement`/`ErrorBoundary`** and no
+  `onUncaughtError` on `createRoot`. Per React Router v7 + React 19 docs (reactrouter.com/how-to/error-boundary,
+  react.dev/reference/react-dom/client/createRoot, 2026-07-01; confirmed React 19.2.6 / RR 7.18) a render
+  throw in any page unmounts the root → blank app, no nav, no recovery.
+- **Fix:** add a root `errorElement` on `RootLayout` rendering a branded fallback via `useRouteError()`
+  with a reload / back-to-dashboard affordance; add `onUncaughtError`/`onRecoverableError` for telemetry.
+
+### Issue 347: _root_infra — uncounted event-log DB pool sits outside the PgBouncer budget (scale axis A)
+- **Status:** DONE 2026-07-01 (code+docs; load-confirm still needs staging per Verify=staging) · **Wave:** W0 · **Lane:** L13 Scale/Quota · **Size:** S · **Verify:** staging · **Sev:** SEV1 · **[DEC]**
+- `event_log.py:70-78` opens a second engine (`pool_size=5,max_overflow=10` = **15 conns/replica**) to
+  `logs_database_url`, which **defaults to `DATABASE_URL`** (same PG/PgBouncer). It runs on the **hot path**
+  (`main.py:374` records on every non-skipped request) but is **absent** from the per-pod budget in
+  `db.py:35-38` → axis-A `QueuePool`/PgBouncer exhaustion hiding in an uncounted engine.
+- **Fix:** pin it small (`pool_size=2,max_overflow=3` — telemetry is best-effort) and add it to the
+  `total_db_connections` inequality in `docs/DEPLOYMENT.md`. (needs-load-confirmation vs the 25-conn
+  PgBouncer sidecar sizing.) Relates to existing `event_log.py` cleanup cluster (151/233/235/250).
+
+### Issue 348: chat — Pro chat runs BYPASSRLS with no `creator_id` GUC → no RLS backstop on the injection surface
+- **Status:** DONE 2026-07-01 · **Wave:** W0 · **Lane:** L05 Cost/Agentic · **Size:** M · **Verify:** staging · **Sev:** SEV1 · **[DEC]**
+- `worker/tasks.py:4364` (+ `chat/runner.py:53`, `chat/tools.py:529`) — the agentic loop runs under the
+  BYPASSRLS `AdminSessionLocal` with no GUC set, so RLS is **not** a second line of defense on the app's
+  most prompt-injection-exposed surface. Isolation is correct **today** (every executor has an explicit
+  `WHERE creator_id`), but one forgotten filter in a future tool = silent cross-tenant leak. **No live leak.**
+- **Fix:** run the turn on app-role `AsyncSessionLocal` with `session.info["creator_id"]=cid` set before the
+  first query (same pattern as `db.get_session`); extend `alembic 0010._TENANT_TABLES` to the chat-reachable
+  child tables (`video_metrics`, `retention_curves`, `clip_outcomes`, `transcripts`, `chat_conversations`,
+  `chat_messages`); keep the explicit filters. Regression test: a creator-B chat session with the GUC set
+  returns empty on a tool call crafted to reach a creator-A id.
+
+### Issue 349: worker — blocking, no-timeout Resend send on the worker loop holding an admin DB connection
+- **Status:** DONE 2026-07-01 · **Wave:** W0 · **Lane:** L09 Notifications · **Size:** S · **Verify:** local · **Sev:** SEV1
+- `worker/tasks.py:4626` invokes `resend.Emails.send` (blocking, **no timeout** — none in `notify/mailer.py`
+  or config) directly in `async def _send_notification_async` **while holding 1 of only 4 admin DB conns**
+  (session open :4519→commit :4660). Fan-out-heavy (per-creator lifecycle + Beat sweeps) → a Resend stall
+  blocks the worker loop AND can exhaust the admin pool. Sibling `list_recent_paid_sessions` IS offloaded.
+  (Severity reconciled up from the `notify` agent's SEV2/prefork-bounded view: no-timeout + admin-conn-hold
+  = scale axes B+E.)
+- **Fix:** commit the delivery/in-app rows first to release the conn, then `await asyncio.to_thread(mailer.send, …)`;
+  add a `RESEND_TIMEOUT_S` (~10s) passed to the SDK.
+
+### Issue 350: improvement — `web_search` `pause_turn` never handled → silent truncated brief
+- **Status:** DONE 2026-07-01 · **Wave:** W0 · **Lane:** L05 Cost/Agentic · **Size:** S · **Verify:** local · **Sev:** SEV1
+- `improvement/brief.py:132-218` enables `web_search` (:96) but neither the `.create` nor the streaming
+  path checks `response.stop_reason`; both return the last *text* block. On a paused search turn that block
+  is the "let me search…" preamble, not the brief (verified vs Anthropic server-tools docs, 2026-07-01).
+  `warn_if_truncated` only catches `max_tokens`. Worsened by `web_search_20260209` with no `max_uses`.
+- **Fix:** loop `while stop_reason=="pause_turn"`: re-send assistant content with the **same** `tools`, cap
+  ~5; for streaming use `stream_message` (returns full Message). Add `max_uses` (~5); add a pause_turn test.
+
+### Issue 351: Layer-0 gate regression — ruff 0→21 and mypy 0→2 (production None-safety)
+- **Status:** DONE 2026-07-01 · **Wave:** W0 · **Lane:** Carry-over & Cleanup · **Size:** S · **Verify:** local · **Sev:** SEV2 (gate)
+- Violates the CLAUDE.md Phase-4 "no regression vs baseline" close-out rule. **ruff 21** — all in
+  `tests/`+`scripts/` (import-sort, unused imports, nested-`with`; 9 auto-fixable via `ruff check . --fix`).
+  **mypy 2 — production `routers/`:** `routers/thumbnails.py:227` passes `list[str | None]` to
+  `analyze_thumbnail_patterns(list[str])` (a `None` image URL reaches the vision call); `routers/insights.py:564`
+  passes `video_title: str | None` to `_build_analysis_prompt(video_title: str)`.
+- **Fix:** `ruff check . --fix` + hand-fix the residue; guard/coerce the two nullable args (filter `None`
+  URLs; `str(video_title or "")`). Restore both gates to 0.
+
+### Issue 352: 2026-07-01 assessment SEV2 backlog (grouped) — ~54 SEV2s
+- **Status:** OPEN · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
+- Full lists per module in `docs/assessment/modules/<module>.md`. Load-bearing leads to promote:
+  - **routers** `activity.py:57` — unauthenticated `POST /api/activity` splats client `**safe_extra` into
+    `log_event` → 500 + log-injection.
+  - **_root_infra** `config.py:391` — `ENV: str` free-string gate; a typo disables every prod fail-fast →
+    `ENV: Literal[...]`. Plus: pin `limits==<resolved>` (unpinned transitive under the Issue-312 limiter
+    mitigation); JWT-secret min-length; cache `_fernet()` (MultiFernet rebuilt per `decrypt()`).
+  - **youtube** `quota.py:37` — `videos.insert` mis-charged 100 units to the shared read pool; Google bills
+    a separate 100-calls/day bucket at 1 unit/call (verified determine_quota_cost, 2026-07-01).
+  - **ingestion** `transcribe.py:250` — AssemblyAI `status=error` returns empty segments as charged "success"
+    (no refund) — NOT fixed by Issue 334; add a `transcript.status` check.
+  - **knowledge** — untrusted transcript/title text in the **system role** in `titles`/`thumbnails`/`hooks`
+    (prompt-injection posture; newer clip builders `wrap_untrusted` correctly); inert 1h cache marker below
+    the 1,024-tok floor for new creators (gate the marker on measured prefix like `scoring.py`).
+  - **preference** `features.py:22` — NaN-guard only covers `dna_match`; a NaN in any other feature fails the
+    sklearn retrain / poisons the rerank.
+  - **billing** — Stripe `Idempotency-Key` is the bare account-scoped `intent_id`; scope it per-creator.
+  - **clip_engine** `ranking.py:127` — idempotency guard reads `clips` by `video_id` with no `creator_id`
+    (defense-in-depth); post-snap `end_s` can exceed source duration.
+  - **worker** — broker `visibility_timeout=3600` decoupled from `CELERY_SOFT_TIME_LIMIT_S` (invariant only
+    in a comment); advisory-lock unlock-without-rollback sites.
+  - **chat** — token usage logged under generic `ANTHROPIC_MODEL` not `_CHAT`/`_INTAKE` (cost misattribution).
+  - **dna** `embeddings.py:31` — tenacity `@retry` has no `retry=` predicate (retries permanent Voyage errors).
+  - **upload_intel** `timing.py:31` — `best_upload_windows` filters malformed rows *after* the top-N slice
+    (under-fills); `optimal_gap_hours` ignores week wraparound.
+  - **frontend** `VideoTable.tsx:59` — raw `fetch` POST with no try/catch → button stuck `busy` on a blip.
+
+---
+
 ## How to use this file (deploy agents in batches)
 
 The plan gives every open issue three coordinates so independent agents run in safe parallel:

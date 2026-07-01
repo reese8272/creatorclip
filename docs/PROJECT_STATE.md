@@ -4,6 +4,55 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-01 — W0 SEV1 beta-gate fixes: Issues 348, 349, 350 (3 issues)
+
+**Branch** `fix/retain-source-video-for-render` (same branch as prior session).
+
+Completed the remaining three W0 SEV1s that gate the ≤100-user paid beta:
+
+- **348** chat BYPASSRLS — switched `_chat_respond_async` from `AdminSessionLocal` to `AsyncSessionLocal` with
+  `session.info["creator_id"] = str(cid)` set before the first query; created migration `0040_rls_chat_child_tables`
+  with subquery-based `tenant_isolation` policies on `video_metrics`, `retention_curves`, `transcripts`,
+  `clip_outcomes`, `chat_messages` (no direct `creator_id` on these tables → subquery through parent). DECISIONS.md entry added.
+- **349** Resend no-timeout — restructured `_send_notification_async` to commit before mailer_send; blocking
+  `mailer.send` now runs outside the session via `asyncio.wait_for(asyncio.to_thread(…), timeout=RESEND_TIMEOUT_S)`.
+  Added `RESEND_TIMEOUT_S: int = 10` to `config.py` and `.env.example`. On failure, a fresh session marks
+  `delivery.status = failed`. Two new unit tests verify ordering (commit before send) and failure path. DECISIONS.md entry added.
+- **350** web_search pause_turn — added `max_uses: 5` to `web_search` tool in `_build_request`; both `.create()`
+  and streaming paths now loop when `stop_reason == "pause_turn"` (up to 5 rounds); streaming path switched
+  from `stream_and_emit` to `stream_message` which returns the full `Message` with `stop_reason` accessible.
+  Tests updated (`test_improvement_brief_streaming_path_passes_tools_to_stream_message`, `test_improvement_brief_pause_turn_loop_continues_on_web_search`, `test_improvement_brief_tool_max_uses_is_set`). DECISIONS.md entry added.
+
+**All W0 SEV1s (345–351) are now DONE.** Beta deployment unblocked pending migration `0040` on prod.
+
+---
+
+## 2026-07-01 — W0 SEV1 beta-gate fixes: Issues 345, 346, 347, 351 (4 issues)
+
+**Branch** `fix/retain-source-video-for-render` (post-merge; these changes staged for a follow-up PR).
+
+Worked the four W0 SEV1s that gate the ≤100-user paid beta. All are S-size, file-disjoint, and now DONE
+(347 needs a load-confirm on staging to fully validate PgBouncer sizing, but the code and budget docs are
+correct):
+
+- **345** billing — `stripe.max_network_retries` was a module-global no-op under Stripe v8; moved to
+  `StripeClient(max_network_retries=3)` constructor. Test updated to check `_requestor._options`. DECISIONS.md entry added.
+- **346** frontend — added `errorElement: <RootError />` to the root route in `App.tsx` (catches any render
+  throw in any child, shows branded reload/back-to-dashboard UI); added `onUncaughtError` + `onRecoverableError`
+  to `createRoot` in `main.tsx` for console telemetry. TypeScript build clean.
+- **347** _root_infra — `event_log.py` pool pinned to `pool_size=2,max_overflow=3` (5 conns, was 15). Added
+  event-log engine to the fleet connection-budget inequality in `docs/DEPLOYMENT.md`. DECISIONS.md entry added.
+- **351** Layer-0 gates restored — ruff 21→0 (10 auto-fixed + 12 hand-fixed: B007, E741, SIM117×9, SIM102);
+  mypy 2→0 (filter `None` from `youtube_ids` list; `or ""` coerce in insights.py). `test_stripe_max_retries`
+  updated to match new attribute path. 1996 unit tests pass, 0 fail.
+
+**Gates:** ruff 0 · mypy 0 · coverage 79.06 · bandit clean. pip_audit 6 = pre-existing venv drift (baseline).
+
+**Remaining beta-gate SEV1s:** Issues 348 (chat BYPASSRLS), 349 (Resend timeout+conn-hold), 350
+(web_search pause_turn). These are the next W0 items.
+
+---
+
 ## 2026-06-30 — L21 Edge-Case Hardening WAVE complete: Issues 329, 333, 334, 335, 336, 337, 339, 340 (8 issues, parallel build)
 
 **Branch** `l21-wave-a` (8 issue branches merged; not yet merged to main — awaiting review). Ran the L21

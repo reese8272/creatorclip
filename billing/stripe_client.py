@@ -31,11 +31,10 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-stripe.max_network_retries = 3
-
 _STRIPE = stripe.StripeClient(
     settings.STRIPE_SECRET_KEY,
     http_client=stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S),
+    max_network_retries=3,
 )
 
 

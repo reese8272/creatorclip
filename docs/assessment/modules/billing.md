@@ -1,115 +1,96 @@
-# billing — assessed 2026-06-24
+# billing — assessed 2026-07-01
 
-Slice: `billing/` — `__init__.py` (empty), `packs.py`, `refund.py`, `stripe_client.py`,
-`ledger.py`. Re-verified every carried-over finding against current line numbers, traced every
-creator-scoped query to its `WHERE`, every `logger.*` for token/PII leakage, the LLM-cost path
-(new since the 2026-06-09 cycle), and the cross-module callers (routers/billing.py,
-routers/auth.py, routers/insights.py, worker/tasks.py, clip_engine/scoring.py, chat/runner.py)
-for session/transaction + async-offload correctness. Installed Stripe SDK: 11.4.0.
+Slice: `billing/ledger.py`, `billing/packs.py`, `billing/refund.py`,
+`billing/stripe_client.py`, `billing/__init__.py` (empty).
+
+All Stripe-SDK claims below are verified against CURRENT official Stripe
+documentation and the stripe-python `master` source (fetched 2026-07-01), not
+from memory. Citations inline.
 
 ## Findings
 
-- [SEV2] stripe_client.py:34 — `stripe.max_network_retries = 3` is a NO-OP for `_STRIPE`
-  (carried from 2026-06-09, STILL UNFIXED). `StripeClient` (SDK 11.4.0) builds its own
-  `RequestorOptions(max_network_retries=None)` and never falls back to the module global;
-  `HTTPClient.request_with_retries` resolves `None → 0`. Checkout-session creation therefore
-  runs with ZERO network retries despite the documented intent, so a transient Stripe blip
-  surfaces straight to the user as a failed checkout. | fix: pass to the constructor —
-  `stripe.StripeClient(settings.STRIPE_SECRET_KEY, http_client=stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S), max_network_retries=3)` —
-  and delete the inert global. Safe because the `intent_id` Idempotency-Key already dedupes at
-  Stripe. (Tracked Issue 206.)
+- [SEV1] billing/stripe_client.py:34 — `stripe.max_network_retries = 3` is a
+  **no-op** for every request in this module. All Stripe calls go through
+  `_STRIPE = stripe.StripeClient(...)` (line 36), and the v8 `StripeClient`
+  deliberately ignores module-level globals ("No global config" — you must pass
+  options to the constructor). I traced the resolution in the SDK source: when
+  `max_network_retries` is not passed to `StripeClient`, `RequestorOptions`
+  keeps it `None`, and `_http_client._should_retry` resolves it as
+  `max_network_retries if max_network_retries is not None else 0`. Net effect:
+  checkout-session creation and reconciliation listing run with **0 automatic
+  retries** despite the code clearly intending 3, so a transient network blip
+  surfaces to the user as a 502 (routers/billing.py:157) / a missed
+  reconciliation instead of a safe retry. Idempotency keys are already present,
+  so retries would be safe. | fix: delete line 34 and pass the option to the
+  constructor:
+  `_STRIPE = stripe.StripeClient(settings.STRIPE_SECRET_KEY, http_client=stripe.HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S), max_network_retries=3)`.
+  Sources: Migration guide for v8 (StripeClient) —
+  https://github.com/stripe/stripe-python/wiki/Migration-guide-for-v8-(StripeClient)
+  ("stripe.max_network_retries = 3 → client = stripe.StripeClient('sk_test_123',
+  max_network_retries=3)"; "No global config"); default-to-0 resolution in
+  https://raw.githubusercontent.com/stripe/stripe-python/master/stripe/_http_client.py
+  (retrieved 2026-07-01).
 
-- [SEV2] stripe_client.py:119 — Stripe `Idempotency-Key` is the raw client-supplied `intent_id`
-  (carried from 2026-06-09, STILL UNFIXED). Stripe scopes idempotency keys per API key, not per
-  customer, so an adversarially reused `intent_id` (leaked via XSS / shared device / pasted
-  browser state) can poison or replay another creator's pending Checkout session inside Stripe's
-  24h window. | fix: tenant-scope the key — `options={"idempotency_key": f"{creator_id}:{intent_id}"}`;
-  `creator_id` is already a parameter, no client change. (Tracked Issue 206.)
+- [SEV2] billing/stripe_client.py:60-67,119 — the Stripe `Idempotency-Key` is
+  the bare client UUID (`intent_id`), which is **account-scoped** (shared across
+  all creators in the one CreatorClip Stripe account), and the comment's
+  security rationale is misleading. UUID-*shape* validation does NOT "close the
+  vector where a client sends a garbage string that collides with another
+  creator's idempotency key" — it does nothing to stop a client submitting
+  another creator's *valid* UUID. What actually protects the money path is
+  (a) v4-UUID randomness and (b) Stripe's documented parameter-mismatch guard:
+  "The idempotency layer compares incoming parameters to those of the original
+  request and errors if they're not the same" — so a reused key with a different
+  `metadata.creator_id` errors rather than charging/leaking. There is therefore
+  no exploitable cross-tenant leak today, but the key is not tenant-scoped as a
+  structural property. | fix (defense-in-depth): scope the key to the tenant —
+  `options={"idempotency_key": f"{creator_id}:{intent_id}"}` (Stripe keys allow
+  up to 255 chars), which makes cross-tenant reuse impossible regardless of UUID
+  entropy; and correct the misleading comment. Sources: Idempotent requests —
+  https://docs.stripe.com/api/idempotent_requests (24h window, ≤255 chars,
+  parameter-mismatch error, UUID-v4 recommendation, retrieved 2026-07-01).
 
-- [SEV2] ledger.py:276 (caller worker/tasks.py:848) — `deduct_for_video` raises FastAPI
-  `HTTPException(402)` but is invoked from the Celery ingest chain (`_ingest_async`), whose
-  generic `except Exception` re-raises with `aemit(..., message="Ingest failed; retrying.")`
-  (tasks.py:870-880). When a balance is drained between the upload pre-check and worker
-  execution (two concurrent uploads both pass `check_balance_for_minutes`), the 402 is treated
-  as retryable: each Celery retry re-downloads + re-ffmpeg-extracts the full video only to hit
-  the same 402, then fails terminally with the actionable "purchase a pack" copy lost. Bounded
-  to the narrow concurrent-drain race (pre-flight guards catch the common case), hence SEV2.
-  | fix: raise a domain `InsufficientBalanceError(detail)` from the ledger; routers map it to
-  `HTTPException(402, detail)` (the router-only pre-flight guards may keep raising HTTPException
-  directly); `_ingest_async` treats it as non-retryable (re-raise without `self.retry`, like
-  `SoftTimeLimitExceeded`) so the refund/on_failure path fires immediately and the failure
-  reason carries the balance copy. (Tracked Issue 205.)
+- [SEV2] billing/ledger.py:303-314 — `send_notification.delay(...)` (balance_low
+  trigger) is enqueued INSIDE `deduct_for_video`, after the SAVEPOINT but BEFORE
+  the caller commits the outer transaction (the docstring at line 244 states
+  "Caller is responsible for committing the outer transaction"). If the outer
+  transaction rolls back after this function returns, the deduction is undone but
+  the notification was already enqueued to Celery → a spurious "balance low"
+  alert for a charge that never persisted (a transactional-outbox violation).
+  On a Celery *retry* the deduction fast-paths to 0 so it won't re-fire, but the
+  pre-commit enqueue window remains. | fix: return a `low_balance` flag (or the
+  `remaining` value) to the caller and enqueue the notification only after the
+  caller's `commit()`, or attach it to a SQLAlchemy `after_commit` session event.
+  (needs-runtime-confirmation that a caller path can roll back after deduct
+  returns.)
 
-- [SEV2] ledger.py:109 (config.py:86) — `_estimate_cost_usd` reads
-  `settings.COST_CACHE_WRITE_MULTIPLIER` (default 1.25× — the 5-min-TTL cache-write premium that
-  prices EVERY non-1h LLM call's cache-creation tokens), but this key is **absent from
-  `.env.example`** while its sibling `COST_CACHE_READ_MULTIPLIER` IS documented (env line 19).
-  NEW this cycle — the LLM-cost code did not exist in the 2026-06-09 slice. An operator
-  correcting the premium after an Anthropic price change has no documented knob, so the cost
-  ledger silently keeps the stale 1.25× fleet-wide (clip scoring overrides to 2.0× inline, but
-  every other caller inherits the default). | fix: add next to env line 19 —
-  `COST_CACHE_WRITE_MULTIPLIER=1.25      # Anthropic 5-min cache-write premium (1.25× input rate); scoring passes 2.0 for ttl:"1h". Source: platform.claude.com/docs/en/about-claude/pricing`.
+- [cleanup] .env.example — `COST_CACHE_WRITE_MULTIPLIER` (consumed at
+  billing/ledger.py:109 for the cache-write cost term) is absent from
+  `.env.example`, though its sibling `COST_CACHE_READ_MULTIPLIER` is present
+  (line 33). It has a safe default (config.py:145 = 1.25) so it is not
+  fail-fast-critical, but the rubric requires new config documented in the
+  template. | fix: add `COST_CACHE_WRITE_MULTIPLIER=1.25  # Anthropic cache-write
+  multiplier (1.25× base input rate, 5-min TTL; scoring passes 2.0 for 1h TTL)`.
 
-- [SEV2] ledger.py:301-307 — `deduct_for_video` enqueues the balance-low notification
-  (`send_notification.delay(...)`) BEFORE the caller commits the outer transaction (docstring
-  line 244: "Caller is responsible for committing"). The Celery task can run and read the
-  creator's balance before the deduction is durable, so "balance low" can fire against the
-  pre-deduction balance, or fire for a deduction the outer transaction then rolls back. The
-  `entity_id=str(video_id)` dedupe bounds this to one stray notification per video → SEV2. NEW
-  this cycle (Trigger-6 / Issue 244 code is new in this slice). | fix: don't enqueue inside the
-  deduction helper — return a "balance_low" flag (or remaining balance) and let the caller
-  `.delay(...)` after `session.commit()`, or move the enqueue to a session `after_commit` event.
-
-- [SEV2] stripe_client.py:131-188 — `list_recent_paid_sessions` paginates with `limit=100` in
-  an unbounded `while True`, accumulating every paid session into an in-memory list with no hard
-  page cap. Fine at the 48h `STRIPE_RECONCILE_LOOKBACK_HOURS` default, but a widened window /
-  backfill lets one reconcile task accumulate unbounded rows and pin one executor thread (sync
-  SDK call offloaded via `run_in_executor`, tasks.py:2198). Rubric 2 (bounded work). NEW this
-  cycle. | fix: add a `max_pages` guard (e.g. 50 → 5000 sessions); log+break with a WARNING when
-  exceeded so an over-wide window degrades loudly instead of OOM-ing the worker.
-
-- [cleanup] ledger.py:301 — redundant `from config import settings` inside `deduct_for_video`'s
-  hot path even though `settings` is already imported at module top (line 24). Harmless but
-  implies the module-level binding is unavailable. | fix: delete the local import; use the
-  module-level `settings`.
-
-- [cleanup] stripe_client.py:65 — `uuid.UUID(intent_id, version=4)` does NOT enforce v4: the
-  stdlib `version` kwarg OVERRIDES the parsed version/variant bits, so any valid UUID (v1/v3/v5/
-  nil) passes. The shape validation (the load-bearing part) works; the "must be a v4 UUID" claim
-  in the docstring + error message is not actually checked. (carried, still unfixed.) | fix:
-  `parsed = uuid.UUID(intent_id); if parsed.version != 4: raise ValueError(...)`, or relax the
-  copy to "must be a UUID". (Tracked Issue 109.)
-
-- [cleanup] stripe_client.py:69 — `per_min = pack.price_cents / pack.minutes` duplicates
-  `Pack.per_minute_cents` (packs.py:44) (DRY). (carried, still unfixed.) | fix: use
-  `pack.per_minute_cents` and drop the local. (Tracked Issue 109.)
-
-- [cleanup] ledger.py:64,144,71 — `_estimate_cost_usd` and `record_llm_usage` swallow ALL
-  exceptions best-effort (`except Exception ... logger.warning`, ledger.py:152; peers at
-  scoring.py:285, chat/runner.py:127). Intentional ("never block the pipeline") but a *systemic*
-  failure (bad `period`, missing `cost_estimate` column, unbound `AdminSessionLocal`) hides
-  behind a per-call WARNING and silently zeroes the cost ledger fleet-wide with no alarm. | fix:
-  keep the catch but emit a rate-limited ERROR + a metric counter (`billing.usage_write_failed`)
-  so a sustained failure is visible; optionally narrow to `(SQLAlchemyError, OperationalError)`
-  so a programming error still surfaces in CI rather than being masked. (Bordering SEV2;
-  rated cleanup because no money/balance row is affected — only the analytics cost ledger.)
+- [cleanup] billing/ledger.py:118-123 — `record_llm_usage(usage: dict, ...)`
+  takes a bare, unparameterized `dict` on a cost-accounting path whose keys are
+  fixed and known (`input_tokens`/`output_tokens`/`cache_read`/`cache_creation`).
+  | fix: type as `dict[str, int]` or a small `TypedDict` so the money math has a
+  checked shape.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — every DB session via `async with` (refund.py:60, ledger.record_llm_usage:149, worker callers); SAVEPOINTs (`begin_nested`) wrap INSERT+UPDATE atomically and roll back on the 402/IntegrityError path; explicit `rollback()` on refund's IntegrityError branch (refund.py:84); `_STRIPE` is a module-level singleton with an explicit `HTTPXClient(timeout=settings.STRIPE_TIMEOUT_S)`; ledger callers own the outer commit and that contract is documented in the docstrings |
-| 2 Concurrency & scale | 4 findings — money mutations are sound (atomic `UPDATE … WHERE minutes_balance >= n … RETURNING` ledger.py:267-272; SAVEPOINT+flush+IntegrityError-catch on grant AND deduct; UNIQUE keys verified at models.py:783 stripe_session_id, models.py:803-807 video_id, migration 0013 refund pack_id partial; webhook + reconcile idempotent under Stripe at-least-once). But: Stripe runs 0 network retries (finding 1), worker-side 402 burns full-reprocess retries (finding 3), balance-low enqueue races the commit (finding 5), reconcile pagination is unbounded (finding 6). No blocking call inside `async def` — sync Stripe SDK correctly offloaded at every call site (routers/billing.py:146 `asyncio.to_thread`, tasks.py:2198 `run_in_executor`) |
-| 3 Security & compliance | ok (+ open carried) — per-creator isolation verified on every query: `Creator.id == creator_id` (get_balance:157, grant UPDATE:209-211, deduct UPDATE:269, _trial_expired:324), `MinutePack.stripe_session_id ==` and `MinuteDeduction.video_id ==` are globally-UNIQUE idempotency keys, `Usage` upsert keyed on UNIQUE(creator_id, period). Webhook stamps `session.info["creator_id"]` before the RLS-gated read (routers/billing.py:231); worker/refund use `AdminSessionLocal` (BYPASSRLS) deliberately for cross-tenant system sweeps. No token/PII in any `logger.*` line — only UUIDs, pack_id, minute counts, stripe session ids. Parameterized ORM/Core SQL only — no f-string/% SQL. No virality promise in any string. Open: un-scoped Stripe idempotency key (finding 2) |
-| 4 Clip-quality | n/a (billing) |
-| 5 Anthropic SDK | partial (NEW surface) — billing does not CALL Anthropic; it PRICES it. `_estimate_cost_usd` correctly bills cache-read (0.1×) and cache-creation (1.25× / 2.0× for ttl:"1h") tokens SEPARATELY from `usage.input_tokens` (the documented cache under-bill fix). 1 finding: the cache-write multiplier knob is undocumented in `.env.example` (finding 4). Token usage IS logged after the call by the LLM callers (scoring.py:276, chat/runner.py); structured-output/max_tokens live in those caller modules, not this slice |
-| 6 Cleanliness & typing | 4 cleanups — every public signature typed; no TODO/print/dead code; redundant re-import (finding 7), illusory v4 check (finding 8), per_minute_cents DRY (finding 9), broad usage-ledger catch (finding 10). All functions single-purpose and under ~35 LOC |
-| 7 Error handling / API surface | n/a (no router in slice — routers/billing.py is the routers module's; reviewed only as a caller). Helpers raise correct `HTTPException(402/404)` with safe, actionable, internals-free detail; `RuntimeError` on missing checkout URL gives the router a clean 502. The cross-context 402 (finding 3) is the one real defect here |
-| 8 Config & paths | 1 finding (SEV2) — `COST_CACHE_WRITE_MULTIPLIER` used (ledger.py:109) + defined (config.py:86) but missing from `.env.example` (finding 4). All other billing config present + described: STRIPE_SECRET_KEY/PUBLISHABLE_KEY/WEBHOOK_SECRET/TIMEOUT_S/TAX_ENABLED/RECONCILE_LOOKBACK_HOURS, LOW_BALANCE_THRESHOLD_MINUTES, COST_CACHE_READ_MULTIPLIER. No filesystem paths in this slice |
+| 1 Resource lifecycle | ok — every DB session via `async with ... AdminSessionLocal()` / passed-in `AsyncSession`; `_STRIPE` is a module-level singleton; deduct/grant/refund idempotent via UNIQUE keys + SAVEPOINT. 1 SEV2 (pre-commit notification enqueue) |
+| 2 Concurrency & scale | 1 SEV1 (retries no-op). Sync Stripe calls ARE offloaded by callers (routers/billing.py:147 `asyncio.to_thread`, worker/tasks.py:2722 `run_in_executor`); `construct_webhook_event` runs inline but is offline HMAC (no network) — fine. Pagination in `list_recent_paid_sessions` is bounded by the lookback window |
+| 3 Security & compliance | 1 SEV2 (idempotency key not tenant-scoped, non-exploitable). Per-creator isolation ok: every query scoped by `Creator.id`/`creator_id`; refund derives creator_id from the deduction row; AdminSessionLocal BYPASSRLS is documented/justified for system paths. Parameterized ORM only. Webhook verified via `stripe.Webhook.construct_event` with `STRIPE_WEBHOOK_SECRET` (default 300s replay tolerance). No secret/PII in logs (creator_id/video_id are UUIDs; `cs_...`/`whsec_` session ids are non-secret). No virality copy |
+| 4 Clip-quality | n/a (not a clip module) |
+| 5 Anthropic SDK | n/a — module only prices token-usage dicts; it makes no LLM call |
+| 6 Cleanliness & typing | 1 cleanup (bare `dict` on record_llm_usage). Otherwise fully typed; no TODO/print/dead code |
+| 7 Error handling / API | n/a (routers own the API surface). stripe_client raises `ValueError`/`RuntimeError` with safe messages for the router to map |
+| 8 Config & paths | 1 cleanup (`COST_CACHE_WRITE_MULTIPLIER` missing from .env.example). No filesystem paths in this module; Stripe/cost/balance config all via pydantic settings |
 
 ## Module verdict
-NEEDS-WORK — no BLOCKER, no SEV1: the money core is correct (atomic, idempotent,
-tenant-isolated mutations under verified UNIQUE constraints, no event-loop blocking). The gaps
-are six SEV2s — two unfixed Stripe-client items (inert retries, un-scoped idempotency key), a
-cross-context 402 that burns full-reprocess retries, an undocumented cache-write cost knob, a
-balance-low notification enqueued before commit, and an unbounded reconcile pagination — plus
-four cleanups.
+NEEDS-WORK — one SEV1 (Stripe automatic-retries silently disabled: the module
+global is a verified no-op under the v8 StripeClient) plus two SEV2 hardening
+items; no BLOCKER and no cross-tenant leak.

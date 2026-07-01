@@ -561,7 +561,7 @@ async def analyze_performer(
 
     # Build and call Haiku using the module-level singleton (Issue 123).
     prompt = _build_analysis_prompt(
-        video_title=video.title or video.youtube_video_id,
+        video_title=video.title or video.youtube_video_id or "",
         kind=video.kind.value,
         views=metrics_row.views if metrics_row else None,
         engagement_rate=metrics_row.engagement_rate if metrics_row else None,

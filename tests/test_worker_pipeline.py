@@ -560,15 +560,15 @@ async def test_load_clip_render_plan_logs_anomaly_running_with_render_uri(
     await db_session.commit()
 
     try:
-        with caplog.at_level(logging.WARNING, logger="worker.tasks"):
-            with (
-                patch("worker.storage.alocal_path", _dummy_local_path),
-                patch("worker.progress.aemit", new_callable=AsyncMock),
-            ):
-                # _load_clip_render_plan opens its own AdminSessionLocal — drive it
-                # directly; the function returns the render plan (not None) since the
-                # clip is 'running', not 'done'.
-                plan = await _load_clip_render_plan(str(clip.id))
+        with (
+            caplog.at_level(logging.WARNING, logger="worker.tasks"),
+            patch("worker.storage.alocal_path", _dummy_local_path),
+            patch("worker.progress.aemit", new_callable=AsyncMock),
+        ):
+            # _load_clip_render_plan opens its own AdminSessionLocal — drive it
+            # directly; the function returns the render plan (not None) since the
+            # clip is 'running', not 'done'.
+            plan = await _load_clip_render_plan(str(clip.id))
 
         assert plan is not None, "_load_clip_render_plan must return a plan (not skip)"
         assert any(

@@ -11,8 +11,6 @@ Two test strategies:
 import re
 from pathlib import Path
 
-import pytest
-
 # All per-task model keys added in Issues 318 and 322–325
 _TASK_MODEL_KEYS = [
     "ANTHROPIC_MODEL_SCORING",

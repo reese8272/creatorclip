@@ -1,127 +1,49 @@
-# knowledge — assessed 2026-06-24
+# knowledge — assessed 2026-07-01
 
-Slice: `knowledge/` — `__init__.py` (empty), `chapters.py`, `hooks.py`,
-`thumbnails.py`, `titles.py`, `util.py`. This module is **pure compute**: each
-builder takes already-fetched arguments (`dna_brief`, `transcript`,
-`channel_title`, retention curves) and calls Claude. It opens **no DB sessions**
-and runs **no creator-scoped queries** — per-creator isolation is enforced by the
-callers in `worker/tasks.py`, which I re-verified: every `_*_async` task checks
-`video.creator_id != cid` and uses `creator.id`-scoped selects
-(worker/tasks.py:3187, :3332, :3523, :3702). All four LLM-calling functions are
-synchronous and are correctly off-loaded via `asyncio.to_thread(...)` from the
-async Celery coroutines, so the blocking Anthropic SDK client never runs on the
-event loop (verified worker/tasks.py:3206, :3388, :3414, :3596, :3728). ruff +
-mypy both pass clean on the slice.
+Slice: `knowledge/{chapters,clip_captions,clip_explain,clip_titles,hooks,thumbnails,titles,util}.py`, `knowledge/__init__.py`.
 
-> Supersedes the 2026-06-16 pass. NOTE: that pass recorded the titles/thumbnails
-> `cache_control` markers as "removed (prefix below the 2048 floor)". The code has
-> since changed again (Issue 218): the markers are **present and live**, the floor
-> is correctly cited as **1024** for Sonnet 4.6, and the comments were rewritten.
-> This assessment reflects the current tree.
+All Anthropic-SDK claims below are verified against **live** Anthropic docs (fetched 2026-07-01),
+not memory or DECISIONS.md (which the user flagged as having flip-flopped). Sources:
+- Prompt caching floors & pricing multipliers: https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching (fetched 2026-07-01)
+- Structured outputs shape + citation incompatibility: https://platform.claude.com/docs/en/docs/build-with-claude/structured-outputs (fetched 2026-07-01)
+- Web search tool version / dynamic filtering / model support: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool (fetched 2026-07-01)
+
+Verified facts used below (verbatim from the live docs):
+- **Claude Sonnet 4.6 minimum cacheable prefix = 1,024 tokens; Claude Haiku 4.5 = 4,096 tokens.**
+  (So DECISIONS.md's 1024/4096 values are CORRECT; a synthesized web-search summary claiming
+  Sonnet 4.6 = 2048 was wrong — the authoritative doc table says 1,024.)
+- Cache-write multiplier: 5-min = **1.25×** base input; **1-hour = 2×** base input; cache read = **0.1×**. `ttl: "1h"` on `cache_control: {type: ephemeral}` is valid.
+- Structured outputs: `output_config.format = {type:"json_schema", schema:{…}}`; objects **must** set `additionalProperties: false`; **returns 400 if citations are enabled** (i.e. cannot be combined with the web_search tool). Sonnet 4.6 + Haiku 4.5 both support structured outputs.
+- Web search: latest version is `web_search_20260318`; `web_search_20260209` (used here) remains available; dynamic filtering requires the code-execution tool and is limited to Opus 4.7/4.6, Sonnet 4.6 etc. — **Haiku 4.5 is not in the dynamic-filtering list**, corroborating hooks.py's rationale for `allowed_callers=["direct"]`.
+- Vision: image inputs are billed as input tokens and surface in `usage.input_tokens`.
 
 ## Findings
-- [SEV2] thumbnails.py:144 — `analyze_thumbnail_patterns` (multimodal vision over
-  up to 10 images, `settings.ANTHROPIC_MODEL` = Sonnet) records its usage to
-  `logger.info` only: it does NOT call `observability.record_llm_tokens`, AND its
-  caller path (worker/tasks.py:3388) never passes the usage to
-  `record_llm_usage` — only the second call (`generate_thumbnail_concepts`) is
-  billed. The vision call is therefore **un-metered (no Prometheus series) and
-  un-billed (no cost-ledger row)**; at scale this is real un-attributed spend. |
-  fix: have `analyze_thumbnail_patterns` call `record_llm_tokens(provider="anthropic",
-  model=settings.ANTHROPIC_MODEL, input_tokens=response.usage.input_tokens,
-  output_tokens=response.usage.output_tokens)` after the call (mirror hooks.py:229),
-  and return its usage so the caller bills it via `record_llm_usage`.
-- [SEV2] titles.py:230 / thumbnails.py:306 / chapters.py:218 — these three builders
-  log token counts via `logger.info` but never call `observability.record_llm_tokens`;
-  only hooks.py:229 does. Their task callers DO call `billing.ledger.record_llm_usage`,
-  but that writes the DB cost row only — it does NOT increment the Prometheus
-  `LLM_TOKENS_TOTAL` metric (confirmed billing/ledger.py:118-153 has no
-  `record_llm_tokens` call). Net: the token-rate/cost dashboards see hooks + chat +
-  insights but silently under-count titles/thumbnails/chapters. | fix: add one
-  `record_llm_tokens(...)` call after each `stream_and_emit` return (model =
-  `settings.ANTHROPIC_MODEL` for titles/thumbnails, `_HAIKU_MODEL` for chapters),
-  matching hooks.py:229, so billing and observability agree module-wide.
-- [SEV2] chapters.py:22 + hooks.py:27 — `_HAIKU_MODEL = "claude-haiku-4-5-20251001"`
-  is hardcoded in both files (used at chapters.py:208, hooks.py:216/231). The ID is
-  valid, but config.py defines only `ANTHROPIC_MODEL` (no hook/chapter override), so
-  rotating or A/B-testing the Haiku model on these two surfaces requires a code change
-  and redeploy — inconsistent with every other call site, which reads
-  `settings.ANTHROPIC_MODEL`. (Tracked Issue 221.) | fix: add
-  `ANTHROPIC_MODEL_CHAPTERS` and `ANTHROPIC_MODEL_HOOK_ANALYSIS` to `config.Settings`
-  (default `"claude-haiku-4-5-20251001"`), document both in `.env.example`, replace the
-  two hardcodes, and log the decision in docs/DECISIONS.md.
-- [cleanup] titles.py:41 + thumbnails.py:44 — `_DISCLAIMER` constants are defined but
-  referenced nowhere (verified repo-wide). The sibling brief modules (dna/brief.py:169,
-  analysis/brief.py:180, improvement/brief.py:162) all append their `_DISCLAIMER` to the
-  returned text; titles.py's module docstring (line 16) still claims "The honesty
-  disclaimer is always appended by Python" — false for this module. Honesty is NOT
-  violated: prompts mandate hedged per-item rationales and the frontend renders standing
-  "estimates grounded in your own data, not guarantees" notices on these surfaces
-  (Editor.tsx, Analysis.tsx, Pricing.tsx, Settings.tsx). So this is dead code + a stale
-  docstring, not a compliance gap. (Tracked Issue 109.) | fix: delete both constants and
-  correct the titles.py docstring, or actually append them to the done payload.
-- [cleanup] titles.py:220 / thumbnails.py:296 / hooks.py:212 / chapters.py:204 —
-  `_ANTHROPIC.with_options(timeout=120.0|60.0)` replaces the client's
-  `httpx.Timeout(X, connect=10.0)` with a flat scalar, silently loosening the *connect*
-  timeout from 10s to the full read budget. Under load a stuck TCP connect can hold the
-  worker thread for up to 120s instead of failing fast at 10s. (Tracked Issue 82, async
-  wave 2.) | fix: drop the `with_options(...)` and pass `_ANTHROPIC` directly (its
-  module-level timeout already encodes connect=10s + the right read budget), or pass a
-  full `httpx.Timeout(120.0, connect=10.0)`.
-- [cleanup] chapters.py:24 / hooks.py:29 / thumbnails.py:31 / titles.py:31 — four
-  separate module-level `Anthropic(...)` singletons with the same api_key and
-  near-identical timeout/retry config (DRY). Each IS a singleton (not per-call), so no
-  leak — just duplication. | fix: build one shared client and import it; keep per-call
-  `.with_options` (or the fix above) for the longer-budget callers.
-- [cleanup] titles.py:107 / thumbnails.py:175 — `_build_request` /
-  `_build_concepts_request` annotated `-> tuple` (bare) where the shape is
-  `tuple[list[dict], list[dict], list[dict]]` (the `(system, tools, messages)` contract).
-  (Tracked Issue 109.) | fix: annotate the precise tuple type.
-- [cleanup] titles.py:38 (`_GENERATE_N = 10`) + hooks.py:36 (`TRANSCRIPT_EXCERPT_S =
-  60.0`) — dead constants, never referenced (the "10" lives in the prompt text; the 60.0
-  is passed literally by the caller). hooks.py:172-173 also computes a "Xpp below median"
-  line guarded only by `(creator_median_at_drop or 0)`, which would mislead if median is
-  None while `retention_drop_at_s` is not — unreachable from the sole caller today but
-  the `float | None` signature permits it. (Tracked Issue 109.) | fix: delete the dead
-  constants; guard `creator_median_at_drop is not None` before emitting the median tail.
 
-## Notes verified (no finding)
-- Anthropic SDK: `max_tokens` set on every call (512–2000). Prompt caching is correct
-  and live where it pays off: titles.py:138 / thumbnails.py:216 carry a `cache_control`
-  ephemeral-1h breakpoint on the DNA block (~1,550-tok prefix > Sonnet 4.6's 1024 floor,
-  so titles→hooks→thumbnails within a creator session share the cached prefix);
-  chapters/hooks intentionally omit the marker because their ~175/~900-tok prefixes are
-  below Haiku 4.5's 4096 floor (documented inline, Issue-135 precedent). The vision call
-  has no caching but its *result* is Redis-cached 24h by the caller, so re-calls are rare
-  — acceptable. Structured output is prompt-enforced JSON + `json.loads` (repo-wide
-  convention, matches dna/brief.py), not the SDK tool-schema mode — not flagged.
-- Security/compliance: no token/PII in any `logger.*` line (only token counts + ids). No
-  OAuth/`decrypt()` in scope. Strong prompt-injection posture — `UNTRUSTED_CONTENT_POLICY`
-  in every static prefix, and `wrap_untrusted()` JSON-encodes attacker-influenceable
-  `stated_identity` and moves it to the user turn (Issue 224/225). No virality promise.
-- Concurrency: no `time.sleep`/`requests.`/`subprocess` anywhere in the slice; no `async
-  def` in the module; all blocking LLM work off-loaded via `to_thread`. Builders are
-  pure/stateless and safe to re-run, meeting the re-runnability the module owes (task-level
-  retry double-billing is a worker/ concern, not this slice). Inputs are bounded
-  (`_SEGMENT_MAX_CHARS`, `_DNA_BRIEF_MAX_CHARS`, 10-image cap, 20-curve cap at caller).
-- Config & paths: `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`ANTHROPIC_WEB_SEARCH_TOOL` all in
-  config.py + `.env.example` with descriptions. No filesystem paths in the module.
+- [SEV2] titles.py:136-140, thumbnails.py:231-235, clip_titles.py:150-154, clip_captions.py:120-124, clip_explain.py:149-153 — the `cache_control {ttl:"1h"}` marker on Block 2 (DNA brief) is emitted **unconditionally**, but the cacheable prefix = Block1(static) + Block2(DNA). Measured static blocks incl. UNTRUSTED_CONTENT_POLICY are only ~471–709 tokens (chars/4: titles 709, thumbnails 621, clip_titles 596, clip_explain 544, clip_captions 471). When `dna_brief is None` the DNA text is "No DNA profile available yet." (~10 tok), so the prefix is **~480–720 tokens — well below Sonnet 4.6's 1,024-token floor** and the marker is INERT (Anthropic silently declines to cache). The inline comments assert "~1,550 tokens … clears the 1024 floor," which only holds when the DNA brief is near its full 3,000-char cap; for every new creator (no DNA yet) caching does nothing. This is the exact defect DECISIONS #315 fixed in `clip_engine/scoring.py` by gating the marker on measured prefix size; the knowledge builders never adopted the guard. No over-bill (usage is read post-hoc from the response, so `cache_creation=0` is recorded honestly), but zero cache benefit + misleading comment. Secondary cost note: the 1h TTL write is **2× base**; for the effectively one-shot-per-video Sonnet calls, if a same-creator read does not follow within 1h you pay 2× on the write with no 0.1× read to amortize — net costlier than not caching. | fix: gate the marker exactly like scoring.py — only attach `cache_control` when `(len(block1_text)+len(block2_text))//4 >= 1024` (Sonnet) and drop it when `dna_brief` is falsy; correct the comments to say the floor is cleared only with a populated DNA brief.
+
+- [SEV2] titles.py:141-143, thumbnails.py:236-240, hooks.py:197-204 — untrusted content is placed in the **system role**. titles Block 3 interpolates `transcript_summary` and `video_title` directly into a system `text` block (`f"VIDEO TO TITLE:\n{video_context}"`); thumbnails Block 3 interpolates `transcript_hook`; hooks Block 3 interpolates `transcript_excerpt`. The module's own `UNTRUSTED_CONTENT_POLICY` explicitly names "Video transcripts" and "YouTube video titles" as untrusted, and the Anthropic prompt-injection guidance cited in util.py states untrusted content **must never go in the system role**. The newer clip builders (clip_titles/clip_captions/clip_explain) do this correctly — they `wrap_untrusted(...)` the transcript in the **user** turn — so the posture is internally inconsistent; only the older Issue-128/129/130 builders leak untrusted text into system. Mitigant: the in-context UNTRUSTED_CONTENT_POLICY reduces (does not remove) the risk, and the attacker is largely the creator's own uploaded video. | fix: move `transcript_summary`/`video_title` (titles), `transcript_hook` (thumbnails), and `transcript_excerpt` (hooks) out of the system blocks and into the user-turn message via `wrap_untrusted("video_transcript", …)` / `wrap_untrusted("video_title", …)`, matching clip_titles.py's pattern.
+
+- [cleanup] 7 separate module-level `Anthropic()` clients — clip_titles.py:31, titles.py:32, clip_explain.py:34, chapters.py:24, hooks.py:27, clip_captions.py:31, thumbnails.py:32 — each builds its own httpx connection pool (DRY / resource duplication). They are module-level (not per-call) so the rubric's singleton rule is technically met, but 7 pools for one provider is wasteful. | fix: one shared client in `knowledge/_client.py` (or a common `llm/client.py`) imported by all builders; keep the `.with_options(timeout=…)` per-call override where needed (it shares the underlying pool).
+
+- [cleanup] Identical `usage_dict` construction duplicated at clip_titles.py:273-278, clip_captions.py:219-224, clip_explain.py:273-278 (same 4-key `getattr(response.usage, …)` block). | fix: extract `usage_from_response(usage) -> dict` into knowledge/util.py and call it in all three.
+
+- [cleanup] The per-call `logger.info("… tokens: in=%d cached_read=%d cached_write=%d out=%d", …)` block is duplicated in all 7 builders (titles.py:252, thumbnails.py:344, hooks.py:244, chapters.py:226, clip_titles.py:279, clip_captions.py:225, clip_explain.py:279). | fix: fold the log line into `record_llm_metric` / `record_llm_tokens` (both already receive the same four numbers) so each call site is one line.
+
+- [cleanup] Bare unparameterized `-> tuple:` return annotation on titles.py:107 `_build_request` and thumbnails.py:193 `_build_concepts_request` (the clip builders correctly use `-> tuple[list[dict], list[dict]]`). | fix: parameterize to `-> tuple[list[dict], list[dict], list[dict]]` (system, tools, messages).
+
+- [cleanup / needs-runtime-confirmation] Web-search builders pin `settings.ANTHROPIC_WEB_SEARCH_TOOL = "web_search_20260209"` and force `allowed_callers=["direct"]` because they do NOT want dynamic filtering (which, per the live doc, additionally requires the code-execution tool). The current basic-search version is `web_search_20250305`; the natural "direct, no dynamic filtering" choice. 20260209 remains available so this is not a defect, but the direct-call workaround on a dynamic-filtering-oriented version is worth confirming on a live call (mocked tests won't catch a routing regression). | fix (optional): consider `web_search_20250305` for the direct-only paths, or add a live smoke assertion that the streamed text block is non-empty.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — clients are module-level singletons (4-way DRY cleanup); no DB/file/subprocess handle in module |
-| 2 Concurrency & scale | ok — sync LLM client off-loaded via to_thread by every caller; no blocking call/async def in module; inputs bounded (connect-timeout-loosening `with_options` noted as cleanup) |
-| 3 Security & compliance | ok — no PII/token logged; strong injection hardening; no creator-scoped query lives here (isolation verified at callers) |
-| 4 Clip-quality | n/a (advisory title/thumbnail/hook/chapter surfaces, not the clip-extraction path) |
-| 5 Anthropic SDK | 3 findings — un-metered+un-billed vision call, missing `record_llm_tokens` in 3 builders, hardcoded `_HAIKU_MODEL`; caching/max_tokens otherwise correct & live |
-| 6 Cleanliness & typing | 5 cleanup — dead `_DISCLAIMER` x2 + stale docstring, dead `_GENERATE_N`/`TRANSCRIPT_EXCERPT_S` + median guard, duplicate clients, `with_options` connect loosening, bare `-> tuple` |
-| 7 Error handling / API | n/a (no FastAPI routes; library raises ValueError/SDK errors for Celery retry — consistent contract) |
-| 8 Config & paths | ok — all config in `.env.example`; no paths (model-override gap captured as the `_HAIKU_MODEL` SEV2) |
+| 1 Resource lifecycle | 1 cleanup (7 duplicate clients); no DB/temp-media in this module |
+| 2 Concurrency & scale | ok — sync `messages.create` builders are documented "call via asyncio.to_thread"; caller-side (out of slice). Bounded inputs (images `[:10]`, transcript char-capped) |
+| 3 Security & compliance | 1 SEV2 (untrusted transcript/title in system role, older builders); virality/honesty guards + injection hardening otherwise strong; no tokens/PII/SQL here |
+| 4 Clip-quality | n/a (generation module, not clip selection) — clip_explain correctly constrains `cited_principle` to the canonical enum |
+| 5 Anthropic SDK | 1 SEV2 (inert cache marker below 1024 floor for empty DNA). Verified OK: token usage logged after EVERY call (record_llm_metric/record_llm_tokens + info log, all 7); thumbnail vision call IS metered+billed (image tokens in usage.input_tokens, logged); structured outputs correctly used on non-web-search paths with `additionalProperties:false` and correctly NOT used on web_search paths (would 400 with citations) |
+| 6 Cleanliness & typing | 4 cleanup (dup clients, dup usage_dict, dup token-log line, bare `tuple`); no TODO/print/pdb |
+| 7 Error handling / API | n/a (not a router; builders raise typed SDK errors to caller as documented) |
+| 8 Config & paths | ok — model IDs + web-search tool are config-driven; no filesystem paths; thumbnail URLs are absolute https |
 
 ## Module verdict
-NEEDS-WORK — no BLOCKER and no SEV1; the module is secure, isolation-safe, and
-non-blocking, and prompt caching is now correct. But the thumbnail vision call is
-un-metered AND un-billed, three builders skip the Prometheus token metric while only
-hooks records it, and the Haiku model is hardcoded on two surfaces — three SEV2s that
-leave LLM cost/observability inconsistent across the module, plus five low-risk cleanups.
+NEEDS-WORK — no blockers; two SEV2s to fix (unconditional 1h cache marker goes inert below Sonnet 4.6's live-confirmed 1,024-token floor when the DNA brief is empty/short, and the older streaming builders put untrusted transcript/title in the system role — both already solved elsewhere in the codebase and just need to be adopted here), plus DRY cleanups.

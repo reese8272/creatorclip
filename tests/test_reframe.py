@@ -508,7 +508,6 @@ class TestReadFrameCv2NaNFps:
     def test_fps_nan_no_crash(self, tmp_path: Path) -> None:
         """fps=NaN is truthy so `fps or 25.0` keeps NaN, causing int(ts*NaN) to
         raise ValueError. The guard must intercept this and use 25.0 instead."""
-        import math
 
         result = self._read_with_fps(tmp_path, float("nan"))
         # Must not raise a ValueError/TypeError from int(timestamp * NaN)

@@ -5,12 +5,11 @@ Pure function tests — no DB, no network, no ffmpeg.
 Transcription backend calls are patched at the SDK boundary.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
-from types import SimpleNamespace
 
 from ingestion.transcribe import (
     _normalize_assemblyai,
@@ -521,7 +520,6 @@ def test_normalize_deepgram_utterance_with_empty_words_list_keeps_segment():
 
 def test_transcribe_done_log_includes_word_count_and_duration(tmp_path, monkeypatch):
     """transcribe_audio must log word_count and transcript_duration_s on success."""
-    import ingestion.transcribe as t_mod
 
     wav = tmp_path / "audio.wav"
     wav.write_bytes(b"RIFFxxxx")

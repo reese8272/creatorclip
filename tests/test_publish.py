@@ -459,9 +459,9 @@ def test_publish_done_null_youtube_video_id_logs_warning(caplog):
     with (
         patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(session)),
         caplog.at_level(logging.WARNING, logger="worker.tasks"),
+        pytest.raises(ValueError, match="stop early"),
     ):
-        with pytest.raises(ValueError, match="stop early"):
-            asyncio.run(_publish_to_youtube_async("task-null-yt", str(cid)))
+        asyncio.run(_publish_to_youtube_async("task-null-yt", str(cid)))
 
     assert any(
         "youtube_video_id is NULL" in record.message

@@ -93,7 +93,9 @@ def _build_request(
         # Volatile per-creator analytics — AFTER the breakpoint, never cached.
         {"type": "text", "text": f"CREATOR ANALYTICS DATA:\n{analytics_json}"},
     ]
-    tools: list[dict] = [{"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search"}]
+    tools: list[dict] = [
+        {"type": settings.ANTHROPIC_WEB_SEARCH_TOOL, "name": "web_search", "max_uses": 5}
+    ]
     messages = [
         {
             "role": "user",
@@ -122,38 +124,60 @@ def generate_improvement_brief(
     Args:
         task_id: Optional Celery task id (Issue 92). When set, switches to the
             streaming path — cache hit/miss + text deltas flow to
-            ``task:{task_id}:events`` via ``worker.anthropic_stream.stream_and_emit``.
-            Mirrors ``dna/brief.py::generate_brief``'s Issue-86 pattern. When None
-            (default), uses the legacy ``.create()`` path so existing tests and
-            non-progress-aware callers keep working unchanged.
+            ``task:{task_id}:events`` via ``worker.anthropic_stream.stream_message``
+            with a ``pause_turn`` loop for multi-round web_search (Issue 350).
+            When None (default), uses the ``.create()`` path with the same loop.
     """
     system, tools, messages = _build_request(channel_title, analytics, dna_brief)
 
-    if task_id is not None:
-        # Streaming path (Issue 92) — forwards message_start.usage + text_delta
-        # events to the SSE consumer. Same prompt structure AND same tools as
-        # the .create() path so the LLM sees an identical contract on both
-        # paths (cache breakpoints + web_search both intact). The tools=tools
-        # kwarg matters: without it, the brief loses web_search grounding —
-        # Wave-3 Fix A closed that SEV1.
-        from worker.anthropic_stream import stream_and_emit
+    _MAX_SEARCH_ROUNDS = 5
 
-        # The 120s timeout matters more here than on the streaming path
-        # (streaming returns first byte fast), but pass it through for parity.
+    if task_id is not None:
+        # Streaming path — uses stream_message (returns full Message with stop_reason)
+        # so we can detect pause_turn and continue the agentic loop when web_search
+        # fires server-side. stream_and_emit only returns text and cannot see stop_reason.
+        from worker.anthropic_stream import stream_message
+
         client = _ANTHROPIC.with_options(timeout=120.0)
+        usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read": 0,
+            "cache_creation": 0,
+        }
+        loop_messages = messages
+        final_msg = None
         try:
-            final_text, usage = stream_and_emit(
-                client,
-                task_id,
-                model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
-                max_tokens=2000,
-                system=system,
-                messages=messages,
-                tools=tools,
-            )
+            for _round in range(_MAX_SEARCH_ROUNDS + 1):
+                msg, round_usage = stream_message(
+                    client,
+                    task_id,
+                    model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
+                    max_tokens=2000,
+                    system=system,
+                    messages=loop_messages,
+                    tools=tools,
+                )
+                for k in usage:
+                    usage[k] += round_usage.get(k, 0)
+                if getattr(msg, "stop_reason", None) != "pause_turn":
+                    final_msg = msg
+                    break
+                loop_messages = loop_messages + [{"role": "assistant", "content": msg.content}]
+            else:
+                logger.warning(
+                    "improvement_brief streaming: hit max search rounds (%d)", _MAX_SEARCH_ROUNDS
+                )
+                final_msg = msg  # type: ignore[possibly-undefined]  # loop always runs ≥1 iter
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
             log_llm_error(logger, exc, task=task_id)
             raise
+        if final_msg is None:
+            raise RuntimeError("Claude returned no message in improvement brief streaming")
+        text_blocks_s = [b for b in final_msg.content if getattr(b, "type", None) == "text"]
+        if not text_blocks_s:
+            raise RuntimeError("Claude returned no text in improvement brief streaming")
+        final_text = text_blocks_s[-1].text
         logger.info(
             "improvement_brief streaming tokens: in=%d cached_read=%d cached_write=%d out=%d",
             usage["input_tokens"],
@@ -162,12 +186,10 @@ def generate_improvement_brief(
             usage["output_tokens"],
         )
         record_llm_metric(settings.ANTHROPIC_MODEL_IMPROVEMENT, usage)
-        # web_search interleaves text + tool_use blocks under streaming too;
-        # stream_and_emit returns the LAST text block (the synthesised
-        # answer), matching the Issue 69 pattern the .create() path uses.
         return final_text + _DISCLAIMER, usage
 
-    # web_search tool can take 60-120s; override the default 60s timeout per-call.
+    # Non-streaming (.create) path — pause_turn loop so server-side web_search
+    # results are folded back and the model synthesises a final answer. (Issue 350)
     from verbose import vlog_llm_request, vlog_llm_response
 
     vlog_llm_request(
@@ -178,17 +200,28 @@ def generate_improvement_brief(
         messages=messages,
         tools=tools,
     )
+    _client = _ANTHROPIC.with_options(timeout=120.0)
+    loop_messages = messages
+    response = None
     try:
-        response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
-            model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
-            max_tokens=2000,
-            system=system,
-            tools=tools,
-            messages=messages,
-        )
+        for _round in range(_MAX_SEARCH_ROUNDS + 1):
+            response = _client.messages.create(
+                model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
+                max_tokens=2000,
+                system=system,
+                tools=tools,
+                messages=loop_messages,
+            )
+            if getattr(response, "stop_reason", None) != "pause_turn":
+                break
+            loop_messages = loop_messages + [{"role": "assistant", "content": response.content}]
+        else:
+            logger.warning("improvement_brief: hit max search rounds (%d)", _MAX_SEARCH_ROUNDS)
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         log_llm_error(logger, exc)
         raise
+    if response is None:
+        raise RuntimeError("Claude returned no response in improvement brief generation")
     vlog_llm_response("improvement_brief", response=response)
 
     _tokens_in = response.usage.input_tokens

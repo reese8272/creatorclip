@@ -76,10 +76,15 @@ Docker Compose is **dev/test only**. Production at 10k+ scale requires Kubernete
   - **Worker pool per pod**: `admin_engine pool_size 2 + max_overflow 2 = 4` client conns
     ≤ PgBouncer sidecar `defaultPoolSize` 5 (sized for `--concurrency=2`). Worker's
     `DATABASE_URL` and `DATABASE_MIGRATION_URL` both point to `localhost:5432` (the sidecar).
+  - **Event-log engine (Issue 347):** `event_log.py` opens a *second* async engine to `logs_database_url`
+    (defaults to the same `DATABASE_URL`/PgBouncer). It is best-effort telemetry on the hot request path.
+    Pool is intentionally small: `pool_size=2,max_overflow=3` = **5 conns/replica** — must be added to the
+    budget below. Under the prod ceiling (20 app replicas) this adds 20 × 5 = 100 conns.
+
   - **Fleet connection budget inequality (Issue 259 — must hold before raising replica counts):**
 
     ```
-    Σ(app_pods × app_defaultPoolSize) + Σ(worker_pods × worker_defaultPoolSize)
+    Σ(app_pods × (app_defaultPoolSize + event_log_pool)) + Σ(worker_pods × worker_defaultPoolSize)
       ≤ Cloud SQL max_connections − superuser_reserved(10)
     ```
 
