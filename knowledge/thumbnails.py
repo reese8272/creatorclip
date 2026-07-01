@@ -333,6 +333,7 @@ def generate_thumbnail_concepts(
     usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_creation": 0}
     loop_messages = messages
     final_msg = None
+    msg = None
     try:
         for _round in range(_MAX_SEARCH_ROUNDS + 1):
             msg, round_usage = stream_message(
