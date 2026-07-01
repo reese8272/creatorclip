@@ -5,6 +5,28 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-07-01 — Rung-1/2 verification blockers: billing idempotency, pause_turn, and test hardening
+
+**What was decided.**
+Three Rung-1 blockers found by full-system verification workflow, all fixed:
+
+1. **`transcribe_video` `SoftTimeLimitExceeded` left video stuck `running`** — Added `_set_status(IngestStatus.failed)` + warning log before the bare `raise`, matching the `render_clip` gold standard. `worker/tasks.py` lines ~234.
+
+2. **All 5 video-analysis tasks (`_generate_video_analysis_async`, `_generate_title_suggestions_async`, `_generate_thumbnail_concepts_async`, `_analyze_hook_async`, `_generate_chapters_async`) could double-charge on retry** — If `aemit('done')` raised a Redis blip after `record_llm_usage`, the outer `except` re-raised → Celery retry → LLM re-ran. Fixed by splitting each function's single `try/except` at the billing boundary: the LLM call + `record_llm_usage` stay in the retryable block; the `aemit('done')` + parse step move to a post-billing `try/except` that does NOT re-raise (only logs). Used `contextlib.suppress` for the innermost fallback `aemit('error')` calls to satisfy ruff SIM105.
+
+3. **`knowledge/thumbnails.py` `generate_thumbnail_concepts` crashed on `pause_turn`** — Was using `stream_and_emit` (which can't handle `pause_turn`). Replaced with the `stream_message` pause_turn loop pattern from `improvement/brief.py` (≤5 rounds, accumulate usage, extract text blocks from final message). Updated `tests/test_thumbnails.py` to mock `stream_message` instead of `stream_and_emit`.
+
+**Test hardening alongside:**
+- `from __future__ import annotations` removed from `routers/chat.py` — caused `PydanticUserError: ForwardRef` on `app.openapi()`.
+- `tests/test_response_models.py` — added `response_class` unwrapping (DefaultPlaceholder) + `_EXEMPT_PATHS` entries for 3 legitimate non-JSON routes (`/auth/connect-publishing`, `/clips/{clip_id}/download`, `/creators/me/export/download`).
+- `tests/test_dna_build_idempotency.py` happy-path test — added `patch("dna.embeddings.embed_patterns", return_value=[])` so the test doesn't hit real Voyage AI in dev envs where `VOYAGE_API_KEY` is set (3 RPM free-tier → `RetryError`).
+
+**Why.** Billing idempotency is a financial correctness requirement. The `pause_turn` loop is required for `web_search` tool calls to complete. The test fixes prevent environment-dependent failures from masking real regressions.
+
+**Source / evidence.** Rung-1 static trace by multi-agent workflow 2026-07-01; `improvement/brief.py` pause_turn loop as reference implementation; Anthropic API `stop_reason: pause_turn` docs.
+
+---
+
 ## 2026-07-01 — Stripe v8: `max_network_retries` must be passed to `StripeClient()`, not set as a module global (Issue 345)
 
 **What was decided.** Removed `stripe.max_network_retries = 3` from `billing/stripe_client.py` and moved

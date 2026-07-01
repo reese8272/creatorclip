@@ -209,6 +209,7 @@ async def test_successful_build_commits_draft_and_embeddings_together(db_session
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
             patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
+            patch("dna.embeddings.embed_patterns", return_value=[]),
         ):
             from worker.tasks import _build_dna_async
 
