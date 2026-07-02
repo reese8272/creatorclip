@@ -10360,3 +10360,88 @@ deleted by the old code; only new uploads render. Manual re-render/trim after th
 **Source/evidence.** Best-practices CHECK brief (2026-07-01) with live `web_search`; verified end-to-end via
 `scripts/repro_ingest_render.py` (real ffmpeg ingest → render `done`) + the integration test in
 `tests/test_worker_pipeline.py`. **Date:** 2026-07-01
+
+## 2026-07-02 — W1 wave scope + five research-resolved decisions [DEC]
+
+Phase-1 CHECK research (9 parallel research agents, all vendor claims verified against live docs
+2026-07-02) reconciled the stale Lane×Wave tracker and locked the W1 execution set. Build round 1:
+352-Batch-A (config hardening), 82b (session-order), 190 (recap Part A), 284 (feature flags),
+203 (data-gate), 200+202 residuals, 148 close-out. Round 2: 352 Batches B–M, 191, 231.
+Operator checklist (external): 282, 286, 288, 228-smoke. Approved by user ("good to go").
+
+**Issue 219 — Batch API for clip scoring: DEFER-post-beta (spike resolves negative).**
+The tracker's open research question is RESOLVED: the Message Batches 50% discount **does stack**
+with prompt caching (best-effort 30–98% cache-hit rate; 1h TTL recommended for batches) — but batch
+turnaround (typical <1h, max 24h, **no SLA**, expiry possible) is incompatible with the live pipeline:
+scoring sits inside the SSE stepper (worker/tasks.py:2237→2283, Wave-3 Fix E keeps the consumer
+subscribed until terminal `done`) and gates auto-render + `clips_ready`. Saving ceiling ≈ $0.01/video
+(~$3–20/mo at beta scale) vs an L-sized build that would degrade "upload → clips in minutes" to a
+no-SLA hours window. Per the issue's own AC spike branch: **scoring stays synchronous**. Revisit
+trigger: a genuinely async workload (catalog backfill / nightly re-score / eval runs) or scoring
+spend > ~$100/mo. Correction: docs/assessment/llm/clip_scoring.md:72 "no live-SSE bar" is stale
+post-Wave-3-Fix-E (logged in OFF_COURSE_BUGS.md).
+*Sources:* platform.claude.com/docs/en/build-with-claude/batch-processing +
+/prompt-caching (accessed 2026-07-02).
+
+**Issues 190/191 — Stream-VOD recap is a new `summaries` artifact (PRD scope expansion).**
+Recap = dedicated `summaries` table (segments JSONB, RLS per 0038/0040 pattern, migration 0041) +
+budgeted greedy-knapsack selection (max of plain-greedy vs score/duration-ratio-greedy — the standard
+bound-preserving trick for budgeted submodular selection), chronological/chapter-aware ordering, each
+segment citing a named principle. Render (191) = re-encode concat via the existing
+`-filter_complex_script` + two-pass-loudnorm path; hard cuts + afade, **no xfade** (cumulative-offset
+fragility, overlap eats content); concat demuxer `-c copy` on source cuts rejected (keyframe-inaccurate,
+A/V desync, violates setup-start accuracy). Overloading `clips` with kind='summary' rejected (montage
+doesn't fit single start/end row shape).
+*Sources:* Gygli et al. (submodular video summarization), arXiv:1912.03650; mpegflow/Cloudinary/Baeldung
+concat guides; OTTVerse/FFmpegLab xfade guides (accessed 2026-07-02).
+
+**Issue 203 — Sub-threshold creators MAY clip (signal-based scoring), communicated honestly.**
+Resolves finding-07 Open Question 3 as "allow": the backend already tolerates `dna_brief=None` and
+falls back to signal-based scoring; only the UI hard-blocked. UI now shows per-kind unlock deltas
+(server-computed to avoid threshold drift — the Issue-88 bug class) + a "Clip a video now" CTA + honest
+"generic until DNA unlocks" copy per the CLAUDE.md honesty constraint. Hard-blocking rejected
+(contradicts PRD §145 and actual backend behavior); client-side delta math rejected (duplicated threshold).
+
+**Issue 284 — Homegrown two-tier feature flags; NO flag platform.**
+Env default (pydantic-settings) + `feature_flags` DB table override read through a ~30s in-process TTL
+cache, fail-open to env default on DB error; 4 kill switches at subsystem entry points (llm_generation,
+youtube_publish, render_intake, signup); flips audited via log_event; ops script flip surface.
+OpenFeature/hosted Unleash/Flagsmith rejected: an incident-response lever must not depend on an external
+SaaS, and 4 booleans don't need targeting machinery. Redis-only flags rejected (not durable/audited).
+*Sources:* docs.getunleash.io flag best practices; launchdarkly.com operational-flags;
+flagshark.com FastAPI homegrown-flags guidance (accessed 2026-07-02).
+
+**Issue 82 — Voyage stays thread-wrapped (DEC premise corrected); split 82a/82b.**
+The old plan's premise "voyageai has no async client" is FALSE — pinned voyageai==0.3.2 ships
+`AsyncClient` (verified in package source). Decision: KEEP the proven `asyncio.to_thread` wrap for
+Voyage anyway — it is worker-only (low concurrency), its tenacity retry semantics are established
+(predicate fix lands in 352 Batch J), and AsyncClient is undocumented API surface on docs.voyageai.com.
+Anthropic sync→AsyncAnthropic migration (82a) proceeds separately, mirroring clip_engine/scoring.py's
+shipped pattern (worker's per-child singleton event loop makes module-level async clients prefork-safe;
+`asyncio.run()`-per-task rejected — kills the loop the client pool binds to). 82b (router session-order:
+release before external call, re-stamp `session.info["creator_id"]` on every reacquired session) is the
+user-visible half and ships first.
+*Sources:* github.com/anthropics/anthropic-sdk-python; voyageai 0.3.2 package source inspection
+(accessed 2026-07-02).
+
+**Issue 286 — Cloudflare edge rate limiting on the FREE tier (1 rule) for beta.**
+Free plan = exactly 1 rate-limiting rule (URI-path match, IP counting; legacy `cloudflare_rate_limit`
+API retired 2025-06-15 — use `cloudflare_ruleset` phase `http_ratelimit`). Beta ships ONE combined
+pre-auth rule (`/auth/*`) with `managed_challenge`, config committed to the repo (not click-ops);
+Pro upgrade (2 rules) deferred until observed abuse warrants per-path thresholds. Must not break
+Bot Fight Mode / Cloudflare health checks (Issue 144 precedent).
+*Sources:* developers.cloudflare.com/waf/rate-limiting-rules/ + /terraform/additional-configurations/
+rate-limiting-rules/ (accessed 2026-07-02).
+
+**Tracker hygiene (same research pass).** Issue 316 CLOSED superseded by 352 (7 unverified residuals
+carried into 352 as Batch M); Issue 240 PARKED for beta (Grafana Cloud via Issue 326 covers log
+aggregation — free tier 50GB/mo logs, 14-day retention, comfortably above beta volume; self-hosted
+Loki-on-GCS DEC stays on file re-gated behind Issue 275); Issue 282 re-scoped off the Issue-236 SLO
+dependency (hosted Better Stack free tier on /health + worker heartbeat; self-hosted Uptime Kuma on the
+same VM rejected — status page must not die with the host it reports on); Issue 228 re-sized to S
+residual (implementation shipped 2026-06-24; remaining: staging 429 smoke + mutmut fold-in + tracker
+flip; slowapi 0.1.10 checked — still no async storage, Issue-312 design stands); Issue 148 reduced to
+XS dedup-by-deletion (Issue 226 deleted its target pages).
+
+**Source/evidence.** Nine CHECK briefs with per-claim URLs (this session, 2026-07-02); all lead defects
+re-verified present in current code before batching. **Date:** 2026-07-02

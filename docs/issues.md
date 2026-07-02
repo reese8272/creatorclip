@@ -94,7 +94,16 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
   URLs; `str(video_title or "")`). Restore both gates to 0.
 
 ### Issue 352: 2026-07-01 assessment SEV2 backlog (grouped) — ~54 SEV2s
-- **Status:** OPEN · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
+- **Status:** OPEN — IN BUILD (W1 round 1 started 2026-07-02) · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
+- **Batch plan (2026-07-02 CHECK, all 13 lead defects re-verified present):** 13 file-disjoint batches
+  A–M in 4 waves — **A** config/crypto/pins (IN BUILD, owns `config.py`+`requirements.txt`) →
+  {**B** billing idempotency scoping, **C** routers unauth surface, **D** youtube quota/publish,
+  **E** ingestion} → {**F** worker invariants, **G** knowledge prompt posture, **H** clip_engine
+  isolation/geometry, **I** chat attribution} → {**J** scoring-math trio, **K** frontend fetch,
+  **L** infra observability, **M** Issue-316 carried residuals: activeTasks SSE-cap invariant,
+  CaptionStylePanel render-SSE, ledger-402 retry burn, `db.py recreate_engine` race, notify PII log,
+  shallow `scrub_dict`, `last_used_at` write-amp (verify-then-fix)}. Full item lists per batch in the
+  session CHECK brief + `docs/assessment/modules/*.md`.
 - Full lists per module in `docs/assessment/modules/<module>.md`. Load-bearing leads to promote:
   - **routers** `activity.py:57` — unauthenticated `POST /api/activity` splats client `**safe_extra` into
     `log_event` → 500 + log-injection.
@@ -749,7 +758,7 @@ Reconcile `DECISIONS.md` to a single authoritative floor (**1024** for Sonnet 4.
 
 ### Issue 316: [SEV2] 2026-06-24 assessment hardening backlog (tracker)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `L` · **Verify** `local`
+**Status** `CLOSED — superseded by #352` (2026-07-02, W1 CHECK reconciliation: fixed items verified in `8ab522f`/`d064189`/L21; everything still live is re-captured by the 2026-07-01 module files; 7 unverified residuals — activeTasks SSE-cap invariant, CaptionStylePanel render-SSE, ledger-402 retry burn, `db.py recreate_engine` bool race, notify recipient-email PII log, shallow `scrub_dict`, api-key `last_used_at` write-amp — carried into #352 as Batch M. See DECISIONS 2026-07-02.) · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `L` · **Verify** `local`
 **Src** assessment 2026-06-24 — tracker for the ~65 remaining SEV2s; itemized in `docs/assessment/REPORT.md`
 
 **Problem.** Beyond the SEV1s (311–313) and the two focus items (314–315), the assessment confirmed ~65
@@ -1558,7 +1567,7 @@ Prompt-cache re-enable, Batch API, the Usage cost ledger, model-per-task, spend 
 
 ### Issue 219: Route clip scoring through the Batch API (-50%)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `L` · **Verify** `external`  
+**Status** `DONE — spike resolved NEGATIVE, deferred post-beta` (2026-07-02; per this issue's own AC branch: batch turnaround — typical <1h, max 24h, NO SLA — is incompatible with the live SSE stepper / auto-render / clips_ready flow (worker/tasks.py:2237→2283, Wave-3 Fix E). Research question RESOLVED: 50% batch discount DOES stack with prompt caching, best-effort 30–98% hits. Saving ceiling ~$0.01/video. Revisit on an async workload or scoring spend >$100/mo. DECISIONS 2026-07-02.) · **Wave** W0 · **Lane** Agentic / Caching / Cost · **Size** `L` · **Verify** `external`  
 **Src** `02 / 167d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/02_agentic_caching_cost.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `clip_engine/candidates.py`, `clip_engine/scoring.py`  
 
@@ -1944,7 +1953,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 228: Per-creator pre-job quota + rate limit on every LLM/render endpoint
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Platform · **Size** `L` · **Verify** `staging`  
+**Status** `OPEN — residual only, re-sized S` (2026-07-02 reconciliation: implementation shipped 2026-06-24 — stacked slowapi limits on all 13 LLM/render routes, config, AST structural guard, tests; see DECISIONS 2026-06-24. Residual: live/staging 429 smoke via `scripts/live_smoke.py`, fold `limiter.py` into mutmut targets, then flip DONE. slowapi 0.1.10 checked 2026-07-02 — still no async storage; Issue-312 design stands.) · **Wave** W0 · **Lane** Security — Platform · **Size** `S` (was `L`) · **Verify** `staging`  
 **Src** `06 / 171a + 04 / I` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/06_monetization_unit_economics.md`  
 **Blocked by** nothing — **ready now** · **Enables** #286, #290 · **Coordinate (hot files)** `limiter.py`, `routers/clips.py`, `routers/insights.py`, `tests/test_quota.py`, `tests/test_security_baselines.py`  
 
@@ -2435,7 +2444,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 240: Log aggregator (Loki) for the K8s target
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Observability · **Size** `L` · **Verify** `external`  
+**Status** `PARKED — DESCOPED-BETA, superseded-for-beta by #326` (2026-07-02: Grafana Cloud free tier — 50GB/mo logs, 14-day retention — covers beta log aggregation; self-hosted Loki-on-GCS DEC stays on file for the scale path, re-gated behind #275. Carry-over rider on #326 activation: verify ingest preserves the app-side scrub + add collector-side drop/redact rules. DECISIONS 2026-07-02.) · **Wave** W1 · **Lane** Observability · **Size** `L` · **Verify** `external`  
 **Src** `05 / 172` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/05_logging_observability.md`  
 **Blocked by** #233  
 
@@ -2492,7 +2501,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 282: Public/internal status page wired to /health + SLOs
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Observability · **Size** `S` · **Verify** `external`  
+**Status** `OPEN — re-scoped for beta` (2026-07-02: hosted Better Stack free tier — keyword monitors on `/health` component JSON + worker heartbeat + 1 status page; DROP the #236 SLO-burn-rate dependency for beta (un-blocked from #236). Self-hosted Uptime Kuma on the same VM rejected — status page must not die with the host it reports on. DECISIONS 2026-07-02. Operator action: account + monitors + footer link + RUNBOOKS section.) · **Wave** W1 · **Lane** Observability · **Size** `S` · **Verify** `external`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #236  
 
