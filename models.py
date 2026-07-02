@@ -95,6 +95,19 @@ class RenderStatus(enum.Enum):
     failed = "failed"
 
 
+class SummaryStatus(enum.Enum):
+    """Lifecycle of a stream-VOD recap Summary (Issue 190).
+
+    ``pending`` — row created; segment selection not yet run/persisted.
+    ``ready``   — segments selected and stored; render tracked by render_status.
+    ``failed``  — selection failed permanently (e.g. no usable candidates).
+    """
+
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
 class PublishStatus(enum.Enum):
     """Lifecycle of a YouTube publish attempt (Issue 195 / 196).
 
@@ -782,6 +795,56 @@ class ClipPublication(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
+    )
+
+
+class Summary(Base):
+    """Stream-VOD recap artifact spanning many (start,end) segments (Issue 190).
+
+    A dedicated table rather than overloading ``clips``: a montage's many
+    segments do not fit a single start_s/end_s row. ``segments`` is a JSONB
+    list; each element carries the exact shape the recap renderer (Issue 191)
+    consumes verbatim::
+
+        {"start_s": float, "end_s": float, "score": float,
+         "principle": str, "rationale": str}
+
+    ``principle`` is an exact named principle from docs/CLIPPING_PRINCIPLES.md
+    (same contract as clips). ``dna_version`` records which DNA the selection
+    was scored against. Per-creator isolation via the ``tenant_isolation`` RLS
+    policy on ``creator_id`` (migration 0041); FK cascade purges rows on
+    account deletion (right-to-erasure).
+    """
+
+    __tablename__ = "summaries"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("videos.id", ondelete="CASCADE"), nullable=False
+    )
+    target_duration_s: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    segments: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    dna_version: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    render_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    render_status: Mapped[RenderStatus] = mapped_column(
+        sa.Enum(RenderStatus, name="render_status_enum"),
+        nullable=False,
+        default=RenderStatus.pending,
+    )
+    status: Mapped[SummaryStatus] = mapped_column(
+        sa.Enum(SummaryStatus, name="summary_status_enum"),
+        nullable=False,
+        default=SummaryStatus.pending,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
     )
 
 
