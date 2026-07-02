@@ -644,6 +644,26 @@ class Settings(BaseSettings):
     # in-process log shipping over the syslog-drain approach.
     OTEL_LOGS_ENABLED: bool = False
 
+    # ── Feature flags / kill switches (Issue 284) ──────────────────────────────
+    # Env DEFAULTS for the runtime kill switches. Resolution order per flag:
+    # feature_flags DB row (flip via scripts/flags.py, no deploy) → this env
+    # default → hard default True (subsystem on). The flag reader FAILS OPEN to
+    # these values when the DB is unreachable — the flag system being down must
+    # never take a healthy subsystem down with it. See flags.py.
+    # Disable LLM brief/title/thumbnail/insights generation endpoints (Anthropic
+    # outage or runaway-cost emergency).
+    FLAG_LLM_GENERATION_ENABLED: bool = True
+    # Disable the publish_to_youtube Celery task (YouTube API incident / quota
+    # emergency / compliance pause). Blocked publishes are marked failed, not
+    # silently dropped.
+    FLAG_YOUTUBE_PUBLISH_ENABLED: bool = True
+    # Disable the render/clean/cuts queue endpoints (bad render path or ffmpeg
+    # cost emergency).
+    FLAG_RENDER_INTAKE_ENABLED: bool = True
+    # Disable NEW creator signups (beta at capacity / incident). Existing
+    # creators still log in; only new Creator rows are blocked.
+    FLAG_SIGNUP_ENABLED: bool = True
+
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:
     #   'console' — renders + logs; no external call (default in dev / CI)

@@ -971,6 +971,31 @@ class AuditLog(Base):
     after_jsonb: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
 
+class FeatureFlag(Base):
+    """Runtime kill switches / feature flags (Issue 284).
+
+    One row per flag key (e.g. ``llm_generation``). A row OVERRIDES the env
+    default from config (``FLAG_<KEY>_ENABLED``); a missing row falls back to
+    that env default. Written ONLY via ``flags.set_flag()`` so every flip is
+    audited (``flag_flipped`` event with actor + reason). No RLS: this is a
+    global operations table, not tenant data — it carries no creator ids, no
+    YouTube-origin data, and no PII.
+    """
+
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(sa.String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    # Operator identity (e.g. shell user running scripts/flags.py) — audit trail.
+    updated_by: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    reason: Mapped[str | None] = mapped_column(sa.String(500), nullable=True)
+
+
 class EventLog(Base):
     """High-volume beta telemetry: UI events (click/submit/navigate) and backend
     events (http_request, task milestones). Append-only — written ONLY via

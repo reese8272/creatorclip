@@ -14,6 +14,7 @@ from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from config import settings
 from db import get_session
 from dna.onboarding import resolve_setup_step
+from flags import flag_enabled
 from limiter import creator_key, limiter
 from models import Creator, YoutubeToken, append_audit
 from routers._schemas import SetupStepOut
@@ -31,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 _STATE_COOKIE = "cc_oauth_state"
 _SECURE = settings.ENV == "production"
+
+
+class SignupsPausedError(Exception):
+    """Raised mid-OAuth when the ``signup`` kill switch is off and the Google
+    identity has no existing Creator row. The callback maps it to a friendly
+    "beta at capacity" login redirect; the uncommitted new-creator transaction
+    is rolled back, so no partial signup is ever persisted. Existing creators
+    are unaffected (Issue 284)."""
 
 
 class LogoutOut(BaseModel):
@@ -114,6 +123,13 @@ async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creat
         channel_id=identity.get("channel_id"),
         channel_title=identity.get("channel_title"),
     )
+
+    # Kill switch (Issue 284): block NEW creator creation only. The commit is
+    # at the end of this function, so raising here rolls the uncommitted
+    # Creator row back. Existing creators (is_new=False) always pass.
+    if is_new and not await flag_enabled("signup"):
+        raise SignupsPausedError
+
     await session.flush()
 
     # Set the per-creator RLS context for the remainder of this transaction.
@@ -219,6 +235,12 @@ async def callback(
     except HTTPException:
         # Deliberate 4xx (e.g. Google returned no refresh token) — preserve it.
         raise
+    except SignupsPausedError:
+        # Kill switch (Issue 284): friendly "beta at capacity" redirect with a
+        # stable error code — never a stack trace. No PII in the log line.
+        await session.rollback()
+        logger.info("signup blocked — signup kill switch is off (beta at capacity)")
+        return RedirectResponse(url="/app/login?error=signup_paused", status_code=302)
     except httpx.HTTPStatusError as exc:
         # Google token-exchange / identity fetch failed (reused/expired code,
         # invalid_grant, client-secret or redirect mismatch). Map to a clean

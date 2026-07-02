@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from config import settings
 from db import get_session
+from flags import require_flag
 from limiter import creator_key, limiter
 from models import ChatConversation, ChatMessage, ChatRole, Creator
 
@@ -112,6 +113,8 @@ async def _enqueue_reply(
     "/messages",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ChatQueuedOut,
+    # Kill switch (Issue 284): 503 when the llm_generation flag is off.
+    dependencies=[Depends(require_flag("llm_generation"))],
 )
 @limiter.limit(_DAILY_LIMIT, key_func=creator_key)
 async def post_message(
@@ -154,6 +157,8 @@ async def post_message(
     "/conversations/{conversation_id}/regenerate",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ChatQueuedOut,
+    # Kill switch (Issue 284): 503 when the llm_generation flag is off.
+    dependencies=[Depends(require_flag("llm_generation"))],
 )
 @limiter.limit(_DAILY_LIMIT, key_func=creator_key)
 async def regenerate(
