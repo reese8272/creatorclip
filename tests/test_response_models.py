@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from starlette.responses import (
     FileResponse,
     HTMLResponse,
+    PlainTextResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -44,6 +45,7 @@ _NON_JSON_RESPONSE_CLASSES = {
     Response,
     RedirectResponse,
     HTMLResponse,
+    PlainTextResponse,
     FileResponse,
     StreamingResponse,
 }

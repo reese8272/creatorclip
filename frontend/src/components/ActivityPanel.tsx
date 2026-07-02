@@ -71,6 +71,7 @@ function deepLinkHref(entry: TaskEntry): string {
 
 function useTaskSubscriptions(tasks: Map<string, TaskEntry>): void {
   const subsRef = useRef<Map<string, StreamSubscription>>(new Map())
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     const subs = subsRef.current
@@ -100,6 +101,9 @@ function useTaskSubscriptions(tasks: Map<string, TaskEntry>): void {
         onStage: (stage) => upsert(entry.taskId, { stage, phase: 'running' }),
         onDone: () => {
           upsert(entry.taskId, { phase: 'done', subscribed: false })
+          // A finished task usually just created a durable notification (e.g.
+          // clips_ready) — refetch so it appears without a page reload.
+          void queryClient.invalidateQueries({ queryKey: ['notifications'] })
         },
         onError: () => {
           upsert(entry.taskId, { phase: 'error', subscribed: false })
@@ -109,7 +113,8 @@ function useTaskSubscriptions(tasks: Map<string, TaskEntry>): void {
       subs.set(entry.taskId, sub)
     }
     // Re-run whenever the task map reference changes (store immutably replaces).
-  }, [tasks])
+    // queryClient is referentially stable for the provider's lifetime.
+  }, [tasks, queryClient])
 
   // Close everything on unmount only (the panel is mounted app-wide in
   // AppChrome, so this is effectively app teardown).
