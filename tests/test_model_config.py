@@ -62,9 +62,23 @@ def _python_source_files() -> list[Path]:
     """
     root = _repo_root()
     excluded_dirs = {
-        "tests", ".claude", "__pycache__", ".git", "node_modules", "frontend",
-        ".venv", "venv", "env", ".env", "site-packages", "build", "dist",
-        ".mypy_cache", ".pytest_cache", ".ruff_cache", ".eggs",
+        "tests",
+        ".claude",
+        "__pycache__",
+        ".git",
+        "node_modules",
+        "frontend",
+        ".venv",
+        "venv",
+        "env",
+        ".env",
+        "site-packages",
+        "build",
+        "dist",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".eggs",
     }
     files = []
     for path in root.rglob("*.py"):
@@ -129,13 +143,11 @@ def test_default_models_are_expected_tier() -> None:
     for key in haiku_tasks:
         value = getattr(settings, key)
         assert "haiku" in value.lower(), (
-            f"settings.{key}={value!r} should default to a Haiku model "
-            f"(cheap classify task)."
+            f"settings.{key}={value!r} should default to a Haiku model (cheap classify task)."
         )
 
     for key in sonnet_tasks:
         value = getattr(settings, key)
         assert "sonnet" in value.lower(), (
-            f"settings.{key}={value!r} should default to a Sonnet model "
-            f"(reasoning/streaming task)."
+            f"settings.{key}={value!r} should default to a Sonnet model (reasoning/streaming task)."
         )

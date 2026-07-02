@@ -79,9 +79,7 @@ async def _seed_creator_with_impression(session: AsyncSession, label: str):
     )
     session.add(clip)
     await session.flush()
-    imp = ClipImpression(
-        creator_id=creator.id, clip_id=clip.id, rank=1, shown_at=datetime.now(UTC)
-    )
+    imp = ClipImpression(creator_id=creator.id, clip_id=clip.id, rank=1, shown_at=datetime.now(UTC))
     session.add(imp)
     await session.commit()
     return creator, clip, imp

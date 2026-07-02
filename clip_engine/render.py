@@ -94,9 +94,7 @@ def _run(cmd: list[str], label: str, timeout_s: float = 120.0) -> None:
             stderr=result.stderr,
             duration_ms=int(now_ms() - _t0),
         )
-        raise RuntimeError(
-            f"ffmpeg {label} failed [{shlex.join(cmd)}]: {result.stderr[-500:]}"
-        )
+        raise RuntimeError(f"ffmpeg {label} failed [{shlex.join(cmd)}]: {result.stderr[-500:]}")
     vlog("ffmpeg_done", label=label, duration_ms=int(now_ms() - _t0))
 
 
@@ -657,8 +655,7 @@ def render_cleaned_clip_file(
             _merged.append((_s, _e))
     if _merged != _original:
         logger.info(
-            "render_cleaned_clip_file: keep_ranges normalized (sorted/merged) "
-            "%s → %s for %s",
+            "render_cleaned_clip_file: keep_ranges normalized (sorted/merged) %s → %s for %s",
             _original,
             _merged,
             source_path.name,

@@ -118,13 +118,9 @@ async def submit_feedback(
         clip_start = clip.start_s
         clip_end = clip.end_s
         if s is not None and s < clip_start:
-            raise HTTPException(
-                status_code=422, detail="trim_start_s is before the clip start"
-            )
+            raise HTTPException(status_code=422, detail="trim_start_s is before the clip start")
         if e is not None and e > clip_end:
-            raise HTTPException(
-                status_code=422, detail="trim_end_s is past the clip end"
-            )
+            raise HTTPException(status_code=422, detail="trim_end_s is past the clip end")
 
     # Issue 235 — check idempotency BEFORE the commit so the new row is not
     # included in the existence query (the session hasn't flushed yet).

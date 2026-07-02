@@ -32,6 +32,7 @@ _LIMIT_RE = re.compile(r"^\d+/day$")
 
 # ── 1. Config key presence and default ────────────────────────────────────────
 
+
 def test_brief_daily_limit_config_key_exists() -> None:
     """BRIEF_DAILY_LIMIT_PER_CREATOR must be a declared field in Settings."""
     src = (_REPO_ROOT / "config.py").read_text(encoding="utf-8")
@@ -58,6 +59,7 @@ def test_brief_daily_limit_config_default_is_positive() -> None:
 
 
 # ── 2. limiter.py exports BRIEF_DAILY_LIMIT ───────────────────────────────────
+
 
 def test_brief_daily_limit_exported_from_limiter() -> None:
     """BRIEF_DAILY_LIMIT must be exported from limiter.py."""
@@ -99,7 +101,7 @@ def test_brief_daily_limit_format() -> None:
     # We read limiter.py source to avoid triggering the Redis connectivity check
     # inside pytest_configure (conftest requires Redis on startup).
     src = (_REPO_ROOT / "limiter.py").read_text(encoding="utf-8")
-    m = re.search(r'BRIEF_DAILY_LIMIT\s*:\s*str\s*=\s*daily_limit\(\s*settings\.(\w+)\s*\)', src)
+    m = re.search(r"BRIEF_DAILY_LIMIT\s*:\s*str\s*=\s*daily_limit\(\s*settings\.(\w+)\s*\)", src)
     assert m is not None, (
         "Could not find BRIEF_DAILY_LIMIT: str = daily_limit(settings.<key>) in limiter.py. "
         "Ensure it follows the same pattern as LLM_DAILY_LIMIT and RENDER_DAILY_LIMIT."
@@ -113,10 +115,9 @@ def test_brief_daily_limit_format() -> None:
 
 # ── 3. Each brief endpoint applies BRIEF_DAILY_LIMIT ──────────────────────────
 
+
 @pytest.mark.parametrize("router_file,endpoint_name", _BRIEF_ENDPOINTS)
-def test_brief_endpoint_has_daily_limit_decorator(
-    router_file: str, endpoint_name: str
-) -> None:
+def test_brief_endpoint_has_daily_limit_decorator(router_file: str, endpoint_name: str) -> None:
     """Brief-generating endpoints must have @limiter.limit(BRIEF_DAILY_LIMIT, ...).
 
     This is the structural guard: if someone removes the decorator from the

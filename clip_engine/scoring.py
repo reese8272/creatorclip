@@ -389,8 +389,9 @@ async def score_candidates(
             # preference feature vector is not seeded with its own label-generating signal
             # (collinearity fix — Issue 103 #5). Claude returns both fields; fall back to
             # the composite score if the model omits dna_score (graceful degradation).
-            raw_dna = hit.get("dna_score", hit.get("score", 0.5))
-            c["dna_match"] = min(1.0, max(0.0, float(raw_dna)))
+            _dna = hit.get("dna_score")
+            raw_dna: float = float(_dna if _dna is not None else hit.get("score", 0.5))
+            c["dna_match"] = min(1.0, max(0.0, raw_dna))
             c["score"] = min(1.0, max(0.0, float(hit.get("score", 0.5))))
             c["principle"] = hit.get("principle", "Audience-fit over generic virality")
             c["reasoning"] = hit.get("reasoning", "")

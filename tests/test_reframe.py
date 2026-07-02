@@ -23,6 +23,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+try:
+    import cv2  # noqa: F401
+
+    _CV2_AVAILABLE = True
+except ImportError:
+    _CV2_AVAILABLE = False
+
 from clip_engine.reframe import (
     _EMA_ALPHA,
     CropCenterPoint,
@@ -476,6 +483,7 @@ class TestLazyImportGuard:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _CV2_AVAILABLE, reason="cv2/libGL not available on this host")
 class TestReadFrameCv2NaNFps:
     """_read_frame_cv2: NaN fps must not propagate to int() and crash."""
 

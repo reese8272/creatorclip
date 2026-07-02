@@ -46,7 +46,9 @@ def _creator() -> MagicMock:
     return c
 
 
-def _clip(creator_id: uuid.UUID, *, render_status: RenderStatus = RenderStatus.pending) -> MagicMock:
+def _clip(
+    creator_id: uuid.UUID, *, render_status: RenderStatus = RenderStatus.pending
+) -> MagicMock:
     cl = MagicMock(spec=Clip)
     cl.id = uuid.uuid4()
     cl.creator_id = creator_id
@@ -380,7 +382,9 @@ def test_confirm_publication_non_scheduled_returns_409(client, initial_status):
     app.dependency_overrides[get_session] = _pub_session(creator.id, cl, pub)
 
     resp = client.post(f"/clips/{cl.id}/publications/{pub.id}/confirm")
-    assert resp.status_code == 409, f"expected 409 for status={initial_status.value}, got {resp.status_code}"
+    assert resp.status_code == 409, (
+        f"expected 409 for status={initial_status.value}, got {resp.status_code}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -406,7 +410,9 @@ def test_cancel_publication_non_mutable_returns_409(client, initial_status):
     app.dependency_overrides[get_session] = _pub_session(creator.id, cl, pub)
 
     resp = client.post(f"/clips/{cl.id}/publications/{pub.id}/cancel")
-    assert resp.status_code == 409, f"expected 409 for status={initial_status.value}, got {resp.status_code}"
+    assert resp.status_code == 409, (
+        f"expected 409 for status={initial_status.value}, got {resp.status_code}"
+    )
 
 
 def test_cancel_then_confirm_race_returns_409(client):

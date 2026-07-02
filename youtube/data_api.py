@@ -264,9 +264,7 @@ async def _get_json(
     return {}  # unreachable
 
 
-async def get_uploads_playlist_id(
-    access_token: str, *, creator_id: uuid.UUID | None = None
-) -> str:
+async def get_uploads_playlist_id(access_token: str, *, creator_id: uuid.UUID | None = None) -> str:
     data = await _get_json(
         access_token,
         f"{_YOUTUBE_V3}/channels",

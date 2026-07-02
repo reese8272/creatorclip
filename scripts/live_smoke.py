@@ -130,9 +130,19 @@ CANARY_PRINCIPLE = "Backward-Look from Peak"
 
 # Honesty disclaimer markers (mirrors llm_e2e.py).
 _HONESTY_WORDS = {
-    "estimate", "estimates", "grounded", "predicts", "not a guarantee",
-    "cannot guarantee", "does not promise", "may", "likely", "based on",
-    "suggest", "suggests", "reflects patterns",
+    "estimate",
+    "estimates",
+    "grounded",
+    "predicts",
+    "not a guarantee",
+    "cannot guarantee",
+    "does not promise",
+    "may",
+    "likely",
+    "based on",
+    "suggest",
+    "suggests",
+    "reflects patterns",
 }
 
 
@@ -222,9 +232,15 @@ def _seed(res: Results) -> None:
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'short', 'pending', now()) "
             "ON CONFLICT (id) DO UPDATE SET render_status = 'pending'",
             (
-                CANARY_CLIP_ID, CANARY_VIDEO_ID, CANARY_CREATOR_ID,
-                CANARY_CLIP_START_S, CANARY_CLIP_START_S, CANARY_CLIP_END_S,
-                CANARY_PEAK_S, 0.82, _json({"principle": CANARY_PRINCIPLE}),
+                CANARY_CLIP_ID,
+                CANARY_VIDEO_ID,
+                CANARY_CREATOR_ID,
+                CANARY_CLIP_START_S,
+                CANARY_CLIP_START_S,
+                CANARY_CLIP_END_S,
+                CANARY_PEAK_S,
+                0.82,
+                _json({"principle": CANARY_PRINCIPLE}),
             ),
         )
         conn.commit()
@@ -294,12 +310,14 @@ def check_pipeline(res: Results) -> None:
         # reads return its rows once the app role enforces RLS (transcripts/signals
         # are child tables without a policy, but the GUC is harmless for them).
         cur.execute("SELECT set_config('app.creator_id', %s, false)", (str(CANARY_CREATOR_ID),))
-        cur.execute(
-            "SELECT ingest_status FROM videos WHERE id = %s", (CANARY_VIDEO_ID,)
-        )
+        cur.execute("SELECT ingest_status FROM videos WHERE id = %s", (CANARY_VIDEO_ID,))
         row = cur.fetchone()
         ingest = row[0] if row else None
-        res.ok(str(ingest) in ("done", "IngestStatus.done"), "pipeline: ingest_status=done", str(ingest))
+        res.ok(
+            str(ingest) in ("done", "IngestStatus.done"),
+            "pipeline: ingest_status=done",
+            str(ingest),
+        )
         cur.execute("SELECT 1 FROM transcripts WHERE video_id = %s", (CANARY_VIDEO_ID,))
         res.ok(cur.fetchone() is not None, "pipeline: transcript row present")
         cur.execute("SELECT 1 FROM signals WHERE video_id = %s", (CANARY_VIDEO_ID,))
@@ -317,19 +335,49 @@ def _make_source_clip(dst: Path, seconds: int = 18) -> None:
     """Generate a tiny synthetic source video (testsrc + sine) via ffmpeg lavfi."""
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=size=1280x720:rate=24:duration={seconds}",
-            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(dst),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=size=1280x720:rate=24:duration={seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={seconds}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(dst),
         ],
-        check=True, capture_output=True, timeout=120,
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
 
 
 def _probe_dims(path: Path) -> tuple[int, int]:
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=width,height", "-of", "csv=s=x:p=0", str(path)],
-        check=True, capture_output=True, text=True, timeout=30,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
     ).stdout.strip()
     w, _, h = out.partition("x")
     return int(w), int(h)
@@ -484,20 +532,43 @@ def _registry(args: argparse.Namespace):
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Live-in-isolation smoke-test harness (Issue 341)")
-    p.add_argument("--target", choices=("prod", "staging"), default="prod",
-                   help="which env file to load: prod=.env, staging=.env.staging")
-    p.add_argument("--only", choices=tuple(_ALL_CHECKS), default=None,
-                   help="run a single capability check in isolation")
-    p.add_argument("--seed", action="store_true", help="create/refresh the canary fixture, then run")
+    p.add_argument(
+        "--target",
+        choices=("prod", "staging"),
+        default="prod",
+        help="which env file to load: prod=.env, staging=.env.staging",
+    )
+    p.add_argument(
+        "--only",
+        choices=tuple(_ALL_CHECKS),
+        default=None,
+        help="run a single capability check in isolation",
+    )
+    p.add_argument(
+        "--seed", action="store_true", help="create/refresh the canary fixture, then run"
+    )
     p.add_argument("--teardown", action="store_true", help="purge the canary fixture and exit")
     p.add_argument("--with-llm", action="store_true", help="include the metered LLM leaf checks")
-    p.add_argument("--publish-live", action="store_true",
-                   help="attempt a REAL upload (staging only; refused on prod)")
+    p.add_argument(
+        "--publish-live",
+        action="store_true",
+        help="attempt a REAL upload (staging only; refused on prod)",
+    )
     return p.parse_args(argv)
 
 
-_ALL_CHECKS = ("db", "isolation", "pipeline", "render", "clean", "title", "caption", "explain",
-               "publish", "r2")
+_ALL_CHECKS = (
+    "db",
+    "isolation",
+    "pipeline",
+    "render",
+    "clean",
+    "title",
+    "caption",
+    "explain",
+    "publish",
+    "r2",
+)
 
 
 def main(argv: list[str] | None = None) -> int:

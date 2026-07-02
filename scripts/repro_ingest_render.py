@@ -106,7 +106,9 @@ async def main() -> int:
             print(f"after render: render_status={c.render_status.value} render_uri={c.render_uri}")
         assert c.render_status == RenderStatus.done and c.render_uri, "clip must render to done"
         out = Path(c.render_uri)
-        assert out.exists() and out.stat().st_size > 0, "rendered clip file must exist + be non-empty"
+        assert out.exists() and out.stat().st_size > 0, (
+            "rendered clip file must exist + be non-empty"
+        )
         print(f"PASS: clip rendered from retained video → {out} ({out.stat().st_size} bytes)")
     except Exception as exc:  # noqa: BLE001
         import traceback

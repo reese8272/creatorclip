@@ -25,7 +25,9 @@ def test_clip_titles_parser_tolerates_fence() -> None:
 
     raw = _fence(
         {
-            "titles": [{"title": "3-Ingredient Pasta", "rationale": "fits DNA", "ctr_signal": "up"}],
+            "titles": [
+                {"title": "3-Ingredient Pasta", "rationale": "fits DNA", "ctr_signal": "up"}
+            ],
             "hook_rewrites": [{"rewrite": "Only 3 things", "rationale": "tighter"}],
         }
     )

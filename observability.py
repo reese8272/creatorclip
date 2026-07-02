@@ -258,9 +258,7 @@ def log_llm_error(log: logging.Logger, exc: BaseException, **ctx: Any) -> None:
     if isinstance(exc, _APIStatusError):
         resp = getattr(exc, "response", None)
         headers = getattr(resp, "headers", {}) if resp is not None else {}
-        retry_after = (
-            headers.get("retry-after") or headers.get("Retry-After") or None
-        )
+        retry_after = headers.get("retry-after") or headers.get("Retry-After") or None
 
     ctx_str = " ".join(f"{k}={v}" for k, v in ctx.items())
     log.error(

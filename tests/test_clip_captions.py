@@ -25,6 +25,7 @@ from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
 # ── Disclaimer / honesty ──────────────────────────────────────────────────────
 
+
 def test_disclaimer_present() -> None:
     assert DISCLAIMER
     assert len(DISCLAIMER) > 10
@@ -50,6 +51,7 @@ def test_disclaimer_uses_hedged_language() -> None:
 
 # ── Untrusted content wrapping ────────────────────────────────────────────────
 
+
 def test_clip_hook_is_wrapped_in_user_turn() -> None:
     _system, messages = _build_request("My Channel", "Brief.", "Hook text here.")
     user_content = messages[0]["content"]
@@ -66,6 +68,7 @@ def test_injection_attempt_is_contained() -> None:
 
 # ── UNTRUSTED_CONTENT_POLICY in system ───────────────────────────────────────
 
+
 def test_system_prompt_contains_untrusted_policy() -> None:
     system, _messages = _build_request("My Channel", "Brief.", "Hook.")
     full_text = " ".join(b["text"] for b in system)
@@ -73,6 +76,7 @@ def test_system_prompt_contains_untrusted_policy() -> None:
 
 
 # ── cache_control breakpoint ──────────────────────────────────────────────────
+
 
 def test_dna_brief_block_has_cache_control() -> None:
     system, _messages = _build_request("My Channel", "DNA brief text.", "Hook.")
@@ -85,13 +89,10 @@ def test_dna_brief_block_has_cache_control() -> None:
 
 # ── _parse_result ─────────────────────────────────────────────────────────────
 
+
 def test_parse_result_valid() -> None:
     raw = json.dumps(
-        {
-            "options": [
-                {"text": f"Short text {i}", "rationale": "Good fit."} for i in range(7)
-            ]
-        }
+        {"options": [{"text": f"Short text {i}", "rationale": "Good fit."} for i in range(7)]}
     )
     result = _parse_result(raw)
     assert len(result["options"]) == SURFACE_N  # capped at SURFACE_N

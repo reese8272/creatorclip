@@ -270,9 +270,16 @@ def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
 
     class _PausedResp:
         stop_reason = "pause_turn"
-        usage = type("U", (), {"input_tokens": 10, "output_tokens": 5,
-                                "cache_read_input_tokens": 0,
-                                "cache_creation_input_tokens": 0})()
+        usage = type(
+            "U",
+            (),
+            {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        )()
 
         class _Block:
             type = "text"
@@ -282,9 +289,16 @@ def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
 
     class _FinalResp:
         stop_reason = "end_turn"
-        usage = type("U", (), {"input_tokens": 20, "output_tokens": 30,
-                                "cache_read_input_tokens": 0,
-                                "cache_creation_input_tokens": 0})()
+        usage = type(
+            "U",
+            (),
+            {
+                "input_tokens": 20,
+                "output_tokens": 30,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        )()
 
         class _Block:
             type = "text"

@@ -9,6 +9,7 @@ pool stays bound to a single loop across task invocations.
 """
 
 import asyncio
+import contextlib
 import logging
 import tempfile
 import uuid
@@ -232,7 +233,21 @@ def transcribe_video(self, video_id: str) -> str:
     try:
         run_async(_transcribe_async(video_id))
     except SoftTimeLimitExceeded:
-        # See ingest_video above — re-raise immediately to fire on_failure.
+        # Terminal — transcription timed out; a retry would time out again.
+        # Mark failed so the UI shows an error instead of spinning, then
+        # re-raise so RefundOnFailureTask.on_failure fires (no retry).
+        logger.warning(
+            "transcribe_video soft-timeout for video %s (task %s) — terminal, not retrying",
+            video_id,
+            self.request.id,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Transcription timed out. Please try again.",
+            )
+        )
         raise
     except Exception as exc:
         run_async(
@@ -3649,8 +3664,6 @@ async def _generate_video_analysis_async(
             settings.COST_PER_MTOK_OUT_SONNET,
         )
 
-        await aemit(job_id, "done", stage="video_analysis", message="Analysis complete.")
-
     except Exception as exc:
         logger.error(
             "_generate_video_analysis_async failed creator=%s video=%s: %s",
@@ -3666,6 +3679,15 @@ async def _generate_video_analysis_async(
             exc_type=type(exc).__name__,
         )
         raise
+
+    # Post-billing: SSE delivery failure must not re-run the LLM call.
+    try:
+        await aemit(job_id, "done", stage="video_analysis", message="Analysis complete.")
+    except Exception:
+        logger.warning(
+            "_generate_video_analysis_async: aemit('done') failed post-billing for job %s",
+            job_id,
+        )
 
 
 # ── Title suggestions (Issue 128) ─────────────────────────────────────────────
@@ -3697,8 +3719,6 @@ async def _generate_title_suggestions_async(
     the ``result`` event containing the top-5 TitleSuggestion objects.
     Per-creator isolation enforced on every query via creator.id filters.
     """
-    import json as _json
-
     from sqlalchemy import select
 
     from config import settings
@@ -3765,35 +3785,6 @@ async def _generate_title_suggestions_async(
             cid, _title_usage, settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET
         )
 
-        try:
-            suggestions = parse_candidates(raw_json)
-        except (ValueError, _json.JSONDecodeError) as exc:
-            logger.error(
-                "_generate_title_suggestions_async parse failed creator=%s video=%s: %s",
-                creator_id,
-                video_id,
-                exc,
-            )
-            await aemit(
-                job_id,
-                "error",
-                stage="title_suggestions",
-                message="Title parsing failed — please try again.",
-            )
-            raise
-
-        # Pass suggestions in the done payload so the SSE consumer's onDone
-        # callback receives them without a separate result event (done already
-        # fires handlers.onDone(data) in progressStream.js, and data is the
-        # full parsed JSON — no progressStream.js changes required).
-        await aemit(
-            job_id,
-            "done",
-            stage="title_suggestions",
-            message="Titles ready.",
-            suggestions=suggestions,
-        )
-
     except Exception as exc:
         logger.error(
             "_generate_title_suggestions_async failed creator=%s video=%s: %s",
@@ -3809,6 +3800,34 @@ async def _generate_title_suggestions_async(
             exc_type=type(exc).__name__,
         )
         raise
+
+    # Post-billing: parse + SSE delivery; failure must not re-run the LLM call.
+    try:
+        suggestions = parse_candidates(raw_json)
+        # Pass suggestions in the done payload so the SSE consumer's onDone
+        # callback receives them without a separate result event (done already
+        # fires handlers.onDone(data) in progressStream.js, and data is the
+        # full parsed JSON — no progressStream.js changes required).
+        await aemit(
+            job_id,
+            "done",
+            stage="title_suggestions",
+            message="Titles ready.",
+            suggestions=suggestions,
+        )
+    except Exception as exc:
+        logger.warning(
+            "_generate_title_suggestions_async: post-billing step failed for job %s: %s",
+            job_id,
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            await aemit(
+                job_id,
+                "error",
+                stage="title_suggestions",
+                message="Title processing failed — please try again.",
+            )
 
 
 # ── Thumbnail concept generator (Issue 129) ───────────────────────────────────
@@ -3976,31 +3995,6 @@ async def _generate_thumbnail_concepts_async(
             settings.COST_PER_MTOK_OUT_SONNET,
         )
 
-        try:
-            concepts = parse_concepts(raw_json)
-        except (ValueError, json.JSONDecodeError) as exc:
-            logger.error(
-                "_generate_thumbnail_concepts_async parse failed creator=%s video=%s: %s",
-                creator_id,
-                video_id,
-                exc,
-            )
-            await aemit(
-                job_id,
-                "error",
-                stage="thumbnail_concepts",
-                message="Concept parsing failed — please try again.",
-            )
-            raise
-
-        await aemit(
-            job_id,
-            "done",
-            stage="thumbnail_concepts",
-            message="Concepts ready.",
-            concepts=concepts,
-        )
-
     except Exception as exc:
         logger.error(
             "_generate_thumbnail_concepts_async failed creator=%s video=%s: %s",
@@ -4016,6 +4010,30 @@ async def _generate_thumbnail_concepts_async(
             exc_type=type(exc).__name__,
         )
         raise
+
+    # Post-billing: parse + SSE delivery; failure must not re-run the LLM call.
+    try:
+        concepts = parse_concepts(raw_json)
+        await aemit(
+            job_id,
+            "done",
+            stage="thumbnail_concepts",
+            message="Concepts ready.",
+            concepts=concepts,
+        )
+    except Exception as exc:
+        logger.warning(
+            "_generate_thumbnail_concepts_async: post-billing step failed for job %s: %s",
+            job_id,
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            await aemit(
+                job_id,
+                "error",
+                stage="thumbnail_concepts",
+                message="Concept processing failed — please try again.",
+            )
 
 
 # ── Hook analyzer (Issue 130) ─────────────────────────────────────────────────
@@ -4041,8 +4059,6 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
 
     Per-creator isolation enforced on every query.
     """
-    import json as _json
-
     from sqlalchemy import select
 
     from config import settings
@@ -4156,31 +4172,6 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
             cid, _hook_usage, settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU
         )
 
-        try:
-            report = parse_hook_report(raw_json)
-        except (ValueError, _json.JSONDecodeError) as exc:
-            logger.error(
-                "_analyze_hook_async parse failed creator=%s video=%s: %s",
-                creator_id,
-                video_id,
-                exc,
-            )
-            await aemit(
-                job_id,
-                "error",
-                stage="hook_analysis",
-                message="Hook report parsing failed — please try again.",
-            )
-            raise
-
-        await aemit(
-            job_id,
-            "done",
-            stage="hook_analysis",
-            message="Hook analysis ready.",
-            report=report,
-        )
-
     except Exception as exc:
         logger.error(
             "_analyze_hook_async failed creator=%s video=%s: %s",
@@ -4196,6 +4187,30 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
             exc_type=type(exc).__name__,
         )
         raise
+
+    # Post-billing: parse + SSE delivery; failure must not re-run the LLM call.
+    try:
+        report = parse_hook_report(raw_json)
+        await aemit(
+            job_id,
+            "done",
+            stage="hook_analysis",
+            message="Hook analysis ready.",
+            report=report,
+        )
+    except Exception as exc:
+        logger.warning(
+            "_analyze_hook_async: post-billing step failed for job %s: %s",
+            job_id,
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            await aemit(
+                job_id,
+                "error",
+                stage="hook_analysis",
+                message="Hook processing failed — please try again.",
+            )
 
 
 # ── Auto chapter markers (Issue 131) ─────────────────────────────────────────
@@ -4221,8 +4236,6 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
 
     Per-creator isolation enforced on every query.
     """
-    import json as _json
-
     from sqlalchemy import select
 
     from config import settings
@@ -4285,32 +4298,6 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
             cid, _chap_usage, settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU
         )
 
-        try:
-            result = parse_chapters(raw_json)
-        except (ValueError, _json.JSONDecodeError) as exc:
-            logger.error(
-                "_generate_chapters_async parse failed creator=%s video=%s: %s",
-                creator_id,
-                video_id,
-                exc,
-            )
-            await aemit(
-                job_id,
-                "error",
-                stage="chapters",
-                message="Chapter parsing failed — please try again.",
-            )
-            raise
-
-        await aemit(
-            job_id,
-            "done",
-            stage="chapters",
-            message="Chapters ready.",
-            chapters=result["chapters"],
-            description_block=result["description_block"],
-        )
-
     except Exception as exc:
         logger.error(
             "_generate_chapters_async failed creator=%s video=%s: %s",
@@ -4326,6 +4313,31 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
             exc_type=type(exc).__name__,
         )
         raise
+
+    # Post-billing: parse + SSE delivery; failure must not re-run the LLM call.
+    try:
+        result = parse_chapters(raw_json)
+        await aemit(
+            job_id,
+            "done",
+            stage="chapters",
+            message="Chapters ready.",
+            chapters=result["chapters"],
+            description_block=result["description_block"],
+        )
+    except Exception as exc:
+        logger.warning(
+            "_generate_chapters_async: post-billing step failed for job %s: %s",
+            job_id,
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            await aemit(
+                job_id,
+                "error",
+                stage="chapters",
+                message="Chapter processing failed — please try again.",
+            )
 
 
 # ── Pro chatbot (Issue 152) ───────────────────────────────────────────────────

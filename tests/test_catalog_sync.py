@@ -152,9 +152,7 @@ async def test_sync_video_catalog_interactive_does_not_charge_sub_budget():
 
     creator = MagicMock(id=uuid.uuid4())
     fake_session = MagicMock()
-    fake_session.execute = AsyncMock(
-        return_value=MagicMock(__iter__=lambda self: iter([]))
-    )
+    fake_session.execute = AsyncMock(return_value=MagicMock(__iter__=lambda self: iter([])))
 
     list_videos = AsyncMock(return_value=[{"video_id": "v1", "title": "t"}])
     get_meta = AsyncMock(return_value=[])
@@ -162,9 +160,7 @@ async def test_sync_video_catalog_interactive_does_not_charge_sub_budget():
         patch.object(analytics, "list_channel_videos", new=list_videos),
         patch.object(analytics, "get_videos_metadata", new=get_meta),
     ):
-        await analytics.sync_video_catalog(
-            fake_session, creator, "tok", charge_sub_budget=False
-        )
+        await analytics.sync_video_catalog(fake_session, creator, "tok", charge_sub_budget=False)
 
     assert list_videos.await_args.kwargs["creator_id"] is None
     assert get_meta.await_args.kwargs["creator_id"] is None
@@ -178,9 +174,7 @@ async def test_sync_video_catalog_beat_default_charges_sub_budget():
 
     creator = MagicMock(id=uuid.uuid4())
     fake_session = MagicMock()
-    fake_session.execute = AsyncMock(
-        return_value=MagicMock(__iter__=lambda self: iter([]))
-    )
+    fake_session.execute = AsyncMock(return_value=MagicMock(__iter__=lambda self: iter([])))
 
     list_videos = AsyncMock(return_value=[{"video_id": "v1", "title": "t"}])
     get_meta = AsyncMock(return_value=[])

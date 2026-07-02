@@ -377,7 +377,9 @@ async def get_valid_access_token(creator_id: uuid.UUID, session: AsyncSession) -
                 raise HTTPException(
                     401, "No OAuth tokens found — please reconnect your YouTube account"
                 )
-            if fresh_row.expires_at is not None and fresh_row.expires_at - datetime.now(UTC) >= timedelta(minutes=5):
+            if fresh_row.expires_at is not None and fresh_row.expires_at - datetime.now(
+                UTC
+            ) >= timedelta(minutes=5):
                 return decrypt(fresh_row.access_token_encrypted)
             logger.debug(
                 "Token still expired for creator %s after retry %d/%d",

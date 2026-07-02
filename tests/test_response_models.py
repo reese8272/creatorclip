@@ -17,6 +17,13 @@ POST /{video_id}/queue now has response_model=QueuedOut — both previously miss
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from starlette.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 
 from main import app
 
@@ -25,7 +32,20 @@ _EXEMPT_PATHS = {
     "/health",  # liveness probe — intentionally a plain status dict
     "/auth/login",  # 302 RedirectResponse to Google
     "/auth/callback",  # 302 RedirectResponse after OAuth
+    "/auth/connect-publishing",  # 302 RedirectResponse to Google (incremental consent)
     "/tasks/{task_id}/events",  # SSE (text/event-stream); wire format is named SSE events, not a JSON body (Issue 86)
+    "/clips/{clip_id}/download",  # 302 → presigned R2 or FileResponse; no JSON schema
+    "/creators/me/export/download",  # 302 → presigned R2 or FileResponse; no JSON schema
+}
+
+# Routes whose response_class signals a non-JSON body (redirect, HTML page, file
+# download, SSE) are exempt — they intentionally have no JSON schema to declare.
+_NON_JSON_RESPONSE_CLASSES = {
+    Response,
+    RedirectResponse,
+    HTMLResponse,
+    FileResponse,
+    StreamingResponse,
 }
 
 
@@ -37,6 +57,12 @@ def test_every_documented_json_route_declares_response_model() -> None:
         if route.path in _EXEMPT_PATHS:
             continue
         if route.status_code == 204:  # no response body (e.g. account deletion)
+            continue
+        # FastAPI wraps the default response_class in a DefaultPlaceholder;
+        # unwrap it so the set membership check works on the actual class.
+        rc = route.response_class
+        actual_rc = rc.value if hasattr(rc, "value") else rc
+        if actual_rc in _NON_JSON_RESPONSE_CLASSES:
             continue
         if route.response_model is None:
             methods = ",".join(sorted((route.methods or set()) - {"HEAD", "OPTIONS"}))

@@ -164,13 +164,18 @@ def _train_scorer(train: list[LabeledClip]):
 
     X = np.array([c.features for c in train], dtype=float)
     w = np.array(
-        [sample_weight(c.created_at, performed_well=(c.relevance >= _REL_PERFORMED_WELL)) for c in train],
+        [
+            sample_weight(c.created_at, performed_well=(c.relevance >= _REL_PERFORMED_WELL))
+            for c in train
+        ],
         dtype=float,
     )
     return fit(X, np.array(y, dtype=int), w)
 
 
-def pool_metrics(per_creator: list[CreatorMetrics]) -> dict[str, dict[str, tuple[float, float, float]]]:
+def pool_metrics(
+    per_creator: list[CreatorMetrics],
+) -> dict[str, dict[str, tuple[float, float, float]]]:
     """Micro-average each metric across creators with bootstrap 95% CIs.
 
     Returns {metric_name: {ranking: (point, ci_low, ci_high)}}. Pooled is the PRIMARY number;
@@ -180,7 +185,9 @@ def pool_metrics(per_creator: list[CreatorMetrics]) -> dict[str, dict[str, tuple
     for metric in ("ndcg", "map", "mrr", "kendall"):
         out[metric] = {}
         for ranking in RANKINGS:
-            vals = [getattr(cm, metric)[ranking] for cm in per_creator if ranking in getattr(cm, metric)]
+            vals = [
+                getattr(cm, metric)[ranking] for cm in per_creator if ranking in getattr(cm, metric)
+            ]
             out[metric][ranking] = bootstrap_ci(vals) if vals else (0.0, 0.0, 0.0)
     return out
 
@@ -206,7 +213,9 @@ async def load_labeled_clips(session, creator_id: uuid.UUID) -> list[LabeledClip
     labeled: list[LabeledClip] = []
     for feedback, clip, outcome in result.all():
         performed_well = outcome.performed_well if outcome else None
-        rel = _relevance_for(getattr(feedback.action, "value", str(feedback.action)), performed_well)
+        rel = _relevance_for(
+            getattr(feedback.action, "value", str(feedback.action)), performed_well
+        )
         if rel is None:
             continue
         feats_dict = (clip.signals_jsonb or {}).get("features", {})
@@ -244,7 +253,9 @@ async def evaluate_creator(
     clips = await load_labeled_clips(session, creator_id)
     if len(clips) < 4:  # need enough to split and have ≥2 in eval
         return None
-    train, eval_clips = chronological_split(clips, key=lambda c: c.created_at, train_frac=train_frac)
+    train, eval_clips = chronological_split(
+        clips, key=lambda c: c.created_at, train_frac=train_frac
+    )
     if len(eval_clips) < 2 or len(train) < 2:
         return None
     return compute_creator_metrics(train, eval_clips, k=k)

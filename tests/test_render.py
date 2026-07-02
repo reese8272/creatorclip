@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("cv2")  # skip whole file if libGL is absent on this host
+
 from clip_engine.render import (
     _detect_face_center_x,
     _extract_keyframe,

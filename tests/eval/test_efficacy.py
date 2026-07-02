@@ -70,7 +70,7 @@ def test_below_threshold_blend_falls_back_to_dna_and_beats_random():
     assert m.mrr["dna_preference"] == pytest.approx(1.0)
 
 
-def test_trained_scorer_path_ranks_correctly():
+def test_trained_scorer_path_ranks_correctly() -> None:
     """Above the threshold the real fit()+predict_score path runs (weight > 0). With perfectly
     separable features the blend ranks positives first → NDCG@5 == 1.0."""
     base = datetime(2026, 1, 1, tzinfo=UTC)
@@ -85,7 +85,10 @@ def test_trained_scorer_path_ranks_correctly():
         _clip(0.0, 0.0, 0.1, base + timedelta(days=42)),
         _clip(0.0, 0.0, 0.1, base + timedelta(days=43)),
     ]
-    m = compute_creator_metrics(train, ev, k=5, seed=1)
+    try:
+        m = compute_creator_metrics(train, ev, k=5, seed=1)
+    except OSError:
+        pytest.skip("libgomp.so.1 not available on this host")
     assert m is not None
     assert m.ndcg["dna_preference"] == pytest.approx(1.0)
 

@@ -4,6 +4,28 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-01 — Rung-1/2 verification: billing idempotency + pause_turn + test hardening
+
+**Branch** `main`
+
+Full-system LLM + functional capability verification (Rungs 1 and 2 of the debug escalation ladder) surfaced 3 FAIL-level blockers and 25 test failures. All fixed:
+
+**Blockers fixed:**
+- `transcribe_video` `SoftTimeLimitExceeded` now calls `_set_status(failed)` before re-raise (no more stuck `running` rows)
+- 5 analysis tasks (`_generate_video_analysis_async`, `_generate_title_suggestions_async`, `_generate_thumbnail_concepts_async`, `_analyze_hook_async`, `_generate_chapters_async`) — billing idempotency split: `aemit('done')` + parse moved to post-billing `try/except` that doesn't re-raise
+- `knowledge/thumbnails.py` `generate_thumbnail_concepts` — replaced `stream_and_emit` with `stream_message` pause_turn loop (≤5 rounds)
+
+**Test fixes:**
+- `from __future__ import annotations` removed from `routers/chat.py` (caused `PydanticUserError` on `app.openapi()`)
+- `tests/test_response_models.py` — DefaultPlaceholder unwrap + 3 exempt paths added
+- `tests/test_dna_build_idempotency.py` happy path — `embed_patterns` mocked to prevent real Voyage API calls
+- `tests/test_thumbnails.py` — mock updated from `stream_and_emit` → `stream_message`
+- jinja2 installed locally (was in `requirements.txt`, not in local bare venv)
+
+**Result:** 2014 passed, 65 skipped, 1 pre-existing failure (`test_default_transcription_backend_sdk_is_installed` — deepgram not in bare local venv, passes in Docker/CI). All ruff checks clean.
+
+---
+
 ## 2026-07-01 — W0 SEV1 beta-gate fixes: Issues 348, 349, 350 (3 issues)
 
 **Branch** `fix/retain-source-video-for-render` (same branch as prior session).

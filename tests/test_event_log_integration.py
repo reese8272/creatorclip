@@ -122,18 +122,12 @@ async def test_record_event_non_uuid_creator_writes_cid_none(db_session):
     )
 
     row = (
-        (
-            await db_session.execute(
-                select(EventLog).where(EventLog.event == unique_event)
-            )
-        )
+        (await db_session.execute(select(EventLog).where(EventLog.event == unique_event)))
         .scalars()
         .first()
     )
     assert row is not None, "Row must be persisted even when creator_id is not a UUID"
-    assert row.creator_id is None, (
-        "Non-UUID creator_id must be stored as NULL in the DB"
-    )
+    assert row.creator_id is None, "Non-UUID creator_id must be stored as NULL in the DB"
 
 
 @pytest.mark.integration

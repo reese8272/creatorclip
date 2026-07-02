@@ -186,12 +186,8 @@ def test_trial_ended_402_detail_does_not_leak_trial_end_date():
     leaking trial_ends_at would allow probing account state. (Issue 340a)"""
     detail = _trial_ended_402_detail()
     # No YYYY-MM-DD, ISO 8601, or epoch timestamps should appear
-    assert not re.search(r"\d{4}-\d{2}-\d{2}", detail), (
-        "402 detail must not include a date string"
-    )
-    assert not re.search(r"\d{10,}", detail), (
-        "402 detail must not include an epoch timestamp"
-    )
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", detail), "402 detail must not include a date string"
+    assert not re.search(r"\d{10,}", detail), "402 detail must not include an epoch timestamp"
 
 
 # ── Ledger — grant and deduct ─────────────────────────────────────────────────
