@@ -113,46 +113,82 @@ class CropCenterPoint:
 # ---------------------------------------------------------------------------
 
 
-def _detect_faces_mediapipe(
-    frame_bgr: object,  # numpy ndarray — typed as object to avoid numpy import at module level
-    frame_width: int,
-) -> list[int]:
-    """Detect face bounding-box centers (x coordinate) using MediaPipe BlazeFace.
+def _create_face_detector() -> object | None:
+    """Build ONE MediaPipe Tasks FaceDetector for reuse across sampled frames.
 
-    Args:
-        frame_bgr: A numpy BGR image array (H × W × 3) as returned by cv2.
-        frame_width: Width of the source frame in pixels (used for normalisation).
+    Hoisted out of the per-frame path (Issue 352 Batch H): constructing the
+    detector parses the model asset, so building it per frame cost 300–450
+    constructions per 60–90s clip at 5 fps. BlazeFace IMAGE-mode ``detect()``
+    is safe to reuse serially within one thread, which is exactly the Celery
+    render worker's execution model.
 
-    Returns:
-        A list of x-center coordinates (pixels) for each detected face, in
-        descending order of face bounding-box area (largest face first).
-        Returns an empty list if mediapipe is unavailable or no face found.
+    Returns None when mediapipe is unavailable or the model asset is missing —
+    callers then fall back to frame-center for every frame.
     """
     try:
         # Lazy import: mediapipe is an optional ~200 MB native package.
         # The Tasks API (mediapipe >= 0.10) is the current 2026 standard;
         # the legacy `solutions.face_detection` is deprecated.
         import mediapipe as mp  # noqa: PLC0415
-        import numpy as np
 
-        # Build detector once per call (stateless BlazeFace — fast enough at
-        # 5 fps; caching the detector object between frames requires thread-
-        # safety guarantees the Celery worker environment makes awkward).
+        model_path = _mediapipe_model_path()
+        if not model_path:
+            return None
+
         BaseOptions = mp.tasks.BaseOptions
         FaceDetector = mp.tasks.vision.FaceDetector
         FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
         VisionRunningMode = mp.tasks.vision.RunningMode
 
         options = FaceDetectorOptions(
-            base_options=BaseOptions(model_asset_path=_mediapipe_model_path()),
+            base_options=BaseOptions(model_asset_path=model_path),
             running_mode=VisionRunningMode.IMAGE,
             min_detection_confidence=_MP_MIN_CONFIDENCE,
         )
-        with FaceDetector.create_from_options(options) as detector:
-            # MediaPipe Tasks API expects RGB; cv2 produces BGR.
-            frame_rgb = np.asarray(frame_bgr)[:, :, ::-1]
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-            result = detector.detect(mp_image)
+        return FaceDetector.create_from_options(options)
+    except Exception as exc:
+        logger.debug("MediaPipe face detector unavailable: %s", exc)
+        return None
+
+
+def _close_face_detector(detector: object | None) -> None:
+    """Release a detector created by :func:`_create_face_detector` (best effort)."""
+    close = getattr(detector, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as exc:
+            logger.debug("MediaPipe face detector close failed: %s", exc)
+
+
+def _detect_faces_mediapipe(
+    frame_bgr: object,  # numpy ndarray — typed as object to avoid numpy import at module level
+    frame_width: int,
+    detector: object | None = None,
+) -> list[int]:
+    """Detect face bounding-box centers (x coordinate) using MediaPipe BlazeFace.
+
+    Args:
+        frame_bgr: A numpy BGR image array (H × W × 3) as returned by cv2.
+        frame_width: Width of the source frame in pixels (used for normalisation).
+        detector: A pre-built MediaPipe Tasks FaceDetector from
+            :func:`_create_face_detector` — built once per track, not per frame.
+
+    Returns:
+        A list of x-center coordinates (pixels) for each detected face, in
+        descending order of face bounding-box area (largest face first).
+        Returns an empty list if no detector is available or no face found.
+    """
+    if detector is None:
+        return []
+    try:
+        import mediapipe as mp  # noqa: PLC0415
+        import numpy as np
+
+        # MediaPipe Tasks API expects RGB; cv2 produces BGR.
+        frame_rgb = np.asarray(frame_bgr)[:, :, ::-1]
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        result = detector.detect(mp_image)  # type: ignore[attr-defined]
 
         if not result.detections:
             return []
@@ -176,30 +212,41 @@ def _detect_faces_mediapipe(
 def _mediapipe_model_path() -> str:
     """Return the filesystem path to the BlazeFace model asset.
 
-    MediaPipe Tasks API requires an explicit path to the ``.task`` model file.
-    When mediapipe is installed via pip the model files are bundled inside the
-    package; we locate them via the package's own resource path.
+    The MediaPipe Tasks FaceDetector requires a metadata-bearing model bundle
+    from the model hub (``blaze_face_short_range.tflite`` / a ``.task`` bundle)
+    — NOT the legacy Solutions graph asset
+    ``modules/face_detection/face_detection_short_range.tflite``, which fails
+    at ``create_from_options`` (Issue 352 Batch H).
 
-    Falls back to a no-op string when mediapipe is not installed (the caller's
-    try/except catches the ImportError before we reach this function).
+    Resolution order:
+      1. ``settings.MEDIAPIPE_FACE_MODEL_PATH`` — the pinned hub asset shipped
+         in the render image (Dockerfile fetches it alongside the fonts).
+      2. A ``.task`` bundle inside the installed mediapipe package, if present.
+      3. "" — callers fall back to frame-center for the whole track.
     """
+    from config import settings  # noqa: PLC0415
+
+    configured = (settings.MEDIAPIPE_FACE_MODEL_PATH or "").strip()
+    if configured:
+        if Path(configured).exists():
+            return configured
+        logger.warning(
+            "MEDIAPIPE_FACE_MODEL_PATH=%s does not exist; "
+            "face detection will fall back to frame center.",
+            configured,
+        )
+        return ""
+
     try:
         import mediapipe as mp  # noqa: PLC0415
 
-        # The blaze-face model bundled with mediapipe >= 0.10.
-        # Path: <mediapipe_pkg>/modules/face_detection/face_detection_short_range.tflite
-        # The Tasks API also accepts the .task bundle from the model hub.
         pkg_root = Path(mp.__file__).parent
-        short_range = pkg_root / "modules" / "face_detection" / "face_detection_short_range.tflite"
-        if short_range.exists():
-            return str(short_range)
-        # Newer mediapipe versions use the tasks bundle layout.
         tasks_bundle = pkg_root / "tasks" / "vision" / "face_detector.task"
         if tasks_bundle.exists():
             return str(tasks_bundle)
         logger.warning(
-            "MediaPipe model file not found at expected paths under %s; "
-            "face detection will fall back to frame center.",
+            "No Tasks-compatible BlazeFace model found (MEDIAPIPE_FACE_MODEL_PATH unset, "
+            "no bundle under %s); face detection will fall back to frame center.",
             pkg_root,
         )
         return ""
@@ -288,24 +335,30 @@ def build_crop_center_track(
     sample_count = max(1, int(duration * sample_fps))
     timestamps = [start_s + i * interval_s for i in range(sample_count)]
 
+    # One detector for the whole track (Issue 352 Batch H) — building it per
+    # frame parsed the model asset 300–450 times per clip at 5 fps.
+    detector = _create_face_detector()
     raw_points: list[CropCenterPoint] = []
-    for ts in timestamps:
-        if ts >= end_s:
-            break
-        frame = _read_frame_cv2(source_path, ts)
-        if frame is None:
-            raw_points.append(CropCenterPoint(ts, center_fallback, is_fallback=True))
-            continue
-        try:
-            centers = _detect_faces_mediapipe(frame, frame_width)
-        except Exception as exc:
-            logger.debug("Face detection raised at t=%.3f: %s — using center fallback", ts, exc)
-            centers = []
-        if centers:
-            # Use the largest face (index 0) as the active speaker proxy.
-            raw_points.append(CropCenterPoint(ts, centers[0]))
-        else:
-            raw_points.append(CropCenterPoint(ts, center_fallback, is_fallback=True))
+    try:
+        for ts in timestamps:
+            if ts >= end_s:
+                break
+            frame = _read_frame_cv2(source_path, ts)
+            if frame is None:
+                raw_points.append(CropCenterPoint(ts, center_fallback, is_fallback=True))
+                continue
+            try:
+                centers = _detect_faces_mediapipe(frame, frame_width, detector)
+            except Exception as exc:
+                logger.debug("Face detection raised at t=%.3f: %s — using center fallback", ts, exc)
+                centers = []
+            if centers:
+                # Use the largest face (index 0) as the active speaker proxy.
+                raw_points.append(CropCenterPoint(ts, centers[0]))
+            else:
+                raw_points.append(CropCenterPoint(ts, center_fallback, is_fallback=True))
+    finally:
+        _close_face_detector(detector)
 
     if not raw_points:
         # Should not happen (sample_count >= 1) but guard defensively.

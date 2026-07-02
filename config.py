@@ -333,6 +333,14 @@ class Settings(BaseSettings):
     # render-env tests.
     REFRAME_SAMPLE_FPS: float = 5.0
 
+    # Absolute path to a MediaPipe Tasks-compatible BlazeFace model asset
+    # (hub `blaze_face_short_range.tflite` or a `.task` bundle). The Tasks
+    # FaceDetector rejects the legacy Solutions .tflite bundled inside the
+    # mediapipe package, so the render image ships the hub asset (Dockerfile)
+    # and points this at it. Empty = try the package's own .task bundle, else
+    # fall back to frame-center. Ignored when ACTIVE_SPEAKER_REFRAME_ENABLED=false.
+    MEDIAPIPE_FACE_MODEL_PATH: str = ""
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     # Auto-render generated clips the moment clip generation finishes, so the
     # Review queue is watch-ready with zero manual steps (the upload already
