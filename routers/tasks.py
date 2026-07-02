@@ -16,7 +16,6 @@ the stream. A ``: keepalive`` comment is emitted on every ~12s idle tick so
 the connection survives mobile-network and CDN idle timeouts.
 """
 
-from __future__ import annotations
 
 import asyncio
 import json
