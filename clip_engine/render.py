@@ -613,6 +613,54 @@ def _audio_segment_filter(idx: int, start: float, end: float) -> str:
     )
 
 
+def _measure_concat_loudnorm(
+    source_path: Path,
+    segments: list[tuple[float, float]],
+    out_path: Path,
+    label: str,
+    timeout_s: float,
+) -> str | None:
+    """Measure loudness of the CONCATENATED segment audio and return the
+    second-pass ``loudnorm`` filter string (Issue 181 contract: the loudnorm
+    target is the final stitched output, not each segment).
+
+    The measurement graph is audio-only (``concat … v=0:a=1``) and runs to
+    ``null``; it degrades to ``None`` (flat render) on failure or near-silence.
+    Segment afades come from ``_audio_segment_filter`` so measurement and apply
+    passes see byte-identical audio. Shared by ``render_cleaned_clip_file`` and
+    ``render_summary_file``.
+    """
+    measure_lines = [_audio_segment_filter(idx, s, e) for idx, (s, e) in enumerate(segments)]
+    a_inputs = "".join(f"[a{idx}]" for idx in range(len(segments)))
+    measure_lines.append(
+        f"{a_inputs}concat=n={len(segments)}:v=0:a=1[outa];"
+        f"[outa]loudnorm={_LOUDNORM_TARGET}:print_format=json[outm]"
+    )
+    measure_script_path = out_path.with_suffix(".measure.filter")
+    measure_script_path.parent.mkdir(parents=True, exist_ok=True)
+    measure_script_path.write_text("\n".join(measure_lines))
+    try:
+        return _measure_loudnorm_filter(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source_path),
+                "-filter_complex_script",
+                str(measure_script_path),
+                "-map",
+                "[outm]",
+                "-f",
+                "null",
+                "-",
+            ],
+            label,
+            timeout_s,
+        )
+    finally:
+        measure_script_path.unlink(missing_ok=True)
+
+
 def render_cleaned_clip_file(
     source_path: Path,
     keep_ranges: list[tuple[float, float]],
@@ -664,38 +712,10 @@ def render_cleaned_clip_file(
 
     # Two-pass loudness normalization (Issue 181): measure the *concatenated* kept
     # audio (the loudnorm target is the final clip, not each segment), then apply
-    # the measured values in the real render. The measurement graph is audio-only
-    # (`concat ... v=0:a=1`) and runs to `null`; it degrades to a flat render on
-    # failure or near-silence. Segment afades are shared via ``_audio_segment_filter``.
-    measure_lines = [_audio_segment_filter(idx, s, e) for idx, (s, e) in enumerate(keep_ranges)]
-    a_inputs = "".join(f"[a{idx}]" for idx in range(len(keep_ranges)))
-    measure_lines.append(
-        f"{a_inputs}concat=n={len(keep_ranges)}:v=0:a=1[outa];"
-        f"[outa]loudnorm={_LOUDNORM_TARGET}:print_format=json[outm]"
+    # the measured values in the real render.
+    loudnorm_filter = _measure_concat_loudnorm(
+        source_path, keep_ranges, out_path, "clean render", timeout_s
     )
-    measure_script_path = out_path.with_suffix(".measure.filter")
-    measure_script_path.parent.mkdir(parents=True, exist_ok=True)
-    measure_script_path.write_text("\n".join(measure_lines))
-    try:
-        loudnorm_filter = _measure_loudnorm_filter(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(source_path),
-                "-filter_complex_script",
-                str(measure_script_path),
-                "-map",
-                "[outm]",
-                "-f",
-                "null",
-                "-",
-            ],
-            "clean render",
-            timeout_s,
-        )
-    finally:
-        measure_script_path.unlink(missing_ok=True)
 
     script_lines: list[str] = []
     concat_inputs: list[str] = []
@@ -760,4 +780,163 @@ def render_cleaned_clip_file(
         source_path.name,
         out_path.name,
         len(keep_ranges),
+    )
+
+
+# ── Stream-VOD recap render (Issue 191) ───────────────────────────────────────
+
+# Light per-segment VIDEO fade at every splice, mirroring the audio afades'
+# placement (in at 0, out at dur−d, halved for very short segments). The audio
+# fade is 5ms (click prevention); a 5ms video fade is under one frame, so the
+# video constant is longer — 0.1s (~3 frames at 30fps) softens the jump cut
+# without eating content. Hard cuts + fades were chosen over xfade (cumulative-
+# offset fragility; overlap eats content) — docs/DECISIONS.md (2026-07-02).
+_SUMMARY_VIDEO_FADE_S = 0.1
+_SUMMARY_FORMAT = "16:9"
+
+
+def _video_segment_filter(idx: int, start: float, end: float, out_w: int, out_h: int) -> str:
+    """Build the ``trim``+``scale``+``fade`` video-filter line for one recap segment.
+
+    ``setsar=1`` normalizes the sample aspect ratio so ``concat`` never rejects
+    segments whose scaled SAR differs. fade ``st`` values are segment-relative
+    because ``setpts=PTS-STARTPTS`` resets timestamps to 0 per segment.
+    """
+    seg_dur = end - start
+    fade_s = min(_SUMMARY_VIDEO_FADE_S, seg_dur / 2.0)
+    fade_out_st = max(0.0, seg_dur - fade_s)
+    return (
+        f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
+        f"scale={out_w}:{out_h},setsar=1,"
+        f"fade=t=in:st=0:d={fade_s:.3f},fade=t=out:st={fade_out_st:.3f}:d={fade_s:.3f}[v{idx}];"
+    )
+
+
+def build_summary_filtergraph(
+    segments: list[tuple[float, float]],
+    loudnorm_filter: str | None = None,
+) -> tuple[str, str]:
+    """Build the ``filter_complex`` script for a 16:9 multi-segment recap.
+
+    PURE — no subprocess, no filesystem — so the graph shape is unit-testable
+    without ffmpeg. Per segment: ``trim``/``atrim`` + ``setpts``/``asetpts=
+    PTS-STARTPTS``, per-segment ``scale`` to the 16:9 preset, a light video
+    fade in/out and a 5ms ``afade`` at every splice; then
+    ``concat=n=N:v=1:a=1``. When ``loudnorm_filter`` is provided (the measured
+    second-pass string) it is chained onto the concatenated audio.
+
+    Returns ``(script_text, audio_out_label)`` where ``audio_out_label`` is the
+    ``-map`` target for audio (``[outa]``, or ``[outaln]`` when normalized).
+    """
+    out_w, out_h = OUTPUT_PRESETS[_SUMMARY_FORMAT]
+    lines: list[str] = []
+    concat_inputs: list[str] = []
+    for idx, (start, end) in enumerate(segments):
+        lines.append(_video_segment_filter(idx, start, end, out_w, out_h))
+        lines.append(_audio_segment_filter(idx, start, end))
+        concat_inputs.append(f"[v{idx}][a{idx}]")
+    concat_line = f"{''.join(concat_inputs)}concat=n={len(segments)}:v=1:a=1[outv][outa]"
+    audio_out = "[outa]"
+    if loudnorm_filter:
+        concat_line += f";[outa]{loudnorm_filter}[outaln]"
+        audio_out = "[outaln]"
+    lines.append(concat_line)
+    return "\n".join(lines), audio_out
+
+
+def build_summary_render_cmd(
+    source_path: Path, script_path: Path, out_path: Path, audio_out: str
+) -> list[str]:
+    """PURE argv builder for the recap render: single ``-i`` source, graph via
+    ``-filter_complex_script`` (never inline — OS arg-length limits at scale)."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-filter_complex_script",
+        str(script_path),
+        "-map",
+        "[outv]",
+        "-map",
+        audio_out,
+        "-c:v",
+        "libx264",
+        "-crf",
+        "23",
+        "-preset",
+        "fast",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        str(out_path),
+    ]
+
+
+def render_summary_file(
+    source_path: Path,
+    segments: list[tuple[float, float]],
+    out_path: Path,
+    timeout_s: float | None = None,
+) -> None:
+    """Stitch the ordered recap ``segments`` from ``source_path`` into one
+    16:9 (1920×1080) mp4 at ``out_path`` (Issue 191).
+
+    ``segments`` is a list of ``(start_s, end_s)`` pairs in source-relative
+    seconds — the ``summaries.segments`` timing contract from Issue 190. They
+    are sorted chronologically here so the stitched recap always plays in
+    narrative order even if a caller passes them shuffled.
+
+    Decode approach: a single-input trim graph — ffmpeg decodes the whole VOD
+    once and drops frames outside the trims. Simple and frame-accurate;
+    the extra decode cost on multi-hour VODs is accepted for the beta (a
+    seek-per-segment multi-input graph is the optimization if recap renders
+    become a bottleneck). Two-pass loudnorm is measured on the CONCATENATED
+    audio (Issue 181 contract) and degrades to a flat render on failure.
+
+    When ``timeout_s`` is ``None`` a budget is derived from the source
+    duration (the whole-VOD decode dominates on long sources).
+
+    Raises ``ValueError`` for empty/invalid ``segments``; ``RuntimeError`` on
+    ffmpeg failure.
+    """
+    if not segments:
+        raise ValueError("render_summary_file: empty segments")
+    for s, e in segments:
+        if s < 0 or e <= s:
+            raise ValueError(f"render_summary_file: invalid segment ({s}, {e})")
+    segments = sorted(segments, key=lambda r: r[0])
+
+    if timeout_s is None:
+        total_dur = sum(e - s for s, e in segments)
+        src_dur = _source_duration_s(source_path)
+        # 4× the recap duration covers the encode; 1× the source duration covers
+        # the whole-VOD decode (ffmpeg decodes well above real time); floor 300s.
+        timeout_s = max(300.0, total_dur * 4, src_dur if src_dur < float("inf") else 0.0)
+
+    loudnorm_filter = _measure_concat_loudnorm(
+        source_path, segments, out_path, "summary render", timeout_s
+    )
+    script_text, audio_out = build_summary_filtergraph(segments, loudnorm_filter)
+
+    # Sibling temp script — same cleanup pattern as render_cleaned_clip_file.
+    script_path = out_path.with_suffix(".filter")
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(script_text)
+    try:
+        _run(
+            build_summary_render_cmd(source_path, script_path, out_path, audio_out),
+            "summary render",
+            timeout_s=timeout_s,
+        )
+    finally:
+        script_path.unlink(missing_ok=True)
+    logger.info(
+        "Recap %s→%s segments=%d",
+        source_path.name,
+        out_path.name,
+        len(segments),
     )

@@ -48,6 +48,7 @@ from models import (
     RenderStatus,
     RetentionCurve,
     Signals,
+    Summary,
     Transcript,
     Video,
     VideoKind,
@@ -4938,3 +4939,188 @@ def _build_inapp_notification(
         body=body,
         link_url=link_url,
     )
+
+
+# ── Stream-VOD recap render (Issue 191) ───────────────────────────────────────
+
+
+async def _creator_id_for_summary(summary_id: str) -> str | None:
+    """Return creator_id string for a summary, or None on any error."""
+    try:
+        async with db.AdminSessionLocal() as session:
+            summary = await session.get(Summary, uuid.UUID(summary_id))
+            return str(summary.creator_id) if summary else None
+    except Exception:
+        return None
+
+
+async def _set_summary_render_status(summary_id: str, status: RenderStatus) -> None:
+    async with db.AdminSessionLocal() as session:
+        summary = await session.get(Summary, uuid.UUID(summary_id))
+        if summary:
+            summary.render_status = status
+            await session.commit()
+
+
+@dataclass(frozen=True)
+class _SummaryRenderPlan:
+    """Source + segment timings snapshotted out of the DB session so it can
+    close before the multi-minute whole-VOD decode/encode/upload."""
+
+    source_uri: str
+    segments: list[tuple[float, float]]
+
+
+async def _load_summary_render_plan(summary_id: str) -> _SummaryRenderPlan | None:
+    """Lock the summary row, flip it to ``running``, and snapshot its plan.
+
+    Returns ``None`` (and emits the terminal ``done`` event) when the recap is
+    already rendered — the idempotent skip under at-least-once delivery.
+    ``with_for_update`` serializes concurrent redeliveries at the Postgres row
+    level so two deliveries cannot both pass the done-check and double-encode
+    (same contract as ``_load_clip_render_plan``).
+    """
+    from worker.progress import aemit
+
+    async with db.AdminSessionLocal() as session:
+        summary = await session.get(Summary, uuid.UUID(summary_id), with_for_update=True)
+        if not summary:
+            raise ValueError(f"Summary {summary_id} not found")
+        if summary.render_status == RenderStatus.done and summary.render_uri:
+            logger.info("Summary %s already rendered — skipping", summary_id)
+            await aemit(summary_id, "done", stage="render", message="Recap already rendered.")
+            return None
+        segments = [
+            (float(seg["start_s"]), float(seg["end_s"])) for seg in (summary.segments or [])
+        ]
+        if not segments:
+            raise ValueError(f"Summary {summary_id} has no segments — run selection first")
+        video = await session.get(Video, summary.video_id)
+        if not video or not video.source_uri:
+            # The 72h retention purge nulls source_uri after the render window
+            # (purge_stale_source_media). Actionable + creator-safe: no URI/path.
+            raise ValueError(
+                f"Source video for summary {summary_id} is no longer available "
+                "(retention window elapsed) — re-upload the video and regenerate the recap"
+            )
+        source_uri = video.source_uri
+        summary.render_status = RenderStatus.running
+        await session.commit()
+        return _SummaryRenderPlan(source_uri=source_uri, segments=segments)
+
+
+async def _render_summary_async(summary_id: str) -> None:
+    """Render + upload the 16:9 recap. Emits step events keyed by ``summary_id``
+    (the SSE stream key the UI subscribes to), mirroring ``_render_clip_async``:
+    render_start → download_source → ffmpeg_encode → upload_r2 → done."""
+    from clip_engine.render import render_summary_file
+    from worker.progress import aemit
+    from worker.storage import alocal_path, aupload_file
+
+    try:
+        await aemit(summary_id, "step", label="render_start", stage="render")
+        plan = await _load_summary_render_plan(summary_id)
+        if plan is None:  # already rendered — terminal done emitted by the loader
+            return
+        await aemit(summary_id, "step", label="download_source", stage="render")
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            out_path = Path(tmp.name)
+        try:
+            async with alocal_path(plan.source_uri) as src:
+                await aemit(
+                    summary_id,
+                    "step",
+                    label="ffmpeg_encode",
+                    stage="render",
+                    segment_count=len(plan.segments),
+                )
+                # Whole-VOD decode + encode in a worker thread so the event
+                # loop stays free (same pattern as _encode_and_upload_clip).
+                await asyncio.to_thread(
+                    render_summary_file,
+                    source_path=src,
+                    segments=plan.segments,
+                    out_path=out_path,
+                )
+            await aemit(summary_id, "step", label="upload_r2", stage="render")
+            render_uri = await aupload_file(out_path, f"summaries/{summary_id}.mp4")
+        finally:
+            out_path.unlink(missing_ok=True)
+
+        async with db.AdminSessionLocal() as session:
+            summary = await session.get(Summary, uuid.UUID(summary_id))
+            if summary:
+                summary.render_uri = render_uri
+                summary.render_status = RenderStatus.done
+                await session.commit()
+        logger.info("Summary %s rendered → %s", summary_id, render_uri)
+        await aemit(summary_id, "done", stage="render", message="Recap ready.")
+    except Exception as exc:
+        # Neutral message — whether render_summary retries depends on the error
+        # class; the summary's render_status is the source of truth the UI polls.
+        await aemit(
+            summary_id,
+            "error",
+            stage="render",
+            message="Recap render failed.",
+            exc_type=type(exc).__name__,
+        )
+        raise
+
+
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_summary")
+def render_summary(self, summary_id: str) -> str:
+    """Render a stream-VOD recap to a 16:9 multi-segment concat mp4 (Issue 191).
+
+    Mirrors ``render_clip``'s classification: ``ValueError``/``FileNotFoundError``
+    (missing summary/segments, or the source purged by the 72h retention window)
+    are PERMANENT — mark failed, no retry. ``SoftTimeLimitExceeded`` is terminal.
+    Anything else (R2/network/ffmpeg blip) retries with backoff. Idempotent under
+    at-least-once redelivery: an already-rendered summary (``render_status=done``
+    + ``render_uri`` set) no-ops in ``_load_summary_render_plan``.
+    """
+    creator_id = run_async(_creator_id_for_summary(summary_id))
+    log_event(
+        "render_summary_started",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=summary_id,
+    )
+    try:
+        run_async(_render_summary_async(summary_id))
+    except (ValueError, FileNotFoundError) as exc:
+        # Permanent — retrying cannot conjure a missing summary/segments/source.
+        run_async(_set_summary_render_status(summary_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_summary").inc()
+        log_event(
+            "render_summary_failed_permanent",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=summary_id,
+            exc_type=type(exc).__name__,
+        )
+        raise
+    except SoftTimeLimitExceeded:
+        # Terminal — a retry of a soft-timed-out whole-VOD render would time out
+        # again, compounding wasted render minutes (same rationale as render_clip).
+        logger.warning(
+            "render_summary soft-timeout for summary %s (task %s) — terminal, not retrying",
+            summary_id,
+            self.request.id,
+        )
+        run_async(_set_summary_render_status(summary_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_summary").inc()
+        raise
+    except Exception as exc:
+        # Transient — set failed (so a UI poll between attempts shows a terminal
+        # state, and the final MaxRetriesExceededError leaves it failed) then retry.
+        run_async(_set_summary_render_status(summary_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_summary").inc()
+        raise self.retry(exc=exc) from exc
+    log_event(
+        "render_summary_done",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=summary_id,
+    )
+    return summary_id
