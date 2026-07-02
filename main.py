@@ -93,15 +93,16 @@ _health_redis: aioredis.Redis | None = None
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _health_redis
     logger.info("CreatorClip starting (env=%s)", settings.ENV)
-    _health_redis = aioredis.from_url(
+    health_redis = aioredis.from_url(
         settings.REDIS_URL,
         decode_responses=True,
         socket_timeout=2.0,
         socket_connect_timeout=2.0,
     )
+    _health_redis = health_redis
     # Registered last → closed first by close_all(). Re-registration replaces
     # the previous lifespan's bound method on repeated startups (TestClient).
-    shared_resources.register_aclose("health_redis", _health_redis.aclose)
+    shared_resources.register_aclose("health_redis", health_redis.aclose)
     yield
     # Close every registered long-lived client — youtube HTTP client (Issue 72),
     # worker progress Redis (Issue 86), the health-check Redis above, and the
@@ -351,7 +352,7 @@ _GPC_LAST_UPDATE = "2026-07-02"  # bump when the GPC posture changes
 
 
 @app.middleware("http")
-async def _detect_gpc(request: Request, call_next):
+async def _detect_gpc(request: Request, call_next: RequestResponseEndpoint) -> _StarletteResponse:
     request.state.gpc = request.headers.get("Sec-GPC") == "1"
     return await call_next(request)
 

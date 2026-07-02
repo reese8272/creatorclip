@@ -34,7 +34,12 @@ async def get_owned[ModelT: Base](
     """
     row = (
         await session.execute(
-            select(model).where(model.id == row_id, model.creator_id == creator_id)
+            # ModelT is bound to Base, which doesn't declare id/creator_id; every
+            # model passed here has both (the call sites are the contract).
+            select(model).where(
+                model.id == row_id,  # type: ignore[attr-defined]
+                model.creator_id == creator_id,  # type: ignore[attr-defined]
+            )
         )
     ).scalar_one_or_none()
     if row is None:
