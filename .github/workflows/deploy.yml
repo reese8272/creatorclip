@@ -6,6 +6,14 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      skip_staging:
+        description: >-
+          Break-glass: skip the staging-parity gate and deploy straight to prod
+          (Issue 298). Use ONLY when staging infra itself is broken — never to
+          bypass a failing migration or smoke test.
+        type: boolean
+        default: false
 
 # Least privilege: deploy authenticates via SSH/GHCR secrets, not the
 # GITHUB_TOKEN, so read-only is sufficient. (Issue 144)
@@ -13,13 +21,141 @@ permissions:
   contents: read
 
 jobs:
+  # ── Staging-parity gate (Issue 298) ──────────────────────────────────────
+  # Motivating incident (2026-07-02 00:41): CI's fresh-DB bootstrap passed
+  # while prod's DATA-BEARING DB failed the same migration. A fresh database
+  # cannot catch migrations that break on existing rows, so the gate deploys
+  # the EXACT image under test to the persistent staging stack (project
+  # ccstage — its postgres volume is deliberately kept across runs) and runs
+  # the in-container migration + critical-journey smoke BEFORE prod deploys.
+  deploy-staging:
+    name: Staging gate (data-bearing DB)
+    runs-on: self-hosted
+    # Same trigger condition as prod, minus the break-glass: skip_staging=true
+    # skips this job entirely and the prod job's condition lets it through.
+    if: >-
+      (github.event.workflow_run.conclusion == 'success'
+        || github.event_name == 'workflow_dispatch')
+      && inputs.skip_staging != true
+    # The GHCR pull token is an environment-scoped secret (same as prod deploy).
+    environment: production
+    defaults:
+      run:
+        working-directory: /opt/autoclip
+
+    steps:
+      - name: Checkout (for docker-compose.staging.yml)
+        uses: actions/checkout@v6
+
+      - name: Copy staging compose file to deploy dir
+        run: cp ${{ github.workspace }}/docker-compose.staging.yml /opt/autoclip/docker-compose.staging.yml
+
+      - name: Resolve exact image under test (sha- tag, never :latest)
+        # docker-publish.yml tags every build `type=sha,prefix=sha-` → sha-<7-char
+        # short SHA> (verified against GHCR: e.g. sha-9e92b66). :latest is
+        # forbidden here — it can race a concurrent push and would defeat the
+        # point of gating THIS build.
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          STAGING_IMAGE="ghcr.io/${{ github.repository_owner }}/creatorclip:sha-${HEAD_SHA:0:7}"
+          echo "STAGING_IMAGE=${STAGING_IMAGE}" >> "$GITHUB_ENV"
+          echo "Staging will run: ${STAGING_IMAGE}"
+
+      - name: Authenticate with GHCR
+        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
+
+      - name: Pull the image under test
+        # Only the app image is pulled explicitly; `up --pull never` below keeps
+        # compose from touching the (cached) third-party infra images.
+        run: docker pull "${STAGING_IMAGE}"
+
+      - name: Bring up staging on the image under test
+        # --no-build --pull never: the gate must run the pulled GHCR image, not
+        # a local rebuild, and must not silently substitute anything else.
+        run: |
+          STAGING_IMAGE="${STAGING_IMAGE}" docker compose -p ccstage \
+            -f docker-compose.staging.yml up -d --no-build --pull never
+
+      - name: Run migrations IN-CONTAINER against the data-bearing staging DB
+        # exec (not `run --rm` on a host checkout): the container has the pinned
+        # deps of the image under test — the exact combination prod will run.
+        # The current==heads assertion mirrors scripts/deploy.sh (2026-06-24
+        # outage guard: alembic once exited 0 while silently rolling back).
+        run: |
+          docker compose -p ccstage -f docker-compose.staging.yml \
+            exec -T app alembic upgrade head
+          CUR_REV=$(docker compose -p ccstage -f docker-compose.staging.yml \
+            exec -T app alembic current 2>/dev/null | grep -oE '^[0-9a-f]+' | head -1)
+          HEAD_REV=$(docker compose -p ccstage -f docker-compose.staging.yml \
+            exec -T app alembic heads 2>/dev/null | grep -oE '^[0-9a-f]+' | head -1)
+          if [ -z "$CUR_REV" ] || [ "$CUR_REV" != "$HEAD_REV" ]; then
+            echo "Staging migration verification FAILED: current='${CUR_REV:-none}' head='${HEAD_REV:-none}'." >&2
+            echo "The upgrade likely no-op'd or failed on existing data — prod deploy is blocked." >&2
+            exit 1
+          fi
+          echo "Staging migrations confirmed at head ($CUR_REV)."
+
+      - name: Seed staging fixtures (idempotent upsert)
+        # tests/perf/seed_staging.py upserts on google_sub, preserving the fixed
+        # creator UUID across runs — safe on the persistent volume, and it makes
+        # the first run on a fresh volume self-sufficient.
+        run: |
+          docker compose -p ccstage -f docker-compose.staging.yml \
+            exec -T app python tests/perf/seed_staging.py
+
+      - name: Staging smoke (llm_harness --flow core)
+        # The verified invocation from docs/STAGING_ACCESS.md: exec inside the
+        # app container (baked-in httpx+jwt), CC_JWT_SECRET from the container's
+        # own JWT_SECRET_KEY, CC_CREATOR_ID = the seeded staging creator.
+        env:
+          CC_CREATOR_ID: ${{ vars.CC_STAGING_CREATOR_ID || '00000000-1111-2222-3333-444444444444' }}
+        run: |
+          echo "Waiting for staging /health..."
+          STATUS=""
+          for i in 1 2 3 4 5; do
+            BODY=$(docker compose -p ccstage -f docker-compose.staging.yml exec -T app \
+              python3 -c "import urllib.request; r=urllib.request.urlopen('http://localhost:8000/health',timeout=10); print(r.read().decode())" \
+              2>/dev/null || true)
+            echo "Attempt $i: $BODY"
+            STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" 2>/dev/null || true)
+            [ "$STATUS" = "ok" ] && break
+            [ $i -lt 5 ] && sleep 10
+          done
+          if [ "$STATUS" != "ok" ]; then
+            echo "Staging /health FAILED after 5 attempts — prod deploy is blocked."
+            exit 1
+          fi
+          echo "Running staging critical journey (llm_harness --flow core)..."
+          docker compose -p ccstage -f docker-compose.staging.yml exec -T \
+            -e CC_CREATOR_ID="${CC_CREATOR_ID}" \
+            app sh -c 'CC_BASE_URL=http://localhost:8000 CC_JWT_SECRET="$JWT_SECRET_KEY" python scripts/llm_harness.py --flow core'
+          echo "Staging gate passed."
+
+      - name: Staging logs (on failure)
+        if: failure()
+        run: docker compose -p ccstage -f docker-compose.staging.yml logs --tail 200 app worker || true
+
+      - name: Stop staging app/worker (keep the postgres volume — its persistence IS the gate)
+        # stop, not down: staging_postgres_data must survive so the next run
+        # migrates a DATA-BEARING database, which is the whole point (Issue 298).
+        if: always()
+        run: docker compose -p ccstage -f docker-compose.staging.yml stop app worker || true
+
   deploy:
     name: Deploy → autoclip.studio
     # Self-hosted runner on 147.182.136.107 — no GitHub-hosted minutes consumed.
     # Install the runner once with scripts/setup-runner.sh.
     # Falls back to manual deploy via scripts/deploy.sh when the runner is offline.
     runs-on: self-hosted
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    needs: deploy-staging
+    # !cancelled() is required: without a status-check function GitHub injects an
+    # implicit success(), which would skip prod even on the skip_staging=true
+    # break-glass path (a skipped needs-job fails success()). The gate condition
+    # itself: staging must have PASSED, or the operator explicitly broke glass.
+    # A workflow_run trigger with a failed Docker publish never reaches here
+    # (deploy-staging is skipped and inputs.skip_staging is unset).
+    if: ${{ !cancelled() && (needs.deploy-staging.result == 'success' || inputs.skip_staging == true) }}
     environment: production
     defaults:
       run:
@@ -124,10 +260,11 @@ jobs:
         # so we have an immutable rollback target if the smoke test fails.
         # Falls back to empty string on first-ever deploy (no container running yet).
         run: |
-          PREV_IMAGE=$(docker inspect \
-            --format='{{index .RepoDigests 0}}' \
-            $(docker compose -f docker-compose.prod.yml ps -q app 2>/dev/null || true) \
-            2>/dev/null || true)
+          CID=$(docker compose -f docker-compose.prod.yml ps -q app 2>/dev/null || true)
+          PREV_IMAGE=""
+          if [ -n "$CID" ]; then
+            PREV_IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "$CID" 2>/dev/null || true)
+          fi
           echo "PREV_IMAGE=${PREV_IMAGE}" >> "$GITHUB_ENV"
           echo "Previous image: ${PREV_IMAGE:-<none — first deploy>}"
 
@@ -181,8 +318,15 @@ jobs:
             echo "Auto-rolling back to previous image: ${PREV_IMAGE}"
             if [ -n "${PREV_IMAGE}" ]; then
               docker pull "${PREV_IMAGE}" || true
+              # PREV_IMAGE is a repo DIGEST ref (ghcr.io/...@sha256:...) which can't
+              # sit in the compose tag slot, so re-tag it locally as :rollback and
+              # select it via the ${IMAGE_TAG:-latest} interpolation now present in
+              # docker-compose.prod.yml. (Issue 271 fix, folded into Issue 298 —
+              # previously IMAGE_TAG was never interpolated and "rollback"
+              # relaunched the broken :latest.)
+              docker tag "${PREV_IMAGE}" ghcr.io/reese8272/creatorclip:rollback || true
               docker compose -f docker-compose.prod.yml down --timeout 30 || true
-              IMAGE_TAG="${PREV_IMAGE}" docker compose -f docker-compose.prod.yml up -d || true
+              IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d || true
               echo "Rollback complete. Verify with: curl http://localhost:8000/health"
             else
               echo "No previous image captured (first deploy?) — manual recovery required."

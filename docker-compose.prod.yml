@@ -1,6 +1,10 @@
 services:
   app:
-    image: ghcr.io/reese8272/creatorclip:latest
+    # ${IMAGE_TAG:-latest}: normal deploys leave IMAGE_TAG unset (→ :latest,
+    # unchanged behavior); the deploy.yml auto-rollback sets IMAGE_TAG=rollback
+    # after re-tagging the previous digest. Hardcoding :latest here made the
+    # Issue 271 rollback a no-op image swap (fixed with Issue 298).
+    image: ghcr.io/reese8272/creatorclip:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # No host port is published: inbound traffic arrives only via the Cloudflare
     # Tunnel (cloudflared → app:8000 on the internal network). Nothing is exposed
@@ -29,7 +33,7 @@ services:
       start_period: 40s
 
   worker:
-    image: ghcr.io/reese8272/creatorclip:latest
+    image: ghcr.io/reese8272/creatorclip:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -48,7 +52,7 @@ services:
       start_period: 60s
 
   beat:
-    image: ghcr.io/reese8272/creatorclip:latest
+    image: ghcr.io/reese8272/creatorclip:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     depends_on:
