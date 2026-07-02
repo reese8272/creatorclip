@@ -172,7 +172,15 @@ def compute_features(candidate: dict, timeline: dict) -> dict:
 
 
 def _signal_score(features: dict) -> float:
-    """Signal-only score for the cold-start path (no DNA profile)."""
+    """Signal-only score for the cold-start path (no DNA profile).
+
+    Weighting: 0.40 whole-window signal density + 0.20 first-5s hook energy +
+    0.30 retention-spike bonus + 0.10 laughter — ~60% energy-driven. The honest
+    principle citation for this path is therefore #4 "Pattern interrupt"
+    (density of engagement beats across the window), NOT #6 "Retention curve is
+    ground truth": cold-start videos often have no retention data at all, and
+    the spike bonus is only a conditional 0.30. (Issue 109c)
+    """
     density = min(1.0, max(0.0, features["signal_density"] / 5.0))
     hook = min(1.0, max(0.0, features["hook_energy"] / 3.0))
     spike = 0.30 if features["has_retention_spike"] else 0.0
@@ -236,7 +244,7 @@ async def score_candidates(
     """
     Score and annotate candidates in-place. Returns the enriched list.
 
-    Cold-start (no dna_brief): signal features only, principle = "Retention curve is ground truth".
+    Cold-start (no dna_brief): signal features only, principle = "Pattern interrupt".
     DNA path: single batched Claude call with DNA brief as cached prefix.
 
     ``ledger_session_factory`` (Issue 82b): the usage-ledger write opens its own
@@ -261,8 +269,8 @@ async def score_candidates(
             # zero-defaults it (preference/features.py:24) rather than seeding it with
             # a collinear composite signal. (Issue 103 fix #5)
             c["dna_match"] = None
-            c["principle"] = "Retention curve is ground truth"
-            c["reasoning"] = "Scored on signal density — DNA profile not available yet."
+            c["principle"] = "Pattern interrupt"
+            c["reasoning"] = "Scored on engagement-signal density — DNA profile not available yet."
         return candidates
 
     # Build payload for Claude
@@ -411,7 +419,7 @@ async def score_candidates(
         else:
             c["score"] = _signal_score(c["features"])
             c["dna_match"] = None
-            c["principle"] = "Retention curve is ground truth"
+            c["principle"] = "Pattern interrupt"
             c["reasoning"] = "Fallback: signal-only score"
 
     return candidates

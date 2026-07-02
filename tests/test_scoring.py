@@ -243,7 +243,9 @@ async def test_score_candidates_cold_start_no_llm():
     mock_client.messages.create.assert_not_called()
     assert len(result) == 1
     assert 0.0 <= result[0]["score"] <= 1.0
-    assert result[0]["principle"] == "Retention curve is ground truth"
+    # Issue 109c: the signal-only path is ~60% energy-driven, so it honestly
+    # cites #4 "Pattern interrupt" rather than #6 "Retention curve is ground truth".
+    assert result[0]["principle"] == "Pattern interrupt"
 
 
 @pytest.mark.asyncio
