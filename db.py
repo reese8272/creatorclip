@@ -3,14 +3,14 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from sqlalchemy import event, text
+from sqlalchemy import Connection, event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.orm import DeclarativeBase, Session, SessionTransaction
 
 from config import settings
 
@@ -151,7 +151,9 @@ class Base(DeclarativeBase):
 
 
 @event.listens_for(Session, "after_begin")
-def _set_app_creator_id(session, transaction, connection):
+def _set_app_creator_id(
+    session: Session, transaction: SessionTransaction, connection: Connection
+) -> None:
     """Emit ``SET LOCAL app.creator_id = <uuid>`` on every transaction whose
     session has a creator id attached via ``session.info["creator_id"]``.
 

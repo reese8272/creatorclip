@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import uuid as _uuid_mod
+from collections.abc import Awaitable, Callable
 
 import redis.asyncio as aredis
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -82,7 +83,7 @@ async def _compute_patterns_single_flight(
     *,
     lock_id: object,
     cache_key: str,
-    compute,
+    compute: Callable[[], Awaitable[dict]],
     cache_ttl: int,
 ) -> dict:
     """Run ``compute`` under a per-creator single-flight lock (SEV1 #3).

@@ -17,6 +17,7 @@ import tempfile
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from typing import Any
 
 import boto3
 from botocore.config import Config
@@ -26,7 +27,7 @@ from config import settings
 _R2 = None  # lazy singleton; populated on first R2 call via _r2()
 
 
-def _r2():
+def _r2() -> Any:  # boto3 clients are runtime-generated; no stubs pinned
     global _R2
     if _R2 is None:
         _R2 = boto3.client(

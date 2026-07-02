@@ -42,12 +42,11 @@ ignore_missing_imports = true   # gradual: don't fail on untyped third-party stu
 warn_unused_ignores = true
 warn_redundant_casts = true
 exclude = ['^alembic/', '^tests/']
-# Ratchet candidate: the original 30-error backlog is now 0 (Issue 78c), but enabling
-# disallow_untyped_defs surfaces ~20 PRE-EXISTING untyped-def violations (mostly
-# clip_engine/render.py) that were never in that 30. Annotating those is a separate
-# follow-up; enable these two flags only once they're 0 too (tracked in issues.md).
-# disallow_untyped_defs = true
-# disallow_incomplete_defs = true
+# Ratchet closed (Issue 78-R, 2026-07-02): the original 30-error backlog went to 0 in
+# Issue 78c; the remaining 59 untyped/incomplete-def violations (worker/tasks.py,
+# scripts/, main.py, routers/, ...) were annotated, so both flags are now enforced.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
 
 [tool.coverage.run]
 branch = true

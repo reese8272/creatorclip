@@ -52,6 +52,12 @@ import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import psycopg
 
 # ── Make the repo root importable when run as `python scripts/live_smoke.py` ──
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -178,7 +184,7 @@ class Results:
 
 
 # ── DB helpers (sync psycopg — mirrors the proven clip_pipeline_state.py) ──────
-def _pg_connect():
+def _pg_connect() -> psycopg.Connection:
     import psycopg
 
     raw = os.environ.get("DATABASE_URL")
@@ -526,7 +532,7 @@ def check_r2(res: Results) -> None:
 
 # ── Registry + main ────────────────────────────────────────────────────────────
 # name → callable(res, ctx). ctx carries the parsed flags the check needs.
-def _registry(args: argparse.Namespace):
+def _registry(args: argparse.Namespace) -> dict[str, Callable[[Results], None]]:
     return {
         "db": lambda res: check_db(res),
         "isolation": lambda res: check_isolation(res),

@@ -39,6 +39,12 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from preference.model import PreferenceScorer
 
 # ── Ranking metrics (pure, dependency-free) ───────────────────────────────────
 
@@ -258,7 +264,9 @@ def compute_creator_metrics(
     return m
 
 
-def _train_scorer(train: list[LabeledClip], half_life_days: float | None = None):
+def _train_scorer(
+    train: list[LabeledClip], half_life_days: float | None = None
+) -> PreferenceScorer | None:
     """Fit a PreferenceScorer on the train split, reproducing preference.train.build_and_save's
     label/weight construction. Returns None when there aren't 2 classes to fit.
 
@@ -403,7 +411,7 @@ def pool_metrics(
     return out
 
 
-async def load_labeled_clips(session, creator_id: uuid.UUID) -> list[LabeledClip]:
+async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> list[LabeledClip]:
     """Load a creator's trainable, labeled clips (read-only) for the harness.
 
     Mirrors preference.train.build_and_save's query: trainable feedback joined to its clip and
@@ -458,7 +466,7 @@ async def load_labeled_clips(session, creator_id: uuid.UUID) -> list[LabeledClip
 
 
 async def evaluate_creator(
-    session, creator_id: uuid.UUID, k: int = DEFAULT_K, train_frac: float = 0.7
+    session: AsyncSession, creator_id: uuid.UUID, k: int = DEFAULT_K, train_frac: float = 0.7
 ) -> CreatorMetrics | None:
     """End-to-end per-creator eval: load → chronological split → metric table."""
     clips = await load_labeled_clips(session, creator_id)

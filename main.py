@@ -4,6 +4,7 @@ import logging
 import re as _re
 import secrets
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response as _StarletteResponse
 
 import event_log
@@ -87,7 +89,7 @@ _health_redis: aioredis.Redis | None = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _health_redis
     logger.info("CreatorClip starting (env=%s)", settings.ENV)
     _health_redis = aioredis.from_url(
@@ -237,14 +239,18 @@ def _rewrite_static(body: bytes, version: str) -> bytes:
 
 
 class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> _StarletteResponse:
         response = await call_next(request)
         ctype = response.headers.get("content-type", "")
         # Only rewrite full HTML responses; skip 304s (empty body) and non-HTML.
         if not ctype.startswith("text/html") or response.status_code == 304:
             return response
         chunks: list[bytes] = []
-        async for chunk in response.body_iterator:
+        # call_next is typed as returning Response, but BaseHTTPMiddleware always
+        # delivers starlette's private _StreamingResponse, which has body_iterator.
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
             chunks.append(chunk)
         body = b"".join(chunks)
         body = _rewrite_static(body, settings.STATIC_VERSION)
@@ -314,7 +320,9 @@ class SecurityHeadersMiddleware(_BaseHTTPMiddleware):
     non-TLS dev/staging hosts.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> _StarletteResponse:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = _build_csp()
         response.headers["X-Frame-Options"] = "DENY"
@@ -382,7 +390,9 @@ _LOG_SKIP_PREFIXES = (
 
 
 @app.middleware("http")
-async def _log_request_events(request: Request, call_next):
+async def _log_request_events(
+    request: Request, call_next: RequestResponseEndpoint
+) -> _StarletteResponse:
     start = time.perf_counter()
     response = await call_next(request)
     path = request.url.path

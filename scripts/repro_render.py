@@ -101,6 +101,7 @@ async def main() -> int:
 
     async with db.AdminSessionLocal() as s:
         clip = await s.get(Clip, clipid)
+        assert clip is not None
         uri = clip.render_uri
         status = clip.render_status
     print(f"RESULT: render_status={status.value} render_uri={uri}")
