@@ -17,7 +17,7 @@ import pytest_asyncio
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from clip_engine.ranking import generate_and_rank_clips
+from clip_engine.ranking import persist_ranked_clips
 from config import settings
 from models import (
     Clip,
@@ -83,12 +83,23 @@ async def _seed(session: AsyncSession, *, render_status=RenderStatus.pending) ->
 async def test_regeneration_preserves_existing_clips_and_feedback(db_session: AsyncSession):
     creator, video, clip = await _seed(db_session)
     try:
-        # Re-run generation for a video that already has clips → must no-op.
-        result = await generate_and_rank_clips(
-            session=db_session,
-            video_id=video.id,
-            creator_id=creator.id,
-            timeline={},  # unused: the existing-clips guard short-circuits first
+        # Re-run persistence for a video that already has clips → must no-op.
+        # (Issue 82b split: the guard now lives in persist_ranked_clips; a fresh
+        # ranking is ignored when clips already exist.)
+        result = await persist_ranked_clips(
+            db_session,
+            video.id,
+            creator.id,
+            ranked=[
+                {
+                    "setup_start_s": 1.0,
+                    "start_s": 1.0,
+                    "end_s": 30.0,
+                    "peak_s": 10.0,
+                    "score": 0.5,
+                    "rank": 1,
+                }
+            ],
         )
         assert [c.id for c in result] == [clip.id]  # returned the existing clip
         feedback_count = await db_session.scalar(

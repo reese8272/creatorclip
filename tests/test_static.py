@@ -287,32 +287,6 @@ def test_dashboard_clips_counter_filters_by_render_status():
 # ── Wave 5: global activity panel wired into every authenticated template ───
 
 
-def test_activity_panel_library_exists_with_canonical_position():
-    """Wave-5 Fix 3: static/activityPanel.js is the floating bottom-right
-    widget that surfaces in-progress background tasks across all pages.
-    Pins (a) the file exists, (b) the canonical bottom-right Linear/Vercel-
-    style position, (c) the dependency contract on activeTasks.js."""
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "activityPanel.js").read_text()
-
-    assert "window.activeTasks" in src or "global.activeTasks" in src, (
-        "activityPanel.js MUST consume window.activeTasks — it's the "
-        "single source of truth for in-progress tasks (Wave-5 Fix 2)."
-    )
-    # Industry-standard 2026 floating activity tray position (Linear, Vercel,
-    # Notion). Bottom-right doesn't compete with primary content above the
-    # fold and stays out of keyboard nav from the top nav.
-    assert "bottom" in src and "right" in src, (
-        "activityPanel.js must use the canonical bottom-right floating "
-        "position; pins the design decision so a future restyle doesn't "
-        "regress it without intent."
-    )
-    # Hidden when nothing's running — the panel only appears when there's
-    # actual work to show.
-    assert "cc-hidden" in src, "activityPanel.js must hide itself when no tasks are active."
-
-
 @pytest.mark.skip(
     reason="Issue 226: all authenticated legacy HTML templates retired — "
     "React SPA (frontend/src/) is now the canonical surface."
@@ -795,52 +769,6 @@ def test_every_retained_template_has_legal_footer():
         )
 
 
-def test_active_tasks_library_exists_and_exports_api():
-    """Wave-5 Fix 2: static/activeTasks.js manages localStorage + SSE
-    EventSource resume so background work (DNA build, catalog sync,
-    improvement brief, upload chain, render) survives page-to-page
-    navigation. This test pins the file exists + exposes the documented
-    public API to `window.activeTasks`.
-    """
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "activeTasks.js").read_text()
-
-    # The file must declare its localStorage key — pins the namespace.
-    assert "creatorclip:active_tasks" in src, (
-        "activeTasks.js must use the `creatorclip:active_tasks` localStorage "
-        "key (prefix-namespaced per industry-standard practice)."
-    )
-
-    # Public API surface: every consumer (the global activity panel +
-    # page-specific UI) depends on these being exposed on window.activeTasks.
-    for symbol in (
-        "registerTask",
-        "getActiveTasks",
-        "subscribe",
-        "removeTask",
-    ):
-        assert symbol + ":" in src or symbol + " :" in src, (
-            f"activeTasks.js must export `{symbol}` on window.activeTasks. "
-            f"The global activity panel and page-specific UI both depend on it."
-        )
-
-    # The Last-Event-ID resume contract: every received event updates
-    # last_event_id so a navigation mid-stream resumes from the right cursor.
-    assert "last_event_id" in src, (
-        "activeTasks.js must track last_event_id so page navigation mid-stream "
-        "resumes from the right XREAD cursor (Issue 86 SSE contract)."
-    )
-
-    # Stale entries (> server-side stream TTL of 1h) get garbage-collected
-    # on every page load — pins the cleanup invariant.
-    assert "STALE_AFTER_MS" in src and "60 * 60 * 1000" in src, (
-        "activeTasks.js must GC entries older than 1h (matches the "
-        "_STREAM_TTL_SECONDS=3600 in worker/progress.py — beyond this window "
-        "the server can't resume the stream anyway)."
-    )
-
-
 @pytest.mark.skip(reason="Issue 226: static/profile.html retired — React SPA is canonical.")
 def test_profile_page_exposes_api_keys_section():
     """Issue 95 frontend — profile.html surfaces the API-key management
@@ -1038,18 +966,6 @@ def test_nav_balance_and_help_in_all_main_pages():
         )
 
 
-def test_auth_js_populates_nav_elements():
-    """Issue 113: auth.js must populate nav-user and nav-balance elements
-    after successful auth — no per-page duplication needed."""
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
-    assert "nav-balance" in src, "auth.js must populate the nav-balance element after auth."
-    assert "/billing/balance" in src, (
-        "auth.js must fetch /billing/balance to display remaining minutes."
-    )
-
-
 @pytest.mark.skip(reason="Issue 226: static/profile.html retired — React SPA is canonical.")
 def test_profile_dna_section_is_collapsible():
     """Issue 114: the Creator DNA section must be wrapped in a <details> element
@@ -1157,49 +1073,6 @@ def test_insights_page_has_ai_analysis_and_saved_panels():
 # ── Issue 136 — dark editor mode + marketing hero ────────────────────────
 
 
-def test_issue_136_editor_layout_css_exists_with_editor_tokens():
-    """Issue 136: static/editor-layout.css owns the dark 3-pane review.html
-    layout. Tokens (--editor-bg / --editor-surface / --editor-strip-width)
-    are defined in _design-tokens.css."""
-    import pathlib
-
-    tokens = (pathlib.Path(__file__).parent.parent / "static" / "_design-tokens.css").read_text()
-    # Issue-136 redirect (2026-06-07): editor surfaces now use slightly warmer,
-    # subtly-indigo-tinted values for a softer, more "futuristic" feel.
-    # Sharp #0a0a0a / #141414 / #0d0d0d are retained on data-dense pages via
-    # --color-bg / --color-surface / --color-elevated.
-    for token, expected in {
-        "--editor-bg": "#0b0c12",
-        "--editor-surface": "#14161f",
-        "--editor-icon-strip": "#0d0e16",
-    }.items():
-        assert f"{token}:" in tokens, f"_design-tokens.css must define {token}"
-        assert expected in tokens, f"{token} must use the Issue-136-locked value {expected}"
-    # Soft-radius ladder + glow/aurora tokens must exist for the editor + hero
-    # to be wired against the same design-token surface.
-    for token in (
-        "--radius-lg",
-        "--radius-xl",
-        "--radius-2xl",
-        "--radius-pill",
-        "--glow-accent",
-        "--gradient-aurora",
-    ):
-        assert f"{token}:" in tokens, f"_design-tokens.css must define {token}"
-
-    layout = (pathlib.Path(__file__).parent.parent / "static" / "editor-layout.css").read_text()
-    # Three-pane CSS Grid is the load-bearing structure.
-    assert "display: grid" in layout
-    assert "grid-template-areas" in layout
-    assert '"player transcript tools"' in layout, (
-        "editor-layout.css must declare the player|transcript|tools 3-pane shell."
-    )
-    # Drawer is driven by data-active-tool on the shell.
-    assert "data-active-tool" in layout
-    # Pure-CSS transition for the slide-out, no JS animation library.
-    assert "transition: transform" in layout
-
-
 @pytest.mark.skip(reason="Issue 226: static/review.html retired — React SPA is canonical.")
 def test_issue_136_review_html_uses_editor_shell_and_dark_tokens():
     """review.html opts into editor mode + uses ONLY --editor-* tokens —
@@ -1270,32 +1143,6 @@ def test_issue_136_index_html_pre_auth_hero_block():
     assert 'id="video-tbody"' in src, "Dashboard table must survive the hero addition."
 
 
-def test_issue_136_auth_js_gates_anonymous_landing():
-    """auth.js — on 401 with data-allow-anonymous set, toggle body.is-hero-mode
-    instead of redirecting. Also pick up the ?yt= hint after login."""
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
-    assert "data-allow-anonymous" in src, "auth.js must check data-allow-anonymous on 401."
-    assert "is-hero-mode" in src, "auth.js must toggle body.is-hero-mode on hero pages."
-    assert "yt" in src and "URLSearchParams" in src, (
-        "auth.js must read the ?yt= query hint after login."
-    )
-
-
-def test_issue_136_hero_css_drives_visibility_via_body_class():
-    """hero.css gates the hero/dashboard split via body.is-hero-mode — pure
-    CSS, no JS animation library."""
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "hero.css").read_text()
-    assert ".hero { display: none; }" in src or ".hero{display:none" in src.replace(" ", "")
-    assert "body.is-hero-mode .hero" in src, "Hero must become visible only in hero mode."
-    assert "body.is-hero-mode .dashboard" in src, (
-        "Dashboard must hide in hero mode (no regression for authenticated users)."
-    )
-
-
 # ── Cache-busting middleware (post-Issue-136 follow-up) ──────────────────
 
 
@@ -1305,30 +1152,29 @@ def test_static_cachebust_middleware_appends_version_to_css(client):
     Each deploy bumps STATIC_VERSION (built from the git SHA) so Cloudflare
     treats the asset URL as new and stops serving the old cached copy.
 
-    Issue 226: static/index.html retired. Now verified against tos.html, which
-    also includes /static/_design-tokens.css and is a retained legal page.
+    Issue 226/148: only the retained legal pages remain under /static — each
+    must serve 200 and reference the cache-busted /static/_design-tokens.css.
     """
     from config import settings
 
-    # Use the retained tos.html which also has static CSS refs.
-    resp = client.get("/static/tos.html")
-    assert resp.status_code == 200
-    body = resp.text
     expected_suffix = f"?v={settings.STATIC_VERSION}"
-    assert f"/static/_design-tokens.css{expected_suffix}" in body, (
-        "CSS link must carry the cache-busting query string."
-    )
+    for path in ("/static/tos.html", "/static/privacy.html", "/static/accessibility.html"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert f"/static/_design-tokens.css{expected_suffix}" in resp.text, (
+            f"{path}: CSS link must carry the cache-busting query string."
+        )
 
 
 def test_static_cachebust_middleware_skips_non_html(client):
     """The middleware must NOT rewrite CSS/JS bodies — only text/html
     responses. The CSS content is the source of truth and tests + Layer 0
     inspect it character-for-character."""
-    resp = client.get("/static/hero.css")
+    resp = client.get("/static/_design-tokens.css")
     assert resp.status_code == 200
     # CSS body should be the raw stylesheet content, not rewritten HTML.
     assert "?v=" not in resp.text.split("\n", 1)[0], (
-        "First line of hero.css should not be touched by the HTML rewriter."
+        "First line of _design-tokens.css should not be touched by the HTML rewriter."
     )
 
 
@@ -1407,38 +1253,6 @@ _ISSUE_137_AUTHENTICATED_PAGES = (
     "walkthrough.html",
     "review.html",
 )
-
-
-def test_issue_137_page_shell_css_exists_with_overflow_and_aurora_rules():
-    """Issue 137: the new shared page-shell.css owns the cross-page chrome —
-    aurora backdrop on body.app-page, glassmorphism nav, soft-card upgrade
-    of .card, .table-wrap to scope horizontal scroll to data, and the global
-    overflow-x: clip guard that prevents the page from ever scrolling
-    sideways. These four primitives are the load-bearing pieces; pin them so
-    a future 'let me simplify the CSS' PR can't silently regress the layout."""
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "page-shell.css").read_text()
-    assert "overflow-x: clip" in src, (
-        "page-shell.css must declare overflow-x: clip on html/body to prevent "
-        "horizontal scroll across the app (Issue 137 acceptance)."
-    )
-    assert "body.app-page" in src, (
-        "page-shell.css must scope its rules under body.app-page so pages that "
-        "do not opt in are unaffected."
-    )
-    assert "backdrop-filter" in src, (
-        "page-shell.css must use backdrop-filter for the glassmorphism nav — "
-        "Issue 137 D1 (Linear/Vercel/Stripe aurora pattern)."
-    )
-    assert ".table-wrap" in src, (
-        "page-shell.css must define .table-wrap so wide tables can scroll "
-        "horizontally within their own wrapper instead of the page."
-    )
-    assert "var(--gradient-aurora)" in src, (
-        "page-shell.css must consume the existing --gradient-aurora token "
-        "(no new color literals — extends the Issue 136 system)."
-    )
 
 
 @pytest.mark.skip(
@@ -1526,20 +1340,6 @@ def test_issue_137_page_shell_loaded_via_html_route_and_cachebust_applied(client
 # ── Issue 138 — SEV1 #1/#2: XSS sinks + shared escapeHtml + dead-id fix ────────
 
 
-def test_shared_escape_util_exists_and_is_complete():
-    """SEV1 #1: static/util.js must define a single escapeHtml that escapes all
-    five HTML-significant chars INCLUDING the apostrophe — the prior per-page
-    helpers were inconsistent (analysis.html `_esc` missed `'`; activityPanel.js
-    `safe` was text-node only)."""
-    import pathlib
-
-    src = (pathlib.Path(__file__).parent.parent / "static" / "util.js").read_text()
-    assert "function escapeHtml" in src
-    assert "window.escapeHtml" in src
-    for needle in ("&amp;", "&lt;", "&gt;", "&quot;", "&#39;"):
-        assert needle in src, f"escapeHtml must map {needle!r}"
-
-
 @pytest.mark.skip(
     reason="Issue 226: static/index.html retired — XSS risk eliminated structurally "
     "(Issue 226). The React SPA uses JSX with encoding by default."
@@ -1604,41 +1404,6 @@ def test_analysis_ingest_cta_uses_urlraw_not_dead_id():
         "Dead element id must be gone — it throws and kills the analysis path."
     )
     assert "'https://www.youtube.com/watch?v=' + urlRaw" in src
-
-
-def test_shared_components_layer_exists_and_is_linked():
-    """Issue 147 — the cohesion layer. static/components.css is the canonical
-    shared component set (built only on _design-tokens.css).
-
-    Issue 226: all legacy authenticated HTML templates retired. This test now
-    only checks that components.css itself defines the canonical components.
-    Per-template consumption is enforced in the React SPA (frontend/src/).
-    """
-    import pathlib
-
-    static = pathlib.Path(__file__).parent.parent / "static"
-    comp = (static / "components.css").read_text()
-
-    # Canonical components defined on the shared layer.
-    for cls in (
-        ".eyebrow",
-        ".stat-cell",
-        ".status-pill",
-        ".callout",
-        ".stream-output",
-        ".status-line",
-        ".input",
-        ".btn-danger",
-    ):
-        assert f"{cls}" in comp, (
-            f"components.css must define {cls} — the shared, deduplicated "
-            f"component the per-page copies collapse into (Issue 147)."
-        )
-    # Built on tokens, not hardcoded literals.
-    assert "#fff" not in comp.lower() and "rgba(" not in comp, (
-        "components.css must consume tokens (var(--…)), never hardcoded "
-        "colors — that is the whole point of the cohesion layer."
-    )
 
 
 def test_eyebrow_label_tracking_is_tokenized():

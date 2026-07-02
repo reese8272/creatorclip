@@ -14,10 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from db import get_session
+from flags import require_flag
 from limiter import LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, RetentionCurve, Transcript, Video, VideoMetrics
 
-router = APIRouter(prefix="/creators", tags=["analysis"])
+# Router-level kill switch (Issue 284): every route here queues LLM analysis
+# work, so the llm_generation flag gates the whole router with one dependency.
+router = APIRouter(
+    prefix="/creators",
+    tags=["analysis"],
+    dependencies=[Depends(require_flag("llm_generation"))],
+)
 logger = logging.getLogger(__name__)
 
 # Accepts a bare 11-char ID, youtu.be/ID, or youtube.com/watch?v=ID

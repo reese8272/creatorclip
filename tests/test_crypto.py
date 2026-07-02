@@ -3,7 +3,18 @@
 import pytest
 from cryptography.fernet import Fernet
 
-from crypto import TokenDecryptError, decrypt, encrypt, generate_key
+from crypto import TokenDecryptError, _fernet, decrypt, encrypt, generate_key
+
+
+@pytest.fixture(autouse=True)
+def _clear_fernet_cache():
+    """_fernet() is an lru_cache singleton (Issue 352) — tests here mutate the
+    live settings keys, so the cache must be cleared around every test to keep
+    key changes visible and to avoid leaking a temp key into other modules."""
+    _fernet.cache_clear()
+    yield
+    _fernet.cache_clear()
+
 
 # ── Config / key-shape boundary tests (Issue 340a) ───────────────────────────
 
@@ -53,6 +64,7 @@ def test_previous_key_empty_string_treated_as_no_previous_key(monkeypatch):
 
     # Verify None produces identical behaviour (the '' ≡ None equivalence)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY_PREVIOUS", None)
+    _fernet.cache_clear()
     assert decrypt(ciphertext) == "edge_case_data"
 
 
@@ -95,9 +107,9 @@ def test_token_decrypt_error_message_does_not_contain_ciphertext():
 def test_decrypt_with_previous_key(monkeypatch):
     """Encrypt under key A, then rotate: primary=B, previous=A — decrypt must succeed.
 
-    `_fernet()` reads settings.TOKEN_ENCRYPTION_KEY[_PREVIOUS] each call, so
-    mutating the live settings object is enough — no module reload needed (which
-    would orphan other modules' `from config import settings` references).
+    `_fernet()` is an lru_cache singleton (Issue 352), so a runtime key rotation
+    must call `_fernet.cache_clear()` for the new keys to take effect — mirroring
+    the process restart a real rotation performs.
     """
     from config import settings
 
@@ -112,6 +124,7 @@ def test_decrypt_with_previous_key(monkeypatch):
     # Rotate: primary = B, previous = A
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", key_b)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY_PREVIOUS", key_a)
+    _fernet.cache_clear()
     assert decrypt(ciphertext) == "rotate_me"
 
 
@@ -145,6 +158,22 @@ def test_decrypt_with_wrong_key_raises_token_decrypt_error(monkeypatch):
 
     # Switch to key B with no previous key configured
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", key_b)
+    _fernet.cache_clear()
 
     with pytest.raises(TokenDecryptError):
         decrypt(ciphertext)
+
+
+# ── Fernet singleton behaviour (Issue 352 Batch A) ────────────────────────────
+
+
+def test_fernet_is_cached_singleton():
+    """encrypt()/decrypt() must reuse ONE MultiFernet instance per process."""
+    assert _fernet() is _fernet()
+
+
+def test_fernet_cache_clear_rebuilds_instance():
+    """cache_clear() is the documented hook for key rotation in tests."""
+    first = _fernet()
+    _fernet.cache_clear()
+    assert _fernet() is not first

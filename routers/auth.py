@@ -14,6 +14,7 @@ from auth import SESSION_COOKIE, create_session_token, get_current_creator
 from config import settings
 from db import get_session
 from dna.onboarding import resolve_setup_step
+from flags import flag_enabled
 from limiter import creator_key, limiter
 from models import Creator, YoutubeToken, append_audit
 from routers._schemas import SetupStepOut
@@ -31,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 _STATE_COOKIE = "cc_oauth_state"
 _SECURE = settings.ENV == "production"
+
+
+class SignupsPausedError(Exception):
+    """Raised mid-OAuth when the ``signup`` kill switch is off and the Google
+    identity has no existing Creator row. The callback maps it to a friendly
+    "beta at capacity" login redirect; the uncommitted new-creator transaction
+    is rolled back, so no partial signup is ever persisted. Existing creators
+    are unaffected (Issue 284)."""
 
 
 class LogoutOut(BaseModel):
@@ -98,7 +107,12 @@ async def connect_publishing(
 
 async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creator, bool, dict]:
     """Exchange the OAuth code, upsert the creator, grant the trial + record consent
-    for new creators, and persist tokens — all in one committed transaction.
+    for new creators, and persist tokens — the DB writes in one committed transaction.
+
+    Issue 82b (pool starvation): the Google token/userinfo round-trips run FIRST,
+    before any query on ``session``, so no pooled DB connection is checked out
+    while waiting on Google. All session use is confined to ``_persist_oauth_grant``,
+    which contains no external calls.
 
     Raises on any failure (``httpx`` for the Google calls, ``SQLAlchemyError`` for
     the DB write) so the caller can map it to a clean redirect rather than leak a
@@ -106,7 +120,20 @@ async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creat
     """
     tokens = await exchange_code(code)
     identity = await fetch_creator_identity(tokens["access_token"])
+    creator, is_new = await _persist_oauth_grant(session, tokens, identity)
+    return creator, is_new, identity
 
+
+async def _persist_oauth_grant(
+    session: AsyncSession, tokens: dict, identity: dict
+) -> tuple[Creator, bool]:
+    """Persist the OAuth grant: upsert the creator, gate new signups on the
+    ``signup`` kill switch, grant the trial + record consent for new creators,
+    and store tokens — all in ONE transaction committed at the end, so a
+    ``SignupsPausedError`` raised mid-way rolls the uncommitted Creator row back
+    and a paused signup never persists anything (Issue 284). No external calls
+    happen here — the session's pooled connection is only held for DB work.
+    """
     creator, is_new = await upsert_creator(
         session,
         google_sub=identity["google_sub"],
@@ -114,6 +141,13 @@ async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creat
         channel_id=identity.get("channel_id"),
         channel_title=identity.get("channel_title"),
     )
+
+    # Kill switch (Issue 284): block NEW creator creation only. The commit is
+    # at the end of this function, so raising here rolls the uncommitted
+    # Creator row back. Existing creators (is_new=False) always pass.
+    if is_new and not await flag_enabled("signup"):
+        raise SignupsPausedError
+
     await session.flush()
 
     # Set the per-creator RLS context for the remainder of this transaction.
@@ -131,6 +165,9 @@ async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creat
         text("SELECT set_config('app.creator_id', :cid, true)"),
         {"cid": str(creator.id)},
     )
+    # Also stamp session.info so any transaction this session begins AFTER the
+    # commit below is restamped by the after_begin listener (Issue 82b).
+    session.info["creator_id"] = creator.id
 
     if is_new:
         from datetime import UTC, datetime, timedelta
@@ -192,7 +229,7 @@ async def _exchange_and_persist(session: AsyncSession, code: str) -> tuple[Creat
         expires_in=tokens.get("expires_in", 3600),
     )
     await session.commit()
-    return creator, is_new, identity
+    return creator, is_new
 
 
 @router.get("/callback")
@@ -219,6 +256,12 @@ async def callback(
     except HTTPException:
         # Deliberate 4xx (e.g. Google returned no refresh token) — preserve it.
         raise
+    except SignupsPausedError:
+        # Kill switch (Issue 284): friendly "beta at capacity" redirect with a
+        # stable error code — never a stack trace. No PII in the log line.
+        await session.rollback()
+        logger.info("signup blocked — signup kill switch is off (beta at capacity)")
+        return RedirectResponse(url="/app/login?error=signup_paused", status_code=302)
     except httpx.HTTPStatusError as exc:
         # Google token-exchange / identity fetch failed (reused/expired code,
         # invalid_grant, client-secret or redirect mismatch). Map to a clean
@@ -383,10 +426,11 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
     """
     creator_id = creator.id
 
-    # Revoke Google OAuth refresh token — best effort, don't abort on failure.
-    # Revoking the refresh token also invalidates any access tokens issued from it
-    # (per Google OAuth 2.0 docs); a 400 with invalid_token / token_revoked means
-    # the grant is already gone, which is success for our purposes.
+    # Read + decrypt the refresh token FIRST, then end the transaction so the
+    # pooled connection is NOT held across the Google revoke + R2 purge
+    # round-trips below (Issue 82b). rollback (not commit) because the read may
+    # have failed and left the transaction unusable; nothing needs persisting yet.
+    refresh_token: str | None = None
     try:
         from sqlalchemy import select
 
@@ -398,6 +442,16 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
         ).scalar_one_or_none()
         if token_row:
             refresh_token = decrypt(token_row.refresh_token_encrypted)
+    except Exception as exc:
+        logger.warning("OAuth token read failed for creator %s: %s", creator_id, exc)
+    await session.rollback()
+
+    # Revoke Google OAuth refresh token — best effort, don't abort on failure.
+    # Revoking the refresh token also invalidates any access tokens issued from it
+    # (per Google OAuth 2.0 docs); a 400 with invalid_token / token_revoked means
+    # the grant is already gone, which is success for our purposes.
+    try:
+        if refresh_token is not None:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
                     "https://oauth2.googleapis.com/revoke",
@@ -446,6 +500,13 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
             logger.info("Purged %d event_logs row(s) for creator %s", n, creator_id)
     except Exception as exc:
         logger.warning("event_logs purge failed for creator %s: %s", creator_id, exc)
+
+    # Reacquired-transaction RLS stamp (Issue 82b): the rollback above ended the
+    # transaction, so the deletes below auto-begin a NEW one. The after_begin
+    # listener stamps the `app.creator_id` GUC from session.info — set it
+    # explicitly so per-creator isolation holds even for callers (e.g. a future
+    # inactive-account sweep) whose session was not built by the auth dependency.
+    session.info["creator_id"] = creator_id
 
     # Audit the deletion WITHOUT the creator's PII (Issue 247). `audit_log` is
     # never purged and RLS-exempt, so writing email/channel_id here would let

@@ -78,7 +78,12 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    # Broker durability (Issue 288): AOF everysec = ≤1s loss window on crash
+    # (pinned explicitly; it is Redis's default when AOF is on). --save gives an
+    # RDB floor so BGSAVE-based backups (scripts/backup_redis.sh) have a snapshot.
+    # Queued-task recovery beyond this window = re-enqueue from DB status rows
+    # (docs/RUNBOOKS.md "Redis broker durability & recovery").
+    command: redis-server --appendonly yes --appendfsync everysec --save 300 100
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

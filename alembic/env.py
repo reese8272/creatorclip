@@ -27,6 +27,13 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
     )
     with context.begin_transaction():
+        # Issue 270 parity for OFFLINE (--sql) mode: online mode gets these via
+        # create_async_engine connect_args, which never render into offline SQL.
+        # Offline SQL is a real prod path (applied via psql when the CLI runner is
+        # unavailable — see DECISIONS 2026-06-24 alembic-rollback incident), so the
+        # rendered script must carry its own lock/statement timeouts.
+        context.execute("SET lock_timeout = '5s'")
+        context.execute("SET statement_timeout = '120s'")
         context.run_migrations()
 
 

@@ -19,6 +19,7 @@ from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from config import settings
 from db import get_session
+from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
 from models import (
     Clip,
@@ -242,19 +243,43 @@ async def generate_clips(
     dna_profile = await get_active(session, creator.id)
     dna_brief = dna_profile.brief_text if dna_profile else None
 
-    from clip_engine.ranking import generate_and_rank_clips
+    import db
+    from clip_engine.ranking import load_existing_clips, persist_ranked_clips, score_and_rank
 
-    clips = await generate_and_rank_clips(
-        session=session,
+    # Idempotency guard (Issue 61) runs BEFORE scoring so a repeat call never
+    # burns LLM tokens; persist_ranked_clips re-checks it before inserting.
+    existing = await load_existing_clips(session, video_id, creator.id)
+    if existing:
+        return {"clips": [_clip_response(c) for c in existing]}
+
+    timeline = signals.timeline_jsonb
+
+    # Issue 82b (pool starvation): release the request-scoped DB connection
+    # BEFORE the per-candidate LLM scoring round-trip (30–120 s). The session
+    # is closed here — get_session's context manager makes the later double
+    # close a no-op — and persistence reacquires a fresh session below.
+    await session.close()
+
+    ranked = await score_and_rank(
         video_id=video_id,
         creator_id=creator.id,
-        timeline=signals.timeline_jsonb,
+        timeline=timeline,
         dna_brief=dna_brief,
         transcript_segments=transcript_segments,
         max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
+        ledger_session_factory=db.AsyncSessionLocal,
     )
+    if not ranked:
+        return {"clips": []}
 
-    return {"clips": [_clip_response(c) for c in clips]}
+    async with db.AsyncSessionLocal() as persist_session:
+        # RLS (Issue 79): the after_begin listener stamps the per-transaction
+        # `app.creator_id` GUC from session.info — it MUST be set before the
+        # first query on this reacquired session, or per-creator isolation
+        # silently disappears on the persist path.
+        persist_session.info["creator_id"] = creator.id
+        clips = await persist_ranked_clips(persist_session, video_id, creator.id, ranked)
+        return {"clips": [_clip_response(c) for c in clips]}
 
 
 def _build_personalization_status(scorer: "PreferenceScorer | None") -> PersonalizationStatus:
@@ -396,7 +421,13 @@ async def list_clips(
 # ── Clip-level actions ────────────────────────────────────────────────────────
 
 
-@clips_router.post("/{clip_id}/render", status_code=202, response_model=RenderQueuedOut)
+@clips_router.post(
+    "/{clip_id}/render",
+    status_code=202,
+    response_model=RenderQueuedOut,
+    # Kill switch (Issue 284): 503 when the render_intake flag is off.
+    dependencies=[Depends(require_flag("render_intake"))],
+)
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
 async def render_clip(
@@ -591,7 +622,13 @@ async def clean_preview(
     }
 
 
-@clips_router.post("/{clip_id}/clean", status_code=202, response_model=CleanQueuedOut)
+@clips_router.post(
+    "/{clip_id}/clean",
+    status_code=202,
+    response_model=CleanQueuedOut,
+    # Kill switch (Issue 284): 503 when the render_intake flag is off.
+    dependencies=[Depends(require_flag("render_intake"))],
+)
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
 async def clean_clip(
@@ -774,6 +811,8 @@ async def clip_transcript(
     "/{clip_id}/cuts",
     status_code=202,
     response_model=CutsQueuedOut,
+    # Kill switch (Issue 284): 503 when the render_intake flag is off.
+    dependencies=[Depends(require_flag("render_intake"))],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
@@ -908,6 +947,11 @@ async def ingest_clip(
     same resolved Creator, never from any client-supplied identifier.
     """
     await check_positive_balance(creator.id, session)
+    # Issue 82b: end the read-only transaction so the pooled connection is not
+    # held across the client-paced streaming loop below. Later queries auto-begin
+    # a new transaction; the after_begin listener restamps the RLS GUC from
+    # session.info (set by the API-key auth dependency).
+    await session.commit()
 
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
     chunk_size = 1 * 1024 * 1024  # 1 MB chunks — same as /videos/upload
@@ -940,6 +984,9 @@ async def ingest_clip(
 
         if duration_s is not None:
             await check_balance_for_minutes(creator.id, video_minutes(duration_s), session)
+        # Issue 82b: release the pooled connection before the (possibly
+        # multi-hundred-MB) R2 PUT. The Video insert below reacquires one.
+        await session.commit()
 
         youtube_video_id = _obs_clip_youtube_id()
         key = f"source/{creator.id}/{youtube_video_id}{suffix}"
@@ -1073,7 +1120,12 @@ class TitleSuggestionsOut(BaseModel):
     disclaimer: str
 
 
-@clips_router.post("/{clip_id}/title-suggestions", response_model=TitleSuggestionsOut)
+@clips_router.post(
+    "/{clip_id}/title-suggestions",
+    response_model=TitleSuggestionsOut,
+    # Kill switch (Issue 284): 503 when the llm_generation flag is off.
+    dependencies=[Depends(require_flag("llm_generation"))],
+)
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 @limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
@@ -1176,7 +1228,12 @@ class CaptionHooksOut(BaseModel):
     disclaimer: str
 
 
-@clips_router.post("/{clip_id}/caption-hooks", response_model=CaptionHooksOut)
+@clips_router.post(
+    "/{clip_id}/caption-hooks",
+    response_model=CaptionHooksOut,
+    # Kill switch (Issue 284): 503 when the llm_generation flag is off.
+    dependencies=[Depends(require_flag("llm_generation"))],
+)
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 @limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)
@@ -1273,7 +1330,12 @@ class ClipExplanationOut(BaseModel):
     disclaimer: str
 
 
-@clips_router.post("/{clip_id}/explanation", response_model=ClipExplanationOut)
+@clips_router.post(
+    "/{clip_id}/explanation",
+    response_model=ClipExplanationOut,
+    # Kill switch (Issue 284): 503 when the llm_generation flag is off.
+    dependencies=[Depends(require_flag("llm_generation"))],
+)
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 @limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)

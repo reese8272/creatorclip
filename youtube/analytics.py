@@ -428,11 +428,15 @@ async def check_data_gate(session: AsyncSession, creator_id: uuid.UUID) -> dict:
     # + 0 shorts (or vice-versa) saw "not ready" in onboarding while the build
     # would have succeeded. Same shape as the original Issue 88 bug —
     # surfaced by the targeted display-vs-filter assessment. (Issue 88)
+    # Issue 203: server-side unlock deltas so the frontend never re-derives
+    # thresholds (a config change here must not orphan hardcoded numbers there).
     return {
         "long_form_videos": long_count,
         "shorts": short_count,
         "long_form_ready": long_count >= settings.MIN_VIDEOS_FOR_DNA,
         "shorts_ready": short_count >= settings.MIN_SHORTS_FOR_DNA,
+        "remaining_long_form": max(0, settings.MIN_VIDEOS_FOR_DNA - long_count),
+        "remaining_shorts": max(0, settings.MIN_SHORTS_FOR_DNA - short_count),
         "ready": (
             long_count >= settings.MIN_VIDEOS_FOR_DNA or short_count >= settings.MIN_SHORTS_FOR_DNA
         ),

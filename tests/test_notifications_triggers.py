@@ -65,8 +65,19 @@ class TestClipsReadyTrigger:
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
             patch("worker.progress.aemit", new_callable=AsyncMock),
+            # Issue 82b split: session-free scoring + reacquired-session persistence.
             patch(
-                "clip_engine.ranking.generate_and_rank_clips",
+                "clip_engine.ranking.load_existing_clips",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "clip_engine.ranking.score_and_rank",
+                new_callable=AsyncMock,
+                return_value=[{"rank": 1}, {"rank": 2}],
+            ),
+            patch(
+                "clip_engine.ranking.persist_ranked_clips",
                 new_callable=AsyncMock,
                 return_value=mock_clips,
             ),

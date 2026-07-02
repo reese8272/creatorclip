@@ -95,6 +95,19 @@ class RenderStatus(enum.Enum):
     failed = "failed"
 
 
+class SummaryStatus(enum.Enum):
+    """Lifecycle of a stream-VOD recap Summary (Issue 190).
+
+    ``pending`` — row created; segment selection not yet run/persisted.
+    ``ready``   — segments selected and stored; render tracked by render_status.
+    ``failed``  — selection failed permanently (e.g. no usable candidates).
+    """
+
+    pending = "pending"
+    ready = "ready"
+    failed = "failed"
+
+
 class PublishStatus(enum.Enum):
     """Lifecycle of a YouTube publish attempt (Issue 195 / 196).
 
@@ -785,6 +798,56 @@ class ClipPublication(Base):
     )
 
 
+class Summary(Base):
+    """Stream-VOD recap artifact spanning many (start,end) segments (Issue 190).
+
+    A dedicated table rather than overloading ``clips``: a montage's many
+    segments do not fit a single start_s/end_s row. ``segments`` is a JSONB
+    list; each element carries the exact shape the recap renderer (Issue 191)
+    consumes verbatim::
+
+        {"start_s": float, "end_s": float, "score": float,
+         "principle": str, "rationale": str}
+
+    ``principle`` is an exact named principle from docs/CLIPPING_PRINCIPLES.md
+    (same contract as clips). ``dna_version`` records which DNA the selection
+    was scored against. Per-creator isolation via the ``tenant_isolation`` RLS
+    policy on ``creator_id`` (migration 0041); FK cascade purges rows on
+    account deletion (right-to-erasure).
+    """
+
+    __tablename__ = "summaries"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("videos.id", ondelete="CASCADE"), nullable=False
+    )
+    target_duration_s: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    segments: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    dna_version: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    render_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    render_status: Mapped[RenderStatus] = mapped_column(
+        sa.Enum(RenderStatus, name="render_status_enum"),
+        nullable=False,
+        default=RenderStatus.pending,
+    )
+    status: Mapped[SummaryStatus] = mapped_column(
+        sa.Enum(SummaryStatus, name="summary_status_enum"),
+        nullable=False,
+        default=SummaryStatus.pending,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
 # ── Preference model ──────────────────────────────────────────────────────────
 
 
@@ -798,6 +861,9 @@ class PreferenceModel(Base):
     version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     weights_blob: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
     feature_schema_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Per-retrain offline eval (Issue 202): {"ndcg_at_5","map_at_5","n_eval","computed_at"}.
+    # Best-effort — NULL when the creator lacks enough held-out labels to evaluate.
+    metrics_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -903,6 +969,31 @@ class AuditLog(Base):
     # (Issue 247, GDPR Art. 17) — muddies the "no PII payload retained" invariant.
     before_jsonb: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     after_jsonb: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+
+
+class FeatureFlag(Base):
+    """Runtime kill switches / feature flags (Issue 284).
+
+    One row per flag key (e.g. ``llm_generation``). A row OVERRIDES the env
+    default from config (``FLAG_<KEY>_ENABLED``); a missing row falls back to
+    that env default. Written ONLY via ``flags.set_flag()`` so every flip is
+    audited (``flag_flipped`` event with actor + reason). No RLS: this is a
+    global operations table, not tenant data — it carries no creator ids, no
+    YouTube-origin data, and no PII.
+    """
+
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(sa.String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    # Operator identity (e.g. shell user running scripts/flags.py) — audit trail.
+    updated_by: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    reason: Mapped[str | None] = mapped_column(sa.String(500), nullable=True)
 
 
 class EventLog(Base):

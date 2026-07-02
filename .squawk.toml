@@ -1,0 +1,18 @@
+# Squawk (migration lint) config — consumed by the "Migration lint" CI job.
+#
+# The Issue 270 DEC scopes this gate to UNSAFE operations (ACCESS-EXCLUSIVE ALTERs
+# without timeouts, concurrent-index-in-transaction, NOT VALID on new constraints).
+# The two exclusions below are STYLE rules that contradict the existing schema:
+#
+# - prefer-bigint-over-int: the schema standard is INTEGER (SQLAlchemy `Integer`)
+#   for bounded values; none of the flagged columns can approach 2^31.
+# - prefer-text-field: flags VARCHAR(n) even on CREATE TABLE, where the
+#   ACCESS-EXCLUSIVE resize concern doesn't apply (it guards later ALTERs).
+#   The schema standard is `String(n)` → VARCHAR.
+#
+# require-timeout-settings stays ACTIVE: alembic/env.py emits SET lock_timeout /
+# statement_timeout in offline (--sql) rendering so every script satisfies it.
+excluded_rules = [
+    "prefer-bigint-over-int",
+    "prefer-text-field",
+]

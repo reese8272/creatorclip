@@ -125,7 +125,7 @@ async def _cleanup_creator(session: AsyncSession, creator_id: uuid.UUID) -> None
 
 @pytest.mark.asyncio
 async def test_generate_and_rank_delete_preserves_done_and_running(db_session):
-    """The DELETE in generate_and_rank_clips must not touch done or running rows."""
+    """The DELETE in the clip-generation path must not touch done or running rows."""
     creator = await _seed_creator(db_session)
     video = await _seed_video(db_session, creator_id=creator.id)
 
@@ -163,7 +163,7 @@ async def test_generate_and_rank_delete_preserves_done_and_running(db_session):
     )
 
     try:
-        # Execute the same DELETE generate_and_rank_clips now uses.
+        # Execute the same DELETE the clip-generation path now uses.
         await db_session.execute(
             delete(Clip).where(
                 Clip.video_id == video.id,

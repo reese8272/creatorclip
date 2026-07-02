@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Literal
 
 from pydantic import ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -342,6 +343,14 @@ class Settings(BaseSettings):
     # generated candidates (≤ CLIPS_PER_VIDEO_DEFAULT). Set >0 to render only
     # the top-N highest-fit clips immediately and leave the rest on demand.
     AUTO_RENDER_TOP_N: int = 0
+    # ── Stream-VOD recap (Issue 190) ───────────────────────────────────────────
+    # Target total-duration bounds (seconds) for a recap built from an uploaded
+    # past-stream VOD. MAX is the hard budget the segment selector packs
+    # against (clip_engine/summary_select.py); MIN documents the floor below
+    # which a recap is not worth rendering. Default 5-10 minutes per the
+    # competitive research (docs/COMPETITIVE_RESEARCH.md).
+    RECAP_TARGET_DURATION_MIN_S: int = 300
+    RECAP_TARGET_DURATION_MAX_S: int = 600
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
     # YouTube raised the Shorts maximum to 180s in October 2024
@@ -387,8 +396,18 @@ class Settings(BaseSettings):
     # 5000 is the industry-standard ceiling for a per-user LightGBM ranker
     # at 30d half-life (Spotify/Netflix sklearn pipelines). (Issue 102)
     PREFERENCE_MAX_TRAINING_LABELS: int = 5000
+    # Warn-only ratchet on the per-retrain offline eval (Issue 202): if the new
+    # model version's held-out NDCG@5 drops by MORE than this vs the previous
+    # version's stored metric, a warning-severity event is logged. Never blocks
+    # the retrain — small NDCG deltas on few labels are noise, so alert only.
+    PREFERENCE_NDCG_REGRESSION_THRESHOLD: float = 0.05
     LLM_TIMEOUT_SECONDS: int = 120
-    ENV: str = "development"
+    # Constrained to the three deploy modes actually branched on. Every production
+    # security boundary (prod-secret fail-fast, /docs disable, HSTS, R2-required,
+    # verbose-logging prod lock) compares against the exact literal "production",
+    # so a deploy-time typo ("prod", "Production") must fail at boot, not silently
+    # run a production container with dev-mode hardening. (Issue 352 Batch A)
+    ENV: Literal["development", "staging", "production"] = "development"
     YTDLP_ENABLED: bool = False
     YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
     # Per-creator/day sub-budget charged ONLY to the non-interactive Beat
@@ -625,6 +644,26 @@ class Settings(BaseSettings):
     # in-process log shipping over the syslog-drain approach.
     OTEL_LOGS_ENABLED: bool = False
 
+    # ── Feature flags / kill switches (Issue 284) ──────────────────────────────
+    # Env DEFAULTS for the runtime kill switches. Resolution order per flag:
+    # feature_flags DB row (flip via scripts/flags.py, no deploy) → this env
+    # default → hard default True (subsystem on). The flag reader FAILS OPEN to
+    # these values when the DB is unreachable — the flag system being down must
+    # never take a healthy subsystem down with it. See flags.py.
+    # Disable LLM brief/title/thumbnail/insights generation endpoints (Anthropic
+    # outage or runaway-cost emergency).
+    FLAG_LLM_GENERATION_ENABLED: bool = True
+    # Disable the publish_to_youtube Celery task (YouTube API incident / quota
+    # emergency / compliance pause). Blocked publishes are marked failed, not
+    # silently dropped.
+    FLAG_YOUTUBE_PUBLISH_ENABLED: bool = True
+    # Disable the render/clean/cuts queue endpoints (bad render path or ffmpeg
+    # cost emergency).
+    FLAG_RENDER_INTAKE_ENABLED: bool = True
+    # Disable NEW creator signups (beta at capacity / incident). Existing
+    # creators still log in; only new Creator rows are blocked.
+    FLAG_SIGNUP_ENABLED: bool = True
+
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:
     #   'console' — renders + logs; no external call (default in dev / CI)
@@ -678,6 +717,23 @@ class Settings(BaseSettings):
             raise ValueError(f"PREFERENCE_WEIGHT_CAP must be in (0, 1] (got {v})")
         return v
 
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def _jwt_secret_min_length(cls, v: str) -> str:
+        """HS256 requires a key at least as long as the hash output (RFC 7518 §3.2).
+
+        256 bits = 32 bytes. PyJWT does not enforce this on encode(), and a short
+        secret is practically brute-forceable — an attacker who recovers it can
+        forge session cookies for any creator_id (full cross-tenant impersonation).
+        Fail fast at boot instead. (Issue 352 Batch A)
+        """
+        if len(v.encode()) < 32:
+            raise ValueError(
+                "JWT_SECRET_KEY must be at least 32 bytes (256 bits) for HS256; "
+                f"got {len(v.encode())} bytes. Generate one with: openssl rand -base64 32"
+            )
+        return v
+
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":
         """Fail fast when Resend is selected but the API key is absent.
@@ -691,6 +747,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "NOTIFY_BACKEND='resend' requires RESEND_API_KEY to be set. "
                 "Generate a key at https://resend.com and add it to .env."
+            )
+        # EMAIL_FROM defaults to "" — with the resend backend that posts
+        # `"from": ""`, Resend 422s, and the worker's broad except marks every
+        # transactional email 'failed' with no startup signal. Fail fast instead.
+        # (2026-07-01 assessment, notify.md SEV2; Issue 352 Batch A)
+        if self.NOTIFY_BACKEND == "resend" and not self.EMAIL_FROM:
+            raise ValueError(
+                "NOTIFY_BACKEND='resend' requires EMAIL_FROM to be set "
+                "(e.g. 'AutoClip <notify@yourdomain.com>')."
             )
         return self
 

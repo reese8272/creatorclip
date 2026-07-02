@@ -24,18 +24,51 @@ async def _main() -> int:
     parser.add_argument(
         "--train-frac", type=float, default=0.7, help="chronological train fraction"
     )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="grid-search DECAY_HALF_LIFE_DAYS on held-out NDCG@k instead of the "
+        "3-ranking comparison (Issue 200); read-only, does NOT change the config",
+    )
     args = parser.parse_args()
 
     from sqlalchemy import select
 
     from db import get_sessionmaker  # type: ignore[import-untyped]
     from models import Creator
-    from tests.eval.efficacy import RANKINGS, evaluate_creator, pool_metrics
+    from preference.efficacy import (
+        RANKINGS,
+        evaluate_creator,
+        load_labeled_clips,
+        pool_metrics,
+        select_best_half_life,
+        sweep_half_life,
+    )
 
     sessionmaker = get_sessionmaker()
     per_creator = []
     async with sessionmaker() as session:
         creator_ids = (await session.execute(select(Creator.id))).scalars().all()
+        if args.sweep:
+            all_clips = [await load_labeled_clips(session, cid) for cid in creator_ids]
+            rows = sweep_half_life(
+                [c for c in all_clips if c], k=args.k, train_frac=args.train_frac
+            )
+            print(f"\nHalf-life sweep — pooled NDCG@{args.k}, point [95% CI]:")
+            for row in rows:
+                print(
+                    f"  H={row.half_life_days:>5.1f}d  {row.ndcg_at_k:.3f}  "
+                    f"[{row.ci_low:.3f}, {row.ci_high:.3f}]  (n_creators={row.n_creators})"
+                )
+            if any(r.n_creators for r in rows):
+                best = select_best_half_life(rows)
+                print(
+                    f"\nBest half-life: {best.half_life_days:.1f}d (ties break larger). "
+                    "Change DECAY_HALF_LIFE_DAYS only if it clears the incumbent's CI."
+                )
+            else:
+                print("\nNo creators with enough chronologically-splittable labeled clips yet.")
+            return 0
         for cid in creator_ids:
             cm = await evaluate_creator(session, cid, k=args.k, train_frac=args.train_frac)
             if cm is not None:

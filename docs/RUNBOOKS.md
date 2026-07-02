@@ -649,3 +649,45 @@ Run against a throwaway target, record the result + measured RTO:
 - PostgreSQL backup & restore: https://www.postgresql.org/docs/current/backup.html
 - Cloudflare R2 Object Lock: https://developers.cloudflare.com/r2/buckets/object-lock/
 - 3-2-1 backup rule (CISA): https://www.cisa.gov/
+
+---
+
+## Redis broker durability & recovery (Issue 288)
+
+Prod Redis (`docker-compose.prod.yml`) runs `--appendonly yes --appendfsync everysec
+--save 300 100` on the named volume `redis_data`. Celery is at-least-once
+(`task_acks_late=True`, `task_reject_on_worker_lost=True`, `visibility_timeout=3600`).
+Staging Redis is **intentionally ephemeral** (`--save '' --appendonly no`) — do not "fix" it.
+
+**Loss windows (know these before an incident):**
+
+| Event | What's lost |
+|---|---|
+| Redis crash / container restart | ≤1s of enqueues (AOF everysec fsync window) |
+| Forcible worker kill (SIGKILL) | Nothing — unacked tasks are redelivered after the 3600s `visibility_timeout` elapses (i.e. up to an hour of apparent stall, not loss) |
+| `redis_data` volume destroyed | Entire queue + Beat schedule state. Recover via re-enqueue (below); the nightly `scripts/backup_redis.sh` snapshot is belt-and-suspenders only — it is minutes-to-hours stale by nature |
+
+**Recovery — the DB is the source of truth, not the broker.** Pipeline tasks are idempotent
+and their progress lives in DB status rows. After any queue loss:
+
+1. Restart the stack: `docker compose -f docker-compose.prod.yml up -d redis worker beat`.
+2. Re-enqueue stuck work from DB state — videos parked in a non-terminal status with no
+   running task: use `scripts/clip_pipeline_state.py` to list them, then re-queue via the
+   normal API/queue endpoints (idempotency markers make re-runs safe).
+3. Beat (RedBeat) rebuilds its schedule from code on startup — see "Beat HA — RedBeat
+   Recovery" above; periodic sweeps self-heal on their next tick.
+
+**Backup schedule (operator):** add alongside the PG cron:
+```
+27 3 * * *  cd /opt/autoclip && ./scripts/backup_redis.sh >> /var/log/creatorclip-backup.log 2>&1
+```
+Requires the same `BACKUP_*`/R2 env as `backup_pg.sh` (one-time setup step 2 above).
+
+**Restart drill (do once after applying the compose change, record the result):** with the
+worker paused (`docker compose stop worker`), enqueue N test tasks →
+`docker compose restart redis` → `docker compose start worker` → assert all N execute.
+Result + date: ________
+
+Sources: https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/ ·
+https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/redis.html
+(accessed 2026-07-02)

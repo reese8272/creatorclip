@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import uuid
+from collections.abc import Callable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,36 +105,44 @@ async def rerank_with_preference(
     return clips
 
 
-async def generate_and_rank_clips(
+async def load_existing_clips(
     session: AsyncSession,
+    video_id: uuid.UUID,
+    creator_id: uuid.UUID,
+) -> list[Clip]:
+    """Return this creator's already-persisted clips for ``video_id`` in rank order.
+
+    The Issue-61 idempotency guard: callers check this BEFORE spending LLM tokens
+    on scoring, and ``persist_ranked_clips`` re-checks it before inserting so a
+    Celery redelivery / concurrent request can never delete+reinsert (which would
+    cascade-delete Clip.feedback / Clip.outcome). Per-creator isolation: the
+    creator_id predicate backs the RLS policy rather than replacing it.
+    """
+    result = await session.execute(
+        select(Clip)
+        .where(Clip.video_id == video_id, Clip.creator_id == creator_id)
+        .order_by(Clip.rank)
+    )
+    return list(result.scalars().all())
+
+
+async def score_and_rank(
     video_id: uuid.UUID,
     creator_id: uuid.UUID,
     timeline: dict,
     dna_brief: str | None = None,
     transcript_segments: list | None = None,
     max_candidates: int = 8,
-) -> list[Clip]:
-    """
-    Extract candidates → score → rank → persist to the clips table.
+    ledger_session_factory: Callable[[], AsyncSession] | None = None,
+) -> list[dict]:
+    """Extract candidates → score (per-candidate LLM call) → rank. Session-free.
 
-    Idempotent: if clips already exist for this video the call is a no-op and the
-    existing clips are returned in rank order. The pipeline generates clips exactly
-    once; a Celery redelivery (at-least-once) must NOT delete+reinsert, because
-    Clip.feedback / Clip.outcome cascade-delete and that would destroy the creator's
-    feedback labels and published-clip outcomes (Issue 61).
-    Returns persisted Clip ORM objects in rank order.
+    Split out of the old ``generate_and_rank_clips`` (Issue 82b): the LLM round-trip
+    here can take 30–120 s, so no DB session may be held across it — callers release
+    their session first and persist the returned ranking via ``persist_ranked_clips``
+    on a freshly acquired session. ``ledger_session_factory`` lets the scoring layer
+    open a short-lived session AFTER the LLM call for the usage-ledger write.
     """
-    existing = (
-        (await session.execute(select(Clip).where(Clip.video_id == video_id).order_by(Clip.rank)))
-        .scalars()
-        .all()
-    )
-    if existing:
-        logger.info(
-            "Clips already exist for video %s (%d) — skipping regeneration", video_id, len(existing)
-        )
-        return list(existing)
-
     # Candidate extraction is CPU-bound (numpy array build + scipy find_peaks over
     # duration/0.5 samples). Offload it so it can't stall the API event loop and the
     # other concurrent requests on this worker. (Issue C)
@@ -149,11 +158,42 @@ async def generate_and_rank_clips(
         return []
 
     scored = await score_candidates(
-        candidates, timeline, dna_brief, transcript_segments, creator_id=creator_id, session=session
+        candidates,
+        timeline,
+        dna_brief,
+        transcript_segments,
+        creator_id=creator_id,
+        ledger_session_factory=ledger_session_factory,
     )
-    ranked = rank_candidates(scored)
+    return rank_candidates(scored)
 
-    # The top-of-function early-return already short-circuits when ANY clip exists
+
+async def persist_ranked_clips(
+    session: AsyncSession,
+    video_id: uuid.UUID,
+    creator_id: uuid.UUID,
+    ranked: list[dict],
+) -> list[Clip]:
+    """Persist a pre-computed ranking to the clips table. DB-only — no LLM calls.
+
+    Idempotent (Issue 61): if clips already exist for this video the call is a
+    no-op and the existing clips are returned in rank order. The pipeline
+    generates clips exactly once; a Celery redelivery (at-least-once) must NOT
+    delete+reinsert, because Clip.feedback / Clip.outcome cascade-delete and that
+    would destroy the creator's feedback labels and published-clip outcomes.
+    Returns persisted Clip ORM objects in rank order.
+    """
+    existing = await load_existing_clips(session, video_id, creator_id)
+    if existing:
+        logger.info(
+            "Clips already exist for video %s (%d) — skipping regeneration", video_id, len(existing)
+        )
+        return existing
+
+    if not ranked:
+        return []
+
+    # The existing-clips early-return above short-circuits when ANY clip exists
     # for this video (Issue 61 idempotency). Local Issue 46's selective-DELETE
     # branch was unreachable under that guard and is dropped during the merge —
     # the stronger guarantee here is "never delete+reinsert", which makes the

@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import httpx
@@ -229,13 +230,17 @@ async def score_candidates(
     dna_brief: str | None = None,
     transcript_segments: list | None = None,
     creator_id: uuid.UUID | None = None,
-    session: AsyncSession | None = None,
+    ledger_session_factory: Callable[[], AsyncSession] | None = None,
 ) -> list[dict]:
     """
     Score and annotate candidates in-place. Returns the enriched list.
 
     Cold-start (no dna_brief): signal features only, principle = "Retention curve is ground truth".
     DNA path: single batched Claude call with DNA brief as cached prefix.
+
+    ``ledger_session_factory`` (Issue 82b): the usage-ledger write opens its own
+    short-lived session AFTER the LLM round-trip, so callers never hold a pooled
+    DB connection across the 30–120 s Claude call.
     """
     if not candidates:
         return []
@@ -342,7 +347,7 @@ async def score_candidates(
     record_llm_metric(settings.ANTHROPIC_MODEL_SCORING, response.usage)
     warn_if_truncated(settings.ANTHROPIC_MODEL_SCORING, getattr(response, "stop_reason", None))
 
-    if creator_id is not None and session is not None:
+    if creator_id is not None and ledger_session_factory is not None:
         try:
             cost = _estimate_cost_usd(
                 _tokens_in,
@@ -358,14 +363,21 @@ async def score_candidates(
                 # otherwise fall back to the standard 1.25× for any residual writes.
                 cache_write_multiplier=2.0 if prefix_clears_floor else None,
             )
-            await increment_usage(
-                session,
-                creator_id,
-                datetime.now(UTC).strftime("%Y-%m"),
-                _tokens_in,
-                _tokens_out,
-                cost,
-            )
+            # Short-lived session acquired AFTER the LLM round-trip (Issue 82b) so no
+            # pooled connection was held during it. Stamping creator_id BEFORE the
+            # first query drives the after_begin RLS GUC for app-role factories;
+            # admin factories (BYPASSRLS) simply ignore the resulting GUC.
+            async with ledger_session_factory() as ledger_session:
+                ledger_session.info["creator_id"] = creator_id
+                await increment_usage(
+                    ledger_session,
+                    creator_id,
+                    datetime.now(UTC).strftime("%Y-%m"),
+                    _tokens_in,
+                    _tokens_out,
+                    cost,
+                )
+                await ledger_session.commit()
         except Exception as _exc:  # noqa: BLE001 — best-effort; never block scoring
             logger.warning("clip_scoring usage ledger write failed: %s", _exc)
 

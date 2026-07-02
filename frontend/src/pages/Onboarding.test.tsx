@@ -30,9 +30,12 @@ function mockFetch(opts: { identity?: unknown; ready?: boolean } = {}) {
     if (url.endsWith('/data-gate'))
       return json({
         long_form_videos: opts.ready ? 12 : 1,
-        shorts: opts.ready ? 6 : 0,
+        shorts: opts.ready ? 6 : 3,
         long_form_ready: !!opts.ready,
         shorts_ready: !!opts.ready,
+        // Server-computed unlock deltas (Issue 203) — thresholds 10 long / 5 short.
+        remaining_long_form: opts.ready ? 0 : 9,
+        remaining_shorts: opts.ready ? 0 : 2,
         ready: !!opts.ready,
       })
     if (url.endsWith('/creators/me/dna')) return json({ profile: null })
@@ -69,6 +72,33 @@ describe('Onboarding', () => {
     expect(await screen.findByText(/Connected as Reese TV/)).toBeInTheDocument()
     expect(screen.getByText(/does not promise virality/i)).toBeInTheDocument()
     expect(await screen.findByText('Ready to build your Creator DNA.')).toBeInTheDocument()
+  })
+
+  // Issue 203: per-kind unlock deltas are server-computed and rendered verbatim,
+  // and the not-ready state offers an honest clip-now path instead of a waiting room.
+  it('renders per-kind unlock deltas and a clip-now CTA when the gate is not ready', async () => {
+    vi.stubGlobal('fetch', mockFetch({ ready: false }))
+    renderOnboarding()
+    expect(
+      await screen.findByText(/9 more published long-form videos to unlock Creator DNA/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/2 more published Shorts to unlock Creator DNA/),
+    ).toBeInTheDocument()
+    // Honest small-catalog copy: clipping works now, personalisation comes later.
+    expect(
+      screen.getByText(/clip videos right now with signal-based scoring/i),
+    ).toBeInTheDocument()
+    const cta = screen.getByRole('link', { name: /Clip a video now/ })
+    expect(cta).toHaveAttribute('href', '/app/dashboard')
+  })
+
+  it('drops the deltas and the clip-now CTA once the gate is ready', async () => {
+    vi.stubGlobal('fetch', mockFetch({ ready: true }))
+    renderOnboarding()
+    expect(await screen.findByText('Ready to build your Creator DNA.')).toBeInTheDocument()
+    expect(screen.queryByText(/to unlock Creator DNA/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Clip a video now/ })).not.toBeInTheDocument()
   })
 
   // Escape hatch: a connected creator can skip setup and go straight to the

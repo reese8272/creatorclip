@@ -131,11 +131,17 @@ async def checkout(
     request: Request,
     body: CheckoutRequest,
     creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
 ) -> CheckoutOut:
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Billing not configured")
     if body.pack_id not in PURCHASABLE_PACKS:
         raise HTTPException(status_code=400, detail="Invalid pack_id")
+    # Issue 82b: get_current_creator's lookup began a transaction on this request's
+    # session (dependency caching hands us the same instance), which would pin a
+    # pooled connection across the 300–800 ms Stripe round-trip. Commit ends the
+    # read-only transaction and returns the connection; no DB use follows.
+    await session.commit()
     try:
         # Wave-3 Fix C: Stripe's StripeClient is sync (urllib3 under the hood);
         # calling it directly inside this async route blocks the FastAPI event

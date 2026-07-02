@@ -319,28 +319,3 @@ def test_issue_126_analysis_html_carries_pre_action_low_balance_warning():
         "analysis page must surface a low-balance warning above the Analyze button"
     )
     assert "Add minutes" in src
-
-
-def test_issue_126_auth_js_caches_balance_and_emits_billing_ready():
-    src = (pathlib.Path(__file__).parent.parent / "static" / "auth.js").read_text()
-    assert "window.__BALANCE__" in src, (
-        "auth.js must cache the full balance payload so every page can read it without re-fetching"
-    )
-    assert "billing:ready" in src, (
-        "auth.js must emit billing:ready so listeners (banner, chip, warnings) "
-        "can render synchronously"
-    )
-    assert "is-low" in src, (
-        "auth.js must toggle the .is-low class on #nav-balance for the amber chip"
-    )
-
-
-def test_issue_126_page_shell_css_has_low_chip_and_trial_banner_styles():
-    src = (pathlib.Path(__file__).parent.parent / "static" / "page-shell.css").read_text()
-    assert ".nav-balance.is-low" in src, (
-        "page-shell.css must define the amber low-balance chip state"
-    )
-    assert ".trial-banner" in src, "page-shell.css must define .trial-banner styling"
-    assert ".low-balance-warning" in src, (
-        "page-shell.css must define the .low-balance-warning utility class"
-    )

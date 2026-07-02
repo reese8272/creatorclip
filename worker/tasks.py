@@ -24,6 +24,7 @@ from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 
 import db
+from flags import flag_enabled
 from models import (
     ChatConversation,
     ChatMessage,
@@ -463,6 +464,36 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
 
     cid = uuid.UUID(clip_id)
 
+    # Kill switch (Issue 284): when youtube_publish is off, record a clean
+    # FAILED publication row (never a silent drop) and stop before any quota
+    # or upload work. YouTubeUploadError is terminal in the task wrapper — the
+    # blocked publish is surfaced, not retried into a paused subsystem.
+    if not await flag_enabled("youtube_publish", session_factory=db.AdminSessionLocal):
+        async with db.AdminSessionLocal() as session:
+            existing = (
+                await session.execute(
+                    select(ClipPublication).where(ClipPublication.task_id == task_id)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.status = PublishStatus.failed
+                existing.error = "youtube_publish_disabled"
+            else:
+                clip = await session.get(Clip, cid)
+                if clip is not None:
+                    session.add(
+                        ClipPublication(
+                            clip_id=cid,
+                            creator_id=clip.creator_id,
+                            task_id=task_id,
+                            status=PublishStatus.failed,
+                            error="youtube_publish_disabled",
+                        )
+                    )
+            await session.commit()
+        logger.warning("publish blocked for clip %s — youtube_publish kill switch is off", clip_id)
+        raise YouTubeUploadError(503, "youtube_publish_disabled: publishing is paused by operators")
+
     async with db.AdminSessionLocal() as session:
         # Idempotency: a redelivery of the same task id that already succeeded is
         # a no-op — never a second upload (at-least-once → effectively once).
@@ -843,13 +874,104 @@ async def _retrain_preference_async(creator_id: str) -> None:
                     logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
                     return
             try:
-                await build_and_save(session, cid)
+                scorer = await build_and_save(session, cid)
             except IntegrityError:
                 # Concurrent retrain won the version race (hardened in Issue 71).
                 await session.rollback()
                 logger.info("retrain_preference: version race for creator %s, skip", cid)
+            else:
+                if scorer is not None:
+                    # Best-effort per-retrain offline eval (Issue 202) — never
+                    # fails the retrain; the model version is already committed.
+                    await _emit_preference_metrics(session, cid)
         finally:
             await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+
+
+async def _emit_preference_metrics(session: Any, creator_id: uuid.UUID) -> None:
+    """Best-effort offline eval of the just-saved preference-model version (Issue 202).
+
+    Runs the efficacy harness (chronological held-out split) for this creator, stores
+    {"ndcg_at_5", "map_at_5", "n_eval", "computed_at"} on the newest PreferenceModel row,
+    and warn-ratchets against the previous version: a held-out NDCG@5 drop greater than
+    PREFERENCE_NDCG_REGRESSION_THRESHOLD emits a warning-severity event. WARN-only by
+    design — an eval failure or a regression NEVER fails or rolls back the retrain.
+    """
+    from sqlalchemy import select
+
+    from config import settings
+    from preference.efficacy import DEFAULT_K, evaluate_creator
+
+    try:
+        cm = await evaluate_creator(session, creator_id, k=DEFAULT_K)
+        if cm is None:
+            logger.info(
+                "preference eval skipped for creator %s (insufficient held-out labels)",
+                creator_id,
+            )
+            return
+        rows = (
+            (
+                await session.execute(
+                    select(PreferenceModel)
+                    .where(PreferenceModel.creator_id == creator_id)
+                    .order_by(PreferenceModel.version.desc())
+                    .limit(2)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return
+        newest = rows[0]
+        previous = rows[1] if len(rows) > 1 else None
+        ndcg = float(cm.ndcg["dna_preference"])
+        newest.metrics_jsonb = {
+            "ndcg_at_5": ndcg,
+            "map_at_5": float(cm.map["dna_preference"]),
+            "n_eval": cm.n_eval,
+            "computed_at": datetime.now(UTC).isoformat(),
+        }
+        await session.commit()
+        log_event(
+            "preference_metrics_computed",
+            creator_id=str(creator_id),
+            version=newest.version,
+            ndcg_at_5=round(ndcg, 4),
+            n_eval=cm.n_eval,
+        )
+        prev_ndcg = (previous.metrics_jsonb or {}).get("ndcg_at_5") if previous else None
+        if (
+            prev_ndcg is not None
+            and (float(prev_ndcg) - ndcg) > settings.PREFERENCE_NDCG_REGRESSION_THRESHOLD
+        ):
+            log_event(
+                "preference_metrics_regression",
+                severity="warning",
+                creator_id=str(creator_id),
+                version=newest.version,
+                ndcg_at_5=round(ndcg, 4),
+                previous_ndcg_at_5=round(float(prev_ndcg), 4),
+                threshold=settings.PREFERENCE_NDCG_REGRESSION_THRESHOLD,
+            )
+            logger.warning(
+                "preference model v%d for creator %s regressed held-out NDCG@5 "
+                "(%.4f -> %.4f, threshold %.2f) — warn-only, retrain kept",
+                newest.version,
+                creator_id,
+                float(prev_ndcg),
+                ndcg,
+                settings.PREFERENCE_NDCG_REGRESSION_THRESHOLD,
+            )
+    except Exception:
+        with contextlib.suppress(Exception):
+            await session.rollback()
+        logger.warning(
+            "preference metrics emission failed for creator %s — retrain unaffected",
+            creator_id,
+            exc_info=True,
+        )
 
 
 async def _creator_id_for_video(video_id: str) -> str | None:
@@ -2163,7 +2285,7 @@ async def _generate_clips_async(video_id: str) -> None:
     """
     from sqlalchemy import select
 
-    from clip_engine.ranking import generate_and_rank_clips
+    from clip_engine.ranking import load_existing_clips, persist_ranked_clips, score_and_rank
     from config import settings
     from dna.profile import get_active
     from models import Signals, Transcript
@@ -2200,9 +2322,9 @@ async def _generate_clips_async(video_id: str) -> None:
             clip_creator_name = (_creator_row.channel_title if _creator_row else None) or "there"
 
             # Idempotency guard (Issue 46): a late retry on a video whose clips are
-            # already rendered is a no-op. Without this, generate_and_rank_clips would
-            # re-extract candidates and insert duplicate pending rows alongside the
-            # already-done clips.
+            # already rendered is a no-op. Without this, the score-and-persist path
+            # would re-extract candidates and insert duplicate pending rows alongside
+            # the already-done clips.
             existing_done = await session.scalar(
                 select(Clip.id)
                 .where(Clip.video_id == video_uuid, Clip.render_status == RenderStatus.done)
@@ -2225,6 +2347,7 @@ async def _generate_clips_async(video_id: str) -> None:
             signals = await session.get(Signals, video_uuid)
             if not signals:
                 raise ValueError(f"Signals not available for video {video_id}")
+            timeline = signals.timeline_jsonb
 
             transcript = await session.get(Transcript, video_uuid)
             transcript_segments = (
@@ -2234,16 +2357,33 @@ async def _generate_clips_async(video_id: str) -> None:
             dna_profile = await get_active(session, video.creator_id)
             dna_brief = dna_profile.brief_text if dna_profile else None
 
-            await aemit(video_id, "step", label="score_and_rank", stage="generate_clips")
-            clips = await generate_and_rank_clips(
-                session=session,
+            # Idempotency guard (Issue 61): existing clips mean a redelivered task
+            # must not re-score (LLM cost) or re-insert (would cascade-delete
+            # feedback/outcomes). Captured here; scoring runs after this session
+            # closes.
+            existing_clips = await load_existing_clips(session, video_uuid, clip_creator_id)
+
+        # Issue 82b (pool starvation): the per-candidate LLM scoring round-trip
+        # (30–120 s) runs with NO admin DB session held — the read session above
+        # is closed, and persistence reacquires a fresh one below.
+        await aemit(video_id, "step", label="score_and_rank", stage="generate_clips")
+        ranked: list[dict] = []
+        if not existing_clips:
+            ranked = await score_and_rank(
                 video_id=video_uuid,
-                creator_id=video.creator_id,
-                timeline=signals.timeline_jsonb,
+                creator_id=clip_creator_id,
+                timeline=timeline,
                 dna_brief=dna_brief,
                 transcript_segments=transcript_segments,
                 max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
+                ledger_session_factory=db.AdminSessionLocal,
             )
+
+        async with db.AdminSessionLocal() as session:
+            # persist_ranked_clips re-runs the existing-clips guard on THIS
+            # session, so the already-generated path returns clips attached to
+            # the live session (the pre-scoring snapshot above is detached).
+            clips = await persist_ranked_clips(session, video_uuid, clip_creator_id, ranked)
 
             logger.info("Generated %d clips for video %s", len(clips), video_id)
 
@@ -2255,7 +2395,7 @@ async def _generate_clips_async(video_id: str) -> None:
             # charges no additional minutes. AUTO_RENDER_TOP_N caps how many of the
             # ranked clips render immediately (0 = all generated candidates).
             if settings.AUTO_RENDER_CLIPS and clips:
-                kit_style = await _brand_kit_style(session, video.creator_id)
+                kit_style = await _brand_kit_style(session, clip_creator_id)
                 top_n = settings.AUTO_RENDER_TOP_N
                 # Only sort when we actually cap — the default (render all) path
                 # renders every clip regardless of order, so skip the sort.

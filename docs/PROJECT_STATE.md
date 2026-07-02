@@ -4,6 +4,64 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-02 — W1 round 1 complete: Issues 190, 203, 284, 148, 82b, 200/202 residuals, 288/286 config, 352 Batch A (parallel build)
+
+**Branch** `w1/round1` (off main `2dbd17c`) — 7 parallel worktree agents + integrator; all merged, full
+suite **2042 passed / 0 failed**, Layer-0 all gates green (ruff 0 · mypy 0 · coverage 79.5 ≥ 75.2
+baseline · bandit 0/0 · pip-audit 0 — the 6 audit hits were local venv drift vs the already-pinned
+jinja2/msgpack; venv synced).
+
+**Phase-1 CHECK first (9 research agents, live-doc verified 2026-07-02)** — reshaped the wave:
+#219 Batch-API spike resolved NEGATIVE (closed; caching DOES stack with batch, but no-SLA turnaround
+breaks the SSE/auto-render flow); #316 closed superseded by #352 (7 residuals → Batch M); #240 parked
+(Grafana Cloud covers beta); #228 re-sized to S residual (built since June); #148 reduced to
+dedup-by-deletion; #82's "no async Voyage client" premise corrected (AsyncClient exists in the pin;
+DEC: keep thread-wrap). All in DECISIONS 2026-07-02.
+
+**Built + merged:**
+- **352 Batch A** — `ENV: Literal` gate, JWT ≥32-byte validator, `limits`/`joblib` pins, fernet
+  singleton, `EMAIL_FROM` fail-fast (+tests)
+- **190** — `Summary` model + migration 0041 (RLS) + budgeted greedy-knapsack `summary_select.py`
+  + recap eval scenario (floor 14→15) + golden tests; segments contract locked for #191
+- **203** — server-side data-gate deltas + `data_gate_evaluated` event + honest small-catalog UI
+  (backend 2014-green, 219 vitest + tsc clean)
+- **284** — `feature_flags` table (0043) + fail-open TTL-cached reader + 4 kill switches
+  (llm_generation / render_intake / youtube_publish / signup) + ops CLI + 14 tests; unblocks #290
+- **200/202 residuals** — half-life sweep harness + `--sweep`; **concept-pivot reweight gate test**;
+  harness extracted to `preference/efficacy.py`; `PreferenceModel.metrics_jsonb` (0042) +
+  per-retrain NDCG@5 emission + warn-ratchet (`PREFERENCE_NDCG_REGRESSION_THRESHOLD=0.05`)
+- **148** — closed folded into #226: 12 orphaned static CSS/JS deleted, ~13 pinning tests pruned
+- **82b** — sessions released across LLM/Stripe/Google/R2 calls in clips/auth/videos/billing/worker;
+  `generate_and_rank_clips` → `score_and_rank` + `persist_ranked_clips`; reacquired sessions re-stamp
+  the RLS GUC (regression test + 10-concurrent small-pool load test; 39 live-PG integration tests green)
+- **288/286 (integrator)** — prod Redis `appendfsync everysec` + `backup_redis.sh` + RUNBOOKS
+  recovery section; `docs/EDGE_SECURITY.md` committed Cloudflare rate-limit config (Free tier, 1 rule)
+
+Migration chain now 0040 → 0041 → 0042 → 0043. **Operator checklist outstanding:** apply the edge
+rule + verify; deploy compose change + Redis cron + restart drill; Better Stack status page (#282);
+#228 live 429 smoke. **Round 2 queued:** 352 Batches B–M, #191, #231, 82a.
+Off-course logged: stale `clip_scoring.md` latency claim; LLM E2E Nightly red on main;
+`eval_efficacy.py` `get_sessionmaker` ImportError.
+
+---
+
+## 2026-07-02 — CI hardening: idempotency + mypy + async event-loop fixes merged to main
+
+**Branch** `fix/llm-idempotency-and-test-hardening` → merged via PR #39 (staging) and PR #40 (main)
+
+All 10 gating CI checks green. Two pre-existing infra failures (Playwright / visual regression — missing `libatk-1.0.so.0` on the runner; same failures existed on PR #38) are not caused by this branch and don't block merge.
+
+**CI fixes landed:**
+- `improvement/brief.py` — initialized `msg = None` before the streaming pause_turn loop and removed `# type: ignore[possibly-undefined]` (unused with pydantic mypy plugin since `stream_message` returns `tuple[Any, ...]`; `warn_unused_ignores=true` was making it an error)
+- `tests/test_issue_104.py` — converted two `get_current_creator` tests from `asyncio.run()` wrappers to `async def`; `asyncio.run()` was closing the event loop and causing `RuntimeError: Event loop is closed` in downstream test teardown
+- `tests/test_render.py` / `tests/test_reframe.py` — `pytest.importorskip("cv2")` / `@skipif` guard for missing `libGL.so.1` on CI runner
+- `tests/test_preference.py` / `tests/eval/test_efficacy.py` — `OSError` guard at call time for missing `libgomp.so.1` (lightgbm importable but `fit()` raises OSError)
+- `tests/test_health.py` — mock all uninvolved services in redis/storage isolation tests (postgres has no pool in unit lane)
+- `clip_engine/scoring.py` — explicit `None` guard on `dict.get()` chain avoids `Any|None` passed to `float()`
+- ruff format — 48 files reformatted (pre-existing violations hidden by prior ruff-check failures)
+
+---
+
 ## 2026-07-01 — Rung-1/2 verification: billing idempotency + pause_turn + test hardening
 
 **Branch** `main`

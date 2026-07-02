@@ -5,6 +5,7 @@ Real credentials come from .env when running integration tests or against live s
 """
 
 import os
+import time
 import uuid
 
 from cryptography.fernet import Fernet
@@ -132,15 +133,28 @@ def _isolate_app_state(client):
     AND after every test makes execution order irrelevant. (OCB 2026-06-24)"""
     import contextlib
 
+    import flags
     from limiter import limiter
 
     app.dependency_overrides.clear()
     client.cookies.clear()
+    # 4. The feature-flag TTL cache (flags._cache, 30s) is process-global AND its
+    #    misses open a DB session inside gated code paths, which shifts tests that
+    #    script AdminSessionLocal with a fixed session sequence (test_publish.py's
+    #    two-session iterator broke under CI's randomized order — PR #41,
+    #    2026-07-02). Reset, then PRIME every known flag with its env default so
+    #    unit tests never take the DB branch. test_flags.py's own autouse fixture
+    #    re-clears the cache after this one, so its cold-cache tests still work.
+    flags._reset_cache()
+    _now = time.monotonic()
+    for _key in flags.KNOWN_FLAGS:
+        flags._cache[_key] = (_now, flags.env_default(_key))
     with contextlib.suppress(Exception):  # best-effort; never fail a test on limiter cleanup
         limiter.reset()
     yield
     app.dependency_overrides.clear()
     client.cookies.clear()
+    flags._reset_cache()
 
 
 @pytest.fixture(autouse=True)
