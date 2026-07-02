@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_key import get_current_creator_via_api_key
 from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
+from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -429,7 +430,7 @@ async def list_clips(
     status_code=202,
     response_model=RenderQueuedOut,
     # Kill switch (Issue 284): 503 when the render_intake flag is off.
-    dependencies=[Depends(require_flag("render_intake"))],
+    dependencies=[Depends(require_flag("render_intake")), Depends(require_budget)],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
@@ -630,7 +631,7 @@ async def clean_preview(
     status_code=202,
     response_model=CleanQueuedOut,
     # Kill switch (Issue 284): 503 when the render_intake flag is off.
-    dependencies=[Depends(require_flag("render_intake"))],
+    dependencies=[Depends(require_flag("render_intake")), Depends(require_budget)],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
@@ -815,7 +816,7 @@ async def clip_transcript(
     status_code=202,
     response_model=CutsQueuedOut,
     # Kill switch (Issue 284): 503 when the render_intake flag is off.
-    dependencies=[Depends(require_flag("render_intake"))],
+    dependencies=[Depends(require_flag("render_intake")), Depends(require_budget)],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
@@ -1127,7 +1128,7 @@ class TitleSuggestionsOut(BaseModel):
     "/{clip_id}/title-suggestions",
     response_model=TitleSuggestionsOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
@@ -1234,7 +1235,7 @@ class CaptionHooksOut(BaseModel):
     "/{clip_id}/caption-hooks",
     response_model=CaptionHooksOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
@@ -1335,7 +1336,7 @@ class ClipExplanationOut(BaseModel):
     "/{clip_id}/explanation",
     response_model=ClipExplanationOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)

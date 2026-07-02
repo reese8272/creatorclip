@@ -128,6 +128,30 @@ async def _keyset_batches(
         last = getattr(rows[-1], pk_col.key)
 
 
+async def _spend_guard_blocked(job_id: str | None, stage: str, creator_id: str) -> bool:
+    """Pre-execution spend gate for paid LLM tasks (Issue 290).
+
+    Sits where the ``youtube_publish`` kill-switch gate sits: at the top of the
+    async impl, before any paid work. Returns True (caller must stop) when the
+    ``llm_generation`` switch is off — the global spend breaker flips it — or
+    the creator is in spend cool-down; emits a safe SSE ``error`` event so
+    streams resolve instead of hanging. The check itself fails OPEN — a guard
+    error never blocks the task.
+    """
+    from billing.spend_guard import SpendCapExceededError, ensure_within_budget
+    from worker.progress import aemit
+
+    try:
+        await ensure_within_budget(creator_id)
+    except SpendCapExceededError as exc:
+        logger.warning("spend guard blocked paid task (stage=%s)", stage)
+        if job_id is not None:
+            with contextlib.suppress(Exception):
+                await aemit(job_id, "error", stage=stage, message=str(exc))
+        return True
+    return False
+
+
 # ── Public entry points ───────────────────────────────────────────────────────
 
 
@@ -2017,6 +2041,10 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     # would just litter Redis with orphan streams.
     progress_enabled = job_id is not None
 
+    # Spend guard (Issue 290): stop before the paid Anthropic/Voyage calls.
+    if await _spend_guard_blocked(job_id, "dna", creator_id):
+        return
+
     async def _emit(event_type: str, **fields: object) -> None:
         if progress_enabled:
             await aemit(job_id, event_type, **fields)  # type: ignore[arg-type]
@@ -3721,6 +3749,21 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                 )
                 return
 
+            # Spend guard (Issue 290): stop before the paid Claude call. The
+            # brief is polled off its DB row, so a blocked run must mark the
+            # row failed (not just emit SSE) or the poller would spin forever.
+            from billing.spend_guard import SpendCapExceededError, ensure_within_budget
+
+            try:
+                await ensure_within_budget(creator_id)
+            except SpendCapExceededError as exc:
+                row.status = ImprovementBriefStatus.failed
+                row.error = str(exc)
+                row.completed_at = datetime.now(UTC)
+                await session.commit()
+                await aemit(job_id, "error", stage="improvement_brief", message=str(exc))
+                return
+
             try:
                 await aemit(
                     job_id,
@@ -3867,6 +3910,10 @@ async def _generate_video_analysis_async(
     from dna.profile import get_active
     from models import RetentionCurve, Video, VideoMetrics
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "video_analysis", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="video_analysis")
@@ -4058,6 +4105,10 @@ async def _generate_title_suggestions_async(
     from models import Transcript, Video
     from worker.progress import aemit
 
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "title_suggestions", creator_id):
+        return
+
     try:
         await aemit(job_id, "step", label="loading_data", stage="title_suggestions")
 
@@ -4200,6 +4251,10 @@ async def _generate_thumbnail_concepts_async(
     )
     from models import Transcript, Video
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "thumbnail_concepts", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="thumbnail_concepts")
@@ -4389,6 +4444,10 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
     from models import RetentionCurve, Transcript, Video
     from worker.progress import aemit
 
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "hook_analysis", creator_id):
+        return
+
     try:
         await aemit(job_id, "step", label="loading_data", stage="hook_analysis")
 
@@ -4569,6 +4628,10 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
     from models import Signals, Transcript, Video
     from worker.progress import aemit
 
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "chapters", creator_id):
+        return
+
     try:
         await aemit(job_id, "step", label="loading_data", stage="chapters")
 
@@ -4689,6 +4752,10 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
     cid = uuid.UUID(creator_id)
     conv_uuid = uuid.UUID(conversation_id)
     history_turns = settings.CHAT_HISTORY_TURNS
+
+    # Spend guard (Issue 290): stop before the paid agentic tool loop.
+    if await _spend_guard_blocked(job_id, "chat", creator_id):
+        return
 
     try:
         async with db.tenant_session(cid) as session:

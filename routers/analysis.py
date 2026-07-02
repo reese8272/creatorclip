@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
+from billing.spend_guard import require_budget
 from db import get_session
 from flags import require_flag
 from limiter import LLM_DAILY_LIMIT, creator_key, limiter
@@ -23,7 +24,7 @@ from models import Creator, RetentionCurve, Transcript, Video, VideoMetrics
 router = APIRouter(
     prefix="/creators",
     tags=["analysis"],
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 logger = logging.getLogger(__name__)
 

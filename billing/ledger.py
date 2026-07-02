@@ -153,6 +153,20 @@ def _estimate_cost_usd(
     ) / _MTOK
 
 
+def _model_tier(cost_per_mtok_in: float) -> str:
+    """Low-cardinality model label for the cost counter, inferred from the rate.
+
+    ``record_llm_usage`` callers pass per-MTok rates, not model ids, so the
+    metric labels by price-book tier — exact enough for the cost-by-model
+    dashboard without touching every call site. (Issue 291)
+    """
+    if cost_per_mtok_in == settings.COST_PER_MTOK_IN_SONNET:
+        return "sonnet-tier"
+    if cost_per_mtok_in == settings.COST_PER_MTOK_IN_HAIKU:
+        return "haiku-tier"
+    return "other"
+
+
 async def record_llm_usage(
     creator_id: uuid.UUID,
     usage: dict,
@@ -169,6 +183,10 @@ async def record_llm_usage(
 
     ``usage`` is the dict returned by ``worker.anthropic_stream.stream_and_emit``
     (keys: input_tokens, output_tokens, cache_read, cache_creation).
+
+    This is also the choke point for the spend guard (Issue 290) and the
+    ``llm_cost_usd_total`` counter (Issue 291) — every billed LLM call flows
+    through here, so both rails see the exact USD the ledger persists.
     """
     import db as _db
 
@@ -182,6 +200,19 @@ async def record_llm_usage(
         cache_read_tokens=usage.get("cache_read", 0),
         cache_creation_tokens=usage.get("cache_creation", 0),
     )
+    try:
+        # Issue 291: Prometheus/OTel cost counter — same USD as the ledger write.
+        from observability import record_llm_cost
+
+        record_llm_cost("anthropic", _model_tier(cost_per_mtok_in), cost)
+        # Issue 290: spend-guard counters + breach checks (internally no-raise;
+        # the outer try is a structural backstop — billing must never break a
+        # pipeline).
+        from billing import spend_guard
+
+        await spend_guard.record_spend(creator_id, cost)
+    except Exception:  # noqa: BLE001 — best-effort; never block pipeline
+        logger.warning("spend-guard/cost-metric hook failed (swallowed)", exc_info=True)
     period = datetime.now(UTC).strftime("%Y-%m")
     try:
         async with _db.AdminSessionLocal() as session:
