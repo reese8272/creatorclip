@@ -214,7 +214,9 @@ def _resend_send_with_headers(headers: dict | None) -> MagicMock:
         patch.object(
             mailer,
             "settings",
-            _fake_settings("resend", resend_api_key="re_test", email_from="noreply@autoclip.studio"),
+            _fake_settings(
+                "resend", resend_api_key="re_test", email_from="noreply@autoclip.studio"
+            ),
         ),
         patch.dict(sys.modules, {"resend": fake_resend}),
     ):

@@ -680,16 +680,12 @@ def test_all_sinks_redact_blocklist_key(key: str) -> None:
     record.request_id = "-"
     setattr(record, key, "sensitive-value")
     fmt_out = json.loads(JsonLogFormatter().format(record))
-    assert fmt_out[key] == "[redacted]", (
-        f"JsonLogFormatter must redact key '{key}'"
-    )
+    assert fmt_out[key] == "[redacted]", f"JsonLogFormatter must redact key '{key}'"
 
     # ── Sink 2: event_log._redact ──────────────────────────────────────────────
     el_out = _redact({key: "sensitive-value", "creator_id": "uuid-safe"})
     assert el_out is not None
-    assert el_out[key] == "[redacted]", (
-        f"event_log._redact must redact key '{key}'"
-    )
+    assert el_out[key] == "[redacted]", f"event_log._redact must redact key '{key}'"
     assert el_out["creator_id"] == "uuid-safe"
 
     # ── Sink 3: _sentry_before_send ───────────────────────────────────────────

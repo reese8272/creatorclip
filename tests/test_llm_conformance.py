@@ -34,9 +34,9 @@ _LLM_MODULES: list[tuple[str, str, bool]] = [
     ("knowledge.titles", "_ANTHROPIC", False),
     ("knowledge.chapters", "_ANTHROPIC", False),
     ("knowledge.thumbnails", "_ANTHROPIC", False),
-    ("knowledge.clip_titles", "_ANTHROPIC", False),    # Issue 322
+    ("knowledge.clip_titles", "_ANTHROPIC", False),  # Issue 322
     ("knowledge.clip_captions", "_ANTHROPIC", False),  # Issue 323
-    ("knowledge.clip_explain", "_ANTHROPIC", False),   # Issue 325
+    ("knowledge.clip_explain", "_ANTHROPIC", False),  # Issue 325
     ("analysis.brief", "_ANTHROPIC", False),
     ("dna.brief", "_ANTHROPIC", False),
     ("improvement.brief", "_ANTHROPIC", False),
@@ -51,9 +51,9 @@ _MUST_INJECT_POLICY = {
     "knowledge.hooks",
     "knowledge.titles",
     "knowledge.thumbnails",
-    "knowledge.clip_titles",    # accepts clip transcript (untrusted)
+    "knowledge.clip_titles",  # accepts clip transcript (untrusted)
     "knowledge.clip_captions",  # accepts clip transcript hook (untrusted)
-    "knowledge.clip_explain",   # accepts clip transcript (untrusted)
+    "knowledge.clip_explain",  # accepts clip transcript (untrusted)
     "clip_engine.scoring",
     "chat.intake",
 }
@@ -61,21 +61,21 @@ _MUST_INJECT_POLICY = {
 # Modules that SHOULD have a cache_control breakpoint in their system prompt
 # (because their prefix clears the relevant model's cacheable floor).
 _MUST_CACHE = {
-    "knowledge.titles",      # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.titles",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
     "knowledge.thumbnails",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "knowledge.clip_titles", # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "knowledge.clip_captions", # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.clip_titles",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "knowledge.clip_captions",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
     "knowledge.clip_explain",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "clip_engine.scoring",   # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
-    "improvement.brief",     # cache_control ephemeral on static instructions block
+    "clip_engine.scoring",  # Block 2 DNA brief, ttl=1h, Sonnet 4.6 1024-token floor
+    "improvement.brief",  # cache_control ephemeral on static instructions block
 }
 
 # Modules that have CONFIRMED NO cache_control (prefix too short for their model floor)
 # — verified in the Issue-135 audit and Issue-315 cleanup.
 # Having an explicit "absent" assertion documents the intentional decision.
 _MUST_NOT_CACHE = {
-    "knowledge.hooks",    # Haiku 4.5, prefix ~900 tokens — below 4096 floor
-    "knowledge.chapters", # Haiku 4.5, prefix ~175 tokens — below 4096 floor
+    "knowledge.hooks",  # Haiku 4.5, prefix ~900 tokens — below 4096 floor
+    "knowledge.chapters",  # Haiku 4.5, prefix ~175 tokens — below 4096 floor
 }
 
 # Typed error names the conformance check accepts as "typed handling present"
@@ -96,6 +96,7 @@ def _parse_ast(import_path: str) -> ast.Module:
 
 
 # ── 1. Singleton assertion ─────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("mod_path,singleton_name,_is_async", _LLM_MODULES)
 def test_singleton_has_timeout_and_max_retries(
@@ -124,6 +125,7 @@ def test_singleton_has_timeout_and_max_retries(
 
 # ── 2. Typed exception handling ────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("mod_path,_,__", _LLM_MODULES)
 def test_typed_exception_handling_present(mod_path: str, _: str, __: bool) -> None:
     """Each LLM module must import or except at least one typed Anthropic error.
@@ -143,6 +145,7 @@ def test_typed_exception_handling_present(mod_path: str, _: str, __: bool) -> No
 
 # ── 3. UNTRUSTED_CONTENT_POLICY injection ─────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "mod_path",
     sorted(_MUST_INJECT_POLICY),
@@ -158,6 +161,7 @@ def test_untrusted_content_policy_present(mod_path: str) -> None:
 
 
 # ── 4. Cache-control breakpoint presence ──────────────────────────────────────
+
 
 @pytest.mark.parametrize("mod_path", sorted(_MUST_CACHE))
 def test_cache_control_present(mod_path: str) -> None:

@@ -40,7 +40,13 @@ _EXEMPT_PATHS = {
 
 # Routes whose response_class signals a non-JSON body (redirect, HTML page, file
 # download, SSE) are exempt — they intentionally have no JSON schema to declare.
-_NON_JSON_RESPONSE_CLASSES = {Response, RedirectResponse, HTMLResponse, FileResponse, StreamingResponse}
+_NON_JSON_RESPONSE_CLASSES = {
+    Response,
+    RedirectResponse,
+    HTMLResponse,
+    FileResponse,
+    StreamingResponse,
+}
 
 
 def test_every_documented_json_route_declares_response_model() -> None:

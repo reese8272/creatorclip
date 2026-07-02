@@ -337,9 +337,7 @@ async def test_aacquire_slot_concurrent_at_cap_overflow_bounded(
 # ── Issue 337: arelease underflow is safe ────────────────────────────────────
 
 
-async def test_arelease_slot_underflow_safe(
-    creator_id: str, _cleanup_keys: None
-) -> None:
+async def test_arelease_slot_underflow_safe(creator_id: str, _cleanup_keys: None) -> None:
     """arelease_slot on a zero (never-acquired) counter must not raise.
 
     Redis DECR on a non-existent key initialises it to 0 and decrements to -1.
@@ -372,6 +370,4 @@ async def test_aget_owner_mismatch_detectable(
 
     owner = await progress.aget_owner(task_id)
     assert owner == creator_id, "aget_owner must return the stored owner"
-    assert owner != other_creator, (
-        "A non-owner must be able to detect the mismatch via aget_owner"
-    )
+    assert owner != other_creator, "A non-owner must be able to detect the mismatch via aget_owner"

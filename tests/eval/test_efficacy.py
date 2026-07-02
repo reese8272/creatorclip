@@ -70,9 +70,10 @@ def test_below_threshold_blend_falls_back_to_dna_and_beats_random():
     assert m.mrr["dna_preference"] == pytest.approx(1.0)
 
 
-def test_trained_scorer_path_ranks_correctly():
+def test_trained_scorer_path_ranks_correctly() -> None:
     """Above the threshold the real fit()+predict_score path runs (weight > 0). With perfectly
     separable features the blend ranks positives first → NDCG@5 == 1.0."""
+    pytest.importorskip("lightgbm")  # skip if libgomp absent on this host
     base = datetime(2026, 1, 1, tzinfo=UTC)
     # 30 train clips (above threshold 20) → weight > 0; perfectly separable.
     train = []

@@ -84,7 +84,9 @@ def test_decode_session_token_alg_none_rejected():
     This test documents the guarantee so a future 'simplify jwt.decode' PR
     cannot silently regress it. (Issue 340a)"""
     # Craft a token manually — jwt.encode() won't accept alg=none in PyJWT 2.x.
-    header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=")
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(
+        b"="
+    )
     payload_data = {
         "sub": str(uuid.uuid4()),
         "iat": int(datetime.now(UTC).timestamp()),

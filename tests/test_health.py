@@ -79,9 +79,14 @@ def test_health_postgres_down_returns_degraded(client, monkeypatch) -> None:
 def test_health_redis_down_returns_degraded(client, monkeypatch) -> None:
     """Forcing _check_redis to fail → status 'degraded' with redis='error'."""
 
+    async def _ok() -> bool:
+        return True
+
     async def _fail() -> bool:
         return False
 
+    monkeypatch.setattr(main_module, "_check_postgres", _ok)
+    monkeypatch.setattr(main_module, "_check_storage", _ok)
     monkeypatch.setattr(main_module, "_check_redis", _fail)
     data = client.get("/health").json()
     assert data["status"] == "degraded"
@@ -93,9 +98,14 @@ def test_health_redis_down_returns_degraded(client, monkeypatch) -> None:
 def test_health_storage_down_returns_degraded(client, monkeypatch) -> None:
     """Forcing _check_storage to fail → status 'degraded' with storage='error'."""
 
+    async def _ok() -> bool:
+        return True
+
     async def _fail() -> bool:
         return False
 
+    monkeypatch.setattr(main_module, "_check_postgres", _ok)
+    monkeypatch.setattr(main_module, "_check_redis", _ok)
     monkeypatch.setattr(main_module, "_check_storage", _fail)
     data = client.get("/health").json()
     assert data["status"] == "degraded"

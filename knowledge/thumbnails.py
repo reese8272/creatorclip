@@ -330,7 +330,12 @@ def generate_thumbnail_concepts(
     _MAX_SEARCH_ROUNDS = 5
 
     client = _ANTHROPIC.with_options(timeout=120.0)
-    usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_creation": 0}
+    usage: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
     loop_messages = messages
     final_msg = None
     msg = None

@@ -380,9 +380,7 @@ def _aai_word(text: str, start: int | None, end: int | None) -> SimpleNamespace:
     return SimpleNamespace(text=text, start=start, end=end)
 
 
-def _aai_transcript(
-    words: list | None, text: str = "hello world"
-) -> SimpleNamespace:
+def _aai_transcript(words: list | None, text: str = "hello world") -> SimpleNamespace:
     return SimpleNamespace(words=words, text=text)
 
 

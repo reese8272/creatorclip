@@ -36,14 +36,21 @@ def test_passphrase_read_from_env_never_argv() -> None:
 
 def test_never_echoes_secrets() -> None:
     """No code path prints the passphrase, DB password, or R2 secret value."""
-    for secret_var in ("BACKUP_ENCRYPTION_KEY", "POSTGRES_PASSWORD", "R2_SECRET_ACCESS_KEY", "PGPASSWORD"):
+    for secret_var in (
+        "BACKUP_ENCRYPTION_KEY",
+        "POSTGRES_PASSWORD",
+        "R2_SECRET_ACCESS_KEY",
+        "PGPASSWORD",
+    ):
         assert f'echo "${secret_var}' not in _TEXT
-        assert f'echo ${secret_var}' not in _TEXT
+        assert f"echo ${secret_var}" not in _TEXT
         assert f'printf "%s" "${secret_var}"' not in _TEXT
     # `set -x` would trace every expanded value (incl. secrets) into the log.
     # Check executable lines only — the string is allowed inside an explanatory comment.
     code_lines = [ln.strip() for ln in _TEXT.splitlines() if not ln.lstrip().startswith("#")]
-    assert not any(ln == "set -x" or ln.startswith("set -x ") or " set -x" in ln for ln in code_lines)
+    assert not any(
+        ln == "set -x" or ln.startswith("set -x ") or " set -x" in ln for ln in code_lines
+    )
 
 
 def test_db_password_handled_container_side() -> None:
@@ -56,7 +63,7 @@ def test_db_password_handled_container_side() -> None:
 def test_targets_separate_backup_bucket_not_media_bucket() -> None:
     """Uploads must target BACKUP_R2_BUCKET, and the script must refuse to run if it
     equals the media bucket (R2_BUCKET) — the 3-2-1 isolation invariant."""
-    assert 's3://${BACKUP_R2_BUCKET}' in _TEXT
+    assert "s3://${BACKUP_R2_BUCKET}" in _TEXT
     assert '"$BACKUP_R2_BUCKET" = "$R2_BUCKET"' in _TEXT, "must guard BACKUP_R2_BUCKET != R2_BUCKET"
 
 

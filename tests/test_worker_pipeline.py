@@ -537,9 +537,7 @@ async def test_build_dna_below_threshold_raises_without_retry(db_session):
 
 
 @pytest.mark.asyncio
-async def test_load_clip_render_plan_logs_anomaly_running_with_render_uri(
-    db_session, caplog
-):
+async def test_load_clip_render_plan_logs_anomaly_running_with_render_uri(db_session, caplog):
     """When a clip is in 'running' state but already has a render_uri set, the
     function must emit a WARNING-level log before re-rendering. This state
     arises when a prior render uploaded the file but crashed before committing
@@ -633,9 +631,7 @@ async def test_sweep_scheduled_publications_noop_when_lock_held(db_session):
     lock_key = "sweep_scheduled_publications"
     # Acquire the lock on the test session's connection (simulates a concurrent sweep).
     held = (
-        await db_session.execute(
-            text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
-        )
+        await db_session.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key})
     ).scalar_one()
     assert held, "test fixture must be able to acquire the advisory lock"
 
@@ -644,9 +640,7 @@ async def test_sweep_scheduled_publications_noop_when_lock_held(db_session):
         # returns False (lock held by our test session). Must not raise.
         await _sweep_scheduled_publications_async()
     finally:
-        await db_session.execute(
-            text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
-        )
+        await db_session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
         await db_session.commit()
 
 
@@ -661,9 +655,7 @@ async def test_sync_channel_catalog_noop_when_lock_held(db_session):
     lock_key = f"catalog-sync:{creator.id}"
 
     held = (
-        await db_session.execute(
-            text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
-        )
+        await db_session.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key})
     ).scalar_one()
     assert held, "test fixture must be able to acquire the per-creator advisory lock"
 
@@ -673,8 +665,6 @@ async def test_sync_channel_catalog_noop_when_lock_held(db_session):
         with patch("youtube.oauth.get_valid_access_token", new_callable=AsyncMock):
             await _sync_channel_catalog_async(str(creator.id))
     finally:
-        await db_session.execute(
-            text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
-        )
+        await db_session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
         await db_session.commit()
         await _cleanup_creator(db_session, creator.id)
