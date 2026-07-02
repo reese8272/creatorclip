@@ -144,9 +144,11 @@ class Settings(BaseSettings):
     # base input rate (1h-TTL is 2×; callers using ttl:"1h" — e.g. clip_engine/scoring.py —
     # pass cache_write_multiplier=2.0 explicitly). Source: same pricing page. (cost ledger)
     COST_CACHE_WRITE_MULTIPLIER: float = 1.25
-    # Deepgram Nova-2 pre-recorded transcription cost per minute (pay-as-you-go).
-    # Source: deepgram.com/pricing (fetched 2026-06-23).
-    COST_PER_MIN_DEEPGRAM: float = 0.0043
+    # Deepgram Nova-3 pre-recorded transcription cost per minute (pay-as-you-go).
+    # Prod transcribes with nova-3 (ingestion/transcribe.py) — the previous 0.0043
+    # figure was delisted nova-2 pricing and under-billed every minute (Issue 293).
+    # Source: deepgram.com/pricing (fetched 2026-07-02).
+    COST_PER_MIN_DEEPGRAM: float = 0.0077
     # Voyage AI voyage-3.5 embedding cost per million tokens.
     # Source: docs.voyageai.com/docs/pricing (fetched 2026-06-23).
     COST_PER_MTOK_VOYAGE: float = 0.06
@@ -166,7 +168,7 @@ class Settings(BaseSettings):
     # Version stamp for the price book. Update this string whenever any rate changes —
     # a version mismatch between a stored cost_estimate and this stamp signals a
     # rate-change event (FinOps Foundation cost-per-unit standard; finops.org/framework/phases/).
-    PRICE_BOOK_VERSION: str = "2026-06-23"
+    PRICE_BOOK_VERSION: str = "2026-07-02"
     # --- Pro chatbot (Issue 152) ---
     # Per-creator daily message cap — the load-bearing margin guard. Bounds
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per

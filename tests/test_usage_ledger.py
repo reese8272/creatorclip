@@ -65,13 +65,13 @@ def test_estimate_cost_deepgram_minutes() -> None:
     """A known Deepgram-minutes figure yields the expected USD amount.
 
     Formula: minutes * COST_PER_MIN_DEEPGRAM
-    60 minutes of Nova-2 pre-recorded audio at $0.0043/min = $0.258 exactly.
+    60 minutes of Nova-3 pre-recorded audio at $0.0077/min = $0.462 exactly.
     This test is a pure-math assertion — no DB, no network.
     """
     minutes = 60.0
-    expected_usd = minutes * settings.COST_PER_MIN_DEEPGRAM  # 60 * 0.0043 = 0.258
-    assert abs(expected_usd - 0.258) < 1e-9, (
-        f"Expected $0.258 for 60 min at ${settings.COST_PER_MIN_DEEPGRAM}/min, got ${expected_usd}"
+    expected_usd = minutes * settings.COST_PER_MIN_DEEPGRAM  # 60 * 0.0077 = 0.462
+    assert abs(expected_usd - 0.462) < 1e-9, (
+        f"Expected $0.462 for 60 min at ${settings.COST_PER_MIN_DEEPGRAM}/min, got ${expected_usd}"
     )
 
 
@@ -81,8 +81,8 @@ def test_estimate_cost_mixed_llm_and_deepgram() -> None:
     Simulates a job that uses both LLM tokens (Sonnet) and Deepgram transcription:
     - 500k Sonnet input tokens at $3/MTok  = $1.50
     - 200k Sonnet output tokens at $15/MTok = $3.00
-    - 30 min Deepgram Nova-2 at $0.0043/min = $0.129
-    Total expected: $4.629
+    - 30 min Deepgram Nova-3 at $0.0077/min = $0.231
+    Total expected: $4.731
     """
     tokens_in = 500_000
     tokens_out = 200_000
@@ -97,7 +97,7 @@ def test_estimate_cost_mixed_llm_and_deepgram() -> None:
     transcription_cost = deepgram_minutes * settings.COST_PER_MIN_DEEPGRAM
     total_cost = llm_cost + transcription_cost
 
-    expected = 1.50 + 3.00 + 0.129
+    expected = 1.50 + 3.00 + 0.231
     assert abs(total_cost - expected) < 1e-9, (
         f"Expected ${expected:.9f} for mixed LLM+Deepgram job, got ${total_cost:.9f}"
     )
@@ -107,6 +107,17 @@ def test_price_book_version_is_set() -> None:
     """PRICE_BOOK_VERSION must be a non-empty string (rate-change tracking sentinel)."""
     assert settings.PRICE_BOOK_VERSION, "PRICE_BOOK_VERSION must not be empty"
     assert isinstance(settings.PRICE_BOOK_VERSION, str)
+
+
+def test_nova3_price_and_version_pinned() -> None:
+    """Issue 293 — pin the nova-3 rate and its version stamp.
+
+    Prod transcribes with nova-3 ($0.0077/min, deepgram.com/pricing 2026-07-02);
+    the old 0.0043 nova-2 rate under-billed every transcription minute. A silent
+    revert of either value must fail loudly here.
+    """
+    assert settings.COST_PER_MIN_DEEPGRAM == 0.0077
+    assert settings.PRICE_BOOK_VERSION == "2026-07-02"
 
 
 # ── Unit: record_llm_usage (mocked DB) ────────────────────────────────────────

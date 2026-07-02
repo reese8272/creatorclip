@@ -100,6 +100,38 @@ def delete_prefix(prefix: str) -> int:
         return 0
 
 
+# Top-level key prefixes whose footprint the daily storage-gauge sweep reports
+# (Issue 293). Fixed set — keeps the Prometheus `prefix` label low-cardinality.
+STORAGE_GAUGE_PREFIXES: tuple[str, ...] = ("source/", "audio/", "clips/", "summaries/")
+
+
+def measure_prefix(prefix: str) -> tuple[int, int]:
+    """Return ``(total_bytes, object_count)`` for all objects under *prefix*.
+
+    R2 backend: paginated ``list_objects_v2`` sweep (same idiom as
+    ``delete_prefix``) summing ``Size``. Local backend: walk
+    ``LOCAL_MEDIA_DIR/prefix`` on disk. May raise on client/IO errors — the
+    gauge task (worker.tasks.collect_storage_gauges) catches per-prefix.
+    """
+    total_bytes = 0
+    count = 0
+    if settings.STORAGE_BACKEND == "r2":
+        paginator = _r2().get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=settings.R2_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                total_bytes += int(obj.get("Size", 0))
+                count += 1
+        return total_bytes, count
+    root = _local_root() / prefix
+    if not root.exists():
+        return 0, 0
+    for p in root.rglob("*"):
+        if p.is_file():
+            total_bytes += p.stat().st_size
+            count += 1
+    return total_bytes, count
+
+
 def presigned_download_url(
     uri: str, *, filename: str, disposition: str = "attachment", expires_s: int = 300
 ) -> str | None:

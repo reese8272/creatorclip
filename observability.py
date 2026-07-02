@@ -130,6 +130,23 @@ REDIS_USED_MEMORY_BYTES = Gauge(
     "Redis used memory in bytes",
 )
 
+# ── Storage-footprint gauges (Issue 293) ─────────────────────────────────────
+# Object-storage COGS visibility: bytes + object counts per top-level key prefix
+# (source, audio, clips, summaries). Set by the daily Beat task
+# worker.tasks.collect_storage_gauges; the prefix label is a small fixed set so
+# cardinality stays flat regardless of creator count. The same gauges are used
+# for the local-disk dev backend (STORAGE_BACKEND=local).
+R2_BYTES_STORED = Gauge(
+    "r2_bytes_stored",
+    "Object storage bytes stored, by top-level key prefix",
+    labelnames=("prefix",),
+)
+R2_OBJECTS = Gauge(
+    "r2_objects",
+    "Object storage object count, by top-level key prefix",
+    labelnames=("prefix",),
+)
+
 
 async def collect_saturation_gauges(engine: Any, redis_client: Any) -> None:
     """Read pool/queue/memory depth and update the saturation Gauges.

@@ -87,4 +87,13 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.purge_stale_event_logs",
         "schedule": timedelta(hours=24),
     },
+    # Issue 293 — daily object-storage footprint sweep. Sums bytes + object
+    # counts per top-level prefix (source/, audio/, clips/, summaries/) into
+    # the r2_bytes_stored{prefix} / r2_objects{prefix} gauges so storage COGS
+    # is visible next to the LLM/transcription cost ledger. Best-effort:
+    # errors are logged and swallowed; unconfigured storage skips cleanly.
+    "collect-storage-gauges-daily": {
+        "task": "worker.tasks.collect_storage_gauges",
+        "schedule": timedelta(hours=24),
+    },
 }

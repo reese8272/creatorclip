@@ -705,3 +705,66 @@ Result + date: ________
 Sources: https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/ ·
 https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/redis.html
 (accessed 2026-07-02)
+
+---
+
+## Monthly Cost Review (Issue 292)
+
+**When:** first week of each month, ~15 minutes. **Goal:** reconcile the three COGS
+lines — (1) metered usage in our own ledger, (2) the DigitalOcean invoice, (3)
+Cloudflare R2 storage — and catch drift or a per-creator outlier before it compounds.
+
+### 1 — Usage ledger (LLM + transcription cost estimates)
+
+Run against prod Postgres (read-only). Monthly totals per period:
+
+```sql
+SELECT period,
+       SUM(cost_estimate)          AS est_cost_usd,
+       SUM(tokens_in + tokens_out) AS total_tokens
+FROM usage
+GROUP BY period
+ORDER BY period DESC;
+```
+
+Then the per-creator isolation sanity check — the top 5 creators by cost for the
+latest period. One creator dominating far beyond their plan tier means a quota or
+isolation bug, not a big user:
+
+```sql
+SELECT creator_id,
+       SUM(cost_estimate)          AS est_cost_usd,
+       SUM(tokens_in + tokens_out) AS total_tokens
+FROM usage
+WHERE period = to_char(now() - interval '1 month', 'YYYY-MM')
+GROUP BY creator_id
+ORDER BY est_cost_usd DESC
+LIMIT 5;
+```
+
+Estimates use the price book in `config.py` (`PRICE_BOOK_VERSION` stamps the rates);
+a step-change month-over-month with flat usage usually means the price book changed
+— check the version stamp before suspecting a leak.
+
+The Grafana panel `docs/dashboards/llm-cost-panel.json` shows the same spend as a
+daily-rate time series — `sum by (provider) (increase(llm_cost_usd_total[1d]))` —
+for eyeballing trend between reviews (the `llm_cost_usd_total` counter ships with
+Issues 290/291).
+
+### 2 — DigitalOcean invoice (compute)
+
+DO console → Billing → most recent invoice. Compare the VM + bandwidth total to last
+month; anything >20% up without a matching usage-ledger increase is a SEV3 to
+investigate (orphaned droplet, snapshot pile-up, egress spike).
+
+### 3 — Cloudflare R2 (storage)
+
+Cloudflare dashboard → R2 → bucket → **Metrics** tab: storage bytes + Class A/B
+operations for the month. Cross-check against the `r2_bytes_stored{prefix}` /
+`r2_objects{prefix}` gauges (daily Beat sweep, Issue 293): the `source/` prefix
+should stay bounded by the ToS retention purge — steady growth there means the purge
+is not running (see Beat HA runbook). `clips/` + `summaries/` growth should track
+creator activity.
+
+**Record the result** (date, three totals, any action filed) in the ops scratch log;
+promote anomalies to `docs/issues.md`.

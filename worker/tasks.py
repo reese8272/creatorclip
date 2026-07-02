@@ -805,6 +805,35 @@ def purge_stale_event_logs() -> None:
     run_async(_purge_stale_event_logs_async())
 
 
+@celery.task(name="worker.tasks.collect_storage_gauges")
+def collect_storage_gauges() -> None:
+    """Issue 293 — daily storage-footprint sweep for object-storage COGS.
+
+    Paginates the bucket per top-level prefix (source/, audio/, clips/,
+    summaries/) and sets the r2_bytes_stored{prefix} / r2_objects{prefix}
+    gauges. With STORAGE_BACKEND=local the same gauges are filled by walking
+    LOCAL_MEDIA_DIR. Best-effort observability: never raises — a failed prefix
+    is logged and skipped, and an unconfigured R2 backend skips cleanly.
+    """
+    from config import settings
+    from observability import R2_BYTES_STORED, R2_OBJECTS
+    from worker.storage import STORAGE_GAUGE_PREFIXES, measure_prefix
+
+    if settings.STORAGE_BACKEND == "r2" and not (settings.R2_ACCOUNT_ID and settings.R2_BUCKET):
+        logger.info("collect_storage_gauges: R2 backend unconfigured — skipping sweep")
+        return
+    for prefix in STORAGE_GAUGE_PREFIXES:
+        label = prefix.rstrip("/")
+        try:
+            total_bytes, count = measure_prefix(prefix)
+            R2_BYTES_STORED.labels(prefix=label).set(total_bytes)
+            R2_OBJECTS.labels(prefix=label).set(count)
+        except Exception:
+            # Gauge keeps its last value; a transient storage error must never
+            # break the Beat loop or mark the sweep failed.
+            logger.warning("collect_storage_gauges: sweep failed for prefix %s", label)
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """

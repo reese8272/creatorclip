@@ -1,0 +1,41 @@
+{
+  "__comment": "Grafana panel spec (Issue 292) — daily LLM spend by provider. Import into any dashboard: panel JSON only, datasource uid is a placeholder for the default Prometheus datasource. The llm_cost_usd_total counter ships with Issues 290/291.",
+  "type": "timeseries",
+  "title": "LLM spend (USD, daily rate, by provider)",
+  "description": "increase() of the llm_cost_usd_total counter over 1d, summed per provider. Estimates from the config.py price book (PRICE_BOOK_VERSION) — not invoice truth. Reconcile monthly per RUNBOOKS.md § Monthly Cost Review.",
+  "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "expr": "sum by (provider) (increase(llm_cost_usd_total[1d]))",
+      "legendFormat": "{{provider}}"
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "unit": "currencyUSD",
+      "decimals": 2,
+      "min": 0,
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 2,
+        "fillOpacity": 10,
+        "spanNulls": true
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "displayMode": "table",
+      "placement": "bottom",
+      "calcs": ["lastNotNull", "max"]
+    },
+    "tooltip": {
+      "mode": "multi"
+    }
+  }
+}
