@@ -94,7 +94,7 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
   URLs; `str(video_title or "")`). Restore both gates to 0.
 
 ### Issue 352: 2026-07-01 assessment SEV2 backlog (grouped) — ~54 SEV2s
-- **Status:** OPEN — **Batch A DONE 2026-07-02** (ENV `Literal` gate, JWT ≥32-byte validator, `limits==5.8.0`+`joblib==1.5.3` pins, fernet singleton, `EMAIL_FROM` fail-fast — merged on `w1/round1`); Batches B–M queued for round 2 · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
+- **Status:** DONE 2026-07-02 — **all 13 batches (A–M) shipped and deployed** across PRs #41 (A), #43 (B,C,D,E,G,H,J,K,L,M), #44 (F,I). Every lead defect re-verified before fixing; 3 items resolved not-an-issue with evidence (notify PII; parts of K's runtime-confirm list). Two follow-ups promoted from the work: styled re-render no-op (OFF_COURSE 2026-07-02) and the NULLIF GUC policy hardening (OFF_COURSE 2026-07-02, from #231). · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
 - **Batch plan (2026-07-02 CHECK, all 13 lead defects re-verified present):** 13 file-disjoint batches
   A–M in 4 waves — **A** config/crypto/pins (IN BUILD, owns `config.py`+`requirements.txt`) →
   {**B** billing idempotency scoping, **C** routers unauth surface, **D** youtube quota/publish,
@@ -1036,7 +1036,7 @@ The v1 scope expansion: uploaded-VOD → 5–10 min 16:9 narrative recap. Co-own
 
 ### Issue 191: Stream-VOD recap — Part B: 16:9 multi-segment concat render
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Stream-VOD Recap · **Size** `L` · **Verify** `render-env`  
+**Status** `DONE — code-complete, real-ffmpeg verified locally` (2026-07-02, PR #44: `render_summary_file` — single-input trim graph, per-segment 1920×1080, hard cuts + afades (no xfade, DECISIONS), two-pass loudnorm on the concatenated output; pure filtergraph/argv builders unit-tested; `render_summary` Celery task with row-lock idempotency on `summaries.render_status`/`render_uri`, SSE steps, R2 upload, retention-window handling, permanent/transient/soft-limit classification. Real ffmpeg 8.1.2 smoke: synthetic 2-segment source → ffprobe-confirmed 1920×1080. **Remaining (render-env):** a real multi-hour VOD render on prod-grade hardware before enabling the UI (#192).) · **Wave** W1 · **Lane** Stream-VOD Recap · **Size** `L` · **Verify** `render-env`  
 **Src** `01 / 186 + 03 / C3` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** #190 · **Enables** #192 · **Coordinate (hot files)** `clip_engine/render.py`, `worker/storage.py`, `worker/tasks.py`  
 
@@ -2061,7 +2061,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 231: Worker tenant tasks under RLS (stop universal BYPASSRLS)
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Security — Platform · **Size** `L` · **Verify** `staging`  
+**Status** `DONE — code-complete, integration-verified on real PG16` (2026-07-02, W1 round 3: `db.tenant_session(creator_id)` helper; **35 worker call sites migrated** off BYPASSRLS to the app role; 18-site AdminSessionLocal allowlist (sweeps/bootstraps/failure-writers, each WHY-commented) pinned by an AST structural test; migration `0044_rls_signals` (0040 subquery pattern); first WITH-CHECK write-path proofs + a real worker function run under `creatorclip_app` — 150 integration tests green locally. **Remaining (staging/prod):** 0044 applies on deploy; prod worker soak. Follow-up promoted: NULLIF GUC policy hardening, OFF_COURSE 2026-07-02.) · **Wave** W0 · **Lane** Security — Platform · **Size** `L` · **Verify** `staging`  
 **Src** `04 / A` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/04_security_scalability.md`  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** Alembic revision chain, `db.py`, `worker/tasks.py`, `youtube/oauth.py`  
 
