@@ -4,6 +4,35 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-02 — W2 wave complete: 192, 290+291, 245, 302, 254, 298+271-fix, 293/283/292, 78-R, 109 (+310/78 reconciled-closed)
+
+**Branch** `w2/round1` — 7 parallel worktree agents (round 1) + 109 (round 2) + integrator; survived a
+mid-build process restart (all worktrees recovered, resume agents finished). Final: **2204 passed / 0
+failed**, venv Layer-0 all green (ruff 0 · CI-mypy 0 · coverage **81.0** · bandit 0/0 · pip-audit 0),
+frontend 240 vitest + tsc clean, eval gate 100%.
+
+**CHECK reconciliation first (8 research agents, literal-URL gate):** #310 closed-as-shipped
+(2026-06-24, tracker stale); #245 was 90% shipped with a live compliance bug; #78 closed + #78-R carved
+out; #109 rescoped 8→5; #291/#292 mostly parked (DO not GCP; no attribution data); #293 found the price
+book under-billing transcription ~44% (nova-2 rate, nova-3 prod). Six DECISIONS approved.
+
+**Shipped:** 192 recap API+UI (Stream-VOD lane user-reachable end to end); 290+291 spend guard (µ$ Lua
+counters → warn/trip onto the llm_generation flag, approved $5/$50/$400 thresholds, 16 routes + 8 tasks
+gated, chat blind spot closed, `llm_cost_usd_total`); 245 RFC-8058 POST unsubscribe + live refresh +
+RLS integration test; 302 GPC declare/detect; 254 deletion-on-restore (`reapply_erasures.py`, honest
+56-day ceiling); 298 staging-parity gate (structural `needs:`, in-container alembic vs data-bearing
+staging PG) **+ fixed #271's broken rollback** (compose hardcoded `:latest` — IMAGE_TAG never
+interpolated); 293 nova-3 price fix + R2 gauges + Deepgram-stays DEC; 283 INCIDENT_RESPONSE.md; 292
+cost-review runbook + panel spec; 78-R mypy strictness ratchet ON; 109 all 5 survivors — incl. a
+measured **4.6–17.6× scoring-loop speedup** (signal-array hoist) and the `get_owned` 25-site sweep.
+
+**Operator checklist added:** cc139 teardown before the first gated deploy (or skip_staging); DO
+billing alert; Grafana cost rule + panel (post-#326); R2 lifecycle-numbers dashboard check (254);
+Gmail one-click round-trip when lifecycle sends activate. **Env note:** post-restart PATH resolves the
+polluted user-site python — use `.venv` tooling for Layer-0 (documented in LEFT_OFF).
+
+---
+
 ## 2026-07-02 — W1 rounds 2–3 complete: Issue 352 ALL batches, 191, 231, 82a — deployed via PRs #42–#44 (+#45 pending)
 
 **Branches** `hotfix/0041-enum-create` (PR #42), `w1/round2` (PR #43), `w1/round2b` (PR #44),
