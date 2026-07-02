@@ -73,20 +73,38 @@ def cleanup():
 def test_build_request_three_system_blocks() -> None:
     system, tools, messages = _build_request(
         channel_title="Test Channel",
-        dna_brief="Creator DNA brief here.",
+        dna_brief="x" * 3000,  # full brief — prefix clears the 1024-token floor
         stated_identity=None,
         video_title="My video",
         transcript_summary="This is the transcript.",
     )
     assert len(system) == 3, "Expected exactly 3 system blocks"
-    # Issue 218: block 2 (DNA brief) carries the 1h cache_control breakpoint.
-    # The ~1,550-token prefix (block 1 + block 2) clears Sonnet 4.6's 1024-token
-    # cacheable-prefix floor (confirmed 2026-06-23 — the prior 2048 comment was wrong).
+    # Issues 218/315/352: block 2 (DNA brief) carries the 1h cache_control
+    # breakpoint only when the measured block1+block2 prefix clears Sonnet 4.6's
+    # 1024-token cacheable-prefix floor — true here with a full 3000-char brief.
     assert "cache_control" not in system[0], "Static instructions block must not have cache_control"
     assert system[1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}, (
-        "DNA brief block must carry the 1h cache_control marker (Issue 218)"
+        "DNA brief block must carry the 1h cache_control marker (Issues 218/352)"
     )
     assert "cache_control" not in system[2], "Per-video context block must not have cache_control"
+
+
+def test_build_request_no_cache_marker_when_dna_brief_empty() -> None:
+    """Issue 352 Batch G: with no DNA brief the block1+block2 prefix is ~720
+    tokens — below Sonnet 4.6's 1024-token cacheable floor — so the cache_control
+    marker must be omitted (an inert marker pays a 2x 1h-TTL write premium for
+    zero cache reads)."""
+    system, _, _ = _build_request(
+        channel_title="Test Channel",
+        dna_brief=None,
+        stated_identity=None,
+        video_title="My video",
+        transcript_summary="transcript",
+    )
+    for block in system:
+        assert "cache_control" not in block, (
+            "No block may carry cache_control when the prefix is below the floor"
+        )
 
 
 def test_build_request_stated_identity_in_user_turn_not_system() -> None:
@@ -128,17 +146,25 @@ def test_build_request_web_search_tool() -> None:
     assert tools[0]["name"] == "web_search"
 
 
-def test_build_request_title_included_in_system() -> None:
-    system, _, _ = _build_request(
+def test_build_request_title_and_transcript_in_user_turn_not_system() -> None:
+    """Issue 352 Batch G: video title + transcript summary are untrusted creator
+    content and must not appear in any system block — they travel in the user
+    turn, JSON-encoded via wrap_untrusted (matching clip_titles.py)."""
+    system, _, messages = _build_request(
         channel_title="Test Channel",
         dna_brief=None,
         stated_identity=None,
         video_title="My test video title",
         transcript_summary="transcript here",
     )
-    video_block = system[2]["text"]
-    assert "My test video title" in video_block
-    assert "transcript here" in video_block
+    for block in system:
+        assert "My test video title" not in block["text"]
+        assert "transcript here" not in block["text"]
+    user_content = messages[0]["content"]
+    assert 'name="video_title"' in user_content
+    assert json.dumps("My test video title") in user_content
+    assert 'name="video_transcript"' in user_content
+    assert json.dumps("transcript here") in user_content
 
 
 def test_build_request_dna_brief_max_chars() -> None:

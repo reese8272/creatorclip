@@ -175,14 +175,25 @@ def test_injection_attempt_is_contained() -> None:
 
 
 def test_dna_brief_block_has_cache_control() -> None:
+    # Marker present only when the static+DNA prefix clears the 1024-token
+    # floor — true with a full 3000-char brief (Issues 315/352).
     system, _messages = _build_request(
-        "My Channel", "DNA brief text.", "Tension and release", 0.7, 5.0, 45.0, "Transcript."
+        "My Channel", "x" * 3000, "Tension and release", 0.7, 5.0, 45.0, "Transcript."
     )
     dna_block = next((b for b in system if "DNA PROFILE" in b.get("text", "")), None)
     assert dna_block is not None, "No DNA profile block in system"
     cc = dna_block.get("cache_control")
     assert cc is not None, "DNA profile block missing cache_control"
     assert cc.get("ttl") == "1h"
+
+
+def test_no_cache_marker_when_dna_brief_empty() -> None:
+    """Issue 352 Batch G: below the cacheable floor the marker must be omitted."""
+    system, _messages = _build_request(
+        "My Channel", None, "Tension and release", 0.7, 5.0, 45.0, "Transcript."
+    )
+    for block in system:
+        assert "cache_control" not in block
 
 
 # ── Score / timing in system context ─────────────────────────────────────────

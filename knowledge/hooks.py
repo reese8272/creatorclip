@@ -2,8 +2,12 @@
 
 Prompt structure (three system blocks):
   Block 1 — static instructions: role, task, honesty constraints.
-  Block 2 — DNA brief (cache_control breakpoint): per-creator, stable across calls.
-  Block 3 — per-video hook data: retention drop + transcript. Uncached.
+  Block 2 — DNA brief: per-creator, stable across calls. No cache marker — the
+            prefix sits below Haiku 4.5's 4096-token cacheable floor (Issue-135 audit).
+  Block 3 — per-video computed data: retention drop stats. Uncached.
+
+The transcript excerpt is UNTRUSTED creator content — it travels in the USER turn,
+JSON-wrapped via wrap_untrusted, never in the system role (OWASP LLM01; Issue 352).
 
 Claude receives the creator's DNA brief, computed retention drop point, transcript
 excerpt, and searches for current niche hook patterns via web_search.
@@ -19,7 +23,7 @@ import numpy as np
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from observability import log_llm_error, record_llm_tokens
 
 logger = logging.getLogger(__name__)
@@ -194,13 +198,11 @@ def analyze_hook(
             "type": "text",
             "text": f"CREATOR DNA PROFILE:\n{dna_text}",
         },
+        # Block 3: per-video COMPUTED data only. The transcript excerpt is
+        # untrusted creator content and travels in the user turn (Issue 352).
         {
             "type": "text",
-            "text": (
-                f"CHANNEL: {channel_title}\n\n"
-                f"RETENTION ANALYTICS:\n{drop_info}\n\n"
-                f"TRANSCRIPT (first 60s):\n{transcript_excerpt or 'No transcript available.'}"
-            ),
+            "text": f"CHANNEL: {channel_title}\n\nRETENTION ANALYTICS:\n{drop_info}",
         },
     ]
     # allowed_callers=["direct"] is REQUIRED here: hooks runs on Haiku 4.5, which
@@ -215,11 +217,19 @@ def analyze_hook(
             "allowed_callers": ["direct"],
         }
     ]
+    # Transcript excerpt is untrusted attacker-influenceable content — JSON-wrap
+    # it in the user turn so it cannot escape its structural bounds (OWASP LLM01;
+    # Anthropic prompt-injection guide; Issue 352).
+    transcript_part = (
+        wrap_untrusted("video_transcript", transcript_excerpt)
+        if transcript_excerpt
+        else "No transcript available for the first 60 seconds.\n"
+    )
     messages = [
         {
             "role": "user",
             "content": (
-                f"Analyze the hook for '{channel_title}'. "
+                transcript_part + f"Analyze the hook for '{channel_title}'. "
                 "Search for current hook patterns in this niche, then return the JSON report."
             ),
         }
