@@ -1,0 +1,35 @@
+scenario: stream_recap_budget
+kind: recap
+description: >
+  A 3-hour stream VOD timeline reduced to 8 pre-scored candidate beats
+  totalling ~19 minutes. With a 600s (10 min) budget the selector must return
+  a non-overlapping subset whose summed duration respects the budget, ordered
+  chronologically (narrative order, never score-descending), every segment
+  citing a named principle. Two candidates overlap the same beat
+  (2400-2520 vs 2460-2580) — at most one may survive. Candidate scores are
+  this creator's DNA-fit scores (Audience-fit over generic virality).
+
+input:
+  budget_s: 600
+  chapters:
+    - {timestamp_s: 0.0, title: "Intro"}
+    - {timestamp_s: 3600.0, title: "Main event"}
+    - {timestamp_s: 7200.0, title: "Winding down"}
+  candidates:
+    - {start_s: 120.0,  end_s: 210.0,  score: 0.71, principle: "Hook in the first 3 seconds"}
+    - {start_s: 900.0,  end_s: 1020.0, score: 0.64, principle: "Tension and release"}
+    - {start_s: 2400.0, end_s: 2520.0, score: 0.88, principle: "Retention curve is ground truth"}
+    - {start_s: 2460.0, end_s: 2580.0, score: 0.55, principle: "Tension and release"}
+    - {start_s: 3550.0, end_s: 3700.0, score: 0.60, principle: "Pattern interrupt"}
+    - {start_s: 4100.0, end_s: 4220.0, score: 0.92, principle: "Retention curve is ground truth"}
+    - {start_s: 6000.0, end_s: 6180.0, score: 0.77, principle: "Audience-fit over generic virality"}
+    - {start_s: 8300.0, end_s: 8420.0, score: 0.69, principle: "Tension and release"}
+
+expected:
+  # Hard budget: summed segment duration must never exceed budget_s.
+  max_total_duration_s: 600
+  # The budget comfortably fits the four strongest non-overlapping beats.
+  min_segments: 4
+  no_overlap: true
+  chronological: true
+  all_principles_named: true

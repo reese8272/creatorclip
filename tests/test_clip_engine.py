@@ -22,6 +22,7 @@ from clip_engine.candidates import (
     snap_to_sentence_boundary,
 )
 from clip_engine.ranking import rank_candidates
+from clip_engine.summary_select import select_recap_segments
 from clip_engine.window import RESOLUTION_S, build_signal_array
 
 # ── build_signal_array ─────────────────────────────────────────────────────────
@@ -195,8 +196,9 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "eval", "scenarios")
 # The minimum number of scenario files that must exist. CI enforces this floor so a
 # silent deletion (or @skip-piling) cannot hollow out the eval harness without
 # raising a visible failure. Raise this number whenever a new scenario is added;
-# never lower it. (Issue 265; raised 6 → 14 when the adversarial scenarios landed — Issue 199)
-SCENARIO_FLOOR = 14
+# never lower it. (Issue 265; raised 6 → 14 when the adversarial scenarios landed — Issue 199;
+# 14 → 15 when the stream-recap budget scenario landed — Issue 190)
+SCENARIO_FLOOR = 15
 
 # Scenario files that are explicitly allowed to carry a pytest skip/xfail marker
 # (e.g. a known-broken scenario under active investigation). Add the YAML filename
@@ -253,9 +255,70 @@ def test_eval_scenario_no_unapproved_skip_markers() -> None:
     )
 
 
+# Exact principle names from docs/CLIPPING_PRINCIPLES.md — recap segments must
+# cite one of these verbatim (same contract as clips). (Issue 190)
+NAMED_PRINCIPLES = frozenset(
+    {
+        "Hook in the first 3 seconds",
+        "Clip the setup, not the aftermath",
+        "Tension and release",
+        "Pattern interrupt",
+        "Dead-air elimination",
+        "Retention curve is ground truth",
+        "Loop-ability",
+        "Front-load value",
+        "One idea per Short",
+        "Native length over generic length",
+        "Audience-fit over generic virality",
+        "Clean Context Boundary",
+    }
+)
+
+
+def _assert_recap_scenario(scenario: dict) -> None:
+    """Recap-kind scenario assertions (Issue 190): total-budget compliance,
+    pairwise non-overlap, chronological (narrative) order, named principles."""
+    inp = scenario["input"]
+    expected = scenario.get("expected", {})
+    segments = select_recap_segments(
+        inp["candidates"], budget_s=float(inp["budget_s"]), chapters=inp.get("chapters")
+    )
+    name = scenario["scenario"]
+
+    total = sum(s["end_s"] - s["start_s"] for s in segments)
+    max_total = expected.get("max_total_duration_s", inp["budget_s"])
+    assert total <= max_total, f"[{name}] total duration {total:.1f}s exceeds budget {max_total}s"
+
+    min_segments = expected.get("min_segments", 0)
+    assert len(segments) >= min_segments, (
+        f"[{name}] expected >= {min_segments} segments, got {len(segments)}"
+    )
+
+    if expected.get("no_overlap", True):
+        for a, b in zip(segments, segments[1:], strict=False):
+            assert a["end_s"] <= b["start_s"], (
+                f"[{name}] segments overlap: ({a['start_s']},{a['end_s']}) vs "
+                f"({b['start_s']},{b['end_s']})"
+            )
+
+    if expected.get("chronological", True):
+        starts = [s["start_s"] for s in segments]
+        assert starts == sorted(starts), f"[{name}] segments not in chronological order: {starts}"
+
+    if expected.get("all_principles_named", True):
+        for s in segments:
+            assert s["principle"] in NAMED_PRINCIPLES, (
+                f"[{name}] segment ({s['start_s']},{s['end_s']}) cites unknown principle "
+                f"{s['principle']!r} — must be an exact name from docs/CLIPPING_PRINCIPLES.md"
+            )
+
+
 def _assert_scenario(scenario: dict) -> None:
     """Run all geometry assertions for one loaded scenario. Raises AssertionError on
     any violation. Shared by the per-scenario test and the aggregate pass-rate gate."""
+    if scenario.get("kind") == "recap":
+        _assert_recap_scenario(scenario)
+        return
     timeline = scenario["input"]["timeline"]
     expected = scenario.get("expected", {})
     candidates = extract_candidates(timeline, max_candidates=8)

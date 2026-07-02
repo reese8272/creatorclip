@@ -342,6 +342,14 @@ class Settings(BaseSettings):
     # generated candidates (≤ CLIPS_PER_VIDEO_DEFAULT). Set >0 to render only
     # the top-N highest-fit clips immediately and leave the rest on demand.
     AUTO_RENDER_TOP_N: int = 0
+    # ── Stream-VOD recap (Issue 190) ───────────────────────────────────────────
+    # Target total-duration bounds (seconds) for a recap built from an uploaded
+    # past-stream VOD. MAX is the hard budget the segment selector packs
+    # against (clip_engine/summary_select.py); MIN documents the floor below
+    # which a recap is not worth rendering. Default 5-10 minutes per the
+    # competitive research (docs/COMPETITIVE_RESEARCH.md).
+    RECAP_TARGET_DURATION_MIN_S: int = 300
+    RECAP_TARGET_DURATION_MAX_S: int = 600
     MIN_VIDEOS_FOR_DNA: int = 10
     MIN_SHORTS_FOR_DNA: int = 5
     # YouTube raised the Shorts maximum to 180s in October 2024
