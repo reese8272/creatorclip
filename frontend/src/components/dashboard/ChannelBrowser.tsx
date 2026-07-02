@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import type { CatalogListResponse, Video } from '@/types'
@@ -20,36 +20,50 @@ const SOURCE_NEEDED_HELP =
 // invalidates the videos + catalog queries so the row moves into "Your videos".
 function CatalogRow({ video }: { video: Video }) {
   const queryClient = useQueryClient()
-  const [busy, setBusy] = useState(false)
-  const [label, setLabel] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
 
-  async function clip() {
+  // Multipart FormData POST — intentionally a raw fetch (the JSON api() helper
+  // would send application/json and 422), wrapped in a mutation so a network
+  // reject resets to Retry instead of latching busy forever (Issue 352 Batch K).
+  const adopt = useMutation({
+    mutationFn: async (youtubeVideoId: string) => {
+      const form = new FormData()
+      form.append('youtube_video_id', youtubeVideoId)
+      const resp = await fetch('/videos/link', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      })
+      if (!resp.ok) throw new Error(`Link failed (${resp.status})`)
+    },
+    onSuccess: () => {
+      // The promoted row is now origin=link: it appears in /videos and leaves
+      // /videos/catalog. Invalidate both so the UI reflects the move.
+      void queryClient.invalidateQueries({ queryKey: ['videos'] })
+      void queryClient.invalidateQueries({ queryKey: ['catalog'] })
+    },
+  })
+
+  function clip() {
     // /videos/link adopts a catalog row by its YouTube id (a required Form field),
     // so a row without one (nullable since Issue 317) cannot be promoted here.
     if (!video.youtube_video_id) {
-      setLabel('Unavailable')
+      setUnavailable(true)
       return
     }
-    setBusy(true)
-    setLabel('Adding…')
-    const form = new FormData()
-    form.append('youtube_video_id', video.youtube_video_id)
-    const resp = await fetch('/videos/link', {
-      method: 'POST',
-      credentials: 'include',
-      body: form,
-    })
-    if (resp.ok) {
-      setLabel('Added ✓')
-      // The promoted row is now origin=link: it appears in /videos and leaves
-      // /videos/catalog. Invalidate both so the UI reflects the move.
-      queryClient.invalidateQueries({ queryKey: ['videos'] })
-      queryClient.invalidateQueries({ queryKey: ['catalog'] })
-    } else {
-      setBusy(false)
-      setLabel('Retry')
-    }
+    adopt.mutate(video.youtube_video_id)
   }
+
+  const busy = adopt.isPending || adopt.isSuccess
+  const label = unavailable
+    ? 'Unavailable'
+    : adopt.isPending
+      ? 'Adding…'
+      : adopt.isSuccess
+        ? 'Added ✓'
+        : adopt.isError
+          ? 'Retry'
+          : null
 
   return (
     <tr className="border-b border-default hover:bg-elevated">
