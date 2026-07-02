@@ -3,14 +3,19 @@
 Locks the behaviour of the ranking NaN guard, the cold-start feature computation on
 malformed windows, and the post-snap geometry invariants of candidate extraction.
 Pure functions — no DB/Redis, default unit lane.
+
+Issue 352 Batch H adds: the post-snap end_s clamp to source duration, and the
+creator_id tenant predicate on the idempotency-guard read.
 """
 
 from __future__ import annotations
 
 import math
+import uuid
+from unittest.mock import MagicMock
 
 from clip_engine.candidates import MIN_CLIP_S, extract_candidates
-from clip_engine.ranking import _safe_score, rank_candidates
+from clip_engine.ranking import _safe_score, load_existing_clips, rank_candidates
 from clip_engine.scoring import compute_features
 
 # ── rank_candidates: deterministic order even with NaN/missing scores ─────────
@@ -118,3 +123,53 @@ def test_extract_candidates_empty_and_flat_return_empty():
     assert extract_candidates({"duration_s": 0.0, "events": []}) == []
     # A flat timeline (no events above the prominence threshold) yields no peaks.
     assert extract_candidates({"duration_s": 100.0, "events": []}) == []
+
+
+# ── Issue 352 Batch H: post-snap end_s is clamped to the source duration ──────
+
+
+def test_extract_candidates_end_clamped_to_source_duration():
+    """A peak at the tail of the video + a transcript word ending past the container
+    duration (encoder/transcriber rounding) must never emit end_s > duration_s —
+    render.py rejects any clip whose end_s exceeds the source duration.
+    """
+    duration = 200.0
+    tl = {
+        "duration_s": duration,
+        "events": [
+            {"type": "silence", "start_s": 165.0, "end_s": 170.0},
+            {"type": "energy_spike", "start_s": 170.0, "end_s": 185.0, "value": 0.8},
+            {"type": "retention_spike", "start_s": 185.0, "end_s": 187.0, "value": 1.5},
+        ],
+    }
+    # Pre-snap end_s sits exactly at duration_s (200.0); this terminal-punct word
+    # ends 2s past the container duration and pulls the forward snap out of range.
+    words = [{"word": "over.", "start": 200.2, "end": 202.0}]
+    cands = extract_candidates(tl, max_candidates=4, words=words)
+    assert cands, "expected a candidate from the tail-of-video peak"
+    for c in cands:
+        assert c["end_s"] <= duration, f"end_s {c['end_s']} exceeds source duration"
+        # The MIN_CLIP_S invariant stays honest after the clamp.
+        assert c["end_s"] - c["setup_start_s"] >= MIN_CLIP_S - 1e-6
+
+
+# ── Issue 352 Batch H: idempotency-guard read carries the tenant predicate ────
+
+
+async def test_load_existing_clips_filters_by_creator_id():
+    """Per-creator isolation: the idempotency guard must never read clips by
+    video_id alone — the creator_id predicate is structural defense-in-depth.
+    """
+    captured: dict = {}
+
+    class _CaptureSession:
+        async def execute(self, stmt):
+            captured["stmt"] = stmt
+            result = MagicMock()
+            result.scalars.return_value.all.return_value = []
+            return result
+
+    await load_existing_clips(_CaptureSession(), uuid.uuid4(), uuid.uuid4())  # type: ignore[arg-type]
+    sql = str(captured["stmt"])
+    assert "clips.video_id" in sql
+    assert "clips.creator_id" in sql, "idempotency guard lost the tenant predicate"

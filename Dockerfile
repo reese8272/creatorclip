@@ -21,6 +21,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
+# MediaPipe Tasks-compatible BlazeFace model for the gated per-frame reframe path
+# (Issue 189 / 352 Batch H). The Tasks FaceDetector rejects the legacy Solutions
+# .tflite bundled inside the mediapipe pip package, so we ship the hub asset at a
+# pinned path and point MEDIAPIPE_FACE_MODEL_PATH at it. Fetch failure is non-fatal:
+# the reframe path falls back to frame-center (and the flag defaults to off).
+RUN mkdir -p /usr/share/mediapipe-models \
+    && wget -q -O /usr/share/mediapipe-models/blaze_face_short_range.tflite \
+       https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite \
+       || { rm -f /usr/share/mediapipe-models/blaze_face_short_range.tflite; \
+            echo "BlazeFace model fetch failed — reframe falls back to frame center"; }
+ENV MEDIAPIPE_FACE_MODEL_PATH=/usr/share/mediapipe-models/blaze_face_short_range.tflite
+
 WORKDIR /app
 
 # ── Dependency layer (cached until requirements.txt changes) ─────────────────

@@ -330,6 +330,7 @@ def extract_candidates(
     # word-level transcript is provided; falls back gracefully when absent.
     if words:
         events = timeline.get("events")
+        snapped: list[dict] = []
         for c in candidates:
             c["setup_start_s"] = round(
                 snap_to_sentence_boundary(
@@ -346,6 +347,17 @@ def extract_candidates(
             # Maintain invariants after snapping: setup < peak, clip >= MIN_CLIP_S
             if c["end_s"] - c["setup_start_s"] < MIN_CLIP_S:
                 c["end_s"] = round(c["setup_start_s"] + MIN_CLIP_S, 2)
+            # Forward snapping and the MIN_CLIP_S re-extension can both push end_s
+            # past the container duration (transcript word `end` values can exceed
+            # the ffprobe duration by encoder/transcriber rounding), and render.py
+            # rejects any end_s > source duration. Clamp back into the renderable
+            # range; if that breaks the MIN_CLIP_S invariant, drop the candidate —
+            # the same handling as the pre-NMS too-short filter above.
+            c["end_s"] = round(min(c["end_s"], duration_s), 2)
             c["setup_start_s"] = min(c["setup_start_s"], c["peak_s"] - 0.1)
+            if c["end_s"] - c["setup_start_s"] < MIN_CLIP_S:
+                continue
+            snapped.append(c)
+        candidates = snapped
 
     return candidates

@@ -604,3 +604,84 @@ class TestClampCropXWiderThanFrame:
         # crop_w=2000 > frame_w=1920 → frame_w - crop_w = -80 → must clamp to 0
         x = clamp_crop_x(960, 2000, 1920)
         assert x == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue 352 Batch H: detector hoisted to one instance per track + model path
+# ---------------------------------------------------------------------------
+
+
+class TestDetectorHoisting:
+    """The FaceDetector is built ONCE per track, shared across frames, and closed."""
+
+    def test_detector_created_once_shared_and_closed(self, tmp_path: Path) -> None:
+        import numpy as np
+
+        fake = tmp_path / "v.mp4"
+        fake.touch()
+        fake_frame = np.zeros((1080, 1920, 3), dtype="uint8")
+        mock_detector = MagicMock()
+
+        with (
+            patch("clip_engine.reframe._read_frame_cv2", return_value=fake_frame),
+            patch(
+                "clip_engine.reframe._create_face_detector", return_value=mock_detector
+            ) as create_mock,
+            patch("clip_engine.reframe._detect_faces_mediapipe", return_value=[800]) as detect_mock,
+        ):
+            build_crop_center_track(fake, start_s=0.0, end_s=2.0, frame_width=1920, sample_fps=5.0)
+
+        # Hoisted (Issue 352 Batch H): one construction per track, not per frame.
+        assert create_mock.call_count == 1
+        assert detect_mock.call_count >= 2  # multiple sampled frames…
+        for call in detect_mock.call_args_list:
+            assert call.args[2] is mock_detector  # …all share the same detector
+        mock_detector.close.assert_called_once()
+
+    def test_detect_faces_without_detector_returns_empty(self) -> None:
+        """detector=None (mediapipe/model unavailable) → [] → center fallback."""
+        import numpy as np
+
+        from clip_engine.reframe import _detect_faces_mediapipe
+
+        assert _detect_faces_mediapipe(np.zeros((10, 10, 3), dtype="uint8"), 1920, None) == []
+
+
+class TestMediapipeModelPath:
+    """_mediapipe_model_path must resolve a Tasks-compatible asset — never the
+    legacy Solutions .tflite inside the mediapipe package (rejected by the
+    Tasks FaceDetector at create_from_options)."""
+
+    def test_configured_path_wins_when_it_exists(self, tmp_path: Path, monkeypatch) -> None:
+        from clip_engine.reframe import _mediapipe_model_path
+        from config import settings
+
+        model = tmp_path / "blaze_face_short_range.tflite"
+        model.write_bytes(b"\x00")
+        monkeypatch.setattr(settings, "MEDIAPIPE_FACE_MODEL_PATH", str(model))
+        assert _mediapipe_model_path() == str(model)
+
+    def test_configured_path_missing_returns_empty(self, tmp_path: Path, monkeypatch) -> None:
+        from clip_engine.reframe import _mediapipe_model_path
+        from config import settings
+
+        monkeypatch.setattr(settings, "MEDIAPIPE_FACE_MODEL_PATH", str(tmp_path / "nope.tflite"))
+        assert _mediapipe_model_path() == ""
+
+    def test_legacy_solutions_tflite_is_never_returned(self, tmp_path: Path, monkeypatch) -> None:
+        """A fake mediapipe package containing ONLY the legacy Solutions asset
+        must yield "" (frame-center fallback), not the incompatible .tflite."""
+        from clip_engine.reframe import _mediapipe_model_path
+        from config import settings
+
+        monkeypatch.setattr(settings, "MEDIAPIPE_FACE_MODEL_PATH", "")
+        pkg_root = tmp_path / "mediapipe"
+        legacy = pkg_root / "modules" / "face_detection"
+        legacy.mkdir(parents=True)
+        (legacy / "face_detection_short_range.tflite").write_bytes(b"\x00")
+        (pkg_root / "__init__.py").touch()
+
+        fake_mp = MagicMock()
+        fake_mp.__file__ = str(pkg_root / "__init__.py")
+        monkeypatch.setitem(sys.modules, "mediapipe", fake_mp)
+        assert _mediapipe_model_path() == ""
