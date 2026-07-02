@@ -18,6 +18,7 @@ a montage's many (start,end) segments do not fit a single start_s/end_s row.
 """
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 
 from alembic import op
@@ -27,8 +28,27 @@ down_revision = "0040"
 branch_labels = None
 depends_on = None
 
+# Both enums are declared with the DIALECT type and create_type=False so the
+# CREATE TABLE never emits CREATE TYPE. On generic ``sa.Enum`` the kwarg is
+# dialect-dependent and was silently ineffective under the prod VM's
+# SQLAlchemy, emitting a duplicate ``CREATE TYPE render_status_enum`` that
+# aborted the 2026-07-02 deploy. ``summary_status_enum`` is created explicitly
+# with checkfirst so a re-run after a partial failure is also safe.
+_render_status = postgresql.ENUM(
+    "pending",
+    "running",
+    "done",
+    "failed",
+    name="render_status_enum",
+    create_type=False,
+)
+_summary_status = postgresql.ENUM(
+    "pending", "ready", "failed", name="summary_status_enum", create_type=False
+)
+
 
 def upgrade() -> None:
+    _summary_status.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "summaries",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -55,21 +75,14 @@ def upgrade() -> None:
         sa.Column("render_uri", sa.Text(), nullable=True),
         sa.Column(
             "render_status",
-            # Type already exists (0001_initial_schema); do not re-create it.
-            sa.Enum(
-                "pending",
-                "running",
-                "done",
-                "failed",
-                name="render_status_enum",
-                create_type=False,
-            ),
+            # Type already exists (0001_initial_schema); never re-created here.
+            _render_status,
             nullable=False,
             server_default="pending",
         ),
         sa.Column(
             "status",
-            sa.Enum("pending", "ready", "failed", name="summary_status_enum"),
+            _summary_status,
             nullable=False,
             server_default="pending",
         ),
