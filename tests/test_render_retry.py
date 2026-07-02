@@ -43,7 +43,7 @@ def render_harness(monkeypatch):
     monkeypatch.setattr(tasks.render_clip, "retry", _fake_retry)
 
     def _set_render_async(exc):
-        async def _impl(clip_id):
+        async def _impl(clip_id, creator_id=None):
             raise exc
 
         monkeypatch.setattr(tasks, "_render_clip_async", _impl)
@@ -77,7 +77,7 @@ def test_transient_error_retries(render_harness):
 def test_success_marks_no_failure(render_harness, monkeypatch):
     tasks, statuses, retry_calls, _ = render_harness
 
-    async def _ok(clip_id):
+    async def _ok(clip_id, creator_id=None):
         return None
 
     monkeypatch.setattr(tasks, "_render_clip_async", _ok)
@@ -110,7 +110,7 @@ def test_base_exception_not_caught_by_render_clip(render_harness, monkeypatch):
     transient except branches. This pins the 'no catch BaseException' contract."""
     tasks, statuses, retry_calls, _ = render_harness
 
-    async def _raises_keyboard(_clip_id):
+    async def _raises_keyboard(_clip_id, creator_id=None):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(tasks, "_render_clip_async", _raises_keyboard)

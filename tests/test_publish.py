@@ -148,7 +148,9 @@ def test_publish_idempotent_skips_when_already_done():
     session.execute = AsyncMock(return_value=result)
 
     with (
-        patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(session)),
+        patch("worker.tasks.db.AsyncSessionLocal", lambda: _SessionCM(session)),
+        # Issue 231: publish runs on tenant_session; bootstrap mocked out.
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
         patch("youtube.publish.upload_video", AsyncMock()) as upload,
         patch("youtube.quota.consume_insert", AsyncMock()) as consume,
     ):
@@ -246,7 +248,9 @@ def test_publish_success_creates_clip_outcome_when_absent():
     local_path_cm.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("worker.tasks.db.AdminSessionLocal", _session_factory),
+        patch("worker.tasks.db.AsyncSessionLocal", _session_factory),
+        # Issue 231: publish runs on tenant_session; bootstrap mocked out.
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch("youtube.publish.upload_video", AsyncMock(return_value=vid)),
@@ -313,7 +317,9 @@ def test_publish_outcome_upsert_skips_when_final_true():
     local_path_cm.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("worker.tasks.db.AdminSessionLocal", _session_factory),
+        patch("worker.tasks.db.AsyncSessionLocal", _session_factory),
+        # Issue 231: publish runs on tenant_session; bootstrap mocked out.
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch("youtube.publish.upload_video", AsyncMock(return_value=vid)),
@@ -375,7 +381,9 @@ def test_publish_outcome_updates_youtube_id_when_not_final():
     local_path_cm.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("worker.tasks.db.AdminSessionLocal", _session_factory),
+        patch("worker.tasks.db.AsyncSessionLocal", _session_factory),
+        # Issue 231: publish runs on tenant_session; bootstrap mocked out.
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch("youtube.publish.upload_video", AsyncMock(return_value=vid)),
@@ -438,7 +446,9 @@ def test_publish_quota_asymmetry_logged_on_permanent_failure(caplog):
     local_path_cm.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(next(sessions_iter))),
+        patch("worker.tasks.db.AsyncSessionLocal", lambda: _SessionCM(next(sessions_iter))),
+        # Issue 231: publish runs on tenant_session; bootstrap mocked out.
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch(
@@ -490,7 +500,9 @@ def test_publish_done_null_youtube_video_id_logs_warning(caplog):
     session.get = AsyncMock(side_effect=ValueError("stop early — guard was bypassed"))
 
     with (
-        patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(session)),
+        patch("worker.tasks.db.AsyncSessionLocal", lambda: _SessionCM(session)),
+        # Issue 231: publish runs on tenant_session; bootstrap mocked out.
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
         caplog.at_level(logging.WARNING, logger="worker.tasks"),
         pytest.raises(ValueError, match="stop early"),
     ):

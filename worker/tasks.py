@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -217,6 +218,8 @@ async def _fire_refund_notification_async(video_uuid: uuid.UUID) -> None:
 
     from models import MinuteDeduction
 
+    # AdminSessionLocal: tenant-id BOOTSTRAP — resolves the creator FROM the
+    # deduction row on a terminal-failure path; no tenant context exists yet.
     async with db.AdminSessionLocal() as session:
         row = await session.scalar(
             select(MinuteDeduction.creator_id).where(MinuteDeduction.video_id == video_uuid)
@@ -247,7 +250,7 @@ def ingest_video(self, video_id: str) -> str:
         "ingest_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
     )
     try:
-        run_async(_ingest_async(video_id))
+        run_async(_ingest_async(video_id, creator_id))
     except SoftTimeLimitExceeded:
         # Soft limit means we've already burned ~50 min. Do NOT retry —
         # the next delivery would time out again, wasting credits. Mark failed
@@ -307,7 +310,7 @@ def transcribe_video(self, video_id: str) -> str:
         video_id=video_id,
     )
     try:
-        run_async(_transcribe_async(video_id))
+        run_async(_transcribe_async(video_id, creator_id))
     except SoftTimeLimitExceeded:
         # Terminal — transcription timed out; a retry would time out again.
         # Mark failed so the UI shows an error instead of spinning, then
@@ -349,7 +352,7 @@ def build_signals(self, video_id: str) -> str:
         "build_signals_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
     )
     try:
-        run_async(_signals_async(video_id))
+        run_async(_signals_async(video_id, creator_id))
     except SoftTimeLimitExceeded:
         # See ingest_video above — mark failed (no perpetual "running" spinner),
         # then re-raise immediately to fire on_failure without retry.
@@ -392,7 +395,7 @@ def generate_clips(self, video_id: str) -> str:
         "generate_clips_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
     )
     try:
-        run_async(_generate_clips_async(video_id))
+        run_async(_generate_clips_async(video_id, creator_id))
     except Exception as exc:
         raise self.retry(exc=exc) from exc
     log_event(
@@ -418,7 +421,7 @@ def render_clip(self, clip_id: str) -> str:
         "render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id
     )
     try:
-        run_async(_render_clip_async(clip_id))
+        run_async(_render_clip_async(clip_id, creator_id=creator_id))
     except (ValueError, FileNotFoundError) as exc:
         # Permanent — retrying cannot conjure a missing clip/source or fix a bad range.
         run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
@@ -552,12 +555,20 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
 
     cid = uuid.UUID(clip_id)
 
+    # Tenant bootstrap (Issue 231): resolve the owning creator once so every
+    # publication session runs on the RLS-gated app role with the GUC set.
+    creator_id_str = await _creator_id_for_clip(clip_id)
+    if creator_id_str is None:
+        raise ValueError(f"Clip {clip_id} not found")
+
     # Kill switch (Issue 284): when youtube_publish is off, record a clean
     # FAILED publication row (never a silent drop) and stop before any quota
     # or upload work. YouTubeUploadError is terminal in the task wrapper — the
     # blocked publish is surfaced, not retried into a paused subsystem.
-    if not await flag_enabled("youtube_publish", session_factory=db.AdminSessionLocal):
-        async with db.AdminSessionLocal() as session:
+    # feature_flags is a global operator table with no tenant rows — the
+    # default app-role factory reads it fine without a GUC.
+    if not await flag_enabled("youtube_publish"):
+        async with db.tenant_session(creator_id_str) as session:
             existing = (
                 await session.execute(
                     select(ClipPublication).where(ClipPublication.task_id == task_id)
@@ -582,7 +593,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         logger.warning("publish blocked for clip %s — youtube_publish kill switch is off", clip_id)
         raise YouTubeUploadError(503, "youtube_publish_disabled: publishing is paused by operators")
 
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(creator_id_str) as session:
         # Idempotency: a redelivery of the same task id that already succeeded is
         # a no-op — never a second upload (at-least-once → effectively once).
         existing = (
@@ -647,7 +658,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
                 privacy_status=settings.YOUTUBE_PUBLISH_PRIVACY,
             )
     except (YouTubeAuthError, YouTubeUploadError) as exc:
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id_str) as session:
             row = await session.get(ClipPublication, pub_id)
             if row is not None:
                 row.status = PublishStatus.failed
@@ -670,7 +681,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
     # (Issue 197). Both writes are committed together so a crash between them cannot
     # leave the publication done but the outcome missing.
     now_utc = datetime.now(UTC)
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(creator_id_str) as session:
         row = await session.get(ClipPublication, pub_id)
         if row is not None:
             row.youtube_video_id = video_id
@@ -914,12 +925,11 @@ async def _retrain_preference_async(creator_id: str) -> None:
     from preference.train import TRAINABLE_ACTIONS, build_and_save
 
     cid = uuid.UUID(creator_id)
-    # Audit fix (Issue-135 audit, scale-checklist D): the retrain reads
-    # ClipFeedback rows for a single creator. Use AdminSessionLocal so the
-    # RLS `after_begin` listener (which sets `app.creator_id` from
-    # session.info) doesn't NULL the predicate and silently fit an empty
-    # model. Worker-internal task — admin role is correct here.
-    async with db.AdminSessionLocal() as session:
+    # Issue 231: single-creator retrain runs on the RLS-gated app role with the
+    # GUC stamped, so a forgotten creator_id predicate can never fit a model on
+    # another tenant's feedback. (Supersedes the Issue-135 AdminSessionLocal fix,
+    # which predated tenant_session and left the retrain unprotected by RLS.)
+    async with db.tenant_session(cid) as session:
         # Advisory lock (Issue 105 — Fix 4): non-blocking variant so a concurrent
         # or redelivered task returns immediately rather than queueing behind a
         # stuck prior run. Template: _build_dna_async uses the xact variant;
@@ -1072,6 +1082,7 @@ async def _creator_id_for_video(video_id: str) -> str | None:
     the log_event still fires — just without the creator dimension.
     """
     try:
+        # AdminSessionLocal: tenant-id BOOTSTRAP — the creator is not known yet.
         async with db.AdminSessionLocal() as session:
             video = await session.get(Video, uuid.UUID(video_id))
             return str(video.creator_id) if video else None
@@ -1082,6 +1093,7 @@ async def _creator_id_for_video(video_id: str) -> str | None:
 async def _creator_id_for_clip(clip_id: str) -> str | None:
     """Return creator_id string for a clip, or None on any error."""
     try:
+        # AdminSessionLocal: tenant-id BOOTSTRAP — the creator is not known yet.
         async with db.AdminSessionLocal() as session:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             return str(clip.creator_id) if clip else None
@@ -1090,6 +1102,8 @@ async def _creator_id_for_clip(clip_id: str) -> str | None:
 
 
 async def _set_status(video_id: str, status: IngestStatus, *, reason: str | None = None) -> None:
+    # AdminSessionLocal: failure-path status write — runs from except blocks where
+    # the tenant may be unresolvable (that lookup may be the thing that failed).
     async with db.AdminSessionLocal() as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if video:
@@ -1117,7 +1131,21 @@ def _humanize_failure(exc: Exception, stage: str) -> str:
     return "Processing failed. Please try again, or contact support if it persists."
 
 
-async def _ingest_async(video_id: str) -> None:
+async def _tenant_id_or_raise(video_id: str, creator_id: str | None) -> str:
+    """Resolve the owning creator for a pipeline stage, or fail like a missing video.
+
+    Pipeline wrappers pass the creator id they already resolved for log context;
+    direct callers (tests, re-entry paths) fall back to the admin bootstrap. A
+    still-unresolvable id means the video row does not exist — the same terminal
+    condition the stage bodies previously raised from inside their session.
+    """
+    creator_id = creator_id or await _creator_id_for_video(video_id)
+    if creator_id is None:
+        raise ValueError(f"Video {video_id} not found")
+    return creator_id
+
+
+async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
     """Ingest stage of the upload chain.
 
     Progress (Issue 92): emits step events to ``task:{video_id}:events``.
@@ -1132,8 +1160,9 @@ async def _ingest_async(video_id: str) -> None:
 
     try:
         await aemit(video_id, "step", label="ingest_start", stage="ingest")
+        creator_id = await _tenant_id_or_raise(video_id, creator_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if not video:
                 raise ValueError(f"Video {video_id} not found")
@@ -1197,7 +1226,7 @@ async def _ingest_async(video_id: str) -> None:
             finally:
                 wav_path.unlink(missing_ok=True)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if video:
                 # Store the audio derivative on its own column; LEAVE source_uri as
@@ -1240,7 +1269,7 @@ async def _ingest_async(video_id: str) -> None:
         raise
 
 
-async def _transcribe_async(video_id: str) -> None:
+async def _transcribe_async(video_id: str, creator_id: str | None = None) -> None:
     """Transcribe stage of the upload chain. (Issue 92 progress wired.)"""
     from config import settings
     from ingestion.transcribe import transcribe_audio
@@ -1249,8 +1278,9 @@ async def _transcribe_async(video_id: str) -> None:
 
     try:
         await aemit(video_id, "step", label="transcribe_start", stage="transcribe")
+        creator_id = await _tenant_id_or_raise(video_id, creator_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if not video or not video.audio_uri:
                 raise ValueError(f"Video {video_id} not ready for transcription")
@@ -1306,7 +1336,7 @@ async def _transcribe_async(video_id: str) -> None:
             stage="transcribe",
             segment_count=len(result.get("segments", [])) if isinstance(result, dict) else 0,
         )
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             existing = await session.get(Transcript, uuid.UUID(video_id))
             if existing:
                 existing.source = result["source"]
@@ -1331,7 +1361,7 @@ async def _transcribe_async(video_id: str) -> None:
         raise
 
 
-async def _signals_async(video_id: str) -> None:
+async def _signals_async(video_id: str, creator_id: str | None = None) -> None:
     """Final stage of the upload chain. Emits the terminal ``done`` event."""
     from sqlalchemy import select
 
@@ -1342,8 +1372,9 @@ async def _signals_async(video_id: str) -> None:
 
     try:
         await aemit(video_id, "step", label="signals_start", stage="signals")
+        creator_id = await _tenant_id_or_raise(video_id, creator_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if not video or not video.audio_uri:
                 raise ValueError(f"Video {video_id} not ready for signal extraction")
@@ -1381,7 +1412,7 @@ async def _signals_async(video_id: str) -> None:
         await aemit(video_id, "step", label="build_timeline", stage="signals")
         timeline = build_signal_timeline(audio_events, retention_points)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             existing = await session.get(Signals, uuid.UUID(video_id))
             if existing:
                 existing.timeline_jsonb = timeline
@@ -1414,6 +1445,8 @@ async def _signals_async(video_id: str) -> None:
 
 
 async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
+    # AdminSessionLocal: failure-path status write — runs from except blocks where
+    # the tenant may be unresolvable (that lookup may be the thing that failed).
     async with db.AdminSessionLocal() as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
@@ -1452,7 +1485,7 @@ class _ClipRenderPlan:
     transcript_segments: list[dict] | None
 
 
-async def _load_clip_render_plan(clip_id: str) -> _ClipRenderPlan | None:
+async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPlan | None:
     """Lock the clip row, flip it to ``running``, and snapshot its render plan.
 
     Returns ``None`` (and emits the terminal ``done`` event) when the clip is
@@ -1463,7 +1496,7 @@ async def _load_clip_render_plan(clip_id: str) -> _ClipRenderPlan | None:
     """
     from worker.progress import aemit
 
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(creator_id) as session:
         clip = await session.get(Clip, uuid.UUID(clip_id), with_for_update=True)
         if not clip:
             raise ValueError(f"Clip {clip_id} not found")
@@ -1519,7 +1552,9 @@ async def _load_clip_render_plan(clip_id: str) -> _ClipRenderPlan | None:
         )
 
 
-async def _encode_and_upload_clip(clip_id: str, src: Path, plan: _ClipRenderPlan) -> None:
+async def _encode_and_upload_clip(
+    clip_id: str, src: Path, plan: _ClipRenderPlan, creator_id: str
+) -> None:
     """Encode one clip from an already-downloaded ``src`` and mark it ``done``.
 
     Split out of the download so several clips of one video can reuse a single
@@ -1565,7 +1600,7 @@ async def _encode_and_upload_clip(clip_id: str, src: Path, plan: _ClipRenderPlan
     finally:
         out_path.unlink(missing_ok=True)
 
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(creator_id) as session:
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
             clip.render_uri = render_uri
@@ -1576,7 +1611,9 @@ async def _encode_and_upload_clip(clip_id: str, src: Path, plan: _ClipRenderPlan
     await aemit(clip_id, "done", stage="render", message="Clip ready.")
 
 
-async def _render_clip_async(clip_id: str, src: Path | None = None) -> None:
+async def _render_clip_async(
+    clip_id: str, src: Path | None = None, creator_id: str | None = None
+) -> None:
     """Render a clip. Issue 92 progress wired — uses ``clip_id`` as the
     SSE stream key for the same deterministic-lookup reason as the upload
     chain. Per-frame ffmpeg progress is intentionally NOT parsed here (the
@@ -1593,15 +1630,18 @@ async def _render_clip_async(clip_id: str, src: Path | None = None) -> None:
 
     try:
         await aemit(clip_id, "step", label="render_start", stage="render")
-        plan = await _load_clip_render_plan(clip_id)
+        creator_id = creator_id or await _creator_id_for_clip(clip_id)
+        if creator_id is None:
+            raise ValueError(f"Clip {clip_id} not found")
+        plan = await _load_clip_render_plan(clip_id, creator_id)
         if plan is None:  # already rendered — skip emitted by the loader
             return
         if src is not None:
-            await _encode_and_upload_clip(clip_id, src, plan)
+            await _encode_and_upload_clip(clip_id, src, plan, creator_id)
         else:
             await aemit(clip_id, "step", label="download_source", stage="render")
             async with alocal_path(plan.source_uri) as downloaded:
-                await _encode_and_upload_clip(clip_id, downloaded, plan)
+                await _encode_and_upload_clip(clip_id, downloaded, plan, creator_id)
     except Exception as exc:
         # Don't promise a retry here — whether render_clip retries depends on the
         # error class (permanent ValueError/FileNotFoundError are terminal). Keep
@@ -1636,7 +1676,8 @@ async def _render_video_clips_async(video_id: str, clip_ids: list[str]) -> None:
 
     if not clip_ids:
         return
-    async with db.AdminSessionLocal() as session:
+    creator_id = await _tenant_id_or_raise(video_id, None)
+    async with db.tenant_session(creator_id) as session:
         video = await session.get(Video, uuid.UUID(video_id))
         if not video or not video.source_uri:
             raise ValueError(f"Source video not available for video {video_id}")
@@ -1645,7 +1686,7 @@ async def _render_video_clips_async(video_id: str, clip_ids: list[str]) -> None:
     async with alocal_path(source_uri) as src:
         for clip_id in clip_ids:
             try:
-                await _render_clip_async(clip_id, src=src)
+                await _render_clip_async(clip_id, src=src, creator_id=creator_id)
             except (ValueError, FileNotFoundError) as exc:
                 # Permanent for THIS clip (bad range / missing row) — retrying
                 # cannot fix it. Mark failed and keep rendering the siblings.
@@ -1700,8 +1741,11 @@ async def _clean_clip_async(clip_id: str) -> None:
 
     try:
         await aemit(clip_id, "step", label="clean_start", stage="clean")
+        creator_id = await _creator_id_for_clip(clip_id)
+        if creator_id is None:
+            raise ValueError(f"Clip {clip_id} not found")
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if not clip:
                 raise ValueError(f"Clip {clip_id} not found")
@@ -1719,7 +1763,7 @@ async def _clean_clip_async(clip_id: str) -> None:
             clip_origin_s = setup_start_s if setup_start_s is not None else start_s
             clip_duration_s = end_s - clip_origin_s
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             transcript = await session.get(Transcript, video_id)
             if not transcript or not isinstance(transcript.segments_jsonb, dict):
                 raise ValueError(f"Clip {clip_id}: transcript missing")
@@ -1797,7 +1841,7 @@ async def _clean_clip_async(clip_id: str) -> None:
             finally:
                 out_path.unlink(missing_ok=True)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if clip:
                 clip.cleaned_render_uri = cleaned_uri
@@ -1832,8 +1876,11 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
 
     try:
         await aemit(clip_id, "step", label="edit_start", stage="edit")
+        creator_id = await _creator_id_for_clip(clip_id)
+        if creator_id is None:
+            raise ValueError(f"Clip {clip_id} not found")
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if not clip:
                 raise ValueError(f"Clip {clip_id} not found")
@@ -1884,7 +1931,7 @@ async def _edit_clip_async(clip_id: str, cut_segments: list[list[float]]) -> Non
             finally:
                 out_path.unlink(missing_ok=True)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             clip = await session.get(Clip, uuid.UUID(clip_id))
             if clip:
                 clip.cleaned_render_uri = edited_uri
@@ -1946,7 +1993,7 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
             await aemit(job_id, event_type, **fields)  # type: ignore[arg-type]
 
     try:
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_uuid) as session:
             await _emit("step", label="acquire_lock")
             # Serialize concurrent builds for this creator. The xact-scoped advisory lock
             # is held until commit/rollback, so a concurrent same-job redelivery blocks
@@ -2128,6 +2175,7 @@ async def _sweep_scheduled_publications_async() -> None:
     now = datetime.now(UTC)
     lock_key = "sweep_scheduled_publications"
 
+    # AdminSessionLocal: genuine cross-tenant sweep — selects due rows across ALL creators.
     async with db.AdminSessionLocal() as session:
         acquired = (
             await session.execute(
@@ -2236,6 +2284,7 @@ async def _poll_clip_outcomes_async() -> None:
     # the looser 30-day floor explored in local Issue 46 before the timelines met.)
     cutoff_created = now - timedelta(days=10)
 
+    # AdminSessionLocal: genuine cross-tenant sweep — polls outcomes for ALL creators.
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task — only one instance
         # should run at a time. Non-blocking so a slow prior run doesn't queue.
@@ -2363,7 +2412,7 @@ async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
     return dict(row.style) if row and isinstance(row.style, dict) else {}
 
 
-async def _generate_clips_async(video_id: str) -> None:
+async def _generate_clips_async(video_id: str, creator_id: str | None = None) -> None:
     """Generate ranked clip candidates for a fully-ingested video.
 
     Wave-3 Fix E: emits progress events on the **same** ``task:{video_id}:events``
@@ -2395,7 +2444,8 @@ async def _generate_clips_async(video_id: str) -> None:
         # refresh after it closes; the actual enqueue happens after the session.
         auto_render_clip_ids: list[str] = []
 
-        async with db.AdminSessionLocal() as session:
+        creator_id = await _tenant_id_or_raise(video_id, creator_id)
+        async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, video_uuid)
             if not video:
                 raise ValueError(f"Video {video_id} not found")
@@ -2453,8 +2503,9 @@ async def _generate_clips_async(video_id: str) -> None:
             existing_clips = await load_existing_clips(session, video_uuid, clip_creator_id)
 
         # Issue 82b (pool starvation): the per-candidate LLM scoring round-trip
-        # (30–120 s) runs with NO admin DB session held — the read session above
-        # is closed, and persistence reacquires a fresh one below.
+        # (30–120 s) runs with NO DB session held — the read session above is
+        # closed, and persistence reacquires a fresh one below. The usage-ledger
+        # factory is a tenant_session partial so the cost write is RLS-gated too.
         await aemit(video_id, "step", label="score_and_rank", stage="generate_clips")
         ranked: list[dict] = []
         if not existing_clips:
@@ -2465,10 +2516,10 @@ async def _generate_clips_async(video_id: str) -> None:
                 dna_brief=dna_brief,
                 transcript_segments=transcript_segments,
                 max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
-                ledger_session_factory=db.AdminSessionLocal,
+                ledger_session_factory=partial(db.tenant_session, creator_id),
             )
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             # persist_ranked_clips re-runs the existing-clips guard on THIS
             # session, so the already-generated path returns clips attached to
             # the live session (the pre-scoring snapshot above is detached).
@@ -2594,6 +2645,7 @@ async def _purge_stale_source_media_async() -> None:
     # then reopen a short write transaction to null source_uri. Previously the
     # session was held across every delete_file call — N round-trips to R2
     # pinned a DB connection for the entire sweep.
+    # AdminSessionLocal: genuine cross-tenant sweep — ToS retention purge over ALL creators.
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task.
         acquired = (
@@ -2702,6 +2754,7 @@ async def _purge_stale_youtube_analytics_async() -> None:
 
     cutoff = datetime.now(UTC) - timedelta(days=settings.YOUTUBE_ANALYTICS_MAX_STALENESS_DAYS)
 
+    # AdminSessionLocal: genuine cross-tenant sweep — analytics retention purge over ALL creators.
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task.
         acquired = (
@@ -2784,6 +2837,7 @@ async def _expire_trials_async() -> None:
 
     from models import Creator
 
+    # AdminSessionLocal: genuine cross-tenant sweep — scans trial expiry for ALL creators.
     async with db.AdminSessionLocal() as session:
         now = datetime.now(UTC)
         window_start = now - timedelta(hours=25)
@@ -2888,6 +2942,7 @@ async def _run_lifecycle_scan_async() -> None:
 
     now = datetime.now(UTC)
 
+    # AdminSessionLocal: genuine cross-tenant sweep — lifecycle cohorts span ALL creators.
     async with db.AdminSessionLocal() as session:
         # ── First-clip nudge: signed up ≥ N days ago, never uploaded a video ──
         nudge_cutoff = now - timedelta(days=settings.LIFECYCLE_NUDGE_AFTER_DAYS)
@@ -2968,6 +3023,7 @@ async def _reconcile_stripe_ledger_async() -> None:
     skipped = 0
     errors = 0
 
+    # AdminSessionLocal: genuine cross-tenant sweep — reconciles Stripe sessions for ALL creators.
     async with db.AdminSessionLocal() as session:
         for cs in paid_sessions:
             stripe_session_id: str = cs["id"]
@@ -3111,7 +3167,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
     cid = uuid.UUID(creator_id)
     lock_key = f"catalog-sync:{cid}"
     try:
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(cid) as session:
             acquired = (
                 await session.execute(
                     text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
@@ -3282,6 +3338,7 @@ async def _refresh_youtube_analytics_async() -> None:
     from youtube.analytics import sync_audience_data, sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
 
+    # AdminSessionLocal: genuine cross-tenant sweep — Beat fan-out over ALL creators.
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task — only one instance
         # should iterate all creators at a time.
@@ -3487,7 +3544,7 @@ async def _collect_creator_export(session: Any, creator: Creator) -> dict:
 async def _set_data_export_failed(creator_id: str) -> None:
     from sqlalchemy import select
 
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(creator_id) as session:
         row = (
             await session.execute(
                 select(DataExport).where(DataExport.creator_id == uuid.UUID(creator_id))
@@ -3508,7 +3565,7 @@ async def _generate_data_export_async(job_id: str, creator_id: str) -> None:
     from worker.storage import aupload_file
 
     cid = uuid.UUID(creator_id)
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(cid) as session:
         row = (
             await session.execute(select(DataExport).where(DataExport.creator_id == cid))
         ).scalar_one_or_none()
@@ -3531,7 +3588,7 @@ async def _generate_data_export_async(job_id: str, creator_id: str) -> None:
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(cid) as session:
         row = (
             await session.execute(select(DataExport).where(DataExport.creator_id == cid))
         ).scalar_one_or_none()
@@ -3586,13 +3643,11 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
         await aemit(job_id, "step", label="improvement_brief_start", stage="improvement_brief")
 
         cid = uuid.UUID(creator_id)
-        async with db.AsyncSessionLocal() as session:
-            # Audit fix (Issue-135 audit, scale-checklist D): stamp creator_id so
-            # the RLS `after_begin` listener sets `app.creator_id` before any
-            # query. Without this the brief query + the VideoMetrics join return
-            # empty under the production role split, and the brief silently
-            # writes a `ready` row with no analytics.
-            session.info["creator_id"] = str(cid)
+        async with db.tenant_session(cid) as session:
+            # tenant_session stamps creator_id so the RLS `after_begin` listener
+            # sets `app.creator_id` before any query. Without it the brief query
+            # + the VideoMetrics join return empty under the production role
+            # split, and the brief silently writes a `ready` row with no analytics.
             row = (
                 await session.execute(
                     select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
@@ -3770,10 +3825,10 @@ async def _generate_video_analysis_async(
 ) -> None:
     """Fetch available data for the video + creator and call Claude (streaming).
 
-    Uses AdminSessionLocal (cross-tenant worker context) but enforces
-    per-creator isolation on every query via creator.id filters. The
-    analysis result is ephemeral — no row is persisted; the stream IS
-    the response.
+    Runs on the RLS-gated app role via ``tenant_session`` (Issue 231) —
+    per-creator isolation is enforced both by the query filters AND the DB
+    policies. The analysis result is ephemeral — no row is persisted; the
+    stream IS the response.
     """
     from collections.abc import Sequence
     from typing import Any
@@ -3790,7 +3845,7 @@ async def _generate_video_analysis_async(
         await aemit(job_id, "step", label="loading_data", stage="video_analysis")
 
         cid = uuid.UUID(creator_id)
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(cid) as session:
             creator = await session.get(Creator, cid)
             if creator is None:
                 await aemit(job_id, "error", stage="video_analysis", message="Creator not found.")
@@ -3983,7 +4038,7 @@ async def _generate_title_suggestions_async(
         cid = uuid.UUID(creator_id)
         vid = uuid.UUID(video_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(cid) as session:
             creator = await session.get(Creator, cid)
             if creator is None:
                 await aemit(
@@ -4127,7 +4182,7 @@ async def _generate_thumbnail_concepts_async(
         cid = uuid.UUID(creator_id)
         vid = uuid.UUID(video_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(cid) as session:
             creator = await session.get(Creator, cid)
             if creator is None:
                 await aemit(
@@ -4317,7 +4372,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
         cid = uuid.UUID(creator_id)
         vid = uuid.UUID(video_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(cid) as session:
             creator = await session.get(Creator, cid)
             if creator is None:
                 await aemit(job_id, "error", stage="hook_analysis", message="Creator not found.")
@@ -4498,7 +4553,7 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
         cid = uuid.UUID(creator_id)
         vid = uuid.UUID(video_id)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(cid) as session:
             video = await session.get(Video, vid)
             if video is None or video.creator_id != cid:
                 await aemit(job_id, "error", stage="chapters", message="Video not found.")
@@ -4615,10 +4670,10 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
     history_turns = settings.CHAT_HISTORY_TURNS
 
     try:
-        async with db.AsyncSessionLocal() as session:
-            # Set the per-creator GUC so RLS policies on chat_conversations and
-            # chat_messages (via conversation subquery) apply to this session.
-            session.info["creator_id"] = str(cid)
+        async with db.tenant_session(cid) as session:
+            # tenant_session sets the per-creator GUC so RLS policies on
+            # chat_conversations and chat_messages (via conversation subquery)
+            # apply to this session.
             conv = await session.get(ChatConversation, conv_uuid)
             if conv is None or conv.creator_id != cid:
                 # Ownership re-check in the worker (defense in depth — the router
@@ -4773,6 +4828,8 @@ async def _send_notification_async(
 
     cid = uuid.UUID(creator_id)
 
+    # AdminSessionLocal: spans RLS-exempt notification tables (preferences /
+    # deliveries have no tenant policy) — documented exception, see docstring.
     async with db.AdminSessionLocal() as session:
         # ── 1. Load creator (needed for the email address) ──────────────────
         creator = await session.get(Creator, cid)
@@ -4931,6 +4988,7 @@ async def _send_notification_async(
                 creator_id,
                 exc,
             )
+            # AdminSessionLocal: same non-RLS notification_deliveries exception as above.
             async with db.AdminSessionLocal() as fail_session:
                 fail_delivery = await fail_session.get(NotificationDelivery, delivery_id)
                 if fail_delivery is not None:
@@ -5048,6 +5106,7 @@ def _build_inapp_notification(
 async def _creator_id_for_summary(summary_id: str) -> str | None:
     """Return creator_id string for a summary, or None on any error."""
     try:
+        # AdminSessionLocal: tenant-id BOOTSTRAP — the creator is not known yet.
         async with db.AdminSessionLocal() as session:
             summary = await session.get(Summary, uuid.UUID(summary_id))
             return str(summary.creator_id) if summary else None
@@ -5056,6 +5115,8 @@ async def _creator_id_for_summary(summary_id: str) -> str | None:
 
 
 async def _set_summary_render_status(summary_id: str, status: RenderStatus) -> None:
+    # AdminSessionLocal: failure-path status write — runs from except blocks where
+    # the tenant may be unresolvable (that lookup may be the thing that failed).
     async with db.AdminSessionLocal() as session:
         summary = await session.get(Summary, uuid.UUID(summary_id))
         if summary:
@@ -5072,7 +5133,7 @@ class _SummaryRenderPlan:
     segments: list[tuple[float, float]]
 
 
-async def _load_summary_render_plan(summary_id: str) -> _SummaryRenderPlan | None:
+async def _load_summary_render_plan(summary_id: str, creator_id: str) -> _SummaryRenderPlan | None:
     """Lock the summary row, flip it to ``running``, and snapshot its plan.
 
     Returns ``None`` (and emits the terminal ``done`` event) when the recap is
@@ -5083,7 +5144,7 @@ async def _load_summary_render_plan(summary_id: str) -> _SummaryRenderPlan | Non
     """
     from worker.progress import aemit
 
-    async with db.AdminSessionLocal() as session:
+    async with db.tenant_session(creator_id) as session:
         summary = await session.get(Summary, uuid.UUID(summary_id), with_for_update=True)
         if not summary:
             raise ValueError(f"Summary {summary_id} not found")
@@ -5110,7 +5171,7 @@ async def _load_summary_render_plan(summary_id: str) -> _SummaryRenderPlan | Non
         return _SummaryRenderPlan(source_uri=source_uri, segments=segments)
 
 
-async def _render_summary_async(summary_id: str) -> None:
+async def _render_summary_async(summary_id: str, creator_id: str | None = None) -> None:
     """Render + upload the 16:9 recap. Emits step events keyed by ``summary_id``
     (the SSE stream key the UI subscribes to), mirroring ``_render_clip_async``:
     render_start → download_source → ffmpeg_encode → upload_r2 → done."""
@@ -5120,7 +5181,10 @@ async def _render_summary_async(summary_id: str) -> None:
 
     try:
         await aemit(summary_id, "step", label="render_start", stage="render")
-        plan = await _load_summary_render_plan(summary_id)
+        creator_id = creator_id or await _creator_id_for_summary(summary_id)
+        if creator_id is None:
+            raise ValueError(f"Summary {summary_id} not found")
+        plan = await _load_summary_render_plan(summary_id, creator_id)
         if plan is None:  # already rendered — terminal done emitted by the loader
             return
         await aemit(summary_id, "step", label="download_source", stage="render")
@@ -5148,7 +5212,7 @@ async def _render_summary_async(summary_id: str) -> None:
         finally:
             out_path.unlink(missing_ok=True)
 
-        async with db.AdminSessionLocal() as session:
+        async with db.tenant_session(creator_id) as session:
             summary = await session.get(Summary, uuid.UUID(summary_id))
             if summary:
                 summary.render_uri = render_uri
@@ -5188,7 +5252,7 @@ def render_summary(self, summary_id: str) -> str:
         video_id=summary_id,
     )
     try:
-        run_async(_render_summary_async(summary_id))
+        run_async(_render_summary_async(summary_id, creator_id))
     except (ValueError, FileNotFoundError) as exc:
         # Permanent — retrying cannot conjure a missing summary/segments/source.
         run_async(_set_summary_render_status(summary_id, RenderStatus.failed))

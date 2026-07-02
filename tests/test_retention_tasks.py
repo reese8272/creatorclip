@@ -357,14 +357,15 @@ def _signals_async_runner(video, *, retention_rows=()):
 
     async def run():
         with (
-            patch("db.AdminSessionLocal") as mock_ctx,
+            # Issue 231: _signals_async runs on tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal") as mock_ctx,
             patch("worker.storage.alocal_path", FakeLocalPath),
             patch("ingestion.audio.extract_audio_events", return_value={}),
             patch("ingestion.signals.build_signal_timeline", return_value={}),
         ):
             mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-            await _signals_async(str(video.id))
+            await _signals_async(str(video.id), str(uuid.uuid4()))
 
     return run(), session
 

@@ -40,12 +40,14 @@ async def test_transcribe_short_circuits_when_already_done() -> None:
 
     with (
         patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
+        # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm),
         patch("worker.progress.aemit", new_callable=AsyncMock),
         patch("ingestion.transcribe.transcribe_audio") as mock_transcribe,
     ):
         from worker.tasks import _transcribe_async
 
-        await _transcribe_async(video_id)
+        await _transcribe_async(video_id, str(uuid.uuid4()))
 
     # The paid Deepgram / WhisperX / AssemblyAI call must never fire.
     mock_transcribe.assert_not_called()
@@ -82,12 +84,14 @@ async def test_signals_short_circuits_when_already_done() -> None:
 
     with (
         patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
+        # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm),
         patch("worker.progress.aemit", new_callable=AsyncMock),
         patch("ingestion.audio.extract_audio_events") as mock_extract,
     ):
         from worker.tasks import _signals_async
 
-        await _signals_async(video_id)
+        await _signals_async(video_id, str(uuid.uuid4()))
 
     mock_extract.assert_not_called()
 
@@ -133,13 +137,15 @@ async def test_ingest_short_circuits_when_source_uri_endswith_wav() -> None:
 
     with (
         patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
+        # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm),
         patch("worker.progress.aemit", new_callable=AsyncMock),
         patch("worker.storage.alocal_path", _valid_wav),
         patch("worker.tasks.asyncio.to_thread") as mock_to_thread,
     ):
         from worker.tasks import _ingest_async
 
-        await _ingest_async(video_id)
+        await _ingest_async(video_id, str(uuid.uuid4()))
 
     # No ffmpeg / audio-extract work should have been dispatched.
     mock_to_thread.assert_not_called()
@@ -186,6 +192,8 @@ async def test_ingest_wav_zero_byte_falls_through() -> None:
 
     with (
         patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
+        # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm),
         patch("worker.progress.aemit", new_callable=AsyncMock),
         patch("worker.storage.alocal_path", _zero_byte_wav),
         patch("worker.tasks.asyncio.to_thread") as mock_to_thread,
@@ -198,7 +206,7 @@ async def test_ingest_wav_zero_byte_falls_through() -> None:
         from worker.tasks import _ingest_async
 
         with pytest.raises(RuntimeError, match="short-circuit bypassed"):
-            await _ingest_async(video_id)
+            await _ingest_async(video_id, str(uuid.uuid4()))
 
     # alocal_path was called (at least once for the probe), confirming the function
     # did NOT return early before reaching the extraction path.
@@ -243,6 +251,8 @@ async def test_sync_channel_catalog_acquires_advisory_lock() -> None:
 
     with (
         patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm),
+        # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm),
         patch("worker.progress.aemit", new_callable=AsyncMock),
     ):
         from worker.tasks import _sync_channel_catalog_async
@@ -272,10 +282,9 @@ async def test_retrain_preference_acquires_advisory_lock() -> None:
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
-    # Issue-135 audit fix: _retrain_preference_async now opens an
-    # AdminSessionLocal (worker-internal pass, bypasses RLS) instead of
-    # AsyncSessionLocal — patch the correct factory.
-    with patch("worker.tasks.db.AdminSessionLocal", return_value=mock_session_cm):
+    # Issue 231: _retrain_preference_async runs on the RLS-gated app role via
+    # db.tenant_session — patch the app factory.
+    with patch("worker.tasks.db.AsyncSessionLocal", return_value=mock_session_cm):
         from worker.tasks import _retrain_preference_async
 
         await _retrain_preference_async(creator_id)

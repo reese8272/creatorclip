@@ -68,6 +68,8 @@ async def test_ingest_async_emits_step_sequence_using_video_id(mocker):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     # Stub IO: alocal_path yields a Path-like; ffmpeg + R2 upload are no-ops.
     fake_local_cm = MagicMock()
@@ -134,6 +136,8 @@ async def test_signals_async_emits_non_terminal_ingest_complete(mocker):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     fake_local_cm = MagicMock()
     fake_local_cm.__aenter__ = AsyncMock(return_value="/tmp/x.wav")
@@ -190,6 +194,8 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
     fake_clips = []
@@ -214,7 +220,7 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     # renders every clip from a single source download.
     delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
 
-    await tasks._generate_clips_async(video_id)
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))
 
     # All emits keyed by video_id — same stream key as the upload chain so
     # the SSE consumer stays subscribed across stages.
@@ -273,6 +279,8 @@ def _generate_clips_scaffold(mocker, *, clips, brand_kit_style=None):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
     mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
     # Issue 82b split: session-free scoring + reacquired-session persistence.
     mocker.patch("clip_engine.ranking.load_existing_clips", AsyncMock(return_value=[]))
@@ -297,7 +305,7 @@ async def test_generate_clips_async_skips_auto_render_when_disabled(mocker):
     video_id, _ = _generate_clips_scaffold(mocker, clips=clips)
     delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
 
-    await tasks._generate_clips_async(video_id)
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))
 
     delay_mock.assert_not_called()
 
@@ -322,7 +330,7 @@ async def test_generate_clips_async_seeds_brand_kit_and_caps_top_n(mocker):
     video_id, _ = _generate_clips_scaffold(mocker, clips=clips, brand_kit_style=kit)
     delay_mock = mocker.patch("worker.tasks.render_video_clips.delay")
 
-    await tasks._generate_clips_async(video_id)
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))
 
     # Top-2 by rank (ranks 1 and 2) enqueue in the single batch; rank-3 does not.
     delay_mock.assert_called_once()
@@ -358,8 +366,10 @@ async def test_generate_clips_async_emits_done_on_idempotent_short_circuit(mocke
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
-    await tasks._generate_clips_async(video_id)
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))
 
     labels = _emit_labels(fake_emit)
     assert labels[-1] == "done", (
@@ -403,6 +413,8 @@ async def test_render_async_emits_step_sequence_using_clip_id(mocker):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     fake_local_cm = MagicMock()
     fake_local_cm.__aenter__ = AsyncMock(return_value="/tmp/src.mp4")
@@ -414,7 +426,7 @@ async def test_render_async_emits_step_sequence_using_clip_id(mocker):
     )
     mocker.patch("clip_engine.render.render_clip_file", MagicMock())
 
-    await tasks._render_clip_async(clip_id)
+    await tasks._render_clip_async(clip_id, creator_id=str(uuid.uuid4()))
 
     # All emits keyed by clip_id (deterministic stream key for the render UI).
     for call in fake_emit.call_args_list:
@@ -471,6 +483,8 @@ async def test_sync_channel_catalog_emits_per_video_progress(mocker):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     mocker.patch(
         "youtube.oauth.get_valid_access_token",
@@ -550,6 +564,8 @@ async def test_sync_channel_catalog_emits_skip_step_on_per_video_failure(mocker)
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     mocker.patch(
         "youtube.oauth.get_valid_access_token",
@@ -616,6 +632,8 @@ async def test_sync_channel_catalog_silent_when_no_task_id(mocker):
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     mocker.patch(
         "youtube.oauth.get_valid_access_token",

@@ -456,3 +456,263 @@ async def test_oauth_callback_tenant_write_requires_guc(admin_engine, db_session
             await s.flush()  # must not raise
     finally:
         await _cleanup(db_session, [creator.id])
+
+
+# ── Issue 231: child-table RLS + worker tenant_session write paths ────────────
+#
+# Migration 0040 policed video_metrics / retention_curves / transcripts /
+# clip_outcomes / chat_messages via the parent-subquery pattern; 0044 closed the
+# `signals` gap; 0041 gave `summaries` a direct creator_id policy. With the
+# worker sweep to db.tenant_session, these policies now gate WRITES (WITH CHECK)
+# for the first time — the tests below prove both directions under the real
+# creatorclip_app role.
+
+from models import (  # noqa: E402
+    ChatConversation,
+    ChatMessage,
+    ChatRole,
+    ClipOutcome,
+    RetentionCurve,
+    Signals,
+    Summary,
+    Transcript,
+    VideoMetrics,
+)
+
+
+async def _seed_creator_with_children(session: AsyncSession, *, label: str) -> dict:
+    """Seed a creator + video + clip + one row in every FK-chained child table.
+
+    Returns the ids the child-table assertions key on.
+    """
+    creator = await _seed_creator(session, label=label)
+    now = datetime.now(UTC)
+    video = Video(
+        creator_id=creator.id,
+        youtube_video_id=f"yt_{uuid.uuid4().hex[:8]}",
+        title="child fixture",
+        kind=VideoKind.long,
+        duration_s=300.0,
+        source_uri="s3://test/source/child.mp4",
+        ingest_status=IngestStatus.done,
+    )
+    session.add(video)
+    await session.flush()
+    clip = Clip(
+        video_id=video.id,
+        creator_id=creator.id,
+        start_s=10.0,
+        end_s=50.0,
+        peak_s=30.0,
+        format=ClipFormat.short,
+        render_status=RenderStatus.pending,
+    )
+    session.add(clip)
+    await session.flush()
+    convo = ChatConversation(creator_id=creator.id, title="child fixture")
+    session.add(convo)
+    await session.flush()
+
+    session.add(VideoMetrics(video_id=video.id, views=100, fetched_at=now))
+    session.add(RetentionCurve(video_id=video.id, timestamp_s=1.0, audience_watch_ratio=0.9))
+    session.add(Transcript(video_id=video.id, source="test", segments_jsonb={"segments": []}))
+    session.add(Signals(video_id=video.id, timeline_jsonb={"peaks": []}))
+    session.add(ClipOutcome(clip_id=clip.id, published_youtube_id="yt_x", fetched_at=now))
+    session.add(ChatMessage(conversation_id=convo.id, role=ChatRole.user, content="hi"))
+    session.add(
+        Summary(creator_id=creator.id, video_id=video.id, target_duration_s=60, segments=[])
+    )
+    await session.commit()
+    return {
+        "creator_id": creator.id,
+        "video_id": video.id,
+        "clip_id": clip.id,
+        "conversation_id": convo.id,
+    }
+
+
+# (table, fk_column) — the FK that reaches the tenant via the policied parent.
+_CHILD_TABLES = (
+    ("video_metrics", "video_id"),
+    ("retention_curves", "video_id"),
+    ("transcripts", "video_id"),
+    ("signals", "video_id"),
+    ("clip_outcomes", "clip_id"),
+    ("chat_messages", "conversation_id"),
+)
+
+_CHILD_FK_KEY = {"video_id": "video_id", "clip_id": "clip_id", "conversation_id": "conversation_id"}
+
+
+@pytest.mark.asyncio
+async def test_rls_child_tables_block_cross_tenant_reads(admin_engine, db_session):
+    """Under the app role with Creator A's GUC, an unfiltered SELECT on every
+    child table returns none of Creator B's rows — and with the GUC unset,
+    zero rows (deny-by-default). AdminSessionLocal-style superuser sessions
+    (the sweep path) still see everything."""
+    a = await _seed_creator_with_children(db_session, label="childA")
+    b = await _seed_creator_with_children(db_session, label="childB")
+
+    try:
+        factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+
+        # App role, NO GUC: deny-by-default on every child table. Runs FIRST —
+        # once a pooled connection has carried the GUC, current_setting() on it
+        # returns '' (not NULL) after commit, so this check needs clean
+        # connections to exercise the truly-never-set predicate path.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            for table, _fk in _CHILD_TABLES:
+                n = (await s.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one()
+                assert n == 0, f"deny-by-default failed on {table}: {n} rows with no GUC"
+
+        # App role + GUC(A): B's rows invisible on every child table.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await s.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(a["creator_id"])},
+            )
+            for table, fk in _CHILD_TABLES:
+                rows = {r[0] for r in (await s.execute(text(f"SELECT {fk} FROM {table}"))).all()}
+                assert b[_CHILD_FK_KEY[fk]] not in rows, (
+                    f"RLS leak on child table {table}: creator B's row visible to creator A"
+                )
+                assert a[_CHILD_FK_KEY[fk]] in rows, (
+                    f"RLS over-block on {table}: creator A cannot see their own row"
+                )
+            # summaries carries a direct creator_id (migration 0041).
+            owners = {
+                r[0] for r in (await s.execute(text("SELECT creator_id FROM summaries"))).all()
+            }
+            assert owners == {a["creator_id"]}
+
+        # Superuser/BYPASSRLS (the AdminSessionLocal sweep path): sees both tenants.
+        async with factory() as s:
+            for table, fk in _CHILD_TABLES:
+                rows = {r[0] for r in (await s.execute(text(f"SELECT {fk} FROM {table}"))).all()}
+                assert {a[_CHILD_FK_KEY[fk]], b[_CHILD_FK_KEY[fk]]} <= rows, (
+                    f"sweep path must see all tenants on {table}"
+                )
+    finally:
+        await _cleanup(db_session, [a["creator_id"], b["creator_id"]])
+
+
+@pytest.mark.asyncio
+async def test_rls_child_table_writes_enforce_with_check(admin_engine, db_session):
+    """WITH CHECK is live on the ingestion write path (Issue 231): under the app
+    role with Creator A's GUC, inserting a signals/transcript row for A's video
+    succeeds, and inserting one for B's video is rejected by RLS. `signals` is
+    the table migration 0044 policed — this is its first write-path proof."""
+    from sqlalchemy.exc import DBAPIError
+
+    a = await _seed_creator_with_children(db_session, label="wcA")
+    b = await _seed_creator_with_children(db_session, label="wcB")
+
+    # A second video for A with no child rows yet, so inserts don't collide.
+    video_a2 = Video(
+        creator_id=a["creator_id"],
+        youtube_video_id=f"yt_{uuid.uuid4().hex[:8]}",
+        kind=VideoKind.long,
+        duration_s=60.0,
+        ingest_status=IngestStatus.done,
+    )
+    db_session.add(video_a2)
+    await db_session.commit()
+
+    factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        # Own-tenant write passes WITH CHECK.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await s.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(a["creator_id"])},
+            )
+            s.add(Signals(video_id=video_a2.id, timeline_jsonb={"peaks": [1]}))
+            s.add(Transcript(video_id=video_a2.id, source="test", segments_jsonb={}))
+            await s.flush()  # must not raise
+            await s.rollback()
+
+        # Cross-tenant write is rejected: A's GUC, B's video.
+        async with factory() as s:
+            await s.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await s.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(a["creator_id"])},
+            )
+            s.add(Signals(video_id=b["video_id"], timeline_jsonb={"peaks": [666]}))
+            with pytest.raises(DBAPIError) as exc_info:
+                await s.flush()
+            assert "row-level security" in str(exc_info.value).lower()
+    finally:
+        await _cleanup(db_session, [a["creator_id"], b["creator_id"]])
+
+
+@pytest_asyncio.fixture
+async def app_role_engine():
+    """Engine that LOGS IN as the non-BYPASSRLS creatorclip_app role — what the
+    production app/worker pods do. Skips when the local cluster's app role has
+    no matching login credential."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(settings.DATABASE_URL).set(username="creatorclip_app")
+    eng = create_async_engine(url, pool_pre_ping=True)
+    try:
+        async with eng.connect() as conn:
+            bypass = (
+                await conn.execute(
+                    text("SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user")
+                )
+            ).scalar_one()
+    except Exception as exc:  # pragma: no cover — env-dependent skip
+        await eng.dispose()
+        pytest.skip(f"cannot log in as creatorclip_app on the local cluster: {exc}")
+    assert bypass is False, "creatorclip_app must NOT have BYPASSRLS"
+    yield eng
+    await eng.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_render_plan_end_to_end_under_app_role(
+    admin_engine, db_session, app_role_engine, monkeypatch
+):
+    """A real worker function (_load_clip_render_plan) runs end-to-end on the
+    app role via db.tenant_session — including its WRITE (clip → running, an
+    UPDATE that must pass USING + WITH CHECK) — and RLS hides another tenant's
+    clip from it entirely."""
+    import db as db_module
+    from worker.tasks import _load_clip_render_plan
+
+    a = await _seed_creator_with_children(db_session, label="taskA")
+    b = await _seed_creator_with_children(db_session, label="taskB")
+
+    app_factory = async_sessionmaker(app_role_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "AsyncSessionLocal", app_factory)
+
+    try:
+        # Own clip: plan loads AND the running-status write commits under RLS.
+        plan = await _load_clip_render_plan(str(a["clip_id"]), str(a["creator_id"]))
+        assert plan is not None
+        assert plan.source_uri == "s3://test/source/child.mp4"
+        status = (
+            await db_session.execute(
+                text("SELECT render_status FROM clips WHERE id = :cid"),
+                {"cid": a["clip_id"]},
+            )
+        ).scalar_one()
+        assert status == "running", "worker write under the app role must have committed"
+
+        # Cross-tenant clip: invisible under A's GUC — the worker cannot even
+        # observe it, let alone flip its status.
+        with pytest.raises(ValueError, match="not found"):
+            await _load_clip_render_plan(str(b["clip_id"]), str(a["creator_id"]))
+        status_b = (
+            await db_session.execute(
+                text("SELECT render_status FROM clips WHERE id = :cid"),
+                {"cid": b["clip_id"]},
+            )
+        ).scalar_one()
+        assert status_b == "pending", "creator B's clip must be untouched"
+    finally:
+        await _cleanup(db_session, [a["creator_id"], b["creator_id"]])

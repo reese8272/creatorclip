@@ -45,6 +45,8 @@ def _mock_session(mocker, get_side_effect) -> AsyncMock:
     fake_session_cm.__aenter__ = AsyncMock(return_value=fake_session)
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
+    # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
+    mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
     return fake_session
 
 
@@ -79,7 +81,7 @@ async def test_redelivery_of_rendered_summary_noops(mocker):
     mocker.patch("worker.storage.aupload_file", fake_upload)
     fake_render = mocker.patch("clip_engine.render.render_summary_file", MagicMock())
 
-    await tasks._render_summary_async(summary_id)
+    await tasks._render_summary_async(summary_id, str(uuid.uuid4()))
 
     fake_render.assert_not_called()
     fake_upload.assert_not_called()
@@ -105,7 +107,7 @@ async def test_missing_source_raises_actionable_valueerror(mocker):
     mocker.patch("worker.progress.aemit", fake_emit)
 
     with pytest.raises(ValueError, match="retention window.*re-upload"):
-        await tasks._render_summary_async(summary_id)
+        await tasks._render_summary_async(summary_id, str(uuid.uuid4()))
 
     assert "error" in _emit_labels(fake_emit)
 
@@ -139,7 +141,7 @@ async def test_happy_path_emits_steps_and_marks_done(mocker, tmp_path):
 
     fake_render = mocker.patch("clip_engine.render.render_summary_file", MagicMock())
 
-    await tasks._render_summary_async(summary_id)
+    await tasks._render_summary_async(summary_id, str(uuid.uuid4()))
 
     # render got the chronological (start,end) tuples from segments JSONB
     kwargs = fake_render.call_args.kwargs
@@ -188,7 +190,7 @@ def summary_harness(monkeypatch):
     monkeypatch.setattr(tasks.render_summary, "retry", _fake_retry)
 
     def _set_render_async(exc):
-        async def _impl(summary_id):
+        async def _impl(summary_id, creator_id=None):
             raise exc
 
         monkeypatch.setattr(tasks, "_render_summary_async", _impl)
@@ -222,7 +224,7 @@ def test_transient_error_retries(summary_harness):
 def test_success_returns_summary_id(summary_harness, monkeypatch):
     tasks, statuses, retry_calls, _ = summary_harness
 
-    async def _ok(summary_id):
+    async def _ok(summary_id, creator_id=None):
         return None
 
     monkeypatch.setattr(tasks, "_render_summary_async", _ok)
