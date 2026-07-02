@@ -1,37 +1,11 @@
 """
 Tests for Issue 15 — connected user flow + auth guard.
-Covers: auth.js served, nav present in all pages, review page accepts video_id param,
-OAuth callback redirects to root, all pages include auth guard script.
+Covers: nav present in all pages, review page accepts video_id param,
+OAuth callback redirects to root. auth.js served/guard tests removed with the
+file itself (Issue 148 close-out — legacy static app retired in Issue 226).
 """
 
 import pytest
-
-# ── auth.js served ────────────────────────────────────────────────────────────
-
-
-def test_auth_js_served(client):
-    resp = client.get("/static/auth.js")
-    assert resp.status_code == 200
-    assert (
-        "javascript" in resp.headers["content-type"]
-        or "text/plain" in resp.headers["content-type"]
-        or "application/javascript" in resp.headers.get("content-type", "")
-    )
-
-
-def test_auth_js_contains_guard(client):
-    resp = client.get("/static/auth.js")
-    content = resp.text
-    assert "/auth/me" in content
-    assert "auth:ready" in content
-    assert "window.location" in content
-
-
-def test_auth_js_contains_logout(client):
-    resp = client.get("/static/auth.js")
-    assert "logout" in resp.text
-    assert "/auth/logout" in resp.text
-
 
 # ── All pages include auth.js ─────────────────────────────────────────────────
 
