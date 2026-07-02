@@ -279,3 +279,41 @@ def test_audit_log_written_even_when_storage_purge_raises(client):
     )
     assert audit_row.action == "creator.deleted"
     assert audit_row.entity_id == creator.id
+
+
+# ── Issue 352 Batch C: revoke token via POST body, never the query string ─────
+
+
+def test_delete_account_revokes_token_via_post_body(client):
+    """The decrypted refresh token must travel in the form-encoded POST body per
+    Google's revoke spec — a query-string token leaks into proxy/access logs."""
+    from crypto import encrypt
+
+    creator = _make_creator()
+    token_row = MagicMock()
+    token_row.refresh_token_encrypted = encrypt("refresh-secret-123")
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _fake_session(token_row=token_row)
+
+    http_client = AsyncMock()
+    http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=http_client)
+    client_cm.__aexit__ = AsyncMock(return_value=False)
+
+    try:
+        with (
+            patch("worker.storage.delete_prefix", return_value=0),
+            patch("routers.auth.httpx.AsyncClient", return_value=client_cm),
+        ):
+            resp = client.delete("/auth/me", cookies=_session_cookie_for(creator))
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 204
+    assert http_client.post.await_count == 1
+    args, kwargs = http_client.post.await_args
+    assert args[0] == "https://oauth2.googleapis.com/revoke"
+    assert kwargs.get("data") == {"token": "refresh-secret-123"}
+    assert "params" not in kwargs, "token must never be sent in the query string"

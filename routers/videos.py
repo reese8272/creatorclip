@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
@@ -305,7 +306,14 @@ async def link_video(
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Double-submit race (Issue 352 Batch C): both requests passed the
+        # SELECT above; the loser violates UNIQUE(creator_id, youtube_video_id)
+        # at commit. Same clean 409 as the check-first path — never a raw 500.
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Video already registered") from None
     await session.refresh(video)
 
     from observability import log_event
@@ -453,7 +461,15 @@ async def upload_video(
         ingest_status=IngestStatus.pending,
     )
     session.add(video)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Double-submit race (Issue 352 Batch C): both uploads passed the dedupe
+        # SELECT; the loser violates UNIQUE(creator_id, youtube_video_id) at
+        # commit → clean 409, not a raw 500. Standalone uploads
+        # (youtube_video_id IS NULL) never conflict — NULLs are distinct.
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Video already registered") from None
     await session.refresh(video)
 
     # Issue 92: stamp ownership for the upload chain's SSE stream. The worker

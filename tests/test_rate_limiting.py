@@ -140,6 +140,48 @@ def test_submit_feedback_has_120_per_minute_limit():
     )
 
 
+# ── Issue 352 Batch C: previously unthrottled endpoints ──────────────────────
+
+
+def test_oauth_callback_has_20_per_minute_limit():
+    import routers.auth  # noqa: F401
+
+    assert _has_limit("routers.auth.callback", "20", "minute"), (
+        f"Expected 20/minute, got: {_limits_for('routers.auth.callback')}"
+    )
+
+
+def test_login_has_30_per_minute_limit():
+    import routers.auth  # noqa: F401
+
+    assert _has_limit("routers.auth.login", "30", "minute"), (
+        f"Expected 30/minute, got: {_limits_for('routers.auth.login')}"
+    )
+
+
+def test_connect_publishing_has_30_per_minute_limit():
+    import routers.auth  # noqa: F401
+
+    assert _has_limit("routers.auth.connect_publishing", "30", "minute"), (
+        f"Expected 30/minute, got: {_limits_for('routers.auth.connect_publishing')}"
+    )
+
+
+def test_chat_and_logs_reads_have_120_per_minute_limit():
+    import routers.chat  # noqa: F401
+    import routers.logs  # noqa: F401
+
+    for qualname in (
+        "routers.chat.list_conversations",
+        "routers.chat.get_messages",
+        "routers.chat.delete_conversation",
+        "routers.logs.my_events",
+    ):
+        assert _has_limit(qualname, "120", "minute"), (
+            f"Expected 120/minute on {qualname}, got: {_limits_for(qualname)}"
+        )
+
+
 # ── 429 with Retry-After when limit exceeded ─────────────────────────────────
 
 

@@ -92,7 +92,9 @@ def _make_lock_redis() -> AsyncMock:
 
 
 def test_delete_account_revokes_refresh_token(client):
-    """The revoke URL must be hit with the decrypted refresh token, not the access token."""
+    """The revoke URL must be hit with the decrypted refresh token, not the access
+    token — and in the form-encoded POST body, never the query string, which
+    leaks into proxy/access logs (Issue 352 Batch C)."""
     from crypto import encrypt
 
     creator = _make_creator()
@@ -124,9 +126,10 @@ def test_delete_account_revokes_refresh_token(client):
         async def __aexit__(self, *args):
             return False
 
-        async def post(self, url, params=None, **kwargs):
+        async def post(self, url, params=None, data=None, **kwargs):
             captured["url"] = url
             captured["params"] = params or {}
+            captured["data"] = data or {}
             return _FakeResponse(200)
 
     try:
@@ -140,7 +143,8 @@ def test_delete_account_revokes_refresh_token(client):
 
     assert resp.status_code == 204
     assert captured["url"] == "https://oauth2.googleapis.com/revoke"
-    assert captured["params"].get("token") == "refresh-secret"
+    assert captured["data"].get("token") == "refresh-secret"
+    assert "token" not in captured["params"], "token must never be sent in the query string"
 
 
 def test_delete_account_tolerates_400_invalid_token(client):
