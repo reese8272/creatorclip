@@ -178,7 +178,7 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
         {"type": "text", "text": INTAKE_SYSTEM, "cache_control": {"type": "ephemeral"}}
     ]
     tools: list[Any] = [PROPOSE_PROFILE_TOOL]
-    total_in = total_out = 0
+    total_in = total_out = total_cache_read = total_cache_creation = 0
     proposal: dict[str, Any] | None = None
     reply = ""
 
@@ -215,6 +215,10 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
         usage = getattr(message, "usage", None)
         total_in += getattr(usage, "input_tokens", 0) or 0
         total_out += getattr(usage, "output_tokens", 0) or 0
+        # Cache tiers are priced separately by the ledger — attribute cached
+        # traffic instead of leaving it invisible (matches chat/runner.py).
+        total_cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
+        total_cache_creation += getattr(usage, "cache_creation_input_tokens", 0) or 0
         warn_if_truncated(
             settings.ANTHROPIC_MODEL_INTAKE,
             getattr(message, "stop_reason", None),
@@ -271,9 +275,11 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
 
     record_llm_tokens(
         provider="anthropic",
-        model=settings.ANTHROPIC_MODEL,
+        model=settings.ANTHROPIC_MODEL_INTAKE,
         input_tokens=total_in,
         output_tokens=total_out,
+        cache_read_tokens=total_cache_read,
+        cache_creation_tokens=total_cache_creation,
     )
     logger.info(
         "intake turn creator=%s in=%d out=%d proposal=%s",

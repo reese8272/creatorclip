@@ -104,6 +104,32 @@ async def test_persistently_invalid_proposal_writes_nothing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_usage_recorded_against_intake_model_with_cache_tokens(monkeypatch):
+    """Cost attribution (Issue 352): usage is logged against ANTHROPIC_MODEL_INTAKE
+    (the model actually invoked) and includes the cache token tiers the ledger prices."""
+    from config import settings
+
+    msg = _msg([_text("What's your channel about?")])
+    msg.usage.cache_read_input_tokens = 42
+    msg.usage.cache_creation_input_tokens = 17
+    _patch_create(monkeypatch, return_value=msg)
+
+    recorded: dict = {}
+
+    def _fake_record(**kwargs):
+        recorded.update(kwargs)
+
+    monkeypatch.setattr(intake, "record_llm_tokens", _fake_record)
+
+    await intake.run_intake_turn(uuid.uuid4(), [{"role": "user", "content": "hi"}])
+    assert recorded["model"] == settings.ANTHROPIC_MODEL_INTAKE
+    assert recorded["input_tokens"] == 10
+    assert recorded["output_tokens"] == 5
+    assert recorded["cache_read_tokens"] == 42
+    assert recorded["cache_creation_tokens"] == 17
+
+
+@pytest.mark.asyncio
 async def test_runaway_guard_bails_before_calling_the_model(monkeypatch):
     create = _patch_create(monkeypatch, return_value=_msg([_text("...")]))
     long_history = [{"role": "user", "content": "x"}] * (intake.MAX_INTAKE_TURNS * 2 + 1)
