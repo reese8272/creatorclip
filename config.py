@@ -417,6 +417,13 @@ class Settings(BaseSettings):
     # cost is ~10-60 units/creator (catalog list + per-video metadata + reports),
     # so 300 leaves wide headroom while capping pathological fan-out.
     YOUTUBE_QUOTA_PER_CREATOR_REFRESH_UNITS: int = 300
+    # videos.insert daily CALL budget (Issue 352 Batch D). Since Google's
+    # 2026-06-01 API update, videos.insert bills to its OWN ~100-calls/day
+    # bucket at 1 call each — NOT 100 units of the shared 10k read pool
+    # (developers.google.com/youtube/v3/determine_quota_cost, verified
+    # 2026-07-02). Tracked in a dedicated Redis day-counter; Google's own
+    # quotaExceeded 403 remains the hard enforcer.
+    YOUTUBE_QUOTA_INSERT_DAILY_CALLS: int = 100
     # TTL (seconds) for the Redis-backed ETag/body cache used for conditional
     # YouTube Data API GETs (Issue 260). A cached 304 (If-None-Match match)
     # returns the stored body and spends NO quota — the measurable quota-unit
