@@ -105,7 +105,6 @@ def compute_creator_metrics(
     import random as _random
 
     from clip_engine.scoring import _signal_score
-    from preference.model import preference_weight
 
     if len({c.relevance for c in eval_clips}) < 2:
         return None
@@ -121,15 +120,7 @@ def compute_creator_metrics(
     # (no leakage), then blend exactly as rerank_with_preference does. Below the
     # personalization threshold the weight is 0 → the blend reduces to the DNA composite,
     # which is the honest production behavior.
-    scorer = _train_scorer(train)
-    weight = preference_weight(len(train)) if scorer is not None else 0.0
-    if scorer is not None and weight > 0.0:
-        blend_scores = [
-            (1.0 - weight) * c.dna_composite + weight * scorer.predict_score(c.features)
-            for c in eval_clips
-        ]
-    else:
-        blend_scores = [c.dna_composite for c in eval_clips]
+    blend_scores = _blend_scores(train, eval_clips)
 
     order = {"random": rand_scores, "generic_signal": signal_scores, "dna_preference": blend_scores}
     m = CreatorMetrics(creator_id=eval_clips[0].clip_id, n_eval=len(eval_clips))
@@ -145,9 +136,13 @@ def compute_creator_metrics(
     return m
 
 
-def _train_scorer(train: list[LabeledClip]):
+def _train_scorer(train: list[LabeledClip], half_life_days: float | None = None):
     """Fit a PreferenceScorer on the train split, reproducing preference.train.build_and_save's
-    label/weight construction. Returns None when there aren't 2 classes to fit."""
+    label/weight construction. Returns None when there aren't 2 classes to fit.
+
+    ``half_life_days`` overrides the configured recency half-life for the sample weights —
+    the Issue-200 sweep retrains per candidate half-life; None keeps production behavior.
+    """
     import numpy as np
 
     from preference.model import fit
@@ -165,12 +160,106 @@ def _train_scorer(train: list[LabeledClip]):
     X = np.array([c.features for c in train], dtype=float)
     w = np.array(
         [
-            sample_weight(c.created_at, performed_well=(c.relevance >= _REL_PERFORMED_WELL))
+            sample_weight(
+                c.created_at,
+                performed_well=(c.relevance >= _REL_PERFORMED_WELL),
+                half_life_days=half_life_days,
+            )
             for c in train
         ],
         dtype=float,
     )
     return fit(X, np.array(y, dtype=int), w)
+
+
+def _blend_scores(
+    train: list[LabeledClip],
+    eval_clips: list[LabeledClip],
+    half_life_days: float | None = None,
+) -> list[float]:
+    """Production DNA+preference blend scores for the eval split, trained on `train` only.
+
+    Below the personalization threshold the weight is 0 → the blend reduces to the DNA
+    composite (the honest production fallback).
+    """
+    from preference.model import preference_weight
+
+    scorer = _train_scorer(train, half_life_days=half_life_days)
+    weight = preference_weight(len(train)) if scorer is not None else 0.0
+    if scorer is not None and weight > 0.0:
+        return [
+            (1.0 - weight) * c.dna_composite + weight * scorer.predict_score(c.features)
+            for c in eval_clips
+        ]
+    return [c.dna_composite for c in eval_clips]
+
+
+DEFAULT_SWEEP_GRID: tuple[float, ...] = (15.0, 30.0, 60.0, 90.0)
+
+
+@dataclass
+class SweepRow:
+    """Pooled NDCG@k (+ bootstrap 95% CI) for one candidate half-life."""
+
+    half_life_days: float
+    ndcg_at_k: float
+    ci_low: float
+    ci_high: float
+    n_creators: int
+
+
+def sweep_half_life(
+    labeled_clips: list[list[LabeledClip]] | list[LabeledClip],
+    grid: tuple[float, ...] = DEFAULT_SWEEP_GRID,
+    k: int = DEFAULT_K,
+    train_frac: float = 0.7,
+) -> list[SweepRow]:
+    """Grid-search the recency half-life on held-out NDCG@k (Issue 200).
+
+    ``labeled_clips`` is one list of LabeledClip per creator (a single flat list is
+    treated as one creator). Each creator is split chronologically ONCE; the scorer is
+    retrained per candidate half-life on the same train split so rows differ only by
+    the decay. Returns one SweepRow (pooled NDCG@k + bootstrap CI) per grid value.
+    """
+    if labeled_clips and isinstance(labeled_clips[0], LabeledClip):
+        creators: list[list[LabeledClip]] = [labeled_clips]  # type: ignore[list-item]
+    else:
+        creators = labeled_clips  # type: ignore[assignment]
+
+    splits: list[tuple[list[LabeledClip], list[LabeledClip]]] = []
+    for clips in creators:
+        if len(clips) < 4:
+            continue
+        train, eval_clips = chronological_split(
+            clips, key=lambda c: c.created_at, train_frac=train_frac
+        )
+        if len(train) < 2 or len(eval_clips) < 2:
+            continue
+        if len({c.relevance for c in eval_clips}) < 2:
+            continue
+        splits.append((train, eval_clips))
+
+    rows: list[SweepRow] = []
+    for h in grid:
+        ndcgs = [
+            ndcg_at_k(_ranked_relevances(ev, _blend_scores(tr, ev, half_life_days=h)), k)
+            for tr, ev in splits
+        ]
+        point, lo, hi = bootstrap_ci(ndcgs) if ndcgs else (0.0, 0.0, 0.0)
+        rows.append(
+            SweepRow(
+                half_life_days=h, ndcg_at_k=point, ci_low=lo, ci_high=hi, n_creators=len(ndcgs)
+            )
+        )
+    return rows
+
+
+def select_best_half_life(rows: list[SweepRow]) -> SweepRow:
+    """The row with the best pooled NDCG; ties break toward the LARGER half-life (the
+    less aggressive decay — prefer the simpler prior when the data can't separate them)."""
+    if not rows:
+        raise ValueError("sweep produced no rows")
+    return max(rows, key=lambda r: (r.ndcg_at_k, r.half_life_days))
 
 
 def pool_metrics(

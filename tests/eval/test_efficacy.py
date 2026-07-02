@@ -12,9 +12,13 @@ import pytest
 from tests.eval.efficacy import (
     RANKINGS,
     LabeledClip,
+    SweepRow,
     _relevance_for,
+    _train_scorer,
     compute_creator_metrics,
     pool_metrics,
+    select_best_half_life,
+    sweep_half_life,
 )
 
 
@@ -91,6 +95,107 @@ def test_trained_scorer_path_ranks_correctly() -> None:
         pytest.skip("libgomp.so.1 not available on this host")
     assert m is not None
     assert m.ndcg["dna_preference"] == pytest.approx(1.0)
+
+
+def _pivot_clip(style: str, rel: float, when: datetime) -> LabeledClip:
+    """A LabeledClip whose ONLY discriminative feature is its style flag: style A =
+    has_laughter, style B = has_retention_spike. Everything else is constant so the
+    scorer can only learn from the style axis."""
+    laughter = 1.0 if style == "A" else 0.0
+    retention = 1.0 if style == "B" else 0.0
+    return LabeledClip(
+        clip_id=f"pivot-{style}-{when.isoformat()}",
+        created_at=when,
+        relevance=rel,
+        features=[1.0, 0.0, 0.0, 0.5, 30.0, 5.0, retention, laughter],
+        dna_composite=0.5,
+        signal_features={
+            "signal_density": 1.0,
+            "hook_energy": 0.0,
+            "has_retention_spike": retention == 1.0,
+            "has_laughter": laughter == 1.0,
+        },
+    )
+
+
+def test_recency_decay_actually_reweights_feedback_concept_pivot() -> None:
+    """The CLAUDE.md 'recency decay actually reweights feedback' gate (Issue 200).
+
+    Concept pivot: OLD feedback (180d ago, and more of it) favors style A; RECENT
+    feedback (1d ago) favors style B. The decayed scorer (configured 30d half-life)
+    must rank a B-aligned clip above an A-aligned one; the undecayed control (huge
+    half-life → flat weights) must not — it follows the old majority to A."""
+    now = datetime.now(UTC)
+    old = now - timedelta(days=180)
+    recent = now - timedelta(days=1)
+    train = []
+    for i in range(6):  # old majority: A upvoted, B downvoted
+        train.append(_pivot_clip("A", 1.0, old + timedelta(minutes=i)))
+        train.append(_pivot_clip("B", 0.0, old + timedelta(minutes=30 + i)))
+    for i in range(3):  # recent pivot: B upvoted, A downvoted
+        train.append(_pivot_clip("B", 1.0, recent + timedelta(minutes=i)))
+        train.append(_pivot_clip("A", 0.0, recent + timedelta(minutes=30 + i)))
+
+    try:
+        decayed = _train_scorer(train)  # configured DECAY_HALF_LIFE_DAYS (30d)
+        undecayed = _train_scorer(train, half_life_days=1e9)  # ~flat weights control
+    except OSError:
+        pytest.skip("libgomp.so.1 not available on this host")
+    assert decayed is not None and undecayed is not None
+
+    a_clip = _pivot_clip("A", 1.0, now)
+    b_clip = _pivot_clip("B", 1.0, now)
+    assert decayed.predict_score(b_clip.features) > decayed.predict_score(a_clip.features), (
+        "decayed model must follow the RECENT style-B pivot"
+    )
+    assert undecayed.predict_score(a_clip.features) > undecayed.predict_score(b_clip.features), (
+        "undecayed control must follow the OLD style-A majority"
+    )
+
+
+def test_sweep_half_life_row_per_grid_point() -> None:
+    """One SweepRow per grid value, in grid order, each with a CI band around the point."""
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    clips = []
+    for i in range(7):  # train split (train_frac=0.7 of 10): both classes present
+        clips.append(
+            _clip(1.0 if i % 2 == 0 else 0.0, float(i % 2) * 5.0, 0.5, base + timedelta(days=i))
+        )
+    clips += [  # eval split: 3 clips, 2 relevance levels
+        _clip(1.0, 5.0, 0.9, base + timedelta(days=7)),
+        _clip(0.0, 0.0, 0.1, base + timedelta(days=8)),
+        _clip(1.0, 5.0, 0.9, base + timedelta(days=9)),
+    ]
+    grid = (15.0, 30.0, 60.0)
+    try:
+        rows = sweep_half_life(clips, grid=grid, k=5)
+    except OSError:
+        pytest.skip("libgomp.so.1 not available on this host")
+    assert [r.half_life_days for r in rows] == list(grid)
+    for r in rows:
+        assert r.n_creators == 1
+        assert 0.0 <= r.ndcg_at_k <= 1.0
+        assert r.ci_low <= r.ndcg_at_k <= r.ci_high
+
+
+def test_select_best_half_life_ties_break_to_larger() -> None:
+    """Exact NDCG ties resolve toward the LARGER half-life (incl. an inf control row);
+    a strictly better score still wins regardless of size."""
+    import math
+
+    tied = [
+        SweepRow(half_life_days=15.0, ndcg_at_k=0.8, ci_low=0.7, ci_high=0.9, n_creators=3),
+        SweepRow(half_life_days=90.0, ndcg_at_k=0.8, ci_low=0.7, ci_high=0.9, n_creators=3),
+        SweepRow(half_life_days=math.inf, ndcg_at_k=0.8, ci_low=0.7, ci_high=0.9, n_creators=3),
+    ]
+    assert select_best_half_life(tied).half_life_days == math.inf
+
+    better_small = tied[:2] + [
+        SweepRow(half_life_days=15.0, ndcg_at_k=0.95, ci_low=0.9, ci_high=1.0, n_creators=3)
+    ]
+    assert select_best_half_life(better_small).ndcg_at_k == 0.95
+    with pytest.raises(ValueError):
+        select_best_half_life([])
 
 
 def test_pool_metrics_micro_averages_with_cis():
