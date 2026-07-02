@@ -120,7 +120,7 @@ async def task_events(
     request: Request,
     task_id: str,
     creator: Creator = Depends(get_current_creator),
-):
+) -> StreamingResponse:
     """Tail a task's progress events as Server-Sent Events.
 
     Auth: session cookie required (via ``get_current_creator``).

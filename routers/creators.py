@@ -12,7 +12,7 @@ from db import get_session
 from dna import identity as identity_module
 from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
-from models import AnalysisMode, Clip, Creator, CreatorStyle
+from models import AnalysisMode, Clip, Creator, CreatorIdentity, CreatorStyle
 from routers._schemas import SetupStepOut, TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
@@ -389,7 +389,7 @@ class IdentityChatOut(BaseModel):
     proposal: ProposedProfileOut | None = None
 
 
-def _identity_to_dict(row) -> dict:
+def _identity_to_dict(row: CreatorIdentity) -> dict:
     return {
         "version": row.version,
         "niches": row.niches or [],

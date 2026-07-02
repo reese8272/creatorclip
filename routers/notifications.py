@@ -26,6 +26,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from slowapi.util import get_remote_address
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import AdminSessionLocal, get_session
@@ -82,7 +83,7 @@ class PreferencesPatch(BaseModel):
 async def list_notifications(
     request: Request,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> NotificationListOut:
     """List the current creator's undismissed notifications, newest first.
 
@@ -128,7 +129,7 @@ async def dismiss_notification(
     request: Request,
     notification_id: uuid.UUID,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> NotificationOut:
     """Dismiss one notification owned by the caller.
 
@@ -159,7 +160,9 @@ async def dismiss_notification(
 # ── Preferences (authed) ──────────────────────────────────────────────────────
 
 
-async def _get_or_create_prefs(session, creator_id: uuid.UUID) -> NotificationPreference:
+async def _get_or_create_prefs(
+    session: AsyncSession, creator_id: uuid.UUID
+) -> NotificationPreference:
     """Return the creator's preference row, lazy-creating defaults if absent.
 
     Mirrors the lazy-create in ``send_notification`` so the API and the worker
@@ -178,7 +181,7 @@ async def _get_or_create_prefs(session, creator_id: uuid.UUID) -> NotificationPr
 async def get_preferences(
     request: Request,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> PreferencesOut:
     """Return the current creator's notification preferences (defaults if none)."""
     prefs = await _get_or_create_prefs(session, creator.id)
@@ -197,7 +200,7 @@ async def update_preferences(
     request: Request,
     patch: PreferencesPatch,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> PreferencesOut:
     """Update the unsubscribable channels.
 

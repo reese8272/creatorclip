@@ -34,7 +34,7 @@ async def _main() -> int:
 
     from sqlalchemy import select
 
-    from db import get_sessionmaker  # type: ignore[import-untyped]
+    from db import AsyncSessionLocal
     from models import Creator
     from preference.efficacy import (
         RANKINGS,
@@ -45,9 +45,8 @@ async def _main() -> int:
         sweep_half_life,
     )
 
-    sessionmaker = get_sessionmaker()
     per_creator = []
-    async with sessionmaker() as session:
+    async with AsyncSessionLocal() as session:
         creator_ids = (await session.execute(select(Creator.id))).scalars().all()
         if args.sweep:
             all_clips = [await load_labeled_clips(session, cid) for cid in creator_ids]

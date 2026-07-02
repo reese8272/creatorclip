@@ -77,6 +77,7 @@ async def main() -> int:
         await _ingest_async(str(vid))
         async with db.AdminSessionLocal() as s:
             v = await s.get(Video, vid)
+            assert v is not None
             print(f"after ingest: source_uri={v.source_uri}")
             print(f"              audio_uri={v.audio_uri}")
         assert v.source_uri == str(VIDEO), "source_uri must still be the ORIGINAL VIDEO"
@@ -103,6 +104,7 @@ async def main() -> int:
         await _render_clip_async(str(clipid))
         async with db.AdminSessionLocal() as s:
             c = await s.get(Clip, clipid)
+            assert c is not None
             print(f"after render: render_status={c.render_status.value} render_uri={c.render_uri}")
         assert c.render_status == RenderStatus.done and c.render_uri, "clip must render to done"
         out = Path(c.render_uri)

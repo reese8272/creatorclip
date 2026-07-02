@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -112,7 +112,7 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
     `ingest_status` is intentionally NOT a filter — see Issue 88.
     """
 
-    def _base_query(kind: VideoKind, cap: int):
+    def _base_query(kind: VideoKind, cap: int) -> Select[tuple[Video, VideoMetrics]]:
         return (
             select(Video, VideoMetrics)
             .join(VideoMetrics, VideoMetrics.video_id == Video.id)
@@ -131,7 +131,7 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
     ).all()
 
     scored: list[dict] = []
-    for video, metrics in longs_rows + shorts_rows:
+    for video, metrics in [*longs_rows, *shorts_rows]:
         weight = _recency_weight(video.published_at)
         scored.append(
             {

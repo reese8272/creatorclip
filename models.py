@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1034,7 +1035,7 @@ class EventLog(Base):
 
 
 async def append_audit(
-    session,
+    session: AsyncSession,
     action: str,
     actor: str | None = None,
     entity_type: str | None = None,
