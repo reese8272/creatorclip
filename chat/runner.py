@@ -6,10 +6,11 @@ client-side tools — see /claude-api python/claude-api/tool-use.md):
     stream → get_final_message() → if stop_reason == "tool_use", run the
     creator-scoped tools locally, append tool_result, loop.
 
-Each blocking streamed LLM round-trip runs in ``asyncio.to_thread`` (the sync
-Anthropic client blocks); tool execution stays in async land so it can touch the
-DB. ``text_delta``s are forwarded to the SSE stream as they arrive; tool-call
-JSON is not streamed to the user.
+Each streamed LLM round-trip is awaited directly on the event loop via the
+async ``stream_message`` helper (AsyncAnthropic — Issue 82a; no to_thread hop);
+tool execution stays in async land so it can touch the DB. ``text_delta``s are
+forwarded to the SSE stream as they arrive; tool-call JSON is not streamed to
+the user.
 
 Margin/runaway guards (DECISIONS 2026-06-17): tool rounds capped at
 ``CHAT_MAX_TOOL_ITERATIONS`` (the final round forces ``tools=None`` so the model
@@ -19,13 +20,12 @@ the caller. Token usage is summed across the whole turn and logged.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Any
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from chat.prompt import build_system
@@ -41,8 +41,9 @@ logger = logging.getLogger(__name__)
 # round — mirrors improvement/brief.py's _MAX_SEARCH_ROUNDS (Issue 350).
 _MAX_PAUSE_ROUNDS = 5
 
-# Module-level singleton (Issue 37 lifecycle rule). Mirrors analysis/brief.py.
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 37 lifecycle rule; async since
+# Issue 82a — prefork-safe lazy pool bind). Mirrors clip_engine/scoring.py.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(120.0, connect=10.0),
     max_retries=2,
@@ -93,8 +94,7 @@ async def run_chat_turn(
         # — mirrors the shipped pattern in improvement/brief.py (Issue 350).
         for _pause_round in range(_MAX_PAUSE_ROUNDS + 1):
             try:
-                message, usage = await asyncio.to_thread(
-                    stream_message,
+                message, usage = await stream_message(
                     client,
                     task_id,
                     model=settings.ANTHROPIC_MODEL_CHAT,

@@ -2009,8 +2009,7 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
             # `thinking`) events as the LLM call progresses. Passing task_id=None
             # keeps the legacy .create() path for unit-test callers that mock
             # this function and any internal invocation without a job_id.
-            brief_text, _brief_usage = await asyncio.to_thread(
-                generate_brief,
+            brief_text, _brief_usage = await generate_brief(
                 patterns,
                 channel_title,
                 stated_identity,
@@ -3679,8 +3678,7 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                 )
                 # task_id propagates into improvement.brief.stream_and_emit,
                 # which forwards cache/token deltas on the same Redis stream.
-                brief_text, _improv_usage = await asyncio.to_thread(
-                    build_brief,
+                brief_text, _improv_usage = await build_brief(
                     channel_title=creator.channel_title or "Unknown Channel",
                     analytics=analytics,
                     dna_brief=dna_brief,
@@ -3884,8 +3882,7 @@ async def _generate_video_analysis_async(
 
             await aemit(job_id, "step", label="analyzing", stage="video_analysis")
 
-            _analysis_result, _analysis_usage = await asyncio.to_thread(
-                build_analysis,
+            _analysis_result, _analysis_usage = await build_analysis(
                 channel_title=creator.channel_title or "Unknown Channel",
                 youtube_video_id=youtube_video_id,
                 video_title=video_title,
@@ -4011,8 +4008,7 @@ async def _generate_title_suggestions_async(
 
         await aemit(job_id, "step", label="generating_titles", stage="title_suggestions")
 
-        raw_json, _title_usage = await asyncio.to_thread(
-            build_suggestions,
+        raw_json, _title_usage = await build_suggestions(
             channel_title=creator.channel_title or "Unknown Channel",
             dna_brief=dna_brief,
             stated_identity=stated_identity,
@@ -4192,8 +4188,7 @@ async def _generate_thumbnail_concepts_async(
 
         if patterns is None and youtube_ids:
             await aemit(job_id, "step", label="analyzing_patterns", stage="thumbnail_concepts")
-            patterns = await asyncio.to_thread(
-                analyze_thumbnail_patterns,
+            patterns = await analyze_thumbnail_patterns(
                 youtube_ids,
                 creator.channel_title or "Unknown Channel",
             )
@@ -4218,8 +4213,7 @@ async def _generate_thumbnail_concepts_async(
 
         await aemit(job_id, "step", label="generating_concepts", stage="thumbnail_concepts")
 
-        raw_json, _thumb_usage = await asyncio.to_thread(
-            build_concepts,
+        raw_json, _thumb_usage = await build_concepts(
             channel_title=creator.channel_title or "Unknown Channel",
             dna_brief=dna_brief,
             patterns=patterns,
@@ -4397,8 +4391,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
                 medians.append(float(np.interp(grid_point, ts, rs)[0]))
             creator_median_at_drop = float(np.median(medians)) if medians else None
 
-        raw_json, _hook_usage = await asyncio.to_thread(
-            build_hook_report,
+        raw_json, _hook_usage = await build_hook_report(
             channel_title=creator.channel_title or "Unknown Channel",
             dna_brief=dna_brief,
             retention_drop_at_s=drop_at_s,
@@ -4526,8 +4519,7 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
 
         boundaries = find_chapter_boundaries(timeline, video_duration_s)
 
-        raw_json, _chap_usage = await asyncio.to_thread(
-            build_chapters,
+        raw_json, _chap_usage = await build_chapters(
             boundaries=boundaries,
             segments=segments,
             video_duration_s=video_duration_s,

@@ -1,8 +1,11 @@
-"""Unit tests for worker.anthropic_stream.stream_and_emit (Issue 86).
+"""Unit tests for worker.anthropic_stream.stream_and_emit (Issue 86; async since 82a).
 
 The Anthropic SDK client is mocked at the boundary of `messages.stream()` —
-we don't make any real LLM calls, just verify the wrapper iterates events,
-forwards the right deltas through sync_emit, and returns final_text + usage.
+we don't make any real LLM calls, just verify the async wrapper iterates
+events, forwards the right deltas through aemit, and returns final_text +
+usage. Assertions are ported unchanged from the sync-era suite: token order,
+the cache event from message_start, usage propagation, and emit-failure
+tolerance are the contract.
 """
 
 from __future__ import annotations
@@ -20,23 +23,31 @@ def _fake_event(event_type: str, **kwargs) -> SimpleNamespace:
     return SimpleNamespace(type=event_type, **kwargs)
 
 
-class _FakeStream:
-    """Mimics the context-manager + iterator returned by client.messages.stream()."""
+class _FakeAsyncStream:
+    """Mimics the async context-manager + async iterator returned by
+    AsyncAnthropic's client.messages.stream()."""
 
     def __init__(self, events: list[SimpleNamespace], final_message: SimpleNamespace) -> None:
         self._events = events
         self._final = final_message
 
-    def __enter__(self) -> _FakeStream:
+    async def __aenter__(self) -> _FakeAsyncStream:
         return self
 
-    def __exit__(self, *exc) -> None:
+    async def __aexit__(self, *exc) -> None:
         return None
 
-    def __iter__(self):
-        return iter(self._events)
+    def __aiter__(self):
+        self._it = iter(self._events)
+        return self
 
-    def get_final_message(self) -> SimpleNamespace:
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def get_final_message(self) -> SimpleNamespace:
         return self._final
 
 
@@ -53,13 +64,22 @@ def _build_final_message(
     return SimpleNamespace(content=[text_block], usage=usage, stop_reason=stop_reason)
 
 
-def test_forwards_message_start_usage_as_cache_event(monkeypatch) -> None:
+def _capture_aemit(monkeypatch, emitted: list[tuple]) -> None:
+    async def _aemit(task_id, etype, **fields):
+        emitted.append((task_id, etype, fields))
+
+    monkeypatch.setattr(anthropic_stream, "aemit", _aemit)
+
+
+def _client_returning(stream: _FakeAsyncStream) -> MagicMock:
+    client = MagicMock()
+    client.messages.stream.return_value = stream
+    return client
+
+
+async def test_forwards_message_start_usage_as_cache_event(monkeypatch) -> None:
     emitted: list[tuple] = []
-    monkeypatch.setattr(
-        anthropic_stream,
-        "sync_emit",
-        lambda task_id, etype, **fields: emitted.append((task_id, etype, fields)),
-    )
+    _capture_aemit(monkeypatch, emitted)
 
     message_start = _fake_event(
         "message_start",
@@ -72,12 +92,9 @@ def test_forwards_message_start_usage_as_cache_event(monkeypatch) -> None:
         ),
     )
     final = _build_final_message("brief here", in_tok=4200, out_tok=120, cr=4000)
-    stream = _FakeStream([message_start], final)
+    client = _client_returning(_FakeAsyncStream([message_start], final))
 
-    client = MagicMock()
-    client.messages.stream.return_value = stream
-
-    text, usage = anthropic_stream.stream_and_emit(
+    text, usage = await anthropic_stream.stream_and_emit(
         client, "task-1", model="m", max_tokens=2000, system=[], messages=[]
     )
 
@@ -92,24 +109,48 @@ def test_forwards_message_start_usage_as_cache_event(monkeypatch) -> None:
     }
 
 
-def test_forwards_text_delta_as_token_events(monkeypatch) -> None:
+async def test_cache_event_emitted_before_first_token(monkeypatch) -> None:
+    """The `cache` event (from message_start.usage) must precede the first
+    `token` event in emit order — the UI shows cache HIT before text streams."""
     emitted: list[tuple] = []
-    monkeypatch.setattr(
-        anthropic_stream,
-        "sync_emit",
-        lambda task_id, etype, **fields: emitted.append((task_id, etype, fields)),
+    _capture_aemit(monkeypatch, emitted)
+
+    events = [
+        _fake_event(
+            "message_start",
+            message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                )
+            ),
+        ),
+        _fake_event("content_block_delta", delta=SimpleNamespace(type="text_delta", text="Hi")),
+    ]
+    final = _build_final_message("Hi")
+    client = _client_returning(_FakeAsyncStream(events, final))
+
+    await anthropic_stream.stream_and_emit(
+        client, "task-order", model="m", max_tokens=2000, system=[], messages=[]
     )
+
+    types_seen = [e[1] for e in emitted]
+    assert types_seen == ["cache", "token"]
+
+
+async def test_forwards_text_delta_as_token_events(monkeypatch) -> None:
+    emitted: list[tuple] = []
+    _capture_aemit(monkeypatch, emitted)
 
     events = [
         _fake_event("content_block_delta", delta=SimpleNamespace(type="text_delta", text="Hello")),
         _fake_event("content_block_delta", delta=SimpleNamespace(type="text_delta", text=" world")),
     ]
     final = _build_final_message("Hello world")
-    stream = _FakeStream(events, final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream(events, final))
 
-    text, _ = anthropic_stream.stream_and_emit(
+    text, _ = await anthropic_stream.stream_and_emit(
         client, "task-2", model="m", max_tokens=2000, system=[], messages=[]
     )
 
@@ -118,15 +159,10 @@ def test_forwards_text_delta_as_token_events(monkeypatch) -> None:
     assert [e[2]["chunk"] for e in token_emits] == ["Hello", " world"]
 
 
-def test_forwards_thinking_delta_as_thinking_events(monkeypatch) -> None:
-    """Future-proofing: when the SDK is bumped in Issue 84 and extended
-    thinking is enabled, thinking_delta should flow through unchanged."""
+async def test_forwards_thinking_delta_as_thinking_events(monkeypatch) -> None:
+    """When extended thinking is enabled, thinking_delta flows through unchanged."""
     emitted: list[tuple] = []
-    monkeypatch.setattr(
-        anthropic_stream,
-        "sync_emit",
-        lambda task_id, etype, **fields: emitted.append((task_id, etype, fields)),
-    )
+    _capture_aemit(monkeypatch, emitted)
 
     events = [
         _fake_event(
@@ -139,11 +175,9 @@ def test_forwards_thinking_delta_as_thinking_events(monkeypatch) -> None:
         ),
     ]
     final = _build_final_message("Answer")
-    stream = _FakeStream(events, final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream(events, final))
 
-    anthropic_stream.stream_and_emit(
+    await anthropic_stream.stream_and_emit(
         client, "task-3", model="m", max_tokens=2000, system=[], messages=[]
     )
 
@@ -152,14 +186,10 @@ def test_forwards_thinking_delta_as_thinking_events(monkeypatch) -> None:
     assert thinking_emits[0][2]["chunk"] == "Let me reason..."
 
 
-def test_ignores_unknown_delta_types_silently(monkeypatch) -> None:
+async def test_ignores_unknown_delta_types_silently(monkeypatch) -> None:
     """signature_delta, input_json_delta, etc. should not crash the wrapper."""
     emitted: list[tuple] = []
-    monkeypatch.setattr(
-        anthropic_stream,
-        "sync_emit",
-        lambda task_id, etype, **fields: emitted.append((task_id, etype, fields)),
-    )
+    _capture_aemit(monkeypatch, emitted)
 
     events = [
         _fake_event(
@@ -173,11 +203,9 @@ def test_ignores_unknown_delta_types_silently(monkeypatch) -> None:
         _fake_event("content_block_delta", delta=SimpleNamespace(type="text_delta", text="hi")),
     ]
     final = _build_final_message("hi")
-    stream = _FakeStream(events, final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream(events, final))
 
-    text, _ = anthropic_stream.stream_and_emit(
+    text, _ = await anthropic_stream.stream_and_emit(
         client, "task-4", model="m", max_tokens=2000, system=[], messages=[]
     )
     assert text == "hi"
@@ -186,15 +214,13 @@ def test_ignores_unknown_delta_types_silently(monkeypatch) -> None:
     assert types_seen == ["token"]
 
 
-def test_returns_final_usage_dict_shape(monkeypatch) -> None:
-    monkeypatch.setattr(anthropic_stream, "sync_emit", lambda *a, **k: None)
+async def test_returns_final_usage_dict_shape(monkeypatch) -> None:
+    _capture_aemit(monkeypatch, [])
 
     final = _build_final_message("result", in_tok=4000, out_tok=890, cr=3800, cc=200)
-    stream = _FakeStream([], final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream([], final))
 
-    _, usage = anthropic_stream.stream_and_emit(
+    _, usage = await anthropic_stream.stream_and_emit(
         client, "task-5", model="m", max_tokens=2000, system=[], messages=[]
     )
     assert usage == {
@@ -205,10 +231,10 @@ def test_returns_final_usage_dict_shape(monkeypatch) -> None:
     }
 
 
-def test_returns_last_text_block_when_multiple_present(monkeypatch) -> None:
+async def test_returns_last_text_block_when_multiple_present(monkeypatch) -> None:
     """Same defensive pattern as dna/brief.py — last text block wins; non-text
     blocks (thinking, tool_use) are filtered out."""
-    monkeypatch.setattr(anthropic_stream, "sync_emit", lambda *a, **k: None)
+    _capture_aemit(monkeypatch, [])
 
     blocks = [
         SimpleNamespace(type="thinking", thinking="..."),
@@ -222,18 +248,16 @@ def test_returns_last_text_block_when_multiple_present(monkeypatch) -> None:
         cache_creation_input_tokens=0,
     )
     final = SimpleNamespace(content=blocks, usage=usage, stop_reason="end_turn")
-    stream = _FakeStream([], final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream([], final))
 
-    text, _ = anthropic_stream.stream_and_emit(
+    text, _ = await anthropic_stream.stream_and_emit(
         client, "task-6", model="m", max_tokens=2000, system=[], messages=[]
     )
     assert text == "last"
 
 
-def test_raises_on_no_text_blocks(monkeypatch) -> None:
-    monkeypatch.setattr(anthropic_stream, "sync_emit", lambda *a, **k: None)
+async def test_raises_on_no_text_blocks(monkeypatch) -> None:
+    _capture_aemit(monkeypatch, [])
 
     blocks = [SimpleNamespace(type="thinking", thinking="...")]
     usage = SimpleNamespace(
@@ -243,26 +267,24 @@ def test_raises_on_no_text_blocks(monkeypatch) -> None:
         cache_creation_input_tokens=0,
     )
     final = SimpleNamespace(content=blocks, usage=usage, stop_reason="end_turn")
-    stream = _FakeStream([], final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream([], final))
 
     with pytest.raises(RuntimeError, match="no text block"):
-        anthropic_stream.stream_and_emit(
+        await anthropic_stream.stream_and_emit(
             client, "task-7", model="m", max_tokens=2000, system=[], messages=[]
         )
 
 
-def test_emit_failures_inside_loop_do_not_abort_iteration(monkeypatch) -> None:
+async def test_emit_failures_inside_loop_do_not_abort_iteration(monkeypatch) -> None:
     """A Redis hiccup mid-stream must not lose us the final text."""
     call_count = {"n": 0}
 
-    def flaky_emit(task_id, etype, **fields):
+    async def flaky_emit(task_id, etype, **fields):
         call_count["n"] += 1
         if call_count["n"] == 2:
             raise RuntimeError("redis down")
 
-    monkeypatch.setattr(anthropic_stream, "sync_emit", flaky_emit)
+    monkeypatch.setattr(anthropic_stream, "aemit", flaky_emit)
 
     events = [
         _fake_event("content_block_delta", delta=SimpleNamespace(type="text_delta", text="a")),
@@ -270,34 +292,57 @@ def test_emit_failures_inside_loop_do_not_abort_iteration(monkeypatch) -> None:
         _fake_event("content_block_delta", delta=SimpleNamespace(type="text_delta", text="c")),
     ]
     final = _build_final_message("abc")
-    stream = _FakeStream(events, final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream(events, final))
 
     # The wrapper must still complete and return the final text even though
-    # one of the sync_emit calls blew up.
-    text, _ = anthropic_stream.stream_and_emit(
+    # one of the aemit calls blew up.
+    text, _ = await anthropic_stream.stream_and_emit(
         client, "task-8", model="m", max_tokens=2000, system=[], messages=[]
     )
     assert text == "abc"
 
 
+# ── stream_message: full-message shape + stop_reason propagation ─────────────
+
+
+async def test_stream_message_returns_full_message_and_stop_reason(monkeypatch) -> None:
+    """stream_message must return the raw Message (stop_reason + content intact)
+    so agentic callers (chat/runner.py pause_turn / tool_use handling) can
+    inspect it — the Issue-152 contract, preserved across the async rewrite."""
+    _capture_aemit(monkeypatch, [])
+
+    final = _build_final_message("answer", in_tok=10, out_tok=5, stop_reason="pause_turn")
+    client = _client_returning(_FakeAsyncStream([], final))
+
+    message, usage = await anthropic_stream.stream_message(
+        client, "task-sm", model="m", max_tokens=2000, system=[], messages=[]
+    )
+    assert message is final
+    assert message.stop_reason == "pause_turn"
+    assert usage == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
+
+
 # ── Wave-3 Fix A: tools kwarg flows through to client.messages.stream ────────
 
 
-def test_tools_kwarg_forwarded_to_stream_when_provided() -> None:
+async def test_tools_kwarg_forwarded_to_stream_when_provided(monkeypatch) -> None:
     """Wave-3 Fix A: ``stream_and_emit`` must forward ``tools`` to
     ``client.messages.stream(...)`` when the caller supplies them. Without
     this, callers like ``improvement/brief.py`` that depend on ``web_search``
     silently lose grounding — the SEV1 closed by Wave 3.
     """
+    _capture_aemit(monkeypatch, [])
+
     final = _build_final_message("brief")
-    stream = _FakeStream([], final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    client = _client_returning(_FakeAsyncStream([], final))
 
     tools = [{"type": "web_search_20260209", "name": "web_search"}]
-    anthropic_stream.stream_and_emit(
+    await anthropic_stream.stream_and_emit(
         client,
         "task-tools",
         model="m",
@@ -318,16 +363,16 @@ def test_tools_kwarg_forwarded_to_stream_when_provided() -> None:
     assert call_kwargs["tools"] == tools
 
 
-def test_tools_kwarg_dropped_when_none() -> None:
+async def test_tools_kwarg_dropped_when_none(monkeypatch) -> None:
     """When `tools` is not provided (default None), the SDK kwarg must be
     absent — passing `tools=None` to older SDK shapes can raise.
     ``dna/brief.py``'s call path (no tools) must keep working unchanged."""
-    final = _build_final_message("brief")
-    stream = _FakeStream([], final)
-    client = MagicMock()
-    client.messages.stream.return_value = stream
+    _capture_aemit(monkeypatch, [])
 
-    anthropic_stream.stream_and_emit(
+    final = _build_final_message("brief")
+    client = _client_returning(_FakeAsyncStream([], final))
+
+    await anthropic_stream.stream_and_emit(
         client,
         "task-no-tools",
         model="m",

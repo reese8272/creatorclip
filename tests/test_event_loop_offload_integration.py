@@ -47,11 +47,14 @@ def _offload_recorder():
 
 
 @pytest.mark.asyncio
-async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, mocker):
-    """The ~120s brief call is offloaded via to_thread inside the worker task.
+async def test_improvement_brief_is_awaited_natively(db_session: AsyncSession, client, mocker):
+    """The ~120s brief call is natively async inside the worker task.
 
-    The call moved off the request path into a Celery task (Issue 78d); it still
-    runs through asyncio.to_thread so it can't pin the worker's event loop.
+    The call moved off the request path into a Celery task (Issue 78d). Since
+    Issue 82a the generator uses AsyncAnthropic and is awaited directly on the
+    worker's event loop — no asyncio.to_thread hop (which saturated the shared
+    default executor under concurrency) and no loop pinning: the httpx I/O
+    yields to the loop natively.
     """
     creator = Creator(
         google_sub=f"test_off_{uuid.uuid4().hex[:8]}",
@@ -88,8 +91,11 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
     )
     await db_session.commit()
 
+    from unittest.mock import AsyncMock
+
     brief_mock = mocker.patch(
-        "improvement.brief.generate_improvement_brief", return_value=("stub brief", {})
+        "improvement.brief.generate_improvement_brief",
+        new=AsyncMock(return_value=("stub brief", {})),
     )
     calls, fake_to_thread = _offload_recorder()
     mocker.patch("asyncio.to_thread", new=fake_to_thread)
@@ -98,8 +104,10 @@ async def test_improvement_brief_is_offloaded(db_session: AsyncSession, client, 
         from worker.tasks import _generate_improvement_brief_async
 
         await _generate_improvement_brief_async("job-off", str(creator.id))
-        # The 120s LLM call was offloaded, not run on the loop.
-        assert brief_mock in calls
+        # Issue 82a: the LLM call is awaited natively — not routed through
+        # asyncio.to_thread (no default-executor saturation).
+        assert brief_mock.await_count == 1
+        assert brief_mock not in calls
     finally:
         await db_session.execute(delete(Creator).where(Creator.id == creator.id))
         await db_session.commit()

@@ -11,7 +11,7 @@ Requires a running Postgres + Alembic schema (see docker-compose.yml).
 """
 
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -112,7 +112,7 @@ async def test_voyage_failure_leaves_no_orphan_draft(db_session: AsyncSession):
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
+            patch("dna.brief.generate_brief", new=AsyncMock(return_value=_STUB_BRIEF_RESULT)),
             # embed_patterns raises on first call — simulates Voyage HTTP error.
             patch(
                 "dna.embeddings.embed_patterns",
@@ -148,7 +148,7 @@ async def test_retry_after_voyage_failure_produces_exactly_one_draft(db_session:
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
+            patch("dna.brief.generate_brief", new=AsyncMock(return_value=_STUB_BRIEF_RESULT)),
             patch(
                 "dna.embeddings.embed_patterns",
                 side_effect=RuntimeError("Voyage API unavailable"),
@@ -169,7 +169,7 @@ async def test_retry_after_voyage_failure_produces_exactly_one_draft(db_session:
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
+            patch("dna.brief.generate_brief", new=AsyncMock(return_value=_STUB_BRIEF_RESULT)),
         ):
             from worker.tasks import _build_dna_async
 
@@ -208,7 +208,7 @@ async def test_successful_build_commits_draft_and_embeddings_together(db_session
                 "dna.builder.build_patterns",
                 return_value=(_STUB_PATTERNS, [], [], 60.0, "first_third", 24.0),
             ),
-            patch("dna.brief.generate_brief", return_value=_STUB_BRIEF_RESULT),
+            patch("dna.brief.generate_brief", new=AsyncMock(return_value=_STUB_BRIEF_RESULT)),
             patch("dna.embeddings.embed_patterns", return_value=[]),
         ):
             from worker.tasks import _build_dna_async

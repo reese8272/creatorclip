@@ -13,7 +13,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import extract_json_block
@@ -21,7 +21,8 @@ from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe lazy pool bind.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(60.0, connect=10.0),
     max_retries=2,
@@ -161,7 +162,7 @@ def parse_chapters(raw_json: str) -> dict:
     return {"chapters": validated_chapters, "description_block": description_block}
 
 
-def generate_chapters(
+async def generate_chapters(
     boundaries: list[float],
     segments: list[dict],
     video_duration_s: float,
@@ -205,7 +206,7 @@ def generate_chapters(
 
     client = _ANTHROPIC.with_options(timeout=60.0)
     try:
-        final_text, usage = stream_and_emit(
+        final_text, usage = await stream_and_emit(
             client,
             task_id,
             model=settings.ANTHROPIC_MODEL_CHAPTERS,

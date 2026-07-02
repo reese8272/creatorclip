@@ -98,12 +98,12 @@ async def test_improvement_brief_is_scoped_to_requesting_creator(
 
     captured: dict = {}
 
-    def _capture(*, channel_title, analytics, dna_brief, task_id=None):
+    async def _capture(*, channel_title, analytics, dna_brief, task_id=None):
         captured["channel_title"] = channel_title
         captured["analytics"] = analytics
         return "stubbed brief text", {}
 
-    mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_capture)
+    mocker.patch("improvement.brief.generate_improvement_brief", new=_capture)
     fake_task = MagicMock()
     fake_task.id = "job-iso-legacy"
     mocker.patch("worker.tasks.generate_improvement_brief.delay", return_value=fake_task)

@@ -1,6 +1,6 @@
 """Stream Anthropic responses while emitting live progress events (Issue 86).
 
-Wraps the sync Anthropic ``messages.stream(...)`` context manager so that:
+Wraps the async Anthropic ``messages.stream(...)`` context manager so that:
 
 * Cache hit/miss + input tokens are surfaced as an ``event: cache`` BEFORE
   the first generated token (via the ``message_start`` event's usage).
@@ -10,16 +10,16 @@ Wraps the sync Anthropic ``messages.stream(...)`` context manager so that:
   added by future SDK releases are silently dropped instead of crashing.
 * The final text and a structured usage dict are returned to the caller.
 
-Designed to be called from inside ``asyncio.to_thread`` in a Celery worker —
-the Anthropic sync client blocks, so the progress emitter is sync too.
+Issue 82a: rewritten async. Callers pass a module-level ``AsyncAnthropic``
+singleton and ``await`` these helpers directly on the worker's persistent
+event loop — no ``asyncio.to_thread`` hop, no default-executor saturation.
+Progress events go through the async emit path (``worker.progress.aemit``).
 
 Per CLAUDE.md /claude-api guidance:
-  - For 0.40, do not pass thinking={...} — the param shape isn't recognized.
-    Enable thinking when the SDK is bumped in Issue 84.
   - `getattr` on every usage field is defensive: older SDK responses don't
     always populate cache_read_input_tokens / cache_creation_input_tokens
     (e.g. when caching wasn't engaged or for non-cacheable models).
-  - Wrap each sync_emit call in try/except inside the loop so a Redis hiccup
+  - Wrap each aemit call in try/except inside the loop so a Redis hiccup
     can't abort iteration before `get_final_message()` is reachable.
 """
 
@@ -30,12 +30,12 @@ from typing import Any
 
 from observability import warn_if_truncated
 from verbose import now_ms, vlog_llm_request, vlog_llm_response
-from worker.progress import sync_emit
+from worker.progress import aemit
 
 logger = logging.getLogger(__name__)
 
 
-def stream_and_emit(
+async def stream_and_emit(
     client: Any,
     task_id: str,
     *,
@@ -88,15 +88,15 @@ def stream_and_emit(
     )
     _t0 = now_ms()
     try:
-        with client.messages.stream(**stream_kwargs) as stream:
-            for event in stream:
+        async with client.messages.stream(**stream_kwargs) as stream:
+            async for event in stream:
                 try:
-                    _forward_event(task_id, event)
+                    await _forward_event(task_id, event)
                 except Exception as exc:
                     # Per /claude-api guidance: a hiccup forwarding one event must
                     # NOT abort iteration — losing the final_text would be worse.
                     logger.warning("stream_and_emit: forward failed task=%s err=%s", task_id, exc)
-            final = stream.get_final_message()
+            final = await stream.get_final_message()
     except Exception as exc:
         vlog_llm_response(
             f"stream:{task_id}", model=model, error=repr(exc), duration_ms=int(now_ms() - _t0)
@@ -127,7 +127,7 @@ def stream_and_emit(
     return final_text, usage_dict
 
 
-def stream_message(
+async def stream_message(
     client: Any,
     task_id: str,
     *,
@@ -168,13 +168,13 @@ def stream_message(
     )
     _t0 = now_ms()
     try:
-        with client.messages.stream(**stream_kwargs) as stream:
-            for event in stream:
+        async with client.messages.stream(**stream_kwargs) as stream:
+            async for event in stream:
                 try:
-                    _forward_event(task_id, event)
+                    await _forward_event(task_id, event)
                 except Exception as exc:
                     logger.warning("stream_message: forward failed task=%s err=%s", task_id, exc)
-            final = stream.get_final_message()
+            final = await stream.get_final_message()
     except Exception as exc:
         vlog_llm_response(
             f"stream:{task_id}", model=model, error=repr(exc), duration_ms=int(now_ms() - _t0)
@@ -198,10 +198,12 @@ def stream_message(
     return final, usage_dict
 
 
-def _forward_event(task_id: str, event: Any) -> None:
+async def _forward_event(task_id: str, event: Any) -> None:
     """Forward a single SDK event to the progress stream.
 
     Split out so the try/except in the main loop wraps exactly the right scope.
+    Awaited in-loop so SSE token ordering matches the SDK event ordering, and
+    the ``cache`` event (from ``message_start``) always precedes the first token.
     """
     etype = getattr(event, "type", None)
 
@@ -211,7 +213,7 @@ def _forward_event(task_id: str, event: Any) -> None:
         msg = getattr(event, "message", None)
         usage = getattr(msg, "usage", None) if msg is not None else None
         if usage is not None:
-            sync_emit(
+            await aemit(
                 task_id,
                 "cache",
                 input_tokens=getattr(usage, "input_tokens", 0),
@@ -226,11 +228,8 @@ def _forward_event(task_id: str, event: Any) -> None:
             return
         dtype = getattr(delta, "type", "")
         if dtype == "text_delta":
-            sync_emit(task_id, "token", chunk=getattr(delta, "text", ""))
+            await aemit(task_id, "token", chunk=getattr(delta, "text", ""))
         elif dtype == "thinking_delta":
-            # Forwarded but won't fire on anthropic==0.40 (SDK predates
-            # extended thinking) — wakes up automatically once Issue 84
-            # bumps the SDK + enables thinking on the call.
-            sync_emit(task_id, "thinking", chunk=getattr(delta, "thinking", ""))
+            await aemit(task_id, "thinking", chunk=getattr(delta, "thinking", ""))
         # Unknown delta types (signature_delta, input_json_delta, future
         # types) are silently dropped — they carry no human-readable text.

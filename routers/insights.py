@@ -458,9 +458,10 @@ async def get_analytics_summary(
 
 # ── AI per-performer analysis (Issue 117) ────────────────────────────────────
 
-# Module-level Anthropic singleton (Issue 123 SEV1 fix: was constructed per-request).
+# Module-level AsyncAnthropic singleton (Issue 123 SEV1 fix: was constructed
+# per-request; Issue 82a: async client, awaited directly — no to_thread hop).
 # Haiku is used here (low cost, fast) — model selected via settings.ANTHROPIC_MODEL_PERFORMER.
-_ANTHROPIC = _anthropic.Anthropic(
+_ANTHROPIC = _anthropic.AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=_httpx.Timeout(120.0, connect=10.0),
     max_retries=2,
@@ -575,8 +576,6 @@ async def analyze_performer(
         dna_brief=dna_row.brief_text if dna_row else None,
     )
 
-    import asyncio as _aio
-
     try:
         # No cache_control: this system prefix (~30 tokens) is far below Haiku
         # 4.5's 4096-token cacheable-prefix floor, so a marker would be inert —
@@ -594,11 +593,10 @@ async def analyze_performer(
             }
         ]
         try:
-            msg = await _aio.to_thread(
-                _ANTHROPIC.messages.create,  # type: ignore[arg-type]  # overloaded fn; callable at runtime
+            msg = await _ANTHROPIC.messages.create(
                 model=settings.ANTHROPIC_MODEL_PERFORMER,
                 max_tokens=256,
-                system=_system,
+                system=_system,  # type: ignore[arg-type]  # list[dict] → TextBlockParam at runtime
                 messages=[{"role": "user", "content": prompt}],
             )
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:

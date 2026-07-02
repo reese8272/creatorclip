@@ -12,7 +12,7 @@ default ``-m "not integration"`` run).
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -197,7 +197,7 @@ async def test_get_returns_none_then_ready(db_session, client, mocker):
         # unpacks both and records the usage to the cost ledger.
         mocker.patch(
             "improvement.brief.generate_improvement_brief",
-            return_value=("Your hooks land best in the first 3 seconds.", {}),
+            new=AsyncMock(return_value=("Your hooks land best in the first 3 seconds.", {})),
         )
         from worker.tasks import _generate_improvement_brief_async
 
@@ -229,7 +229,7 @@ async def test_task_marks_failed_with_safe_error_on_llm_exception(db_session, cl
 
         mocker.patch(
             "improvement.brief.generate_improvement_brief",
-            side_effect=RuntimeError("anthropic 401 secret-token-leak"),
+            new=AsyncMock(side_effect=RuntimeError("anthropic 401 secret-token-leak")),
         )
         from worker.tasks import _generate_improvement_brief_async
 
@@ -254,12 +254,12 @@ async def test_task_is_scoped_to_requesting_creator(db_session, client, mocker):
 
     captured: dict = {}
 
-    def _capture(*, channel_title, analytics, dna_brief, task_id=None):
+    async def _capture(*, channel_title, analytics, dna_brief, task_id=None):
         captured["channel_title"] = channel_title
         captured["analytics"] = analytics
         return "stubbed brief text", {}
 
-    mocker.patch("improvement.brief.generate_improvement_brief", side_effect=_capture)
+    mocker.patch("improvement.brief.generate_improvement_brief", new=_capture)
 
     fake_task = MagicMock()
     fake_task.id = "job-iso"
@@ -289,7 +289,8 @@ async def test_task_idempotent_on_redelivery(db_session, client, mocker):
     try:
         client.post("/creators/me/improvement-brief", cookies={SESSION_COOKIE: token})
         build = mocker.patch(
-            "improvement.brief.generate_improvement_brief", return_value=("first brief", {})
+            "improvement.brief.generate_improvement_brief",
+            new=AsyncMock(return_value=("first brief", {})),
         )
         from worker.tasks import _generate_improvement_brief_async
 

@@ -6,7 +6,7 @@ Pure-function and mock-at-boundary tests — no DB, no network.
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -187,37 +187,37 @@ def _mock_anthropic_response(text: str) -> MagicMock:
     return resp
 
 
-def test_generate_brief_calls_claude_and_appends_disclaimer(monkeypatch):
+async def test_generate_brief_calls_claude_and_appends_disclaimer(monkeypatch):
     mock_response = _mock_anthropic_response("Channel insight text here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
-        mock_client.messages.create.return_value = mock_response
-        result, _usage = generate_brief({"top_videos": []}, "TestChannel")
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        result, _usage = await generate_brief({"top_videos": []}, "TestChannel")
 
     assert "Channel insight text here." in result
     assert _DISCLAIMER in result
 
 
-def test_generate_brief_disclaimer_always_present(monkeypatch):
+async def test_generate_brief_disclaimer_always_present(monkeypatch):
     """Honesty constraint: disclaimer must be in every brief regardless of LLM output."""
     mock_response = _mock_anthropic_response("Some brief content.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
-        mock_client.messages.create.return_value = mock_response
-        result, _usage = generate_brief({}, "AnyChannel")
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        result, _usage = await generate_brief({}, "AnyChannel")
 
     assert "does not promise virality" in result
 
 
-def test_generate_brief_raises_on_empty_response():
+async def test_generate_brief_raises_on_empty_response():
     resp = MagicMock()
     resp.content = []
     resp.usage = MagicMock(input_tokens=0, output_tokens=0)
     with patch("dna.brief._ANTHROPIC") as mock_client:
-        mock_client.messages.create.return_value = resp
+        mock_client.messages.create = AsyncMock(return_value=resp)
         with pytest.raises(RuntimeError, match="no text block"):
-            generate_brief({}, "BadChannel")
+            await generate_brief({}, "BadChannel")
 
 
-def test_generate_brief_no_cache_marker_below_floor():
+async def test_generate_brief_no_cache_marker_below_floor():
     """Issue 315: dna/brief.py must send NO cache_control on any system block.
     The static instructions block is ~570–650 tokens — below Sonnet 4.6's
     1024-token cacheable floor. An inert marker charges the write-premium
@@ -226,8 +226,8 @@ def test_generate_brief_no_cache_marker_below_floor():
     See docs/DECISIONS.md (Issues 223/224/315)."""
     mock_response = _mock_anthropic_response("Brief here.")
     with patch("dna.brief._ANTHROPIC") as mock_client:
-        mock_client.messages.create.return_value = mock_response
-        generate_brief({"top_videos": []}, "TestChannel")
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        await generate_brief({"top_videos": []}, "TestChannel")
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])

@@ -1173,8 +1173,7 @@ async def get_clip_title_suggestions(
     channel_title = creator.channel_title or "Your Channel"
 
     try:
-        result, usage = await asyncio.to_thread(
-            generate_clip_title_suggestions,
+        result, usage = await generate_clip_title_suggestions(
             channel_title,
             dna_brief,
             clip_transcript,
@@ -1274,8 +1273,7 @@ async def get_clip_caption_hooks(
     channel_title = creator.channel_title or "Your Channel"
 
     try:
-        result, usage = await asyncio.to_thread(
-            generate_clip_caption_hooks,
+        result, usage = await generate_clip_caption_hooks(
             channel_title,
             dna_brief,
             clip_hook,
@@ -1383,8 +1381,7 @@ async def get_clip_explanation(
     clip_score = clip.score
 
     try:
-        result, usage = await asyncio.to_thread(
-            generate_clip_explanation,
+        result, usage = await generate_clip_explanation(
             channel_title,
             dna_brief,
             clip_principle,
