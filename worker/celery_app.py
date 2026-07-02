@@ -38,6 +38,29 @@ celery = Celery(
     include=["worker.tasks", "worker.schedule"],
 )
 
+# Hard time limit = soft limit + this margin: the soft-timeout handler gets
+# 300 s of cleanup headroom (status writes, temp-file removal) before SIGKILL.
+HARD_LIMIT_MARGIN_S = 300
+# Extra headroom between the hard kill and broker redelivery, so a task that
+# runs to the hard limit is always dead before Redis would redeliver it.
+VISIBILITY_BUFFER_S = 300
+
+
+def visibility_timeout_s(soft_limit_s: int) -> int:
+    """Redis broker ``visibility_timeout`` derived from the Celery soft time limit.
+
+    Per the Celery "Using Redis" broker docs (Visibility Timeout caveat), an
+    unacked message older than visibility_timeout is redelivered and re-executed
+    — with acks_late that means a still-RUNNING task gets a concurrent duplicate
+    (double ffmpeg encode / double paid LLM call). The invariant
+    ``soft < hard < visibility`` is therefore DERIVED here rather than
+    hand-maintained: raising CELERY_SOFT_TIME_LIMIT_S (as the per-task-override
+    note below invites) automatically raises the visibility timeout with it.
+    The 3600 floor preserves the long-standing default for short soft limits.
+    """
+    return max(3600, soft_limit_s + HARD_LIMIT_MARGIN_S + VISIBILITY_BUFFER_S)
+
+
 celery.conf.update(
     task_serializer="json",
     result_serializer="json",
@@ -60,8 +83,11 @@ celery.conf.update(
     # transcription-timeout config validator (config.py) asserts
     # TRANSCRIPTION_TIMEOUT_S < soft_limit - 30 using this setting. Keep in sync.
     task_soft_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S,
-    task_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S + 300,
-    broker_transport_options={"visibility_timeout": 3600},
+    task_time_limit=settings.CELERY_SOFT_TIME_LIMIT_S + HARD_LIMIT_MARGIN_S,
+    # Derived, never hardcoded — see visibility_timeout_s() above (Issue 352 Batch F).
+    broker_transport_options={
+        "visibility_timeout": visibility_timeout_s(settings.CELERY_SOFT_TIME_LIMIT_S)
+    },
     # RedBeat distributed beat scheduler (Issue 263).
     # Replaces the file-backed PersistentScheduler. RedBeat stores the schedule in
     # Redis (key prefix "redbeat::") and acquires a distributed lock (TTL 1500s)

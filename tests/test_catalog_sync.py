@@ -63,6 +63,8 @@ async def test_sync_channel_catalog_calls_sync_video_catalog_and_commits():
     fake_session = MagicMock()
     fake_session.get = AsyncMock(return_value=fake_creator)
     fake_session.commit = AsyncMock()
+    # Issue 352 Batch F: the finally now rolls back before the advisory unlock.
+    fake_session.rollback = AsyncMock()
     # Issue 88: phase 2 queries for unmetered videos. Empty result = no metrics fetched.
     empty_phase2 = MagicMock()
     empty_phase2.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
@@ -108,6 +110,8 @@ async def test_sync_channel_catalog_no_token_is_a_clean_no_op():
     fake_session = MagicMock()
     fake_session.get = AsyncMock(return_value=fake_creator)
     fake_session.commit = AsyncMock()
+    # Issue 352 Batch F: the finally now rolls back before the advisory unlock.
+    fake_session.rollback = AsyncMock()
     # Issue 105: advisory-lock probe is the first execute call — must return True
     # so the body proceeds (then the token lookup raises, which is what we test).
     advisory_lock_result = MagicMock()

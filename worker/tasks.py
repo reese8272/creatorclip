@@ -13,7 +13,7 @@ import contextlib
 import logging
 import tempfile
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,6 +79,52 @@ def _thumb_redis() -> aredis.Redis:
             socket_connect_timeout=2.0,
         )
     return _THUMB_REDIS
+
+
+async def _rollback_then_unlock(session: Any, lock_key: str) -> None:
+    """Roll back, then release the session-scoped advisory lock *lock_key*.
+
+    Shared ``finally`` epilogue for every ``pg_try_advisory_lock`` site in this
+    file. If the locked section left the session in a failed-transaction state
+    (e.g. a commit raised), the unlock ``execute`` would itself raise and the
+    connection would return to the pool with the advisory lock STILL HELD —
+    silently disabling that sweep until ``pool_recycle`` cycles the connection
+    (Issue 143). Rolling back first is a no-op on a clean session and guarantees
+    the unlock statement can run.
+    """
+    from sqlalchemy import text
+
+    await session.rollback()
+    await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+
+
+_KEYSET_BATCH_SIZE = 500
+
+
+async def _keyset_batches(
+    session: Any,
+    stmt: Any,
+    pk_col: Any,
+    batch_size: int = _KEYSET_BATCH_SIZE,
+) -> AsyncIterator[Sequence[Any]]:
+    """Yield ORM rows for *stmt* (a ``Select``) in primary-key keyset batches.
+
+    Bounds worker memory on otherwise-unbounded result sets (daily analytics
+    refresh, GDPR export): each round-trip fetches at most *batch_size* rows
+    ordered by *pk_col* and resumes strictly after the last-seen key. Clean ORM
+    instances are only weakly referenced by the session, so earlier batches are
+    released as soon as the caller drops them.
+    """
+    last: Any = None
+    while True:
+        q = stmt if last is None else stmt.where(pk_col > last)
+        rows = list((await session.execute(q.order_by(pk_col).limit(batch_size))).scalars())
+        if not rows:
+            return
+        yield rows
+        if len(rows) < batch_size:
+            return
+        last = getattr(rows[-1], pk_col.key)
 
 
 # ── Public entry points ───────────────────────────────────────────────────────
@@ -204,8 +250,21 @@ def ingest_video(self, video_id: str) -> str:
         run_async(_ingest_async(video_id))
     except SoftTimeLimitExceeded:
         # Soft limit means we've already burned ~50 min. Do NOT retry —
-        # the next delivery would time out again, wasting credits. Re-raise
+        # the next delivery would time out again, wasting credits. Mark failed
+        # so the UI shows an error instead of spinning forever, then re-raise
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
+        logger.warning(
+            "ingest_video soft-timeout for video %s (task %s) — terminal, not retrying",
+            video_id,
+            self.request.id,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Ingest timed out. Please try again.",
+            )
+        )
         raise
     except HTTPException as exc:
         if exc.status_code == 402:
@@ -292,7 +351,20 @@ def build_signals(self, video_id: str) -> str:
     try:
         run_async(_signals_async(video_id))
     except SoftTimeLimitExceeded:
-        # See ingest_video above — re-raise immediately to fire on_failure.
+        # See ingest_video above — mark failed (no perpetual "running" spinner),
+        # then re-raise immediately to fire on_failure without retry.
+        logger.warning(
+            "build_signals soft-timeout for video %s (task %s) — terminal, not retrying",
+            video_id,
+            self.request.id,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Signal analysis timed out. Please try again.",
+            )
+        )
         raise
     except Exception as exc:
         run_async(
@@ -903,7 +975,7 @@ async def _retrain_preference_async(creator_id: str) -> None:
                     # fails the retrain; the model version is already committed.
                     await _emit_preference_metrics(session, cid)
         finally:
-            await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+            await _rollback_then_unlock(session, lock_key)
 
 
 async def _emit_preference_metrics(session: Any, creator_id: uuid.UUID) -> None:
@@ -2116,7 +2188,7 @@ async def _sweep_scheduled_publications_async() -> None:
             await session.rollback()
             raise
         finally:
-            await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+            await _rollback_then_unlock(session, lock_key)
 
 
 # Minimum number of comparable published Shorts before we'll judge performed_well.
@@ -2272,15 +2344,7 @@ async def _poll_clip_outcomes_async() -> None:
                 # across the whole batch, and partial progress survives a mid-batch failure.
                 await session.commit()
         finally:
-            # Roll back first: if the body aborted (e.g. a per-creator commit raised),
-            # the session is in a failed-transaction state and the unlock execute would
-            # itself raise — silently *leaking* the session-level advisory lock and
-            # blocking every future poll on this pooled backend. Issue 143.
-            await session.rollback()
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "poll_clip_outcomes"},
-            )
+            await _rollback_then_unlock(session, "poll_clip_outcomes")
 
 
 async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
@@ -2559,10 +2623,7 @@ async def _purge_stale_source_media_async() -> None:
             # after signals ran (migration 0039). The loop skips defensive None.
             targets = result.all()
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "purge_stale_source_media"},
-            )
+            await _rollback_then_unlock(session, "purge_stale_source_media")
 
     if not targets:
         return
@@ -2694,10 +2755,7 @@ async def _purge_stale_youtube_analytics_async() -> None:
 
             await session.commit()
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "purge_stale_youtube_analytics"},
-            )
+            await _rollback_then_unlock(session, "purge_stale_youtube_analytics")
 
     total = deleted_metrics + deleted_curves + deleted_activity + deleted_demographics
     if total:
@@ -3204,9 +3262,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                     fetched=fetched,
                 )
             finally:
-                await session.execute(
-                    text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
-                )
+                await _rollback_then_unlock(session, lock_key)
     except YouTubeAuthError:
         await _emit("error", stage="catalog_sync", message="YouTube token revoked; reconnect.")
         raise
@@ -3271,11 +3327,15 @@ async def _refresh_youtube_analytics_async() -> None:
                     # invisible to the pipeline until the next deploy. (Issue 87)
                     await sync_video_catalog(session, creator, access_token)
 
-                    videos_result = await session.execute(
-                        select(Video).where(Video.creator_id == creator.id)
-                    )
-                    for video in list(videos_result.scalars()):
-                        await sync_video_analytics(session, video, creator, access_token)
+                    # Keyset-paginated: one large channel must not load its whole
+                    # catalog into worker memory at once (Issue 352 Batch F).
+                    async for video_batch in _keyset_batches(
+                        session,
+                        select(Video).where(Video.creator_id == creator.id),
+                        Video.id,
+                    ):
+                        for video in video_batch:
+                            await sync_video_analytics(session, video, creator, access_token)
 
                     await sync_audience_data(session, creator, access_token)
                     creator.last_analytics_refreshed_at = datetime.now(UTC)
@@ -3322,10 +3382,7 @@ async def _refresh_youtube_analytics_async() -> None:
                     logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
                     await session.rollback()
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "refresh_youtube_analytics"},
-            )
+            await _rollback_then_unlock(session, "refresh_youtube_analytics")
 
 
 @celery.task(
@@ -3351,56 +3408,76 @@ def _row_to_dict(obj) -> dict:
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
 
-async def _collect_creator_export(session, creator) -> dict:
+async def _collect_creator_export(session: Any, creator: Creator) -> dict:
     """Gather every data class for one creator into a JSON-serializable dict.
 
     Strictly single-tenant: every query is scoped to this creator (directly via
-    ``creator_id`` or via the creator's own video/clip/conversation ids)."""
+    ``creator_id`` or via the creator's own video/clip/conversation ids).
+    Every table is read through ``_keyset_batches`` so a power user's history is
+    fetched in bounded batches — plain column dicts, never the whole ORM result
+    set at once (Issue 352 Batch F). Output shape is unchanged.
+    """
     from sqlalchemy import select
 
     cid = creator.id
 
-    async def _all(stmt) -> list[dict]:
-        return [_row_to_dict(r) for r in (await session.execute(stmt)).scalars().all()]
+    async def _all(stmt: Any, pk_col: Any) -> list[dict]:
+        out: list[dict] = []
+        async for batch in _keyset_batches(session, stmt, pk_col):
+            out.extend(_row_to_dict(r) for r in batch)
+        return out
 
-    videos = (await session.execute(select(Video).where(Video.creator_id == cid))).scalars().all()
-    video_ids = [v.id for v in videos]
-    clips = (await session.execute(select(Clip).where(Clip.creator_id == cid))).scalars().all()
-    clip_ids = [c.id for c in clips]
-    convos = (
-        (await session.execute(select(ChatConversation).where(ChatConversation.creator_id == cid)))
-        .scalars()
-        .all()
+    videos = await _all(select(Video).where(Video.creator_id == cid), Video.id)
+    video_ids = [v["id"] for v in videos]
+    clips = await _all(select(Clip).where(Clip.creator_id == cid), Clip.id)
+    convos = await _all(
+        select(ChatConversation).where(ChatConversation.creator_id == cid), ChatConversation.id
     )
-    convo_ids = [c.id for c in convos]
+    clip_ids = [c["id"] for c in clips]
+    convo_ids = [c["id"] for c in convos]
 
     return {
         "profile": _row_to_dict(creator),
-        "dna": await _all(select(CreatorDna).where(CreatorDna.creator_id == cid)),
-        "videos": [_row_to_dict(v) for v in videos],
+        "dna": await _all(select(CreatorDna).where(CreatorDna.creator_id == cid), CreatorDna.id),
+        "videos": videos,
         "video_metrics": (
-            await _all(select(VideoMetrics).where(VideoMetrics.video_id.in_(video_ids)))
+            await _all(
+                select(VideoMetrics).where(VideoMetrics.video_id.in_(video_ids)),
+                VideoMetrics.video_id,
+            )
             if video_ids
             else []
         ),
         # Clips reference their downloadable media via the authed endpoint (durable,
         # isolation-enforced) rather than an expiring presigned link.
-        "clips": [{**_row_to_dict(c), "download_path": f"/clips/{c.id}/download"} for c in clips],
-        "clip_feedback": await _all(select(ClipFeedback).where(ClipFeedback.creator_id == cid)),
+        "clips": [{**c, "download_path": f"/clips/{c['id']}/download"} for c in clips],
+        "clip_feedback": await _all(
+            select(ClipFeedback).where(ClipFeedback.creator_id == cid), ClipFeedback.id
+        ),
         "clip_outcomes": (
-            await _all(select(ClipOutcome).where(ClipOutcome.clip_id.in_(clip_ids)))
+            await _all(
+                select(ClipOutcome).where(ClipOutcome.clip_id.in_(clip_ids)), ClipOutcome.clip_id
+            )
             if clip_ids
             else []
         ),
-        "chat_conversations": [_row_to_dict(c) for c in convos],
+        "chat_conversations": convos,
         "chat_messages": (
-            await _all(select(ChatMessage).where(ChatMessage.conversation_id.in_(convo_ids)))
+            await _all(
+                select(ChatMessage).where(ChatMessage.conversation_id.in_(convo_ids)),
+                ChatMessage.id,
+            )
             if convo_ids
             else []
         ),
-        "billing_packs": await _all(select(MinutePack).where(MinutePack.creator_id == cid)),
+        "billing_packs": await _all(
+            select(MinutePack).where(MinutePack.creator_id == cid), MinutePack.id
+        ),
         "billing_deductions": (
-            await _all(select(MinuteDeduction).where(MinuteDeduction.video_id.in_(video_ids)))
+            await _all(
+                select(MinuteDeduction).where(MinuteDeduction.video_id.in_(video_ids)),
+                MinuteDeduction.id,
+            )
             if video_ids
             else []
         ),
