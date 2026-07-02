@@ -248,6 +248,14 @@ def _transcribe_assemblyai(audio_path: str) -> dict:
                 aai.settings.http_timeout = float(settings.TRANSCRIPTION_HTTP_TIMEOUT_S)
                 _ASSEMBLYAI_READY = True
     transcript = aai.Transcriber().transcribe(audio_path)
+    # The SDK does NOT raise on a failed job — `.transcribe()` returns a transcript
+    # with status == error and words=None, which would otherwise normalize to an
+    # empty-segments "success": the creator is charged, gets a garbage transcript,
+    # and the worker's terminal-failure refund never fires. Raise instead so the
+    # retry → refund chain engages. This is the SDK's documented post-transcribe
+    # status-check pattern. (Issue 352 Batch E)
+    if transcript.status == aai.TranscriptStatus.error:
+        raise RuntimeError(f"AssemblyAI transcription failed: {transcript.error}")
     return _normalize_assemblyai(transcript)
 
 

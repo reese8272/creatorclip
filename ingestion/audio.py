@@ -19,7 +19,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _ENERGY_THRESHOLD = 0.6  # normalized RMS ≥ this → energy spike
-_SILENCE_THRESHOLD = 0.03  # normalized RMS < this → silence
+# Absolute silence floor in dBFS. Silence must be gated absolutely, not against the
+# per-file peak: with the old rms/rms.max() ratio a near-silent file "spiked" at 0.6
+# of its own noise floor, and audible speech next to one loud transient was flagged
+# as silence. Industry silence gates are absolute — ffmpeg silencedetect defaults to
+# -60 dB noise tolerance; EBU R128 gates at -70 LUFS. (Issue 352 Batch E)
+_SILENCE_DBFS = -60.0  # absolute RMS below this → silence
 _LAUGHTER_ENERGY_MIN = 0.3  # minimum energy for laughter classification
 _LAUGHTER_ZCR_THRESHOLD = 0.5  # normalized ZCR ≥ this (combined with energy) → laughter
 _MIN_ENERGY_DURATION_S = 0.5
@@ -98,19 +103,33 @@ def extract_audio_events(audio_path: str | Path) -> dict:
 
     rms = librosa.feature.rms(y=y, hop_length=hop)[0]
     rms_norm = rms / (rms.max() + 1e-8)
+    # Absolute loudness in dBFS — librosa loads float audio in [-1, 1], so ref=1.0
+    # is full scale. top_db=None disables the relative-to-max clipping so truly
+    # silent frames keep their real (very low) level. (Issue 352 Batch E)
+    rms_db = librosa.amplitude_to_db(rms, ref=1.0, top_db=None)
 
     zcr = librosa.feature.zero_crossing_rate(y=y, hop_length=hop)[0]
     zcr_norm = zcr / (zcr.max() + 1e-8)
 
     times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop)
 
-    energy_spikes = _merge_runs(
-        times, rms_norm >= _ENERGY_THRESHOLD, rms_norm, frame_dur, _MIN_ENERGY_DURATION_S
+    silence_mask = rms_db < _SILENCE_DBFS
+    if bool(silence_mask.all()):
+        logger.warning(
+            "Audio peak RMS %.1f dBFS is below the %.0f dBFS silence floor — file is "
+            "effectively silent; per-file-relative energy/laughter signals suppressed.",
+            float(rms_db.max()),
+            _SILENCE_DBFS,
+        )
+    # Energy spikes and laughter stay relative to the creator's own baseline, but a
+    # frame below the absolute silence floor can never be a spike — that was the
+    # near-silent-file false-positive vector. (Issue 352 Batch E)
+    energy_mask = (rms_norm >= _ENERGY_THRESHOLD) & ~silence_mask
+    energy_spikes = _merge_runs(times, energy_mask, rms_norm, frame_dur, _MIN_ENERGY_DURATION_S)
+    silences = _merge_runs(times, silence_mask, None, frame_dur, _MIN_SILENCE_DURATION_S)
+    laughter_mask = (
+        (rms_norm >= _LAUGHTER_ENERGY_MIN) & (zcr_norm >= _LAUGHTER_ZCR_THRESHOLD) & ~silence_mask
     )
-    silences = _merge_runs(
-        times, rms_norm < _SILENCE_THRESHOLD, None, frame_dur, _MIN_SILENCE_DURATION_S
-    )
-    laughter_mask = (rms_norm >= _LAUGHTER_ENERGY_MIN) & (zcr_norm >= _LAUGHTER_ZCR_THRESHOLD)
     laughter = _merge_runs(times, laughter_mask, zcr_norm, frame_dur, _MIN_LAUGHTER_DURATION_S)
 
     return {
@@ -175,13 +194,23 @@ def generate_waveform_image(
     else:
         timeout = base_timeout
 
+    # showwavespic has NO background option (`ffmpeg -h filter=showwavespic` lists
+    # only size/split_channels/colors/scale/draw/filter) — the previous
+    # `:bg_color=...` token made ffmpeg exit non-zero on every call. The standard
+    # way to get an opaque background is compositing the (transparent-background)
+    # waveform over a `color` source via `overlay`. (Issue 352 Batch E)
+    filter_complex = (
+        f"color=c={bg_color}:s={width}x{height}[bg];"
+        f"[0:a]showwavespic=s={width}x{height}:colors={fg_color}[fg];"
+        f"[bg][fg]overlay=format=auto"
+    )
     cmd = [
         "ffmpeg",
         "-y",  # overwrite without prompting
         "-i",
         str(audio_path),
         "-filter_complex",
-        (f"showwavespic=s={width}x{height}:colors={fg_color}:bg_color={bg_color}"),
+        filter_complex,
         "-frames:v",
         "1",
         str(output_path),

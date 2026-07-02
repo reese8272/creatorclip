@@ -169,6 +169,77 @@ def test_deepgram_mip_opt_out_is_positional_not_kwarg():
     assert addons_positional.get("mip_opt_out") is True
 
 
+# ── AssemblyAI error-status → raise (Issue 352 Batch E) ──────────────────────
+
+
+def _make_fake_aai_module(transcript: MagicMock) -> MagicMock:
+    """Fake `assemblyai` module: the SDK is a non-default backend and is not
+    installed in the unit lane, so mock it at the sys.modules boundary."""
+    fake_aai = MagicMock()
+    fake_aai.TranscriptStatus.error = "error"
+    fake_aai.Transcriber.return_value.transcribe.return_value = transcript
+    return fake_aai
+
+
+def test_assemblyai_error_status_raises_for_refund():
+    """An error-status transcript must RAISE, not normalize to empty segments.
+
+    The AssemblyAI SDK does NOT raise on a failed job — `.transcribe()` returns a
+    transcript with status == TranscriptStatus.error and words=None. Before the
+    fix that normalized to a charged empty-segments "success" and the worker's
+    terminal-failure refund never fired. (Issue 352 Batch E)
+    """
+    transcript = MagicMock()
+    transcript.status = "error"
+    transcript.error = "Download error: unable to fetch audio"
+    transcript.words = None
+    transcript.text = None
+
+    with (
+        patch.dict("sys.modules", {"assemblyai": _make_fake_aai_module(transcript)}),
+        patch("ingestion.transcribe.settings") as mock_settings,
+    ):
+        mock_settings.ASSEMBLYAI_API_KEY = "fake-key"
+        mock_settings.TRANSCRIPTION_HTTP_TIMEOUT_S = 30
+        from ingestion.transcribe import _transcribe_assemblyai
+
+        with pytest.raises(RuntimeError, match="unable to fetch audio"):
+            _transcribe_assemblyai("/fake/audio.wav")
+
+
+def test_assemblyai_completed_status_normalizes():
+    """Happy path: a completed transcript passes the status gate and normalizes
+    (ms → s) exactly as before the error-status check was added."""
+    word = MagicMock()
+    word.text = "hello"
+    word.start = 1000
+    word.end = 1500
+    transcript = MagicMock()
+    transcript.status = "completed"
+    transcript.words = [word]
+    transcript.text = "hello"
+
+    with (
+        patch.dict("sys.modules", {"assemblyai": _make_fake_aai_module(transcript)}),
+        patch("ingestion.transcribe.settings") as mock_settings,
+    ):
+        mock_settings.ASSEMBLYAI_API_KEY = "fake-key"
+        mock_settings.TRANSCRIPTION_HTTP_TIMEOUT_S = 30
+        from ingestion.transcribe import _transcribe_assemblyai
+
+        result = _transcribe_assemblyai("/fake/audio.wav")
+
+    assert result["source"] == "assemblyai"
+    assert result["segments"] == [
+        {
+            "start": 1.0,
+            "end": 1.5,
+            "text": "hello",
+            "words": [{"word": "hello", "start": 1.0, "end": 1.5}],
+        }
+    ]
+
+
 # ── Art. 30 record presence gate ─────────────────────────────────────────────
 
 
