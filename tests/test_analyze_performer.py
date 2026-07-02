@@ -19,7 +19,7 @@ from db import get_session
 from main import app
 from models import Creator, CreatorInsight, InsightType, Video
 from routers.insights import _build_analysis_prompt
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, owned_result
 
 _URL = "/creators/me/insights/analyze-performer"
 
@@ -73,9 +73,9 @@ def _fake_session(
 
     async def _gen():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=video)
         session.execute = AsyncMock(
             side_effect=[
+                owned_result(video),  # get_owned ownership select (Issue 109e)
                 _make_execute_result(metrics),
                 _make_execute_result(dna),
                 _make_execute_result(existing_insight),

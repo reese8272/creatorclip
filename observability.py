@@ -106,6 +106,14 @@ LLM_TOKENS_TOTAL = Counter(
     "LLM tokens by provider/model/kind",
     labelnames=("provider", "model", "kind"),
 )
+# LLM cost counter (Issue 291) — the USD twin of LLM_TOKENS_TOTAL, incremented
+# beside the billing-ledger write with the SAME estimated USD value. Same
+# low-cardinality label discipline: provider + model tier only, never creator_id.
+LLM_COST_USD_TOTAL = Counter(
+    "llm_cost_usd_total",
+    "Estimated LLM spend in USD by provider/model",
+    labelnames=("provider", "model"),
+)
 RENDER_FAILURES_TOTAL = Counter(
     "render_failures_total",
     "Render pipeline failures",
@@ -128,6 +136,23 @@ CELERY_QUEUE_DEPTH = Gauge(
 REDIS_USED_MEMORY_BYTES = Gauge(
     "redis_used_memory_bytes",
     "Redis used memory in bytes",
+)
+
+# ── Storage-footprint gauges (Issue 293) ─────────────────────────────────────
+# Object-storage COGS visibility: bytes + object counts per top-level key prefix
+# (source, audio, clips, summaries). Set by the daily Beat task
+# worker.tasks.collect_storage_gauges; the prefix label is a small fixed set so
+# cardinality stays flat regardless of creator count. The same gauges are used
+# for the local-disk dev backend (STORAGE_BACKEND=local).
+R2_BYTES_STORED = Gauge(
+    "r2_bytes_stored",
+    "Object storage bytes stored, by top-level key prefix",
+    labelnames=("prefix",),
+)
+R2_OBJECTS = Gauge(
+    "r2_objects",
+    "Object storage object count, by top-level key prefix",
+    labelnames=("prefix",),
 )
 
 
@@ -197,6 +222,23 @@ def record_llm_tokens(
         LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_read").inc(_cr)
     if _cc:
         LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_creation").inc(_cc)
+
+
+def record_llm_cost(provider: str, model: str, usd: float) -> None:
+    """Increment ``llm_cost_usd_total`` for one LLM call (Issue 291).
+
+    Called from the billing-ledger choke point (``record_llm_usage``) with the
+    same estimated USD the ledger persists, so the Prometheus/OTel rail and the
+    DB cost ledger can never diverge. Non-numeric or non-positive values are
+    dropped silently — the metric is best-effort and must never raise into the
+    billing path.
+    """
+    try:
+        value = float(usd)
+    except (TypeError, ValueError):
+        return
+    if value > 0:
+        LLM_COST_USD_TOTAL.labels(provider=provider, model=model).inc(value)
 
 
 def record_llm_metric(model: str, usage: Any, *, provider: str = "anthropic") -> None:

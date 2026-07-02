@@ -16,8 +16,6 @@ the stream. A ``: keepalive`` comment is emitted on every ~12s idle tick so
 the connection survives mobile-network and CDN idle timeouts.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -120,7 +118,7 @@ async def task_events(
     request: Request,
     task_id: str,
     creator: Creator = Depends(get_current_creator),
-):
+) -> StreamingResponse:
     """Tail a task's progress events as Server-Sent Events.
 
     Auth: session cookie required (via ``get_current_creator``).

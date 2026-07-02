@@ -10487,3 +10487,58 @@ Also 3× suite speedup (60–113s → ~24s). Full account in OFF_COURSE 2026-07-
 
 **Source/evidence.** Per-batch agent reports (this session); RLS integration suite 150 green on local
 PG16 at head 0044; conformance/caching suites. **Date:** 2026-07-02
+
+## 2026-07-02 — W2 wave scope + six approved decisions [DEC]
+
+Phase-2 CHECK (8 research agents, every claim backed by a URL fetched this session) reconciled the
+W2 column and the user approved all recommendations ("good to go on all"). Round 1 build set: 192
+(recap UI — absorbs the selection/enqueue wiring 190/191 left uncalled), 290+291-counter (spend
+guard), 245-residual, 302+254, 298 (+rollback fix), cost-obs batch (293/283/292 residuals), 78-R.
+Round 2: 109-rescoped (hot-file sequenced). Reconciled-closed: 310 (shipped 2026-06-24), 78, most
+of 291/292 (parked), 245's built 90%.
+
+**290 — static spend thresholds for beta; adaptive tier PARKED.** Microdollar Redis counters (Lua
+check-then-increment, the youtube/quota.py pattern) + 80% warn / 100% trip onto the EXISTING
+llm_generation flag (SETNX trip-latch; manual global reset only — spend doesn't self-heal, per the
+Azure circuit-breaker manual-reset guidance). Defaults approved: $5/creator/day, $50 global/day,
+$400/month (= 80% of Anthropic's Start-tier $500 hard pause so we degrade before the provider
+pauses us), $5/15-min global velocity, $1/15-min per-creator (cool-down 429, never fleet-wide).
+Trailing-baseline anomaly detection + prompt fingerprinting + Haiku degradation routing parked —
+no per-creator baselines exist at ≤100 users. Sources: learn.microsoft.com circuit-breaker;
+docs.aws.amazon.com budgets-controls; docs.cloud.google.com billing notify;
+platform.claude.com/docs/en/api/rate-limits; redis.io INCR patterns (all fetched 2026-07-02).
+
+**293 — Deepgram nova-3 stays; price book corrected.** Break-even vs self-host GPU ≈ 1,200
+audio-hr/mo (DO RTX 4000 Ada $555/mo ÷ $0.462/hr); beta ≈ 50 hr/mo. Revisit trigger >1,000 hr/mo
+sustained (measured from deduct ledger); AssemblyAI is the intermediate lever. LOAD-BEARING FIX:
+`COST_PER_MIN_DEEPGRAM` 0.0043→0.0077 (nova-2 was delisted; prod runs nova-3) + PRICE_BOOK_VERSION
+bump — the ledger was under-billing transcription ~44%. Sources: deepgram.com/pricing,
+assemblyai.com/pricing, digitalocean.com/pricing/gpu-droplets (fetched 2026-07-02).
+
+**298 — structural staging gate via jobs.needs; unblocked from #261.** Two-job deploy.yml:
+deploy-staging (exact sha- image, in-container alembic against the data-bearing staging PG, --flow
+core smoke) → prod `needs:` it; `skip_staging` audited break-glass. Environment-protection rules
+are Pro-gated on private repos (verified) — keep `environment:` decorative until Pro. The #261
+load test is not a prerequisite of the gate mechanism (approved unblock). Folds the #271 rollback
+fix: docker-compose.prod.yml hardcoded `:latest` so the rollback's IMAGE_TAG never interpolated.
+Sources: docs.github.com workflow-syntax + using-jobs; 12factor.net/dev-prod-parity (fetched).
+
+**245 — bell/unread-badge is a deliberate descope** (the written AC is satisfied by the activity
+panel); the residual POST /unsubscribe handler is a compliance requirement (RFC 8058 one-click =
+POST; our advertised header currently 405s) — datatracker.ietf.org/doc/html/rfc8058 +
+support.google.com/a/answer/81126 + resend.com unsubscribe docs (fetched 2026-07-02).
+
+**302 — GPC honored-by-default, declaration + detection only, no consent state.** We do not
+sell/share (252 posture), so per CA AG / CPPA the opt-out is inapplicable; the deliverables are the
+accurate policy claim, `/.well-known/gpc.json` per the spec, and a Sec-GPC detection hook.
+Sources: w3c.github.io/gpc, oag.ca.gov/privacy/ccpa, cppa.ca.gov/faq.html (fetched 2026-07-02).
+
+**254 — "beyond use + deletion-on-restore" backup-erasure stance.** Restore procedures MUST replay
+erasures (never-purged `creator.deleted` audit rows → `scripts/reapply_erasures.py`); honest
+persistence ceiling stated as ~56 days (the weekly backup is a full-dump copy — doc correction).
+Crypto-shredding rejected as beta over-scope. Sources: EDPB CEF-2025 right-to-erasure report §4.2.6
+(PDF fetched), cnil.fr sheet n°13 (fetched); ICO page cited but 403-blocked non-browser fetch.
+
+**283/291/292 beta rescopes** as recorded in their tracker status lines (solo-responder incident
+doc; counter+operator-clicks with anomaly layer parked; dashboard parked for lack of attribution
+data and revenue denominator). **Date:** 2026-07-02

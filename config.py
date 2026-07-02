@@ -144,9 +144,11 @@ class Settings(BaseSettings):
     # base input rate (1h-TTL is 2×; callers using ttl:"1h" — e.g. clip_engine/scoring.py —
     # pass cache_write_multiplier=2.0 explicitly). Source: same pricing page. (cost ledger)
     COST_CACHE_WRITE_MULTIPLIER: float = 1.25
-    # Deepgram Nova-2 pre-recorded transcription cost per minute (pay-as-you-go).
-    # Source: deepgram.com/pricing (fetched 2026-06-23).
-    COST_PER_MIN_DEEPGRAM: float = 0.0043
+    # Deepgram Nova-3 pre-recorded transcription cost per minute (pay-as-you-go).
+    # Prod transcribes with nova-3 (ingestion/transcribe.py) — the previous 0.0043
+    # figure was delisted nova-2 pricing and under-billed every minute (Issue 293).
+    # Source: deepgram.com/pricing (fetched 2026-07-02).
+    COST_PER_MIN_DEEPGRAM: float = 0.0077
     # Voyage AI voyage-3.5 embedding cost per million tokens.
     # Source: docs.voyageai.com/docs/pricing (fetched 2026-06-23).
     COST_PER_MTOK_VOYAGE: float = 0.06
@@ -166,7 +168,7 @@ class Settings(BaseSettings):
     # Version stamp for the price book. Update this string whenever any rate changes —
     # a version mismatch between a stored cost_estimate and this stamp signals a
     # rate-change event (FinOps Foundation cost-per-unit standard; finops.org/framework/phases/).
-    PRICE_BOOK_VERSION: str = "2026-06-23"
+    PRICE_BOOK_VERSION: str = "2026-07-02"
     # --- Pro chatbot (Issue 152) ---
     # Per-creator daily message cap — the load-bearing margin guard. Bounds
     # worst-case spend to ≈ CHAT_DAILY_MESSAGE_LIMIT × ~$0.04/heavy message per
@@ -610,7 +612,9 @@ class Settings(BaseSettings):
     # recorded version string on each Creator row lets a future re-prompt path
     # compare the stored version against the current one and gate the OAuth CTA.
     TOS_VERSION: str = "2026-06-23"
-    PRIVACY_VERSION: str = "2026-06-23"
+    # 2026-07-02: GPC recognition clause (Issue 302) + backup-erasure ceiling
+    # disclosure (Issue 254) published to /static/privacy.html.
+    PRIVACY_VERSION: str = "2026-07-02"
 
     # ── Error tracking — Sentry / GlitchTip (Issue 281) ───────────────────────
     # Set SENTRY_DSN to a Sentry project DSN or a GlitchTip DSN (identical
@@ -678,6 +682,26 @@ class Settings(BaseSettings):
     # Disable NEW creator signups (beta at capacity / incident). Existing
     # creators still log in; only new Creator rows are blocked.
     FLAG_SIGNUP_ENABLED: bool = True
+
+    # ── Spend guard — USD caps + cost-velocity circuit breaker (Issues 290+291) ─
+    # Enforced by billing/spend_guard.py from Redis µ$ counters incremented at the
+    # ledger choke point (record_llm_usage). A cap set to 0 disables that arm.
+    # Per-creator daily LLM spend ceiling; at 100% the creator gets a 429 +
+    # cool-down (creator-scoped — never trips the global switch).
+    SPEND_CAP_CREATOR_DAILY_USD: float = 5.00
+    # Global daily / monthly ceilings; at 100% the breaker flips the existing
+    # llm_generation kill switch off (manual re-enable via scripts/flags.py).
+    SPEND_CAP_GLOBAL_DAILY_USD: float = 50.00
+    SPEND_CAP_GLOBAL_MONTHLY_USD: float = 400.00
+    # Fraction of any cap at which a once-per-window spend_cap_warning event fires.
+    SPEND_WARN_RATIO: float = 0.80
+    # Cost-velocity trips: rolling ~15-min spend (3 × 5-min buckets) above these
+    # rates trips the breaker even when the daily caps are far away (runaway-loop
+    # detector). Global trip → kill switch; creator trip → creator cool-down.
+    SPEND_VELOCITY_GLOBAL_USD_PER_15M: float = 5.00
+    SPEND_VELOCITY_CREATOR_USD_PER_15M: float = 1.00
+    # TTL (seconds) of the per-creator cool-down key and the global trip-latch.
+    SPEND_COOLDOWN_TTL_S: int = 3600
 
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:

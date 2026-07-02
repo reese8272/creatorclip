@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
+from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -42,6 +43,7 @@ from models import (
     VideoMetrics,
 )
 from observability import record_llm_tokens
+from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 
 router = APIRouter(prefix="/creators/me/insights", tags=["insights"])
@@ -499,7 +501,7 @@ def _build_analysis_prompt(
     "/analyze-performer",
     response_model=InsightOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
@@ -522,9 +524,7 @@ async def analyze_performer(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid video_id") from exc
 
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
 
     metrics_row = (
         (await session.execute(select(VideoMetrics).where(VideoMetrics.video_id == video_id)))
@@ -669,9 +669,9 @@ async def save_insight(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Toggle the saved state of an insight."""
-    insight = await session.get(CreatorInsight, insight_id)
-    if not insight or insight.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Insight not found")
+    insight = await get_owned(
+        session, CreatorInsight, insight_id, creator.id, detail="Insight not found"
+    )
     insight.is_saved = not insight.is_saved
     await session.commit()
     await session.refresh(insight)

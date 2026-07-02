@@ -128,6 +128,30 @@ async def _keyset_batches(
         last = getattr(rows[-1], pk_col.key)
 
 
+async def _spend_guard_blocked(job_id: str | None, stage: str, creator_id: str) -> bool:
+    """Pre-execution spend gate for paid LLM tasks (Issue 290).
+
+    Sits where the ``youtube_publish`` kill-switch gate sits: at the top of the
+    async impl, before any paid work. Returns True (caller must stop) when the
+    ``llm_generation`` switch is off — the global spend breaker flips it — or
+    the creator is in spend cool-down; emits a safe SSE ``error`` event so
+    streams resolve instead of hanging. The check itself fails OPEN — a guard
+    error never blocks the task.
+    """
+    from billing.spend_guard import SpendCapExceededError, ensure_within_budget
+    from worker.progress import aemit
+
+    try:
+        await ensure_within_budget(creator_id)
+    except SpendCapExceededError as exc:
+        logger.warning("spend guard blocked paid task (stage=%s)", stage)
+        if job_id is not None:
+            with contextlib.suppress(Exception):
+                await aemit(job_id, "error", stage=stage, message=str(exc))
+        return True
+    return False
+
+
 # ── Public entry points ───────────────────────────────────────────────────────
 
 
@@ -244,7 +268,7 @@ async def _fire_refund_notification_async(video_uuid: uuid.UUID) -> None:
     default_retry_delay=30,
     name="worker.tasks.ingest_video",
 )
-def ingest_video(self, video_id: str) -> str:
+def ingest_video(self: Task, video_id: str) -> str:
     creator_id = run_async(_creator_id_for_video(video_id))
     log_event(
         "ingest_video_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
@@ -301,7 +325,7 @@ def ingest_video(self, video_id: str) -> str:
     default_retry_delay=30,
     name="worker.tasks.transcribe_video",
 )
-def transcribe_video(self, video_id: str) -> str:
+def transcribe_video(self: Task, video_id: str) -> str:
     creator_id = run_async(_creator_id_for_video(video_id))
     log_event(
         "transcribe_video_started",
@@ -346,7 +370,7 @@ def transcribe_video(self, video_id: str) -> str:
     default_retry_delay=30,
     name="worker.tasks.build_signals",
 )
-def build_signals(self, video_id: str) -> str:
+def build_signals(self: Task, video_id: str) -> str:
     creator_id = run_async(_creator_id_for_video(video_id))
     log_event(
         "build_signals_started", creator_id=creator_id, task_id=self.request.id, video_id=video_id
@@ -388,7 +412,7 @@ def build_signals(self, video_id: str) -> str:
     default_retry_delay=60,
     name="worker.tasks.generate_clips",
 )
-def generate_clips(self, video_id: str) -> str:
+def generate_clips(self: Task, video_id: str) -> str:
     """Score and rank clip candidates for a fully-ingested video."""
     creator_id = run_async(_creator_id_for_video(video_id))
     log_event(
@@ -405,7 +429,7 @@ def generate_clips(self, video_id: str) -> str:
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_clip")
-def render_clip(self, clip_id: str) -> str:
+def render_clip(self: Task, clip_id: str) -> str:
     """Render a clip to 9:16 and upload to storage.
 
     Permanent failures (missing clip/source, invalid timing range — raised as
@@ -459,7 +483,7 @@ def render_clip(self, clip_id: str) -> str:
 @celery.task(
     bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_video_clips"
 )
-def render_video_clips(self, video_id: str, clip_ids: list[str]) -> str:
+def render_video_clips(self: Task, video_id: str, clip_ids: list[str]) -> str:
     """Render a batch of clips from one video, downloading the source ONCE.
 
     The auto-render path enqueues this instead of N ``render_clip`` tasks so a
@@ -505,7 +529,7 @@ def render_video_clips(self, video_id: str, clip_ids: list[str]) -> str:
 
 
 @celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.clean_clip")
-def clean_clip(self, clip_id: str) -> str:
+def clean_clip(self: Task, clip_id: str) -> str:
     """Re-render a clip with filler words + long silences removed (Issue 134)."""
     try:
         run_async(_clean_clip_async(clip_id))
@@ -517,7 +541,7 @@ def clean_clip(self, clip_id: str) -> str:
 @celery.task(
     bind=True, max_retries=3, default_retry_delay=120, name="worker.tasks.publish_to_youtube"
 )
-def publish_to_youtube(self, clip_id: str) -> str:
+def publish_to_youtube(self: Task, clip_id: str) -> str:
     """Upload a rendered clip to the creator's YouTube channel (Issue 195).
 
     Idempotent on the Celery task id: a redelivery finds the existing
@@ -713,7 +737,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
 
 
 @celery.task(bind=True, max_retries=2, default_retry_delay=60, name="worker.tasks.edit_clip")
-def edit_clip(self, clip_id: str, cut_segments: list[list[float]]) -> str:
+def edit_clip(self: Task, clip_id: str, cut_segments: list[list[float]]) -> str:
     """Re-render a clip with user-supplied transcript-editor cuts (Issue 135).
 
     ``cut_segments`` is a JSON-serialisable list of ``[start_s, end_s]`` pairs
@@ -805,6 +829,35 @@ def purge_stale_event_logs() -> None:
     run_async(_purge_stale_event_logs_async())
 
 
+@celery.task(name="worker.tasks.collect_storage_gauges")
+def collect_storage_gauges() -> None:
+    """Issue 293 — daily storage-footprint sweep for object-storage COGS.
+
+    Paginates the bucket per top-level prefix (source/, audio/, clips/,
+    summaries/) and sets the r2_bytes_stored{prefix} / r2_objects{prefix}
+    gauges. With STORAGE_BACKEND=local the same gauges are filled by walking
+    LOCAL_MEDIA_DIR. Best-effort observability: never raises — a failed prefix
+    is logged and skipped, and an unconfigured R2 backend skips cleanly.
+    """
+    from config import settings
+    from observability import R2_BYTES_STORED, R2_OBJECTS
+    from worker.storage import STORAGE_GAUGE_PREFIXES, measure_prefix
+
+    if settings.STORAGE_BACKEND == "r2" and not (settings.R2_ACCOUNT_ID and settings.R2_BUCKET):
+        logger.info("collect_storage_gauges: R2 backend unconfigured — skipping sweep")
+        return
+    for prefix in STORAGE_GAUGE_PREFIXES:
+        label = prefix.rstrip("/")
+        try:
+            total_bytes, count = measure_prefix(prefix)
+            R2_BYTES_STORED.labels(prefix=label).set(total_bytes)
+            R2_OBJECTS.labels(prefix=label).set(count)
+        except Exception:
+            # Gauge keeps its last value; a transient storage error must never
+            # break the Beat loop or mark the sweep failed.
+            logger.warning("collect_storage_gauges: sweep failed for prefix %s", label)
+
+
 @celery.task(name="worker.tasks.refresh_youtube_analytics")
 def refresh_youtube_analytics() -> None:
     """
@@ -817,7 +870,7 @@ def refresh_youtube_analytics() -> None:
 @celery.task(
     bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.sync_channel_catalog"
 )
-def sync_channel_catalog(self, creator_id: str) -> str:
+def sync_channel_catalog(self: Task, creator_id: str) -> str:
     """Pull the creator's uploads playlist into the videos table (Issue 87).
 
     Idempotent: the underlying sync_video_catalog skips existing
@@ -880,7 +933,7 @@ def sweep_scheduled_publications() -> None:
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.build_dna")
-def build_dna(self, creator_id: str) -> str:
+def build_dna(self: Task, creator_id: str) -> str:
     """
     Build creator DNA patterns, generate brief, store draft profile + embeddings.
     ValueError (data gate failure) is re-raised without retry — it is a permanent error.
@@ -901,7 +954,7 @@ def build_dna(self, creator_id: str) -> str:
 @celery.task(
     bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.retrain_preference"
 )
-def retrain_preference(self, creator_id: str) -> str:
+def retrain_preference(self: Task, creator_id: str) -> str:
     """Retrain the creator's preference model from their clip feedback (Issue 60).
 
     Idempotent + self-debouncing: a no-op when no new trainable feedback has arrived
@@ -1987,6 +2040,10 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
     # test invocations of _build_dna_async) there's no subscriber and emitting
     # would just litter Redis with orphan streams.
     progress_enabled = job_id is not None
+
+    # Spend guard (Issue 290): stop before the paid Anthropic/Voyage calls.
+    if await _spend_guard_blocked(job_id, "dna", creator_id):
+        return
 
     async def _emit(event_type: str, **fields: object) -> None:
         if progress_enabled:
@@ -3152,7 +3209,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
     metric progress. When None (Beat-task callers + tests), emits short-
     circuit silently — no observer.
     """
-    from sqlalchemy import select, text
+    from sqlalchemy import Select, select, text
 
     from config import settings
     from worker.progress import aemit
@@ -3218,7 +3275,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                 # YouTube Analytics API calls (~4 min) regardless of catalog size. Older
                 # or excess videos are picked up gradually by the hourly Beat task
                 # (refresh_youtube_analytics). (Issue 120)
-                def _unmeasured_query(kind: VideoKind, cap: int):
+                def _unmeasured_query(kind: VideoKind, cap: int) -> Select[tuple[Video]]:
                     return (
                         select(Video)
                         .outerjoin(VideoMetrics, VideoMetrics.video_id == Video.id)
@@ -3250,7 +3307,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                     .scalars()
                     .all()
                 )
-                unmeasured = longs_unmeasured + shorts_unmeasured
+                unmeasured = [*longs_unmeasured, *shorts_unmeasured]
 
                 # Re-fetch the access token before the Phase 2 loop. Phase 1 (catalog
                 # upsert) can take several minutes on large channels; if the token was
@@ -3444,7 +3501,7 @@ async def _refresh_youtube_analytics_async() -> None:
 @celery.task(
     bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.generate_data_export"
 )
-def generate_data_export(self, creator_id: str) -> str:
+def generate_data_export(self: Task, creator_id: str) -> str:
     """Build a creator's GDPR Art. 15/20 data export off the request path (Issue 249).
 
     Gathers every data class into a JSON artifact, uploads it to R2, and writes
@@ -3459,7 +3516,7 @@ def generate_data_export(self, creator_id: str) -> str:
     return creator_id
 
 
-def _row_to_dict(obj) -> dict:
+def _row_to_dict(obj: db.Base) -> dict:
     """Serialize a model instance to a plain column dict (JSON via default=str)."""
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
@@ -3602,7 +3659,7 @@ async def _generate_data_export_async(job_id: str, creator_id: str) -> None:
 @celery.task(
     bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.generate_improvement_brief"
 )
-def generate_improvement_brief(self, creator_id: str) -> str:
+def generate_improvement_brief(self: Task, creator_id: str) -> str:
     """Generate a creator's content-improvement brief off the request path (Issue 78d).
 
     The ~120s Claude + web_search call previously ran inline on the API event loop;
@@ -3690,6 +3747,21 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                     stage="improvement_brief",
                     message="Creator not found.",
                 )
+                return
+
+            # Spend guard (Issue 290): stop before the paid Claude call. The
+            # brief is polled off its DB row, so a blocked run must mark the
+            # row failed (not just emit SSE) or the poller would spin forever.
+            from billing.spend_guard import SpendCapExceededError, ensure_within_budget
+
+            try:
+                await ensure_within_budget(creator_id)
+            except SpendCapExceededError as exc:
+                row.status = ImprovementBriefStatus.failed
+                row.error = str(exc)
+                row.completed_at = datetime.now(UTC)
+                await session.commit()
+                await aemit(job_id, "error", stage="improvement_brief", message=str(exc))
                 return
 
             try:
@@ -3792,7 +3864,7 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     name="worker.tasks.generate_video_analysis",
 )
 def generate_video_analysis(
-    self,
+    self: Task,
     creator_id: str,
     youtube_video_id: str,
     query: str,
@@ -3838,6 +3910,10 @@ async def _generate_video_analysis_async(
     from dna.profile import get_active
     from models import RetentionCurve, Video, VideoMetrics
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "video_analysis", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="video_analysis")
@@ -3993,7 +4069,7 @@ async def _generate_video_analysis_async(
     default_retry_delay=60,
     name="worker.tasks.generate_title_suggestions",
 )
-def generate_title_suggestions(self, creator_id: str, video_id: str) -> str:
+def generate_title_suggestions(self: Task, creator_id: str, video_id: str) -> str:
     """Generate title suggestions for a video off the request path (Issue 128)."""
     try:
         run_async(_generate_title_suggestions_async(self.request.id, creator_id, video_id))
@@ -4028,6 +4104,10 @@ async def _generate_title_suggestions_async(
     )
     from models import Transcript, Video
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "title_suggestions", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="title_suggestions")
@@ -4132,7 +4212,7 @@ async def _generate_title_suggestions_async(
     default_retry_delay=60,
     name="worker.tasks.generate_thumbnail_concepts",
 )
-def generate_thumbnail_concepts(self, creator_id: str, video_id: str) -> str:
+def generate_thumbnail_concepts(self: Task, creator_id: str, video_id: str) -> str:
     """Generate thumbnail concepts for a video off the request path (Issue 129)."""
     try:
         run_async(_generate_thumbnail_concepts_async(self.request.id, creator_id, video_id))
@@ -4171,6 +4251,10 @@ async def _generate_thumbnail_concepts_async(
     )
     from models import Transcript, Video
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "thumbnail_concepts", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="thumbnail_concepts")
@@ -4336,7 +4420,7 @@ async def _generate_thumbnail_concepts_async(
     default_retry_delay=60,
     name="worker.tasks.analyze_hook",
 )
-def analyze_hook(self, creator_id: str, video_id: str) -> str:
+def analyze_hook(self: Task, creator_id: str, video_id: str) -> str:
     """Analyze the first-30s hook against the creator's retention curves (Issue 130)."""
     try:
         run_async(_analyze_hook_async(self.request.id, creator_id, video_id))
@@ -4359,6 +4443,10 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
     from knowledge.util import extract_transcript_excerpt
     from models import RetentionCurve, Transcript, Video
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "hook_analysis", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="hook_analysis")
@@ -4512,7 +4600,7 @@ async def _analyze_hook_async(job_id: str, creator_id: str, video_id: str) -> No
     default_retry_delay=60,
     name="worker.tasks.generate_chapters",
 )
-def generate_chapters(self, creator_id: str, video_id: str) -> str:
+def generate_chapters(self: Task, creator_id: str, video_id: str) -> str:
     """Generate YouTube chapter markers from transcript + signal timeline (Issue 131)."""
     try:
         run_async(_generate_chapters_async(self.request.id, creator_id, video_id))
@@ -4539,6 +4627,10 @@ async def _generate_chapters_async(job_id: str, creator_id: str, video_id: str) 
     from knowledge.util import get_transcript_segments
     from models import Signals, Transcript, Video
     from worker.progress import aemit
+
+    # Spend guard (Issue 290): stop before the paid Claude call.
+    if await _spend_guard_blocked(job_id, "chapters", creator_id):
+        return
 
     try:
         await aemit(job_id, "step", label="loading_data", stage="chapters")
@@ -4660,6 +4752,10 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
     cid = uuid.UUID(creator_id)
     conv_uuid = uuid.UUID(conversation_id)
     history_turns = settings.CHAT_HISTORY_TURNS
+
+    # Spend guard (Issue 290): stop before the paid agentic tool loop.
+    if await _spend_guard_blocked(job_id, "chat", creator_id):
+        return
 
     try:
         async with db.tenant_session(cid) as session:
@@ -5226,7 +5322,7 @@ async def _render_summary_async(summary_id: str, creator_id: str | None = None) 
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_summary")
-def render_summary(self, summary_id: str) -> str:
+def render_summary(self: Task, summary_id: str) -> str:
     """Render a stream-VOD recap to a 16:9 multi-segment concat mp4 (Issue 191).
 
     Mirrors ``render_clip``'s classification: ``ValueError``/``FileNotFoundError``

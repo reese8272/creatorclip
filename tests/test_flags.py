@@ -21,7 +21,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import Creator, FeatureFlag
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, stub_get_owned
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ def test_render_gate_blocks_when_disabled(client) -> None:
 def test_render_gate_passes_when_enabled(client) -> None:
     _seed_cache("render_intake", True)
     session = AsyncMock()
-    session.get = AsyncMock(return_value=None)  # clip not found → 404 past the gate
+    stub_get_owned(session, None)  # clip not found → 404 past the gate
     app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
     app.dependency_overrides[get_session] = _override_session(session)
 

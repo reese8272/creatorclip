@@ -4,6 +4,7 @@ import logging
 import re as _re
 import secrets
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,9 +18,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response as _StarletteResponse
 
 import event_log
+import shared_resources
 from auth import check_not_cross_site
 from config import settings
 from db import engine
@@ -87,30 +90,25 @@ _health_redis: aioredis.Redis | None = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _health_redis
     logger.info("CreatorClip starting (env=%s)", settings.ENV)
-    _health_redis = aioredis.from_url(
+    health_redis = aioredis.from_url(
         settings.REDIS_URL,
         decode_responses=True,
         socket_timeout=2.0,
         socket_connect_timeout=2.0,
     )
+    _health_redis = health_redis
+    # Registered last → closed first by close_all(). Re-registration replaces
+    # the previous lifespan's bound method on repeated startups (TestClient).
+    shared_resources.register_aclose("health_redis", health_redis.aclose)
     yield
-    # Close the shared YouTube/Google HTTP client (Issue 72).
-    from youtube import _http
-
-    await _http.aclose()
-    # Close the Issue-86 progress Redis client cleanly (no Event-loop-is-closed
-    # warnings at shutdown; releases the connection pool).
-    from worker import progress
-
-    await progress.aclose()
-    # Close the health-check Redis singleton.
-    if _health_redis is not None:
-        await _health_redis.aclose()
-    # Close the event-log sink pool (Issue 151).
-    await event_log.dispose()
+    # Close every registered long-lived client — youtube HTTP client (Issue 72),
+    # worker progress Redis (Issue 86), the health-check Redis above, and the
+    # event-log sink pool (Issue 151) — in reverse registration order,
+    # error-isolated per resource (Issue 109b).
+    await shared_resources.close_all()
     logger.info("CreatorClip shutdown")
 
 
@@ -152,6 +150,7 @@ app.include_router(creators_router.router)
 app.include_router(videos_router.router)
 app.include_router(clips_module.router)
 app.include_router(clips_module.clips_router)
+app.include_router(clips_module.summaries_router)
 app.include_router(publications_router.router)
 app.include_router(review_router.router)
 app.include_router(upload_intel_router.router)
@@ -236,14 +235,18 @@ def _rewrite_static(body: bytes, version: str) -> bytes:
 
 
 class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> _StarletteResponse:
         response = await call_next(request)
         ctype = response.headers.get("content-type", "")
         # Only rewrite full HTML responses; skip 304s (empty body) and non-HTML.
         if not ctype.startswith("text/html") or response.status_code == 304:
             return response
         chunks: list[bytes] = []
-        async for chunk in response.body_iterator:
+        # call_next is typed as returning Response, but BaseHTTPMiddleware always
+        # delivers starlette's private _StreamingResponse, which has body_iterator.
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
             chunks.append(chunk)
         body = b"".join(chunks)
         body = _rewrite_static(body, settings.STATIC_VERSION)
@@ -313,7 +316,9 @@ class SecurityHeadersMiddleware(_BaseHTTPMiddleware):
     non-TLS dev/staging hosts.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> _StarletteResponse:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = _build_csp()
         response.headers["X-Frame-Options"] = "DENY"
@@ -335,6 +340,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Global Privacy Control (Issue 302 — w3c.github.io/gpc) ───────────────────
+# Detection only: the Sec-GPC header is surfaced on request.state and never
+# logged or persisted. CreatorClip does not sell or share personal information
+# (no ad-tech, no cross-context behavioural advertising), so a GPC opt-out is
+# satisfied by default — see static/privacy.html (CCPA section) and
+# docs/COMPLIANCE.md (Privacy Posture).
+_GPC_LAST_UPDATE = "2026-07-02"  # bump when the GPC posture changes
+
+
+@app.middleware("http")
+async def _detect_gpc(request: Request, call_next: RequestResponseEndpoint) -> _StarletteResponse:
+    request.state.gpc = request.headers.get("Sec-GPC") == "1"
+    return await call_next(request)
+
+
+@app.get("/.well-known/gpc.json", include_in_schema=False)
+async def gpc_well_known() -> dict:
+    """Machine-readable GPC support declaration (W3C GPC spec §5)."""
+    return {"gpc": True, "lastUpdate": _GPC_LAST_UPDATE}
 
 
 # ── Backend request telemetry (Issue 151) ────────────────────────────────────
@@ -360,7 +386,9 @@ _LOG_SKIP_PREFIXES = (
 
 
 @app.middleware("http")
-async def _log_request_events(request: Request, call_next):
+async def _log_request_events(
+    request: Request, call_next: RequestResponseEndpoint
+) -> _StarletteResponse:
     start = time.perf_counter()
     response = await call_next(request)
     path = request.url.path

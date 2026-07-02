@@ -22,6 +22,7 @@ from auth import get_current_creator
 from db import get_session
 from limiter import creator_key, limiter
 from models import Creator, CreatorApiKey, append_audit
+from routers._owned import get_owned
 
 router = APIRouter(prefix="/creators/me/api-keys", tags=["api-keys"])
 logger = logging.getLogger(__name__)
@@ -189,8 +190,8 @@ async def revoke_api_key(
     IP, UA, and request_id are folded into ``before_jsonb`` to avoid a
     schema migration in this issue.
     """
-    row = await session.get(CreatorApiKey, key_id)
-    if row is None or row.creator_id != creator.id or row.revoked_at is not None:
+    row = await get_owned(session, CreatorApiKey, key_id, creator.id, detail="API key not found")
+    if row.revoked_at is not None:
         raise HTTPException(status_code=404, detail="API key not found")
 
     # Capture pre-revoke state for the audit row BEFORE mutating.

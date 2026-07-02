@@ -25,8 +25,8 @@ from httpx import ASGITransport, AsyncClient
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import Creator, IngestStatus, RenderStatus, Signals, Transcript, Video
-from tests._helpers import override_current_creator
+from models import Creator, IngestStatus, RenderStatus, Signals, Video
+from tests._helpers import override_current_creator, owned_lookup_result
 
 # ── Stubs ─────────────────────────────────────────────────────────────────────
 
@@ -81,23 +81,27 @@ _RANKED = [
 
 
 def _request_session(video: MagicMock, signals: MagicMock) -> AsyncMock:
-    """Fake request-scoped session: routes .get() by model, empty clip list."""
+    """Fake request-scoped session: Video via the get_owned ownership select
+    (Issue 109e), Signals/Transcript via .get(), empty clip list otherwise."""
     session = AsyncMock()
     session.info = {}
 
     async def _get(model, pk):
-        if model is Video:
-            return video
         if model is Signals:
             return signals
-        if model is Transcript:
-            return None
         return None
 
     session.get = AsyncMock(side_effect=_get)
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = []
-    session.execute = AsyncMock(return_value=result)
+
+    async def _execute(stmt, *a, **kw):
+        entity = stmt.column_descriptions[0]["type"]
+        if entity is Video:
+            return owned_lookup_result(stmt, video)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
     return session
 
 
@@ -244,14 +248,16 @@ class _PooledSession:
 
     async def get(self, model, pk):
         await self._checkout()
-        if model is Video:
-            return self._video
         if model is Signals:
             return self._signals
         return None
 
-    async def execute(self, *args, **kwargs):
+    async def execute(self, stmt=None, *args, **kwargs):
         await self._checkout()
+        descriptions = getattr(stmt, "column_descriptions", None)
+        entity = descriptions[0]["type"] if descriptions else None
+        if entity is Video:  # get_owned ownership select (Issue 109e)
+            return owned_lookup_result(stmt, self._video)
         result = MagicMock()
         result.scalars.return_value.all.return_value = []
         return result

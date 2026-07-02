@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import uuid as _uuid_mod
+from collections.abc import Awaitable, Callable
 
 import redis.asyncio as aredis
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
+from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -81,7 +83,7 @@ async def _compute_patterns_single_flight(
     *,
     lock_id: object,
     cache_key: str,
-    compute,
+    compute: Callable[[], Awaitable[dict]],
     cache_ttl: int,
 ) -> dict:
     """Run ``compute`` under a per-creator single-flight lock (SEV1 #3).
@@ -238,7 +240,7 @@ async def get_thumbnail_patterns(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ThumbnailConceptsQueuedOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)

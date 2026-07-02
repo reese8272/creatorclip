@@ -25,6 +25,7 @@ from clip_engine.edits import (
     CutValidationError,
     validate_user_cuts,
 )
+from tests._helpers import stub_get_owned
 
 # ── validate_user_cuts ────────────────────────────────────────────────────
 
@@ -211,7 +212,7 @@ def test_post_cuts_happy_path_returns_202(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=clip)
+        stub_get_owned(s, clip)
         s.commit = AsyncMock()
         yield s
 
@@ -269,7 +270,7 @@ def test_post_cuts_validation_returns_422_with_code(client, segments, expected_c
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=clip)
+        stub_get_owned(s, clip)
         s.commit = AsyncMock()
         yield s
 
@@ -310,7 +311,8 @@ def test_post_cuts_rejects_other_creators_clip(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=clip)
+        # Ownership-scoped select (Issue 109e): foreign row → no match → 404.
+        stub_get_owned(s, None)
         yield s
 
     app.dependency_overrides[get_current_creator] = lambda: creator
@@ -362,7 +364,8 @@ def test_get_transcript_returns_clip_relative_words(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(side_effect=[clip, transcript])
+        stub_get_owned(s, clip)
+        s.get = AsyncMock(return_value=transcript)
         yield s
 
     app.dependency_overrides[get_current_creator] = lambda: creator
@@ -402,7 +405,7 @@ def test_post_cuts_rejects_when_cleaned_render_uri_already_set(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=clip)
+        stub_get_owned(s, clip)
         yield s
 
     app.dependency_overrides[get_current_creator] = lambda: creator

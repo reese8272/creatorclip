@@ -10,11 +10,13 @@ Three surfaces sit on top of the Issue 243/244 notification infra:
     ``notification_preferences`` row.  ``email_transactional`` is legally
     always-on (CAN-SPAM / GDPR Art. 6(1)(b)); it is intentionally absent from
     the PATCH request model so a crafted body can never disable it.
-  * No-auth one-click unsubscribe — GET /unsubscribe/{token}.  The token is the
+  * No-auth unsubscribe — GET + POST /unsubscribe/{token}.  The token is the
     unguessable UUID4 ``unsubscribe_token`` keyed on the (no-RLS) preferences
-    table; the handler flips ``email_lifecycle`` off and returns a generic
-    confirmation that never reveals which email/creator the token maps to
-    (RFC 8058 one-click; must stay live ≥30 days — no rotation here).
+    table; both handlers flip ``email_lifecycle`` off and return a generic
+    response that never reveals which email/creator the token maps to.  POST is
+    the RFC 8058 one-click endpoint (mail receivers such as Gmail/Yahoo issue an
+    HTTPS POST to the ``List-Unsubscribe`` URL); GET is the human landing page
+    behind the same link.  Must stay live ≥30 days — no rotation here.
 """
 
 import logging
@@ -22,10 +24,11 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 from slowapi.util import get_remote_address
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import AdminSessionLocal, get_session
@@ -82,7 +85,7 @@ class PreferencesPatch(BaseModel):
 async def list_notifications(
     request: Request,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> NotificationListOut:
     """List the current creator's undismissed notifications, newest first.
 
@@ -128,7 +131,7 @@ async def dismiss_notification(
     request: Request,
     notification_id: uuid.UUID,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> NotificationOut:
     """Dismiss one notification owned by the caller.
 
@@ -159,7 +162,9 @@ async def dismiss_notification(
 # ── Preferences (authed) ──────────────────────────────────────────────────────
 
 
-async def _get_or_create_prefs(session, creator_id: uuid.UUID) -> NotificationPreference:
+async def _get_or_create_prefs(
+    session: AsyncSession, creator_id: uuid.UUID
+) -> NotificationPreference:
     """Return the creator's preference row, lazy-creating defaults if absent.
 
     Mirrors the lazy-create in ``send_notification`` so the API and the worker
@@ -178,7 +183,7 @@ async def _get_or_create_prefs(session, creator_id: uuid.UUID) -> NotificationPr
 async def get_preferences(
     request: Request,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> PreferencesOut:
     """Return the current creator's notification preferences (defaults if none)."""
     prefs = await _get_or_create_prefs(session, creator.id)
@@ -197,7 +202,7 @@ async def update_preferences(
     request: Request,
     patch: PreferencesPatch,
     creator: Creator = Depends(get_current_creator),
-    session=Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ) -> PreferencesOut:
     """Update the unsubscribable channels.
 
@@ -247,16 +252,12 @@ _UNSUBSCRIBE_NOT_FOUND_HTML = (
 )
 
 
-@unsubscribe_router.get("/{token}", response_class=HTMLResponse)
-@limiter.limit("30/minute", key_func=get_remote_address)
-async def unsubscribe(request: Request, token: uuid.UUID) -> HTMLResponse:
-    """One-click unsubscribe from lifecycle emails (RFC 8058).
+async def _flip_lifecycle_off(token: uuid.UUID) -> bool:
+    """Flip ``email_lifecycle`` off for the preference row matching ``token``.
 
-    Unauthenticated by design — the email recipient has no session.  The token
-    is the unguessable UUID4 ``unsubscribe_token``; a malformed (non-UUID) path
-    param yields 422 before this handler runs.  Idempotent: flipping an
-    already-False preference is a no-op success.  A token that matches no
-    preference returns a generic 404 that reveals no email or creator id.
+    Idempotent: flipping an already-False preference is a no-op success.
+    Returns True when the token matched a preference row, False otherwise —
+    the caller renders the generic (no email / creator id) response either way.
 
     Uses an admin (BYPASSRLS) session because there is no creator request
     context to set the RLS GUC; the ``notification_preferences`` table has no
@@ -269,7 +270,7 @@ async def unsubscribe(request: Request, token: uuid.UUID) -> HTMLResponse:
         )
         if prefs is None:
             logger.info("unsubscribe: token not found")
-            return HTMLResponse(content=_UNSUBSCRIBE_NOT_FOUND_HTML, status_code=404)
+            return False
 
         if prefs.email_lifecycle:
             prefs.email_lifecycle = False
@@ -278,4 +279,36 @@ async def unsubscribe(request: Request, token: uuid.UUID) -> HTMLResponse:
             logger.info("unsubscribe: creator %s opted out of lifecycle email", prefs.creator_id)
         else:
             logger.info("unsubscribe: creator %s already opted out — no-op", prefs.creator_id)
-        return HTMLResponse(content=_UNSUBSCRIBE_CONFIRMED_HTML, status_code=200)
+        return True
+
+
+@unsubscribe_router.get("/{token}", response_class=HTMLResponse)
+@limiter.limit("30/minute", key_func=get_remote_address)
+async def unsubscribe(request: Request, token: uuid.UUID) -> HTMLResponse:
+    """Human landing page for the unsubscribe link (lifecycle emails).
+
+    Unauthenticated by design — the email recipient has no session.  The token
+    is the unguessable UUID4 ``unsubscribe_token``; a malformed (non-UUID) path
+    param yields 422 before this handler runs.  A token that matches no
+    preference returns a generic 404 that reveals no email or creator id.
+    """
+    if not await _flip_lifecycle_off(token):
+        return HTMLResponse(content=_UNSUBSCRIBE_NOT_FOUND_HTML, status_code=404)
+    return HTMLResponse(content=_UNSUBSCRIBE_CONFIRMED_HTML, status_code=200)
+
+
+@unsubscribe_router.post("/{token}", response_class=PlainTextResponse)
+@limiter.limit("30/minute", key_func=get_remote_address)
+async def unsubscribe_one_click(request: Request, token: uuid.UUID) -> PlainTextResponse:
+    """RFC 8058 one-click unsubscribe — the POST mail receivers actually send.
+
+    Lifecycle emails advertise ``List-Unsubscribe-Post: List-Unsubscribe=One-Click``
+    (worker/tasks.py), so RFC 8058 receivers (Gmail, Yahoo) perform an HTTPS
+    POST to the ``List-Unsubscribe`` URL with no user interaction.  Machines
+    consume the status code, not a page, so this returns plain text.  Same
+    semantics as the GET landing page: idempotent flip, generic 404 on an
+    unknown token (no existence leak).
+    """
+    if not await _flip_lifecycle_off(token):
+        return PlainTextResponse(content="Not found", status_code=404)
+    return PlainTextResponse(content="Unsubscribed", status_code=200)

@@ -98,7 +98,7 @@ the ToS would result in API access revocation, destroying the product.
 | Source media | Raw video bytes (`videos.source_uri`) | Purged `SOURCE_MEDIA_RETENTION_HOURS` (default 72h) after ingest completion (`videos.ingest_done_at`), not upload time — see Issue 43 | Never stored longer than needed for processing. The video is retained through the render window (migration 0039) — rendering IS processing; auto-render runs within minutes of ingest. |
 | Extracted audio | Derived WAV (`videos.audio_uri`, migration 0039) — input for transcription + signal extraction | Purged alongside the source video at 72h by `purge_stale_source_media` | Derived artifact, not YouTube-origin data. Split from `source_uri` so ingest no longer discards the video the renderer needs. |
 | Rendered clips | 9:16 Short output | Until creator deletes | Stored in R2 (media bucket). Delete-protected by a short R2 Object Lock window on `clips/` (Issue 258) reconciled with right-to-erasure (Issue 254). |
-| Encrypted DB backups (Issue 256) | Nightly encrypted `pg_dump` (the full Postgres slice — incl. creator emails + aggregated demographics, all as in-DB) stored in the **separate** `creatorclip-backups` R2 bucket | **`daily/` ≤ 14 days** (within the 30-day YouTube analytics-staleness ceiling for the analytics rows it carries); `weekly/` ~56d for the non-analytics precious slice; `predeploy/` short. Enforced by R2 Lifecycle rules. | PII-bearing → at-rest encrypted (openssl AES-256), Object Lock (Compliance mode) to resist deletion, separate bucket from media. OAuth tokens are carried as Fernet **ciphertext** (useless without the separately-escrowed key, Issue 255). **Right-to-erasure:** a creator's rows leave the live DB immediately on `DELETE /auth/me`; backups age out within the windows above (documented "beyond use" stance, coordinated with Issue 254). |
+| Encrypted DB backups (Issue 256) | Nightly encrypted `pg_dump` (the full Postgres slice — incl. creator emails + aggregated demographics, all as in-DB) stored in the **separate** `creatorclip-backups` R2 bucket | **`daily/` ≤ 14 days** (within the 30-day YouTube analytics-staleness ceiling for the analytics rows it carries); `weekly/` ~56d — **a full-dump copy of the Sunday daily object** (server-side R2 copy in `backup_pg.sh`), NOT a reduced non-analytics slice; `predeploy/` short. Enforced by R2 Lifecycle rules. | PII-bearing → at-rest encrypted (openssl AES-256), Object Lock (Compliance mode) to resist deletion, separate bucket from media. OAuth tokens are carried as Fernet **ciphertext** (useless without the separately-escrowed key, Issue 255). **Right-to-erasure:** a creator's rows leave the live DB immediately on `DELETE /auth/me`; backup copies persist until lifecycle expiry — honest ceiling **~56 days** via the weekly full dump — and any restore MUST re-run `scripts/reapply_erasures.py` (see "Erasure vs. backups", Issue 254). |
 | Transcripts | Word-level segments | Until video deleted | Derived from source; not YouTube-origin data |
 | Creator DNA | Pattern profiles, brief text | Until creator deletes | Creator-owned derivative data |
 | Feedback labels | upvote/downvote/skip/trim | Until creator deletes | Creator-owned |
@@ -111,6 +111,27 @@ the ToS would result in API access revocation, destroying the product.
 | Notifications / in-app center (Issue 243) | `kind`, `title`, `body`, `link_url`, `seen_at`, `dismissed_at` | Until account deletion (CASCADE) | RLS `tenant_isolation` ENABLE+FORCE (migration 0031) — same policy as `chat_conversations`. Creator-visible only. Copy honesty-constrained (no virality language). |
 | **Clickwrap consent record (Issue 299)** | `terms_accepted_at` (TIMESTAMPTZ), `terms_version` (VARCHAR 32), `privacy_version` (VARCHAR 32) on the `creators` row | Until account deletion (CASCADE with creator row) | Stores the affirmative acceptance timestamp + the version strings of the ToS and Privacy Policy presented at first sign-in. Recorded only on the first OAuth callback (`is_new=True`). NULL on legacy rows (pre-migration 0033). Evidence artifact per 9th Cir. *Chabolla v. ClassPass* (2025) and GDPR Art. 7 recorded-consent requirement. Configured via `TOS_VERSION` / `PRIVACY_VERSION` in `config.py` (bumped on material policy changes). No PII beyond creator_id. |
 | **COPPA minimum-age attestation (Issue 300)** | `minimum_age_confirmed_at` (TIMESTAMPTZ) on the `creators` row | Until account deletion (CASCADE with creator row) | Stores the UTC timestamp when the creator checked the "I confirm I am 13 or older" attestation checkbox and completed the OAuth flow for the first time. Recorded in the same `is_new=True` block as the consent record (`routers/auth.py`). NULL on legacy rows (pre-migration 0034). Age-neutral phrasing per FTC amended COPPA Rule (16 CFR Part 312, effective 2025-06-23). CreatorClip is a **general-audience service not directed to children** and does not knowingly collect PII from persons under 13. Deletion path for under-age accounts: account deletion endpoint (`DELETE /auth/me`) purges all data — same path as voluntary erasure. |
+
+### Erasure vs. backups (Issue 254)
+
+The right-to-erasure stance, stated honestly:
+
+- **Live systems: immediate.** `DELETE /auth/me` revokes the OAuth grant, purges R2 media
+  and telemetry, and cascade-deletes every DB row at request time.
+- **Backups: bounded persistence, never otherwise read.** Erased data may persist inside the
+  encrypted, access-restricted `creatorclip-backups` dumps until R2 lifecycle expiry. The
+  honest ceiling is **~56 days**: the Sunday `weekly/` object is a byte-for-byte full-dump
+  copy of the daily backup (it is NOT a reduced "non-analytics slice"), so an erased
+  creator's rows can survive in a weekly object for up to its ~56-day lifecycle. Backups are
+  never read or restored for any purpose other than disaster recovery ("beyond use").
+- **Restores re-apply erasures.** After ANY restore, `scripts/reapply_erasures.py` MUST be
+  run (mandatory post-restore step in `docs/RUNBOOKS.md`, DR procedures b/d). It replays
+  `creator.deleted` rows from the NEWEST available audit trail against the restored DB and
+  re-runs the full `erase_creator` cascade for any resurrected creator, so an erased account
+  never returns to service. Idempotent — already-absent creators are skipped.
+- **R2 media has no versioning (DEC 2026-06-27, Issue 258):** `delete_prefix` on
+  `source/{creator_id}/` + `clips/{creator_id}/` removes the only copy — media erasure is
+  immediate with no backup tail (DB dumps carry no media bytes).
 
 ---
 
@@ -149,6 +170,12 @@ the blast radius of a token compromise.
   CEF 2025). Only the internal `creator_id` (pseudonymous once the creator row is gone) is
   retained as evidence-of-erasure. Pinned by `test_delete_account_writes_audit_log`.
 - Demographics data: aggregated payloads only; no individual viewer data is stored.
+- **Global Privacy Control (Issue 302):** the backend detects `Sec-GPC: 1` on every request
+  (`request.state.gpc` — detection only, never logged or persisted) and serves the
+  machine-readable declaration at `/.well-known/gpc.json` per the W3C GPC spec
+  (w3c.github.io/gpc). Because CreatorClip does not sell or share personal information
+  (no ad-tech, no cross-context behavioural advertising), a GPC opt-out is satisfied by
+  default; the Privacy Policy's CCPA section states this recognition explicitly.
 - **Sub-processors and Art. 30 record (Issue 251):** see `docs/SUBPROCESSORS.md` for the
   full sub-processor list (Anthropic, Voyage AI, Deepgram, Cloudflare R2, Stripe, Google),
   the personal data categories each processes, transfer mechanisms, and the DPA runbook.

@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -112,7 +112,7 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
     `ingest_status` is intentionally NOT a filter — see Issue 88.
     """
 
-    def _base_query(kind: VideoKind, cap: int):
+    def _base_query(kind: VideoKind, cap: int) -> Select[tuple[Video, VideoMetrics]]:
         return (
             select(Video, VideoMetrics)
             .join(VideoMetrics, VideoMetrics.video_id == Video.id)
@@ -131,7 +131,7 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
     ).all()
 
     scored: list[dict] = []
-    for video, metrics in longs_rows + shorts_rows:
+    for video, metrics in [*longs_rows, *shorts_rows]:
         weight = _recency_weight(video.published_at)
         scored.append(
             {
@@ -151,54 +151,73 @@ async def rank_videos(session: AsyncSession, creator_id: uuid.UUID) -> list[dict
     return sorted(scored, key=lambda v: v["weighted_score"], reverse=True)
 
 
-async def _enrich_videos(session: AsyncSession, videos: list[dict]) -> None:
-    """Attach hook text, signal counts, and retention data to each video dict in-place.
+async def _load_hook_texts(session: AsyncSession, ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """Hook text per video, extracted from each transcript (one IN-query)."""
+    rows = (await session.execute(select(Transcript).where(Transcript.video_id.in_(ids)))).scalars()
+    return {t.video_id: _hook_text(t.segments_jsonb) for t in rows}
 
-    Batched into 3 IN-queries total, regardless of video count — previously 3 round
-    trips per video, an N+1 of up to ~60 queries per build. (Issue B)
-    """
-    if not videos:
-        return
-    ids = [v["video_id"] for v in videos]
 
-    transcripts = {
-        t.video_id: t
-        for t in (
-            await session.execute(select(Transcript).where(Transcript.video_id.in_(ids)))
-        ).scalars()
+async def _load_signal_counts(
+    session: AsyncSession, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, tuple[int, int]]:
+    """(energy_spike_count, laughter_count) per video (one IN-query)."""
+    rows = (await session.execute(select(Signals).where(Signals.video_id.in_(ids)))).scalars()
+    return {
+        s.video_id: (
+            len(s.timeline_jsonb.get("energy_spikes", [])),
+            len(s.timeline_jsonb.get("laughter", [])),
+        )
+        for s in rows
     }
-    signals_map = {
-        s.video_id: s
-        for s in (await session.execute(select(Signals).where(Signals.video_id.in_(ids)))).scalars()
-    }
-    retention: dict[uuid.UUID, list] = {}
-    ret_rows = (
+
+
+async def _load_retention_rows(
+    session: AsyncSession, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[RetentionCurve]]:
+    """Retention-curve rows per video, ordered by timestamp (one IN-query)."""
+    retention: dict[uuid.UUID, list[RetentionCurve]] = {}
+    rows = (
         await session.execute(
             select(RetentionCurve)
             .where(RetentionCurve.video_id.in_(ids))
             .order_by(RetentionCurve.video_id, RetentionCurve.timestamp_s)
         )
     ).scalars()
-    for r in ret_rows:
+    for r in rows:
         retention.setdefault(r.video_id, []).append(r)
+    return retention
+
+
+def _retention_fields(
+    rows: list[RetentionCurve], duration_s: float | None
+) -> tuple[list[float], str | None]:
+    """(rewatch-spike times, best source region) for one video's retention rows."""
+    spike_times = [r.timestamp_s for r in rows if r.is_rewatch_spike]
+    return spike_times, _best_source_region(rows, duration_s)
+
+
+async def _enrich_videos(session: AsyncSession, videos: list[dict]) -> None:
+    """Attach hook text, signal counts, and retention data to each video dict in-place.
+
+    Thin stitch over four focused loaders. Batched into 3 IN-queries total,
+    regardless of video count — previously 3 round trips per video, an N+1 of
+    up to ~60 queries per build. (Issue B; split in Issue 109a)
+    """
+    if not videos:
+        return
+    ids = [v["video_id"] for v in videos]
+
+    hooks = await _load_hook_texts(session, ids)
+    counts = await _load_signal_counts(session, ids)
+    retention = await _load_retention_rows(session, ids)
 
     for v in videos:
         vid_id = v["video_id"]
-        transcript = transcripts.get(vid_id)
-        v["hook_text"] = _hook_text(transcript.segments_jsonb) if transcript else ""
-
-        signals = signals_map.get(vid_id)
-        if signals:
-            timeline = signals.timeline_jsonb
-            v["energy_spike_count"] = len(timeline.get("energy_spikes", []))
-            v["laughter_count"] = len(timeline.get("laughter", []))
-        else:
-            v["energy_spike_count"] = 0
-            v["laughter_count"] = 0
-
-        rows = retention.get(vid_id, [])
-        v["retention_spike_times"] = [r.timestamp_s for r in rows if r.is_rewatch_spike]
-        v["best_source_region"] = _best_source_region(rows, v.get("duration_s"))
+        v["hook_text"] = hooks.get(vid_id, "")
+        v["energy_spike_count"], v["laughter_count"] = counts.get(vid_id, (0, 0))
+        v["retention_spike_times"], v["best_source_region"] = _retention_fields(
+            retention.get(vid_id, []), v.get("duration_s")
+        )
 
 
 def _video_summary(v: dict) -> dict:

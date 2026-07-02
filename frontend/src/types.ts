@@ -428,6 +428,43 @@ export interface NotificationPreferences {
   push_enabled: boolean
 }
 
+// ── Recap summaries (Issue 192) ──────────────────────────────────────────────
+
+// One chronological recap segment (SummarySegmentOut). `principle` is a named
+// principle from docs/CLIPPING_PRINCIPLES.md; the UI headlines the honest fit
+// tier derived from `score`, never the raw number.
+export interface SummarySegment {
+  start_s: number
+  end_s: number
+  score: number
+  principle: string
+  rationale: string
+}
+
+// GET /videos/{id}/summaries row (SummaryOut).
+export interface Summary {
+  id: string
+  video_id: string
+  status: string
+  render_status: string
+  target_duration_s: number
+  segments: SummarySegment[]
+  render_uri: string | null
+  created_at: string
+}
+
+export interface SummaryListResponse {
+  summaries: Summary[]
+}
+
+// 202 envelope for POST /videos/{id}/summaries (SummaryQueuedOut). stream_url
+// is null on a Redis blip (job queued, no live progress channel this time).
+export interface SummaryQueued {
+  summary_id: string
+  status: string
+  stream_url: string | null
+}
+
 // ── Per-clip AI features (Issues 322, 323, 325) ──────────────────────────────
 
 // POST /clips/{clip_id}/title-suggestions (Issue 322)

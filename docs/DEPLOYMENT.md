@@ -276,13 +276,47 @@ deploy pgbouncer in statement pooling mode with this stack.
 
 ---
 
+## Staging-Parity Gate (Issue 298)
+
+**What it is:** the prod `deploy` job in `deploy.yml` now declares
+`needs: deploy-staging`. The `deploy-staging` job deploys the **exact image under test**
+(`ghcr.io/reese8272/creatorclip:sha-<7-char SHA>`, resolved from the triggering
+Docker-publish run — never `:latest`) to the staging stack as compose project `ccstage`,
+runs `alembic upgrade head` **in-container** with a `current == heads` assertion, seeds
+fixtures idempotently, runs the verified critical-journey smoke
+(`scripts/llm_harness.py --flow core`), then **stops** app/worker while **keeping the
+`staging_postgres_data` volume**. The volume's persistence is the mechanism: every gate
+run migrates a **data-bearing** database, which is exactly the failure class CI's
+fresh-DB bootstrap cannot catch (motivating incident 2026-07-02 00:41 — CI green, prod
+migration failed on existing rows).
+
+**Break-glass:** `workflow_dispatch` → set `skip_staging=true`. The prod job's condition
+is `!cancelled() && (needs.deploy-staging.result == 'success' || inputs.skip_staging == true)`.
+Use it ONLY when staging infrastructure itself is broken — never to push past a failing
+migration or smoke test (that failure is the gate working). The `!cancelled()` guard is
+load-bearing: without it GitHub's implicit `success()` would skip prod even on the
+break-glass path (a skipped needs-job fails `success()`).
+
+**Parity contract:** staging must run the same postgres/redis images as prod —
+enforced by `tests/test_ci_config.py::test_staging_prod_compose_parity`, with PgBouncer
+as the documented staging-only inversion. Matrix: `docs/STAGING_ACCESS.md`.
+
+---
+
 ## Auto-Rollback on Failed Smoke Test (Issue 271)
 
 **Mechanism (single-VM stopgap):** `deploy.yml` captures the running image digest
 before pulling the new image (`PREV_IMAGE`). The `docker image prune` step runs AFTER
 the smoke test. If the smoke test fails:
 
-1. The deploy step re-pulls `PREV_IMAGE` and restarts the previous container.
+1. The deploy step re-pulls `PREV_IMAGE`, re-tags the digest locally as
+   `ghcr.io/reese8272/creatorclip:rollback` (a digest ref can't sit in the compose tag
+   slot), and relaunches with `IMAGE_TAG=rollback` — selected via the
+   `${IMAGE_TAG:-latest}` interpolation on the `app`/`worker`/`beat` images in
+   `docker-compose.prod.yml`. Normal deploys leave `IMAGE_TAG` unset (→ `:latest`,
+   behavior unchanged). *Fixed with Issue 298: the compose file previously hardcoded
+   `:latest`, so the rollback's `IMAGE_TAG` env was never interpolated and "rollback"
+   relaunched the broken image.*
 2. The step still exits non-zero, so GitHub Actions reports the deploy as failed and
    alerting fires — the auto-rollback does NOT hide the failure.
 3. First-deploy guard: if `PREV_IMAGE` is empty, rollback is skipped and manual
@@ -315,12 +349,9 @@ PREV_TAG=<previous-sha-or-tag>
 # 2. Pull the previous image.
 docker pull ghcr.io/reese8272/creatorclip:${PREV_TAG}
 
-# 3. Update the image pin in docker-compose.prod.yml (or set IMAGE_TAG env var).
-sed -i "s|ghcr.io/reese8272/creatorclip:.*|ghcr.io/reese8272/creatorclip:${PREV_TAG}|" \
-  /opt/autoclip/docker-compose.prod.yml
-
-# 4. Restart on the previous image (schema unchanged).
-cd /opt/autoclip && docker compose -f docker-compose.prod.yml up -d
+# 3+4. Restart on the previous image (schema unchanged). No compose-file edit needed:
+#      the app/worker/beat images interpolate ${IMAGE_TAG:-latest} (Issue 271 fix).
+cd /opt/autoclip && IMAGE_TAG="${PREV_TAG}" docker compose -f docker-compose.prod.yml up -d
 
 # 5. Verify the smoke test passes.
 curl -s http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin))"

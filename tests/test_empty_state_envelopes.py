@@ -16,6 +16,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import IngestStatus, OnboardingState, RenderStatus, Signals, VideoKind, VideoOrigin
+from tests._helpers import owned_result
 
 
 def _mock_creator(onboarding_state=OnboardingState.active):
@@ -168,13 +169,13 @@ def test_saved_insights_populated(client):
 
 
 def _clips_session(video, clips):
-    """list_clips calls session.get(Video, ...) first, then session.execute() twice:
-    once for the Clip query and once for the PreferenceModel query (Issue 216).
-    Return the clips result for the first execute and a no-model result for the second.
+    """list_clips fetches the Video via the get_owned ownership select (Issue
+    109e), then session.execute() twice more: the Clip query and the
+    PreferenceModel query (Issue 216).
 
     When clips is empty + ingest done, the endpoint also calls session.get(Signals, ...)
-    for the skip-reason taxonomy (Issue 217), so session.get must dispatch by model:
-    Video → the video; Signals → a stub with an empty timeline (the "no signal" case).
+    for the skip-reason taxonomy (Issue 217): Signals → a stub with an empty
+    timeline (the "no signal" case).
     """
 
     def _get(model, _id, **_kw):
@@ -182,7 +183,7 @@ def _clips_session(video, clips):
             sig = MagicMock()
             sig.timeline_jsonb = {}
             return sig
-        return video
+        return None
 
     async def _session():
         session = AsyncMock()
@@ -195,7 +196,7 @@ def _clips_session(video, clips):
         pref_result = MagicMock()
         pref_result.first.return_value = None
 
-        session.execute = AsyncMock(side_effect=[clips_result, pref_result])
+        session.execute = AsyncMock(side_effect=[owned_result(video), clips_result, pref_result])
         yield session
 
     return _session

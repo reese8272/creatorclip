@@ -264,6 +264,15 @@ function ActionCell({
               Timeline
             </Button>
           </Link>
+          {/* Issue 192: recap needs the stored source (clippable) + scored clips;
+              a purged/linked video gets no dead-end CTA. */}
+          {video.clippable && (
+            <Link to={`/video/${video.id}/recap`}>
+              <Button variant="secondary" size="sm">
+                Create recap
+              </Button>
+            </Link>
+          )}
           {titlesLink}
         </div>
       )

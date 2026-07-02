@@ -32,6 +32,7 @@ from models import (
     PublishPlatform,
     PublishStatus,
 )
+from routers._owned import get_owned
 from upload_intel.timing import best_upload_windows
 
 logger = logging.getLogger(__name__)
@@ -136,10 +137,7 @@ async def _get_owned_clip(
         cid = uuid.UUID(clip_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Clip not found") from None
-    clip = await session.get(Clip, cid)
-    if clip is None or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    return clip
+    return await get_owned(session, Clip, cid, creator.id, detail="Clip not found")
 
 
 async def _get_owned_publication(
@@ -157,10 +155,9 @@ async def _get_owned_publication(
     except ValueError:
         raise HTTPException(status_code=404, detail="Publication not found") from None
     await _get_owned_clip(clip_id, creator, session)
-    pub = await session.get(ClipPublication, pid)
-    if pub is None or pub.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Publication not found")
-    return pub
+    return await get_owned(
+        session, ClipPublication, pid, creator.id, detail="Publication not found"
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

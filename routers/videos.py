@@ -17,6 +17,7 @@ from config import settings
 from db import get_session
 from limiter import creator_key, limiter
 from models import Creator, IngestStatus, OnboardingState, Video, VideoKind, VideoOrigin
+from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 from worker.storage import upload_file
 from worker.tasks import start_pipeline
@@ -536,9 +537,7 @@ async def queue_video_for_analysis(
     stalled. Idempotent: if the pipeline is already running or done, returns
     the current status without re-queuing.
     """
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
     # Issue 139: the ingest pipeline needs stored source media — we never
     # download from YouTube (ToS). A linked/catalog row has no source_uri, so
     # queuing it would fail ingest with a confusing error. Reject up front with
@@ -599,9 +598,7 @@ async def get_video_status(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
     return {
         "video_id": str(video.id),
         "youtube_video_id": video.youtube_video_id,

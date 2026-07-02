@@ -620,6 +620,17 @@ These are the external steps that arm the tooling shipped in this batch:
        sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
    ```
 3. Restore `TOKEN_ENCRYPTION_KEY` from escrow (step a) — **the restore is useless without it.**
+4. **MANDATORY — re-apply erasures (Issue 254).** The restored dump is older than the DB it
+   replaces, so it can resurrect creators erased AFTER the dump was taken — a GDPR Art. 17
+   violation if served. Before returning to service, run:
+   ```bash
+   python3 scripts/reapply_erasures.py
+   ```
+   Source erasures from the **NEWEST audit trail available** — the live `audit_log` if it
+   survived, else the newest dump's — never only the restored (older) one. If the restored
+   `audit_log` predates the newest dump, first re-insert the newer `creator.deleted` rows
+   from that dump, then run the script. It is idempotent (already-absent creators are
+   skipped), so re-running is always safe.
 
 #### Restore drill (quarterly — "an untested backup is not a backup")
 
@@ -643,6 +654,9 @@ Run against a throwaway target, record the result + measured RTO:
   paths (Issue 257), under the `predeploy/` prefix. To roll back a bad schema change, restore
   the most recent `predeploy/` dump using the procedure in **(b)**, then redeploy the prior
   image (see the rollback note in `deploy.yml` / Issue 271).
+- **MANDATORY after the restore:** run `python3 scripts/reapply_erasures.py` (step 4 in
+  **(b)**), sourcing erasures from the NEWEST audit trail — any account deleted between the
+  `predeploy/` dump and the rollback would otherwise be resurrected (Issue 254).
 
 ### Sources
 
@@ -691,3 +705,141 @@ Result + date: ________
 Sources: https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/ ·
 https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/redis.html
 (accessed 2026-07-02)
+
+---
+
+## Monthly Cost Review (Issue 292)
+
+**When:** first week of each month, ~15 minutes. **Goal:** reconcile the three COGS
+lines — (1) metered usage in our own ledger, (2) the DigitalOcean invoice, (3)
+Cloudflare R2 storage — and catch drift or a per-creator outlier before it compounds.
+
+### 1 — Usage ledger (LLM + transcription cost estimates)
+
+Run against prod Postgres (read-only). Monthly totals per period:
+
+```sql
+SELECT period,
+       SUM(cost_estimate)          AS est_cost_usd,
+       SUM(tokens_in + tokens_out) AS total_tokens
+FROM usage
+GROUP BY period
+ORDER BY period DESC;
+```
+
+Then the per-creator isolation sanity check — the top 5 creators by cost for the
+latest period. One creator dominating far beyond their plan tier means a quota or
+isolation bug, not a big user:
+
+```sql
+SELECT creator_id,
+       SUM(cost_estimate)          AS est_cost_usd,
+       SUM(tokens_in + tokens_out) AS total_tokens
+FROM usage
+WHERE period = to_char(now() - interval '1 month', 'YYYY-MM')
+GROUP BY creator_id
+ORDER BY est_cost_usd DESC
+LIMIT 5;
+```
+
+Estimates use the price book in `config.py` (`PRICE_BOOK_VERSION` stamps the rates);
+a step-change month-over-month with flat usage usually means the price book changed
+— check the version stamp before suspecting a leak.
+
+The Grafana panel `docs/dashboards/llm-cost-panel.json` shows the same spend as a
+daily-rate time series — `sum by (provider) (increase(llm_cost_usd_total[1d]))` —
+for eyeballing trend between reviews (the `llm_cost_usd_total` counter ships with
+Issues 290/291).
+
+### 2 — DigitalOcean invoice (compute)
+
+DO console → Billing → most recent invoice. Compare the VM + bandwidth total to last
+month; anything >20% up without a matching usage-ledger increase is a SEV3 to
+investigate (orphaned droplet, snapshot pile-up, egress spike).
+
+### 3 — Cloudflare R2 (storage)
+
+Cloudflare dashboard → R2 → bucket → **Metrics** tab: storage bytes + Class A/B
+operations for the month. Cross-check against the `r2_bytes_stored{prefix}` /
+`r2_objects{prefix}` gauges (daily Beat sweep, Issue 293): the `source/` prefix
+should stay bounded by the ToS retention purge — steady growth there means the purge
+is not running (see Beat HA runbook). `clips/` + `summaries/` growth should track
+creator activity.
+
+**Record the result** (date, three totals, any action filed) in the ops scratch log;
+promote anomalies to `docs/issues.md`.
+---
+
+## Spend guard trip & reset (Issues 290+291)
+
+`billing/spend_guard.py` enforces USD caps on LLM spend from Redis microdollar
+counters incremented at the billing-ledger choke point (`record_llm_usage`, plus
+chat's `increment_usage` path). Caps and the warn ratio live in `.env`
+(`SPEND_CAP_*`, `SPEND_WARN_RATIO`, `SPEND_VELOCITY_*`, `SPEND_COOLDOWN_TTL_S`).
+**Everything here resets manually — nothing un-trips on its own except by TTL.**
+
+### What a trip looks like
+
+| Breach | Effect | Signal |
+|---|---|---|
+| ≥80% of any cap | Warning only — nothing blocked | `spend_cap_warning` event (log + event_log row), once per window |
+| 100% per-creator daily cap or creator velocity | That creator gets 429s on LLM/render routes + their paid tasks stop; cool-down key TTL `SPEND_COOLDOWN_TTL_S` (default 1h) | `spend_cap_tripped` event, `scope=creator` |
+| 100% global daily / monthly cap, or global velocity (rolling ~15 min) | `llm_generation` kill switch flipped OFF for everyone (`updated_by=spend_guard`) behind a trip-latch | `spend_cap_tripped` event, `scope=global` + `flag_flipped` event |
+
+The guard **fails open** on Redis errors: caps stop being enforced (warn-once log
+line), LLM features keep working.
+
+### Diagnose
+
+```bash
+# Which flag state are we in?
+python3 scripts/flags.py list
+
+# What tripped? (events carry cap name + spent/cap USD)
+docker compose -f docker-compose.prod.yml logs app worker | grep -E 'spend_cap_(warning|tripped)'
+
+# Current counters (values are MICRODOLLARS — divide by 1,000,000 for USD)
+redis-cli --scan --pattern 'creatorclip:spend:*'
+redis-cli GET "creatorclip:spend:$(date -u +%F)"                # global daily
+redis-cli GET "creatorclip:spend:$(date -u +%Y-%m)"             # global monthly
+redis-cli GET "creatorclip:spend:$(date -u +%F):creator:<id>"   # one creator
+```
+
+### Reset — global trip (llm_generation off)
+
+Investigate FIRST (runaway loop? abuse? legitimately busy day?). Then:
+
+```bash
+# 1. Clear the trip-latch so a still-breached counter can re-trip cleanly
+redis-cli DEL creatorclip:spend:trip:llm_generation
+
+# 2. If the underlying counter is still over the cap, either raise the cap in
+#    .env (SPEND_CAP_GLOBAL_DAILY_USD / _MONTHLY_USD) + restart app & worker,
+#    or delete the counter to forgive the window:
+redis-cli DEL "creatorclip:spend:$(date -u +%F)"        # forgive today (rare)
+
+# 3. Re-enable the feature
+python3 scripts/flags.py enable llm_generation --reason "spend trip investigated: <why>"
+```
+
+If you re-enable without step 1/2, the very next billed call re-trips the breaker —
+that is by design.
+
+### Reset — single creator cool-down
+
+```bash
+redis-cli DEL "creatorclip:spend:cooldown:creator:<creator-id>"
+# If their daily counter is still at the cap they will re-enter cool-down on the
+# next billed call; to actually unblock, also delete their daily counter or raise
+# SPEND_CAP_CREATOR_DAILY_USD:
+redis-cli DEL "creatorclip:spend:$(date -u +%F):creator:<creator-id>"
+```
+
+Otherwise the cool-down simply expires after `SPEND_COOLDOWN_TTL_S` (default 1h),
+and daily counters roll over at midnight UTC.
+
+### Verify
+
+- `python3 scripts/flags.py list` shows `llm_generation` enabled.
+- A cheap LLM route (e.g. clip title suggestions) returns 202/200, not 429/503.
+- Grafana: `llm_cost_usd_total` (by provider/model) resumes climbing at a sane slope.

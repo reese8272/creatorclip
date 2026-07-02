@@ -1,9 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-02 (end of the W1 wave execution session)
-**Branch at close:** `w1/round3` — PR #45 open to main (carries migration `0044_rls_signals`)
-**Prod:** three green deploys today (PRs #42/#43/#44); prod at W1-round-2b content, DB head `0043`
-**CI/Deploy:** merging PR #45 auto-deploys + applies 0044
+**Last updated:** 2026-07-02 (end of the W2 wave session)
+**Branch at close:** `w2/round1` — PR to main pending (no migrations)
+**Prod:** at W1 content (PR #45, DB head `0044`); W2 deploys when its PR merges
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -11,47 +10,54 @@
 
 ## CURRENT FOCUS
 
-**The W1 wave is code-complete.** Everything buildable in W1 (plus the open W0 stragglers) shipped
-today across PRs #41–#45: all 13 batches of the Issue-352 SEV2 backlog, Stream-VOD recap Parts A+B
-(190/191), feature flags/kill switches (284), data-gate UX (203), session-order + async-SDK refactor
-(82a+82b), worker RLS sweep (231), eval residuals (200/202), 148 close-out, 288/286 config.
+**W1 and W2 are both code-complete.** W2 shipped today on `w2/round1`: recap UI (192 — the
+Stream-VOD lane is user-reachable end to end), spend guard (290+291, approved $5/$50/$400
+thresholds onto the llm_generation kill switch), one-click-unsubscribe compliance fix (245),
+GPC (302), deletion-on-restore (254), the staging-parity deploy gate + the #271 rollback fix
+(298), nova-3 price fix + R2 gauges + Deepgram-stays DEC (293), incident-response index (283),
+cost-review runbook (292), the mypy strictness ratchet (78-R), and all 5 rescoped 109 cleanups
+(incl. a measured 4.6–17.6× scoring-loop speedup). 310/78 were reconciled-closed as
+already-shipped.
 
 ### → NEXT ACTIONS
 
-1. **Merge PR #45 once CI is green** (same known-red Playwright/visual pair) → deploy applies 0044.
-2. **Operator checklist (user, all documented):**
-   - Rotate the Anthropic API key that surfaced in-session; update VM + local `.env`
-   - Apply the Cloudflare `/auth/*` rate-limit rule + edge verify → `docs/EDGE_SECURITY.md`
-   - Install the Redis backup cron (03:27) + run the restart drill → `docs/RUNBOOKS.md`
-   - Better Stack status page (#282), #228 live 429 smoke (`scripts/live_smoke.py`)
-3. **Promote from OFF_COURSE_BUGS into issues.md:** styled re-render no-op (SEV2); NULLIF GUC
-   policy hardening migration (SEV2); LLM E2E Nightly red; Playwright runner gap.
-4. **Next wave:** W2 issues (see the Lane×Wave matrix) — 192 (recap UI), 290 (spend caps — now
-   unblocked by 284), 245, plus the W1 staging-verify residuals (200 sweep on real data, 198/201).
+1. **Open + merge the W2 PR** from `w2/round1` (all gates green locally: 2204 tests, venv
+   Layer-0 clean, 240 vitest + tsc, eval 100%). ⚠️ The merge triggers the **first run of the
+   new staging gate**: EITHER tear down the old `cc139` staging project on the VM first
+   (`docker compose -p cc139 -f docker-compose.staging.yml down` — it holds port 8001) OR
+   dispatch the deploy with `skip_staging=true` once, then do the teardown.
+2. **Operator checklist** (accumulated, all documented): rotate the exposed Anthropic key;
+   Cloudflare `/auth/*` rule (`docs/EDGE_SECURITY.md`); Redis backup cron + drill
+   (`docs/RUNBOOKS.md`); Better Stack page (#282); #228 live 429 smoke; DO billing alert;
+   Grafana cost rule + `docs/dashboards/llm-cost-panel.json` after #326 activation; R2
+   lifecycle-numbers dashboard check (#254); spend-guard staging trip drill (#290).
+3. **Promote from OFF_COURSE_BUGS:** styled re-render no-op (SEV2); NULLIF GUC policy
+   hardening migration (SEV2); LLM E2E Nightly red; Playwright runner gap.
+4. **Next wave: W3** — open items incl. 246 (lifecycle sequence), 300 (COPPA gate), 296
+   (migration reversibility CI), 197 (published-clips outcome loop), 96-fold residuals; plus
+   the W1/W2 staging-verify residuals once the staging gate is exercised.
 
 ---
 
-## KEY FACTS / GOTCHAS (delta from previous handoff)
+## KEY FACTS / GOTCHAS (delta from the W1 handoff)
 
-- **Dev box reality UPDATED:** ffmpeg 8.1.2 IS installed; a native PG16+pgvector cluster with both
-  roles runs locally (integration lane works: `-m integration`); pytest-randomly is now installed
-  locally (was CI-only). The old "no ffmpeg/no Postgres" notes are stale.
-- **Unit lane is now hermetic:** conftest pins `STORAGE_BACKEND=local` — before today, `/health`
-  unit tests probed the LIVE R2 bucket (developer `.env` leak). Full suite now ~24s (was 60–113s).
-- **Migrations:** head `0044`. The 0041 incident: `create_type=False` on generic `sa.Enum` is
-  dialect-dependent — always use `postgresql.ENUM` in migrations. Deploy runs migrations with the
-  VM's own Python stack (unpinned — version skew vs CI; follow-up: run alembic inside the container).
-- **Squawk migration gate is now real** (was structurally unable to fail); `.squawk.toml` excludes
-  2 style rules; env.py offline mode emits SET timeouts.
-- **Worker sessions:** per-creator tasks use `db.tenant_session(creator_id)` (RLS-enforced);
-  `AdminSessionLocal` is an AST-test-pinned 18-site allowlist — adding a site outside it fails
-  `tests/test_worker_invariants.py` by design.
-- **All LLM calls are AsyncAnthropic now** — structural guards forbid sync clients / to_thread on
-  LLM paths (`tests/test_llm_conformance.py`). Voyage stays thread-wrapped (DECISIONS).
-- **Flags:** 4 kill switches (llm_generation, render_intake, youtube_publish, signup) — flip via
-  `scripts/flags.py`; TTL cache ~30s; tests get env defaults primed per-test in conftest.
-- **The shell sometimes lands inside a completed agent's worktree** — `cd` to the repo root before
-  merge/branch operations (bit us twice today).
+- **Post-restart PATH trap:** `python3.12` now resolves to the polluted `~/.local` user-site
+  (stale FastAPI-0.115-era packages) — its pip-audit output is NOISE and its mypy misses real
+  errors. **Layer-0 must run as** `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python
+  .claude/skills/production-assessment/scripts/run_layer0.py`. The user-site needed
+  `deepgram-sdk` installed (`--user --break-system-packages`) for Batch E's SDK-guard test.
+- **Spend guard:** `billing/spend_guard.py`; trip/reset runbook in RUNBOOKS.md; counters are
+  MICRODOLLARS in Redis; global trips flip `llm_generation` (manual reset only).
+- **Ownership lookups:** use `routers/_owned.py::get_owned` (25 sites migrated); test stubs
+  use `tests/_helpers.owned_lookup_result`/`stub_get_owned`, not `session.get` mocks.
+- **Shutdown lifecycle:** long-lived clients register with `shared_resources.register_aclose`;
+  lifespan calls `close_all()` (reverse order, error-isolated).
+- **Recap flow:** POST `/videos/{id}/summaries` → selection in-request → `render_summary`
+  task → `GET /summaries/{id}/download`. UI at `/app/video/:id/recap`.
+- **Deploy pipeline:** prod job now `needs: deploy-staging` (exact sha- image, in-container
+  alembic against the persistent ccstage DB); `skip_staging` workflow_dispatch break-glass;
+  rollback works now (`${IMAGE_TAG:-latest}` + `:rollback` re-tag).
+- The agent-worktree CWD-teleport quirk persists — `cd` to repo root before git operations.
 
 ---
 
@@ -59,10 +65,9 @@ today across PRs #41–#45: all 13 batches of the Issue-352 SEV2 backlog, Stream
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/PROJECT_STATE.md` | Today's four session entries (round 1, rounds 2–3, hotfix) |
-| `docs/issues.md` | Tracker — W1 statuses flipped with evidence; W2 is next |
-| `docs/DECISIONS.md` | Three 2026-07-02 entries (W1 scope + research calls; Squawk gate; rounds 2–3) |
-| `docs/OFF_COURSE_BUGS.md` | 7 new entries today — 2 promotable SEV2s |
-| `docs/EDGE_SECURITY.md` | NEW — committed Cloudflare edge config + apply/verify steps |
-| `docs/RUNBOOKS.md` | + Redis broker durability & recovery section |
+| `docs/PROJECT_STATE.md` | Session log — W2 entry at top |
+| `docs/issues.md` | Tracker — W2 statuses flipped with evidence; W3 next |
+| `docs/DECISIONS.md` | 2026-07-02 entries: W1 + Squawk + rounds 2–3 + W2 scope/decisions |
+| `docs/INCIDENT_RESPONSE.md` | NEW — severity ladder + runbook index |
+| `docs/OFF_COURSE_BUGS.md` | 2 promotable SEV2s outstanding |
 | Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |

@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -114,7 +115,7 @@ async def _enqueue_reply(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ChatQueuedOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit(_DAILY_LIMIT, key_func=creator_key)
 async def post_message(
@@ -158,7 +159,7 @@ async def post_message(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ChatQueuedOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit(_DAILY_LIMIT, key_func=creator_key)
 async def regenerate(
