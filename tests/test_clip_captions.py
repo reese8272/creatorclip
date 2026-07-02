@@ -79,12 +79,21 @@ def test_system_prompt_contains_untrusted_policy() -> None:
 
 
 def test_dna_brief_block_has_cache_control() -> None:
-    system, _messages = _build_request("My Channel", "DNA brief text.", "Hook.")
+    # Marker present only when the static+DNA prefix clears the 1024-token
+    # floor — true with a full 3000-char brief (Issues 315/352).
+    system, _messages = _build_request("My Channel", "x" * 3000, "Hook.")
     dna_block = next((b for b in system if "DNA PROFILE" in b.get("text", "")), None)
     assert dna_block is not None, "No DNA profile block found in system"
     cc = dna_block.get("cache_control")
     assert cc is not None, "DNA profile block missing cache_control"
     assert cc.get("ttl") == "1h"
+
+
+def test_no_cache_marker_when_dna_brief_empty() -> None:
+    """Issue 352 Batch G: below the cacheable floor the marker must be omitted."""
+    system, _messages = _build_request("My Channel", None, "Hook.")
+    for block in system:
+        assert "cache_control" not in block
 
 
 # ── _parse_result ─────────────────────────────────────────────────────────────

@@ -173,13 +173,16 @@ def test_cache_control_present(mod_path: str) -> None:
 
     We check for the dict-key form (``"cache_control"``) rather than bare text
     to avoid false-positives from comment mentions like ``# cache_control breakpoint``.
+    Issue 352 Batch G: the knowledge builders now attach the marker via the shared
+    floor-gated helper ``knowledge.util.dna_system_block`` — a call to it counts as
+    a (conditionally applied) breakpoint.
     """
     source = _read_source(mod_path)
-    assert '"cache_control"' in source, (
-        f'{mod_path}: "cache_control" dict key not found in code. '
-        "This module's prefix clears the cacheable floor — add a cache_control breakpoint "
-        'e.g. {"cache_control": {"type": "ephemeral"}} so the 2nd same-creator call '
-        "benefits from cache reads."
+    assert '"cache_control"' in source or "dna_system_block(" in source, (
+        f'{mod_path}: no "cache_control" dict key and no dna_system_block(...) call found. '
+        "This module's prefix can clear the cacheable floor — add a cache_control breakpoint "
+        "(inline dict key, or the floor-gated knowledge.util.dna_system_block helper) so the "
+        "2nd same-creator call benefits from cache reads."
     )
 
 

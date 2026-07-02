@@ -248,6 +248,16 @@ def test_analyze_hook_builds_prompt_with_drop() -> None:
     assert "cache_control" not in system_blocks[1]
     assert "12.5s" in system_blocks[2]["text"]
     assert "55.0%" in system_blocks[2]["text"]
+    # Issue 352 Batch G: the transcript excerpt is untrusted creator content —
+    # it must not appear in any system block; it travels JSON-encoded in the
+    # user turn via wrap_untrusted.
+    import json
+
+    for block in system_blocks:
+        assert "hello world" not in block["text"]
+    user_content = call_kwargs["messages"][0]["content"]
+    assert 'name="video_transcript"' in user_content
+    assert json.dumps("hello world") in user_content
 
 
 def test_analyze_hook_no_drop_path() -> None:
@@ -279,7 +289,9 @@ def test_analyze_hook_no_drop_path() -> None:
     system_blocks = fake_stream.call_args.kwargs["system"]
     assert "No significant retention drop" in system_blocks[2]["text"]
     assert "No DNA profile" in system_blocks[1]["text"]
-    assert "No transcript available" in system_blocks[2]["text"]
+    # Issue 352: the transcript (and its fallback) lives in the user turn now.
+    user_content = fake_stream.call_args.kwargs["messages"][0]["content"]
+    assert "No transcript available" in user_content
 
 
 # ── extract_transcript_excerpt ────────────────────────────────────────────────

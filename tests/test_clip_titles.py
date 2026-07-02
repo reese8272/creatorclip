@@ -103,13 +103,22 @@ def test_system_prompt_contains_untrusted_policy() -> None:
 
 
 def test_dna_brief_block_has_cache_control() -> None:
-    """Block 2 (DNA brief) must carry cache_control with ttl=1h."""
-    system, _messages = _build_request("My Channel", "DNA brief text.", "Transcript.")
+    """Block 2 (DNA brief) carries cache_control ttl=1h only when the measured
+    static+DNA prefix clears Sonnet 4.6's 1024-token floor (Issues 315/352)."""
+    system, _messages = _build_request("My Channel", "x" * 3000, "Transcript.")
     dna_block = next((b for b in system if "DNA PROFILE" in b.get("text", "")), None)
     assert dna_block is not None, "No DNA profile block found in system"
     cc = dna_block.get("cache_control")
     assert cc is not None, "DNA profile block missing cache_control"
     assert cc.get("ttl") == "1h", f"Expected ttl='1h', got {cc!r}"
+
+
+def test_no_cache_marker_when_dna_brief_empty() -> None:
+    """Issue 352 Batch G: with no DNA brief the prefix is below the 1024-token
+    cacheable floor — the marker would be inert and must be omitted."""
+    system, _messages = _build_request("My Channel", None, "Transcript.")
+    for block in system:
+        assert "cache_control" not in block
 
 
 # ── _parse_result ─────────────────────────────────────────────────────────────

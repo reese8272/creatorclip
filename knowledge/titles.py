@@ -2,12 +2,16 @@
 
 Prompt structure (three system blocks):
   Block 1 — static instructions: role, task, CTR principles, neutral-band definition.
-  Block 2 — DNA brief (cache_control breakpoint, ttl=1h): per-creator, stable across
-            calls. The block 1 + block 2 prefix (~1,550 tokens) exceeds Sonnet 4.6's
-            1024-token cacheable-prefix floor, so the marker is live (Issue 218).
-            Note: earlier code comments cited a 2048-token floor — this was incorrect;
-            the live Anthropic docs (fetched 2026-06-23) show 1024 for Sonnet 4.6.
-  Block 3 — per-video context: video title + transcript summary. Uncached.
+  Block 2 — DNA brief. The cache_control marker (ttl=1h) is attached only when the
+            measured block 1 + block 2 prefix clears Sonnet 4.6's 1024-token
+            cacheable-prefix floor — which requires a populated DNA brief; with an
+            empty brief the prefix is ~720 tokens and a marker would be inert
+            (Issues 218 / 315 / 352).
+  Block 3 — per-video factual context: channel name only. Uncached.
+
+Untrusted creator content (video title, transcript summary, stated identity) travels
+in the USER turn, JSON-wrapped via wrap_untrusted — never in the system role
+(OWASP LLM01; Issues 224 / 352).
 
 Claude generates 10 ranked candidates; the caller surfaces the top 5.
 Results stream via stream_and_emit and are returned as a JSON string for the
@@ -23,7 +27,12 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
+from knowledge.util import (
+    UNTRUSTED_CONTENT_POLICY,
+    dna_system_block,
+    extract_json_block,
+    wrap_untrusted,
+)
 from knowledge.util import extract_transcript_text as _extract_transcript_text
 from observability import log_llm_error, record_llm_metric
 
@@ -107,39 +116,23 @@ def _build_request(
 ) -> tuple:
     """Assemble (system, tools, messages) for both .create and streaming paths.
 
-    Block 2 carries the cache breakpoint (ttl=1h): static instructions + DNA brief
-    prefix totals ~1,550 tokens, which clears Sonnet 4.6's 1024-token cacheable-
-    prefix floor. Within a 1h window a creator's title/thumbnail/hook calls all
-    benefit from the cached prefix (10x cost reduction on the cached portion).
-    Per-video context is in the uncached block 3. (Issue 218)
+    Block 2 carries the cache breakpoint (ttl=1h) only when the measured static +
+    DNA prefix clears Sonnet 4.6's 1024-token cacheable-prefix floor — with a
+    populated (near-cap) DNA brief the prefix is ~1,450 tokens; with no brief it
+    is ~720 tokens and the marker is omitted (Issues 218 / 315 / 352). Within a
+    1h window a creator's title/thumbnail calls share the cached prefix.
+    Per-video trusted context is in the uncached block 3; untrusted content
+    (video title, transcript, stated identity) travels in the user turn.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
-
-    # Issue 224: stated_identity is attacker-influenceable creator free-text and
-    # must not go in the system role. Build video context without it; it moves to
-    # the user turn, JSON-wrapped via wrap_untrusted.
-    video_context_parts: list[str] = []
-    if video_title:
-        video_context_parts.append(f"Video title: {video_title}")
-    if transcript_summary:
-        video_context_parts.append(f"Transcript excerpt:\n{transcript_summary}")
-    video_context_parts.append(f"Channel: {channel_title}")
-    video_context = "\n\n".join(video_context_parts)
 
     system: list[dict] = [
         # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — stable per-creator. cache_control with 1h TTL so
-        # all brief calls (titles → hooks → thumbnails) within the same session
-        # window share the cached prefix. The ~1,550-token prefix clears Sonnet
-        # 4.6's 1024-token cacheable-prefix floor (confirmed 2026-06-23). (Issue 218)
-        {
-            "type": "text",
-            "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        },
+        # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
+        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
         # Block 3: per-video factual context — no creator free-text.
-        {"type": "text", "text": f"VIDEO TO TITLE:\n{video_context}"},
+        {"type": "text", "text": f"CHANNEL: {channel_title}"},
     ]
     # allowed_callers=["direct"]: this call must return a parseable JSON text block.
     # web_search_20260209's default dynamic filtering (programmatic tool calling) routes
@@ -154,12 +147,17 @@ def _build_request(
         }
     ]
 
-    # stated_identity travels in the user turn so the model receives it from the
-    # user role, not as trusted operator instructions. JSON-wrapped to prevent
-    # quote/bracket break-out (OWASP LLM01; Anthropic prompt-injection guide).
+    # Untrusted creator content (stated_identity, video_title, transcript_summary)
+    # travels in the user turn so the model receives it from the user role, not as
+    # trusted operator instructions. JSON-wrapped to prevent quote/bracket
+    # break-out (OWASP LLM01; Anthropic prompt-injection guide; Issues 224 / 352).
     user_preamble = ""
     if stated_identity:
-        user_preamble = wrap_untrusted("creator_stated_identity", stated_identity)
+        user_preamble += wrap_untrusted("creator_stated_identity", stated_identity)
+    if video_title:
+        user_preamble += wrap_untrusted("video_title", video_title)
+    if transcript_summary:
+        user_preamble += wrap_untrusted("video_transcript", transcript_summary)
     messages = [
         {
             "role": "user",

@@ -132,13 +132,13 @@ class TestBuildConceptsRequest:
         )
         assert len(system) == 3
 
-    def test_dna_block_has_cache_control(self):
-        # Issue 218: DNA brief block (index 1) carries cache_control: {type:ephemeral, ttl:1h}
-        # so title/hook/thumbnail calls within a creator session share the 1h cached prefix.
-        # Block 0 (static instructions) and block 2 (per-video data) remain uncached.
+    def test_dna_block_has_cache_control_with_full_brief(self):
+        # Issues 218/315/352: DNA brief block (index 1) carries cache_control
+        # {type:ephemeral, ttl:1h} only when the measured block1+block2 prefix
+        # clears Sonnet 4.6's 1024-token cacheable floor — true with a full brief.
         system, _, _ = _build_concepts_request(
             channel_title="Test",
-            dna_brief="DNA brief.",
+            dna_brief="x" * 3000,
             patterns=_empty_patterns(),
             transcript_hook="",
             stated_identity=None,
@@ -146,6 +146,39 @@ class TestBuildConceptsRequest:
         assert system[0].get("cache_control") is None
         assert system[1].get("cache_control") == {"type": "ephemeral", "ttl": "1h"}
         assert system[2].get("cache_control") is None
+
+    def test_no_cache_marker_when_dna_brief_empty(self):
+        # Issue 352 Batch G: with no DNA brief the prefix (~630 tokens) is below
+        # the 1024-token floor — the marker would be inert, so it must be omitted.
+        system, _, _ = _build_concepts_request(
+            channel_title="Test",
+            dna_brief=None,
+            patterns=_empty_patterns(),
+            transcript_hook="",
+            stated_identity=None,
+        )
+        for block in system:
+            assert "cache_control" not in block
+
+    def test_transcript_hook_in_user_turn_not_system(self):
+        """Issue 352 Batch G: the transcript hook is untrusted creator content —
+        it must not appear in any system block and must travel JSON-encoded in
+        the user turn via wrap_untrusted."""
+        import json
+
+        hook = "Today I'm going to show you something wild"
+        system, _, messages = _build_concepts_request(
+            channel_title="Test",
+            dna_brief="DNA",
+            patterns=_empty_patterns(),
+            transcript_hook=hook,
+            stated_identity=None,
+        )
+        for block in system:
+            assert hook not in block["text"]
+        user_content = messages[0]["content"]
+        assert 'name="video_transcript_hook"' in user_content
+        assert json.dumps(hook) in user_content
 
     def test_web_search_tool_in_tools(self):
         _, tools, _ = _build_concepts_request(
