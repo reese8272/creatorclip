@@ -93,10 +93,15 @@ def build_authorization_url(state: str, *, include_publish: bool = False) -> str
         #                    than being silently re-authenticated into the
         #                    same Google session. (Assessment 2026-06-08 fix.)
         "prompt": "consent select_account",
+        # Set on the BASE flow too (Issue 352 Batch D): a plain re-login with
+        # `prompt=consent` and only the read scopes would otherwise return a
+        # token narrowed to those scopes, and storing it silently strips a
+        # previously-granted youtube.upload from our records. With
+        # include_granted_scopes Google returns the COMBINED authorization.
+        # (developers.google.com/identity/protocols/oauth2/web-server)
+        "include_granted_scopes": "true",
         "state": state,
     }
-    if include_publish:
-        params["include_granted_scopes"] = "true"
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 
 
@@ -245,7 +250,14 @@ async def store_or_update_tokens(
         row.access_token_encrypted = encrypt(access_token)
         if refresh_token:
             row.refresh_token_encrypted = encrypt(refresh_token)
-        row.scope = scope
+        # Union with the stored grant (Issue 352 Batch D) — defense-in-depth
+        # alongside `include_granted_scopes=true` in build_authorization_url:
+        # a narrower re-grant must never silently strip an already-granted
+        # scope (e.g. youtube.upload → has_publish_scope() flipping off).
+        # Google's own OAuth client libraries merge scopes the same way. If a
+        # scope was truly revoked at Google, the API call 401/403s and the
+        # reconnect path re-syncs the record.
+        row.scope = " ".join(sorted(set(scope.split()) | set(row.scope.split())))
         row.expires_at = expires_at
         row.updated_at = datetime.now(UTC)
 

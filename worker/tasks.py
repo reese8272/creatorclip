@@ -460,7 +460,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
     from youtube.errors import YouTubeAuthError
     from youtube.oauth import get_valid_access_token
     from youtube.publish import YouTubeUploadError, upload_video
-    from youtube.quota import COST_DATA_VIDEOS_INSERT, consume
+    from youtube.quota import consume_insert
 
     cid = uuid.UUID(clip_id)
 
@@ -544,8 +544,10 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         # Same open session — get_valid_access_token may refresh + commit.
         access_token = await get_valid_access_token(creator_id, session)
 
-    # Reserve quota before the upload (raises QuotaExhaustedError → task retries).
-    await consume(COST_DATA_VIDEOS_INSERT)
+    # Reserve one videos.insert call from the dedicated daily insert bucket
+    # (raises QuotaExhaustedError → task retries after the PT-midnight reset).
+    # Uploads never debit the shared read pool. (Issue 352 Batch D)
+    await consume_insert()
 
     try:
         async with alocal_path(render_uri) as local_file:
@@ -563,16 +565,16 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
                 row.status = PublishStatus.failed
                 row.error = str(exc)[:500]
                 await session.commit()
-        # QUOTA ASYMMETRY: consume() already deducted COST_DATA_VIDEOS_INSERT units
-        # from the daily quota before the upload failed. Those units are gone — the
-        # YouTube API does not refund on upload error. Log so operators can track
-        # partial quota consumption during outages or audit spikes. (Issue 336)
+        # QUOTA ASYMMETRY: consume_insert() already deducted one videos.insert
+        # call from the daily insert bucket before the upload failed. That call
+        # is gone — the YouTube API does not refund on upload error. Log so
+        # operators can track partial quota consumption during outages or audit
+        # spikes. (Issue 336)
         logger.warning(
-            "Publish %s failed permanently (%s) — QUOTA ASYMMETRY: %d quota units"
-            " consumed before upload failure; units are non-refundable",
+            "Publish %s failed permanently (%s) — QUOTA ASYMMETRY: 1 videos.insert"
+            " call consumed before upload failure; calls are non-refundable",
             clip_id,
             type(exc).__name__,
-            COST_DATA_VIDEOS_INSERT,
         )
         raise
 

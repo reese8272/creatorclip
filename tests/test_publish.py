@@ -63,6 +63,39 @@ def test_upload_video_happy_path(tmp_path):
     assert "bytes 0-99/100" in client.put.call_args.kwargs["headers"]["Content-Range"]
 
 
+def test_upload_final_chunk_error_but_session_complete_returns_id(tmp_path):
+    """Issue 352 Batch D: a final-chunk PUT that dies on the wire AFTER YouTube
+    finished the upload must be verified via the session-status query — which
+    returns 200 + the created video resource — and reported as SUCCESS. Raising
+    instead would make the Celery retry re-upload a duplicate video."""
+    import httpx
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x" * 100)
+    client = _fake_client(post=_resp(200, headers={"Location": "https://upload.session/abc"}))
+    # 1st PUT (the chunk) dies mid-flight; 2nd PUT (status query) → 200 + resource.
+    client.put = AsyncMock(
+        side_effect=[
+            httpx.ConnectError("connection reset"),
+            _resp(200, json_body={"id": "VID_ALREADY_DONE"}),
+        ]
+    )
+    with patch("youtube.publish._http.client", return_value=client):
+        vid = asyncio.run(upload_video("tok", media, title="T", description="d"))
+    assert vid == "VID_ALREADY_DONE"
+
+
+def test_upload_5xx_on_chunk_but_session_complete_returns_id(tmp_path):
+    """Same duplicate-upload guard for the 5xx chunk-response branch."""
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x" * 100)
+    client = _fake_client(post=_resp(200, headers={"Location": "https://upload.session/abc"}))
+    client.put = AsyncMock(side_effect=[_resp(503), _resp(201, json_body={"id": "VID_5XX_DONE"})])
+    with patch("youtube.publish._http.client", return_value=client):
+        vid = asyncio.run(upload_video("tok", media, title="T", description="d"))
+    assert vid == "VID_5XX_DONE"
+
+
 def test_upload_video_init_403_is_permanent(tmp_path):
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"x" * 10)
@@ -117,7 +150,7 @@ def test_publish_idempotent_skips_when_already_done():
     with (
         patch("worker.tasks.db.AdminSessionLocal", lambda: _SessionCM(session)),
         patch("youtube.publish.upload_video", AsyncMock()) as upload,
-        patch("youtube.quota.consume", AsyncMock()) as consume,
+        patch("youtube.quota.consume_insert", AsyncMock()) as consume,
     ):
         out = asyncio.run(_publish_to_youtube_async("task-1", str(uuid.uuid4())))
 
@@ -217,7 +250,7 @@ def test_publish_success_creates_clip_outcome_when_absent():
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch("youtube.publish.upload_video", AsyncMock(return_value=vid)),
-        patch("youtube.quota.consume", AsyncMock()),
+        patch("youtube.quota.consume_insert", AsyncMock()),
         patch("config.settings") as mock_settings,
     ):
         mock_settings.YOUTUBE_PUBLISH_PRIVACY = "private"
@@ -284,7 +317,7 @@ def test_publish_outcome_upsert_skips_when_final_true():
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch("youtube.publish.upload_video", AsyncMock(return_value=vid)),
-        patch("youtube.quota.consume", AsyncMock()),
+        patch("youtube.quota.consume_insert", AsyncMock()),
         patch("config.settings") as mock_settings,
     ):
         mock_settings.YOUTUBE_PUBLISH_PRIVACY = "private"
@@ -346,7 +379,7 @@ def test_publish_outcome_updates_youtube_id_when_not_final():
         patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
         patch("worker.storage.alocal_path", return_value=local_path_cm),
         patch("youtube.publish.upload_video", AsyncMock(return_value=vid)),
-        patch("youtube.quota.consume", AsyncMock()),
+        patch("youtube.quota.consume_insert", AsyncMock()),
         patch("config.settings") as mock_settings,
     ):
         mock_settings.YOUTUBE_PUBLISH_PRIVACY = "private"
@@ -412,7 +445,7 @@ def test_publish_quota_asymmetry_logged_on_permanent_failure(caplog):
             "youtube.publish.upload_video",
             AsyncMock(side_effect=YouTubeUploadError(403, "forbidden by audit")),
         ),
-        patch("youtube.quota.consume", AsyncMock()),
+        patch("youtube.quota.consume_insert", AsyncMock()),
         patch("config.settings") as mock_settings,
         caplog.at_level(logging.WARNING, logger="worker.tasks"),
     ):

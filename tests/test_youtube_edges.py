@@ -229,6 +229,39 @@ async def test_store_or_update_tokens_preserves_stored_refresh_when_omitted():
     assert decrypt(existing_row.refresh_token_encrypted) == stored_refresh
 
 
+@pytest.mark.asyncio
+async def test_store_or_update_tokens_never_narrows_stored_scope():
+    """Issue 352 Batch D: a base re-login returning only the read scopes must NOT
+    strip a previously-granted youtube.upload from the stored grant — the update
+    path unions new + stored scopes (defense alongside include_granted_scopes)."""
+    from crypto import encrypt
+    from youtube.oauth import PUBLISH_SCOPE, has_publish_scope, store_or_update_tokens
+
+    existing_row = MagicMock()
+    existing_row.access_token_encrypted = encrypt("old-access")
+    existing_row.refresh_token_encrypted = encrypt("stored-refresh")
+    existing_row.scope = f"openid {PUBLISH_SCOPE}"  # creator had opted into publishing
+    existing_row.expires_at = datetime.now(UTC)
+    existing_row.updated_at = None
+
+    session_mock = AsyncMock()
+    session_mock.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=lambda: existing_row)
+    )
+
+    await store_or_update_tokens(
+        session_mock,
+        uuid.uuid4(),
+        access_token="new-access",
+        refresh_token=None,
+        scope="openid",  # narrower re-grant (no upload scope)
+        expires_in=3600,
+    )
+
+    assert has_publish_scope(existing_row.scope)  # publish opt-in survived
+    assert "openid" in existing_row.scope.split()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. ANALYTICS EMPTY-ROW COVERAGE
 # ──────────────────────────────────────────────────────────────────────────────
