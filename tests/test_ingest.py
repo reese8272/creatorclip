@@ -222,8 +222,10 @@ def test_assemblyai_sets_sdk_http_timeout(monkeypatch):
 
     fake_aai = types.ModuleType("assemblyai")
     fake_aai.settings = types.SimpleNamespace(api_key=None, http_timeout=None)
+    fake_aai.TranscriptStatus = types.SimpleNamespace(error="error")
 
     class _Transcript:
+        status = "completed"  # the error-status gate raises otherwise (Issue 352 Batch E)
         words: list = []
         text = ""
 
