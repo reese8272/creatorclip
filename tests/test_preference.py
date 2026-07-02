@@ -143,9 +143,11 @@ def test_fit_logistic_below_threshold():
 
 
 def test_fit_lgbm_at_threshold():
-    pytest.importorskip("lightgbm")  # skip if libgomp absent on this host
     X, y, w = _training_data(15, 15)
-    scorer = fit(X, y, w, threshold=20)
+    try:
+        scorer = fit(X, y, w, threshold=20)
+    except OSError:
+        pytest.skip("libgomp.so.1 not available on this host")
     assert isinstance(scorer, PreferenceScorer)
 
 
