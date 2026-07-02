@@ -39,3 +39,28 @@ def test_decisions_records_dr_batch() -> None:
 def test_compliance_lists_backup_bucket() -> None:
     text = (_DOCS / "COMPLIANCE.md").read_text()
     assert "creatorclip-backups" in text
+
+
+def test_runbooks_mandate_post_restore_erasure_replay() -> None:
+    """Issue 254: both restore procedures (b database-loss, d bad-migration) must
+    carry the MANDATORY reapply_erasures.py step, sourced from the NEWEST audit
+    trail — otherwise a restore silently resurrects erased accounts."""
+    text = (_DOCS / "RUNBOOKS.md").read_text()
+    assert text.count("reapply_erasures.py") >= 2  # (b) and (d)
+    assert "MANDATORY" in text
+    assert "NEWEST audit trail" in text
+
+
+def test_compliance_states_honest_backup_erasure_ceiling() -> None:
+    """Issue 254: the erasure stance must state the honest ~56-day backup ceiling
+    (the weekly object is a FULL-dump copy, not a non-analytics slice) and that
+    restores re-apply erasures."""
+    text = (_DOCS / "COMPLIANCE.md").read_text()
+    assert "~56 days" in text
+    assert "non-analytics slice" not in text.replace(
+        'NOT a reduced "non-analytics slice"', ""
+    ).replace("NOT a reduced non-analytics slice", ""), (
+        "the old 'weekly/ is a non-analytics slice' claim must stay corrected"
+    )
+    assert "reapply_erasures" in text
+    assert "Erasure vs. backups" in text
