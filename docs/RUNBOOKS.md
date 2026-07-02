@@ -620,6 +620,17 @@ These are the external steps that arm the tooling shipped in this batch:
        sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
    ```
 3. Restore `TOKEN_ENCRYPTION_KEY` from escrow (step a) — **the restore is useless without it.**
+4. **MANDATORY — re-apply erasures (Issue 254).** The restored dump is older than the DB it
+   replaces, so it can resurrect creators erased AFTER the dump was taken — a GDPR Art. 17
+   violation if served. Before returning to service, run:
+   ```bash
+   python3 scripts/reapply_erasures.py
+   ```
+   Source erasures from the **NEWEST audit trail available** — the live `audit_log` if it
+   survived, else the newest dump's — never only the restored (older) one. If the restored
+   `audit_log` predates the newest dump, first re-insert the newer `creator.deleted` rows
+   from that dump, then run the script. It is idempotent (already-absent creators are
+   skipped), so re-running is always safe.
 
 #### Restore drill (quarterly — "an untested backup is not a backup")
 
@@ -643,6 +654,9 @@ Run against a throwaway target, record the result + measured RTO:
   paths (Issue 257), under the `predeploy/` prefix. To roll back a bad schema change, restore
   the most recent `predeploy/` dump using the procedure in **(b)**, then redeploy the prior
   image (see the rollback note in `deploy.yml` / Issue 271).
+- **MANDATORY after the restore:** run `python3 scripts/reapply_erasures.py` (step 4 in
+  **(b)**), sourcing erasures from the NEWEST audit trail — any account deleted between the
+  `predeploy/` dump and the rollback would otherwise be resurrected (Issue 254).
 
 ### Sources
 

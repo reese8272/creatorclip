@@ -610,7 +610,9 @@ class Settings(BaseSettings):
     # recorded version string on each Creator row lets a future re-prompt path
     # compare the stored version against the current one and gate the OAuth CTA.
     TOS_VERSION: str = "2026-06-23"
-    PRIVACY_VERSION: str = "2026-06-23"
+    # 2026-07-02: GPC recognition clause (Issue 302) + backup-erasure ceiling
+    # disclosure (Issue 254) published to /static/privacy.html.
+    PRIVACY_VERSION: str = "2026-07-02"
 
     # ── Error tracking — Sentry / GlitchTip (Issue 281) ───────────────────────
     # Set SENTRY_DSN to a Sentry project DSN or a GlitchTip DSN (identical

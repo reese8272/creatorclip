@@ -337,6 +337,27 @@ app.add_middleware(
 )
 
 
+# ── Global Privacy Control (Issue 302 — w3c.github.io/gpc) ───────────────────
+# Detection only: the Sec-GPC header is surfaced on request.state and never
+# logged or persisted. CreatorClip does not sell or share personal information
+# (no ad-tech, no cross-context behavioural advertising), so a GPC opt-out is
+# satisfied by default — see static/privacy.html (CCPA section) and
+# docs/COMPLIANCE.md (Privacy Posture).
+_GPC_LAST_UPDATE = "2026-07-02"  # bump when the GPC posture changes
+
+
+@app.middleware("http")
+async def _detect_gpc(request: Request, call_next):
+    request.state.gpc = request.headers.get("Sec-GPC") == "1"
+    return await call_next(request)
+
+
+@app.get("/.well-known/gpc.json", include_in_schema=False)
+async def gpc_well_known() -> dict:
+    """Machine-readable GPC support declaration (W3C GPC spec §5)."""
+    return {"gpc": True, "lastUpdate": _GPC_LAST_UPDATE}
+
+
 # ── Backend request telemetry (Issue 151) ────────────────────────────────────
 # One event_logs row per real request — the "what was done" half of the
 # click→action trail. Registered before RequestIDMiddleware so that (being
