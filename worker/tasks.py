@@ -24,6 +24,7 @@ from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 
 import db
+from flags import flag_enabled
 from models import (
     ChatConversation,
     ChatMessage,
@@ -462,6 +463,38 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
     from youtube.quota import COST_DATA_VIDEOS_INSERT, consume
 
     cid = uuid.UUID(clip_id)
+
+    # Kill switch (Issue 284): when youtube_publish is off, record a clean
+    # FAILED publication row (never a silent drop) and stop before any quota
+    # or upload work. YouTubeUploadError is terminal in the task wrapper — the
+    # blocked publish is surfaced, not retried into a paused subsystem.
+    if not await flag_enabled("youtube_publish", session_factory=db.AdminSessionLocal):
+        async with db.AdminSessionLocal() as session:
+            existing = (
+                await session.execute(
+                    select(ClipPublication).where(ClipPublication.task_id == task_id)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.status = PublishStatus.failed
+                existing.error = "youtube_publish_disabled"
+            else:
+                clip = await session.get(Clip, cid)
+                if clip is not None:
+                    session.add(
+                        ClipPublication(
+                            clip_id=cid,
+                            creator_id=clip.creator_id,
+                            task_id=task_id,
+                            status=PublishStatus.failed,
+                            error="youtube_publish_disabled",
+                        )
+                    )
+            await session.commit()
+        logger.warning("publish blocked for clip %s — youtube_publish kill switch is off", clip_id)
+        raise YouTubeUploadError(
+            503, "youtube_publish_disabled: publishing is paused by operators"
+        )
 
     async with db.AdminSessionLocal() as session:
         # Idempotency: a redelivery of the same task id that already succeeded is

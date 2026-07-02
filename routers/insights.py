@@ -27,6 +27,7 @@ from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from config import settings
 from db import get_session
+from flags import require_flag
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import (
@@ -493,7 +494,12 @@ def _build_analysis_prompt(
     )
 
 
-@router.post("/analyze-performer", response_model=InsightOut)
+@router.post(
+    "/analyze-performer",
+    response_model=InsightOut,
+    # Kill switch (Issue 284): 503 when the llm_generation flag is off.
+    dependencies=[Depends(require_flag("llm_generation"))],
+)
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 @limiter.limit(BRIEF_DAILY_LIMIT, key_func=creator_key)

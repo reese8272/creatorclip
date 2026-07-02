@@ -22,6 +22,9 @@ export function Login() {
   // Set by the backend OAuth callback when token exchange or persistence fails,
   // instead of leaking a 500 mid-OAuth (see routers/auth.py callback hardening).
   const oauthFailed = params.get('error') === 'oauth_failed'
+  // Set by the backend OAuth callback when the signup kill switch is off
+  // (Issue 284): new signups are paused; existing creators still sign in.
+  const signupPaused = params.get('error') === 'signup_paused'
   const signInHref = yt ? `/auth/login?yt=${encodeURIComponent(yt)}` : '/auth/login'
 
   const [agreed, setAgreed] = useState(false)
@@ -45,6 +48,16 @@ export function Login() {
             >
               We couldn't complete sign-in with Google. This is usually temporary — please try
               again. If it keeps happening, contact support.
+            </div>
+          )}
+
+          {signupPaused && (
+            <div
+              role="alert"
+              className="mb-5 rounded-md border border-danger-border bg-danger-soft px-3.5 py-3 text-left text-xs leading-relaxed text-danger"
+            >
+              The beta is at capacity right now, so new signups are temporarily paused. If you
+              already have an account, signing in still works — please try again soon.
             </div>
           )}
 
