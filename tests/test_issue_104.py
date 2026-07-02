@@ -91,7 +91,7 @@ def test_get_current_creator_stashes_creator_id_on_state():
     async def run():
         return await get_current_creator(request=request, session=session)
 
-    returned = asyncio.get_event_loop().run_until_complete(run())
+    returned = asyncio.run(run())
     assert returned is creator
     assert getattr(request.state, "creator_id", None) == cid
 
@@ -138,7 +138,7 @@ def test_get_current_creator_via_api_key_stashes_creator_id_on_state():
     async def run():
         return await get_current_creator_via_api_key(request=request, session=session)
 
-    returned = asyncio.get_event_loop().run_until_complete(run())
+    returned = asyncio.run(run())
     assert returned is creator
     assert getattr(request.state, "creator_id", None) == cid
 
