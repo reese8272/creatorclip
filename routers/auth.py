@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from slowapi.util import get_remote_address
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,7 +61,11 @@ class AuthMeOut(BaseModel):
 
 
 @router.get("/login")
-async def login() -> RedirectResponse:
+# Pre-auth endpoint — IP-keyed limit (no creator identity yet). Cheap redirect,
+# but unbounded state-cookie minting + telemetry writes shouldn't be free
+# (Issue 352 Batch C).
+@limiter.limit("30/minute", key_func=get_remote_address)
+async def login(request: Request) -> RedirectResponse:
     state = secrets.token_urlsafe(32)
     resp = RedirectResponse(url=build_authorization_url(state), status_code=302)
     resp.set_cookie(
@@ -80,7 +85,9 @@ async def login() -> RedirectResponse:
 
 
 @router.get("/connect-publishing")
+@limiter.limit("30/minute", key_func=creator_key)
 async def connect_publishing(
+    request: Request,
     creator: Creator = Depends(get_current_creator),
 ) -> RedirectResponse:
     """Start incremental consent for the ``youtube.upload`` write scope (Issue 194).
@@ -233,6 +240,11 @@ async def _persist_oauth_grant(
 
 
 @router.get("/callback")
+# Unauthenticated + expensive (Google token exchange + identity fetch + DB
+# writes + first-login catalog sync). The CSRF state check fast-rejects blind
+# floods, but a client holding a valid state cookie could otherwise drive
+# unbounded exchanges → Google-quota + Celery burn (Issue 352 Batch C).
+@limiter.limit("20/minute", key_func=get_remote_address)
 async def callback(
     request: Request,
     session: AsyncSession = Depends(get_session),
@@ -453,9 +465,12 @@ async def erase_creator(session: AsyncSession, creator: Creator) -> None:
     try:
         if refresh_token is not None:
             async with httpx.AsyncClient(timeout=10) as client:
+                # Token goes in the form-encoded POST body per Google's revoke
+                # spec — NEVER the query string, where it would be captured by
+                # proxy/egress access logs (Issue 352 Batch C).
                 resp = await client.post(
                     "https://oauth2.googleapis.com/revoke",
-                    params={"token": refresh_token},
+                    data={"token": refresh_token},
                 )
             if resp.status_code == 400:
                 body = {}

@@ -7,13 +7,14 @@ view (admin-gated) is a deliberate follow-up — for beta, operators query the
 event_logs table directly; the per-creator endpoint is what ships behind auth.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
+from limiter import creator_key, limiter
 from models import Creator, EventLog
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
@@ -36,7 +37,9 @@ class EventLogListOut(BaseModel):
 
 
 @router.get("/me", response_model=EventLogListOut)
+@limiter.limit("120/minute", key_func=creator_key)
 async def my_events(
+    request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
     limit: int = Query(100, ge=1, le=500),

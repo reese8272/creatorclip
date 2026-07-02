@@ -67,6 +67,61 @@ def test_activity_extra_keys_capped(client, caplog):
     assert resp.status_code == 204
 
 
+def test_activity_extra_key_colliding_with_named_kwarg_returns_204(client):
+    """Issue 352 Batch C: client `extra` keys were **splatted into log_event, so a
+    key equal to a named kwarg (page/creator_id) or a reserved LogRecord attribute
+    (message/args) raised → unhandled 500 on an unauthenticated endpoint."""
+    resp = client.post(
+        "/api/activity",
+        json={
+            "page": "p",
+            "event_type": "click",
+            "target": "t",
+            "extra": {"page": "evil", "creator_id": "evil", "message": "evil", "args": "evil"},
+        },
+    )
+    assert resp.status_code == 204
+
+
+def test_activity_extra_never_splatted_into_log_fields(client, caplog):
+    """Client keys land inside the single JSON-string `extra` field — never as
+    top-level structured-log fields (log injection)."""
+    with caplog.at_level(logging.INFO, logger="event"):
+        client.post(
+            "/api/activity",
+            json={
+                "page": "p",
+                "event_type": "click",
+                "target": "t",
+                "extra": {"injected_key": "boom"},
+            },
+        )
+    recs = [r for r in caplog.records if "ui_activity" in r.getMessage()]
+    assert recs, "expected a ui_activity log line"
+    rec = recs[0]
+    assert not hasattr(rec, "injected_key"), "client key must not become a log field"
+    assert '"injected_key"' in rec.extra  # carried inside the sanitized JSON string
+
+
+def test_activity_non_scalar_extra_values_dropped(client):
+    """Nested dict/list values bypass the string-length cap — they are dropped."""
+    resp = client.post(
+        "/api/activity",
+        json={
+            "page": "p",
+            "event_type": "click",
+            "target": "t",
+            "extra": {"nested": {"blob": "x" * 10000}, "ok": "fine"},
+        },
+    )
+    assert resp.status_code == 204
+
+    from routers.activity import _sanitize_extra
+
+    clean = _sanitize_extra({"nested": {"blob": "x" * 10000}, "ok": "fine", "n": 3})
+    assert clean == {"ok": "fine", "n": 3}
+
+
 def test_activity_long_string_truncated(client):
     # A 500-char target string must not crash the endpoint.
     resp = client.post(
