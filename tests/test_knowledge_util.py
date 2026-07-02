@@ -137,3 +137,30 @@ class TestWrapUntrusted:
         the instruction text that follows it in the prompt."""
         result = wrap_untrusted("field", "value")
         assert result.endswith("\n")
+
+
+class TestDnaSystemBlock:
+    """Issue 352 Batch G — cache marker gated on the measured prefix floor.
+
+    Sonnet 4.6's minimum cacheable prefix is 1,024 tokens (chars/4 estimate →
+    4,096 chars). Below it Anthropic silently declines to cache, so the ttl=1h
+    marker (a 2x write premium) must be omitted. Same gate as
+    clip_engine/scoring.py (Issue 315).
+    """
+
+    def test_marker_present_at_floor_boundary(self) -> None:
+        from knowledge.util import dna_system_block
+
+        dna_text = "d" * 1000
+        static = "s" * (4 * 1024 - len(f"CREATOR DNA PROFILE:\n{dna_text}"))
+        block = dna_system_block(static, dna_text)
+        assert block["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_marker_absent_below_floor(self) -> None:
+        from knowledge.util import dna_system_block
+
+        dna_text = "No DNA profile available yet."
+        static = "s" * 2000  # combined prefix ~507 tokens — below the floor
+        block = dna_system_block(static, dna_text)
+        assert "cache_control" not in block
+        assert block["text"] == f"CREATOR DNA PROFILE:\n{dna_text}"

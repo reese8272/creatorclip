@@ -56,6 +56,20 @@ def test_best_windows_label_am():
     assert "AM" in result[0]["label"]
 
 
+def test_best_windows_malformed_row_does_not_underfill_top_n():
+    """Issue 352 Batch J: filter BEFORE slicing — a malformed row that ranks in
+    the top-N must not consume a slot when more valid windows exist below it."""
+    rows = [
+        _activity(7, 5, 1.0),  # malformed (dow=7) but highest activity_index
+        _activity(0, 8, 0.9),
+        _activity(1, 12, 0.8),
+        _activity(2, 18, 0.7),
+    ]
+    result = best_upload_windows(rows, top_n=3)
+    assert len(result) == 3
+    assert [r["activity_index"] for r in result] == [0.9, 0.8, 0.7]
+
+
 # ── optimal_gap_hours ─────────────────────────────────────────────────────────
 
 
@@ -90,6 +104,13 @@ def test_optimal_gap_hours_skips_malformed_rows():
 
     # Two valid rows → top slots [8, 12] → single gap of 4 hours.
     assert gap == pytest.approx(4.0)
+
+
+def test_optimal_gap_hours_week_wraparound():
+    """Issue 352 Batch J: the week is circular. Saturday 23:00 (slot 167) and
+    Sunday 01:00 (slot 1) are 2 hours apart, not 166."""
+    rows = [_activity(6, 23, 0.95), _activity(0, 1, 0.9)]  # Sat 23:00, Sun 01:00
+    assert optimal_gap_hours(rows) == pytest.approx(2.0)
 
 
 def test_optimal_gap_hours_returns_none_when_only_malformed():

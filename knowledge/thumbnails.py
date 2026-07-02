@@ -23,7 +23,12 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
+from knowledge.util import (
+    UNTRUSTED_CONTENT_POLICY,
+    dna_system_block,
+    extract_json_block,
+    wrap_untrusted,
+)
 from knowledge.util import extract_transcript_text as _extract_transcript_text
 from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
@@ -193,12 +198,12 @@ def _build_concepts_request(
 ) -> tuple:
     """Assemble (system, tools, messages) for concept generation.
 
-    Block 2 carries the cache breakpoint (ttl=1h): static instructions + DNA brief
-    prefix totals ~1,550 tokens, which clears Sonnet 4.6's 1024-token cacheable-
-    prefix floor (confirmed 2026-06-23). Cross-call sharing: if a titles call already
-    wrote the cache, a subsequent thumbnail call within the 1h window will read it
-    for free (same block 1 + block 2 byte-identical prefix). (Issue 218)
-    Per-video patterns and context are in the uncached block 3.
+    Block 2 carries the cache breakpoint (ttl=1h) only when the measured static +
+    DNA prefix clears Sonnet 4.6's 1024-token cacheable-prefix floor — which
+    requires a populated DNA brief; with no brief the prefix is ~630 tokens and
+    the marker is omitted rather than emitted inert (Issues 218 / 315 / 352).
+    Per-video patterns and trusted context are in the uncached block 3; untrusted
+    content (transcript hook, stated identity) travels in the user turn.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
@@ -212,31 +217,15 @@ def _build_concepts_request(
     ]
     pattern_text = "\n".join(pattern_lines)
 
-    # Issue 224: stated_identity is attacker-influenceable creator free-text and
-    # must not go in the system role. Build video context without it; it moves to
-    # the user turn, JSON-wrapped via wrap_untrusted.
-    video_context_parts: list[str] = []
-    if transcript_hook:
-        video_context_parts.append(f"Video opening (hook):\n{transcript_hook}")
-    video_context_parts.append(f"Channel: {channel_title}")
-    video_context = "\n\n".join(video_context_parts)
-
     system: list[dict] = [
         # Block 1: static instructions.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — stable per-creator. cache_control with 1h TTL so
-        # all brief calls (titles → hooks → thumbnails) within a creator session
-        # share the cached prefix. ~1,550-token prefix clears Sonnet 4.6's 1024-
-        # token cacheable-prefix floor (confirmed 2026-06-23). (Issue 218)
-        {
-            "type": "text",
-            "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        },
+        # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
+        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
         # Block 3: per-video factual context — no creator free-text.
         {
             "type": "text",
-            "text": f"CHANNEL THUMBNAIL PATTERNS:\n{pattern_text}\n\nVIDEO CONTEXT:\n{video_context}",
+            "text": f"CHANNEL THUMBNAIL PATTERNS:\n{pattern_text}\n\nCHANNEL: {channel_title}",
         },
     ]
     # allowed_callers=["direct"]: this call must return a parseable JSON text block.
@@ -251,12 +240,15 @@ def _build_concepts_request(
         }
     ]
 
-    # stated_identity travels in the user turn so the model receives it from the
-    # user role, not as trusted operator instructions. JSON-wrapped to prevent
-    # quote/bracket break-out (OWASP LLM01; Anthropic prompt-injection guide).
+    # Untrusted creator content (stated_identity, transcript hook) travels in the
+    # user turn so the model receives it from the user role, not as trusted
+    # operator instructions. JSON-wrapped to prevent quote/bracket break-out
+    # (OWASP LLM01; Anthropic prompt-injection guide; Issues 224 / 352).
     user_preamble = ""
     if stated_identity:
-        user_preamble = wrap_untrusted("creator_stated_identity", stated_identity)
+        user_preamble += wrap_untrusted("creator_stated_identity", stated_identity)
+    if transcript_hook:
+        user_preamble += wrap_untrusted("video_transcript_hook", transcript_hook)
     messages = [
         {
             "role": "user",

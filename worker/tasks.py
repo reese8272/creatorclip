@@ -22,6 +22,7 @@ from typing import Any
 import redis.asyncio as aredis
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
+from fastapi import HTTPException
 
 import db
 from flags import flag_enabled
@@ -205,6 +206,20 @@ def ingest_video(self, video_id: str) -> str:
         # the next delivery would time out again, wasting credits. Re-raise
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
         raise
+    except HTTPException as exc:
+        if exc.status_code == 402:
+            # Terminal (Issue 352 Batch B, Issue-316 residual): an insufficient
+            # balance is deterministic — every retry would re-run the full
+            # ingest and 402 again, burning retries and compute. Fail cleanly
+            # with the ledger's actionable copy (safe, user-facing) and re-raise
+            # WITHOUT self.retry so on_failure fires now (refund is a no-op:
+            # the 402 SAVEPOINT rolled the deduction back).
+            run_async(_set_status(video_id, IngestStatus.failed, reason=str(exc.detail)))
+            raise
+        run_async(
+            _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest"))
+        )
+        raise self.retry(exc=exc) from exc
     except Exception as exc:
         run_async(
             _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest"))
@@ -460,7 +475,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
     from youtube.errors import YouTubeAuthError
     from youtube.oauth import get_valid_access_token
     from youtube.publish import YouTubeUploadError, upload_video
-    from youtube.quota import COST_DATA_VIDEOS_INSERT, consume
+    from youtube.quota import consume_insert
 
     cid = uuid.UUID(clip_id)
 
@@ -544,8 +559,10 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         # Same open session — get_valid_access_token may refresh + commit.
         access_token = await get_valid_access_token(creator_id, session)
 
-    # Reserve quota before the upload (raises QuotaExhaustedError → task retries).
-    await consume(COST_DATA_VIDEOS_INSERT)
+    # Reserve one videos.insert call from the dedicated daily insert bucket
+    # (raises QuotaExhaustedError → task retries after the PT-midnight reset).
+    # Uploads never debit the shared read pool. (Issue 352 Batch D)
+    await consume_insert()
 
     try:
         async with alocal_path(render_uri) as local_file:
@@ -563,16 +580,16 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
                 row.status = PublishStatus.failed
                 row.error = str(exc)[:500]
                 await session.commit()
-        # QUOTA ASYMMETRY: consume() already deducted COST_DATA_VIDEOS_INSERT units
-        # from the daily quota before the upload failed. Those units are gone — the
-        # YouTube API does not refund on upload error. Log so operators can track
-        # partial quota consumption during outages or audit spikes. (Issue 336)
+        # QUOTA ASYMMETRY: consume_insert() already deducted one videos.insert
+        # call from the daily insert bucket before the upload failed. That call
+        # is gone — the YouTube API does not refund on upload error. Log so
+        # operators can track partial quota consumption during outages or audit
+        # spikes. (Issue 336)
         logger.warning(
-            "Publish %s failed permanently (%s) — QUOTA ASYMMETRY: %d quota units"
-            " consumed before upload failure; units are non-refundable",
+            "Publish %s failed permanently (%s) — QUOTA ASYMMETRY: 1 videos.insert"
+            " call consumed before upload failure; calls are non-refundable",
             clip_id,
             type(exc).__name__,
-            COST_DATA_VIDEOS_INSERT,
         )
         raise
 
@@ -1133,11 +1150,18 @@ async def _ingest_async(video_id: str) -> None:
     except Exception as exc:
         # Safe message — exception args may carry internal detail. The
         # generic shape matches the data-gate emit policy in _build_dna_async.
+        # A 402 is terminal (ingest_video does not retry it), so its live
+        # message must not claim a retry is coming.
+        is_402 = isinstance(exc, HTTPException) and exc.status_code == 402
         await aemit(
             video_id,
             "error",
             stage="ingest",
-            message="Ingest failed; retrying.",
+            message=(
+                "Processing stopped: insufficient minutes balance."
+                if is_402
+                else "Ingest failed; retrying."
+            ),
             exc_type=type(exc).__name__,
         )
         raise

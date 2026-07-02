@@ -12,6 +12,11 @@ Cost reference (Google official documentation, 2026):
   Data API playlistItems.list:   1 unit
   Data API videos.list:          1 unit
   Data API captions.list:        50 units
+
+videos.insert is NOT part of the shared pool: since Google's 2026-06-01 API
+update it bills to its OWN daily bucket (~100 calls/day, 1 call each) — see
+``consume_insert()``. Verified 2026-07-02 against
+https://developers.google.com/youtube/v3/determine_quota_cost.
 """
 
 import logging
@@ -34,11 +39,6 @@ COST_DATA_CHANNELS = 1
 COST_DATA_PLAYLIST_ITEMS = 1
 COST_DATA_VIDEOS = 1
 COST_DATA_CAPTIONS = 50
-# videos.insert (Issue 195). Google cut this from ~1600 → ~100 units on
-# 2025-12-04 (verified against the Quota Calculator) — so the default 10k/day
-# quota now allows ~100 uploads/day rather than ~6, matching the anti-abuse cap.
-# Local accounting only; Google's own quotaExceeded 403 is the hard enforcer.
-COST_DATA_VIDEOS_INSERT = 100
 
 # Atomic two-key Lua: check the global budget and (optionally) a per-creator
 # refresh sub-budget BEFORE incrementing either, so the check-then-incr stays
@@ -87,6 +87,13 @@ def _creator_quota_key(creator_id: uuid.UUID) -> str:
     """Per-creator/day refresh sub-budget key, PT-date-anchored (Issue 76 invariant)."""
     pt_date = datetime.now(_QUOTA_RESET_TZ).strftime("%Y-%m-%d")
     return f"creatorclip:yt_quota:{pt_date}:creator:{creator_id}"
+
+
+def _insert_quota_key() -> str:
+    """videos.insert daily CALL counter — a bucket separate from the shared read
+    pool since Google's 2026-06-01 update (1 call each, ~100 calls/day)."""
+    pt_date = datetime.now(_QUOTA_RESET_TZ).strftime("%Y-%m-%d")
+    return f"creatorclip:yt_quota:insert:{pt_date}"
 
 
 class QuotaExhaustedError(Exception):
@@ -147,6 +154,38 @@ async def consume(
             f"YouTube quota budget exhausted (limit={settings.YOUTUBE_QUOTA_DAILY_UNITS}/day)"
         )
     logger.debug("YouTube quota: consumed %d units (daily total: %d)", cost, result)
+
+
+async def consume_insert() -> None:
+    """Consume one ``videos.insert`` call from the dedicated daily insert bucket.
+
+    Uploads never debit the shared read pool (``consume()``): since Google's
+    2026-06-01 API update, ``videos.insert`` bills to its own ~100-calls/day
+    bucket at 1 call each (developers.google.com/youtube/v3/determine_quota_cost,
+    verified 2026-07-02). Reuses ``_LUA_CONSUME`` with an empty creator key so
+    the check-then-incr stays atomic; Google's own quotaExceeded 403 remains
+    the hard enforcer.
+
+    Raises:
+        QuotaExhaustedError: the daily videos.insert call budget would be exceeded.
+    """
+    r = get_redis_client()
+    result = await r.eval(  # type: ignore[misc]  # SDK/stub typing lag (Issue 78c)
+        _LUA_CONSUME,
+        2,
+        _insert_quota_key(),
+        "",
+        1,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
+        settings.YOUTUBE_QUOTA_INSERT_DAILY_CALLS,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
+        0,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
+        _TTL_SECONDS,  # type: ignore[arg-type]  # SDK/stub typing lag (Issue 78c)
+    )
+    if result == -1:
+        raise QuotaExhaustedError(
+            "YouTube videos.insert daily call budget exhausted "
+            f"(limit={settings.YOUTUBE_QUOTA_INSERT_DAILY_CALLS} uploads/day)"
+        )
+    logger.debug("YouTube insert quota: consumed 1 call (daily total: %d)", result)
 
 
 async def remaining() -> int:

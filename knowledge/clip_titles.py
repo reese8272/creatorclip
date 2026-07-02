@@ -2,9 +2,9 @@
 
 Prompt structure (three system blocks):
   Block 1 — static instructions + UNTRUSTED_CONTENT_POLICY (creator-independent).
-  Block 2 — DNA brief (cache_control ttl=1h breakpoint). The static + DNA prefix
-            clears Sonnet 4.6's 1024-token cacheable-prefix floor, so repeat calls
-            within the same creator session benefit from prompt-cache reads.
+  Block 2 — DNA brief. The cache_control marker (ttl=1h) is attached only when the
+            measured static + DNA prefix clears Sonnet 4.6's 1024-token cacheable-
+            prefix floor — which requires a populated DNA brief (Issues 315 / 352).
   Block 3 — per-clip context (transcript excerpt). Uncached.
 
 The clip transcript is UNTRUSTED content — wrapped via wrap_untrusted in the user
@@ -23,7 +23,12 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
+from knowledge.util import (
+    UNTRUSTED_CONTENT_POLICY,
+    dna_system_block,
+    extract_json_block,
+    wrap_untrusted,
+)
 from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
@@ -135,9 +140,10 @@ def _build_request(
 ) -> tuple[list[dict], list[dict]]:
     """Assemble (system_blocks, messages) for the clip-titles call.
 
-    Block 2 carries the cache breakpoint (ttl=1h): static instructions + DNA brief
-    prefix clears Sonnet 4.6's 1024-token cacheable-prefix floor, so same-creator
-    calls within the session window benefit from cache reads. (Issue 322 / Issue 218)
+    Block 2 carries the cache breakpoint (ttl=1h) only when the measured static +
+    DNA prefix clears Sonnet 4.6's 1024-token cacheable-prefix floor — which
+    requires a populated DNA brief; below the floor the marker is omitted rather
+    than emitted inert. (Issues 322 / 218 / 315 / 352)
     The clip transcript is in the user turn, JSON-wrapped via wrap_untrusted to
     prevent prompt-injection break-out (OWASP LLM01; Anthropic guide 2026-06-23).
     """
@@ -146,12 +152,8 @@ def _build_request(
     system: list[dict] = [
         # Block 1: static instructions — never contains per-creator data.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — stable per-creator within the ttl=1h window.
-        {
-            "type": "text",
-            "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        },
+        # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
+        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
         # Block 3: per-clip factual context — uncached; changes every call.
         {"type": "text", "text": f"CHANNEL: {channel_title}"},
     ]

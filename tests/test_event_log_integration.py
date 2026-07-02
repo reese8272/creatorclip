@@ -5,6 +5,7 @@ Covers: UI events persist + are redacted, the request middleware records backend
 events, and /api/logs/me enforces per-creator isolation.
 """
 
+import asyncio
 import uuid
 
 import pytest
@@ -85,20 +86,27 @@ async def test_http_request_recorded_by_middleware(client, db_session):
     resp = client.get("/creators/niches", cookies=_cookie(creator))
     assert resp.status_code == 200
 
-    row = (
-        (
-            await db_session.execute(
-                select(EventLog).where(
-                    EventLog.creator_id == creator.id,
-                    EventLog.source == "backend",
-                    EventLog.event == "http_request",
-                    EventLog.page == "/creators/niches",
+    # The middleware write is fire-and-forget (Issue 352) — eventually consistent,
+    # so poll briefly for the row instead of asserting read-after-write.
+    row = None
+    for _ in range(50):
+        row = (
+            (
+                await db_session.execute(
+                    select(EventLog).where(
+                        EventLog.creator_id == creator.id,
+                        EventLog.source == "backend",
+                        EventLog.event == "http_request",
+                        EventLog.page == "/creators/niches",
+                    )
                 )
             )
+            .scalars()
+            .first()
         )
-        .scalars()
-        .first()
-    )
+        if row is not None:
+            break
+        await asyncio.sleep(0.1)
     assert row is not None
     assert row.status_code == 200
     assert row.target == "GET"

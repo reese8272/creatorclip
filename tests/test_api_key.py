@@ -14,12 +14,14 @@ import uuid
 import pytest
 
 from api_key import (
+    _LAST_USED_STAMP_INTERVAL,
     _PREFIX,
     _PREFIX_DISPLAY_LEN,
     _extract_bearer,
     display_prefix,
     generate_api_key,
     hash_api_key,
+    should_stamp_last_used,
 )
 
 # ── Key generation ─────────────────────────────────────────────────────────
@@ -146,6 +148,26 @@ def test_extract_bearer_empty_token_returns_none():
     through to a hash lookup."""
     assert _extract_bearer(_FakeRequest({"authorization": "Bearer "})) is None
     assert _extract_bearer(_FakeRequest({"authorization": "Bearer    "})) is None
+
+
+# ── last_used_at write throttle (Issue 352) ───────────────────────────────────
+
+
+def test_should_stamp_last_used_when_never_stamped():
+    from datetime import UTC, datetime
+
+    assert should_stamp_last_used(None, datetime.now(UTC)) is True
+
+
+def test_should_stamp_last_used_throttles_fresh_stamp():
+    """A stamp fresher than the interval must NOT trigger another UPDATE —
+    the whole point of the throttle is no write per request."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    assert should_stamp_last_used(now - _LAST_USED_STAMP_INTERVAL / 2, now) is False
+    # Boundary: exactly one interval old → stale, stamp again.
+    assert should_stamp_last_used(now - _LAST_USED_STAMP_INTERVAL, now) is True
 
 
 # ── Hashing edge cases (Issue 340a) ───────────────────────────────────────────

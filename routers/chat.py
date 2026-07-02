@@ -196,7 +196,9 @@ async def regenerate(
 
 
 @router.get("/conversations")
+@limiter.limit("120/minute", key_func=creator_key)
 async def list_conversations(
+    request: Request,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -225,7 +227,9 @@ async def list_conversations(
 
 
 @router.get("/conversations/{conversation_id}/messages")
+@limiter.limit("120/minute", key_func=creator_key)
 async def get_messages(
+    request: Request,
     conversation_id: str,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
@@ -265,7 +269,9 @@ async def get_messages(
     response_class=Response,
     response_model=None,
 )
+@limiter.limit("120/minute", key_func=creator_key)
 async def delete_conversation(
+    request: Request,
     conversation_id: str,
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),

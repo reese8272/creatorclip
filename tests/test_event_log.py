@@ -317,3 +317,71 @@ def test_record_event_write_failure_swallowed(monkeypatch) -> None:
             event="write_failure_test",
         )
     )
+
+
+# ── Issue 352: recursive redaction + fire-and-forget off the request hot path ──
+
+
+def test_redact_scrubs_nested_payload() -> None:
+    """Nested dicts/lists must not smuggle an email or token past redaction."""
+    out = _redact(
+        {
+            "user": {"email": "creator@example.com", "name": "reese"},
+            "attempts": [{"refresh_token": "tok-123", "ok": False}],
+            "count": 2,
+        }
+    )
+    assert out is not None
+    assert out["user"]["email"] == "[redacted]"
+    assert out["user"]["name"] == "reese"
+    assert out["attempts"][0]["refresh_token"] == "[redacted]"
+    assert out["attempts"][0]["ok"] is False
+    assert out["count"] == 2
+
+
+async def test_record_event_nowait_writes_off_path(monkeypatch) -> None:
+    """record_event_nowait returns immediately and the row lands via a background task."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+    monkeypatch.setattr(event_log, "_pending_tasks", set())  # isolate from other tests' loops
+
+    added_rows: list = []
+    session = MagicMock()
+    session.add = lambda row: added_rows.append(row)
+    session.commit = AsyncMock()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(event_log, "_get_sessionmaker", lambda: lambda: _CM())
+
+    event_log.record_event_nowait(source="backend", event="http_request", page="/x")
+    assert not added_rows, "the write must not happen synchronously on the caller's path"
+    assert len(event_log._pending_tasks) == 1
+    await asyncio.gather(*event_log._pending_tasks)
+    assert len(added_rows) == 1
+    assert not event_log._pending_tasks, "done callback must discard the finished task"
+
+
+async def test_record_event_nowait_drops_when_backlog_full(monkeypatch) -> None:
+    """Beyond _MAX_PENDING in-flight writes, events are dropped — never queued unbounded."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+    monkeypatch.setattr(event_log, "_pending_tasks", set())
+    monkeypatch.setattr(event_log, "_MAX_PENDING", 0)
+    write = AsyncMock()
+    monkeypatch.setattr(event_log, "record_event", write)
+
+    event_log.record_event_nowait(source="backend", event="http_request")
+    assert not event_log._pending_tasks
+    write.assert_not_called()
+
+
+def test_record_event_nowait_noop_without_running_loop(monkeypatch) -> None:
+    """A sync caller with no event loop must not crash — the event is dropped."""
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+    monkeypatch.setattr(event_log, "_pending_tasks", set())
+    event_log.record_event_nowait(source="backend", event="http_request")
+    assert not event_log._pending_tasks

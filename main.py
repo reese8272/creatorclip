@@ -343,9 +343,11 @@ app.add_middleware(
 # inner) the correlation id is already bound when it runs; the creator id is
 # read after call_next, by which point the auth dependency has stashed it on
 # request.state. Static assets, the SPA shell, health/metrics probes, and the
-# activity/logs endpoints themselves are skipped as noise/recursion. record_event
-# is best-effort (never raises); it is awaited so reads are read-after-write
-# consistent — a high-throughput async queue is the documented scale path.
+# activity/logs endpoints themselves are skipped as noise/recursion. The write is
+# fire-and-forget via record_event_nowait (Issue 352): best-effort, bounded
+# in-flight, off the request hot path — a slow logs DB never adds latency to or
+# starves connections from real requests. /api/logs reads are eventually
+# consistent by design.
 _LOG_SKIP_PREFIXES = (
     "/static",
     "/app",
@@ -371,7 +373,7 @@ async def _log_request_events(request: Request, call_next):
         from auth import creator_id_from_cookie
 
         creator_id = getattr(request.state, "creator_id", None) or creator_id_from_cookie(request)
-        await event_log.record_event(
+        event_log.record_event_nowait(
             source="backend",
             event="http_request",
             creator_id=creator_id,

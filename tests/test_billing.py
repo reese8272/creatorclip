@@ -583,15 +583,19 @@ def test_creator_key_accepts_token_within_leeway(monkeypatch):
     assert _creator_key(request) == str(creator_id)
 
 
-def test_create_checkout_session_passes_idempotency_key():
-    """Issue 106 SEV2: Stripe checkout.sessions.create must receive the
-    client-supplied intent_id as the Idempotency-Key option. Without this,
-    a user double-click / router retry would create two Checkout sessions;
-    if both complete the user pays twice and the ledger grants twice.
+def test_create_checkout_session_passes_tenant_scoped_idempotency_key():
+    """Issue 106 SEV2 + Issue 352 Batch B: Stripe checkout.sessions.create must
+    receive a SERVER-DERIVED, tenant-scoped Idempotency-Key
+    (`checkout:{creator_id}:{intent_id}`), not the bare client-supplied
+    intent_id. Stripe idempotency keys are account-wide: a bare intent_id
+    replayed by another creator would return the FIRST creator's cached
+    checkout response. The creator_id prefix makes cross-tenant reuse
+    structurally impossible while still deduping double-clicks per creator.
     """
     from billing.stripe_client import create_checkout_session
 
     intent_id = "deadbeef-dead-4eef-bdea-dfeeddeadbee"
+    creator_id = str(uuid.uuid4())
 
     captured: dict = {}
 
@@ -608,7 +612,7 @@ def test_create_checkout_session_passes_idempotency_key():
         stripe_mock.checkout.sessions.create.side_effect = _capture
         url = create_checkout_session(
             pack_id="creator",
-            creator_id=str(uuid.uuid4()),
+            creator_id=creator_id,
             stripe_customer_id=None,
             success_url="http://x/ok",
             cancel_url="http://x/no",
@@ -616,16 +620,18 @@ def test_create_checkout_session_passes_idempotency_key():
         )
 
     assert url == "https://checkout.stripe.com/c/pay/xyz"
-    assert captured["kwargs"].get("options") == {"idempotency_key": intent_id}, (
-        f"Stripe must receive options={{'idempotency_key': {intent_id!r}}}; "
+    expected_key = f"checkout:{creator_id}:{intent_id}"
+    assert len(expected_key) <= 255  # Stripe's documented key-length limit
+    assert captured["kwargs"].get("options") == {"idempotency_key": expected_key}, (
+        f"Stripe must receive options={{'idempotency_key': {expected_key!r}}}; "
         f"got {captured['kwargs']!r}"
     )
 
 
 def test_create_checkout_session_rejects_malformed_intent_id():
-    """Server-side UUID-shape validation closes the vector where a client
-    sends a garbage string that happens to collide with another creator's
-    idempotency key. (Issue 106)
+    """Server-side UUID-shape validation keeps the derived Stripe key
+    well-formed and bounded. (Issue 106; tenant isolation itself comes from
+    the creator_id prefix — Issue 352 Batch B.)
     """
     from billing.stripe_client import create_checkout_session
 

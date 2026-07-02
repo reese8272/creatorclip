@@ -6,7 +6,9 @@ and the clip's opening hook (transcript excerpt).
 
 Prompt structure (three system blocks):
   Block 1 — static instructions + UNTRUSTED_CONTENT_POLICY.
-  Block 2 — DNA brief (cache_control ttl=1h breakpoint).
+  Block 2 — DNA brief. cache_control (ttl=1h) attached only when the measured
+            static + DNA prefix clears Sonnet 4.6's 1024-token cacheable-prefix
+            floor — requires a populated DNA brief (Issues 315 / 352).
   Block 3 — per-clip context (channel label). Uncached.
 
 The clip transcript excerpt is UNTRUSTED content — wrapped via wrap_untrusted
@@ -23,7 +25,12 @@ import httpx
 from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
 
 from config import settings
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
+from knowledge.util import (
+    UNTRUSTED_CONTENT_POLICY,
+    dna_system_block,
+    extract_json_block,
+    wrap_untrusted,
+)
 from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
@@ -107,21 +114,18 @@ def _build_request(
 ) -> tuple[list[dict], list[dict]]:
     """Assemble (system_blocks, messages) for the per-clip caption-hook call.
 
-    Block 2 carries the cache breakpoint (ttl=1h): static + DNA prefix clears
-    Sonnet 4.6's 1024-token cacheable-prefix floor. Clip hook is JSON-wrapped
-    in the user turn to prevent prompt-injection break-out. (Issue 323 / 218)
+    Block 2 carries the cache breakpoint (ttl=1h) only when the measured static +
+    DNA prefix clears Sonnet 4.6's 1024-token cacheable-prefix floor — which
+    requires a populated DNA brief. Clip hook is JSON-wrapped in the user turn to
+    prevent prompt-injection break-out. (Issues 323 / 218 / 315 / 352)
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
 
     system: list[dict] = [
         # Block 1: static instructions — byte-identical across all calls.
         {"type": "text", "text": _SYSTEM_INSTRUCTIONS},
-        # Block 2: DNA brief — cached per-creator for 1h.
-        {
-            "type": "text",
-            "text": f"CREATOR DNA PROFILE:\n{dna_text}",
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        },
+        # Block 2: DNA brief — 1h cache marker gated on the measured prefix floor.
+        dna_system_block(_SYSTEM_INSTRUCTIONS, dna_text),
         # Block 3: per-clip factual label — uncached.
         {"type": "text", "text": f"CHANNEL: {channel_title}"},
     ]

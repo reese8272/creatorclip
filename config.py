@@ -333,6 +333,14 @@ class Settings(BaseSettings):
     # render-env tests.
     REFRAME_SAMPLE_FPS: float = 5.0
 
+    # Absolute path to a MediaPipe Tasks-compatible BlazeFace model asset
+    # (hub `blaze_face_short_range.tflite` or a `.task` bundle). The Tasks
+    # FaceDetector rejects the legacy Solutions .tflite bundled inside the
+    # mediapipe package, so the render image ships the hub asset (Dockerfile)
+    # and points this at it. Empty = try the package's own .task bundle, else
+    # fall back to frame-center. Ignored when ACTIVE_SPEAKER_REFRAME_ENABLED=false.
+    MEDIAPIPE_FACE_MODEL_PATH: str = ""
+
     CLIPS_PER_VIDEO_DEFAULT: int = 8
     # Auto-render generated clips the moment clip generation finishes, so the
     # Review queue is watch-ready with zero manual steps (the upload already
@@ -417,6 +425,13 @@ class Settings(BaseSettings):
     # cost is ~10-60 units/creator (catalog list + per-video metadata + reports),
     # so 300 leaves wide headroom while capping pathological fan-out.
     YOUTUBE_QUOTA_PER_CREATOR_REFRESH_UNITS: int = 300
+    # videos.insert daily CALL budget (Issue 352 Batch D). Since Google's
+    # 2026-06-01 API update, videos.insert bills to its OWN ~100-calls/day
+    # bucket at 1 call each — NOT 100 units of the shared 10k read pool
+    # (developers.google.com/youtube/v3/determine_quota_cost, verified
+    # 2026-07-02). Tracked in a dedicated Redis day-counter; Google's own
+    # quotaExceeded 403 remains the hard enforcer.
+    YOUTUBE_QUOTA_INSERT_DAILY_CALLS: int = 100
     # TTL (seconds) for the Redis-backed ETag/body cache used for conditional
     # YouTube Data API GETs (Issue 260). A cached 304 (If-None-Match match)
     # returns the stored body and spends NO quota — the measurable quota-unit

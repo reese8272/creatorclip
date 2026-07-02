@@ -9,7 +9,8 @@ from typing import Any
 
 import voyageai
 from sqlalchemy.ext.asyncio import AsyncSession
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from voyageai.error import APIConnectionError, RateLimitError, ServiceUnavailableError, Timeout
 
 from config import settings
 from models import DnaEmbedding, DnaEmbeddingKind
@@ -28,7 +29,19 @@ def _voyage() -> voyageai.Client:
     return _VOYAGE
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+# Retry ONLY transient Voyage failures. voyageai 0.3.2's own client retries exactly
+# RateLimitError / ServiceUnavailableError / Timeout (voyageai/client.py); we add
+# APIConnectionError (network-level drop, also transient). Permanent errors —
+# AuthenticationError, InvalidRequestError, MalformedRequestError, APIError — surface
+# immediately instead of burning 3 attempts on a doomed request. (Issue 352 Batch J)
+_TRANSIENT_VOYAGE_ERRORS = (RateLimitError, ServiceUnavailableError, Timeout, APIConnectionError)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(_TRANSIENT_VOYAGE_ERRORS),
+)
 def _embed(texts: list[str], model: str, input_type: str) -> Any:
     # Voyage SDK returns a result object with `.embeddings: list[list[float]]`
     # — typed loosely as Any here so a Voyage SDK rename surfaces at the

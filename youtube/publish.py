@@ -83,16 +83,27 @@ def _offset_from_range(range_header: str | None, fallback: int) -> int:
     return fallback
 
 
-async def _query_offset(session_uri: str, total_bytes: int) -> int:
-    """Ask the session how many bytes it has received, to resume after a failure."""
+async def _query_offset(session_uri: str, total_bytes: int) -> tuple[int, str | None]:
+    """Ask the session how many bytes it has received, to resume after a failure.
+
+    Returns ``(offset, video_id)``. A 200/201 status-query response means the
+    upload actually COMPLETED despite the failed chunk PUT — the body carries
+    the created video resource, so its id is returned and the caller reports
+    success. Discarding it (the pre-Issue-352 behavior) misreported a finished
+    upload as failed, and the Celery retry re-uploaded a duplicate video.
+    """
     resp = await _http.client().put(
         session_uri,
         headers={"Content-Range": f"bytes */{total_bytes}", "Content-Length": "0"},
     )
     if resp.status_code in (200, 201):
-        return total_bytes
+        try:
+            video_id = resp.json().get("id")
+        except ValueError:
+            video_id = None
+        return total_bytes, video_id
     if resp.status_code == 308:
-        return _offset_from_range(resp.headers.get("Range"), 0)
+        return _offset_from_range(resp.headers.get("Range"), 0), None
     raise YouTubeUploadError(resp.status_code, "offset query failed")
 
 
@@ -141,7 +152,13 @@ async def upload_video(
                 if attempts > _MAX_RESUME_ATTEMPTS:
                     raise YouTubeUploadError(0, f"resume attempts exhausted: {exc}") from exc
                 logger.warning("upload chunk failed (%s) — resuming", exc)
-                offset = await _query_offset(session_uri, total)
+                offset, completed_id = await _query_offset(session_uri, total)
+                if completed_id:
+                    logger.info(
+                        "upload session already complete despite chunk error — video %s",
+                        completed_id,
+                    )
+                    return completed_id
                 continue
 
             if resp.status_code in (200, 201):
@@ -159,9 +176,19 @@ async def upload_video(
                 attempts += 1
                 if attempts > _MAX_RESUME_ATTEMPTS:
                     raise YouTubeUploadError(resp.status_code, "server errors exhausted resume")
-                offset = await _query_offset(session_uri, total)
+                offset, completed_id = await _query_offset(session_uri, total)
+                if completed_id:
+                    logger.info(
+                        "upload session already complete despite %d on chunk — video %s",
+                        resp.status_code,
+                        completed_id,
+                    )
+                    return completed_id
                 continue
             # 403 (audit/quota/forbidden), 400 (bad request) — permanent.
             raise YouTubeUploadError(resp.status_code, f"upload failed: {resp.text[:200]}")
 
-    raise YouTubeUploadError(0, "upload loop exited without completing")
+    # Ambiguous terminal state: the session reports all bytes received but no
+    # video id was ever returned. Permanent (never retried) — a blind retry
+    # here is exactly the duplicate-upload path this guards against.
+    raise YouTubeUploadError(0, "upload completed without a video id — not retrying")

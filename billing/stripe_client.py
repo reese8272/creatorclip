@@ -5,13 +5,17 @@ Uses Stripe Checkout (one-time payment mode) — no subscriptions, no meters.
 Each pack is a line item with a price_data block; no pre-configured Stripe
 products are required.
 
-Issue 106 hardening:
-- `create_checkout_session` now accepts a client-supplied v4 UUID `intent_id`
-  and passes it as Stripe's `Idempotency-Key`. Double-click / router retry
-  within Stripe's 24h idempotency window dedupes to a single Checkout
-  session, closing the double-pay risk if a user happens to complete both
-  flows from a back-button / parallel-tab scenario. Pattern matches Stripe's
-  primary documented recommendation (client UUID in sessionStorage).
+Issue 106 hardening (key derivation revised in Issue 352 Batch B):
+- `create_checkout_session` accepts a client-supplied v4 UUID `intent_id` and
+  derives Stripe's `Idempotency-Key` server-side as
+  `checkout:{creator_id}:{intent_id}`. Double-click / router retry within
+  Stripe's 24h idempotency window dedupes to a single Checkout session,
+  closing the double-pay risk if a user happens to complete both flows from a
+  back-button / parallel-tab scenario. The creator_id prefix makes the key
+  tenant-scoped: Stripe idempotency keys are account-wide, so a bare client
+  UUID replayed by another creator would return the FIRST creator's cached
+  checkout response. Keys must unambiguously identify one operation per
+  account (≤255 chars) — https://docs.stripe.com/api/idempotent_requests.
 - `_STRIPE` client now carries an explicit `STRIPE_TIMEOUT_S` HTTP timeout
   (default 10s). The SDK default is ~80s; one stuck Stripe call would pin
   an `asyncio.to_thread` executor slot for that long.
@@ -49,17 +53,20 @@ def create_checkout_session(
     """Create a Stripe Checkout session for a minute pack. Returns the hosted URL.
 
     `intent_id` must be a v4 UUID generated client-side on /pricing page
-    load and persisted in sessionStorage. Used as the Stripe Idempotency-Key
-    so double-clicks or router retries within Stripe's 24h window collapse
-    to a single Checkout session.
+    load and persisted in sessionStorage. The Stripe Idempotency-Key is
+    derived server-side as ``checkout:{creator_id}:{intent_id}`` so
+    double-clicks or router retries within Stripe's 24h window collapse to a
+    single Checkout session, while a replay of the same intent_id under a
+    different creator can never surface another tenant's cached response.
     """
     pack = PURCHASABLE_PACKS.get(pack_id)
     if pack is None:
         raise ValueError(f"Unknown pack_id: {pack_id!r}")
 
-    # Validate UUID shape before passing to Stripe — closes the vector
-    # where a client sends a garbage string that happens to collide with
-    # another creator's idempotency key.
+    # Validate UUID shape before deriving the key — keeps the Stripe key
+    # well-formed and bounded. Cross-tenant isolation does NOT come from this
+    # check (a client could submit another creator's *valid* UUID); it comes
+    # from the server-side creator_id prefix in the derived key below.
     try:
         uuid.UUID(intent_id, version=4)
     except (ValueError, AttributeError, TypeError) as exc:
@@ -113,9 +120,13 @@ def create_checkout_session(
         params["automatic_tax"] = {"enabled": True}
         params["billing_address_collection"] = "required"
 
+    # Tenant-scoped key (Issue 352 Batch B): Stripe idempotency keys are
+    # account-wide, so the bare intent_id would let a replayed key from another
+    # creator return the first creator's cached checkout session. 82 chars —
+    # well under Stripe's 255-char limit.
     session = _STRIPE.checkout.sessions.create(
         params,
-        options={"idempotency_key": intent_id},
+        options={"idempotency_key": f"checkout:{creator_id}:{intent_id}"},
     )
     if session.url is None:
         raise RuntimeError(f"Stripe returned no checkout URL for session {session.id}")

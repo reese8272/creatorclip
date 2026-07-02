@@ -20,6 +20,8 @@ Issue 187 — Learn the Brand Kit from repeated choices.
 
 from __future__ import annotations
 
+from typing import Any
+
 # Ordered list of kit fields we inspect.  Order matters: the first field whose
 # count exceeds the threshold wins (avoids showing all diverging fields at once,
 # which would overwhelm the UI).
@@ -33,7 +35,30 @@ _KIT_FIELDS: tuple[str, ...] = (
 )
 
 
-def dominant_style(history: list[dict], field: str, threshold: int = 5) -> str | None:
+def _dominant(history: list[dict], field: str, threshold: int) -> tuple[Any, int] | None:
+    """Return ``(value, count)`` for the MOST FREQUENT value of ``field``.
+
+    Uses the argmax over occurrence counts — not the first value to clear the
+    threshold — so a newer majority choice beats an older minority one that
+    happens to appear earlier in the history. (Issue 352 Batch J)
+
+    Returns None when no value meets the threshold. Entries where the field is
+    absent are skipped; ties resolve to the first-seen value.
+    """
+    counts: dict[Any, int] = {}
+    for entry in history:
+        val = entry.get(field)
+        if val is None:
+            continue
+        counts[val] = counts.get(val, 0) + 1
+
+    if not counts:
+        return None
+    val, count = max(counts.items(), key=lambda kv: kv[1])
+    return (val, count) if count >= threshold else None
+
+
+def dominant_style(history: list[dict], field: str, threshold: int = 5) -> Any | None:
     """Return the field value that appears >= threshold times in history.
 
     Args:
@@ -42,20 +67,11 @@ def dominant_style(history: list[dict], field: str, threshold: int = 5) -> str |
         threshold: Minimum occurrence count to qualify as dominant.
 
     Returns:
-        The dominant value as a string/bool/None-as-str, or None when no value
-        meets the threshold.  Entries where the field is absent are skipped.
+        The most frequent value (string/bool), or None when no value meets the
+        threshold.  Entries where the field is absent are skipped.
     """
-    counts: dict[object, int] = {}
-    for entry in history:
-        val = entry.get(field)
-        if val is None:
-            continue
-        counts[val] = counts.get(val, 0) + 1
-
-    for val, count in counts.items():
-        if count >= threshold:
-            return val  # type: ignore[return-value]
-    return None
+    result = _dominant(history, field, threshold)
+    return result[0] if result is not None else None
 
 
 def style_suggestion(
@@ -74,15 +90,9 @@ def style_suggestion(
         threshold: Minimum occurrence count (config-driven: STYLE_LEARN_THRESHOLD).
     """
     for field in _KIT_FIELDS:
-        counts: dict[object, int] = {}
-        for entry in history:
-            val = entry.get(field)
-            if val is None:
-                continue
-            counts[val] = counts.get(val, 0) + 1
-
-        for val, count in counts.items():
-            if count >= threshold:
-                return {"field": field, "value": val, "count": count}
+        result = _dominant(history, field, threshold)
+        if result is not None:
+            val, count = result
+            return {"field": field, "value": val, "count": count}
 
     return None

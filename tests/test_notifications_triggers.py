@@ -382,30 +382,36 @@ class TestTrialEndingTrigger:
 
 
 class TestBalanceLowTrigger:
-    """deduct_for_video enqueues balance_low when the post-deduct balance crosses threshold."""
+    """deduct_for_video stages balance_low in session.info; the after_commit
+    listener enqueues it — never before the outer transaction commits
+    (Issue 244; post-commit enqueue Issue 352 Batch B)."""
 
-    @pytest.mark.asyncio
-    async def test_balance_low_enqueued_when_below_threshold(self) -> None:
-        """send_notification.delay is called with balance_low when remaining ≤ threshold."""
-        creator_uuid = _make_creator_uuid()
-        video_uuid = uuid.uuid4()
-
-        # Simulate: no existing deduction, successful deduct, remaining = 5 (below threshold 10)
+    @staticmethod
+    def _mock_session_with_remaining(remaining: int) -> AsyncMock:
         mock_session = AsyncMock()
         mock_session.scalar = AsyncMock(return_value=None)  # no existing deduction
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
+        mock_session.info = {}  # real dict — the staging area under test
 
-        # UPDATE … RETURNING returns remaining = 5
         mock_execute_result = MagicMock()
-        mock_execute_result.fetchone = MagicMock(return_value=(5,))
+        mock_execute_result.fetchone = MagicMock(return_value=(remaining,))
         mock_session.execute = AsyncMock(return_value=mock_execute_result)
 
-        # begin_nested context manager
         mock_savepoint = AsyncMock()
         mock_savepoint.__aenter__ = AsyncMock(return_value=mock_savepoint)
         mock_savepoint.__aexit__ = AsyncMock(return_value=False)
         mock_session.begin_nested = MagicMock(return_value=mock_savepoint)
+        return mock_session
+
+    @pytest.mark.asyncio
+    async def test_balance_low_staged_but_not_sent_before_commit(self) -> None:
+        """Below threshold: the pair is staged in session.info and NOTHING is
+        enqueued yet — enqueuing pre-commit could notify for a deduction a
+        later rollback undoes."""
+        creator_uuid = _make_creator_uuid()
+        video_uuid = uuid.uuid4()
+        mock_session = self._mock_session_with_remaining(5)
 
         with (
             patch("worker.tasks.send_notification") as mock_send_notif,
@@ -423,33 +429,63 @@ class TestBalanceLowTrigger:
             )
 
         assert result == 2  # 120s = 2 minutes
-        mock_send_notif.delay.assert_called_once_with(
-            str(creator_uuid),
-            "balance_low",
-            str(video_uuid),
-            {},
-        )
+        mock_send_notif.delay.assert_not_called()
+
+        from billing.ledger import _PENDING_BALANCE_LOW_KEY
+
+        assert mock_session.info[_PENDING_BALANCE_LOW_KEY] == [(str(creator_uuid), str(video_uuid))]
+
+    def test_balance_low_sent_exactly_once_after_real_commit(self) -> None:
+        """A real Session commit drains the staged entry through the
+        after_commit listener; a second commit does not re-send."""
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import Session
+
+        from billing.ledger import _PENDING_BALANCE_LOW_KEY
+
+        creator_id, video_id = str(uuid.uuid4()), str(uuid.uuid4())
+        engine = create_engine("sqlite://")
+        with (
+            patch("worker.tasks.send_notification") as mock_send_notif,
+            Session(engine) as session,
+        ):
+            session.execute(text("SELECT 1"))
+            session.info.setdefault(_PENDING_BALANCE_LOW_KEY, []).append((creator_id, video_id))
+            session.commit()
+            mock_send_notif.delay.assert_called_once_with(creator_id, "balance_low", video_id, {})
+
+            session.execute(text("SELECT 1"))
+            session.commit()
+            mock_send_notif.delay.assert_called_once()  # still exactly once
+
+    def test_balance_low_discarded_on_rollback(self) -> None:
+        """A rollback drops the staged entry — a later commit on the same
+        session must not send a notification for a deduction that never
+        persisted."""
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import Session
+
+        from billing.ledger import _PENDING_BALANCE_LOW_KEY
+
+        engine = create_engine("sqlite://")
+        with (
+            patch("worker.tasks.send_notification") as mock_send_notif,
+            Session(engine) as session,
+        ):
+            session.execute(text("SELECT 1"))  # real DBAPI txn so after_rollback fires
+            session.info.setdefault(_PENDING_BALANCE_LOW_KEY, []).append(("c", "v"))
+            session.rollback()
+            session.execute(text("SELECT 1"))
+            session.commit()
+
+        mock_send_notif.delay.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_balance_low_not_enqueued_when_above_threshold(self) -> None:
-        """No balance_low notification when remaining > threshold."""
+    async def test_balance_low_not_staged_when_above_threshold(self) -> None:
+        """Nothing staged (and nothing enqueued) when remaining > threshold."""
         creator_uuid = _make_creator_uuid()
         video_uuid = uuid.uuid4()
-
-        mock_session = AsyncMock()
-        mock_session.scalar = AsyncMock(return_value=None)
-        mock_session.add = MagicMock()
-        mock_session.flush = AsyncMock()
-
-        # remaining = 50 (well above threshold 10)
-        mock_execute_result = MagicMock()
-        mock_execute_result.fetchone = MagicMock(return_value=(50,))
-        mock_session.execute = AsyncMock(return_value=mock_execute_result)
-
-        mock_savepoint = AsyncMock()
-        mock_savepoint.__aenter__ = AsyncMock(return_value=mock_savepoint)
-        mock_savepoint.__aexit__ = AsyncMock(return_value=False)
-        mock_session.begin_nested = MagicMock(return_value=mock_savepoint)
+        mock_session = self._mock_session_with_remaining(50)
 
         with (
             patch("worker.tasks.send_notification") as mock_send_notif,
@@ -467,6 +503,7 @@ class TestBalanceLowTrigger:
             )
 
         mock_send_notif.delay.assert_not_called()
+        assert mock_session.info == {}
 
     @pytest.mark.asyncio
     async def test_balance_low_not_enqueued_on_idempotent_skip(self) -> None:

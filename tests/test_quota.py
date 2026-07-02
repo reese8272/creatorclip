@@ -188,6 +188,52 @@ def test_cost_constants_are_correct():
     assert COST_DATA_CAPTIONS == 50
 
 
+# ── Issue 352 Batch D: videos.insert dedicated daily call bucket ──────────────
+
+
+@pytest.mark.asyncio
+async def test_consume_insert_uses_separate_bucket_at_one_call_each():
+    """videos.insert bills 1 call to its OWN daily key — never 100 units of the
+    shared read pool (Google 2026-06-01 API update)."""
+    from config import settings
+    from youtube.quota import _insert_quota_key, consume_insert
+
+    mock_redis = _make_redis_mock(eval_return=1)
+    with patch("youtube.quota.get_redis_client", return_value=mock_redis):
+        await consume_insert()
+
+    args = mock_redis.eval.call_args.args
+    # script, numkeys, insert_key, creator_key(empty), cost, limit, ...
+    assert args[2] == _insert_quota_key()
+    assert args[2] != _quota_key()  # NOT the shared read-pool counter
+    assert args[3] == ""
+    assert int(args[4]) == 1  # 1 call, not 100 units
+    assert int(args[5]) == settings.YOUTUBE_QUOTA_INSERT_DAILY_CALLS
+
+
+@pytest.mark.asyncio
+async def test_consume_insert_exhausted_raises_quota_error():
+    from youtube.quota import consume_insert
+
+    mock_redis = _make_redis_mock(eval_return=-1)
+    with (
+        patch("youtube.quota.get_redis_client", return_value=mock_redis),
+        pytest.raises(QuotaExhaustedError),
+    ):
+        await consume_insert()
+
+
+def test_insert_quota_key_is_pt_dated():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from youtube.quota import _insert_quota_key
+
+    key = _insert_quota_key()
+    assert key.startswith("creatorclip:yt_quota:insert:")
+    assert datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d") in key
+
+
 # ── Issue 45: singleton tests ─────────────────────────────────────────────────
 
 

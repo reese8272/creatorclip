@@ -1,14 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
+import { subscribeToTaskStream, type StreamSubscription } from '@/lib/taskStream'
 import { Button } from '@/components/ui/button'
 import type { BrandKit, ReviewClip } from '@/types'
 
 const selectCls =
   'rounded-sm border border-strong bg-bg px-2 py-1 text-xs text-fg focus:border-accent focus:outline-none'
 
+// POST /clips/{id}/render response envelope (routers/clips.py RenderQueuedOut).
+interface RenderQueued {
+  task_id: string
+  status: string
+  stream_url: string | null
+}
+
+// The server rejects a 4th concurrent SSE stream with this named error event
+// (routers/tasks.py) — the render itself is still queued and running.
+const SSE_CAP_MESSAGE = 'too many open streams'
+
 // Issue 119 + 133 — animated caption styles baked into a re-render.
 // Issue 186 — defaults pre-populated from the creator's saved brand kit.
+// Issue 352 Batch K (carried from the 2026-06-24 e2e assessment): subscribe to
+// the render task's owner-stamped SSE returned by the POST, so the styled
+// render_uri surfaces via query invalidation instead of "come back in ~30s".
 export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
+  const queryClient = useQueryClient()
   const [subtitle, setSubtitle] = useState('')
   const [background, setBackground] = useState('')
   const [captionsEnabled, setCaptionsEnabled] = useState(false)
@@ -16,6 +33,33 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   const [denoise, setDenoise] = useState(false)
   const [aspect, setAspect] = useState('')
   const [status, setStatus] = useState('')
+  const [rendering, setRendering] = useState(false)
+
+  // Live render progress via the task SSE (DnaCard idiom: subscribe in the
+  // event handler, close on unmount).
+  const subRef = useRef<StreamSubscription | null>(null)
+  useEffect(() => () => subRef.current?.close(), [])
+
+  function follow(streamUrl: string) {
+    subRef.current?.close()
+    subRef.current = subscribeToTaskStream(streamUrl, {
+      onDone: () => {
+        setRendering(false)
+        setStatus('Styled render ready ✓')
+        // Editor + Review read the clip list under this key — refetch so the
+        // new render_uri (and render_status) surface without a manual refresh.
+        void queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
+      },
+      onError: (message) => {
+        setRendering(false)
+        setStatus(
+          message === SSE_CAP_MESSAGE
+            ? 'Render queued — live progress unavailable right now; check back in ~30s.'
+            : `Render failed — ${message || 'try again.'}`,
+        )
+      },
+    })
+  }
 
   // Pre-populate from the creator's brand kit on mount.
   useEffect(() => {
@@ -36,7 +80,7 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
   async function apply() {
     setStatus('Queueing styled render…')
     try {
-      await api(`/clips/${clip.id}/render`, {
+      const queued = await api<RenderQueued>(`/clips/${clip.id}/render`, {
         method: 'POST',
         body: {
           subtitle: subtitle || null,
@@ -47,7 +91,15 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
           aspect: aspect || null,
         },
       })
-      setStatus('Render queued — come back in ~30s.')
+      if (queued.stream_url) {
+        // Follow the render live; the SSE handlers land the result.
+        setStatus('Rendering…')
+        setRendering(true)
+        follow(queued.stream_url)
+      } else {
+        // Redis blip fail-open path: the job is queued but has no stream.
+        setStatus('Render queued — come back in ~30s.')
+      }
     } catch (e) {
       setStatus(e instanceof ApiError ? e.message : 'Render failed — try again.')
     }
@@ -105,7 +157,13 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
         Reduce background noise
         <input type="checkbox" checked={denoise} onChange={(e) => setDenoise(e.target.checked)} />
       </label>
-      <Button variant="secondary" size="sm" className="mt-1 w-fit" onClick={apply}>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="mt-1 w-fit"
+        onClick={apply}
+        disabled={rendering}
+      >
         Render with style
       </Button>
       {status && <div className="text-subtle">{status}</div>}

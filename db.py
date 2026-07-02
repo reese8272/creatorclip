@@ -1,3 +1,4 @@
+import threading
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import event, text
@@ -84,7 +85,7 @@ AdminSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
 )
 
 
-_recreate_in_progress = False
+_recreate_lock = threading.Lock()
 
 
 def recreate_engine() -> None:
@@ -94,33 +95,44 @@ def recreate_engine() -> None:
     Inherited connections are abandoned (close=False) so we don't close FDs
     the parent still holds.
 
-    Re-entry guard (Issue 123): concurrent Celery prefork signals can call
-    this simultaneously. The second caller returns immediately rather than
-    tearing down the pool the first caller is rebuilding.
+    Re-entry guard (Issue 123, hardened Issue 352): concurrent Celery prefork
+    signals can call this simultaneously. A non-blocking lock acquire makes
+    check-and-set atomic — the second caller returns immediately rather than
+    tearing down the pool the first caller is rebuilding. New objects are
+    built fully BEFORE the module globals are swapped and the old engines are
+    disposed only AFTER the swap, so a concurrent reader can never observe a
+    disposed engine or a half-built sessionmaker.
     """
-    global engine, AsyncSessionLocal, admin_engine, AdminSessionLocal, _recreate_in_progress
-    if _recreate_in_progress:
+    global engine, AsyncSessionLocal, admin_engine, AdminSessionLocal
+    if not _recreate_lock.acquire(blocking=False):
         return
-    _recreate_in_progress = True
     try:
-        engine.sync_engine.dispose(close=False)
-        admin_engine.sync_engine.dispose(close=False)
-        engine = _make_engine()
-        admin_engine = _make_admin_engine()
-        AsyncSessionLocal = async_sessionmaker(
-            engine,
+        new_engine = _make_engine()
+        new_admin_engine = _make_admin_engine()
+        new_factory = async_sessionmaker(
+            new_engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
-        AdminSessionLocal = async_sessionmaker(
-            admin_engine,
+        new_admin_factory = async_sessionmaker(
+            new_admin_engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
+        old_engine, old_admin_engine = engine, admin_engine
+        # Swap references only once fully built. Each assignment is atomic under
+        # the GIL, and readers go through the sessionmaker (which holds its own
+        # engine reference), so they always see a consistent engine/factory pair.
+        AsyncSessionLocal = new_factory
+        engine = new_engine
+        AdminSessionLocal = new_admin_factory
+        admin_engine = new_admin_engine
+        old_engine.sync_engine.dispose(close=False)
+        old_admin_engine.sync_engine.dispose(close=False)
         # Listener is class-level (registered on Session) — no re-registration
         # needed on engine rebind.
     finally:
-        _recreate_in_progress = False
+        _recreate_lock.release()
 
 
 async def dispose_engine() -> None:

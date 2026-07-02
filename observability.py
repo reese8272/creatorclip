@@ -510,9 +510,13 @@ class RequestIDMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             if self.metrics_enabled:
-                # Label by route template (not the raw path) to keep cardinality bounded.
+                # Label by route template (never the raw path) to keep cardinality
+                # bounded. When no route matched (404s, scanners minting random
+                # /<uuid> paths) a constant label is used instead of the raw path,
+                # so unmatched traffic cannot explode the Prometheus series
+                # (Issue 352).
                 route = scope.get("route")
-                path = getattr(route, "path", None) or scope.get("path", "unknown")
+                path = getattr(route, "path", None) or "__unmatched__"
                 HTTP_REQUEST_DURATION.labels(
                     method=scope.get("method", "-"),
                     path=path,

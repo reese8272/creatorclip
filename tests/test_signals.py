@@ -5,6 +5,7 @@ Audio tests use a synthetic WAV generated in-process — no binary fixtures comm
 Signal timeline tests use simple mock objects for RetentionCurve rows.
 """
 
+import shutil
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -242,6 +243,97 @@ def test_extract_audio_events_over_cap_truncates_and_warns(wav_with_burst, monke
     assert any("truncat" in r.message.lower() for r in caplog.records), (
         "expected a truncation WARNING log when audio exceeds the cap"
     )
+
+
+# ── absolute silence floor (Issue 352 Batch E) ────────────────────────────────
+
+
+@pytest.fixture
+def wav_near_silent(tmp_path):
+    """3-second uniformly near-silent WAV (~ -72 dBFS — below the -60 dBFS floor)."""
+    import scipy.io.wavfile as wf
+
+    sr = 16000
+    audio = (np.ones(sr * 3) * 8).astype(np.int16)  # 8/32767 ≈ -72 dBFS
+    path = tmp_path / "near_silent.wav"
+    wf.write(str(path), sr, audio)
+    return path
+
+
+def test_near_silent_file_is_silence_not_energy(wav_near_silent, caplog):
+    """A uniformly near-silent file must register as silence, with NO energy spikes.
+
+    Regression: RMS was normalized to the per-file peak, so this file "spiked" at
+    1.0 of its own noise floor and emitted zero silences — exactly backwards for
+    the dead-air-elimination principle. (Issue 352 Batch E)
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="ingestion.audio"):
+        result = extract_audio_events(wav_near_silent)
+    assert result["energy_spikes"] == [], "near-silent file must not emit energy spikes"
+    assert result["laughter"] == []
+    assert len(result["silences"]) == 1, "whole file should be one silence run"
+    assert any("silence floor" in r.message for r in caplog.records), (
+        "expected a WARNING that the file is effectively silent"
+    )
+
+
+def test_audible_content_next_to_loud_transient_not_silence(tmp_path):
+    """Audible content (~ -37 dBFS) must NOT be flagged silence just because the
+    same file contains a full-scale transient (old per-file-relative bug: quiet
+    speech at 0.02 of an explosion peak fell under the 0.03 relative threshold)."""
+    import scipy.io.wavfile as wf
+
+    sr = 16000
+    t = np.linspace(0, 1, sr)
+    quiet_speech = (0.02 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    loud = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+    audio = np.concatenate([quiet_speech, loud, quiet_speech])
+    path = tmp_path / "transient.wav"
+    wf.write(str(path), sr, (audio * 32767).astype(np.int16))
+
+    result = extract_audio_events(path)
+    assert result["silences"] == [], "audible content misflagged as silence"
+
+
+# ── generate_waveform_image: valid showwavespic invocation (Issue 352 Batch E) ─
+
+
+def test_generate_waveform_image_filter_has_no_invalid_bg_option(tmp_path, monkeypatch):
+    """`showwavespic` has NO bg_color option — the old filter string made ffmpeg
+    exit non-zero on every real call. The background must be composited via a
+    `color` source + `overlay` instead."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return MagicMock(returncode=0, stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        generate_waveform_image(tmp_path / "a.wav", tmp_path / "o.png")
+
+    filter_arg = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+    assert "bg_color" not in filter_arg, "invalid showwavespic option bg_color rebuilt"
+    assert "showwavespic" in filter_arg
+    assert "overlay" in filter_arg and "color=" in filter_arg
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")
+def test_generate_waveform_image_real_ffmpeg(tmp_path):
+    """Run the REAL ffmpeg — the previous invocation failed on every real call
+    while the mocked test stayed green over it."""
+    import scipy.io.wavfile as wf
+
+    sr = 8000
+    t = np.linspace(0, 0.2, int(sr * 0.2))
+    tone = (np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
+    audio_path = tmp_path / "tone.wav"
+    wf.write(str(audio_path), sr, tone)
+
+    out = generate_waveform_image(audio_path, tmp_path / "wave.png", width=200, height=50)
+    assert out.exists() and out.stat().st_size > 0
 
 
 # ── generate_waveform_image: timeout scales with duration (Issue 334) ──────────

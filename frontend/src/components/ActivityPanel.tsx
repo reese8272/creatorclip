@@ -12,7 +12,7 @@
 // Accessibility: respects prefers-reduced-motion via matchMedia — enter/exit
 // transitions are gated on that query.
 
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -22,7 +22,7 @@ import {
   isCapExhausted,
   type TaskEntry,
 } from '@/stores/activeTasks'
-import { subscribeToTaskStream } from '@/lib/taskStream'
+import { subscribeToTaskStream, type StreamSubscription } from '@/lib/taskStream'
 import { sendActivity } from '@/lib/activity'
 import { api } from '@/lib/api'
 import type { NotificationItem, NotificationList } from '@/types'
@@ -59,16 +59,35 @@ function deepLinkHref(entry: TaskEntry): string {
 }
 
 // ── SSE subscription manager ──────────────────────────────────────────────────
-// For each task entry that has a streamUrl and is not yet subscribed, open an
-// EventSource (if the cap allows). Cleanup closes all open connections.
+// For each task entry that has a streamUrl and no open connection yet, open an
+// EventSource (if the cap allows). Open connections live in a ref keyed by
+// taskId — NOT in the effect's closure — because the `upsert(subscribed: true)`
+// write below replaces the store map, which is this effect's dependency: a
+// closure-scoped cleanup would tear each EventSource down on the very re-render
+// its own upsert triggered, leaving the entry marked subscribed with no live
+// stream (Issue 352 Batch K, confirming the 2026-07-01 assessment F4). The
+// effect instead diffs the ref against the map: it opens missing subscriptions
+// and closes only those whose task is gone or settled; unmount closes all.
 
 function useTaskSubscriptions(tasks: Map<string, TaskEntry>): void {
-  useEffect(() => {
-    const closers: Array<() => void> = []
+  const subsRef = useRef<Map<string, StreamSubscription>>(new Map())
 
+  useEffect(() => {
+    const subs = subsRef.current
+
+    // Close connections whose task left the store or reached a terminal phase.
+    for (const [taskId, sub] of subs) {
+      const entry = tasks.get(taskId)
+      if (!entry || entry.phase === 'done' || entry.phase === 'error') {
+        sub.close()
+        subs.delete(taskId)
+      }
+    }
+
+    // Open connections for live entries that need one.
     for (const entry of tasks.values()) {
       if (!entry.streamUrl) continue
-      if (entry.subscribed) continue
+      if (subs.has(entry.taskId)) continue
       if (entry.phase === 'done' || entry.phase === 'error') continue
       if (isCapExhausted()) continue
 
@@ -87,15 +106,20 @@ function useTaskSubscriptions(tasks: Map<string, TaskEntry>): void {
         },
       })
 
-      closers.push(() => sub.close())
-    }
-
-    return () => {
-      closers.forEach((fn) => fn())
+      subs.set(entry.taskId, sub)
     }
     // Re-run whenever the task map reference changes (store immutably replaces).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks])
+
+  // Close everything on unmount only (the panel is mounted app-wide in
+  // AppChrome, so this is effectively app teardown).
+  useEffect(() => {
+    const subs = subsRef.current
+    return () => {
+      subs.forEach((sub) => sub.close())
+      subs.clear()
+    }
+  }, [])
 }
 
 // ── Task row ─────────────────────────────────────────────────────────────────

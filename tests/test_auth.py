@@ -169,10 +169,12 @@ def test_build_authorization_url_includes_analytics_scope():
 
 
 def test_base_authorization_url_excludes_upload_scope():
-    """Minimum-necessary: the base login flow must NOT request youtube.upload."""
+    """Minimum-necessary: the base login flow must NOT request youtube.upload —
+    but it MUST set include_granted_scopes so a re-login returns the combined
+    grant instead of narrowing away a prior publish opt-in (Issue 352 Batch D)."""
     url = build_authorization_url("s")
     assert "youtube.upload" not in url
-    assert "include_granted_scopes" not in url
+    assert "include_granted_scopes=true" in url
 
 
 def test_publish_authorization_url_adds_upload_and_incremental_flag():
