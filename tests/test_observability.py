@@ -815,3 +815,51 @@ def test_sentry_init_is_noop_when_dsn_empty() -> None:
     with _mock.patch.dict(sys.modules, {"sentry_sdk": fake_sdk}):
         init_sentry(dsn="", environment="test", release="abc123")
     fake_sdk.init.assert_not_called()
+
+
+# ── Issue 352: recursive scrub_dict + bounded metric-label cardinality ─────────
+
+
+def test_scrub_dict_recursive_nested_payload() -> None:
+    """scrub_dict must redact sensitive keys inside nested dicts and lists, keep
+    benign nested values, and leave flat-dict behavior unchanged."""
+    from redact import _MAX_SCRUB_DEPTH, scrub_dict
+
+    out = scrub_dict(
+        {
+            "token": "top-secret",
+            "user": {"email": "a@b.com", "id": "u1", "auth": {"jwt": "xyz"}},
+            "events": [{"session": "s1", "kind": "click"}],
+            "plain": 7,
+        }
+    )
+    assert out["token"] == "[redacted]"
+    assert out["user"]["email"] == "[redacted]"
+    assert out["user"]["id"] == "u1"
+    assert out["user"]["auth"]["jwt"] == "[redacted]"
+    assert out["events"][0]["session"] == "[redacted]"
+    assert out["events"][0]["kind"] == "click"
+    assert out["plain"] == 7
+
+    # Depth bound: a payload nested past the cap is conservatively redacted wholesale.
+    deep: dict = {"leaf": "v"}
+    for _ in range(_MAX_SCRUB_DEPTH + 2):
+        deep = {"nested": deep}
+    node = scrub_dict(deep)
+    for _ in range(_MAX_SCRUB_DEPTH):
+        node = node["nested"]
+        if node == "[redacted]":
+            break
+    assert node == "[redacted]", "over-deep subtree must collapse to [redacted]"
+
+
+def test_middleware_unmatched_path_uses_bounded_metric_label(client: TestClient) -> None:
+    """404s (no matched route) must be labelled with the constant '__unmatched__',
+    never the raw path — a scanner minting /<uuid> paths must not explode the
+    Prometheus series (Issue 352)."""
+    raw = "/no-such-route/123e4567-e89b-12d3-a456-426614174000"
+    resp = client.get(raw)
+    assert resp.status_code == 404
+    scrape = client.get("/metrics").text
+    assert raw not in scrape, "raw unmatched path must never appear as a metric label"
+    assert "__unmatched__" in scrape

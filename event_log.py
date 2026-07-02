@@ -18,6 +18,7 @@ Celery worker) does not open a pool on the wrong event loop.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -33,12 +34,19 @@ from sqlalchemy.ext.asyncio import (
 
 from config import settings
 from models import EventLog
-from redact import _REDACTED, is_sensitive
+from redact import _REDACTED, is_sensitive, scrub_value
 
 logger = logging.getLogger(__name__)
 
 _MAX_KEYS = 20
 _MAX_STR_LEN = 500
+
+# Bound on fire-and-forget writes in flight (Issue 352). The logs engine pool is
+# pinned at pool_size=2/max_overflow=3 (Issue 347); pending tasks beyond the pool
+# queue on it, and beyond this cap new events are dropped — telemetry is
+# best-effort and must never back-pressure the request path.
+_MAX_PENDING = 20
+_pending_tasks: set[asyncio.Task[None]] = set()
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -60,7 +68,9 @@ def _redact(extra: dict[str, Any] | None) -> dict[str, Any] | None:
         elif isinstance(value, str):
             out[key] = value[:_MAX_STR_LEN]
         else:
-            out[key] = value
+            # Recursive scrub (Issue 352): nested dicts/lists must not smuggle
+            # an email/token past the key check above.
+            out[key] = scrub_value(value)
     return out
 
 
@@ -127,6 +137,57 @@ async def record_event(
         logger.warning("event_log.record_event failed (swallowed)", exc_info=True)
 
 
+def record_event_nowait(
+    *,
+    source: str,
+    event: str,
+    creator_id: uuid.UUID | str | None = None,
+    level: str = "info",
+    request_id: str | None = None,
+    page: str | None = None,
+    target: str | None = None,
+    status_code: int | None = None,
+    duration_ms: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Schedule record_event off the caller's hot path (Issue 352).
+
+    Fire-and-forget with bounded in-flight concurrency: at most _MAX_PENDING
+    writes may be pending; beyond that the event is dropped so a slow logs DB
+    can neither add latency to requests nor stampede the pinned logs pool.
+    Never raises. Requires a running event loop (drops the event otherwise).
+    """
+    if not settings.EVENT_LOG_DB_ENABLED:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # no loop (sync caller) — best-effort, drop
+        return
+    # Prune tasks scheduled on other (since-closed) loops — they can never
+    # complete here and would otherwise eat the backlog cap. In production
+    # there is a single loop, so this is a no-op.
+    _pending_tasks.difference_update({t for t in _pending_tasks if t.get_loop() is not loop})
+    if len(_pending_tasks) >= _MAX_PENDING:
+        logger.debug("event_log backlog full (%d pending); event dropped", len(_pending_tasks))
+        return
+    task = loop.create_task(
+        record_event(
+            source=source,
+            event=event,
+            creator_id=creator_id,
+            level=level,
+            request_id=request_id,
+            page=page,
+            target=target,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            extra=extra,
+        )
+    )
+    _pending_tasks.add(task)
+    task.add_done_callback(_pending_tasks.discard)
+
+
 async def purge_creator_events(creator_id: uuid.UUID | str) -> int:
     """Delete all telemetry rows for a creator (Issue 248 — right to erasure).
 
@@ -175,8 +236,18 @@ async def purge_stale_events(cutoff: datetime) -> int:
 
 
 async def dispose() -> None:
-    """Dispose the logs engine pool. Call on app shutdown."""
+    """Drain in-flight fire-and-forget writes, then dispose the logs engine pool.
+
+    Call on app shutdown. record_event never raises, so gather is safe; the
+    drain is bounded by _MAX_PENDING tasks. Only tasks on the current loop are
+    awaited — a task from another (closed) loop can never complete here.
+    """
     global _engine, _sessionmaker
+    loop = asyncio.get_running_loop()
+    drainable = [t for t in _pending_tasks if t.get_loop() is loop]
+    if drainable:
+        await asyncio.gather(*drainable, return_exceptions=True)
+    _pending_tasks.clear()
     if _engine is not None:
         await _engine.dispose()
         _engine = None
