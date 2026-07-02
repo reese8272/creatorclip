@@ -24,8 +24,14 @@ feature/<issue>  ──PR──►  staging  ──PR──►  main  ──auto
 1. Branch `feature/<issue>` off `staging`.
 2. Open a PR into `staging`. The `CI` workflow runs (lint, unit, integration, coverage,
    static-gates, docker). Merge when green.
-3. Verify on the staging stack (see `docs/STAGING_ACCESS.md`).
-4. Open a PR `staging → main`. Merge when green → auto-deploys.
+3. Verify on the staging stack (see `docs/STAGING_ACCESS.md`). For feature branches
+   this is the **manual** runbook. Since Issue 298 the same stack is ALSO exercised
+   **automatically** on every prod deploy: `deploy.yml`'s `deploy-staging` gate deploys
+   the exact `sha-` image under test to the persistent (data-bearing) staging DB, runs
+   in-container migrations + the core smoke, and blocks the prod job on failure — so
+   promotion no longer rests on the manual step alone.
+4. Open a PR `staging → main`. Merge when green → auto-deploys (staging gate first,
+   then prod; break-glass via `workflow_dispatch` with `skip_staging=true`).
 
 Keep `staging` fast-forward-able from `main`: after any direct hotfix to `main`, sync
 `staging` (`git push origin origin/main:staging`).

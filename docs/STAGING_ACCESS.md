@@ -13,6 +13,45 @@ healthy), built from branch `issue-139-142-sweep` under the `creatorclip:staging
 
 ---
 
+## Automated staging-parity gate (Issue 298)
+
+The manual runbook below is no longer the only consumer of this stack. On every prod
+deploy, `.github/workflows/deploy.yml` runs a **`deploy-staging` gate job** on the
+self-hosted runner BEFORE the prod `deploy` job:
+
+1. Resolves the **exact GHCR image under test** from the triggering Docker-publish run
+   (`ghcr.io/reese8272/creatorclip:sha-<7-char SHA>` — the `type=sha,prefix=sha-` tag
+   format; never `:latest`, which can race a concurrent push).
+2. Brings this file up as compose project **`ccstage`** with
+   `STAGING_IMAGE=<sha- image> … up -d --no-build --pull never`.
+3. Runs `alembic upgrade head` **in-container** against the **persistent** staging DB
+   and asserts `alembic current` == `alembic heads` (silent-no-op guard).
+4. Seeds fixtures (idempotent upsert) and runs the verified smoke below
+   (`llm_harness --flow core`).
+5. **Stops** `app`/`worker` but keeps `staging_postgres_data` — the volume's persistence
+   is the point: the next run migrates a **data-bearing** database, not a fresh one.
+   (Motivating incident 2026-07-02: CI's fresh-DB bootstrap passed while prod's
+   data-bearing DB failed the same migration.)
+
+The prod job declares `needs: deploy-staging`; break-glass is the `workflow_dispatch`
+input `skip_staging=true` (staging infra broken — never to bypass a failing migration).
+See `docs/DEPLOYMENT.md` → "Staging-parity gate".
+
+### Parity matrix (prod ⇄ staging)
+
+Enforced by `tests/test_ci_config.py::test_staging_prod_compose_parity` — update the
+test and this matrix together.
+
+| Component | prod (`docker-compose.prod.yml`) | staging (`docker-compose.staging.yml`) | Parity |
+|-----------|----------------------------------|----------------------------------------|--------|
+| app/worker image | `ghcr.io/reese8272/creatorclip:${IMAGE_TAG:-latest}` | `${STAGING_IMAGE:-creatorclip:staging}` | Gate injects the exact `sha-` image prod will run |
+| postgres | `pgvector/pgvector:pg16` | `pgvector/pgvector:pg16` | **MATCH** (test-enforced) |
+| redis | `redis:7-alpine` | `redis:7-alpine` | **MATCH** (test-enforced) |
+| pgbouncer | — (app connects direct) | `edoburu/pgbouncer:v1.25.2-p0` (transaction mode) | **Allowlisted staging-only inversion** — staging exercises the production-K8s topology (Issue 112) |
+| cloudflared / autoheal | present | absent | Prod-only edge/ops plumbing, not under test by the gate |
+
+---
+
 ## What's already in place (verified)
 
 - **SSH works.** `~/.ssh/config` has a `creatorclip-vm` alias → `root@147.182.136.107`

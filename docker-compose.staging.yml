@@ -1,4 +1,8 @@
-# Staging stack for Locust load testing (Issue 112).
+# Staging stack for Locust load testing (Issue 112) and the automated
+# staging-parity deploy gate (Issue 298 — deploy.yml `deploy-staging` runs this
+# stack as compose project `ccstage` with STAGING_IMAGE set to the exact GHCR
+# image under test; the staging_postgres_data volume persists between runs so
+# migrations are exercised against a DATA-BEARING database, not a fresh one).
 #
 # Runs an isolated copy of the app on port 8001 behind a real PgBouncer
 # (transaction-pooling mode) — the environment that production K8s will use.
@@ -56,10 +60,12 @@ services:
 
   # ── App (exposed on 8001 so prod on 8000 is untouched) ───────────────────
   app:
-    # Build from the local checkout under a staging-only tag. Prod and the old
-    # staging both run ghcr.io/.../creatorclip:latest, so we must NEVER reuse
-    # that tag here or a branch build would leak into a prod restart. (Issue 142)
-    image: creatorclip:staging
+    # ${STAGING_IMAGE:-creatorclip:staging}: the staging-parity gate in
+    # deploy.yml (Issue 298) injects the exact GHCR sha- image under test;
+    # manual/branch runs fall back to a local build under the staging-only tag.
+    # NEVER point this at :latest — prod shares that tag, so a branch build
+    # would leak into a prod restart. (Issue 142)
+    image: ${STAGING_IMAGE:-creatorclip:staging}
     build:
       context: .
     restart: unless-stopped
@@ -92,7 +98,7 @@ services:
 
   # ── Celery worker (reduced concurrency — staging, not prod scale) ─────────
   worker:
-    image: creatorclip:staging
+    image: ${STAGING_IMAGE:-creatorclip:staging}
     restart: unless-stopped
     env_file: .env
     environment:
