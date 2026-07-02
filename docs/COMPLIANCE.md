@@ -149,6 +149,12 @@ the blast radius of a token compromise.
   CEF 2025). Only the internal `creator_id` (pseudonymous once the creator row is gone) is
   retained as evidence-of-erasure. Pinned by `test_delete_account_writes_audit_log`.
 - Demographics data: aggregated payloads only; no individual viewer data is stored.
+- **Global Privacy Control (Issue 302):** the backend detects `Sec-GPC: 1` on every request
+  (`request.state.gpc` — detection only, never logged or persisted) and serves the
+  machine-readable declaration at `/.well-known/gpc.json` per the W3C GPC spec
+  (w3c.github.io/gpc). Because CreatorClip does not sell or share personal information
+  (no ad-tech, no cross-context behavioural advertising), a GPC opt-out is satisfied by
+  default; the Privacy Policy's CCPA section states this recognition explicitly.
 - **Sub-processors and Art. 30 record (Issue 251):** see `docs/SUBPROCESSORS.md` for the
   full sub-processor list (Anthropic, Voyage AI, Deepgram, Cloudflare R2, Stripe, Google),
   the personal data categories each processes, transfer mechanisms, and the DPA runbook.
