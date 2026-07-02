@@ -4,6 +4,23 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-02 — CI hardening: idempotency + mypy + async event-loop fixes merged to main
+
+**Branch** `fix/llm-idempotency-and-test-hardening` → merged via PR #39 (staging) and PR #40 (main)
+
+All 10 gating CI checks green. Two pre-existing infra failures (Playwright / visual regression — missing `libatk-1.0.so.0` on the runner; same failures existed on PR #38) are not caused by this branch and don't block merge.
+
+**CI fixes landed:**
+- `improvement/brief.py` — initialized `msg = None` before the streaming pause_turn loop and removed `# type: ignore[possibly-undefined]` (unused with pydantic mypy plugin since `stream_message` returns `tuple[Any, ...]`; `warn_unused_ignores=true` was making it an error)
+- `tests/test_issue_104.py` — converted two `get_current_creator` tests from `asyncio.run()` wrappers to `async def`; `asyncio.run()` was closing the event loop and causing `RuntimeError: Event loop is closed` in downstream test teardown
+- `tests/test_render.py` / `tests/test_reframe.py` — `pytest.importorskip("cv2")` / `@skipif` guard for missing `libGL.so.1` on CI runner
+- `tests/test_preference.py` / `tests/eval/test_efficacy.py` — `OSError` guard at call time for missing `libgomp.so.1` (lightgbm importable but `fit()` raises OSError)
+- `tests/test_health.py` — mock all uninvolved services in redis/storage isolation tests (postgres has no pool in unit lane)
+- `clip_engine/scoring.py` — explicit `None` guard on `dict.get()` chain avoids `Any|None` passed to `float()`
+- ruff format — 48 files reformatted (pre-existing violations hidden by prior ruff-check failures)
+
+---
+
 ## 2026-07-01 — Rung-1/2 verification: billing idempotency + pause_turn + test hardening
 
 **Branch** `main`
