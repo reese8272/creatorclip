@@ -153,6 +153,108 @@ async def test_runner_executes_tool_then_answers(_patch_runner):
     assert usage["output_tokens"] == 25  # summed across both round-trips
 
 
+async def test_runner_resumes_pause_turn_with_same_tools(_patch_runner):
+    """pause_turn (server-tool pause) resumes the turn — same tools, assistant
+    content re-sent — instead of being mistaken for a final answer (Issue 352)."""
+    from chat import runner
+
+    calls, monkeypatch = _patch_runner
+    scripted = [
+        (_msg("pause_turn", [_text_block("searching…")]), _usage(output_tokens=3)),
+        (_msg("end_turn", [_text_block("Done.")]), _usage(output_tokens=7)),
+    ]
+    seen_kwargs = []
+
+    def _fake_stream(client, task_id, **kwargs):
+        calls["stream"] += 1
+        seen_kwargs.append(kwargs)
+        return scripted.pop(0)
+
+    monkeypatch.setattr("chat.runner.stream_message", _fake_stream)
+
+    text, usage = await runner.run_chat_turn(
+        "task-p", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+    )
+    assert text == "Done."
+    assert calls["stream"] == 2
+    assert calls["tools"] == []  # no client-side tool executed for a server pause
+    # Resume round keeps the SAME tools and re-sends the assistant content.
+    assert seen_kwargs[0]["tools"] == seen_kwargs[1]["tools"]
+    assert seen_kwargs[1]["messages"][-1]["role"] == "assistant"
+    assert usage["output_tokens"] == 10  # both rounds summed
+
+
+async def test_runner_bounds_pause_turn_rounds(_patch_runner):
+    """A model that never leaves pause_turn cannot loop forever."""
+    from chat import runner
+
+    calls, monkeypatch = _patch_runner
+
+    def _always_pause(client, task_id, **kwargs):
+        calls["stream"] += 1
+        return _msg("pause_turn", [_text_block("still going…")]), _usage()
+
+    monkeypatch.setattr("chat.runner.stream_message", _always_pause)
+
+    text, _ = await runner.run_chat_turn(
+        "task-pb", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+    )
+    # Initial call + at most _MAX_PAUSE_ROUNDS resumes, then the loop bails.
+    assert calls["stream"] == runner._MAX_PAUSE_ROUNDS + 1
+    assert text == "still going…"
+
+
+async def test_runner_flags_max_tokens_truncation(_patch_runner):
+    """max_tokens truncation is surfaced in the turn metadata, not passed off as
+    a complete reply (Issue 352)."""
+    from chat import runner
+
+    calls, monkeypatch = _patch_runner
+
+    def _truncated(client, task_id, **kwargs):
+        calls["stream"] += 1
+        return _msg("max_tokens", [_text_block("Half an ans")]), _usage(output_tokens=1500)
+
+    monkeypatch.setattr("chat.runner.stream_message", _truncated)
+
+    text, usage = await runner.run_chat_turn(
+        "task-t", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+    )
+    assert text == "Half an ans"
+    assert usage["truncated"] == 1
+
+
+async def test_runner_records_usage_against_chat_model(_patch_runner):
+    """Cost attribution: usage is logged against ANTHROPIC_MODEL_CHAT (the model
+    actually invoked), not the generic ANTHROPIC_MODEL default (Issue 352)."""
+    from chat import runner
+    from config import settings
+
+    calls, monkeypatch = _patch_runner
+
+    def _answer(client, task_id, **kwargs):
+        calls["stream"] += 1
+        return (
+            _msg("end_turn", [_text_block("hi")]),
+            _usage(input_tokens=11, output_tokens=7, cache_read=3, cache_creation=2),
+        )
+
+    monkeypatch.setattr("chat.runner.stream_message", _answer)
+    recorded = {}
+
+    def _fake_record(**kwargs):
+        recorded.update(kwargs)
+
+    monkeypatch.setattr("chat.runner.record_llm_tokens", _fake_record)
+
+    await runner.run_chat_turn(
+        "task-m", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+    )
+    assert recorded["model"] == settings.ANTHROPIC_MODEL_CHAT
+    assert recorded["cache_read_tokens"] == 3
+    assert recorded["cache_creation_tokens"] == 2
+
+
 async def test_runner_caps_tool_iterations(_patch_runner):
     from chat import runner
     from config import settings
