@@ -4,6 +4,7 @@ Unit tests for clip_engine/render.py.
 ffmpeg / ffprobe / cv2 calls are patched — no video files needed.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,8 +20,11 @@ from clip_engine.render import (
     _measure_loudnorm_filter,
     _parse_loudnorm_stats,
     _run,
+    build_summary_filtergraph,
+    build_summary_render_cmd,
     render_cleaned_clip_file,
     render_clip_file,
+    render_summary_file,
 )
 
 # A representative loudnorm JSON block as printed to stderr by
@@ -936,3 +940,156 @@ def test_reframe_flag_enabled_sendcmd_file_cleaned_up(tmp_path):
     # Every .sendcmd file written must have been cleaned up.
     for p in written_paths:
         assert not p.exists(), f"sendcmd temp file not cleaned up: {p}"
+
+
+# ── stream-VOD recap render (Issue 191) ───────────────────────────────────────
+
+_RECAP_SEGMENTS = [(10.0, 25.0), (100.0, 130.0), (500.0, 520.0)]
+
+
+def test_build_summary_filtergraph_shape():
+    """Three segments → 3 trim/atrim pairs, per-segment 16:9 scale + video fades
+    + splice afades, concatenated with concat=n=3:v=1:a=1."""
+    script, audio_out = build_summary_filtergraph(_RECAP_SEGMENTS)
+
+    assert script.count("[0:v]trim=") == 3
+    assert script.count("[0:a]atrim=") == 3
+    assert script.count(",setpts=PTS-STARTPTS") == 3
+    assert script.count(",asetpts=PTS-STARTPTS") == 3
+    assert script.count("scale=1920:1080") == 3  # per-segment 16:9 preset
+    assert script.count("afade=t=in") == 3 and script.count("afade=t=out") == 3
+    assert script.count("fade=t=in") == 6  # 3 video + 3 audio (afade contains 'fade')
+    assert "[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[outv][outa]" in script
+    assert audio_out == "[outa]"  # no loudnorm → raw concat audio is mapped
+
+
+def test_build_summary_filtergraph_chains_loudnorm_after_concat():
+    measured = "loudnorm=I=-14:TP=-1.5:LRA=11:measured_I=-20.0:linear=true"
+    script, audio_out = build_summary_filtergraph(_RECAP_SEGMENTS, measured)
+
+    concat_at = script.index("concat=n=3:v=1:a=1")
+    loudnorm_at = script.index(f";[outa]{measured}[outaln]")
+    assert loudnorm_at > concat_at, "loudnorm must chain AFTER the concat"
+    assert audio_out == "[outaln]"
+
+
+def test_build_summary_render_cmd_single_input_script_graph(tmp_path):
+    cmd = build_summary_render_cmd(
+        Path("/abs/src.mp4"), tmp_path / "g.filter", tmp_path / "out.mp4", "[outaln]"
+    )
+    assert cmd.count("-i") == 1  # single-input trim graph (whole-VOD decode)
+    assert "-filter_complex_script" in cmd  # never inline args (OS arg limits)
+    assert "-filter_complex" not in cmd
+    assert cmd[cmd.index("-map") + 1] == "[outv]"
+    assert "[outaln]" in cmd
+
+
+def test_render_summary_file_writes_script_and_maps_normalized_audio(tmp_path):
+    """House mocked-subprocess pattern: capture the -filter_complex_script content
+    and assert the render maps the loudnorm-normalized audio label."""
+    captured = {}
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        captured["cmd"] = cmd
+        captured["script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+
+    measured = "loudnorm=I=-14:TP=-1.5:LRA=11:measured_I=-20.0:linear=true"
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=measured),
+    ):
+        render_summary_file(
+            source_path=Path("/fake/vod.mp4"),
+            segments=[(5.0, 15.0), (60.0, 90.0)],
+            out_path=tmp_path / "recap.mp4",
+            timeout_s=120.0,
+        )
+
+    script = captured["script"]
+    assert "concat=n=2:v=1:a=1[outv][outa]" in script
+    assert script.count("scale=1920:1080") == 2
+    assert f";[outa]{measured}[outaln]" in script
+    assert "[outaln]" in captured["cmd"]
+    assert not (tmp_path / "recap.filter").exists(), "filter script must be cleaned up"
+
+
+def test_render_summary_file_sorts_segments_chronologically(tmp_path):
+    captured = {}
+
+    def _fake_run(cmd, label, timeout_s=120.0):
+        captured["script"] = Path(cmd[cmd.index("-filter_complex_script") + 1]).read_text()
+
+    with (
+        patch("clip_engine.render._run", _fake_run),
+        patch("clip_engine.render._measure_loudnorm_filter", return_value=None),
+    ):
+        render_summary_file(
+            source_path=Path("/fake/vod.mp4"),
+            segments=[(60.0, 90.0), (5.0, 15.0)],  # shuffled on purpose
+            out_path=tmp_path / "recap.mp4",
+            timeout_s=120.0,
+        )
+
+    assert "[0:v]trim=start=5.000" in captured["script"].splitlines()[0]
+
+
+@pytest.mark.parametrize("segments", [[], [(10.0, 10.0)], [(-1.0, 5.0)]])
+def test_render_summary_file_rejects_bad_segments(tmp_path, segments):
+    with pytest.raises(ValueError):
+        render_summary_file(Path("/fake/vod.mp4"), segments, tmp_path / "recap.mp4", 120.0)
+
+
+# Real-ffmpeg smoke (render-env bonus): only when ffmpeg + ffprobe are installed.
+_FFMPEG_AVAILABLE = bool(shutil.which("ffmpeg")) and bool(shutil.which("ffprobe"))
+
+
+@pytest.mark.skipif(not _FFMPEG_AVAILABLE, reason="ffmpeg/ffprobe not installed")
+def test_render_summary_file_real_ffmpeg_smoke(tmp_path):
+    """Tiny synthetic 2-segment source → stitched recap exists and is 1920x1080."""
+    src = tmp_path / "vod.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=4:size=320x240:rate=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            str(src),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
+
+    out = tmp_path / "recap.mp4"
+    render_summary_file(src, [(0.5, 1.5), (2.0, 3.0)], out, timeout_s=120.0)
+
+    assert out.exists() and out.stat().st_size > 0
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert probe.stdout.strip() == "1920,1080"

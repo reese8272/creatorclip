@@ -31,11 +31,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from chat.prompt import build_system
 from chat.tools import TOOLS, execute_tool
 from config import settings
-from observability import record_llm_tokens
+from observability import record_llm_tokens, warn_if_truncated
 from worker.anthropic_stream import stream_message
 from worker.progress import aemit
 
 logger = logging.getLogger(__name__)
+
+# Bound on server-tool pause resumes (stop_reason == "pause_turn") per tool
+# round — mirrors improvement/brief.py's _MAX_SEARCH_ROUNDS (Issue 350).
+_MAX_PAUSE_ROUNDS = 5
 
 # Module-level singleton (Issue 37 lifecycle rule). Mirrors analysis/brief.py.
 _ANTHROPIC = Anthropic(
@@ -61,11 +65,19 @@ async def run_chat_turn(
 
     ``history`` is the conversation as Anthropic message params, ending with the
     new user message. Returns ``(final_text, usage)`` where usage sums every
-    round-trip in the turn.
+    round-trip in the turn; ``usage["truncated"]`` is 1 when the final answer was
+    cut off at ``max_tokens`` (surfaced honestly rather than passed off as a
+    complete reply).
     """
     system = build_system(channel_title)
     messages = list(history)
-    total = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_creation": 0}
+    total = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+        "truncated": 0,
+    }
     final_text = ""
 
     max_iters = settings.CHAT_MAX_TOOL_ITERATIONS
@@ -75,40 +87,59 @@ async def run_chat_turn(
         # The final allowed round forces a text answer (no tools) so the loop
         # can't run past the cap with a dangling tool_use.
         tools = None if i == max_iters else TOOLS
-        try:
-            message, usage = await asyncio.to_thread(
-                stream_message,
-                client,
-                task_id,
-                model=settings.ANTHROPIC_MODEL_CHAT,
-                max_tokens=settings.CHAT_MAX_TOKENS,
-                system=system,
-                messages=messages,
-                tools=tools,
-            )
-        except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-            logger.error(
-                "chat_turn LLM error creator=%s round=%d exc_type=%s",
+        message: Any = None
+        # pause_turn: the server paused a long-running turn (server-side tools).
+        # Resume by re-sending the assistant content with the SAME tools, bounded
+        # — mirrors the shipped pattern in improvement/brief.py (Issue 350).
+        for _pause_round in range(_MAX_PAUSE_ROUNDS + 1):
+            try:
+                message, usage = await asyncio.to_thread(
+                    stream_message,
+                    client,
+                    task_id,
+                    model=settings.ANTHROPIC_MODEL_CHAT,
+                    max_tokens=settings.CHAT_MAX_TOKENS,
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                )
+            except (RateLimitError, APIStatusError, APIConnectionError) as exc:
+                logger.error(
+                    "chat_turn LLM error creator=%s round=%d exc_type=%s",
+                    creator_id,
+                    i,
+                    type(exc).__name__,
+                )
+                from verbose import vlog
+
+                vlog(
+                    "chat_turn_error",
+                    creator_id=str(creator_id),
+                    task_id=task_id,
+                    round=i,
+                    exc_type=type(exc).__name__,
+                    error=repr(exc),
+                )
+                raise
+            for k in total:
+                total[k] += usage.get(k, 0)
+            if getattr(message, "stop_reason", None) != "pause_turn":
+                break
+            messages.append({"role": "assistant", "content": message.content})
+        else:
+            logger.warning(
+                "chat_turn hit max pause_turn rounds (%d) creator=%s",
+                _MAX_PAUSE_ROUNDS,
                 creator_id,
-                i,
-                type(exc).__name__,
             )
-            from verbose import vlog
 
-            vlog(
-                "chat_turn_error",
-                creator_id=str(creator_id),
-                task_id=task_id,
-                round=i,
-                exc_type=type(exc).__name__,
-                error=repr(exc),
-            )
-            raise
-        for k in total:
-            total[k] += usage.get(k, 0)
-
-        if getattr(message, "stop_reason", None) != "tool_use":
+        stop_reason = getattr(message, "stop_reason", None)
+        if stop_reason != "tool_use":
             final_text = _text_of(message)
+            if warn_if_truncated(settings.ANTHROPIC_MODEL_CHAT, stop_reason, task=task_id):
+                # Don't pretend the reply is complete — flag it in the turn
+                # metadata so callers can surface the truncation.
+                total["truncated"] = 1
             break
 
         # Persist the assistant's tool-use turn, then execute each tool scoped to
@@ -167,7 +198,7 @@ async def run_chat_turn(
 
     record_llm_tokens(
         provider="anthropic",
-        model=settings.ANTHROPIC_MODEL,
+        model=settings.ANTHROPIC_MODEL_CHAT,
         input_tokens=total["input_tokens"],
         output_tokens=total["output_tokens"],
         cache_read_tokens=total.get("cache_read", 0),

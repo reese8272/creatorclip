@@ -13,7 +13,7 @@ import contextlib
 import logging
 import tempfile
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +49,7 @@ from models import (
     RenderStatus,
     RetentionCurve,
     Signals,
+    Summary,
     Transcript,
     Video,
     VideoKind,
@@ -78,6 +79,52 @@ def _thumb_redis() -> aredis.Redis:
             socket_connect_timeout=2.0,
         )
     return _THUMB_REDIS
+
+
+async def _rollback_then_unlock(session: Any, lock_key: str) -> None:
+    """Roll back, then release the session-scoped advisory lock *lock_key*.
+
+    Shared ``finally`` epilogue for every ``pg_try_advisory_lock`` site in this
+    file. If the locked section left the session in a failed-transaction state
+    (e.g. a commit raised), the unlock ``execute`` would itself raise and the
+    connection would return to the pool with the advisory lock STILL HELD —
+    silently disabling that sweep until ``pool_recycle`` cycles the connection
+    (Issue 143). Rolling back first is a no-op on a clean session and guarantees
+    the unlock statement can run.
+    """
+    from sqlalchemy import text
+
+    await session.rollback()
+    await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+
+
+_KEYSET_BATCH_SIZE = 500
+
+
+async def _keyset_batches(
+    session: Any,
+    stmt: Any,
+    pk_col: Any,
+    batch_size: int = _KEYSET_BATCH_SIZE,
+) -> AsyncIterator[Sequence[Any]]:
+    """Yield ORM rows for *stmt* (a ``Select``) in primary-key keyset batches.
+
+    Bounds worker memory on otherwise-unbounded result sets (daily analytics
+    refresh, GDPR export): each round-trip fetches at most *batch_size* rows
+    ordered by *pk_col* and resumes strictly after the last-seen key. Clean ORM
+    instances are only weakly referenced by the session, so earlier batches are
+    released as soon as the caller drops them.
+    """
+    last: Any = None
+    while True:
+        q = stmt if last is None else stmt.where(pk_col > last)
+        rows = list((await session.execute(q.order_by(pk_col).limit(batch_size))).scalars())
+        if not rows:
+            return
+        yield rows
+        if len(rows) < batch_size:
+            return
+        last = getattr(rows[-1], pk_col.key)
 
 
 # ── Public entry points ───────────────────────────────────────────────────────
@@ -203,8 +250,21 @@ def ingest_video(self, video_id: str) -> str:
         run_async(_ingest_async(video_id))
     except SoftTimeLimitExceeded:
         # Soft limit means we've already burned ~50 min. Do NOT retry —
-        # the next delivery would time out again, wasting credits. Re-raise
+        # the next delivery would time out again, wasting credits. Mark failed
+        # so the UI shows an error instead of spinning forever, then re-raise
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
+        logger.warning(
+            "ingest_video soft-timeout for video %s (task %s) — terminal, not retrying",
+            video_id,
+            self.request.id,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Ingest timed out. Please try again.",
+            )
+        )
         raise
     except HTTPException as exc:
         if exc.status_code == 402:
@@ -291,7 +351,20 @@ def build_signals(self, video_id: str) -> str:
     try:
         run_async(_signals_async(video_id))
     except SoftTimeLimitExceeded:
-        # See ingest_video above — re-raise immediately to fire on_failure.
+        # See ingest_video above — mark failed (no perpetual "running" spinner),
+        # then re-raise immediately to fire on_failure without retry.
+        logger.warning(
+            "build_signals soft-timeout for video %s (task %s) — terminal, not retrying",
+            video_id,
+            self.request.id,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Signal analysis timed out. Please try again.",
+            )
+        )
         raise
     except Exception as exc:
         run_async(
@@ -902,7 +975,7 @@ async def _retrain_preference_async(creator_id: str) -> None:
                     # fails the retrain; the model version is already committed.
                     await _emit_preference_metrics(session, cid)
         finally:
-            await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+            await _rollback_then_unlock(session, lock_key)
 
 
 async def _emit_preference_metrics(session: Any, creator_id: uuid.UUID) -> None:
@@ -2115,7 +2188,7 @@ async def _sweep_scheduled_publications_async() -> None:
             await session.rollback()
             raise
         finally:
-            await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+            await _rollback_then_unlock(session, lock_key)
 
 
 # Minimum number of comparable published Shorts before we'll judge performed_well.
@@ -2271,15 +2344,7 @@ async def _poll_clip_outcomes_async() -> None:
                 # across the whole batch, and partial progress survives a mid-batch failure.
                 await session.commit()
         finally:
-            # Roll back first: if the body aborted (e.g. a per-creator commit raised),
-            # the session is in a failed-transaction state and the unlock execute would
-            # itself raise — silently *leaking* the session-level advisory lock and
-            # blocking every future poll on this pooled backend. Issue 143.
-            await session.rollback()
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "poll_clip_outcomes"},
-            )
+            await _rollback_then_unlock(session, "poll_clip_outcomes")
 
 
 async def _brand_kit_style(session: Any, creator_id: uuid.UUID) -> dict:
@@ -2558,10 +2623,7 @@ async def _purge_stale_source_media_async() -> None:
             # after signals ran (migration 0039). The loop skips defensive None.
             targets = result.all()
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "purge_stale_source_media"},
-            )
+            await _rollback_then_unlock(session, "purge_stale_source_media")
 
     if not targets:
         return
@@ -2693,10 +2755,7 @@ async def _purge_stale_youtube_analytics_async() -> None:
 
             await session.commit()
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "purge_stale_youtube_analytics"},
-            )
+            await _rollback_then_unlock(session, "purge_stale_youtube_analytics")
 
     total = deleted_metrics + deleted_curves + deleted_activity + deleted_demographics
     if total:
@@ -3203,9 +3262,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
                     fetched=fetched,
                 )
             finally:
-                await session.execute(
-                    text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key}
-                )
+                await _rollback_then_unlock(session, lock_key)
     except YouTubeAuthError:
         await _emit("error", stage="catalog_sync", message="YouTube token revoked; reconnect.")
         raise
@@ -3270,11 +3327,15 @@ async def _refresh_youtube_analytics_async() -> None:
                     # invisible to the pipeline until the next deploy. (Issue 87)
                     await sync_video_catalog(session, creator, access_token)
 
-                    videos_result = await session.execute(
-                        select(Video).where(Video.creator_id == creator.id)
-                    )
-                    for video in list(videos_result.scalars()):
-                        await sync_video_analytics(session, video, creator, access_token)
+                    # Keyset-paginated: one large channel must not load its whole
+                    # catalog into worker memory at once (Issue 352 Batch F).
+                    async for video_batch in _keyset_batches(
+                        session,
+                        select(Video).where(Video.creator_id == creator.id),
+                        Video.id,
+                    ):
+                        for video in video_batch:
+                            await sync_video_analytics(session, video, creator, access_token)
 
                     await sync_audience_data(session, creator, access_token)
                     creator.last_analytics_refreshed_at = datetime.now(UTC)
@@ -3321,10 +3382,7 @@ async def _refresh_youtube_analytics_async() -> None:
                     logger.warning("Analytics refresh failed for creator %s: %s", creator.id, exc)
                     await session.rollback()
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(hashtext(:k))"),
-                {"k": "refresh_youtube_analytics"},
-            )
+            await _rollback_then_unlock(session, "refresh_youtube_analytics")
 
 
 @celery.task(
@@ -3350,56 +3408,76 @@ def _row_to_dict(obj) -> dict:
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
 
-async def _collect_creator_export(session, creator) -> dict:
+async def _collect_creator_export(session: Any, creator: Creator) -> dict:
     """Gather every data class for one creator into a JSON-serializable dict.
 
     Strictly single-tenant: every query is scoped to this creator (directly via
-    ``creator_id`` or via the creator's own video/clip/conversation ids)."""
+    ``creator_id`` or via the creator's own video/clip/conversation ids).
+    Every table is read through ``_keyset_batches`` so a power user's history is
+    fetched in bounded batches — plain column dicts, never the whole ORM result
+    set at once (Issue 352 Batch F). Output shape is unchanged.
+    """
     from sqlalchemy import select
 
     cid = creator.id
 
-    async def _all(stmt) -> list[dict]:
-        return [_row_to_dict(r) for r in (await session.execute(stmt)).scalars().all()]
+    async def _all(stmt: Any, pk_col: Any) -> list[dict]:
+        out: list[dict] = []
+        async for batch in _keyset_batches(session, stmt, pk_col):
+            out.extend(_row_to_dict(r) for r in batch)
+        return out
 
-    videos = (await session.execute(select(Video).where(Video.creator_id == cid))).scalars().all()
-    video_ids = [v.id for v in videos]
-    clips = (await session.execute(select(Clip).where(Clip.creator_id == cid))).scalars().all()
-    clip_ids = [c.id for c in clips]
-    convos = (
-        (await session.execute(select(ChatConversation).where(ChatConversation.creator_id == cid)))
-        .scalars()
-        .all()
+    videos = await _all(select(Video).where(Video.creator_id == cid), Video.id)
+    video_ids = [v["id"] for v in videos]
+    clips = await _all(select(Clip).where(Clip.creator_id == cid), Clip.id)
+    convos = await _all(
+        select(ChatConversation).where(ChatConversation.creator_id == cid), ChatConversation.id
     )
-    convo_ids = [c.id for c in convos]
+    clip_ids = [c["id"] for c in clips]
+    convo_ids = [c["id"] for c in convos]
 
     return {
         "profile": _row_to_dict(creator),
-        "dna": await _all(select(CreatorDna).where(CreatorDna.creator_id == cid)),
-        "videos": [_row_to_dict(v) for v in videos],
+        "dna": await _all(select(CreatorDna).where(CreatorDna.creator_id == cid), CreatorDna.id),
+        "videos": videos,
         "video_metrics": (
-            await _all(select(VideoMetrics).where(VideoMetrics.video_id.in_(video_ids)))
+            await _all(
+                select(VideoMetrics).where(VideoMetrics.video_id.in_(video_ids)),
+                VideoMetrics.video_id,
+            )
             if video_ids
             else []
         ),
         # Clips reference their downloadable media via the authed endpoint (durable,
         # isolation-enforced) rather than an expiring presigned link.
-        "clips": [{**_row_to_dict(c), "download_path": f"/clips/{c.id}/download"} for c in clips],
-        "clip_feedback": await _all(select(ClipFeedback).where(ClipFeedback.creator_id == cid)),
+        "clips": [{**c, "download_path": f"/clips/{c['id']}/download"} for c in clips],
+        "clip_feedback": await _all(
+            select(ClipFeedback).where(ClipFeedback.creator_id == cid), ClipFeedback.id
+        ),
         "clip_outcomes": (
-            await _all(select(ClipOutcome).where(ClipOutcome.clip_id.in_(clip_ids)))
+            await _all(
+                select(ClipOutcome).where(ClipOutcome.clip_id.in_(clip_ids)), ClipOutcome.clip_id
+            )
             if clip_ids
             else []
         ),
-        "chat_conversations": [_row_to_dict(c) for c in convos],
+        "chat_conversations": convos,
         "chat_messages": (
-            await _all(select(ChatMessage).where(ChatMessage.conversation_id.in_(convo_ids)))
+            await _all(
+                select(ChatMessage).where(ChatMessage.conversation_id.in_(convo_ids)),
+                ChatMessage.id,
+            )
             if convo_ids
             else []
         ),
-        "billing_packs": await _all(select(MinutePack).where(MinutePack.creator_id == cid)),
+        "billing_packs": await _all(
+            select(MinutePack).where(MinutePack.creator_id == cid), MinutePack.id
+        ),
         "billing_deductions": (
-            await _all(select(MinuteDeduction).where(MinuteDeduction.video_id.in_(video_ids)))
+            await _all(
+                select(MinuteDeduction).where(MinuteDeduction.video_id.in_(video_ids)),
+                MinuteDeduction.id,
+            )
             if video_ids
             else []
         ),
@@ -4962,3 +5040,188 @@ def _build_inapp_notification(
         body=body,
         link_url=link_url,
     )
+
+
+# ── Stream-VOD recap render (Issue 191) ───────────────────────────────────────
+
+
+async def _creator_id_for_summary(summary_id: str) -> str | None:
+    """Return creator_id string for a summary, or None on any error."""
+    try:
+        async with db.AdminSessionLocal() as session:
+            summary = await session.get(Summary, uuid.UUID(summary_id))
+            return str(summary.creator_id) if summary else None
+    except Exception:
+        return None
+
+
+async def _set_summary_render_status(summary_id: str, status: RenderStatus) -> None:
+    async with db.AdminSessionLocal() as session:
+        summary = await session.get(Summary, uuid.UUID(summary_id))
+        if summary:
+            summary.render_status = status
+            await session.commit()
+
+
+@dataclass(frozen=True)
+class _SummaryRenderPlan:
+    """Source + segment timings snapshotted out of the DB session so it can
+    close before the multi-minute whole-VOD decode/encode/upload."""
+
+    source_uri: str
+    segments: list[tuple[float, float]]
+
+
+async def _load_summary_render_plan(summary_id: str) -> _SummaryRenderPlan | None:
+    """Lock the summary row, flip it to ``running``, and snapshot its plan.
+
+    Returns ``None`` (and emits the terminal ``done`` event) when the recap is
+    already rendered — the idempotent skip under at-least-once delivery.
+    ``with_for_update`` serializes concurrent redeliveries at the Postgres row
+    level so two deliveries cannot both pass the done-check and double-encode
+    (same contract as ``_load_clip_render_plan``).
+    """
+    from worker.progress import aemit
+
+    async with db.AdminSessionLocal() as session:
+        summary = await session.get(Summary, uuid.UUID(summary_id), with_for_update=True)
+        if not summary:
+            raise ValueError(f"Summary {summary_id} not found")
+        if summary.render_status == RenderStatus.done and summary.render_uri:
+            logger.info("Summary %s already rendered — skipping", summary_id)
+            await aemit(summary_id, "done", stage="render", message="Recap already rendered.")
+            return None
+        segments = [
+            (float(seg["start_s"]), float(seg["end_s"])) for seg in (summary.segments or [])
+        ]
+        if not segments:
+            raise ValueError(f"Summary {summary_id} has no segments — run selection first")
+        video = await session.get(Video, summary.video_id)
+        if not video or not video.source_uri:
+            # The 72h retention purge nulls source_uri after the render window
+            # (purge_stale_source_media). Actionable + creator-safe: no URI/path.
+            raise ValueError(
+                f"Source video for summary {summary_id} is no longer available "
+                "(retention window elapsed) — re-upload the video and regenerate the recap"
+            )
+        source_uri = video.source_uri
+        summary.render_status = RenderStatus.running
+        await session.commit()
+        return _SummaryRenderPlan(source_uri=source_uri, segments=segments)
+
+
+async def _render_summary_async(summary_id: str) -> None:
+    """Render + upload the 16:9 recap. Emits step events keyed by ``summary_id``
+    (the SSE stream key the UI subscribes to), mirroring ``_render_clip_async``:
+    render_start → download_source → ffmpeg_encode → upload_r2 → done."""
+    from clip_engine.render import render_summary_file
+    from worker.progress import aemit
+    from worker.storage import alocal_path, aupload_file
+
+    try:
+        await aemit(summary_id, "step", label="render_start", stage="render")
+        plan = await _load_summary_render_plan(summary_id)
+        if plan is None:  # already rendered — terminal done emitted by the loader
+            return
+        await aemit(summary_id, "step", label="download_source", stage="render")
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            out_path = Path(tmp.name)
+        try:
+            async with alocal_path(plan.source_uri) as src:
+                await aemit(
+                    summary_id,
+                    "step",
+                    label="ffmpeg_encode",
+                    stage="render",
+                    segment_count=len(plan.segments),
+                )
+                # Whole-VOD decode + encode in a worker thread so the event
+                # loop stays free (same pattern as _encode_and_upload_clip).
+                await asyncio.to_thread(
+                    render_summary_file,
+                    source_path=src,
+                    segments=plan.segments,
+                    out_path=out_path,
+                )
+            await aemit(summary_id, "step", label="upload_r2", stage="render")
+            render_uri = await aupload_file(out_path, f"summaries/{summary_id}.mp4")
+        finally:
+            out_path.unlink(missing_ok=True)
+
+        async with db.AdminSessionLocal() as session:
+            summary = await session.get(Summary, uuid.UUID(summary_id))
+            if summary:
+                summary.render_uri = render_uri
+                summary.render_status = RenderStatus.done
+                await session.commit()
+        logger.info("Summary %s rendered → %s", summary_id, render_uri)
+        await aemit(summary_id, "done", stage="render", message="Recap ready.")
+    except Exception as exc:
+        # Neutral message — whether render_summary retries depends on the error
+        # class; the summary's render_status is the source of truth the UI polls.
+        await aemit(
+            summary_id,
+            "error",
+            stage="render",
+            message="Recap render failed.",
+            exc_type=type(exc).__name__,
+        )
+        raise
+
+
+@celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.render_summary")
+def render_summary(self, summary_id: str) -> str:
+    """Render a stream-VOD recap to a 16:9 multi-segment concat mp4 (Issue 191).
+
+    Mirrors ``render_clip``'s classification: ``ValueError``/``FileNotFoundError``
+    (missing summary/segments, or the source purged by the 72h retention window)
+    are PERMANENT — mark failed, no retry. ``SoftTimeLimitExceeded`` is terminal.
+    Anything else (R2/network/ffmpeg blip) retries with backoff. Idempotent under
+    at-least-once redelivery: an already-rendered summary (``render_status=done``
+    + ``render_uri`` set) no-ops in ``_load_summary_render_plan``.
+    """
+    creator_id = run_async(_creator_id_for_summary(summary_id))
+    log_event(
+        "render_summary_started",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=summary_id,
+    )
+    try:
+        run_async(_render_summary_async(summary_id))
+    except (ValueError, FileNotFoundError) as exc:
+        # Permanent — retrying cannot conjure a missing summary/segments/source.
+        run_async(_set_summary_render_status(summary_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_summary").inc()
+        log_event(
+            "render_summary_failed_permanent",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=summary_id,
+            exc_type=type(exc).__name__,
+        )
+        raise
+    except SoftTimeLimitExceeded:
+        # Terminal — a retry of a soft-timed-out whole-VOD render would time out
+        # again, compounding wasted render minutes (same rationale as render_clip).
+        logger.warning(
+            "render_summary soft-timeout for summary %s (task %s) — terminal, not retrying",
+            summary_id,
+            self.request.id,
+        )
+        run_async(_set_summary_render_status(summary_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_summary").inc()
+        raise
+    except Exception as exc:
+        # Transient — set failed (so a UI poll between attempts shows a terminal
+        # state, and the final MaxRetriesExceededError leaves it failed) then retry.
+        run_async(_set_summary_render_status(summary_id, RenderStatus.failed))
+        RENDER_FAILURES_TOTAL.labels(task="render_summary").inc()
+        raise self.retry(exc=exc) from exc
+    log_event(
+        "render_summary_done",
+        creator_id=creator_id,
+        task_id=self.request.id,
+        video_id=summary_id,
+    )
+    return summary_id

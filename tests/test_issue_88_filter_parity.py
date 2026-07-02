@@ -233,6 +233,8 @@ async def test_sync_channel_catalog_chains_metrics_for_unmetered_videos():
     fake_session = MagicMock()
     fake_session.get = AsyncMock(return_value=fake_creator)
     fake_session.commit = AsyncMock()
+    # Issue 352 Batch F: the finally now rolls back before the advisory unlock.
+    fake_session.rollback = AsyncMock()
 
     # Two unmeasured videos returned by the longs phase-2 query (Issue 120: two
     # queries now — longs and shorts — so shorts returns empty to keep count at 2).

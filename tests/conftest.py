@@ -23,6 +23,13 @@ os.environ.setdefault("TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-32-bytes-minimum-!")
 os.environ.setdefault("ALLOWED_ORIGINS", "http://localhost:8000")
 os.environ.setdefault("LOG_DIR", "")  # disable file logging in tests (/app/logs is Docker-only)
+# Pin the storage backend for the unit lane. Without this, a developer .env with
+# STORAGE_BACKEND=r2 + real credentials leaks in (env file loses to real env vars,
+# but nothing set one) and every /health test probes the LIVE R2 bucket over the
+# network — passing when the probe succeeds, flaking when it doesn't. Found
+# 2026-07-02 chasing "order-dependent" test_health failures that were actually
+# live-network flakes. Real env var still overrides for deliberate runs.
+os.environ.setdefault("STORAGE_BACKEND", "local")
 
 import pytest
 from fastapi.testclient import TestClient
