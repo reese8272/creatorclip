@@ -23,7 +23,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import IngestStatus, OnboardingState, Video, VideoKind, VideoOrigin
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, stub_get_owned
 
 _REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -202,7 +202,7 @@ def test_queue_rejects_source_less_video_with_409():
 
     async def _sess():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=video)
+        stub_get_owned(s, video)
         yield s
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)

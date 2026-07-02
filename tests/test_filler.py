@@ -25,6 +25,7 @@ from clip_engine.filler import (
     merge_adjacent_cuts,
     percent_removed,
 )
+from tests._helpers import stub_get_owned
 
 
 def _w(word: str, start: float, end: float) -> dict:
@@ -344,7 +345,8 @@ def test_clean_preview_endpoint_returns_cuts(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(side_effect=[clip, transcript])
+        stub_get_owned(s, clip)  # clip via the ownership select (Issue 109e)
+        s.get = AsyncMock(return_value=transcript)  # transcript fetch
         yield s
 
     app.dependency_overrides[get_current_creator] = lambda: creator
@@ -386,7 +388,7 @@ def test_clean_confirm_idempotent_when_no_cleaned_uri(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=clip)
+        stub_get_owned(s, clip)
         s.commit = AsyncMock()
         yield s
 
@@ -424,7 +426,7 @@ def test_clean_rejects_when_cleaned_render_uri_already_set(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=clip)
+        stub_get_owned(s, clip)
         yield s
 
     app.dependency_overrides[get_current_creator] = lambda: creator

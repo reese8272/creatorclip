@@ -27,6 +27,7 @@ from clip_engine.candidates import (
 from db import get_session
 from main import app
 from models import Creator, IngestStatus, Signals, Video
+from tests._helpers import owned_lookup_result
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -195,16 +196,21 @@ def _fake_session(video: MagicMock, clips: list, signals: MagicMock | None) -> A
         session = AsyncMock()
 
         async def _get(model, pk, **kwargs):
-            if model is Video:
-                return video
             if model is Signals:
                 return signals
             return None
 
         session.get = AsyncMock(side_effect=_get)
-        result = MagicMock()
-        result.scalars.return_value = iter(clips)
-        session.execute = AsyncMock(return_value=result)
+
+        async def _execute(stmt, *a, **kw):
+            entity = stmt.column_descriptions[0]["type"]
+            if entity is Video:  # get_owned ownership select (Issue 109e)
+                return owned_lookup_result(stmt, video)
+            result = MagicMock()
+            result.scalars.return_value = iter(clips)
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
         yield session
 
     return _session
@@ -347,16 +353,10 @@ def test_list_clips_skip_reason_does_not_return_other_creators_video(client):
     async def _session():
         session = AsyncMock()
 
-        async def _get(model, pk, **kwargs):
-            if model is Video:
-                # Return video_a but creator_b is the requester — mismatch simulated
-                # by returning a video whose creator_id ≠ authenticated creator_id.
-                return video_a
-            return None
-
-        session.get = AsyncMock(side_effect=_get)
+        # video_a belongs to creator_a but creator_b is the requester — the
+        # ownership-scoped select's predicate filters it out (Issue 109e).
         session.execute = AsyncMock(
-            return_value=MagicMock(scalars=MagicMock(return_value=iter([])))
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, video_a)
         )
         yield session
 

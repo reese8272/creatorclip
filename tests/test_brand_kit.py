@@ -14,6 +14,8 @@ import pathlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests._helpers import owned_result
+
 # ── Structural: model ────────────────────────────────────────────────────────
 
 
@@ -332,13 +334,13 @@ def test_brand_kit_render_applies_kit_defaults(client):
     kit_row = MagicMock(spec=CreatorStyle)
     kit_row.style = {"subtitle": "bold_pop", "background": "blur"}
 
-    # session.get returns the clip; session.execute returns the kit row.
+    # First execute = get_owned ownership select → clip (Issue 109e); the
+    # second execute returns the kit row.
     mock_kit_result = MagicMock()
     mock_kit_result.scalar_one_or_none.return_value = kit_row
 
     session = AsyncMock()
-    session.get = AsyncMock(return_value=clip)
-    session.execute = AsyncMock(return_value=mock_kit_result)
+    session.execute = AsyncMock(side_effect=[owned_result(clip), mock_kit_result])
     session.commit = AsyncMock()
 
     async def _fake_session():
@@ -396,8 +398,7 @@ def test_brand_kit_render_request_body_overrides_kit(client):
     mock_kit_result.scalar_one_or_none.return_value = kit_row
 
     session = AsyncMock()
-    session.get = AsyncMock(return_value=clip)
-    session.execute = AsyncMock(return_value=mock_kit_result)
+    session.execute = AsyncMock(side_effect=[owned_result(clip), mock_kit_result])
     session.commit = AsyncMock()
 
     async def _fake_session():

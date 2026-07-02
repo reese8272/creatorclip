@@ -27,7 +27,7 @@ from models import (
     Video,
     VideoOrigin,
 )
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, owned_lookup_result, where_criteria
 
 # ── Fixture helpers ────────────────────────────────────────────────────────────
 
@@ -99,18 +99,16 @@ def _fake_session(
     summary: MagicMock | None = None,
     signals: MagicMock | None = None,
 ):
-    """Async get_session override. session.get dispatches on model; execute
-    returns the clip list (POST) or summary list (GET); scalar returns the
-    idempotency probe's result."""
+    """Async get_session override. Ownership fetches (Video/Summary) go through
+    the get_owned single-shot select (Issue 109e) — emulated with
+    owned_lookup_result so foreign rows genuinely miss; other execute calls
+    return the clip list (POST) or summary list (GET); session.get still serves
+    the non-ownership Signals fetch; scalar returns the idempotency probe."""
 
     async def _session():
         session = AsyncMock()
 
         async def _get(model, pk, **kwargs):
-            if model is Video:
-                return video
-            if model is Summary:
-                return summary
             if model is Signals:
                 return signals
             return None
@@ -118,9 +116,15 @@ def _fake_session(
         session.get = AsyncMock(side_effect=_get)
         session.scalar = AsyncMock(return_value=existing_summary)
 
-        result = MagicMock()
-        result.scalars.return_value = iter(clips or [])
-        session.execute = AsyncMock(return_value=result)
+        async def _execute(stmt, *a, **kw):
+            entity = stmt.column_descriptions[0]["type"]
+            if "id" in where_criteria(stmt):  # get_owned ownership select
+                return owned_lookup_result(stmt, video if entity is Video else summary)
+            result = MagicMock()
+            result.scalars.return_value = iter(clips or [])
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
 
         async def _refresh(obj, *a, **kw):
             if getattr(obj, "id", None) is None:

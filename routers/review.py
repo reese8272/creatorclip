@@ -17,6 +17,7 @@ from auth import get_current_creator
 from db import get_session
 from limiter import creator_key, limiter
 from models import Clip, ClipFeedback, Creator, FeedbackAction
+from routers._owned import get_owned
 
 router = APIRouter(prefix="/clips", tags=["review"])
 logger = logging.getLogger(__name__)
@@ -107,9 +108,7 @@ async def submit_feedback(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Record a feedback action for a clip."""
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
     # Issue 339: validate trim values against the clip's actual window.
     # clip.start_s and clip.end_s are video-absolute timestamps.

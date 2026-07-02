@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._helpers import owned_lookup_result
+
 # ── Structural: models + migration ──────────────────────────────────────────
 
 
@@ -218,7 +220,11 @@ def test_issue_125_queue_endpoint_triggers_pipeline_on_pending(client, mocker):
     fake_video.ingest_status = IngestStatus.pending
 
     mock_session = AsyncMock()
-    mock_session.get = AsyncMock(return_value=fake_video)
+    # get_owned ownership select (Issue 109e) — emulates the DB predicate,
+    # so the foreign-owner case genuinely misses.
+    mock_session.execute = AsyncMock(
+        side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, fake_video)
+    )
 
     async def _fake_session():
         yield mock_session
@@ -283,7 +289,11 @@ def test_issue_313_queue_owner_set_drives_sse_authz(client, mocker):
     fake_video.ingest_status = IngestStatus.pending
 
     mock_session = AsyncMock()
-    mock_session.get = AsyncMock(return_value=fake_video)
+    # get_owned ownership select (Issue 109e) — emulates the DB predicate,
+    # so the foreign-owner case genuinely misses.
+    mock_session.execute = AsyncMock(
+        side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, fake_video)
+    )
 
     async def _fake_session():
         yield mock_session
@@ -348,7 +358,11 @@ def test_issue_125_queue_endpoint_idempotent_when_not_pending(client, mocker):
     fake_video.ingest_status = IngestStatus.running
 
     mock_session = AsyncMock()
-    mock_session.get = AsyncMock(return_value=fake_video)
+    # get_owned ownership select (Issue 109e) — emulates the DB predicate,
+    # so the foreign-owner case genuinely misses.
+    mock_session.execute = AsyncMock(
+        side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, fake_video)
+    )
 
     async def _fake_session():
         yield mock_session
@@ -389,7 +403,11 @@ def test_queue_endpoint_retries_failed_video(client, mocker):
     fake_video.failure_reason = "Transcription failed. This can be a temporary service issue."
 
     mock_session = AsyncMock()
-    mock_session.get = AsyncMock(return_value=fake_video)
+    # get_owned ownership select (Issue 109e) — emulates the DB predicate,
+    # so the foreign-owner case genuinely misses.
+    mock_session.execute = AsyncMock(
+        side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, fake_video)
+    )
 
     async def _fake_session():
         yield mock_session
@@ -439,7 +457,11 @@ def test_issue_125_queue_endpoint_404_on_other_creators_video(client, mocker):
     fake_video.ingest_status = IngestStatus.pending
 
     mock_session = AsyncMock()
-    mock_session.get = AsyncMock(return_value=fake_video)
+    # get_owned ownership select (Issue 109e) — emulates the DB predicate,
+    # so the foreign-owner case genuinely misses.
+    mock_session.execute = AsyncMock(
+        side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, fake_video)
+    )
 
     async def _fake_session():
         yield mock_session

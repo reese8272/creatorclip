@@ -7,6 +7,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import Clip, Creator
+from tests._helpers import owned_lookup_result
 from worker.storage import presigned_download_url
 
 
@@ -30,7 +31,11 @@ def _clip(
 def _fake_session(clip):
     async def _session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=clip)
+        # get_owned ownership select (Issue 109e) — emulates the DB predicate,
+        # so the cross-creator clip genuinely misses (404).
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, clip)
+        )
         yield session
 
     return _session
