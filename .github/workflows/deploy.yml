@@ -66,16 +66,20 @@ jobs:
         run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
 
       - name: Pull the image under test
-        # Only the app image is pulled explicitly; `up --pull never` below keeps
-        # compose from touching the (cached) third-party infra images.
+        # The app image is pulled explicitly by digest-equivalent sha- tag so the
+        # gate runs it exactly as published.
         run: docker pull "${STAGING_IMAGE}"
 
       - name: Bring up staging on the image under test
-        # --no-build --pull never: the gate must run the pulled GHCR image, not
-        # a local rebuild, and must not silently substitute anything else.
+        # --no-build: never substitute a local rebuild for the pulled GHCR image.
+        # --pull missing (compose's default, stated explicitly): the app image is
+        # already present from the pull above and is used as-is; absent
+        # third-party infra images (e.g. the digest-pinned PgBouncer sidecar) may
+        # be fetched. `--pull never` failed the gate's FIRST run because the
+        # pinned pgbouncer digest had never been pulled on this VM.
         run: |
           STAGING_IMAGE="${STAGING_IMAGE}" docker compose -p ccstage \
-            -f docker-compose.staging.yml up -d --no-build --pull never
+            -f docker-compose.staging.yml up -d --no-build --pull missing
 
       - name: Run migrations IN-CONTAINER against the data-bearing staging DB
         # exec (not `run --rm` on a host checkout): the container has the pinned
