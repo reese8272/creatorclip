@@ -53,6 +53,7 @@ def test_deepgram_prerecorded_options_use_valid_sdk_kwargs():
     assert opts.smart_format is True
     assert opts.utterances is True
 
+
 # ── mip_opt_out enforcement ───────────────────────────────────────────────────
 
 

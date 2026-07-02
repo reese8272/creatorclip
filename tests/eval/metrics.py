@@ -122,7 +122,11 @@ def bootstrap_ci(
 
 
 def paired_bootstrap_delta(
-    a: Sequence[float], b: Sequence[float], n_resamples: int = 10_000, ci: float = 0.95, seed: int = 0
+    a: Sequence[float],
+    b: Sequence[float],
+    n_resamples: int = 10_000,
+    ci: float = 0.95,
+    seed: int = 0,
 ) -> tuple[float, float, float]:
     """Paired bootstrap of the per-query metric delta (a - b). `a` beats `b` at the
     given confidence iff the returned ci_low > 0. Inputs must be aligned per query."""

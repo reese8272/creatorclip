@@ -28,6 +28,6 @@ def test_short_judged_against_shorts_not_longform_scale():
     shorts = [4000, 5000, 6000]
     median = _shorts_baseline_median(shorts)
     assert median == 5000
-    assert (median <= 6000) is True   # strong Short → performed_well True
-    assert (median <= 5000) is True   # median Short → True (not systematically failed)
+    assert (median <= 6000) is True  # strong Short → performed_well True
+    assert (median <= 5000) is True  # median Short → True (not systematically failed)
     assert (median <= 3000) is False  # weak Short → False

@@ -467,9 +467,18 @@ class TestGenerateThumbnailConcepts:
             "output_tokens": 200,
         }
 
+        # stream_message returns (Message, usage); build a minimal Message stub.
+        mock_msg = MagicMock()
+        mock_msg.stop_reason = "end_turn"
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = expected_json
+        mock_msg.content = [text_block]
+
         with (
             patch(
-                "worker.anthropic_stream.stream_and_emit", return_value=(expected_json, mock_usage)
+                "worker.anthropic_stream.stream_message",
+                return_value=(mock_msg, mock_usage),
             ),
             patch("knowledge.thumbnails._ANTHROPIC") as mock_client,
         ):

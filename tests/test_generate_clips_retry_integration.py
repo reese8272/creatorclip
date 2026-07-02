@@ -393,6 +393,7 @@ def test_generate_clips_terminal_failure_refunds_exactly_once() -> None:
         )
         assert packs[0].minutes_granted == 5, f"300 s → 5 min; got {packs[0].minutes_granted}"
     finally:
+
         async def _cleanup() -> None:
             async with factory() as s:
                 await s.execute(delete(MinutePack).where(MinutePack.creator_id == creator_id))

@@ -122,9 +122,7 @@ def test_catalog_query_isolation_filters_creator_and_origin(client):
         app.dependency_overrides.clear()
 
     # The page query (second execute) is the base SELECT with order/limit/offset.
-    page_sql = str(
-        captured[1].compile(compile_kwargs={"literal_binds": True})
-    ).lower()
+    page_sql = str(captured[1].compile(compile_kwargs={"literal_binds": True})).lower()
     # UUIDs render hex-without-dashes under literal_binds; match on .hex.
     assert creator.id.hex in page_sql  # per-creator isolation
     assert VideoOrigin.catalog.value in page_sql  # catalog-only

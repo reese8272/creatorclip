@@ -225,9 +225,9 @@ async def update_preferences(
 # ── One-click unsubscribe (no auth) ───────────────────────────────────────────
 
 _UNSUBSCRIBE_CONFIRMED_HTML = (
-    "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">"
-    "<title>Unsubscribed</title></head><body style=\"font-family: sans-serif; "
-    "max-width: 480px; margin: 48px auto; padding: 0 24px; color: #1a1a1a;\">"
+    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+    '<title>Unsubscribed</title></head><body style="font-family: sans-serif; '
+    'max-width: 480px; margin: 48px auto; padding: 0 24px; color: #1a1a1a;">'
     "<h2>You've been unsubscribed</h2>"
     "<p>You will no longer receive lifecycle emails (welcome, nudges, "
     "re-engagement) from AutoClip. Transactional emails — such as clip-ready and "
@@ -237,9 +237,9 @@ _UNSUBSCRIBE_CONFIRMED_HTML = (
 )
 
 _UNSUBSCRIBE_NOT_FOUND_HTML = (
-    "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">"
-    "<title>Link not recognised</title></head><body style=\"font-family: sans-serif; "
-    "max-width: 480px; margin: 48px auto; padding: 0 24px; color: #1a1a1a;\">"
+    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+    '<title>Link not recognised</title></head><body style="font-family: sans-serif; '
+    'max-width: 480px; margin: 48px auto; padding: 0 24px; color: #1a1a1a;">'
     "<h2>This link is no longer valid</h2>"
     "<p>We couldn't process this unsubscribe link. If you continue to receive "
     "emails you didn't expect, please update your preferences from Settings.</p>"
@@ -265,9 +265,7 @@ async def unsubscribe(request: Request, token: uuid.UUID) -> HTMLResponse:
     """
     async with AdminSessionLocal() as session:
         prefs = await session.scalar(
-            select(NotificationPreference).where(
-                NotificationPreference.unsubscribe_token == token
-            )
+            select(NotificationPreference).where(NotificationPreference.unsubscribe_token == token)
         )
         if prefs is None:
             logger.info("unsubscribe: token not found")

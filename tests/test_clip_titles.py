@@ -30,6 +30,7 @@ from knowledge.util import UNTRUSTED_CONTENT_POLICY
 
 # ── Disclaimer / honesty ──────────────────────────────────────────────────────
 
+
 def test_disclaimer_present() -> None:
     """DISCLAIMER constant must be non-empty and set by Python, not the model."""
     assert DISCLAIMER
@@ -63,6 +64,7 @@ def test_disclaimer_uses_hedged_language() -> None:
 
 # ── Untrusted content wrapping ────────────────────────────────────────────────
 
+
 def test_clip_transcript_is_wrapped_in_user_turn() -> None:
     """Clip transcript must travel in the user turn, JSON-encoded, via wrap_untrusted."""
     _system, messages = _build_request(
@@ -90,6 +92,7 @@ def test_injection_attempt_is_contained() -> None:
 
 # ── UNTRUSTED_CONTENT_POLICY in system prompt ─────────────────────────────────
 
+
 def test_system_prompt_contains_untrusted_policy() -> None:
     system, _messages = _build_request("My Channel", "Brief.", "Transcript.")
     full_text = " ".join(b["text"] for b in system)
@@ -97,6 +100,7 @@ def test_system_prompt_contains_untrusted_policy() -> None:
 
 
 # ── Cache-control breakpoint ──────────────────────────────────────────────────
+
 
 def test_dna_brief_block_has_cache_control() -> None:
     """Block 2 (DNA brief) must carry cache_control with ttl=1h."""
@@ -109,6 +113,7 @@ def test_dna_brief_block_has_cache_control() -> None:
 
 
 # ── _parse_result ─────────────────────────────────────────────────────────────
+
 
 def test_parse_result_valid() -> None:
     """Valid response is parsed into the expected shape."""
@@ -174,12 +179,9 @@ def test_parse_result_caps_hook_rewrites() -> None:
     raw = json.dumps(
         {
             "titles": [
-                {"title": f"T{i}", "rationale": "ok", "ctr_signal": "neutral"}
-                for i in range(5)
+                {"title": f"T{i}", "rationale": "ok", "ctr_signal": "neutral"} for i in range(5)
             ],
-            "hook_rewrites": [
-                {"rewrite": f"Hook {i}", "rationale": "ok"} for i in range(5)
-            ],
+            "hook_rewrites": [{"rewrite": f"Hook {i}", "rationale": "ok"} for i in range(5)],
         }
     )
     result = _parse_result(raw)
@@ -187,6 +189,7 @@ def test_parse_result_caps_hook_rewrites() -> None:
 
 
 # ── No creator_id in tool context (isolation) ─────────────────────────────────
+
 
 def test_build_request_no_creator_id_in_system() -> None:
     """creator_id must never appear in system prompt blocks."""

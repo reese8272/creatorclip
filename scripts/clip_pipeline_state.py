@@ -46,9 +46,11 @@ def main() -> None:
     _load_env()
     raw = os.environ.get("DATABASE_URL")
     if not raw:
-        print("DATABASE_URL not set. Add it to .env, or run against the live VM DB:\n"
-              "  ssh creatorclip-vm 'cd /opt/autoclip && docker compose "
-              "-f docker-compose.prod.yml exec -T app python3.12 scripts/clip_pipeline_state.py'")
+        print(
+            "DATABASE_URL not set. Add it to .env, or run against the live VM DB:\n"
+            "  ssh creatorclip-vm 'cd /opt/autoclip && docker compose "
+            "-f docker-compose.prod.yml exec -T app python3.12 scripts/clip_pipeline_state.py'"
+        )
         sys.exit(1)
     creator = sys.argv[1] if len(sys.argv) > 1 else None
 
@@ -88,9 +90,7 @@ def main() -> None:
             short = str(vid)[:8]
             cl = clip_rows.get(vid, [])
             if cl:
-                summary = ", ".join(
-                    f"{st}={n}" + (f"(uri:{u})" if u else "") for st, n, u in cl
-                )
+                summary = ", ".join(f"{st}={n}" + (f"(uri:{u})" if u else "") for st, n, u in cl)
             else:
                 summary = "NO CLIP ROWS"
             ing = ingest.value if hasattr(ingest, "value") else str(ingest)

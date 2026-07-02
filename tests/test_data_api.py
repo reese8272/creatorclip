@@ -59,9 +59,7 @@ async def test_200_stores_etag_and_consumes_once(mocker):
     mocker.patch("youtube._http.client", return_value=fake)
     consume_mock = AsyncMock()
     mocker.patch("youtube.data_api.consume", new=consume_mock)
-    mocker.patch(
-        "youtube.data_api._etag_cache_get", new=AsyncMock(return_value=(None, None))
-    )
+    mocker.patch("youtube.data_api._etag_cache_get", new=AsyncMock(return_value=(None, None)))
     put_mock = AsyncMock()
     mocker.patch("youtube.data_api._etag_cache_put", new=put_mock)
 
@@ -85,20 +83,14 @@ async def test_list_channel_videos_sends_fields_param(mocker):
         if "channels" in request.url.path:
             return httpx.Response(
                 200,
-                json={
-                    "items": [
-                        {"contentDetails": {"relatedPlaylists": {"uploads": "UP1"}}}
-                    ]
-                },
+                json={"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UP1"}}}]},
             )
         return httpx.Response(200, json={"items": []})
 
     fake = _fake_client(handler)
     mocker.patch("youtube._http.client", return_value=fake)
     mocker.patch("youtube.data_api.consume", new=AsyncMock())
-    mocker.patch(
-        "youtube.data_api._etag_cache_get", new=AsyncMock(return_value=(None, None))
-    )
+    mocker.patch("youtube.data_api._etag_cache_get", new=AsyncMock(return_value=(None, None)))
     mocker.patch("youtube.data_api._etag_cache_put", new=AsyncMock())
 
     await data_api.list_channel_videos("token", creator_id=uuid.uuid4())
@@ -119,9 +111,7 @@ async def test_get_videos_metadata_sends_fields_and_batches_at_50(mocker):
     fake = _fake_client(handler)
     mocker.patch("youtube._http.client", return_value=fake)
     mocker.patch("youtube.data_api.consume", new=AsyncMock())
-    mocker.patch(
-        "youtube.data_api._etag_cache_get", new=AsyncMock(return_value=(None, None))
-    )
+    mocker.patch("youtube.data_api._etag_cache_get", new=AsyncMock(return_value=(None, None)))
     mocker.patch("youtube.data_api._etag_cache_put", new=AsyncMock())
 
     ids = [f"v{i}" for i in range(60)]

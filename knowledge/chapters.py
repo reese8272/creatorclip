@@ -219,9 +219,7 @@ def generate_chapters(
             messages=messages,
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
-        logger.error(
-            "generate_chapters LLM error task=%s exc_type=%s", task_id, type(exc).__name__
-        )
+        logger.error("generate_chapters LLM error task=%s exc_type=%s", task_id, type(exc).__name__)
         raise
     logger.info(
         "generate_chapters tokens: in=%d cached_read=%d cached_write=%d out=%d",

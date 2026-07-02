@@ -18,8 +18,12 @@ import sys
 async def _main() -> int:
     parser = argparse.ArgumentParser(description="Personalization efficacy harness (Issue 198)")
     parser.add_argument("--k", type=int, default=5, help="rank cutoff for NDCG@k / MAP@k")
-    parser.add_argument("--min-labels", type=int, default=30, help="min labels for per-creator rows")
-    parser.add_argument("--train-frac", type=float, default=0.7, help="chronological train fraction")
+    parser.add_argument(
+        "--min-labels", type=int, default=30, help="min labels for per-creator rows"
+    )
+    parser.add_argument(
+        "--train-frac", type=float, default=0.7, help="chronological train fraction"
+    )
     args = parser.parse_args()
 
     from sqlalchemy import select
@@ -50,8 +54,10 @@ async def _main() -> int:
             print(f"    {ranking:<16} {point:.3f}  [{lo:.3f}, {hi:.3f}]")
 
     above = [cm for cm in per_creator if cm.n_eval >= args.min_labels]
-    print(f"\nPer-creator rows with >= {args.min_labels} eval labels: {len(above)} "
-          f"(others pooled-only — single-creator metrics below the floor are noise).")
+    print(
+        f"\nPer-creator rows with >= {args.min_labels} eval labels: {len(above)} "
+        f"(others pooled-only — single-creator metrics below the floor are noise)."
+    )
     return 0
 
 

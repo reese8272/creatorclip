@@ -298,9 +298,9 @@ async def test_fetch_audience_activity_unparseable_day_strings_are_skipped():
     mixed = {
         "columnHeaders": [{"name": "day"}, {"name": "views"}],
         "rows": [
-            ["2026-01-05", 500],    # valid — Monday
-            ["not-a-date", 9999],   # invalid — must be skipped
-            ["2026-01-06", 300],    # valid — Tuesday
+            ["2026-01-05", 500],  # valid — Monday
+            ["not-a-date", 9999],  # invalid — must be skipped
+            ["2026-01-06", 300],  # valid — Tuesday
         ],
     }
     with patch("youtube.analytics._fetch_report", AsyncMock(return_value=mixed)):
@@ -393,7 +393,7 @@ def test_clamp_ingest_field_emoji_at_boundary_does_not_split_codepoint():
     # Build a string where the emoji starts at index max_chars-1
     # (so a byte-based slice would cut inside it but a codepoint slice drops it).
     base = "A" * 9  # 9 chars
-    emoji = "🎬"     # 1 codepoint, 4 bytes
+    emoji = "🎬"  # 1 codepoint, 4 bytes
     value = base + emoji  # 10 chars total
     result = clamp_ingest_field(value, 9)
     # rsplit at word boundary — no space, so falls back to [:9] = "AAAAAAAAA"
@@ -408,9 +408,7 @@ def test_check_captions_available_empty_items_returns_false():
     from youtube.data_api import check_captions_available
 
     async def _run():
-        with patch(
-            "youtube.data_api._get_json", AsyncMock(return_value={"items": []})
-        ):
+        with patch("youtube.data_api._get_json", AsyncMock(return_value={"items": []})):
             return await check_captions_available("tok", "vid123")
 
     assert asyncio.get_event_loop().run_until_complete(_run()) is False
@@ -423,9 +421,7 @@ def test_check_captions_available_missing_key_returns_false():
     from youtube.data_api import check_captions_available
 
     async def _run():
-        with patch(
-            "youtube.data_api._get_json", AsyncMock(return_value={})
-        ):
+        with patch("youtube.data_api._get_json", AsyncMock(return_value={})):
             return await check_captions_available("tok", "vid123")
 
     assert asyncio.get_event_loop().run_until_complete(_run()) is False
@@ -456,9 +452,9 @@ def test_probe_duration_s_non_zero_returncode_returns_none_and_logs_stderr(caplo
         result = probe_duration_s("/tmp/bad.mp4")
 
     assert result is None
-    assert any(
-        "Invalid data" in rec.message for rec in caplog.records
-    ), "Expected stderr content in WARNING log"
+    assert any("Invalid data" in rec.message for rec in caplog.records), (
+        "Expected stderr content in WARNING log"
+    )
 
 
 def test_probe_duration_s_empty_stdout_returns_none():

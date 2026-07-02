@@ -91,7 +91,5 @@ def test_stream_and_emit_quiet_when_complete(monkeypatch, caplog):
     client.messages.stream.return_value = stream
 
     with caplog.at_level(logging.WARNING, logger="observability"):
-        stream_and_emit(
-            client, "task-2", model="m", max_tokens=10, system=[], messages=[]
-        )
+        stream_and_emit(client, "task-2", model="m", max_tokens=10, system=[], messages=[])
     assert not any("truncated" in r.message for r in caplog.records)

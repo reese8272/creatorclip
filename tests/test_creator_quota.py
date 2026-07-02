@@ -134,20 +134,14 @@ def test_render_clip_carries_render_daily_cap_value() -> None:
     from config import settings
 
     _import_routers()
-    assert (
-        _amount_for_period("routers.clips.render_clip", "day")
-        == settings.RENDER_DAILY_JOB_LIMIT
-    )
+    assert _amount_for_period("routers.clips.render_clip", "day") == settings.RENDER_DAILY_JOB_LIMIT
 
 
 def test_generate_clips_carries_llm_daily_cap_value() -> None:
     from config import settings
 
     _import_routers()
-    assert (
-        _amount_for_period("routers.clips.generate_clips", "day")
-        == settings.LLM_DAILY_JOB_LIMIT
-    )
+    assert _amount_for_period("routers.clips.generate_clips", "day") == settings.LLM_DAILY_JOB_LIMIT
 
 
 # ── 429 surfaced cleanly when the cap is exceeded ─────────────────────────────

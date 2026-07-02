@@ -286,9 +286,7 @@ def test_record_event_non_uuid_creator_id_writes_with_cid_none(monkeypatch) -> N
     )
 
     assert len(added_rows) == 1, "A row must be written even with a non-UUID creator_id"
-    assert added_rows[0].creator_id is None, (
-        "Non-UUID creator_id must be stored as NULL (cid=None)"
-    )
+    assert added_rows[0].creator_id is None, "Non-UUID creator_id must be stored as NULL (cid=None)"
 
 
 def test_record_event_write_failure_swallowed(monkeypatch) -> None:

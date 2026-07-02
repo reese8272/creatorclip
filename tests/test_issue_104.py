@@ -58,11 +58,9 @@ def test_creator_key_falls_back_to_remote_address():
 # ── Fix 1: auth deps stash creator_id on request.state ───────────────────────
 
 
-def test_get_current_creator_stashes_creator_id_on_state():
+async def test_get_current_creator_stashes_creator_id_on_state():
     """get_current_creator must set request.state.creator_id = creator.id
     so creator_key() can read it without re-decoding the JWT."""
-    import asyncio
-
     from auth import create_session_token, get_current_creator
 
     cid = uuid.uuid4()
@@ -88,19 +86,14 @@ def test_get_current_creator_stashes_creator_id_on_state():
     result.scalar_one_or_none.return_value = creator
     session.execute = AsyncMock(return_value=result)
 
-    async def run():
-        return await get_current_creator(request=request, session=session)
-
-    returned = asyncio.get_event_loop().run_until_complete(run())
+    returned = await get_current_creator(request=request, session=session)
     assert returned is creator
     assert getattr(request.state, "creator_id", None) == cid
 
 
-def test_get_current_creator_via_api_key_stashes_creator_id_on_state():
+async def test_get_current_creator_via_api_key_stashes_creator_id_on_state():
     """get_current_creator_via_api_key must set request.state.creator_id so
     creator_key() works correctly on bearer-auth routes like /clips/ingest."""
-    import asyncio
-
     from api_key import generate_api_key, get_current_creator_via_api_key, hash_api_key
 
     raw_key = generate_api_key()
@@ -135,10 +128,7 @@ def test_get_current_creator_via_api_key_stashes_creator_id_on_state():
     session.get = AsyncMock(return_value=creator)
     session.commit = AsyncMock()
 
-    async def run():
-        return await get_current_creator_via_api_key(request=request, session=session)
-
-    returned = asyncio.get_event_loop().run_until_complete(run())
+    returned = await get_current_creator_via_api_key(request=request, session=session)
     assert returned is creator
     assert getattr(request.state, "creator_id", None) == cid
 

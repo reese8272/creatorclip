@@ -12,8 +12,6 @@ existing ``/tasks/{id}/events`` SSE channel (Issue 86), reusing the React
 every read is filtered by the owning creator (RLS + app-layer, defense in depth).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import uuid as _uuid_mod

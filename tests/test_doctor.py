@@ -52,6 +52,7 @@ def test_doctor_storage_ok_for_fully_configured_r2():
     )
     assert all(r.status is Status.OK for r in results)
 
+
 # ── redaction never leaks the value ─────────────────────────────────────────────
 
 

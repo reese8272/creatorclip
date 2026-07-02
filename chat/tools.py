@@ -425,9 +425,7 @@ async def _get_clip_detail(creator_id: uuid.UUID, session: AsyncSession, inp: di
     if clip is None:
         return {"found": False, "message": "Clip not found in your catalog."}
 
-    outcome = await session.scalar(
-        select(ClipOutcome).where(ClipOutcome.clip_id == clip.id)
-    )
+    outcome = await session.scalar(select(ClipOutcome).where(ClipOutcome.clip_id == clip.id))
     sj = clip.signals_jsonb or {}
 
     return {

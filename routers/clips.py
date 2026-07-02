@@ -1064,6 +1064,7 @@ async def download_clip(
 
 # ── Issue 322: Per-clip Short-title + hook-rewrite suggestions ────────────────
 
+
 class TitleSuggestionsOut(BaseModel):
     """Response for POST /clips/{clip_id}/title-suggestions."""
 
@@ -1109,8 +1110,8 @@ async def get_clip_title_suggestions(
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_transcript = (
-        extract_transcript_text(transcript.segments_jsonb if transcript else None, 1500)
+    clip_transcript = extract_transcript_text(
+        transcript.segments_jsonb if transcript else None, 1500
     )
 
     # Fetch the creator's DNA brief.
@@ -1167,6 +1168,7 @@ async def get_clip_title_suggestions(
 
 # ── Issue 323: Per-clip caption-hook / thumbnail-text concepts ────────────────
 
+
 class CaptionHooksOut(BaseModel):
     """Response for POST /clips/{clip_id}/caption-hooks."""
 
@@ -1208,9 +1210,7 @@ async def get_clip_caption_hooks(
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_hook = (
-        extract_transcript_text(transcript.segments_jsonb if transcript else None, 800)
-    )
+    clip_hook = extract_transcript_text(transcript.segments_jsonb if transcript else None, 800)
 
     dna = await _get_active_dna(session, creator.id)
     dna_brief = dna.brief_text if dna else None
@@ -1264,6 +1264,7 @@ async def get_clip_caption_hooks(
 
 # ── Issue 325: "Explain this clip" — Why-This-Clip LLM narrative ─────────────
 
+
 class ClipExplanationOut(BaseModel):
     """Response for POST /clips/{clip_id}/explanation."""
 
@@ -1306,8 +1307,8 @@ async def get_clip_explanation(
     transcript = await session.scalar(
         select(Transcript).where(Transcript.video_id == clip.video_id)
     )
-    clip_transcript = (
-        extract_transcript_text(transcript.segments_jsonb if transcript else None, 1200)
+    clip_transcript = extract_transcript_text(
+        transcript.segments_jsonb if transcript else None, 1200
     )
 
     dna = await _get_active_dna(session, creator.id)
