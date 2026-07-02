@@ -843,13 +843,104 @@ async def _retrain_preference_async(creator_id: str) -> None:
                     logger.info("retrain_preference: no new feedback for creator %s, skip", cid)
                     return
             try:
-                await build_and_save(session, cid)
+                scorer = await build_and_save(session, cid)
             except IntegrityError:
                 # Concurrent retrain won the version race (hardened in Issue 71).
                 await session.rollback()
                 logger.info("retrain_preference: version race for creator %s, skip", cid)
+            else:
+                if scorer is not None:
+                    # Best-effort per-retrain offline eval (Issue 202) — never
+                    # fails the retrain; the model version is already committed.
+                    await _emit_preference_metrics(session, cid)
         finally:
             await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+
+
+async def _emit_preference_metrics(session: Any, creator_id: uuid.UUID) -> None:
+    """Best-effort offline eval of the just-saved preference-model version (Issue 202).
+
+    Runs the efficacy harness (chronological held-out split) for this creator, stores
+    {"ndcg_at_5", "map_at_5", "n_eval", "computed_at"} on the newest PreferenceModel row,
+    and warn-ratchets against the previous version: a held-out NDCG@5 drop greater than
+    PREFERENCE_NDCG_REGRESSION_THRESHOLD emits a warning-severity event. WARN-only by
+    design — an eval failure or a regression NEVER fails or rolls back the retrain.
+    """
+    from sqlalchemy import select
+
+    from config import settings
+    from preference.efficacy import DEFAULT_K, evaluate_creator
+
+    try:
+        cm = await evaluate_creator(session, creator_id, k=DEFAULT_K)
+        if cm is None:
+            logger.info(
+                "preference eval skipped for creator %s (insufficient held-out labels)",
+                creator_id,
+            )
+            return
+        rows = (
+            (
+                await session.execute(
+                    select(PreferenceModel)
+                    .where(PreferenceModel.creator_id == creator_id)
+                    .order_by(PreferenceModel.version.desc())
+                    .limit(2)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return
+        newest = rows[0]
+        previous = rows[1] if len(rows) > 1 else None
+        ndcg = float(cm.ndcg["dna_preference"])
+        newest.metrics_jsonb = {
+            "ndcg_at_5": ndcg,
+            "map_at_5": float(cm.map["dna_preference"]),
+            "n_eval": cm.n_eval,
+            "computed_at": datetime.now(UTC).isoformat(),
+        }
+        await session.commit()
+        log_event(
+            "preference_metrics_computed",
+            creator_id=str(creator_id),
+            version=newest.version,
+            ndcg_at_5=round(ndcg, 4),
+            n_eval=cm.n_eval,
+        )
+        prev_ndcg = (previous.metrics_jsonb or {}).get("ndcg_at_5") if previous else None
+        if (
+            prev_ndcg is not None
+            and (float(prev_ndcg) - ndcg) > settings.PREFERENCE_NDCG_REGRESSION_THRESHOLD
+        ):
+            log_event(
+                "preference_metrics_regression",
+                severity="warning",
+                creator_id=str(creator_id),
+                version=newest.version,
+                ndcg_at_5=round(ndcg, 4),
+                previous_ndcg_at_5=round(float(prev_ndcg), 4),
+                threshold=settings.PREFERENCE_NDCG_REGRESSION_THRESHOLD,
+            )
+            logger.warning(
+                "preference model v%d for creator %s regressed held-out NDCG@5 "
+                "(%.4f -> %.4f, threshold %.2f) — warn-only, retrain kept",
+                newest.version,
+                creator_id,
+                float(prev_ndcg),
+                ndcg,
+                settings.PREFERENCE_NDCG_REGRESSION_THRESHOLD,
+            )
+    except Exception:
+        with contextlib.suppress(Exception):
+            await session.rollback()
+        logger.warning(
+            "preference metrics emission failed for creator %s — retrain unaffected",
+            creator_id,
+            exc_info=True,
+        )
 
 
 async def _creator_id_for_video(video_id: str) -> str | None:
