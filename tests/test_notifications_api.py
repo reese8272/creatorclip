@@ -10,6 +10,8 @@ design — see CLAUDE.md Testing Rules). These cover the load-bearing edges:
   * GET /unsubscribe/{token} flips email_lifecycle off, is idempotent, 404s an
     unknown token with a generic body (no email/creator id), and 422s a
     malformed (non-uuid) token.
+  * POST /unsubscribe/{token} — the RFC 8058 one-click endpoint mail receivers
+    (Gmail/Yahoo) actually hit — same flip / idempotency / generic-404 contract.
 """
 
 import uuid
@@ -214,3 +216,57 @@ def test_unsubscribe_unknown_token_generic_404(client) -> None:
 def test_unsubscribe_malformed_token_422(client) -> None:
     resp = client.get("/unsubscribe/not-a-uuid")
     assert resp.status_code == 422
+
+
+# ── POST /unsubscribe/{token} (RFC 8058 one-click) ────────────────────────────
+
+
+def test_one_click_post_unsubscribe_flips_lifecycle_off(client) -> None:
+    token = uuid.uuid4()
+    prefs = MagicMock(spec=NotificationPreference)
+    prefs.creator_id = uuid.uuid4()
+    prefs.email_lifecycle = True
+
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=prefs)
+
+    with patch("routers.notifications.AdminSessionLocal", _admin_session_cm(session)):
+        # RFC 8058 receivers POST a form body of "List-Unsubscribe=One-Click".
+        resp = client.post(
+            f"/unsubscribe/{token}",
+            data={"List-Unsubscribe": "One-Click"},
+        )
+
+    assert resp.status_code == 200
+    assert prefs.email_lifecycle is False
+    session.commit.assert_awaited()
+
+
+def test_one_click_post_unsubscribe_idempotent(client) -> None:
+    token = uuid.uuid4()
+    prefs = MagicMock(spec=NotificationPreference)
+    prefs.creator_id = uuid.uuid4()
+    prefs.email_lifecycle = False  # already opted out
+
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=prefs)
+
+    with patch("routers.notifications.AdminSessionLocal", _admin_session_cm(session)):
+        resp = client.post(f"/unsubscribe/{token}")
+
+    assert resp.status_code == 200  # no-op success
+    session.commit.assert_not_awaited()
+
+
+def test_one_click_post_unsubscribe_unknown_token_generic_404(client) -> None:
+    token = uuid.uuid4()
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
+
+    with patch("routers.notifications.AdminSessionLocal", _admin_session_cm(session)):
+        resp = client.post(f"/unsubscribe/{token}")
+
+    assert resp.status_code == 404
+    # Generic body — must not reveal an email address or creator id.
+    assert "@" not in resp.text
+    assert str(token) not in resp.text

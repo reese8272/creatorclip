@@ -187,4 +187,30 @@ describe('ActivityPanel — SSE subscription lifecycle', () => {
     unmount()
     expect(firstSub().close).toHaveBeenCalledTimes(1)
   })
+
+  // Issue 245 residual — a task finishing usually just created a durable
+  // notification (e.g. clips_ready); onDone must invalidate ['notifications']
+  // so the row appears without a page reload.
+  it('invalidates the notifications query when a stream reports done', () => {
+    upsert('t1', { videoId: 'v1', phase: 'running', streamUrl: '/tasks/t1/events' })
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ActivityPanel />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const handlers = vi.mocked(subscribeToTaskStream).mock.calls[0][1]
+    act(() => {
+      handlers.onDone?.({})
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['notifications'] })
+  })
 })
