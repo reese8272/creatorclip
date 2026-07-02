@@ -116,6 +116,7 @@ async def test_get_current_creator_via_api_key_stashes_creator_id_on_state():
     key_row.key_hash = hash_api_key(raw_key)
     key_row.revoked_at = None
     key_row.creator_id = cid
+    key_row.last_used_at = None  # never stamped → dependency stamps it (Issue 352 throttle)
 
     creator = MagicMock()
     creator.id = cid

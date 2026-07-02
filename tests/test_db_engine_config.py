@@ -29,11 +29,27 @@ def test_pool_recycle_set() -> None:
 
 def test_recreate_engine_reentry_guard_returns_early() -> None:
     # Concurrent prefork signals must not race through pool teardown (Issue 123).
-    original_flag = db._recreate_in_progress
+    # The guard is a non-blocking lock (Issue 352) so check-and-set is atomic.
     original_engine = db.engine
-    db._recreate_in_progress = True
+    assert db._recreate_lock.acquire(blocking=False)
     try:
-        db.recreate_engine()  # must be a no-op when already in progress
+        db.recreate_engine()  # must be a no-op while another caller holds the lock
         assert db.engine is original_engine  # engine reference unchanged
     finally:
-        db._recreate_in_progress = original_flag
+        db._recreate_lock.release()
+
+
+def test_recreate_engine_never_exposes_disposed_engine() -> None:
+    # Build-then-swap (Issue 352): after recreate_engine the module globals are
+    # fresh objects and the sessionmaker is bound to the new engine, so no
+    # reader can ever pick up a disposed engine via db.AsyncSessionLocal.
+    pre_engine = db.engine
+    pre_admin = db.admin_engine
+    db.recreate_engine()
+    try:
+        assert db.engine is not pre_engine
+        assert db.admin_engine is not pre_admin
+        assert db.AsyncSessionLocal.kw["bind"] is db.engine
+        assert db.AdminSessionLocal.kw["bind"] is db.admin_engine
+    finally:
+        db.recreate_engine()  # rebind again so no state leaks into later tests

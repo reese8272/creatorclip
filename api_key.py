@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
@@ -40,6 +40,11 @@ from models import Creator, CreatorApiKey
 _PREFIX = "ack_"  # "AutoClip Key" — easy to grep in user logs/keyrings
 _RAW_LEN = 32  # url-safe chars after the prefix
 _PREFIX_DISPLAY_LEN = 8  # how many post-prefix chars to keep for UI display
+
+# last_used_at means "roughly when last used" (management-UI freshness), so an
+# UPDATE + commit on every authenticated request is pure write amplification.
+# Only stamp when the current value is missing or older than this interval.
+_LAST_USED_STAMP_INTERVAL = timedelta(minutes=5)
 
 
 # ── Generation + hashing ────────────────────────────────────────────────────
@@ -55,6 +60,13 @@ def hash_api_key(raw_key: str) -> str:
     comparison is not needed here because lookups happen by hash on an
     indexed column."""
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def should_stamp_last_used(last_used_at: datetime | None, now: datetime) -> bool:
+    """True when ``last_used_at`` should be rewritten: never stamped yet, or
+    stale by at least ``_LAST_USED_STAMP_INTERVAL``. Keeps the column's
+    'roughly when last used' semantics without a write per request."""
+    return last_used_at is None or (now - last_used_at) >= _LAST_USED_STAMP_INTERVAL
 
 
 def display_prefix(raw_key: str) -> str:
@@ -84,7 +96,9 @@ async def get_current_creator_via_api_key(
 
     Raises 401 if the header is missing, malformed, refers to a hash
     we don't know, or the matching row has been revoked. Updates
-    ``last_used_at`` so the management UI can show key freshness.
+    ``last_used_at`` so the management UI can show key freshness —
+    throttled to once per ``_LAST_USED_STAMP_INTERVAL`` to avoid an
+    UPDATE per request (Issue 352).
     Sets ``session.info["creator_id"]`` so RLS gates downstream queries
     (Issue 79).
     """
@@ -110,8 +124,10 @@ async def get_current_creator_via_api_key(
         # rather than 500 to avoid leaking schema state.
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
 
-    row.last_used_at = datetime.now(UTC)
-    await session.commit()
+    now = datetime.now(UTC)
+    if should_stamp_last_used(row.last_used_at, now):
+        row.last_used_at = now
+        await session.commit()
 
     session.info["creator_id"] = creator.id
     # Stash on request.state so creator_key() in limiter.py can read the
