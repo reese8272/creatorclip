@@ -9,6 +9,7 @@ from clip_engine.render import render_clip_file
 from db import get_session
 from main import app
 from models import Clip, Creator, RenderStatus
+from tests._helpers import stub_get_owned
 
 
 def _mock_creator() -> MagicMock:
@@ -30,7 +31,7 @@ def _mock_clip(creator_id: uuid.UUID, style: dict | None = None) -> MagicMock:
 def _fake_session(clip: MagicMock):
     async def _session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=clip)
+        stub_get_owned(session, clip)
         session.commit = AsyncMock()
         yield session
 

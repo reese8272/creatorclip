@@ -4,6 +4,7 @@ Unit tests for dna/builder.py, dna/brief.py, dna/profile.py.
 Pure-function and mock-at-boundary tests — no DB, no network.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -425,3 +426,140 @@ async def test_create_draft_does_not_regress_active_state():
     assert stub.onboarding_state == OnboardingState.active, (
         "create_draft MUST NOT regress active → dna_pending on rebuild"
     )
+
+
+# ── _enrich_videos (Issue 109a split regression) ──────────────────────────────
+#
+# Expected output below was captured by running the PRE-SPLIT _enrich_videos
+# (single ~48-line function) against this exact fixture; the split into four
+# focused loaders + a thin stitch must be byte-identical.
+
+_ENRICH_V1 = uuid.UUID(int=1)
+_ENRICH_V2 = uuid.UUID(int=2)
+_ENRICH_V3 = uuid.UUID(int=3)
+
+
+def _enrich_result(rows):
+    res = MagicMock()
+    res.scalars.return_value = list(rows)
+    return res
+
+
+async def test_enrich_videos_matches_pre_split_output():
+    from dna.builder import _enrich_videos
+
+    transcripts = [
+        SimpleNamespace(
+            video_id=_ENRICH_V1,
+            segments_jsonb={
+                "segments": [
+                    {
+                        "words": [
+                            {"word": w}
+                            for w in [
+                                "so",
+                                "today",
+                                "we",
+                                "are",
+                                "testing",
+                                "the",
+                                "hook",
+                                "extraction",
+                            ]
+                        ]
+                    },
+                    {
+                        "words": [
+                            {"word": w} for w in ["and", "this", "is", "the", "second", "segment"]
+                        ]
+                    },
+                ]
+            },
+        ),
+    ]
+    signals = [
+        SimpleNamespace(
+            video_id=_ENRICH_V1,
+            timeline_jsonb={
+                "energy_spikes": [{"start_s": 10.0}, {"start_s": 42.0}, {"start_s": 90.0}],
+                "laughter": [{"start_s": 55.0}],
+            },
+        ),
+    ]
+    retention = [
+        SimpleNamespace(
+            video_id=_ENRICH_V1, timestamp_s=15.0, is_rewatch_spike=True, audience_watch_ratio=0.9
+        ),
+        SimpleNamespace(
+            video_id=_ENRICH_V1, timestamp_s=150.0, is_rewatch_spike=False, audience_watch_ratio=0.5
+        ),
+        SimpleNamespace(
+            video_id=_ENRICH_V1, timestamp_s=290.0, is_rewatch_spike=True, audience_watch_ratio=0.7
+        ),
+        SimpleNamespace(
+            video_id=_ENRICH_V2, timestamp_s=30.0, is_rewatch_spike=False, audience_watch_ratio=0.4
+        ),
+        SimpleNamespace(
+            video_id=_ENRICH_V2, timestamp_s=200.0, is_rewatch_spike=False, audience_watch_ratio=0.8
+        ),
+    ]
+
+    session = MagicMock()
+    # Query order is part of the contract: Transcript, Signals, RetentionCurve —
+    # exactly 3 batched IN-queries (no N+1), same as pre-split.
+    session.execute = AsyncMock(
+        side_effect=[
+            _enrich_result(transcripts),
+            _enrich_result(signals),
+            _enrich_result(retention),
+        ]
+    )
+    videos = [
+        {"video_id": _ENRICH_V1, "duration_s": 300.0},
+        {"video_id": _ENRICH_V2, "duration_s": 240.0},
+        {"video_id": _ENRICH_V3, "duration_s": None},
+    ]
+
+    await _enrich_videos(session, videos)
+
+    assert session.execute.await_count == 3, "must stay 3 batched IN-queries (no N+1)"
+    assert videos == [
+        {
+            "video_id": _ENRICH_V1,
+            "duration_s": 300.0,
+            "hook_text": (
+                "so today we are testing the hook extraction and this is the second segment"
+            ),
+            "energy_spike_count": 3,
+            "laughter_count": 1,
+            "retention_spike_times": [15.0, 290.0],
+            "best_source_region": "first_third",
+        },
+        {
+            "video_id": _ENRICH_V2,
+            "duration_s": 240.0,
+            "hook_text": "",
+            "energy_spike_count": 0,
+            "laughter_count": 0,
+            "retention_spike_times": [],
+            "best_source_region": "last_third",
+        },
+        {
+            "video_id": _ENRICH_V3,
+            "duration_s": None,
+            "hook_text": "",
+            "energy_spike_count": 0,
+            "laughter_count": 0,
+            "retention_spike_times": [],
+            "best_source_region": None,
+        },
+    ]
+
+
+async def test_enrich_videos_empty_list_is_noop():
+    from dna.builder import _enrich_videos
+
+    session = MagicMock()
+    session.execute = AsyncMock()
+    await _enrich_videos(session, [])
+    session.execute.assert_not_awaited()

@@ -22,6 +22,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response as _StarletteResponse
 
 import event_log
+import shared_resources
 from auth import check_not_cross_site
 from config import settings
 from db import engine
@@ -98,21 +99,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         socket_timeout=2.0,
         socket_connect_timeout=2.0,
     )
+    # Registered last → closed first by close_all(). Re-registration replaces
+    # the previous lifespan's bound method on repeated startups (TestClient).
+    shared_resources.register_aclose("health_redis", _health_redis.aclose)
     yield
-    # Close the shared YouTube/Google HTTP client (Issue 72).
-    from youtube import _http
-
-    await _http.aclose()
-    # Close the Issue-86 progress Redis client cleanly (no Event-loop-is-closed
-    # warnings at shutdown; releases the connection pool).
-    from worker import progress
-
-    await progress.aclose()
-    # Close the health-check Redis singleton.
-    if _health_redis is not None:
-        await _health_redis.aclose()
-    # Close the event-log sink pool (Issue 151).
-    await event_log.dispose()
+    # Close every registered long-lived client — youtube HTTP client (Issue 72),
+    # worker progress Redis (Issue 86), the health-check Redis above, and the
+    # event-log sink pool (Issue 151) — in reverse registration order,
+    # error-isolated per resource (Issue 109b).
+    await shared_resources.close_all()
     logger.info("CreatorClip shutdown")
 
 

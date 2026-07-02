@@ -33,7 +33,7 @@ from models import (
     Transcript,
     Video,
 )
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, owned_lookup_result, stub_get_owned
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ def test_render_clip_409_when_already_running(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=running_clip)
+        stub_get_owned(s, running_clip)
         yield s
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
@@ -133,7 +133,7 @@ def test_render_clip_aset_owner_redis_error_returns_stream_url_none(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(return_value=pending_clip)
+        stub_get_owned(s, pending_clip)
         s.commit = AsyncMock()
         yield s
 
@@ -167,8 +167,8 @@ def test_clean_preview_none_transcript_returns_empty_cuts(client):
 
     async def _session():
         s = AsyncMock()
-        # First .get() → clip; second .get() → None (no transcript)
-        s.get = AsyncMock(side_effect=[cl, None])
+        stub_get_owned(s, cl)  # clip via the ownership select (Issue 109e)
+        s.get = AsyncMock(return_value=None)  # transcript fetch → None
         yield s
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
@@ -210,7 +210,8 @@ def test_clean_preview_high_removal_populates_warning(client):
 
     async def _session():
         s = AsyncMock()
-        s.get = AsyncMock(side_effect=[cl, tr])
+        stub_get_owned(s, cl)  # clip via the ownership select (Issue 109e)
+        s.get = AsyncMock(return_value=tr)  # transcript fetch
         yield s
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
@@ -337,22 +338,23 @@ def _pub(creator_id: uuid.UUID, status: PublishStatus) -> MagicMock:
 
 
 def _pub_session(creator_id, clip_mock, pub_mock):
-    """Session that returns clip_mock from .get(Clip) and pub_mock from .get(ClipPublication)."""
+    """Session serving the get_owned ownership selects (Issue 109e) for
+    Clip/ClipPublication; other execute calls yield an empty scalars result."""
 
     async def _session():
         s = AsyncMock()
 
-        async def _get(model, pk, **kw):
-            if model is Clip:
-                return clip_mock
-            if model is ClipPublication:
-                return pub_mock
-            return None
+        async def _execute(stmt, *a, **kw):
+            entity = stmt.column_descriptions[0]["type"]
+            if entity is Clip:
+                return owned_lookup_result(stmt, clip_mock)
+            if entity is ClipPublication:
+                return owned_lookup_result(stmt, pub_mock)
+            return MagicMock(scalars=lambda: iter([]))
 
-        s.get = AsyncMock(side_effect=_get)
+        s.execute = AsyncMock(side_effect=_execute)
         s.commit = AsyncMock()
         s.refresh = AsyncMock()
-        s.execute = AsyncMock(return_value=MagicMock(scalars=lambda: iter([])))
         yield s
 
     return _session
@@ -437,22 +439,22 @@ def test_cancel_then_confirm_race_returns_409(client):
     async def _session_cancel():
         s = AsyncMock()
 
-        async def _get(model, pk, **kw):
-            if model is Clip:
-                return cl
-            if model is ClipPublication:
-                return pub
-            return None
+        async def _execute(stmt, *a, **kw):
+            entity = stmt.column_descriptions[0]["type"]
+            if entity is Clip:
+                return owned_lookup_result(stmt, cl)
+            if entity is ClipPublication:
+                return owned_lookup_result(stmt, pub)
+            return MagicMock(scalars=lambda: iter([]))
 
         async def _commit():
             # Simulate the handler writing status=failed
             pub.status = PublishStatus.failed
             pub.error = "Cancelled by creator"
 
-        s.get = AsyncMock(side_effect=_get)
+        s.execute = AsyncMock(side_effect=_execute)
         s.commit = AsyncMock(side_effect=_commit)
         s.refresh = AsyncMock()
-        s.execute = AsyncMock(return_value=MagicMock(scalars=lambda: iter([])))
         yield s
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)

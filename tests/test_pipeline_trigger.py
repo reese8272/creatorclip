@@ -13,7 +13,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import IngestStatus, VideoKind
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, owned_lookup_result
 
 # ── generate_clips task ───────────────────────────────────────────────────────
 
@@ -70,7 +70,10 @@ def test_video_status_endpoint_returns_status(client):
 
     async def fake_session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=video)
+        # get_owned ownership select (Issue 109e) — emulates the DB predicate.
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, video)
+        )
         yield session
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
@@ -92,7 +95,10 @@ def test_video_status_404_wrong_creator(client):
 
     async def fake_session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=video)
+        # get_owned ownership select (Issue 109e) — emulates the DB predicate.
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, video)
+        )
         yield session
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)

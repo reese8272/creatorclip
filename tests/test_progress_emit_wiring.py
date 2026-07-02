@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, stub_get_owned
 
 
 def _emit_labels(mock_emit: AsyncMock) -> list[str]:
@@ -766,7 +766,7 @@ async def test_render_router_fails_open_on_redis_down(mocker):
 
     fake_session = AsyncMock()
     fake_session.scalar = AsyncMock(return_value=100)  # balance check passes
-    fake_session.get = AsyncMock(return_value=clip_stub)
+    stub_get_owned(fake_session, clip_stub)
 
     async def _fake_session_gen():
         yield fake_session
@@ -862,7 +862,7 @@ async def test_render_router_uses_clip_id_as_stream_key(mocker):
 
     fake_session = AsyncMock()
     fake_session.scalar = AsyncMock(return_value=100)  # check_positive_balance passes
-    fake_session.get = AsyncMock(return_value=clip_stub)
+    stub_get_owned(fake_session, clip_stub)
 
     async def _fake_session_gen():
         yield fake_session

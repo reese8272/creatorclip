@@ -38,6 +38,7 @@ from models import (
     VideoOrigin,
 )
 from observability import record_llm_tokens
+from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
 from worker.storage import presigned_download_url, upload_file
 from youtube.data_api import classify_video_kind
@@ -229,9 +230,7 @@ async def generate_clips(
     """Extract, score, and rank clip candidates for a fully-ingested video."""
     await check_positive_balance(creator.id, session)
 
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
     if video.ingest_status != IngestStatus.done:
         raise HTTPException(status_code=400, detail="Video is not fully ingested yet")
 
@@ -330,9 +329,7 @@ async def list_clips(
     principle-grounded explanation when the video produced zero clips so the creator
     understands *why* — never a raw score, never virality language.
     """
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
 
     # Hard cap to prevent unbounded scans as clip counts grow. (Issue 76)
     # Issue 339: query for _LIST_LIMIT+1 so we can distinguish "exactly 100
@@ -449,9 +446,7 @@ async def render_clip(
     """
     await check_positive_balance(creator.id, session)
 
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if clip.render_status == RenderStatus.running:
         raise HTTPException(status_code=409, detail="Render already in progress")
 
@@ -609,9 +604,7 @@ async def clean_preview(
     No render is triggered — this is the cheap preview endpoint that drives
     the transcript-strikethrough UI (Issue 134).
     """
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     transcript = await session.get(Transcript, clip.video_id)
     preview, pct, dur = _clip_clean_cuts(clip, transcript)
     warning: str | None = None
@@ -648,9 +641,7 @@ async def clean_clip(
     ``POST /clean/confirm`` swaps them (Issue 134)."""
     await check_positive_balance(creator.id, session)
 
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if not clip.render_uri:
         raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
     # Issue-135 audit fix: clean and edit share cleaned_render_uri; running one
@@ -708,9 +699,7 @@ async def clean_confirm(
     lifecycle prefix (no new cleanup code needed). Idempotent: if the swap
     has already happened (``cleaned_render_uri`` is null) the endpoint
     returns 200 with ``status="noop"`` so router-retry is safe (Issue 134)."""
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if not clip.cleaned_render_uri:
         return {
             "clip_id": str(clip_id),
@@ -780,9 +769,7 @@ async def clip_transcript(
     """Return the clip-windowed transcript word array for the editor pane
     (Issue 135). Word timestamps are normalised to clip-relative seconds so
     the frontend doesn't need to know about the source-video timebase."""
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     transcript = await session.get(Transcript, clip.video_id)
     clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
     clip_duration_s = clip.end_s - clip_origin_s
@@ -841,9 +828,7 @@ async def submit_cuts(
 
     await check_positive_balance(creator.id, session)
 
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if not clip.render_uri:
         raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
     # Issue-135 audit fix — mirror /clean: refuse if a pending cleaned/edited
@@ -1061,9 +1046,7 @@ async def get_clip(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Return a single clip by ID."""
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     return _clip_response(clip)
 
 
@@ -1087,9 +1070,7 @@ async def download_clip(
     Prod (R2): 302-redirects to a short-lived presigned GET URL so bandwidth is
     offloaded to object storage. Dev (local disk): streams the file directly.
     """
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
     uri = clip.cleaned_render_uri if variant == "cleaned" else clip.render_uri
     if not uri:
@@ -1158,9 +1139,7 @@ async def get_clip_title_suggestions(
     await check_positive_balance(creator.id, session)
 
     # Fetch clip with isolation check.
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
     # Fetch transcript for the clip's parent video.
     transcript = await session.scalar(
@@ -1262,9 +1241,7 @@ async def get_clip_caption_hooks(
     await check_positive_balance(creator.id, session)
 
     # Fetch clip with isolation check.
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
     # Fetch opening transcript hook for the clip's parent video.
     transcript = await session.scalar(
@@ -1363,9 +1340,7 @@ async def get_clip_explanation(
     await check_positive_balance(creator.id, session)
 
     # Fetch clip with isolation check.
-    clip = await session.get(Clip, clip_id)
-    if not clip or clip.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
     # Fetch transcript.
     transcript = await session.scalar(
@@ -1526,9 +1501,7 @@ async def create_summary(
     """
     await check_positive_balance(creator.id, session)
 
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
     if video.origin != VideoOrigin.upload:
         raise HTTPException(
             status_code=400,
@@ -1670,9 +1643,7 @@ async def list_summaries(
 ) -> dict:
     """List the video's recap summaries, newest first. Creator-scoped: another
     creator's video — or a missing id — returns 404."""
-    video = await session.get(Video, video_id)
-    if not video or video.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Video not found")
+    await get_owned(session, Video, video_id, creator.id, detail="Video not found")
     result = await session.execute(
         select(Summary)
         .where(Summary.video_id == video_id, Summary.creator_id == creator.id)
@@ -1691,9 +1662,7 @@ async def get_summary(
 ) -> dict:
     """Return a single recap summary with its segments. Per-creator isolation:
     a foreign creator's summary returns 404, never 403."""
-    summary = await session.get(Summary, summary_id)
-    if not summary or summary.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Summary not found")
+    summary = await get_owned(session, Summary, summary_id, creator.id, detail="Summary not found")
     return _summary_response(summary)
 
 
@@ -1712,9 +1681,7 @@ async def download_summary(
     16:9 player ``<video>``. 404 until the render lands. Prod (R2): 302 to a
     short-lived presigned GET URL; dev (local disk): streams the file.
     """
-    summary = await session.get(Summary, summary_id)
-    if not summary or summary.creator_id != creator.id:
-        raise HTTPException(status_code=404, detail="Summary not found")
+    summary = await get_owned(session, Summary, summary_id, creator.id, detail="Summary not found")
     if not summary.render_uri:
         raise HTTPException(status_code=404, detail="Recap not yet rendered")
 

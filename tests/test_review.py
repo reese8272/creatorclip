@@ -15,7 +15,7 @@ from auth import get_current_creator
 from db import get_session
 from main import app
 from models import Clip, Creator, RenderStatus
-from tests._helpers import override_current_creator
+from tests._helpers import override_current_creator, owned_lookup_result
 
 
 def _make_creator():
@@ -46,7 +46,10 @@ def _make_clip(creator_id: uuid.UUID) -> MagicMock:
 def _build_client(creator, clip):
     async def fake_session():
         session = AsyncMock()
-        session.get = AsyncMock(side_effect=lambda model, pk: clip if model is Clip else None)
+        # get_owned ownership select (Issue 109e) — emulates the DB predicate.
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, clip)
+        )
         session.add = MagicMock()
         session.commit = AsyncMock()
         session.refresh = AsyncMock()
@@ -124,7 +127,10 @@ def test_feedback_wrong_creator_returns_404():
 
     async def fake_session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=clip)  # returns the clip but wrong creator
+        # Foreign clip: the ownership predicate filters it out server-side (Issue 109e).
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, clip)
+        )
         session.add = MagicMock()
         session.commit = AsyncMock()
         session.refresh = AsyncMock()
@@ -143,7 +149,9 @@ def test_feedback_clip_not_found_returns_404():
 
     async def fake_session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=None)
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, None)
+        )
         yield session
 
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)

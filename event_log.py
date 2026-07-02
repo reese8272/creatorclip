@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import (
 from config import settings
 from models import EventLog
 from redact import _REDACTED, is_sensitive, scrub_value
+from shared_resources import register_aclose
 
 logger = logging.getLogger(__name__)
 
@@ -252,3 +253,7 @@ async def dispose() -> None:
         await _engine.dispose()
         _engine = None
         _sessionmaker = None
+
+
+# App shutdown closes the sink pool via shared_resources.close_all() (Issue 109b).
+register_aclose("event_log", dispose)
