@@ -29,9 +29,12 @@ from models import (
     IngestStatus,
     RenderStatus,
     Signals,
+    Summary,
+    SummaryStatus,
     Transcript,
     Video,
     VideoKind,
+    VideoOrigin,
 )
 from observability import record_llm_tokens
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
@@ -1427,3 +1430,307 @@ async def get_clip_explanation(
         result.get("cited_principle", ""),
     )
     return result
+
+
+# ── Issue 192: stream-VOD recap summaries — API front door ────────────────────
+
+summaries_router = APIRouter(prefix="/summaries", tags=["summaries"])
+
+
+class SummarySegmentOut(BaseModel):
+    """One chronological recap segment (the shape persisted to ``summaries.segments``).
+
+    ``principle`` is an exact named principle from docs/CLIPPING_PRINCIPLES.md —
+    the same contract as clips. ``score`` is this creator's DNA-fit score for
+    the segment; the UI headlines the honest tier, never the raw number.
+    """
+
+    start_s: float
+    end_s: float
+    score: float
+    principle: str
+    rationale: str
+
+
+class SummaryOut(BaseModel):
+    """A stream-VOD recap Summary row (Issue 190) with its selected segments."""
+
+    id: str
+    video_id: str
+    status: str
+    render_status: str
+    target_duration_s: int
+    segments: list[SummarySegmentOut]
+    render_uri: str | None
+    created_at: str
+
+
+class SummaryListOut(BaseModel):
+    """Envelope for GET /videos/{video_id}/summaries."""
+
+    summaries: list[SummaryOut]
+
+
+class SummaryQueuedOut(BaseModel):
+    """202 Accepted response for POST /videos/{video_id}/summaries.
+
+    Mirrors TaskQueuedOut's fail-open ``stream_url`` posture but keys on
+    ``summary_id`` — the SSE stream and the resource share the same id, so the
+    client never needs a separate task id.
+    """
+
+    summary_id: str
+    status: str
+    stream_url: str | None = None
+
+
+def _summary_response(summary: Summary) -> dict:
+    return {
+        "id": str(summary.id),
+        "video_id": str(summary.video_id),
+        "status": summary.status.value,
+        "render_status": summary.render_status.value,
+        "target_duration_s": summary.target_duration_s,
+        "segments": summary.segments or [],
+        "render_uri": summary.render_uri,
+        "created_at": summary.created_at.isoformat() if summary.created_at else "",
+    }
+
+
+@router.post(
+    "/{video_id}/summaries",
+    status_code=202,
+    response_model=SummaryQueuedOut,
+    # Kill switch (Issue 284): 503 when the render_intake flag is off.
+    dependencies=[Depends(require_flag("render_intake"))],
+)
+@limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
+async def create_summary(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Select recap segments for a video and queue the 16:9 recap render.
+
+    Selection (``clip_engine.summary_select.select_recap_segments``) is pure and
+    runs in-request from the video's already-scored clips — segment starts use
+    ``setup_start_s`` so the recap clips the setup, not the aftermath. The heavy
+    render happens in the ``render_summary`` Celery task (Issue 191).
+
+    Idempotent: an existing Summary whose render is still pending/running is
+    returned as-is instead of duplicating the job. Per-creator isolation: the
+    video must belong to the authenticated creator, else 404.
+    """
+    await check_positive_balance(creator.id, session)
+
+    video = await session.get(Video, video_id)
+    if not video or video.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.origin != VideoOrigin.upload:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Recaps need your uploaded source file — we never download your "
+                "video from YouTube (per their Terms of Service). Upload the "
+                "original file to create a recap."
+            ),
+        )
+    if video.ingest_status != IngestStatus.done:
+        raise HTTPException(status_code=400, detail="Video is not fully ingested yet")
+    if not video.source_uri:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Source media expired (72-hour retention) — re-upload the video to create a recap."
+            ),
+        )
+
+    # Idempotency: a summary whose render is still in flight is THE recap for
+    # this video — return it rather than enqueue a duplicate render.
+    existing = await session.scalar(
+        select(Summary)
+        .where(
+            Summary.video_id == video_id,
+            Summary.creator_id == creator.id,
+            Summary.render_status.in_([RenderStatus.pending, RenderStatus.running]),
+            Summary.status != SummaryStatus.failed,
+        )
+        .order_by(Summary.created_at.desc())
+        .limit(1)
+    )
+    if existing:
+        return {
+            "summary_id": str(existing.id),
+            "status": "queued",
+            "stream_url": f"/tasks/{existing.id}/events",
+        }
+
+    # Candidates: the video's existing scored clips (principle + rationale from
+    # signals_jsonb — same source as _clip_response). Setup-start rule: the
+    # segment begins at the setup, not the peak's aftermath.
+    result = await session.execute(
+        select(Clip).where(Clip.video_id == video_id, Clip.creator_id == creator.id)
+    )
+    candidates: list[dict] = []
+    for clip in result.scalars():
+        if clip.score is None:
+            continue
+        sj = clip.signals_jsonb or {}
+        start_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+        candidates.append(
+            {
+                "start_s": float(start_s),
+                "end_s": float(clip.end_s),
+                "score": float(clip.score),
+                "principle": sj.get("principle", ""),
+                "rationale": sj.get("reasoning", ""),
+            }
+        )
+
+    # Chapter boundaries (when a signal timeline exists) demote segments that
+    # straddle a chapter mid-segment — parse_chapters()['chapters'] shape.
+    chapters: list[dict] | None = None
+    signals = await session.get(Signals, video_id)
+    if signals and video.duration_s:
+        from knowledge.chapters import find_chapter_boundaries
+
+        boundaries = find_chapter_boundaries(signals.timeline_jsonb, float(video.duration_s))
+        chapters = [{"timestamp_s": b} for b in boundaries]
+
+    from clip_engine.summary_select import select_recap_segments
+
+    segments = select_recap_segments(
+        candidates,
+        budget_s=float(settings.RECAP_TARGET_DURATION_MAX_S),
+        chapters=chapters,
+    )
+    if not segments:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Not enough scored material yet — generate clips for this video "
+                "first, then request a recap."
+            ),
+        )
+
+    from dna.profile import get_active
+
+    dna_profile = await get_active(session, creator.id)
+
+    summary = Summary(
+        creator_id=creator.id,
+        video_id=video_id,
+        target_duration_s=settings.RECAP_TARGET_DURATION_MAX_S,
+        segments=segments,
+        dna_version=dna_profile.version if dna_profile else None,
+        status=SummaryStatus.ready,
+    )
+    session.add(summary)
+    await session.commit()
+    await session.refresh(summary)
+
+    import redis as _redis_pkg
+
+    from worker import progress
+    from worker.tasks import render_summary as render_summary_task
+
+    # `.delay()` is sync Redis I/O; offload from the request loop (scale-checklist B).
+    await asyncio.to_thread(render_summary_task.delay, str(summary.id))
+    # summary_id is the SSE stream key (the worker emits to task:{summary_id}:events).
+    # Fail-open posture (Wave-5 Fix 1): a Redis blip returns stream_url=None
+    # instead of 500-ing — the render is already enqueued and will run.
+    stream_url: str | None = f"/tasks/{summary.id}/events"
+    try:
+        await progress.aset_owner(str(summary.id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning(
+            "recap aset_owner failed (Redis down?) summary_id=%s err=%s",
+            summary.id,
+            exc,
+        )
+        stream_url = None
+
+    return {
+        "summary_id": str(summary.id),
+        "status": "queued",
+        "stream_url": stream_url,
+    }
+
+
+@router.get("/{video_id}/summaries", response_model=SummaryListOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def list_summaries(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """List the video's recap summaries, newest first. Creator-scoped: another
+    creator's video — or a missing id — returns 404."""
+    video = await session.get(Video, video_id)
+    if not video or video.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    result = await session.execute(
+        select(Summary)
+        .where(Summary.video_id == video_id, Summary.creator_id == creator.id)
+        .order_by(Summary.created_at.desc())
+    )
+    return {"summaries": [_summary_response(s) for s in result.scalars()]}
+
+
+@summaries_router.get("/{summary_id}", response_model=SummaryOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def get_summary(
+    request: Request,
+    summary_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return a single recap summary with its segments. Per-creator isolation:
+    a foreign creator's summary returns 404, never 403."""
+    summary = await session.get(Summary, summary_id)
+    if not summary or summary.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    return _summary_response(summary)
+
+
+@summaries_router.get("/{summary_id}/download", response_model=None)
+@limiter.limit("60/minute", key_func=creator_key)
+async def download_summary(
+    request: Request,
+    summary_id: uuid.UUID,
+    disposition: Literal["attachment", "inline"] = "attachment",
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> RedirectResponse | FileResponse:
+    """Serve a rendered recap — the ``download_clip`` contract, verbatim.
+
+    ``disposition=attachment`` forces a download; ``inline`` backs the in-app
+    16:9 player ``<video>``. 404 until the render lands. Prod (R2): 302 to a
+    short-lived presigned GET URL; dev (local disk): streams the file.
+    """
+    summary = await session.get(Summary, summary_id)
+    if not summary or summary.creator_id != creator.id:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    if not summary.render_uri:
+        raise HTTPException(status_code=404, detail="Recap not yet rendered")
+
+    filename = f"recap-{summary_id}.mp4"
+
+    presigned = presigned_download_url(
+        summary.render_uri, filename=filename, disposition=disposition
+    )
+    if presigned is not None:
+        return RedirectResponse(url=presigned, status_code=302)
+    # Local-disk dev: stream the file straight from disk.
+    path = Path(summary.render_uri)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Recap file not found")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=filename,
+        content_disposition_type=disposition,
+    )

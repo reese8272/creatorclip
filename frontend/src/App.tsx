@@ -13,6 +13,7 @@ import { Login } from '@/pages/Login'
 import { Walkthrough } from '@/pages/Walkthrough'
 import { Onboarding } from '@/pages/Onboarding'
 import { VideoClipsMap } from '@/pages/VideoClipsMap'
+import { Recap } from '@/pages/Recap'
 import { Editor } from '@/pages/Editor'
 import { Settings } from '@/pages/Settings'
 
@@ -79,6 +80,7 @@ const router = createBrowserRouter(
                 { path: 'settings', element: <Settings /> },
                 { path: 'chat', element: <Chat /> },
                 { path: 'video/:videoId', element: <VideoClipsMap /> },
+                { path: 'video/:videoId/recap', element: <Recap /> },
                 { path: 'editor', element: <Editor /> },
               ],
             },
