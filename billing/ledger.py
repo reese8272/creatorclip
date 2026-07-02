@@ -16,10 +16,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session as SyncSession
 
 from config import settings
 from models import Creator, MinuteDeduction, MinutePack, Usage
@@ -27,6 +28,43 @@ from models import Creator, MinuteDeduction, MinutePack, Usage
 logger = logging.getLogger(__name__)
 
 _MTOK = 1_000_000  # tokens per million (for cost calculation)
+
+# session.info key holding balance_low notifications staged by deduct_for_video,
+# drained by the after_commit listener below (Issue 352 Batch B).
+_PENDING_BALANCE_LOW_KEY = "billing_pending_balance_low"
+
+
+@event.listens_for(SyncSession, "after_commit")
+def _send_balance_low_after_commit(sync_session: SyncSession) -> None:
+    """Enqueue staged balance_low notifications only once the transaction commits.
+
+    deduct_for_video stages (creator_id, video_id) pairs in ``session.info``
+    instead of enqueuing directly — enqueuing before the caller's commit could
+    notify for a deduction that a later rollback undoes (transactional-outbox
+    violation). Class-level listener so no per-call listener bookkeeping is
+    needed; sessions with nothing staged pay one dict lookup.
+    """
+    pending: list[tuple[str, str]] | None = sync_session.info.pop(_PENDING_BALANCE_LOW_KEY, None)
+    if not pending:
+        return
+    for creator_id, video_id in pending:
+        try:
+            from worker.tasks import send_notification
+
+            send_notification.delay(creator_id, "balance_low", video_id, {})
+        except Exception as notify_exc:  # noqa: BLE001 — notification is best-effort
+            logger.warning(
+                "balance_low notification failed for creator %s video %s: %s",
+                creator_id,
+                video_id,
+                notify_exc,
+            )
+
+
+@event.listens_for(SyncSession, "after_rollback")
+def _discard_balance_low_on_rollback(sync_session: SyncSession) -> None:
+    """A rolled-back deduction never persisted — drop anything staged for it."""
+    sync_session.info.pop(_PENDING_BALANCE_LOW_KEY, None)
 
 
 def video_minutes(duration_s: float) -> int:
@@ -293,25 +331,21 @@ async def deduct_for_video(
         remaining,
     )
 
-    # Trigger 6: balance-low notification (Issue 244).
-    # Fires only when the post-deduct balance is at or below the threshold.
-    # entity_id = str(video_id) so the dedupe key prevents duplicate notifications
-    # for the same video (at-least-once Celery delivery), while still allowing a
-    # new notification on the next video that crosses the threshold.
+    # Trigger 6: balance-low notification (Issue 244; enqueue moved post-commit
+    # in Issue 352 Batch B). Fires only when the post-deduct balance is at or
+    # below the threshold. Staged in session.info and enqueued by the
+    # after_commit listener above — never before the outer transaction commits,
+    # so a rollback after this function returns cannot send a notification for
+    # a deduction that never persisted. entity_id = str(video_id) so the dedupe
+    # key prevents duplicate notifications for the same video (at-least-once
+    # Celery delivery), while still allowing a new notification on the next
+    # video that crosses the threshold.
     from config import settings
 
     if remaining <= settings.LOW_BALANCE_THRESHOLD_MINUTES:
-        try:
-            from worker.tasks import send_notification
-
-            send_notification.delay(str(creator_id), "balance_low", str(video_id), {})
-        except Exception as notify_exc:
-            logger.warning(
-                "balance_low notification failed for creator %s video %s: %s",
-                creator_id,
-                video_id,
-                notify_exc,
-            )
+        session.info.setdefault(_PENDING_BALANCE_LOW_KEY, []).append(
+            (str(creator_id), str(video_id))
+        )
 
     return minutes
 
