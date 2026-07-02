@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Literal
 
 from pydantic import ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -388,7 +389,12 @@ class Settings(BaseSettings):
     # at 30d half-life (Spotify/Netflix sklearn pipelines). (Issue 102)
     PREFERENCE_MAX_TRAINING_LABELS: int = 5000
     LLM_TIMEOUT_SECONDS: int = 120
-    ENV: str = "development"
+    # Constrained to the three deploy modes actually branched on. Every production
+    # security boundary (prod-secret fail-fast, /docs disable, HSTS, R2-required,
+    # verbose-logging prod lock) compares against the exact literal "production",
+    # so a deploy-time typo ("prod", "Production") must fail at boot, not silently
+    # run a production container with dev-mode hardening. (Issue 352 Batch A)
+    ENV: Literal["development", "staging", "production"] = "development"
     YTDLP_ENABLED: bool = False
     YOUTUBE_QUOTA_DAILY_UNITS: int = 8000
     # Per-creator/day sub-budget charged ONLY to the non-interactive Beat
@@ -678,6 +684,23 @@ class Settings(BaseSettings):
             raise ValueError(f"PREFERENCE_WEIGHT_CAP must be in (0, 1] (got {v})")
         return v
 
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def _jwt_secret_min_length(cls, v: str) -> str:
+        """HS256 requires a key at least as long as the hash output (RFC 7518 §3.2).
+
+        256 bits = 32 bytes. PyJWT does not enforce this on encode(), and a short
+        secret is practically brute-forceable — an attacker who recovers it can
+        forge session cookies for any creator_id (full cross-tenant impersonation).
+        Fail fast at boot instead. (Issue 352 Batch A)
+        """
+        if len(v.encode()) < 32:
+            raise ValueError(
+                "JWT_SECRET_KEY must be at least 32 bytes (256 bits) for HS256; "
+                f"got {len(v.encode())} bytes. Generate one with: openssl rand -base64 32"
+            )
+        return v
+
     @model_validator(mode="after")
     def _validate_notify_backend(self) -> "Settings":
         """Fail fast when Resend is selected but the API key is absent.
@@ -691,6 +714,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "NOTIFY_BACKEND='resend' requires RESEND_API_KEY to be set. "
                 "Generate a key at https://resend.com and add it to .env."
+            )
+        # EMAIL_FROM defaults to "" — with the resend backend that posts
+        # `"from": ""`, Resend 422s, and the worker's broad except marks every
+        # transactional email 'failed' with no startup signal. Fail fast instead.
+        # (2026-07-01 assessment, notify.md SEV2; Issue 352 Batch A)
+        if self.NOTIFY_BACKEND == "resend" and not self.EMAIL_FROM:
+            raise ValueError(
+                "NOTIFY_BACKEND='resend' requires EMAIL_FROM to be set "
+                "(e.g. 'AutoClip <notify@yourdomain.com>')."
             )
         return self
 

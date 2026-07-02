@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from config import settings
@@ -10,12 +12,17 @@ class TokenDecryptError(Exception):
     """
 
 
+@lru_cache(maxsize=1)
 def _fernet() -> MultiFernet:
     """Build a MultiFernet from the primary key and (optionally) the previous key.
 
     MultiFernet.encrypt() always uses the first (primary) key.
     MultiFernet.decrypt() tries each key in order, so tokens encrypted under the
     previous key remain readable during a zero-downtime rotation window.
+
+    Cached as a process-wide singleton (Issue 352 Batch A): keys only change on
+    process restart, so rebuilding per encrypt()/decrypt() call was pure waste.
+    Tests that rotate keys at runtime must call ``_fernet.cache_clear()``.
     """
     primary = Fernet(settings.TOKEN_ENCRYPTION_KEY.encode())
     if settings.TOKEN_ENCRYPTION_KEY_PREVIOUS:

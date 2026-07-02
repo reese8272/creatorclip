@@ -145,3 +145,30 @@ def test_production_r2_with_full_config_is_valid():
     s = Settings(**_prod_kwargs())
     assert s.STORAGE_BACKEND == "r2"
     assert s.R2_BUCKET == "bucket"
+
+
+# ── Issue 352 Batch A: boot-time fail-fast on ENV typos and weak JWT secrets ───
+
+
+def test_env_literal_rejects_typo():
+    """A deploy-time typo like 'prod' must fail at boot, not silently run a
+    production container with dev-mode hardening (no HSTS, /docs exposed)."""
+    from config import Settings
+
+    with pytest.raises(ValidationError, match="ENV"):
+        Settings(ENV="prod")
+
+
+def test_env_literal_accepts_staging():
+    from config import Settings
+
+    s = Settings(ENV="staging")
+    assert s.ENV == "staging"
+
+
+def test_jwt_secret_key_rejects_short_value():
+    """HS256 needs >= 32 bytes (RFC 7518 §3.2); a short secret is forgeable."""
+    from config import Settings
+
+    with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
+        Settings(JWT_SECRET_KEY="too-short")

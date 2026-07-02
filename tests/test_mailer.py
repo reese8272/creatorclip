@@ -381,13 +381,45 @@ def test_missing_resend_api_key_fails_at_settings_load() -> None:
         "GOOGLE_OAUTH_CLIENT_SECRET": "gcs",
         "OAUTH_REDIRECT_URI": "http://localhost/cb",
         "TOKEN_ENCRYPTION_KEY": "dGVzdGtleXZhbHVldGVzdGtleXZhbHVldGVzdA==",
-        "JWT_SECRET_KEY": "testsecretjwt",
+        "JWT_SECRET_KEY": "test-jwt-secret-32-bytes-minimum-!",
         "ALLOWED_ORIGINS": "http://localhost",
     }
 
     with (
         patch.dict(os.environ, env_overrides, clear=False),
         pytest.raises(ValidationError, match="RESEND_API_KEY"),
+    ):
+        Settings()
+
+
+def test_missing_email_from_fails_at_settings_load() -> None:
+    """NOTIFY_BACKEND='resend' with EMAIL_FROM='' must fail at startup.
+
+    Otherwise _send_resend posts `"from": ""`, Resend 422s, and every
+    transactional email is silently marked failed. (Issue 352 Batch A)
+    """
+    from pydantic import ValidationError
+
+    from config import Settings
+
+    env_overrides = {
+        "NOTIFY_BACKEND": "resend",
+        "RESEND_API_KEY": "re_test_key",
+        "EMAIL_FROM": "",
+        "ANTHROPIC_API_KEY": "test",
+        "DATABASE_URL": "postgresql+psycopg://u:p@localhost:5432/db",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "GOOGLE_OAUTH_CLIENT_ID": "gci",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "gcs",
+        "OAUTH_REDIRECT_URI": "http://localhost/cb",
+        "TOKEN_ENCRYPTION_KEY": "dGVzdGtleXZhbHVldGVzdGtleXZhbHVldGVzdA==",
+        "JWT_SECRET_KEY": "test-jwt-secret-32-bytes-minimum-!",
+        "ALLOWED_ORIGINS": "http://localhost",
+    }
+
+    with (
+        patch.dict(os.environ, env_overrides, clear=False),
+        pytest.raises(ValidationError, match="EMAIL_FROM"),
     ):
         Settings()
 
