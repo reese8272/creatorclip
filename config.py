@@ -679,6 +679,26 @@ class Settings(BaseSettings):
     # creators still log in; only new Creator rows are blocked.
     FLAG_SIGNUP_ENABLED: bool = True
 
+    # ── Spend guard — USD caps + cost-velocity circuit breaker (Issues 290+291) ─
+    # Enforced by billing/spend_guard.py from Redis µ$ counters incremented at the
+    # ledger choke point (record_llm_usage). A cap set to 0 disables that arm.
+    # Per-creator daily LLM spend ceiling; at 100% the creator gets a 429 +
+    # cool-down (creator-scoped — never trips the global switch).
+    SPEND_CAP_CREATOR_DAILY_USD: float = 5.00
+    # Global daily / monthly ceilings; at 100% the breaker flips the existing
+    # llm_generation kill switch off (manual re-enable via scripts/flags.py).
+    SPEND_CAP_GLOBAL_DAILY_USD: float = 50.00
+    SPEND_CAP_GLOBAL_MONTHLY_USD: float = 400.00
+    # Fraction of any cap at which a once-per-window spend_cap_warning event fires.
+    SPEND_WARN_RATIO: float = 0.80
+    # Cost-velocity trips: rolling ~15-min spend (3 × 5-min buckets) above these
+    # rates trips the breaker even when the daily caps are far away (runaway-loop
+    # detector). Global trip → kill switch; creator trip → creator cool-down.
+    SPEND_VELOCITY_GLOBAL_USD_PER_15M: float = 5.00
+    SPEND_VELOCITY_CREATOR_USD_PER_15M: float = 1.00
+    # TTL (seconds) of the per-creator cool-down key and the global trip-latch.
+    SPEND_COOLDOWN_TTL_S: int = 3600
+
     # ── Transactional email (Issue 242) ────────────────────────────────────────
     # NOTIFY_BACKEND controls where send() dispatches:
     #   'console' — renders + logs; no external call (default in dev / CI)

@@ -193,6 +193,14 @@ async def run_chat_turn(
             total["output_tokens"],
             cost,
         )
+        # Issues 290+291: chat bills via increment_usage (not record_llm_usage),
+        # so it feeds the spend-guard counters + cost metric itself — otherwise
+        # chat spend would be invisible to the caps.
+        from billing.spend_guard import record_spend
+        from observability import record_llm_cost
+
+        record_llm_cost("anthropic", "sonnet-tier", cost)
+        await record_spend(creator_id, cost)
     except Exception as _exc:  # noqa: BLE001 — best-effort; never block chat
         logger.warning("chat usage ledger write failed creator=%s: %s", creator_id, _exc)
 

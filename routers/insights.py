@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
+from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -499,7 +500,7 @@ def _build_analysis_prompt(
     "/analyze-performer",
     response_model=InsightOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("20/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)

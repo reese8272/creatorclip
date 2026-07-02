@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
+from billing.spend_guard import require_budget
 from db import get_session
 from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
@@ -42,7 +43,7 @@ class ImprovementBriefOut(BaseModel):
     status_code=status.HTTP_202_ACCEPTED,
     response_model=BriefQueuedOut,
     # Kill switch (Issue 284): 503 when the llm_generation flag is off.
-    dependencies=[Depends(require_flag("llm_generation"))],
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
 )
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)

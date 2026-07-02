@@ -106,6 +106,14 @@ LLM_TOKENS_TOTAL = Counter(
     "LLM tokens by provider/model/kind",
     labelnames=("provider", "model", "kind"),
 )
+# LLM cost counter (Issue 291) — the USD twin of LLM_TOKENS_TOTAL, incremented
+# beside the billing-ledger write with the SAME estimated USD value. Same
+# low-cardinality label discipline: provider + model tier only, never creator_id.
+LLM_COST_USD_TOTAL = Counter(
+    "llm_cost_usd_total",
+    "Estimated LLM spend in USD by provider/model",
+    labelnames=("provider", "model"),
+)
 RENDER_FAILURES_TOTAL = Counter(
     "render_failures_total",
     "Render pipeline failures",
@@ -197,6 +205,23 @@ def record_llm_tokens(
         LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_read").inc(_cr)
     if _cc:
         LLM_TOKENS_TOTAL.labels(provider=provider, model=model, kind="cache_creation").inc(_cc)
+
+
+def record_llm_cost(provider: str, model: str, usd: float) -> None:
+    """Increment ``llm_cost_usd_total`` for one LLM call (Issue 291).
+
+    Called from the billing-ledger choke point (``record_llm_usage``) with the
+    same estimated USD the ledger persists, so the Prometheus/OTel rail and the
+    DB cost ledger can never diverge. Non-numeric or non-positive values are
+    dropped silently — the metric is best-effort and must never raise into the
+    billing path.
+    """
+    try:
+        value = float(usd)
+    except (TypeError, ValueError):
+        return
+    if value > 0:
+        LLM_COST_USD_TOTAL.labels(provider=provider, model=model).inc(value)
 
 
 def record_llm_metric(model: str, usage: Any, *, provider: str = "anthropic") -> None:
