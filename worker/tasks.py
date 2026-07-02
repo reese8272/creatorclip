@@ -22,6 +22,7 @@ from typing import Any
 import redis.asyncio as aredis
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
+from fastapi import HTTPException
 
 import db
 from flags import flag_enabled
@@ -205,6 +206,20 @@ def ingest_video(self, video_id: str) -> str:
         # the next delivery would time out again, wasting credits. Re-raise
         # so RefundOnFailureTask.on_failure fires immediately on terminal failure.
         raise
+    except HTTPException as exc:
+        if exc.status_code == 402:
+            # Terminal (Issue 352 Batch B, Issue-316 residual): an insufficient
+            # balance is deterministic — every retry would re-run the full
+            # ingest and 402 again, burning retries and compute. Fail cleanly
+            # with the ledger's actionable copy (safe, user-facing) and re-raise
+            # WITHOUT self.retry so on_failure fires now (refund is a no-op:
+            # the 402 SAVEPOINT rolled the deduction back).
+            run_async(_set_status(video_id, IngestStatus.failed, reason=str(exc.detail)))
+            raise
+        run_async(
+            _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest"))
+        )
+        raise self.retry(exc=exc) from exc
     except Exception as exc:
         run_async(
             _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "ingest"))
@@ -1135,11 +1150,18 @@ async def _ingest_async(video_id: str) -> None:
     except Exception as exc:
         # Safe message — exception args may carry internal detail. The
         # generic shape matches the data-gate emit policy in _build_dna_async.
+        # A 402 is terminal (ingest_video does not retry it), so its live
+        # message must not claim a retry is coming.
+        is_402 = isinstance(exc, HTTPException) and exc.status_code == 402
         await aemit(
             video_id,
             "error",
             stage="ingest",
-            message="Ingest failed; retrying.",
+            message=(
+                "Processing stopped: insufficient minutes balance."
+                if is_402
+                else "Ingest failed; retrying."
+            ),
             exc_type=type(exc).__name__,
         )
         raise
