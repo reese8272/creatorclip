@@ -147,6 +147,7 @@ def generate_improvement_brief(
         }
         loop_messages = messages
         final_msg = None
+        msg = None
         try:
             for _round in range(_MAX_SEARCH_ROUNDS + 1):
                 msg, round_usage = stream_message(
@@ -168,7 +169,7 @@ def generate_improvement_brief(
                 logger.warning(
                     "improvement_brief streaming: hit max search rounds (%d)", _MAX_SEARCH_ROUNDS
                 )
-                final_msg = msg  # type: ignore[possibly-undefined]  # loop always runs ≥1 iter
+                final_msg = msg
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
             log_llm_error(logger, exc, task=task_id)
             raise
