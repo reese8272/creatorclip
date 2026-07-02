@@ -199,8 +199,15 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
         c.rank = i + 1
         c.style_preset = None
         fake_clips.append(c)
+    # Issue 82b split: scoring is session-free; persistence runs on a reacquired
+    # session. The pre-scoring guard (load_existing_clips) must see no clips.
+    mocker.patch("clip_engine.ranking.load_existing_clips", AsyncMock(return_value=[]))
     mocker.patch(
-        "clip_engine.ranking.generate_and_rank_clips",
+        "clip_engine.ranking.score_and_rank",
+        AsyncMock(return_value=[{"rank": i + 1} for i in range(3)]),
+    )
+    mocker.patch(
+        "clip_engine.ranking.persist_ranked_clips",
         AsyncMock(return_value=fake_clips),
     )
     # Auto-render (auto-render): the success path enqueues ONE batch task that
@@ -267,7 +274,13 @@ def _generate_clips_scaffold(mocker, *, clips, brand_kit_style=None):
     fake_session_cm.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("db.AdminSessionLocal", MagicMock(return_value=fake_session_cm))
     mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
-    mocker.patch("clip_engine.ranking.generate_and_rank_clips", AsyncMock(return_value=clips))
+    # Issue 82b split: session-free scoring + reacquired-session persistence.
+    mocker.patch("clip_engine.ranking.load_existing_clips", AsyncMock(return_value=[]))
+    mocker.patch(
+        "clip_engine.ranking.score_and_rank",
+        AsyncMock(return_value=[{"rank": i + 1} for i in range(len(clips))]),
+    )
+    mocker.patch("clip_engine.ranking.persist_ranked_clips", AsyncMock(return_value=clips))
     # Keep the real defaults discoverable to the tests that override them.
     assert hasattr(_settings, "AUTO_RENDER_CLIPS")
     return video_id, fake_emit

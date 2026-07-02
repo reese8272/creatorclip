@@ -344,6 +344,11 @@ async def upload_video(
     if youtube_video_id is not None:
         _validate_youtube_id(youtube_video_id)
     await check_positive_balance(creator.id, session)
+    # Issue 82b: end the read-only transaction so the pooled connection is not
+    # held across the client-paced streaming loop below. Later queries auto-begin
+    # a new transaction; the after_begin listener restamps the RLS GUC from
+    # session.info (set by get_current_creator).
+    await session.commit()
 
     max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
 
@@ -428,6 +433,10 @@ async def upload_video(
         # recoverable from the row even when youtube_video_id is NULL.
         storage_token = youtube_video_id or uuid.uuid4().hex
         key = f"source/{creator.id}/{storage_token}{suffix}"
+        # Issue 82b: release the pooled connection before the R2 PUT — the
+        # dedupe/balance reads above began a transaction that would otherwise
+        # be held for the full upload. The Video insert below reacquires one.
+        await session.commit()
         # Offload the (possibly multi-hundred-MB) R2 PUT / disk copy so it never
         # blocks the API event loop and stalls other requests. (Issue 67)
         source_uri = await asyncio.to_thread(upload_file, tmp_path, key)

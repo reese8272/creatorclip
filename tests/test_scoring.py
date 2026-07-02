@@ -374,9 +374,14 @@ async def test_score_candidates_no_2x_write_premium_when_marker_absent():
     )
 
     creator_id = uuid.uuid4()
+    # Issue 82b: the ledger write now opens its own short-lived session from a
+    # factory AFTER the LLM call, so callers never hold a connection across it.
     mock_session = MagicMock()
+    mock_session.info = {}
     mock_session.execute = AsyncMock()
     mock_session.commit = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
 
     with (
         patch("clip_engine.scoring._ANTHROPIC") as mock_client,
@@ -392,11 +397,13 @@ async def test_score_candidates_no_2x_write_premium_when_marker_absent():
             _timeline(),
             dna_brief="short",
             creator_id=creator_id,
-            session=mock_session,
+            ledger_session_factory=lambda: mock_session,
         )
 
     # _estimate_cost_usd must have been called without cache_write_multiplier=2.0.
-    assert mock_cost.called, "cost estimator should be called when creator_id + session provided"
+    assert mock_cost.called, (
+        "cost estimator should be called when creator_id + ledger factory provided"
+    )
     call_kwargs = mock_cost.call_args.kwargs
     assert call_kwargs.get("cache_write_multiplier") is None, (
         "Issue 315: cache_write_multiplier must be None (default 1.25×) when the "

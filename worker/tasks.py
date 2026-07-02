@@ -492,9 +492,7 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
                     )
             await session.commit()
         logger.warning("publish blocked for clip %s — youtube_publish kill switch is off", clip_id)
-        raise YouTubeUploadError(
-            503, "youtube_publish_disabled: publishing is paused by operators"
-        )
+        raise YouTubeUploadError(503, "youtube_publish_disabled: publishing is paused by operators")
 
     async with db.AdminSessionLocal() as session:
         # Idempotency: a redelivery of the same task id that already succeeded is
@@ -2287,7 +2285,7 @@ async def _generate_clips_async(video_id: str) -> None:
     """
     from sqlalchemy import select
 
-    from clip_engine.ranking import generate_and_rank_clips
+    from clip_engine.ranking import load_existing_clips, persist_ranked_clips, score_and_rank
     from config import settings
     from dna.profile import get_active
     from models import Signals, Transcript
@@ -2324,9 +2322,9 @@ async def _generate_clips_async(video_id: str) -> None:
             clip_creator_name = (_creator_row.channel_title if _creator_row else None) or "there"
 
             # Idempotency guard (Issue 46): a late retry on a video whose clips are
-            # already rendered is a no-op. Without this, generate_and_rank_clips would
-            # re-extract candidates and insert duplicate pending rows alongside the
-            # already-done clips.
+            # already rendered is a no-op. Without this, the score-and-persist path
+            # would re-extract candidates and insert duplicate pending rows alongside
+            # the already-done clips.
             existing_done = await session.scalar(
                 select(Clip.id)
                 .where(Clip.video_id == video_uuid, Clip.render_status == RenderStatus.done)
@@ -2349,6 +2347,7 @@ async def _generate_clips_async(video_id: str) -> None:
             signals = await session.get(Signals, video_uuid)
             if not signals:
                 raise ValueError(f"Signals not available for video {video_id}")
+            timeline = signals.timeline_jsonb
 
             transcript = await session.get(Transcript, video_uuid)
             transcript_segments = (
@@ -2358,16 +2357,33 @@ async def _generate_clips_async(video_id: str) -> None:
             dna_profile = await get_active(session, video.creator_id)
             dna_brief = dna_profile.brief_text if dna_profile else None
 
-            await aemit(video_id, "step", label="score_and_rank", stage="generate_clips")
-            clips = await generate_and_rank_clips(
-                session=session,
+            # Idempotency guard (Issue 61): existing clips mean a redelivered task
+            # must not re-score (LLM cost) or re-insert (would cascade-delete
+            # feedback/outcomes). Captured here; scoring runs after this session
+            # closes.
+            existing_clips = await load_existing_clips(session, video_uuid, clip_creator_id)
+
+        # Issue 82b (pool starvation): the per-candidate LLM scoring round-trip
+        # (30–120 s) runs with NO admin DB session held — the read session above
+        # is closed, and persistence reacquires a fresh one below.
+        await aemit(video_id, "step", label="score_and_rank", stage="generate_clips")
+        ranked: list[dict] = []
+        if not existing_clips:
+            ranked = await score_and_rank(
                 video_id=video_uuid,
-                creator_id=video.creator_id,
-                timeline=signals.timeline_jsonb,
+                creator_id=clip_creator_id,
+                timeline=timeline,
                 dna_brief=dna_brief,
                 transcript_segments=transcript_segments,
                 max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
+                ledger_session_factory=db.AdminSessionLocal,
             )
+
+        async with db.AdminSessionLocal() as session:
+            # persist_ranked_clips re-runs the existing-clips guard on THIS
+            # session, so the already-generated path returns clips attached to
+            # the live session (the pre-scoring snapshot above is detached).
+            clips = await persist_ranked_clips(session, video_uuid, clip_creator_id, ranked)
 
             logger.info("Generated %d clips for video %s", len(clips), video_id)
 
@@ -2379,7 +2395,7 @@ async def _generate_clips_async(video_id: str) -> None:
             # charges no additional minutes. AUTO_RENDER_TOP_N caps how many of the
             # ranked clips render immediately (0 = all generated candidates).
             if settings.AUTO_RENDER_CLIPS and clips:
-                kit_style = await _brand_kit_style(session, video.creator_id)
+                kit_style = await _brand_kit_style(session, clip_creator_id)
                 top_n = settings.AUTO_RENDER_TOP_N
                 # Only sort when we actually cap — the default (render all) path
                 # renders every clip regardless of order, so skip the sort.
