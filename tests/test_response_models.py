@@ -36,6 +36,7 @@ _EXEMPT_PATHS = {
     "/auth/connect-publishing",  # 302 RedirectResponse to Google (incremental consent)
     "/tasks/{task_id}/events",  # SSE (text/event-stream); wire format is named SSE events, not a JSON body (Issue 86)
     "/clips/{clip_id}/download",  # 302 → presigned R2 or FileResponse; no JSON schema
+    "/summaries/{summary_id}/download",  # 302 → presigned R2 or FileResponse; no JSON schema (Issue 192)
     "/creators/me/export/download",  # 302 → presigned R2 or FileResponse; no JSON schema
 }
 

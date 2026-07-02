@@ -129,6 +129,21 @@ describe('VideoTable — StageStepper integration', () => {
     expect(screen.getByRole('link', { name: 'Review' })).toBeInTheDocument()
   })
 
+  it('shows a Create recap link for a clippable done video with clips (Issue 192)', () => {
+    renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
+      vd: { total: 3, rendered: 2, loading: false },
+    })
+    const link = screen.getByRole('link', { name: 'Create recap' })
+    expect(link).toHaveAttribute('href', '/video/vd/recap')
+  })
+
+  it('hides Create recap when the video is not clippable (Issue 192 gating)', () => {
+    renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: false })], {
+      vd: { total: 3, rendered: 2, loading: false },
+    })
+    expect(screen.queryByRole('link', { name: 'Create recap' })).toBeNull()
+  })
+
   it('Clips column shows 0 for a done video with no clips (Issue 305)', () => {
     renderTable([makeVideo({ id: 'vd', ingest_status: 'done', clippable: true })], {
       vd: { total: 0, rendered: 0, loading: false },
