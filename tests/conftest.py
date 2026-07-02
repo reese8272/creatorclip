@@ -133,9 +133,8 @@ def _isolate_app_state(client):
     AND after every test makes execution order irrelevant. (OCB 2026-06-24)"""
     import contextlib
 
-    from limiter import limiter
-
     import flags
+    from limiter import limiter
 
     app.dependency_overrides.clear()
     client.cookies.clear()
