@@ -94,7 +94,7 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
   URLs; `str(video_title or "")`). Restore both gates to 0.
 
 ### Issue 352: 2026-07-01 assessment SEV2 backlog (grouped) — ~54 SEV2s
-- **Status:** OPEN — IN BUILD (W1 round 1 started 2026-07-02) · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
+- **Status:** OPEN — **Batch A DONE 2026-07-02** (ENV `Literal` gate, JWT ≥32-byte validator, `limits==5.8.0`+`joblib==1.5.3` pins, fernet singleton, `EMAIL_FROM` fail-fast — merged on `w1/round1`); Batches B–M queued for round 2 · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** local · **Sev:** SEV2
 - **Batch plan (2026-07-02 CHECK, all 13 lead defects re-verified present):** 13 file-disjoint batches
   A–M in 4 waves — **A** config/crypto/pins (IN BUILD, owns `config.py`+`requirements.txt`) →
   {**B** billing idempotency scoping, **C** routers unauth surface, **D** youtube quota/publish,
@@ -994,7 +994,7 @@ The v1 scope expansion: uploaded-VOD → 5–10 min 16:9 narrative recap. Co-own
 
 ### Issue 190: Stream-VOD recap — Part A: data model + budgeted multi-segment selection
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Stream-VOD Recap · **Size** `L` · **Verify** `staging`  
+**Status** `DONE — code-complete, locally verified` (2026-07-02, W1 round 1: `Summary` model + migration `0041_summaries` (RLS per 0038 pattern) + pure `clip_engine/summary_select.py` — max(plain, score/duration-ratio) greedy knapsack, non-overlap, chrono order, chapter-straddle demotion; `RECAP_TARGET_DURATION_MIN_S/MAX_S` config; recap eval scenario (`SCENARIO_FLOOR` 14→15) + 5 golden-selection tests. Segments JSONB element: `{start_s,end_s,score,principle,rationale}` — the #191 contract. **Remaining (staging):** migration up/down + RLS cross-creator proof on real PG. DECISIONS 2026-07-02.) · **Wave** W0 · **Lane** Stream-VOD Recap · **Size** `L` · **Verify** `staging`  
 **Src** `01 / 185` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** nothing — **ready now** · **Enables** #191, #192 · **Coordinate (hot files)** Alembic revision chain, `clip_engine/scoring.py`, `knowledge/chapters.py`  
 
@@ -1236,7 +1236,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 200: Recency-decay half-life calibration + parameterize
 
-**Status** `OPEN — parameterization complete & verified; calibration sweep pending` (2026-06-27: `_LAMBDA` now derived from `DECAY_HALF_LIFE_DAYS` config (default 30), `.env.example` + decay test updated to read config [28 preference tests pass], DECISIONS entry. **Remaining (staging):** the {15,30,60,90} held-out NDCG@5 sweep + concept-pivot scenario on real data, change default only if it clears the incumbent CI) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `staging`  
+**Status** `OPEN — instrument complete; only the real-data run remains` (2026-07-02, W1 round 1: `half_life_days` override on `recency_weight`/`sample_weight` (zero behavior change when None); `sweep_half_life` {15,30,60,90} — chrono split, retrain per candidate, pooled NDCG@5 + bootstrap CI, tie-break to larger; `--sweep` flag on `scripts/eval_efficacy.py`; **concept-pivot gate test shipped** (`test_recency_decay_actually_reweights_feedback_concept_pivot` — the CLAUDE.md reweight gate, green locally). 2026-06-27: `_LAMBDA` from `DECAY_HALF_LIFE_DAYS` config. **Remaining (staging):** run the sweep on real data; change default only if it clears the incumbent CI. NOTE: `scripts/eval_efficacy.py` has a pre-existing `get_sessionmaker` ImportError — fix before the staging run, OFF_COURSE_BUGS 2026-07-02) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `M` · **Verify** `staging`  
 **Src** `08 / 173d` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** #198 · **Enables** #109 · **Coordinate (hot files)** `preference/decay.py`, `tests/eval/efficacy.py`, `tests/test_preference.py`  
 
@@ -1308,7 +1308,7 @@ Personalization-efficacy harness, adversarial eval scenarios, recency-decay cali
 
 ### Issue 202: Continuous eval — impression/position logging + standing report
 
-**Status** `OPEN — impression log complete; standing-report emission deferred` (2026-06-27: `ClipImpression` model + migration 0037 (RLS `tenant_isolation`, indexed) + best-effort write in `list_clips` (never breaks the read path); integration test asserts field capture + cross-tenant isolation; DECISIONS + COMPLIANCE updated. **Remaining (staging + #265):** the per-retrain pooled-NDCG@5 emission + regression ratchet — deferred to when the #198 harness runs on staging and #265's ratchet mechanics exist) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `L` · **Verify** `staging`  
+**Status** `DONE — code-complete, locally verified` (2026-07-02, W1 round 1: the deferral's #265 blocker was stale — #265 shipped. Harness core extracted to `preference/efficacy.py` (production never imports `tests.*`; tests re-export); `PreferenceModel.metrics_jsonb` + migration `0042`; `_retrain_preference_async` now best-effort stores `{ndcg_at_5,map_at_5,n_eval,computed_at}` per version + emits `preference_metrics_computed`; warn-ratchet `preference_metrics_regression` on NDCG@5 drop > `PREFERENCE_NDCG_REGRESSION_THRESHOLD` (0.05) — warn-not-block (per-creator n is noisy). 2026-06-27: `ClipImpression` + 0037 shipped. **Remaining (staging):** end-to-end on real labels.) · **Wave** W1 · **Lane** Scoring, Eval & Preference (the moat) · **Size** `L` · **Verify** `staging`  
 **Src** `08 / 173f` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/08_personalization_efficacy_eval.md`  
 **Blocked by** #198 · **Coordinate (hot files)** Alembic revision chain, `routers/clips.py`, `tests/eval/efficacy.py`, `worker/tasks.py`  
 
@@ -2152,7 +2152,7 @@ Headers/CSP, CSRF, worker RLS, upload limits, per-creator quota, edge WAF/rate-l
 
 ### Issue 286: Edge/gateway rate limiting for anonymous + pre-auth abuse
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Security — Platform · **Size** `S` · **Verify** `external`  
+**Status** `OPEN — config committed; operator apply + edge verify remain` (2026-07-02: `docs/EDGE_SECURITY.md` — Free-tier single rule (`/auth/*`, 10 req/min/IP, managed_challenge) with dashboard + API apply steps and the edge-429-with-clean-origin-logs verification procedure; Free-vs-Pro tier `[DEC]` recorded 2026-07-02. Operator: apply the rule, run the verify loop, record the transcript date in the doc.) · **Wave** W1 · **Lane** Security — Platform · **Size** `S` · **Verify** `external`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #228, #285  
 
@@ -2356,7 +2356,7 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 
 ### Issue 284: Feature flags / kill switches for risky subsystems
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Observability · **Size** `M` · **Verify** `staging`  
+**Status** `DONE — code-complete, locally verified` (2026-07-02, W1 round 1: `feature_flags` table + migration `0043`; `flags.py` — DB-override → env-default resolution via 30s TTL cache, fail-open on DB error, `set_flag` audited on both `log_event` rails; 4 kill switches at entry points — `llm_generation` (all LLM routers via `require_flag` dep), `render_intake` (render/clean/cuts), `youtube_publish` (task entry, terminal failed status), `signup` (new-creator-only block + friendly login banner); `scripts/flags.py` ops CLI; 14 tests. Unblocks #290. **Remaining (staging):** flip-disables-live-subsystem-without-deploy proof. DECISIONS 2026-07-02.) · **Wave** W0 · **Lane** Observability · **Size** `M` · **Verify** `staging`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** nothing — **ready now** · **Enables** #290 · **Coordinate (hot files)** `main.py`  
 
@@ -3219,7 +3219,7 @@ Key escrow, encrypted PG backup + restore drill, pre-migration dump, R2 durabili
 
 ### Issue 288: Redis broker persistence + backup (in-flight queue durability)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Disaster Recovery & Infra · **Size** `S` · **Verify** `external`  
+**Status** `OPEN — code-complete; VM drill + backup cron remain` (2026-07-02: prod Redis pinned `--appendfsync everysec --save 300 100`; `scripts/backup_redis.sh` (BGSAVE → encrypted stream → backup R2 bucket, same posture as `backup_pg.sh`); RUNBOOKS "Redis broker durability & recovery" — loss-window table, re-enqueue-from-DB recovery, restart drill. Operator: deploy compose change, install the 03:27 cron, run the drill and record it.) · **Wave** W1 · **Lane** Disaster Recovery & Infra · **Size** `S` · **Verify** `external`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #263  
 
@@ -4039,7 +4039,7 @@ Data-gate delta, identity-gate resolution, onboarding stepper UX, post-OAuth rou
 
 ### Issue 203: Data-gate — unlock delta + real small-catalog path
 
-**Status** `OPEN` · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `M` · **Verify** `local`  
+**Status** `DONE` (2026-07-02, W1 round 1: server-computed `remaining_long_form`/`remaining_shorts` on `check_data_gate` + `DataGateOut`; `data_gate_evaluated` funnel event; `DataGateStatus` rewrite — per-kind deltas ("2 more published Shorts to unlock Creator DNA"), honest signal-based-scoring copy, "Clip a video now" CTA → /app/dashboard; "link" language gone per #317. Backend 4 tests + 2 Vitest specs; no-virality structural test green. Sub-threshold-may-clip `[DEC]` recorded 2026-07-02.) · **Wave** W1 · **Lane** Activation & Onboarding · **Size** `M` · **Verify** `local`  
 **Src** `07 / 191` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/07_activation_onboarding_funnel.md`  
 **Blocked by** #235 · **Coordinate (hot files)** `frontend/src/pages/Onboarding.tsx`, `routers/_schemas.py`, `routers/creators.py`, `youtube/analytics.py`  
 
@@ -4329,7 +4329,7 @@ Pipeline stepper, global active-tasks panel, Insights rebuild, per-video clips m
 
 ### Issue 148: UI design-system migration — deep CSS dedup (static templates, now non-canonical)
 
-**Status** `OPEN` · **Wave** W1 · **Lane** UI Core · **Size** `S` · **Verify** `local`  
+**Status** `CLOSED — folded into #226, dedup-by-deletion` (2026-07-02: the targeted static app pages were deleted by #226; residual executed — 12 orphaned CSS/JS files deleted (page-shell/components/editor-layout/hero .css + 8 legacy .js), ~13 pinning tests deleted across `test_static`/`test_issue_126`/`test_user_flow`, cachebust test retargeted to `_design-tokens.css`; `static/` now exactly tos/privacy/accessibility + `_design-tokens.css`. DECISIONS 2026-07-02.) · **Wave** W1 · **Lane** UI Core · **Size** `S` · **Verify** `local`  
 **Src** pre-existing 148 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** #226  
 
@@ -5261,7 +5261,7 @@ Pre-existing open items: response-model coverage, SEV-2 long tail, salvage PR#6,
 
 ### Issue 82: Issue-38 Wave 2 — AsyncAnthropic + AsyncVoyage migration + router session-order refactor
 
-**Status** `OPEN` · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `L` · **Verify** `local`  
+**Status** `OPEN — 82b (session-order half) DONE 2026-07-02; 82a (async-SDK half) remains` (W1 round 1 shipped 82b: `generate_and_rank_clips` split into session-free `score_and_rank` + `persist_ranked_clips`; sessions released across LLM/Stripe/Google/R2 round-trips in `clips.py`/`auth.py`/`videos.py`/`billing.py`/`worker generate_clips`; every reacquired session re-stamps `session.info["creator_id"]` (RLS GUC) with regression test `test_reacquired_persist_session_stamps_creator_id` + 10-concurrent small-pool load test; 39 live-PG integration tests green. **Remaining (82a):** sync→AsyncAnthropic swap across ~11 modules + async `anthropic_stream.py` rewrite; Voyage stays thread-wrapped per DECISIONS 2026-07-02.) · **Wave** W0 · **Lane** Carry-over & Cleanup · **Size** `L` · **Verify** `local`  
 **Src** pre-existing 82 — see `docs/archive/issues_snapshot_2026-06-22.md` for the original entry  
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `chat/runner.py`, `clip_engine/ranking.py`, `dna/brief.py`, `improvement/brief.py`, `routers/auth.py`, `routers/clips.py`  
 
