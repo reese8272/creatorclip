@@ -138,6 +138,23 @@ def test_compute_features_silence_outside_window_excluded():
     assert feats["silence_ratio"] == pytest.approx(0.0)
 
 
+def test_compute_features_precomputed_signal_is_behavior_identical():
+    """Issue 109d hoist: passing a precomputed signal array yields identical features."""
+    from clip_engine.window import build_signal_array
+
+    events = [
+        {"type": "energy_spike", "start_s": 20.0, "end_s": 25.0},
+        {"type": "laughter", "start_s": 55.0, "end_s": 58.0},
+        {"type": "retention_spike", "start_s": 60.0, "end_s": 61.0},
+        {"type": "silence", "start_s": 45.0, "end_s": 50.0},
+    ]
+    timeline = _timeline(events)
+    candidates = [_candidate(), _candidate(setup=40.0, peak=60.0, end=80.0)]
+    _, signal = build_signal_array(timeline)
+    for c in candidates:
+        assert compute_features(c, timeline, signal) == compute_features(c, timeline)
+
+
 # ── _signal_score ─────────────────────────────────────────────────────────────
 
 

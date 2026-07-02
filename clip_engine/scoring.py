@@ -27,6 +27,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 
 import httpx
+import numpy as np
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,9 +121,16 @@ Candidates:
 """
 
 
-def compute_features(candidate: dict, timeline: dict) -> dict:
-    """Compute signal-based features for a candidate window."""
-    _, signal = build_signal_array(timeline)
+def compute_features(candidate: dict, timeline: dict, signal: np.ndarray | None = None) -> dict:
+    """Compute signal-based features for a candidate window.
+
+    ``signal`` optionally supplies a precomputed ``build_signal_array(timeline)``
+    signal so batch callers build it once per timeline instead of once per
+    candidate — the rebuild measured 92–98% of the scoring feature loop on a
+    2h/2000-event timeline with 30 candidates (Issue 109d).
+    """
+    if signal is None:
+        _, signal = build_signal_array(timeline)
     duration_s = timeline.get("duration_s", 0.0)
 
     if len(signal) == 0 or duration_s <= 0:
@@ -257,8 +265,10 @@ async def score_candidates(
     # Feature computation is CPU-bound (signal-array build per candidate). Offload it
     # so scoring never blocks the event loop on this worker. (Issue C)
     def _compute_features_all() -> None:
+        # One signal-array build per timeline, shared across candidates (Issue 109d).
+        _, signal = build_signal_array(timeline)
         for c in candidates:
-            c["features"] = compute_features(c, timeline)
+            c["features"] = compute_features(c, timeline, signal)
 
     await asyncio.to_thread(_compute_features_all)
 
