@@ -10445,3 +10445,17 @@ XS dedup-by-deletion (Issue 226 deleted its target pages).
 
 **Source/evidence.** Nine CHECK briefs with per-claim URLs (this session, 2026-07-02); all lead defects
 re-verified present in current code before batching. **Date:** 2026-07-02
+
+## 2026-07-02 — Squawk gate made real: PyPI install, per-file rendering, offline timeouts, 2 style rules excluded [DEC]
+
+**What changed.** The Issue-270 migration-lint gate never actually linted anything (npm missing on the
+self-hosted runner + an off-by-one rendering the wrong migration — see OFF_COURSE_BUGS 2026-07-02).
+Fixed: `squawk-cli` from PyPI; each changed migration rendered as `down_revision:revision --sql` under
+`pipefail`; `alembic/env.py` offline mode now emits `SET lock_timeout='5s'`/`statement_timeout='120s'`
+(online mode already had them via connect_args — offline psql-applied scripts did not); new
+`.squawk.toml` excludes `prefer-bigint-over-int` + `prefer-text-field` (style rules contradicting the
+existing INTEGER/VARCHAR schema; the ACCESS-EXCLUSIVE resize concern guards ALTERs, not CREATE TABLE).
+All unsafe-operation rules remain active — the Issue-270 DEC scope is preserved.
+**Why.** PR #41 (migrations 0041–0043) was the first PR to trip the gate; investigation showed it was
+structurally unable to fail. **Source/evidence.** CI run 28603117834 exit-127 log; local squawk 2.59.0
+runs before/after (3/3 clean). **Date:** 2026-07-02

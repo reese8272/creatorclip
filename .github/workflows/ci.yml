@@ -280,7 +280,9 @@ jobs:
         if: steps.filter.outputs.migrations == 'true'
         run: |
           pip install -r requirements.txt
-          npm install -g squawk-cli
+          # squawk is installed from PyPI, not npm — the self-hosted runner has no
+          # node toolchain (npm-missing failure, 2026-07-02; OFF_COURSE_BUGS.md).
+          pip install squawk-cli
       - name: Bootstrap schema to previous head
         if: steps.filter.outputs.migrations == 'true'
         run: alembic upgrade head
@@ -293,20 +295,27 @@ jobs:
             echo "No migration files changed vs origin/main — skipping squawk."
             exit 0
           fi
+          set -o pipefail  # an alembic render error must fail the gate, not pass an empty script
           FAIL=0
           for F in $CHANGED; do
-            # Extract the revision ID from the filename (e.g. 0028_foo.py → 0028)
-            REV=$(python3 -c "
+            # Render exactly this migration: read revision + down_revision from the
+            # file itself and render the down→rev range. (The previous "REV:+1"
+            # form rendered the migration AFTER the changed one — off by one, and
+            # the newest migration errored into suppressed stderr → empty stdout
+            # → trivially passed. Found + fixed 2026-07-02.)
+            read -r REV DOWN <<< "$(python3 -c "
           import re, sys
-          m = re.search(r'([0-9a-f]+)_', sys.argv[1])
-          print(m.group(1) if m else '')
-          " "$F")
+          s = open(sys.argv[1]).read()
+          rev = re.search(r'^revision\s*=\s*[\"\']([^\"\']+)[\"\']', s, re.M)
+          down = re.search(r'^down_revision\s*=\s*[\"\']([^\"\']+)[\"\']', s, re.M)
+          print(rev.group(1) if rev else '', down.group(1) if down else 'base')
+          " "$F")"
             if [ -z "$REV" ]; then
               echo "Cannot parse revision from $F — skipping."
               continue
             fi
-            echo "=== Linting migration $REV ($F) ==="
-            alembic upgrade "${REV}:+1" --sql 2>/dev/null | squawk || FAIL=1
+            echo "=== Linting migration $REV (from $DOWN) — $F ==="
+            alembic upgrade "${DOWN}:${REV}" --sql | squawk || FAIL=1
           done
           exit $FAIL
 
