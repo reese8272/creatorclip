@@ -14,6 +14,26 @@ from typing import Any
 
 _DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
+_HOURS_PER_WEEK = 168
+
+
+def _coerce_row(row: Any) -> tuple[int, int, float] | None:
+    """Validate + coerce one activity row to ``(day_of_week, hour, activity_index)``.
+
+    Returns None for malformed rows (out-of-range or non-coercible values) so a
+    single bad ingest never breaks the whole upload-intel response (Issue 73/75).
+    Shared by both public functions so they filter with identical rules.
+    """
+    try:
+        dow = int(row.day_of_week)
+        hour = int(row.hour)
+        idx = float(row.activity_index)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if not (0 <= dow <= 6) or not (0 <= hour <= 23):
+        return None
+    return dow, hour, idx
+
 
 def best_upload_windows(
     activity_rows: Sequence[Any],
@@ -28,16 +48,14 @@ def best_upload_windows(
     if not activity_rows:
         return []
 
-    sorted_rows = sorted(activity_rows, key=lambda r: r.activity_index, reverse=True)[:top_n]
+    # Filter+coerce BEFORE slicing — slicing first would let a malformed row
+    # occupy a top-N slot and under-fill the result even when more valid
+    # windows exist lower in the ranking. (Issue 352 Batch J)
+    valid = [c for c in (_coerce_row(r) for r in activity_rows) if c is not None]
+    top = sorted(valid, key=lambda t: t[2], reverse=True)[:top_n]
 
     results = []
-    for row in sorted_rows:
-        dow = int(row.day_of_week)
-        hour = int(row.hour)
-        # Skip malformed rows rather than IndexError → 500 on the endpoint (Issue 73/75):
-        # a single bad ingest must not break the whole upload-intel response.
-        if not (0 <= dow <= 6) or not (0 <= hour <= 23):
-            continue
+    for dow, hour, idx in top:
         period = "AM" if hour < 12 else "PM"
         display_hour = hour if hour <= 12 else hour - 12
         display_hour = 12 if display_hour == 0 else display_hour
@@ -47,7 +65,7 @@ def best_upload_windows(
                 "day_name": _DAY_NAMES[dow],
                 "hour": hour,
                 "label": f"{_DAY_NAMES[dow]} {display_hour}:00 {period}",
-                "activity_index": float(row.activity_index),
+                "activity_index": idx,
             }
         )
     return results
@@ -61,14 +79,9 @@ def optimal_gap_hours(activity_rows: Sequence[Any]) -> float | None:
     if len(activity_rows) < 2:
         return None
 
-    # Validate and coerce before any arithmetic — mirrors the hardening applied to
-    # best_upload_windows in Issue 75d. A single malformed row must not raise
-    # AttributeError or produce a nonsense gap calculation.
-    valid = [
-        (int(r.day_of_week), int(r.hour), float(r.activity_index))
-        for r in activity_rows
-        if 0 <= int(r.day_of_week) <= 6 and 0 <= int(r.hour) <= 23
-    ]
+    # Validate and coerce before any arithmetic — a single malformed row must not
+    # raise or produce a nonsense gap calculation. Shared rules via _coerce_row.
+    valid = [c for c in (_coerce_row(r) for r in activity_rows) if c is not None]
     if len(valid) < 2:
         return None
 
@@ -76,5 +89,10 @@ def optimal_gap_hours(activity_rows: Sequence[Any]) -> float | None:
     times = sorted(dow * 24 + hour for dow, hour, _ in top)
     if len(times) < 2:
         return None
-    gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+    # The week is circular: Saturday 23:00 (slot 167) → Sunday 00:00 (slot 0) is a
+    # 1-hour gap, not 167. Use the shorter arc of the 168-hour week. (Issue 352 Batch J)
+    gaps = [
+        min(times[i + 1] - times[i], _HOURS_PER_WEEK - (times[i + 1] - times[i]))
+        for i in range(len(times) - 1)
+    ]
     return sum(gaps) / len(gaps)

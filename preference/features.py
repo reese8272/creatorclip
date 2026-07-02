@@ -5,6 +5,17 @@ Feature vector per clip for the preference model.
 import math
 
 
+def _finite(value: float | None, default: float = 0.0) -> float:
+    """Coerce None/NaN/inf to ``default``.
+
+    A single non-finite feature fails the sklearn/LightGBM retrain
+    (``check_array`` rejects non-finite input) or silently poisons the
+    rerank sort at predict time, so every float feature is clamped here —
+    not just ``dna_match`` (Issue 338 → generalized in Issue 352).
+    """
+    return float(value) if (value is not None and math.isfinite(value)) else default
+
+
 def clip_features(
     signal_density: float = 0.0,
     hook_energy: float = 0.0,
@@ -19,16 +30,13 @@ def clip_features(
     Return a fixed-length feature vector for one clip.
     Feature order must stay stable between training runs.
     """
-    # Treat NaN/inf dna_match as "absent" (0.0): a non-finite value would otherwise
-    # propagate through the model and poison the rerank sort order. (Issue 338)
-    dna = dna_match if (dna_match is not None and math.isfinite(dna_match)) else 0.0
     return [
-        signal_density,
-        hook_energy,
-        silence_ratio,
-        dna,
-        clip_duration_s,
-        setup_length_s,
+        _finite(signal_density),
+        _finite(hook_energy),
+        _finite(silence_ratio),
+        _finite(dna_match),
+        _finite(clip_duration_s),
+        _finite(setup_length_s),
         1.0 if has_retention_spike else 0.0,
         1.0 if has_laughter else 0.0,
     ]
