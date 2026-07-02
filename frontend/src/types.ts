@@ -118,11 +118,15 @@ export interface TaskQueued {
 }
 
 // GET /creators/me/data-gate — readiness of the creator's catalog for DNA build.
+// remaining_* are server-computed unlock deltas (Issue 203) so the UI never
+// hardcodes the thresholds.
 export interface DataGate {
   long_form_videos: number
   shorts: number
   long_form_ready: boolean
   shorts_ready: boolean
+  remaining_long_form: number
+  remaining_shorts: number
   ready: boolean
 }
 

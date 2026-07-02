@@ -22,18 +22,38 @@ function DataGateStatus({ gate }: { gate: DataGate | undefined }) {
   const mark = (ok: boolean) =>
     ok ? <span className="text-success">✓</span> : <span className="text-warning">•</span>
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+  // Issue 203: per-kind unlock delta, computed server-side — the UI never
+  // re-derives the thresholds. Only shown for a kind that hasn't unlocked.
+  const delta = (remaining: number, kind: string) =>
+    ` — ${remaining} more published ${kind}${remaining === 1 ? '' : 's'} to unlock Creator DNA`
   return (
-    <p className="mb-4 text-sm text-muted">
-      {mark(gate.long_form_ready)} {plural(gate.long_form_videos, 'long-form video')}
-      <br />
-      {mark(gate.shorts_ready)} {plural(gate.shorts, 'Short')}
-      <br />
+    <div className="mb-4 text-sm text-muted">
+      <p>
+        {mark(gate.long_form_ready)} {plural(gate.long_form_videos, 'long-form video')}
+        {!gate.long_form_ready && delta(gate.remaining_long_form, 'long-form video')}
+        <br />
+        {mark(gate.shorts_ready)} {plural(gate.shorts, 'Short')}
+        {!gate.shorts_ready && delta(gate.remaining_shorts, 'Short')}
+      </p>
       {gate.ready ? (
-        <span className="text-success">Ready to build your Creator DNA.</span>
+        <p className="mt-1 text-success">Ready to build your Creator DNA.</p>
       ) : (
-        'Link more of your published videos to unlock DNA.'
+        <>
+          {/* Honest small-catalog path (Issue 203): clipping works today with
+              signal-based scoring; DNA personalisation arrives once either
+              threshold above is met. No waiting room, no virality language. */}
+          <p className="mt-2">
+            You can clip videos right now with signal-based scoring — once your Creator DNA
+            unlocks, scoring gets personalised to your channel.
+          </p>
+          <Link to="/dashboard">
+            <Button variant="secondary" className="mt-2 w-full">
+              Clip a video now
+            </Button>
+          </Link>
+        </>
       )}
-    </p>
+    </div>
   )
 }
 

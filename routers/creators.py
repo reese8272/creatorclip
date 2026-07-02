@@ -54,6 +54,10 @@ class DataGateOut(BaseModel):
     shorts: int
     long_form_ready: bool
     shorts_ready: bool
+    # Issue 203: how many more published videos of each kind unlock DNA
+    # (0 when that kind's threshold is already met).
+    remaining_long_form: int
+    remaining_shorts: int
     ready: bool
 
 
@@ -449,7 +453,24 @@ async def get_data_gate(
     creator: Creator = Depends(get_current_creator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return await check_data_gate(session, creator.id)
+    gate = await check_data_gate(session, creator.id)
+    # Issue 203 — funnel visibility on the unlock delta: same fire-and-forget
+    # DB-sink pattern as the sibling funnel events in this router (Issue 235).
+    from event_log import record_event
+
+    asyncio.ensure_future(
+        record_event(
+            source="backend",
+            event="data_gate_evaluated",
+            creator_id=creator.id,
+            extra={
+                "ready": gate["ready"],
+                "long_form_videos": gate["long_form_videos"],
+                "shorts": gate["shorts"],
+            },
+        )
+    )
+    return gate
 
 
 @router.post("/me/catalog/sync", status_code=202, response_model=CatalogSyncQueuedOut)
