@@ -85,7 +85,7 @@ async def test_sync_channel_catalog_calls_sync_video_catalog_and_commits():
 
     sync_catalog_mock = AsyncMock()
     with (
-        patch("worker.tasks.db.AdminSessionLocal", return_value=fake_ctx),
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=fake_ctx),
         patch(
             "youtube.oauth.get_valid_access_token",
             new=AsyncMock(return_value="tok"),
@@ -125,7 +125,7 @@ async def test_sync_channel_catalog_no_token_is_a_clean_no_op():
 
     sync_catalog_mock = AsyncMock()
     with (
-        patch("worker.tasks.db.AdminSessionLocal", return_value=fake_ctx),
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=fake_ctx),
         patch(
             "youtube.oauth.get_valid_access_token",
             new=AsyncMock(side_effect=RuntimeError("no token")),

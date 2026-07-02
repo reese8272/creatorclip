@@ -436,6 +436,8 @@ async def test_generate_chapters_async_video_not_found_returns_early() -> None:
     from worker import tasks as worker_tasks
 
     class _FakeSession:
+        info: dict = {}
+
         async def __aenter__(self):
             return self
 
@@ -447,7 +449,7 @@ async def test_generate_chapters_async_video_not_found_returns_early() -> None:
 
     aemit_mock = AsyncMock()
     with (
-        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch.object(db, "AsyncSessionLocal", MagicMock(return_value=_FakeSession())),
         patch("worker.progress.aemit", aemit_mock),
     ):
         await worker_tasks._generate_chapters_async("job-c", str(uuid.uuid4()), str(uuid.uuid4()))
@@ -468,6 +470,8 @@ async def test_generate_chapters_async_no_transcript_returns_early() -> None:
     video.duration_s = 300
 
     class _FakeSession:
+        info: dict = {}
+
         async def __aenter__(self):
             return self
 
@@ -482,7 +486,7 @@ async def test_generate_chapters_async_no_transcript_returns_early() -> None:
 
     aemit_mock = AsyncMock()
     with (
-        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch.object(db, "AsyncSessionLocal", MagicMock(return_value=_FakeSession())),
         patch("worker.progress.aemit", aemit_mock),
     ):
         # Note: creator_id passed must MATCH video.creator_id so we hit transcript-check branch

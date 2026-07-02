@@ -64,6 +64,8 @@ class TestClipsReadyTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.progress.aemit", new_callable=AsyncMock),
             # Issue 82b split: session-free scoring + reacquired-session persistence.
             patch(
@@ -87,7 +89,7 @@ class TestClipsReadyTrigger:
         ):
             from worker.tasks import _generate_clips_async
 
-            await _generate_clips_async(video_id)
+            await _generate_clips_async(video_id, str(uuid.uuid4()))
 
         # Issue 311: payload now carries the per-email vars the clips_ready
         # template needs (creator_name greeting, video_title, absolute review_url)
@@ -116,13 +118,15 @@ class TestClipsReadyTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.progress.aemit", new_callable=AsyncMock),
             patch("worker.tasks.send_notification") as mock_send_notif,
         ):
             from worker.tasks import _generate_clips_async
 
             with pytest.raises(ValueError):
-                await _generate_clips_async(video_id)
+                await _generate_clips_async(video_id, str(uuid.uuid4()))
 
         mock_send_notif.delay.assert_not_called()
 
@@ -164,6 +168,8 @@ class TestDnaBuiltTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.progress.aemit", new_callable=AsyncMock),
             patch(
                 "dna.builder.build_patterns",
@@ -225,6 +231,8 @@ class TestRefundIssuedTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.tasks.send_notification") as mock_send_notif,
         ):
             from worker.tasks import _fire_refund_notification_async
@@ -250,6 +258,8 @@ class TestRefundIssuedTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.tasks.send_notification") as mock_send_notif,
         ):
             from worker.tasks import _fire_refund_notification_async
@@ -342,6 +352,8 @@ class TestTrialEndingTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.tasks.send_notification") as mock_send_notif,
         ):
             from worker.tasks import _expire_trials_async
@@ -369,6 +381,8 @@ class TestTrialEndingTrigger:
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
+            # Issue 231: per-creator tasks open db.tenant_session → AsyncSessionLocal.
+            patch("db.AsyncSessionLocal", return_value=mock_session),
             patch("worker.tasks.send_notification") as mock_send_notif,
         ):
             from worker.tasks import _expire_trials_async

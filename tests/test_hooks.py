@@ -359,6 +359,8 @@ async def test_analyze_hook_async_creator_not_found_returns_early() -> None:
     from worker import tasks as worker_tasks
 
     class _FakeSession:
+        info: dict = {}
+
         async def __aenter__(self):
             return self
 
@@ -370,7 +372,7 @@ async def test_analyze_hook_async_creator_not_found_returns_early() -> None:
 
     aemit_mock = AsyncMock()
     with (
-        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch.object(db, "AsyncSessionLocal", MagicMock(return_value=_FakeSession())),
         patch("worker.progress.aemit", aemit_mock),
     ):
         await worker_tasks._analyze_hook_async("job-x", str(uuid.uuid4()), str(uuid.uuid4()))
@@ -393,6 +395,7 @@ async def test_analyze_hook_async_video_not_found_returns_early() -> None:
     class _FakeSession:
         def __init__(self):
             self._call = 0
+            self.info: dict = {}
 
         async def __aenter__(self):
             return self
@@ -406,7 +409,7 @@ async def test_analyze_hook_async_video_not_found_returns_early() -> None:
 
     aemit_mock = AsyncMock()
     with (
-        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch.object(db, "AsyncSessionLocal", MagicMock(return_value=_FakeSession())),
         patch("worker.progress.aemit", aemit_mock),
     ):
         await worker_tasks._analyze_hook_async("job-y", str(creator.id), str(uuid.uuid4()))

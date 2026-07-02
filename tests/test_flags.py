@@ -287,7 +287,10 @@ async def test_publish_gate_records_failed_row_and_raises(
         async def __aexit__(self, *exc: object) -> bool:
             return False
 
+    # Issue 231: the bootstrap uses AdminSessionLocal; the publication write
+    # runs on tenant_session → AsyncSessionLocal. Same mock serves both.
     monkeypatch.setattr(db, "AdminSessionLocal", lambda: _CM())
+    monkeypatch.setattr(db, "AsyncSessionLocal", lambda: _CM())
 
     with pytest.raises(YouTubeUploadError, match="youtube_publish_disabled"):
         await _publish_to_youtube_async("task-1", str(uuid.uuid4()))

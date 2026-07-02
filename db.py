@@ -1,5 +1,7 @@
 import threading
+import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
@@ -156,9 +158,10 @@ def _set_app_creator_id(session, transaction, connection):
     The listener is registered on the global ``Session`` class so it fires
     for sessions from both factories; the discriminator is presence of the
     info key. App sessions get the id set by the FastAPI auth dependency
-    (`auth.get_current_creator`). Admin sessions (worker tasks, integration
-    test fixtures) leave it unset — no GUC is emitted, and since the admin
-    role has ``BYPASSRLS`` the policies do not gate visibility anyway.
+    (`auth.get_current_creator`); per-creator worker tasks get it via
+    ``tenant_session`` (Issue 231). Admin sessions (cross-tenant sweeps,
+    integration test fixtures) leave it unset — no GUC is emitted, and since
+    the admin role has ``BYPASSRLS`` the policies do not gate visibility anyway.
 
     The bootstrap-auth Creator lookup runs before the listener has anything
     to inject, which is fine — the ``creators`` table is exempt from RLS
@@ -185,4 +188,30 @@ def _set_app_creator_id(session, transaction, connection):
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
+        yield session
+
+
+# ── Worker tenant session (Issue 231) ─────────────────────────────────────────
+
+
+@asynccontextmanager
+async def tenant_session(creator_id: uuid.UUID | str) -> AsyncGenerator[AsyncSession, None]:
+    """Yield an app-role session pre-stamped with ``creator_id``.
+
+    The DRY entry point for per-creator worker tasks: stamping
+    ``session.info["creator_id"]`` BEFORE the first statement means the
+    ``after_begin`` listener emits the ``app.creator_id`` GUC on every
+    transaction, so the RLS policies gate every read (USING) and write
+    (WITH CHECK) the task performs — the same structural backstop request
+    paths get from ``auth.get_current_creator``. A call site cannot forget
+    the GUC because the id is a required argument.
+
+    Cross-tenant sweeps (purge_*, analytics fan-out, outcome polling) must
+    keep using ``AdminSessionLocal`` — see the allowlist pinned by
+    ``tests/test_worker_invariants.py``.
+    """
+    # Look up the module-global factory at call time so a post-fork
+    # recreate_engine() rebind is always honoured.
+    async with AsyncSessionLocal() as session:
+        session.info["creator_id"] = str(creator_id)
         yield session

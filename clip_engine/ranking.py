@@ -7,6 +7,7 @@ import logging
 import math
 import uuid
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,7 +134,7 @@ async def score_and_rank(
     dna_brief: str | None = None,
     transcript_segments: list | None = None,
     max_candidates: int = 8,
-    ledger_session_factory: Callable[[], AsyncSession] | None = None,
+    ledger_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None = None,
 ) -> list[dict]:
     """Extract candidates → score (per-candidate LLM call) → rank. Session-free.
 

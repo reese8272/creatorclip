@@ -23,6 +23,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 
 import httpx
@@ -230,7 +231,7 @@ async def score_candidates(
     dna_brief: str | None = None,
     transcript_segments: list | None = None,
     creator_id: uuid.UUID | None = None,
-    ledger_session_factory: Callable[[], AsyncSession] | None = None,
+    ledger_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None = None,
 ) -> list[dict]:
     """
     Score and annotate candidates in-place. Returns the enriched list.
