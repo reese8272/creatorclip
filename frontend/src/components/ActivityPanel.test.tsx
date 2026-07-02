@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ActivityPanel } from './ActivityPanel'
 import { upsert, _reset } from '@/stores/activeTasks'
+import { subscribeToTaskStream } from '@/lib/taskStream'
 
 // Issue 211 — ActivityPanel unit tests.
 // Guards: hidden when store empty, shows in-flight task, hides after terminal
@@ -144,5 +145,46 @@ describe('ActivityPanel', () => {
     upsert('t1', { videoId: 'v1', phase: 'running', stage: 'signals' })
     renderPanel()
     expect(document.body.textContent ?? '').not.toMatch(/viral/i)
+  })
+})
+
+// Issue 352 Batch K — regression for the open-then-immediately-close defect:
+// the effect's `upsert(subscribed: true)` replaces the store map (its own
+// dependency), which used to fire the closure-scoped cleanup and close the
+// EventSource it had just opened, never reopening it.
+describe('ActivityPanel — SSE subscription lifecycle', () => {
+  function firstSub() {
+    const mocked = vi.mocked(subscribeToTaskStream)
+    return mocked.mock.results[0]?.value as { close: ReturnType<typeof vi.fn> }
+  }
+
+  it('opens exactly one subscription per streaming task and keeps it open across store updates', () => {
+    upsert('t1', { videoId: 'v1', phase: 'running', streamUrl: '/tasks/t1/events' })
+    renderPanel()
+    const mocked = vi.mocked(subscribeToTaskStream)
+    expect(mocked).toHaveBeenCalledTimes(1)
+    expect(mocked).toHaveBeenCalledWith('/tasks/t1/events', expect.any(Object))
+    expect(firstSub().close).not.toHaveBeenCalled()
+
+    // An unrelated store update (new map reference) must neither tear the
+    // subscription down nor open a duplicate.
+    act(() => upsert('t1', { label: 'Transcribing' }))
+    expect(mocked).toHaveBeenCalledTimes(1)
+    expect(firstSub().close).not.toHaveBeenCalled()
+  })
+
+  it('closes the subscription once the task settles', () => {
+    upsert('t1', { videoId: 'v1', phase: 'running', streamUrl: '/tasks/t1/events' })
+    renderPanel()
+    act(() => upsert('t1', { phase: 'done', subscribed: false }))
+    expect(firstSub().close).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes all open subscriptions on unmount', () => {
+    upsert('t1', { videoId: 'v1', phase: 'running', streamUrl: '/tasks/t1/events' })
+    const { unmount } = renderPanel()
+    expect(firstSub().close).not.toHaveBeenCalled()
+    unmount()
+    expect(firstSub().close).toHaveBeenCalledTimes(1)
   })
 })

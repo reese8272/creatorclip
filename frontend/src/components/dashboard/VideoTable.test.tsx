@@ -1,4 +1,5 @@
 import { render, screen, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -134,6 +135,41 @@ describe('VideoTable — StageStepper integration', () => {
     })
     expect(screen.getByText('0')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Generate clips' })).toBeInTheDocument()
+  })
+
+  it('shows the done label after a successful queue POST (button stays disabled)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }) as Response),
+    )
+    renderTable([makeVideo({ ingest_status: 'pending', clippable: true })])
+    await userEvent.click(screen.getByRole('button', { name: 'Queue for analysis' }))
+    const btn = await screen.findByRole('button', { name: 'Queued ✓' })
+    expect(btn).toBeDisabled()
+  })
+
+  it('resets to an enabled Retry button when the queue POST rejects at the network level (Issue 352 Batch K)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
+    renderTable([makeVideo({ ingest_status: 'pending', clippable: true })])
+    await userEvent.click(screen.getByRole('button', { name: 'Queue for analysis' }))
+    const btn = await screen.findByRole('button', { name: 'Retry' })
+    expect(btn).toBeEnabled()
+  })
+
+  it('resets to Retry on an HTTP error response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({ ok: false, status: 500, json: async () => ({ detail: 'boom' }) }) as Response,
+      ),
+    )
+    renderTable([makeVideo({ ingest_status: 'pending', clippable: true })])
+    await userEvent.click(screen.getByRole('button', { name: 'Queue for analysis' }))
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeEnabled()
   })
 
   it('a 10-row table with 9 done + 1 in-flight opens exactly 1 SSE connection', () => {

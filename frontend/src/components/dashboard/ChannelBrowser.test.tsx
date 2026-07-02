@@ -98,6 +98,40 @@ describe('ChannelBrowser', () => {
     })
   })
 
+  it('resets to an enabled Retry button when the link POST rejects at the network level (Issue 352 Batch K)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (typeof url === 'string' && url.startsWith('/videos/catalog')) {
+          return { ok: true, status: 200, json: async () => catalogPayload() } as Response
+        }
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    renderBrowser(qc)
+    const btn = await screen.findByRole('button', { name: 'Clip this' })
+    await userEvent.click(btn)
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(retry).toBeEnabled()
+  })
+
+  it('resets to Retry on an HTTP error response from /videos/link', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (typeof url === 'string' && url.startsWith('/videos/catalog')) {
+          return { ok: true, status: 200, json: async () => catalogPayload() } as Response
+        }
+        return { ok: false, status: 422, json: async () => ({ detail: 'bad' }) } as Response
+      }),
+    )
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    renderBrowser(qc)
+    await userEvent.click(await screen.findByRole('button', { name: 'Clip this' }))
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeEnabled()
+  })
+
   it('surface contains no virality language (structural honesty)', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const { container } = renderBrowser(qc)

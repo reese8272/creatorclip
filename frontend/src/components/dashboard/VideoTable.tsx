@@ -1,6 +1,6 @@
-import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StageStepper } from '@/components/dashboard/StageStepper'
@@ -40,8 +40,18 @@ function titlesUrl(v: Video): string {
   return `/analysis?video_id=${v.id}&video_title=${encodeURIComponent(v.title || '')}`
 }
 
-// A single video row. Owns the local button state for the Queue / Generate
-// actions (Queuing… → Queued ✓ → Retry) and invalidates the videos query so the
+// Variables for the Queue / Generate POST — carries the button copy for each
+// mutation phase so the label can be derived from the mutation state.
+interface ActVars {
+  url: string
+  pending: string
+  done: string
+}
+
+// A single video row. Button state for the Queue / Generate actions
+// (Queuing… → Queued ✓ → Retry) is derived from a TanStack mutation so a
+// network-level failure (fetch reject) resets to Retry instead of latching
+// busy forever (Issue 352 Batch K); the videos query is invalidated so the
 // list reflects the new status.
 function VideoRow({
   video,
@@ -53,21 +63,25 @@ function VideoRow({
   analysisMode: AnalysisMode
 }) {
   const queryClient = useQueryClient()
-  const [busy, setBusy] = useState(false)
-  const [label, setLabel] = useState<string | null>(null)
 
-  async function act(url: string, pending: string, done: string) {
-    setBusy(true)
-    setLabel(pending)
-    const resp = await fetch(url, { method: 'POST', credentials: 'include' })
-    if (resp.ok) {
-      setLabel(done)
+  const act = useMutation({
+    mutationFn: ({ url }: ActVars) => api(url, { method: 'POST' }),
+    onSuccess: () => {
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['videos'] }), 3000)
-    } else {
-      setBusy(false)
-      setLabel('Retry')
-    }
-  }
+    },
+  })
+
+  // Success keeps the button disabled on the done label until the delayed
+  // invalidation swaps the row; any failure (HTTP error or network reject)
+  // re-enables it as "Retry".
+  const busy = act.isPending || act.isSuccess
+  const label = act.isPending
+    ? (act.variables?.pending ?? null)
+    : act.isSuccess
+      ? (act.variables?.done ?? null)
+      : act.isError
+        ? 'Retry'
+        : null
 
   const streamState = useStageStream(
     video.clippable ? video.id : null,
@@ -125,10 +139,14 @@ function VideoRow({
           busy={busy}
           label={label}
           onQueue={() =>
-            act(`/videos/${video.id}/queue`, 'Queuing…', 'Queued ✓')
+            act.mutate({ url: `/videos/${video.id}/queue`, pending: 'Queuing…', done: 'Queued ✓' })
           }
           onGenerate={() =>
-            act(`/videos/${video.id}/clips/generate`, 'Generating…', 'Queued ✓')
+            act.mutate({
+              url: `/videos/${video.id}/clips/generate`,
+              pending: 'Generating…',
+              done: 'Queued ✓',
+            })
           }
         />
       </td>

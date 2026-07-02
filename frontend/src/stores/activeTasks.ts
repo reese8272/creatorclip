@@ -4,10 +4,15 @@
 // — so consumers can wire it via useSyncExternalStore without adding any external
 // state-management dependency (Zustand uses this same primitive internally).
 //
-// Load-bearing purpose: the server-side SSE cap is 3 concurrent connections per
-// creator (MAX_CONCURRENT_SSE_PER_CREATOR = 3 in routers/tasks.py).  All
-// EventSource opens for task-stream state MUST go through this store so the cap
-// cannot be exceeded by independent per-component subscriptions.
+// SSE cap posture (corrected 2026-07-02, Issue 352 Batch K): the SERVER is the
+// sole enforcer of the 3-concurrent-streams-per-creator cap
+// (MAX_CONCURRENT_SSE_PER_CREATOR = 3 in routers/tasks.py) — a 4th stream is
+// rejected with a named `error` event ("too many open streams") that every
+// consumer surfaces as an error state. This store's cap accounting
+// (isCapExhausted) is a client-side courtesy pre-empt honored by the
+// ActivityPanel only; other consumers (useStageStream per dashboard row,
+// useTaskStream in Onboarding, the chat stream, DnaCard resync) open
+// EventSources directly and rely on the server cap.
 //
 // Lifecycle rule: terminal entries (done / error) auto-remove after
 // TERMINAL_TTL_MS so the panel empties and hides without a manual dismiss step.
