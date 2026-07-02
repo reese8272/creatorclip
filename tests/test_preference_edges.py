@@ -75,6 +75,15 @@ def test_clip_features_normal_dna_match_passthrough():
     assert clip_features(dna_match=0.42)[3] == 0.42
 
 
+def test_clip_features_nan_in_non_dna_feature_zeroed():
+    """Issue 352 Batch J: the finite guard must cover EVERY float feature —
+    a NaN in hook_energy used to pass straight through and fail the retrain."""
+    vec = clip_features(hook_energy=float("nan"), silence_ratio=float("inf"))
+    assert vec[1] == 0.0
+    assert vec[2] == 0.0
+    assert all(math.isfinite(x) for x in vec)
+
+
 # ── decay weights ────────────────────────────────────────────────────────────
 
 

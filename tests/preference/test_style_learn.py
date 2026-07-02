@@ -55,6 +55,13 @@ def test_dominant_style_false_boolean_not_skipped() -> None:
     assert result is False
 
 
+def test_dominant_style_returns_argmax_not_first_over_threshold() -> None:
+    """Issue 352 Batch J: when TWO values clear the threshold, the MOST
+    frequent one wins — not the one that happens to appear first."""
+    history = [{"subtitle": "karaoke"}] * 5 + [{"subtitle": "bold_pop"}] * 7
+    assert dominant_style(history, "subtitle", threshold=5) == "bold_pop"
+
+
 # ── style_suggestion ──────────────────────────────────────────────────────────
 
 
@@ -110,6 +117,15 @@ def test_style_suggestion_returns_none_when_no_kit_field_present() -> None:
     """History rows with unrelated keys produce no suggestion."""
     history = [{"unrelated_key": "value"}] * 10
     assert style_suggestion(history, threshold=5) is None
+
+
+def test_style_suggestion_returns_argmax_not_first_over_threshold() -> None:
+    """Issue 352 Batch J: same argmax rule inside style_suggestion."""
+    history = [{"subtitle": "minimal"}] * 5 + [{"subtitle": "gradient_slide"}] * 9
+    result = style_suggestion(history, threshold=5)
+    assert result is not None
+    assert result["value"] == "gradient_slide"
+    assert result["count"] == 9
 
 
 def test_style_suggestion_count_matches_occurrences() -> None:
