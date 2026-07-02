@@ -10,6 +10,8 @@ hanging a request/worker indefinitely.
 
 import httpx
 
+from shared_resources import register_aclose
+
 # connect=5s, read/write/pool=60s. Google's YouTube Analytics endpoint is
 # the slow tail — per-video reports routinely take 10-15s and OCCASIONALLY
 # spike past 30s. A 15s default tripped Issue 88 (sync_channel_catalog
@@ -35,3 +37,7 @@ async def aclose() -> None:
     if _CLIENT is not None and not _CLIENT.is_closed:
         await _CLIENT.aclose()
     _CLIENT = None
+
+
+# App shutdown closes this via shared_resources.close_all() (Issue 109b).
+register_aclose("youtube_http", aclose)

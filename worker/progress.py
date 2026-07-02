@@ -40,6 +40,7 @@ import redis.asyncio as aredis
 
 from config import settings
 from observability import request_id_ctx
+from shared_resources import register_aclose
 
 logger = logging.getLogger(__name__)
 
@@ -300,3 +301,7 @@ async def aclose() -> None:
     finally:
         _AIO = None
         _AIO_LOOP = None
+
+
+# App shutdown closes this via shared_resources.close_all() (Issue 109b).
+register_aclose("worker_progress", aclose)
