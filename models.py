@@ -798,6 +798,9 @@ class PreferenceModel(Base):
     version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     weights_blob: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
     feature_schema_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Per-retrain offline eval (Issue 202): {"ndcg_at_5","map_at_5","n_eval","computed_at"}.
+    # Best-effort — NULL when the creator lacks enough held-out labels to evaluate.
+    metrics_jsonb: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
     __table_args__ = (

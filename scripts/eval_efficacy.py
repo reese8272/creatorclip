@@ -36,7 +36,7 @@ async def _main() -> int:
 
     from db import get_sessionmaker  # type: ignore[import-untyped]
     from models import Creator
-    from tests.eval.efficacy import (
+    from preference.efficacy import (
         RANKINGS,
         evaluate_creator,
         load_labeled_clips,

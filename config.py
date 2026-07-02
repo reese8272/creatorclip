@@ -387,6 +387,11 @@ class Settings(BaseSettings):
     # 5000 is the industry-standard ceiling for a per-user LightGBM ranker
     # at 30d half-life (Spotify/Netflix sklearn pipelines). (Issue 102)
     PREFERENCE_MAX_TRAINING_LABELS: int = 5000
+    # Warn-only ratchet on the per-retrain offline eval (Issue 202): if the new
+    # model version's held-out NDCG@5 drops by MORE than this vs the previous
+    # version's stored metric, a warning-severity event is logged. Never blocks
+    # the retrain — small NDCG deltas on few labels are noise, so alert only.
+    PREFERENCE_NDCG_REGRESSION_THRESHOLD: float = 0.05
     LLM_TIMEOUT_SECONDS: int = 120
     ENV: str = "development"
     YTDLP_ENABLED: bool = False
