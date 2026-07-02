@@ -138,7 +138,7 @@ async def test_runner_executes_tool_then_answers(_patch_runner):
         (_msg("end_turn", [_text_block("Your best video was X.")]), _usage(output_tokens=20)),
     ]
 
-    def _fake_stream(client, task_id, **kwargs):
+    async def _fake_stream(client, task_id, **kwargs):
         calls["stream"] += 1
         return scripted.pop(0)
 
@@ -165,7 +165,7 @@ async def test_runner_resumes_pause_turn_with_same_tools(_patch_runner):
     ]
     seen_kwargs = []
 
-    def _fake_stream(client, task_id, **kwargs):
+    async def _fake_stream(client, task_id, **kwargs):
         calls["stream"] += 1
         seen_kwargs.append(kwargs)
         return scripted.pop(0)
@@ -190,7 +190,7 @@ async def test_runner_bounds_pause_turn_rounds(_patch_runner):
 
     calls, monkeypatch = _patch_runner
 
-    def _always_pause(client, task_id, **kwargs):
+    async def _always_pause(client, task_id, **kwargs):
         calls["stream"] += 1
         return _msg("pause_turn", [_text_block("still going…")]), _usage()
 
@@ -211,7 +211,7 @@ async def test_runner_flags_max_tokens_truncation(_patch_runner):
 
     calls, monkeypatch = _patch_runner
 
-    def _truncated(client, task_id, **kwargs):
+    async def _truncated(client, task_id, **kwargs):
         calls["stream"] += 1
         return _msg("max_tokens", [_text_block("Half an ans")]), _usage(output_tokens=1500)
 
@@ -232,7 +232,7 @@ async def test_runner_records_usage_against_chat_model(_patch_runner):
 
     calls, monkeypatch = _patch_runner
 
-    def _answer(client, task_id, **kwargs):
+    async def _answer(client, task_id, **kwargs):
         calls["stream"] += 1
         return (
             _msg("end_turn", [_text_block("hi")]),
@@ -262,7 +262,7 @@ async def test_runner_caps_tool_iterations(_patch_runner):
     calls, monkeypatch = _patch_runner
 
     # Model "never stops" calling tools — the loop must still terminate.
-    def _always_tool(client, task_id, **kwargs):
+    async def _always_tool(client, task_id, **kwargs):
         calls["stream"] += 1
         return (
             _msg("tool_use", [_tool_block("get_channel_dna", {}, f"tu_{calls['stream']}")]),

@@ -210,7 +210,7 @@ def test_analyze_performer_llm_success_creates_insight() -> None:
         patch("routers.insights._ANTHROPIC") as mock_anthropic,
         TestClient(app) as client,
     ):
-        mock_anthropic.messages.create.return_value = mock_msg
+        mock_anthropic.messages.create = AsyncMock(return_value=mock_msg)
         resp = client.post(
             _URL,
             json={"video_id": str(video.id), "performer_kind": "top"},
@@ -246,7 +246,7 @@ def test_analyze_performer_no_inert_cache_marker() -> None:
         patch("routers.insights._ANTHROPIC") as mock_anthropic,
         TestClient(app) as client,
     ):
-        mock_anthropic.messages.create.return_value = mock_msg
+        mock_anthropic.messages.create = AsyncMock(return_value=mock_msg)
         client.post(
             _URL,
             json={"video_id": str(video.id), "performer_kind": "top"},
@@ -273,7 +273,7 @@ def test_analyze_performer_empty_llm_content_returns_fallback() -> None:
         patch("routers.insights._ANTHROPIC") as mock_anthropic,
         TestClient(app) as client,
     ):
-        mock_anthropic.messages.create.return_value = mock_msg
+        mock_anthropic.messages.create = AsyncMock(return_value=mock_msg)
         resp = client.post(
             _URL,
             json={"video_id": str(video.id), "performer_kind": "top"},
@@ -295,7 +295,7 @@ def test_analyze_performer_llm_error_returns_503() -> None:
         patch("routers.insights._ANTHROPIC") as mock_anthropic,
         TestClient(app) as client,
     ):
-        mock_anthropic.messages.create.side_effect = Exception("upstream API error")
+        mock_anthropic.messages.create = AsyncMock(side_effect=Exception("upstream API error"))
         resp = client.post(
             _URL,
             json={"video_id": str(video.id), "performer_kind": "top"},

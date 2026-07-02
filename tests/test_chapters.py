@@ -317,11 +317,11 @@ def test_chapters_queued_when_transcript_exists() -> None:
 # ── Unit: generate_chapters prompt assembly + _segment_text ───────────────────
 
 
-def test_generate_chapters_builds_request() -> None:
+async def test_generate_chapters_builds_request() -> None:
     """generate_chapters delegates to stream_and_emit with cached system block."""
     from knowledge.chapters import generate_chapters
 
-    fake_stream = MagicMock(
+    fake_stream = AsyncMock(
         return_value=(
             '{"chapters":[]}',
             {
@@ -337,7 +337,7 @@ def test_generate_chapters_builds_request() -> None:
         {"start": 120.0, "text": "second section"},
     ]
     with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
-        result, _usage = generate_chapters(
+        result, _usage = await generate_chapters(
             boundaries=[0.0, 120.0],
             segments=segments,
             video_duration_s=240.0,
@@ -382,11 +382,11 @@ def test_find_chapter_boundaries_silence_at_end_skipped() -> None:
     assert all(b < 599.5 for b in bounds)
 
 
-def test_generate_chapters_empty_segment_placeholder() -> None:
+async def test_generate_chapters_empty_segment_placeholder() -> None:
     """Segments with no transcript text get a placeholder."""
     from knowledge.chapters import generate_chapters
 
-    fake_stream = MagicMock(
+    fake_stream = AsyncMock(
         return_value=(
             '{"chapters":[]}',
             {
@@ -398,7 +398,7 @@ def test_generate_chapters_empty_segment_placeholder() -> None:
         )
     )
     with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
-        generate_chapters(
+        await generate_chapters(
             boundaries=[0.0, 60.0],
             segments=[],  # no transcript at all
             video_duration_s=120.0,

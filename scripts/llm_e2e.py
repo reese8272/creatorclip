@@ -19,6 +19,7 @@ Exit codes: 0 = all assertions pass, 1 = one or more assertions failed.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -165,13 +166,15 @@ def test_titles() -> None:
     from knowledge.titles import generate_title_suggestions, parse_candidates
 
     # First call — cache write
-    raw1, usage1 = generate_title_suggestions(
-        channel_title=_FAKE_CHANNEL,
-        dna_brief=_FAKE_DNA_BRIEF,
-        stated_identity=None,
-        video_title=_FAKE_VIDEO_TITLE,
-        transcript_summary=_FAKE_TRANSCRIPT[:500],
-        task_id=_FAKE_TASK_ID,
+    raw1, usage1 = asyncio.run(
+        generate_title_suggestions(
+            channel_title=_FAKE_CHANNEL,
+            dna_brief=_FAKE_DNA_BRIEF,
+            stated_identity=None,
+            video_title=_FAKE_VIDEO_TITLE,
+            transcript_summary=_FAKE_TRANSCRIPT[:500],
+            task_id=_FAKE_TASK_ID,
+        )
     )
     candidates1 = parse_candidates(raw1)
     _assert(len(candidates1) > 0, "titles: candidates non-empty")
@@ -183,13 +186,15 @@ def test_titles() -> None:
     _assert_usage_nonempty(usage1, "titles call 1")
 
     # Second call — should see cache_read > 0 (1h TTL DNA prefix)
-    raw2, usage2 = generate_title_suggestions(
-        channel_title=_FAKE_CHANNEL,
-        dna_brief=_FAKE_DNA_BRIEF,
-        stated_identity=None,
-        video_title=_FAKE_VIDEO_TITLE,
-        transcript_summary=_FAKE_TRANSCRIPT[:500],
-        task_id=_FAKE_TASK_ID,
+    raw2, usage2 = asyncio.run(
+        generate_title_suggestions(
+            channel_title=_FAKE_CHANNEL,
+            dna_brief=_FAKE_DNA_BRIEF,
+            stated_identity=None,
+            video_title=_FAKE_VIDEO_TITLE,
+            transcript_summary=_FAKE_TRANSCRIPT[:500],
+            task_id=_FAKE_TASK_ID,
+        )
     )
     _assert(
         usage2.get("cache_read", 0) > 0,
@@ -202,14 +207,16 @@ def test_hooks() -> None:
     """knowledge/hooks.py — hook analysis."""
     from knowledge.hooks import analyze_hook
 
-    raw, usage = analyze_hook(
-        channel_title=_FAKE_CHANNEL,
-        dna_brief=_FAKE_DNA_BRIEF,
-        retention_drop_at_s=5.0,
-        retention_at_drop=0.72,
-        creator_median_at_drop=0.85,
-        transcript_excerpt=_FAKE_TRANSCRIPT,
-        task_id=_FAKE_TASK_ID,
+    raw, usage = asyncio.run(
+        analyze_hook(
+            channel_title=_FAKE_CHANNEL,
+            dna_brief=_FAKE_DNA_BRIEF,
+            retention_drop_at_s=5.0,
+            retention_at_drop=0.72,
+            creator_median_at_drop=0.85,
+            transcript_excerpt=_FAKE_TRANSCRIPT,
+            task_id=_FAKE_TASK_ID,
+        )
     )
     _assert(bool(raw), "hooks: non-empty response")
     _assert_usage_nonempty(usage, "hooks")
@@ -229,13 +236,15 @@ def test_thumbnails() -> None:
         "composition_pattern": "close-up face with food in foreground",
         "channel_thumbnail_signature": "Energetic face + vivid food colour block",
     }
-    raw, usage = generate_thumbnail_concepts(
-        channel_title=_FAKE_CHANNEL,
-        dna_brief=_FAKE_DNA_BRIEF,
-        patterns=fake_patterns,
-        transcript_hook=_FAKE_TRANSCRIPT[:200],
-        stated_identity=None,
-        task_id=_FAKE_TASK_ID,
+    raw, usage = asyncio.run(
+        generate_thumbnail_concepts(
+            channel_title=_FAKE_CHANNEL,
+            dna_brief=_FAKE_DNA_BRIEF,
+            patterns=fake_patterns,
+            transcript_hook=_FAKE_TRANSCRIPT[:200],
+            stated_identity=None,
+            task_id=_FAKE_TASK_ID,
+        )
     )
     concepts = parse_concepts(raw)
     _assert(len(concepts) > 0, "thumbnails: concepts non-empty")
@@ -247,15 +256,17 @@ def test_analysis() -> None:
     """analysis/brief.py — per-video analysis."""
     from analysis.brief import generate_video_analysis
 
-    text, usage = generate_video_analysis(
-        channel_title=_FAKE_CHANNEL,
-        youtube_video_id="dQw4w9WgXcQ",  # fake, no DB lookup
-        video_title=_FAKE_VIDEO_TITLE,
-        query="Why did this video underperform?",
-        video_metrics={"views": 1200, "engagement_rate": 0.032},
-        retention_summary={"avg_view_percent": 0.45},
-        channel_avg={"avg_views": 5000, "avg_engagement_rate": 0.05},
-        dna_brief=_FAKE_DNA_BRIEF,
+    text, usage = asyncio.run(
+        generate_video_analysis(
+            channel_title=_FAKE_CHANNEL,
+            youtube_video_id="dQw4w9WgXcQ",  # fake, no DB lookup
+            video_title=_FAKE_VIDEO_TITLE,
+            query="Why did this video underperform?",
+            video_metrics={"views": 1200, "engagement_rate": 0.032},
+            retention_summary={"avg_view_percent": 0.45},
+            channel_avg={"avg_views": 5000, "avg_engagement_rate": 0.05},
+            dna_brief=_FAKE_DNA_BRIEF,
+        )
     )
     _assert(bool(text) and len(text) > 50, "analysis: non-empty response")
     _assert_usage_nonempty(usage, "analysis")
@@ -272,11 +283,13 @@ def test_dna_brief() -> None:
         "avg_engagement_rate": 0.05,
         "channel_title": _FAKE_CHANNEL,
     }
-    text, usage = generate_brief(
-        patterns=fake_patterns,
-        channel_title=_FAKE_CHANNEL,
-        stated_identity=None,
-        task_id=None,  # non-streaming path
+    text, usage = asyncio.run(
+        generate_brief(
+            patterns=fake_patterns,
+            channel_title=_FAKE_CHANNEL,
+            stated_identity=None,
+            task_id=None,  # non-streaming path
+        )
     )
     _assert(bool(text) and len(text) > 50, "dna_brief: non-empty response")
     _assert_usage_nonempty(usage, "dna_brief")
@@ -293,11 +306,13 @@ def test_improvement() -> None:
         "top_topics": ["pasta", "quick recipes"],
         "underperformers": ["sourdough"],
     }
-    text, usage = generate_improvement_brief(
-        channel_title=_FAKE_CHANNEL,
-        analytics=analytics,
-        dna_brief=_FAKE_DNA_BRIEF,
-        task_id=None,  # non-streaming path
+    text, usage = asyncio.run(
+        generate_improvement_brief(
+            channel_title=_FAKE_CHANNEL,
+            analytics=analytics,
+            dna_brief=_FAKE_DNA_BRIEF,
+            task_id=None,  # non-streaming path
+        )
     )
     _assert(bool(text) and len(text) > 50, "improvement: non-empty response")
     _assert_usage_nonempty(usage, "improvement")

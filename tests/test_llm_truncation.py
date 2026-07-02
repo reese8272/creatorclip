@@ -25,16 +25,23 @@ class _FakeStream:
         self._events = events
         self._final = final_message
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *exc):
+    async def __aexit__(self, *exc):
         return False
 
-    def __iter__(self):
-        return iter(self._events)
+    def __aiter__(self):
+        self._it = iter(self._events)
+        return self
 
-    def get_final_message(self):
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def get_final_message(self):
         return self._final
 
 
@@ -70,26 +77,32 @@ def test_warn_if_truncated_silent_on_normal_stop(caplog):
 # ── stream_and_emit wires the check for every streaming caller ────────────────
 
 
-def test_stream_and_emit_warns_when_truncated(monkeypatch, caplog):
-    monkeypatch.setattr(anthropic_stream, "sync_emit", lambda *a, **k: None)
+async def test_stream_and_emit_warns_when_truncated(monkeypatch, caplog):
+    async def _noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(anthropic_stream, "aemit", _noop)
     stream = _FakeStream([], _final("partial", stop_reason="max_tokens"))
     client = MagicMock()
     client.messages.stream.return_value = stream
 
     with caplog.at_level(logging.WARNING, logger="observability"):
-        text, usage = stream_and_emit(
+        text, usage = await stream_and_emit(
             client, "task-1", model="claude-sonnet-4-6", max_tokens=10, system=[], messages=[]
         )
     assert text == "partial"  # still returns what it got
     assert any("truncated at max_tokens" in r.message for r in caplog.records)
 
 
-def test_stream_and_emit_quiet_when_complete(monkeypatch, caplog):
-    monkeypatch.setattr(anthropic_stream, "sync_emit", lambda *a, **k: None)
+async def test_stream_and_emit_quiet_when_complete(monkeypatch, caplog):
+    async def _noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(anthropic_stream, "aemit", _noop)
     stream = _FakeStream([], _final("done", stop_reason="end_turn"))
     client = MagicMock()
     client.messages.stream.return_value = stream
 
     with caplog.at_level(logging.WARNING, logger="observability"):
-        stream_and_emit(client, "task-2", model="m", max_tokens=10, system=[], messages=[])
+        await stream_and_emit(client, "task-2", model="m", max_tokens=10, system=[], messages=[])
     assert not any("truncated" in r.message for r in caplog.records)

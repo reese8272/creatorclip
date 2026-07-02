@@ -16,7 +16,7 @@ import logging
 from collections.abc import Mapping
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
@@ -24,7 +24,8 @@ from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe lazy pool bind.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(60.0, connect=10.0),
     max_retries=2,
@@ -109,7 +110,7 @@ def _build_request(
     return system, tools, messages
 
 
-def generate_improvement_brief(
+async def generate_improvement_brief(
     channel_title: str,
     analytics: Mapping[str, object],
     dna_brief: str | None = None,
@@ -150,7 +151,7 @@ def generate_improvement_brief(
         msg = None
         try:
             for _round in range(_MAX_SEARCH_ROUNDS + 1):
-                msg, round_usage = stream_message(
+                msg, round_usage = await stream_message(
                     client,
                     task_id,
                     model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
@@ -206,7 +207,7 @@ def generate_improvement_brief(
     response = None
     try:
         for _round in range(_MAX_SEARCH_ROUNDS + 1):
-            response = _client.messages.create(
+            response = await _client.messages.create(
                 model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
                 max_tokens=2000,
                 system=system,

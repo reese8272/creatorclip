@@ -20,7 +20,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import (
@@ -34,7 +34,8 @@ from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe lazy pool bind.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(120.0, connect=10.0),
     max_retries=2,
@@ -105,14 +106,14 @@ def _empty_patterns() -> dict:
     }
 
 
-def analyze_thumbnail_patterns(
+async def analyze_thumbnail_patterns(
     youtube_video_ids: list[str],
     channel_title: str,
 ) -> dict:
     """Analyze top-performing thumbnails using Claude multimodal vision.
 
     Passes thumbnail image URLs directly to Claude — no download required,
-    no CV pipeline needed. Intended to be called via asyncio.to_thread.
+    no CV pipeline needed. Awaited directly on the caller's event loop.
 
     Returns a dict with keys: face_present, dominant_emotions,
     text_overlay_style, typical_colors, composition_pattern,
@@ -156,7 +157,7 @@ def analyze_thumbnail_patterns(
         messages=[{"role": "user", "content": content}],
     )
     try:
-        response = _ANTHROPIC.messages.create(
+        response = await _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_THUMBNAILS,
             max_tokens=512,
             messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]  # SDK stub doesn't model a locally-built list[dict] of content blocks as valid content
@@ -298,7 +299,7 @@ def parse_concepts(raw_json: str) -> list[dict]:
     return validated[:CONCEPT_SURFACE_N]
 
 
-def generate_thumbnail_concepts(
+async def generate_thumbnail_concepts(
     channel_title: str,
     dna_brief: str | None,
     patterns: dict,
@@ -311,7 +312,7 @@ def generate_thumbnail_concepts(
     Returns ``(raw_json, usage)`` where usage is the token-count dict from
     ``stream_and_emit``. Callers should pass usage to ``billing.ledger.increment_usage``.
     Raises on network / API errors so the Celery task can retry.
-    Intended to be called via asyncio.to_thread.
+    Awaited directly on the worker's event loop (Issue 82a).
     """
     system, tools, messages = _build_concepts_request(
         channel_title, dna_brief, patterns, transcript_hook, stated_identity
@@ -333,7 +334,7 @@ def generate_thumbnail_concepts(
     msg = None
     try:
         for _round in range(_MAX_SEARCH_ROUNDS + 1):
-            msg, round_usage = stream_message(
+            msg, round_usage = await stream_message(
                 client,
                 task_id,
                 model=settings.ANTHROPIC_MODEL_THUMBNAILS,

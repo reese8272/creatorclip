@@ -9,7 +9,6 @@ limiter / Depends / DB needed):
 
 import asyncio
 import threading
-import time
 import uuid
 
 import pytest
@@ -41,10 +40,11 @@ async def test_single_flight_runs_compute_once_under_concurrency():
     calls = []
     lock = threading.Lock()
 
-    def _compute():
+    async def _compute():
         with lock:
             calls.append(1)
-        time.sleep(0.6)  # simulate the multimodal round trip (runs in a thread)
+        # Simulate the multimodal round trip — awaited on the loop (Issue 82a).
+        await asyncio.sleep(0.6)
         return dict(_PATTERNS)
 
     async def _run():
@@ -80,7 +80,7 @@ async def test_single_flight_fails_open_on_redis_error():
 
     calls = []
 
-    def _compute():
+    async def _compute():
         calls.append(1)
         return dict(_PATTERNS)
 

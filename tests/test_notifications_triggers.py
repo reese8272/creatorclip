@@ -187,6 +187,7 @@ class TestDnaBuiltTrigger:
             patch("dna.identity.format_for_prompt", return_value=None),
             patch(
                 "dna.brief.generate_brief",
+                new_callable=AsyncMock,
                 return_value=("Brief text.", {"input_tokens": 100, "output_tokens": 50}),
             ),
             patch(

@@ -25,7 +25,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import (
@@ -38,7 +38,8 @@ from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe lazy pool bind.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(60.0, connect=10.0),
     max_retries=2,
@@ -206,7 +207,7 @@ def _parse_result(raw_json: str) -> dict:
     }
 
 
-def generate_clip_explanation(
+async def generate_clip_explanation(
     channel_title: str,
     dna_brief: str | None,
     clip_principle: str,
@@ -215,9 +216,9 @@ def generate_clip_explanation(
     clip_end_s: float,
     clip_transcript: str,
 ) -> tuple[dict, dict]:
-    """Call Claude synchronously; return ``(parsed_result, usage)``.
+    """Call Claude asynchronously; return ``(parsed_result, usage)``.
 
-    Intended to be called via ``asyncio.to_thread`` from async route handlers.
+    Awaited directly from async route handlers (Issue 82a).
     Uses ``messages.create`` (non-streaming) — short-latency direct response.
 
     The returned dict always includes ``cited_principle``, which must be one of
@@ -262,7 +263,7 @@ def generate_clip_explanation(
         messages=messages,
     )
     try:
-        response = _ANTHROPIC.messages.create(  # type: ignore[call-overload]
+        response = await _ANTHROPIC.messages.create(  # type: ignore[call-overload]
             model=settings.ANTHROPIC_MODEL_CLIP_EXPLAIN,
             max_tokens=512,
             system=system,

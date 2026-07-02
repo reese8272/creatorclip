@@ -24,7 +24,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import (
@@ -38,7 +38,8 @@ from observability import log_llm_error, record_llm_metric
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe lazy pool bind.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(120.0, connect=10.0),
     max_retries=2,
@@ -210,7 +211,7 @@ def parse_candidates(raw_json: str) -> list[dict]:
     return validated[:SURFACE_N]
 
 
-def generate_title_suggestions(
+async def generate_title_suggestions(
     channel_title: str,
     dna_brief: str | None,
     stated_identity: str | None,
@@ -235,7 +236,7 @@ def generate_title_suggestions(
 
     client = _ANTHROPIC.with_options(timeout=120.0)
     try:
-        final_text, usage = stream_and_emit(
+        final_text, usage = await stream_and_emit(
             client,
             task_id,
             model=settings.ANTHROPIC_MODEL_TITLES,

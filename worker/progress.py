@@ -14,10 +14,11 @@ loses everything on the first dropped connection.
 
 Why both sync_emit AND aemit
 ----------------------------
-The Anthropic sync streaming context manager runs inside ``asyncio.to_thread``
-(it's blocking), so its callbacks need a synchronous Redis client. Other call
-sites run on the worker's singleton event loop and can use the async client
-directly. Both write the same XADD payload.
+LLM streaming is fully async since Issue 82a (AsyncAnthropic + ``aemit``), but
+genuinely blocking work still runs inside ``asyncio.to_thread`` and needs the
+synchronous Redis client to emit progress from that thread. Call sites on the
+worker's singleton event loop use the async client directly. Both write the
+same XADD payload.
 
 Progress is observational — never load-bearing
 ----------------------------------------------

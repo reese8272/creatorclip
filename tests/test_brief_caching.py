@@ -6,6 +6,8 @@ DB-free: the Anthropic client is patched; we assert on the request `system` shap
 returned. No real API call, no DB.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 
@@ -28,7 +30,7 @@ class _Resp:
         self.usage = _Usage()
 
 
-def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
+async def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
     """Issue 315: dna/brief.py has NO cache_control markers on any block.
     The static instructions block is ~570–650 tokens — below Sonnet 4.6's
     1024-token cacheable floor. An inert marker charges the write-premium
@@ -44,9 +46,9 @@ def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
         captured.update(kwargs)
         return _Resp([_Block("text", "BRIEF BODY")])
 
-    mocker.patch.object(b._ANTHROPIC.messages, "create", side_effect=_create)
+    mocker.patch.object(b._ANTHROPIC.messages, "create", AsyncMock(side_effect=_create))
 
-    out, _usage = b.generate_brief(
+    out, _usage = await b.generate_brief(
         {"top_videos": [{"title": "T", "hook_text": "H"}]}, "Acme Channel"
     )
 
@@ -65,7 +67,7 @@ def test_dna_brief_splits_static_prefix_from_volatile_data(mocker):
     assert out.startswith("BRIEF BODY")
 
 
-def test_dna_brief_stated_identity_in_user_turn_not_system(mocker):
+async def test_dna_brief_stated_identity_in_user_turn_not_system(mocker):
     """Issue 224: stated_identity must appear in the user message content, not in
     any system block. The model must receive it from the user role so it is treated
     as untrusted user content, not as trusted operator instructions."""
@@ -77,10 +79,10 @@ def test_dna_brief_stated_identity_in_user_turn_not_system(mocker):
         captured.update(kwargs)
         return _Resp([_Block("text", "BRIEF BODY")])
 
-    mocker.patch.object(b._ANTHROPIC.messages, "create", side_effect=_create)
+    mocker.patch.object(b._ANTHROPIC.messages, "create", AsyncMock(side_effect=_create))
 
     identity = "I make educational Python tutorials for beginners."
-    b.generate_brief(
+    await b.generate_brief(
         {"top_videos": [{"title": "T", "hook_text": "H"}]},
         "Acme Channel",
         stated_identity=identity,
@@ -109,7 +111,7 @@ def test_dna_brief_stated_identity_in_user_turn_not_system(mocker):
     )
 
 
-def test_improvement_brief_returns_final_text_block_not_preamble(mocker):
+async def test_improvement_brief_returns_final_text_block_not_preamble(mocker):
     import improvement.brief as b
 
     captured: dict = {}
@@ -126,10 +128,12 @@ def test_improvement_brief_returns_final_text_block_not_preamble(mocker):
         )
 
     mock_client = mocker.MagicMock()
-    mock_client.messages.create.side_effect = _create
+    mock_client.messages.create = AsyncMock(side_effect=_create)
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
-    out, _usage = b.generate_improvement_brief(channel_title="Ch", analytics={"avg_views": 100})
+    out, _usage = await b.generate_improvement_brief(
+        channel_title="Ch", analytics={"avg_views": 100}
+    )
 
     system = captured["system"]
     assert len(system) == 2
@@ -141,15 +145,15 @@ def test_improvement_brief_returns_final_text_block_not_preamble(mocker):
     assert "Let me search" not in out
 
 
-def test_improvement_brief_raises_when_no_text(mocker):
+async def test_improvement_brief_raises_when_no_text(mocker):
     import improvement.brief as b
 
     mock_client = mocker.MagicMock()
-    mock_client.messages.create.return_value = _Resp([_Block("server_tool_use")])
+    mock_client.messages.create = AsyncMock(return_value=_Resp([_Block("server_tool_use")]))
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
     with pytest.raises(RuntimeError, match="no text"):
-        b.generate_improvement_brief(channel_title="Ch", analytics={})
+        await b.generate_improvement_brief(channel_title="Ch", analytics={})
 
 
 # ── Issue 84 — web_search tool string is the current GA version ──────────────
@@ -171,7 +175,7 @@ def test_default_web_search_tool_is_current_ga_version():
     )
 
 
-def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
+async def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
     """The improvement brief request body must carry the configured tool string
     on the tools list. Pins the wiring from config → call site so a future
     config change is actually reflected in the Anthropic call."""
@@ -184,10 +188,10 @@ def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
         return _Resp([_Block("text", "FINAL")])
 
     mock_client = mocker.MagicMock()
-    mock_client.messages.create.side_effect = _create
+    mock_client.messages.create = AsyncMock(side_effect=_create)
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
-    b.generate_improvement_brief(channel_title="Ch", analytics={"avg_views": 100})
+    await b.generate_improvement_brief(channel_title="Ch", analytics={"avg_views": 100})
 
     tools = captured["tools"]
     assert len(tools) == 1
@@ -203,7 +207,7 @@ def test_improvement_brief_request_uses_configured_web_search_tool(mocker):
 # ── Wave-3 Fix A: streaming path also receives web_search tools ──────────────
 
 
-def test_improvement_brief_streaming_path_passes_tools_to_stream_message(mocker):
+async def test_improvement_brief_streaming_path_passes_tools_to_stream_message(mocker):
     """SEV1 regression: streaming path must pass tools=[web_search] to stream_message.
     Issue 350 switched the streaming branch from stream_and_emit to stream_message
     (needed to inspect stop_reason for the pause_turn loop). This test pins the
@@ -225,6 +229,7 @@ def test_improvement_brief_streaming_path_passes_tools_to_stream_message(mocker)
         content = [_Block()]
 
     def _fake_stream_message(client, task_id, **kwargs):
+        # sync side_effect on an AsyncMock — the mock wraps the return value.
         captured.update(kwargs)
         captured["task_id"] = task_id
         return (
@@ -237,9 +242,11 @@ def test_improvement_brief_streaming_path_passes_tools_to_stream_message(mocker)
             },
         )
 
-    mocker.patch("worker.anthropic_stream.stream_message", side_effect=_fake_stream_message)
+    mocker.patch(
+        "worker.anthropic_stream.stream_message", AsyncMock(side_effect=_fake_stream_message)
+    )
 
-    result, _usage = b.generate_improvement_brief(
+    result, _usage = await b.generate_improvement_brief(
         channel_title="Ch",
         analytics={"avg_views": 100},
         task_id="task-w3-fix-a",
@@ -261,7 +268,7 @@ def test_improvement_brief_streaming_path_passes_tools_to_stream_message(mocker)
 # ── Issue 350 — pause_turn loop ───────────────────────────────────────────────
 
 
-def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
+async def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
     """When stop_reason == 'pause_turn' the loop re-calls create() with the
     assistant turn appended and uses the final synthesised answer, not the
     search-trigger preamble. max_uses=5 is set on the tool definition.
@@ -314,10 +321,10 @@ def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
         return responses[len(call_args) - 1]
 
     mock_client = mocker.MagicMock()
-    mock_client.messages.create.side_effect = _create
+    mock_client.messages.create = AsyncMock(side_effect=_create)
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
-    result, _usage = b.generate_improvement_brief(channel_title="Ch", analytics={})
+    result, _usage = await b.generate_improvement_brief(channel_title="Ch", analytics={})
 
     assert mock_client.messages.create.call_count == 2, (
         "pause_turn must trigger exactly one continuation call"
@@ -331,7 +338,7 @@ def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker):
     assert "let me search" not in result
 
 
-def test_improvement_brief_tool_max_uses_is_set(mocker):
+async def test_improvement_brief_tool_max_uses_is_set(mocker):
     """max_uses=5 must be present on the web_search tool definition (Issue 350).
     Without it the model can call web_search unboundedly, blowing token budgets.
     """
@@ -344,10 +351,10 @@ def test_improvement_brief_tool_max_uses_is_set(mocker):
         return _Resp([_Block("text", "FINAL")])
 
     mock_client = mocker.MagicMock()
-    mock_client.messages.create.side_effect = _create
+    mock_client.messages.create = AsyncMock(side_effect=_create)
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
-    b.generate_improvement_brief(channel_title="Ch", analytics={})
+    await b.generate_improvement_brief(channel_title="Ch", analytics={})
 
     tools = captured["tools"]
     assert tools[0].get("max_uses") == 5, (
