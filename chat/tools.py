@@ -21,7 +21,6 @@ No ``creator_id`` parameter appears in any tool schema — the worker injects it
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
@@ -457,8 +456,8 @@ async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp
     """Generate Short-title candidates for a clip (reuses Issue-322 generator).
 
     Fetches the clip, its transcript, and the creator's DNA brief from DB (all
-    filtered by creator_id), then calls the Issue-322 generator synchronously
-    via asyncio.to_thread. Returns the title/hook suggestions as a dict.
+    filtered by creator_id), then awaits the Issue-322 async generator
+    directly (Issue 82a). Returns the title/hook suggestions as a dict.
     """
     from dna.profile import get_active as _get_active_dna
     from knowledge.clip_titles import generate_clip_title_suggestions
@@ -498,8 +497,7 @@ async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp
     dna_brief = dna.brief_text if dna else None
 
     try:
-        result, _usage = await asyncio.to_thread(
-            generate_clip_title_suggestions,
+        result, _usage = await generate_clip_title_suggestions(
             channel_title,
             dna_brief,
             clip_transcript,

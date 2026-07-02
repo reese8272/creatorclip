@@ -211,11 +211,11 @@ def test_hook_analysis_no_retention_data() -> None:
 # ── Unit: analyze_hook prompt assembly ────────────────────────────────────────
 
 
-def test_analyze_hook_builds_prompt_with_drop() -> None:
+async def test_analyze_hook_builds_prompt_with_drop() -> None:
     """analyze_hook delegates to stream_and_emit with cached DNA + drop stats."""
     from knowledge.hooks import analyze_hook
 
-    fake_stream = MagicMock(
+    fake_stream = AsyncMock(
         return_value=(
             '{"diagnosis":"x"}',
             {
@@ -227,7 +227,7 @@ def test_analyze_hook_builds_prompt_with_drop() -> None:
         )
     )
     with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
-        result, _usage = analyze_hook(
+        result, _usage = await analyze_hook(
             channel_title="Test Channel",
             dna_brief="DNA brief text " * 100,
             retention_drop_at_s=12.5,
@@ -260,11 +260,11 @@ def test_analyze_hook_builds_prompt_with_drop() -> None:
     assert json.dumps("hello world") in user_content
 
 
-def test_analyze_hook_no_drop_path() -> None:
+async def test_analyze_hook_no_drop_path() -> None:
     """When drop is None, prompt says no significant drop."""
     from knowledge.hooks import analyze_hook
 
-    fake_stream = MagicMock(
+    fake_stream = AsyncMock(
         return_value=(
             "{}",
             {
@@ -276,7 +276,7 @@ def test_analyze_hook_no_drop_path() -> None:
         )
     )
     with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
-        analyze_hook(
+        await analyze_hook(
             channel_title="Channel",
             dna_brief=None,
             retention_drop_at_s=None,
@@ -359,6 +359,8 @@ async def test_analyze_hook_async_creator_not_found_returns_early() -> None:
     from worker import tasks as worker_tasks
 
     class _FakeSession:
+        info: dict = {}
+
         async def __aenter__(self):
             return self
 
@@ -370,7 +372,7 @@ async def test_analyze_hook_async_creator_not_found_returns_early() -> None:
 
     aemit_mock = AsyncMock()
     with (
-        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch.object(db, "AsyncSessionLocal", MagicMock(return_value=_FakeSession())),
         patch("worker.progress.aemit", aemit_mock),
     ):
         await worker_tasks._analyze_hook_async("job-x", str(uuid.uuid4()), str(uuid.uuid4()))
@@ -393,6 +395,7 @@ async def test_analyze_hook_async_video_not_found_returns_early() -> None:
     class _FakeSession:
         def __init__(self):
             self._call = 0
+            self.info: dict = {}
 
         async def __aenter__(self):
             return self
@@ -406,7 +409,7 @@ async def test_analyze_hook_async_video_not_found_returns_early() -> None:
 
     aemit_mock = AsyncMock()
     with (
-        patch.object(db, "AdminSessionLocal", MagicMock(return_value=_FakeSession())),
+        patch.object(db, "AsyncSessionLocal", MagicMock(return_value=_FakeSession())),
         patch("worker.progress.aemit", aemit_mock),
     ):
         await worker_tasks._analyze_hook_async("job-y", str(creator.id), str(uuid.uuid4()))

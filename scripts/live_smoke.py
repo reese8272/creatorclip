@@ -42,6 +42,7 @@ Exit codes: 0 = all run checks passed (skips are not failures), 1 = a failure.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import shutil
@@ -432,8 +433,12 @@ def check_title(res: Results, with_llm: bool) -> None:
         return
     from knowledge.clip_titles import generate_clip_title_suggestions
 
-    result, usage = generate_clip_title_suggestions(
-        channel_title=CANARY_CHANNEL, dna_brief=CANARY_DNA_BRIEF, clip_transcript=CANARY_TRANSCRIPT
+    result, usage = asyncio.run(
+        generate_clip_title_suggestions(
+            channel_title=CANARY_CHANNEL,
+            dna_brief=CANARY_DNA_BRIEF,
+            clip_transcript=CANARY_TRANSCRIPT,
+        )
     )
     res.ok(bool(result.get("titles")), "title: titles non-empty")
     res.honesty(str(result.get("disclaimer", "")), "title")
@@ -446,8 +451,12 @@ def check_caption(res: Results, with_llm: bool) -> None:
         return
     from knowledge.clip_captions import generate_clip_caption_hooks
 
-    result, usage = generate_clip_caption_hooks(
-        channel_title=CANARY_CHANNEL, dna_brief=CANARY_DNA_BRIEF, clip_hook=CANARY_TRANSCRIPT[:200]
+    result, usage = asyncio.run(
+        generate_clip_caption_hooks(
+            channel_title=CANARY_CHANNEL,
+            dna_brief=CANARY_DNA_BRIEF,
+            clip_hook=CANARY_TRANSCRIPT[:200],
+        )
     )
     res.ok(bool(result.get("options")), "caption: options non-empty")
     res.honesty(str(result.get("disclaimer", "")), "caption")
@@ -460,14 +469,16 @@ def check_explain(res: Results, with_llm: bool) -> None:
         return
     from knowledge.clip_explain import generate_clip_explanation
 
-    result, usage = generate_clip_explanation(
-        channel_title=CANARY_CHANNEL,
-        dna_brief=CANARY_DNA_BRIEF,
-        clip_principle=CANARY_PRINCIPLE,
-        clip_score=0.82,
-        clip_start_s=CANARY_CLIP_START_S,
-        clip_end_s=CANARY_CLIP_END_S,
-        clip_transcript=CANARY_TRANSCRIPT,
+    result, usage = asyncio.run(
+        generate_clip_explanation(
+            channel_title=CANARY_CHANNEL,
+            dna_brief=CANARY_DNA_BRIEF,
+            clip_principle=CANARY_PRINCIPLE,
+            clip_score=0.82,
+            clip_start_s=CANARY_CLIP_START_S,
+            clip_end_s=CANARY_CLIP_END_S,
+            clip_transcript=CANARY_TRANSCRIPT,
+        )
     )
     res.ok(bool(result.get("cited_principle")), "explain: cites a named principle")
     res.ok(usage.get("input_tokens", 0) > 0, "explain: usage recorded", str(usage))

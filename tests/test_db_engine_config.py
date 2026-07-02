@@ -53,3 +53,47 @@ def test_recreate_engine_never_exposes_disposed_engine() -> None:
         assert db.AdminSessionLocal.kw["bind"] is db.admin_engine
     finally:
         db.recreate_engine()  # rebind again so no state leaks into later tests
+
+
+# ── tenant_session (Issue 231) ─────────────────────────────────────────────────
+
+
+async def test_tenant_session_stamps_creator_id_before_yield() -> None:
+    """The helper must stamp session.info BEFORE any statement runs, so the
+    after_begin listener emits the app.creator_id GUC on the first transaction."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    cid = uuid.uuid4()
+    session = MagicMock()
+    session.info = {}
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(db, "AsyncSessionLocal", MagicMock(return_value=session)):
+        async with db.tenant_session(cid) as s:
+            assert s is session
+            assert s.info["creator_id"] == str(cid)
+
+
+async def test_tenant_session_uses_app_factory_not_admin() -> None:
+    """tenant_session must run on the RLS-gated app factory — never BYPASSRLS."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    session = MagicMock()
+    session.info = {}
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    app_factory = MagicMock(return_value=session)
+    admin_factory = MagicMock()
+
+    with (
+        patch.object(db, "AsyncSessionLocal", app_factory),
+        patch.object(db, "AdminSessionLocal", admin_factory),
+    ):
+        async with db.tenant_session(str(uuid.uuid4())):
+            pass
+
+    app_factory.assert_called_once()
+    admin_factory.assert_not_called()

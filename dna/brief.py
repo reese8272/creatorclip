@@ -15,7 +15,7 @@ import json
 import logging
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
@@ -23,7 +23,9 @@ from observability import log_llm_error, record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC: Anthropic = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe: the httpx
+# pool binds lazily on the first await, on the worker child's persistent loop.
+_ANTHROPIC: AsyncAnthropic = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(60.0, connect=10.0),
     max_retries=2,
@@ -108,7 +110,7 @@ def _build_request(
     return system, messages
 
 
-def generate_brief(
+async def generate_brief(
     patterns: dict,
     channel_title: str,
     stated_identity: str | None = None,
@@ -145,7 +147,7 @@ def generate_brief(
         from worker.anthropic_stream import stream_and_emit
 
         try:
-            final_text, usage = stream_and_emit(
+            final_text, usage = await stream_and_emit(
                 _ANTHROPIC,
                 task_id,
                 model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
@@ -176,7 +178,7 @@ def generate_brief(
         messages=messages,
     )
     try:
-        response = _ANTHROPIC.messages.create(
+        response = await _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_DNA_BRIEF,
             max_tokens=2000,
             system=system,  # type: ignore[arg-type]

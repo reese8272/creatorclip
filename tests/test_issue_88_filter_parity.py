@@ -259,7 +259,7 @@ async def test_sync_channel_catalog_chains_metrics_for_unmetered_videos():
     sync_catalog_mock = AsyncMock()
     sync_analytics_mock = AsyncMock()
     with (
-        patch("worker.tasks.db.AdminSessionLocal", return_value=fake_ctx),
+        patch("worker.tasks.db.AsyncSessionLocal", return_value=fake_ctx),
         patch("youtube.oauth.get_valid_access_token", new=AsyncMock(return_value="tok")),
         patch("youtube.analytics.sync_video_catalog", new=sync_catalog_mock),
         patch("youtube.analytics.sync_video_analytics", new=sync_analytics_mock),

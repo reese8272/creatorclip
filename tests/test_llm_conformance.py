@@ -29,18 +29,20 @@ import pytest
 _REPO_ROOT = Path(__file__).parent.parent
 
 # (import_path, singleton_name, is_async)
+# Issue 82a: every LLM module now uses a module-level AsyncAnthropic singleton,
+# awaited directly on the caller's event loop (no asyncio.to_thread hop).
 _LLM_MODULES: list[tuple[str, str, bool]] = [
-    ("knowledge.hooks", "_ANTHROPIC", False),
-    ("knowledge.titles", "_ANTHROPIC", False),
-    ("knowledge.chapters", "_ANTHROPIC", False),
-    ("knowledge.thumbnails", "_ANTHROPIC", False),
-    ("knowledge.clip_titles", "_ANTHROPIC", False),  # Issue 322
-    ("knowledge.clip_captions", "_ANTHROPIC", False),  # Issue 323
-    ("knowledge.clip_explain", "_ANTHROPIC", False),  # Issue 325
-    ("analysis.brief", "_ANTHROPIC", False),
-    ("dna.brief", "_ANTHROPIC", False),
-    ("improvement.brief", "_ANTHROPIC", False),
-    ("chat.runner", "_ANTHROPIC", False),
+    ("knowledge.hooks", "_ANTHROPIC", True),
+    ("knowledge.titles", "_ANTHROPIC", True),
+    ("knowledge.chapters", "_ANTHROPIC", True),
+    ("knowledge.thumbnails", "_ANTHROPIC", True),
+    ("knowledge.clip_titles", "_ANTHROPIC", True),  # Issue 322
+    ("knowledge.clip_captions", "_ANTHROPIC", True),  # Issue 323
+    ("knowledge.clip_explain", "_ANTHROPIC", True),  # Issue 325
+    ("analysis.brief", "_ANTHROPIC", True),
+    ("dna.brief", "_ANTHROPIC", True),
+    ("improvement.brief", "_ANTHROPIC", True),
+    ("chat.runner", "_ANTHROPIC", True),
     ("chat.intake", "_ANTHROPIC", True),
     ("clip_engine.scoring", "_ANTHROPIC", True),
 ]
@@ -202,4 +204,95 @@ def test_cache_control_intentionally_absent(mod_path: str) -> None:
         f'{mod_path}: "cache_control" dict key found in code, but the prefix is below '
         "the cacheable floor (Haiku 4.5 requires 4,096 tokens minimum). Remove the "
         "cache_control marker to avoid paying the write premium for a prefix that cannot cache."
+    )
+
+
+# ── 5. Issue 82a — AsyncAnthropic everywhere; no to_thread around LLM calls ────
+
+# Async generator entry points exposed by the LLM modules. A caller wrapping any
+# of these in asyncio.to_thread would pass a coroutine to a thread (a bug) and
+# reintroduce the default-executor saturation Issue 82a removed.
+_LLM_ENTRY_POINTS = {
+    "generate_brief",
+    "generate_improvement_brief",
+    "generate_video_analysis",
+    "generate_title_suggestions",
+    "generate_thumbnail_concepts",
+    "analyze_thumbnail_patterns",
+    "analyze_hook",
+    "generate_chapters",
+    "generate_clip_title_suggestions",
+    "generate_clip_caption_hooks",
+    "generate_clip_explanation",
+    "stream_and_emit",
+    "stream_message",
+    "run_chat_turn",
+    # worker/tasks.py local aliases (import ... as build_*)
+    "build_brief",
+    "build_analysis",
+    "build_suggestions",
+    "build_concepts",
+    "build_hook_report",
+    "build_chapters",
+}
+
+# Files that call the LLM generators (in addition to the LLM modules themselves).
+_LLM_CALL_SITE_FILES = [
+    "worker/tasks.py",
+    "worker/anthropic_stream.py",
+    "routers/clips.py",
+    "routers/insights.py",
+    "chat/tools.py",
+    "chat/runner.py",
+]
+
+
+@pytest.mark.parametrize("mod_path,_,__", _LLM_MODULES)
+def test_llm_module_uses_async_client_without_to_thread(mod_path: str, _: str, __: bool) -> None:
+    """Issue 82a: LLM modules construct AsyncAnthropic; no to_thread on the client.
+
+    to_thread stays legitimate for CPU-bound work (e.g. clip_engine.scoring's
+    feature computation) — the assertion targets the Anthropic call path only.
+    """
+    import re
+
+    source = _read_source(mod_path)
+    assert "AsyncAnthropic(" in source, (
+        f"{mod_path}: expected a module-level AsyncAnthropic singleton (Issue 82a). "
+        "Sync Anthropic clients must not come back — they either block the loop or "
+        "force asyncio.to_thread hops that saturate the shared default executor."
+    )
+    offenders = [
+        target
+        for target in re.findall(r"asyncio\.to_thread\(\s*([\w.]+)", source)
+        if "_ANTHROPIC" in target or "messages" in target or target in _LLM_ENTRY_POINTS
+    ]
+    assert not offenders, (
+        f"{mod_path}: asyncio.to_thread wraps the Anthropic call path {offenders}. "
+        "LLM calls are natively async since Issue 82a — await the AsyncAnthropic "
+        "client directly."
+    )
+
+
+@pytest.mark.parametrize("rel_path", _LLM_CALL_SITE_FILES)
+def test_no_to_thread_around_llm_generators(rel_path: str) -> None:
+    """Issue 82a: no call site wraps an async LLM generator in asyncio.to_thread.
+
+    Structural grep-test (same pattern as test_model_config.py): scans the
+    call-site source for ``asyncio.to_thread(<llm generator>`` shapes. to_thread
+    remains legitimate for genuinely blocking work (ffmpeg, boto3, Celery
+    ``.delay``) — only the LLM entry points are asserted here.
+    """
+    import re
+
+    source = (_REPO_ROOT / rel_path).read_text(encoding="utf-8")
+    offenders = [
+        name
+        for name in re.findall(r"asyncio\.to_thread\(\s*(\w+)", source)
+        if name in _LLM_ENTRY_POINTS
+    ]
+    assert not offenders, (
+        f"{rel_path}: asyncio.to_thread wraps async LLM generator(s) {offenders}. "
+        "Since Issue 82a these are coroutine functions — await them directly; "
+        "to_thread would hand a coroutine to a thread and never execute it."
     )

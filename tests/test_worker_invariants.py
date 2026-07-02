@@ -87,7 +87,7 @@ def test_ingest_chain_soft_timeout_marks_failed_without_retry(
     async def _set_status(video_id, status, reason=None):
         statuses.append((status, reason))
 
-    async def _soft_timeout(video_id):
+    async def _soft_timeout(video_id, creator_id=None):
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(tasks, "_creator_id_for_video", _creator)
@@ -143,3 +143,83 @@ async def test_keyset_batches_paginates_by_pk_and_stops() -> None:
     second_stmt = str(session.execute.await_args_list[1].args[0])
     assert "LIMIT" in first_stmt and "LIMIT" in second_stmt
     assert "videos.id >" in second_stmt and "videos.id >" not in first_stmt
+
+
+# ── 4. AdminSessionLocal allowlist (Issue 231) ────────────────────────────────
+#
+# Per-creator worker tasks run on the RLS-gated app role via db.tenant_session;
+# BYPASSRLS (AdminSessionLocal) is reserved for the enumerated sites below.
+# A NEW AdminSessionLocal reference anywhere else in worker/tasks.py fails this
+# test — the durable guard that the worker tier stays under RLS.
+
+_ADMIN_SESSION_ALLOWLIST = frozenset(
+    {
+        # Tenant-id bootstraps — the creator is not known until the row is read.
+        "_creator_id_for_video",
+        "_creator_id_for_clip",
+        "_creator_id_for_summary",
+        "_fire_refund_notification_async",
+        # Failure-path status writes — run from except blocks where the tenant
+        # lookup itself may be the thing that failed.
+        "_set_status",
+        "_set_clip_render_status",
+        "_set_summary_render_status",
+        # Genuine cross-tenant sweeps (Beat tasks over ALL creators).
+        "_sweep_scheduled_publications_async",
+        "_poll_clip_outcomes_async",
+        "_purge_stale_source_media_async",
+        "_purge_stale_youtube_analytics_async",
+        "_expire_trials_async",
+        "_run_lifecycle_scan_async",
+        "_reconcile_stripe_ledger_async",
+        "_refresh_youtube_analytics_async",
+        # Spans RLS-exempt notification tables (preferences / deliveries carry
+        # no tenant policy); per-creator isolation via explicit predicates.
+        "_send_notification_async",
+    }
+)
+
+
+def test_admin_session_local_call_sites_match_allowlist() -> None:
+    import ast
+    import inspect
+
+    from worker import tasks
+
+    tree = ast.parse(inspect.getsource(tasks))
+
+    offenders: set[str] = set()
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self._stack: list[str] = []
+
+        def _visit_func(self, node) -> None:
+            self._stack.append(node.name)
+            self.generic_visit(node)
+            self._stack.pop()
+
+        visit_FunctionDef = _visit_func
+        visit_AsyncFunctionDef = _visit_func
+
+        def visit_Attribute(self, node: ast.Attribute) -> None:
+            if node.attr == "AdminSessionLocal":
+                offenders.add(self._stack[0] if self._stack else "<module>")
+            self.generic_visit(node)
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if node.id == "AdminSessionLocal":
+                offenders.add(self._stack[0] if self._stack else "<module>")
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+
+    unexpected = offenders - _ADMIN_SESSION_ALLOWLIST
+    assert not unexpected, (
+        f"New AdminSessionLocal (BYPASSRLS) call site(s) in worker/tasks.py: {sorted(unexpected)}. "
+        "Per-creator work must use db.tenant_session(creator_id) so RLS applies (Issue 231); "
+        "add to the allowlist ONLY for a genuine cross-tenant sweep or tenant-id bootstrap."
+    )
+    # And the allowlist itself must not go stale — every entry still exists.
+    missing = _ADMIN_SESSION_ALLOWLIST - offenders
+    assert not missing, f"Stale allowlist entries (no AdminSessionLocal use anymore): {missing}"

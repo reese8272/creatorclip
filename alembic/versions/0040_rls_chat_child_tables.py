@@ -20,10 +20,14 @@ Each gets ENABLE + FORCE row-level security and a subquery-based tenant_isolatio
 policy.  The pattern mirrors 0010/0038 for the GUC predicate; the subquery form is
 the standard for child tables that lack a direct creator_id (PostgreSQL docs §5.8).
 
-Worker writes to video_metrics / retention_curves / transcripts / clip_outcomes use
-AdminSessionLocal (BYPASSRLS) so WITH CHECK does not block ingestion.  chat_messages
-are written by the chat worker via AsyncSessionLocal with the GUC set (Issue 348
-fix), so WITH CHECK is actively enforced for that table.
+Worker writes to video_metrics / retention_curves / transcripts / clip_outcomes used
+AdminSessionLocal (BYPASSRLS) when this migration shipped, so WITH CHECK did not block
+ingestion.  chat_messages are written by the chat worker via AsyncSessionLocal with
+the GUC set (Issue 348 fix), so WITH CHECK is actively enforced for that table.
+
+UPDATE (Issue 231): per-creator worker tasks now run on the app role via
+db.tenant_session with the GUC stamped, so WITH CHECK is actively enforced on ALL
+of these tables' write paths; BYPASSRLS is reserved for cross-tenant sweeps.
 """
 
 from alembic import op

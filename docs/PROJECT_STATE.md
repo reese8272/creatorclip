@@ -4,6 +4,50 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-02 — W1 rounds 2–3 complete: Issue 352 ALL batches, 191, 231, 82a — deployed via PRs #42–#44 (+#45 pending)
+
+**Branches** `hotfix/0041-enum-create` (PR #42), `w1/round2` (PR #43), `w1/round2b` (PR #44),
+`w1/round3` (PR #45 — carries migration 0044). Three prod deploys green after the 0041 hotfix.
+
+**Deploy incident + fix (PR #42):** the #41 deploy failed at "Run migrations" — generic
+`sa.Enum(create_type=False)` is dialect-dependent and emitted a duplicate
+`CREATE TYPE render_status_enum` under the VM's unpinned migration stack (prod rolled back safely at
+0040; no impact). Fixed with dialect `postgresql.ENUM` + checkfirst; proven on real PG16
+(0001→0043 chain, down/re-up, offline render, squawk clean). Also made the **Squawk gate real**:
+it had never run (npm missing on the runner + an off-by-one linting the wrong migration); now PyPI
+install + `down_revision:revision` rendering + offline SET timeouts in env.py + `.squawk.toml`.
+
+**Round 2a (PR #43) — Issue 352 batches B,C,D,E,G,H,J,K,L,M (~40 SEV2 fixes):** tenant-scoped Stripe
+idempotency + after-commit balance-low outbox + terminal 402; activity-splat sanitizer + POST-body
+revoke + 409 double-submit + 7 throttles; videos.insert own 100-calls/day bucket + verify-before-
+reupload + OAuth scope union; AssemblyAI error-status→refund + real-ffmpeg-tested waveform fix +
+absolute silence floor; untrusted content out of system role + floor-gated cache markers; end_s clamp
++ reframe detector hoist; full NaN guard + Voyage retry predicate + timing/argmax fixes; frontend
+useMutation conversions + SSE lifecycle fix + CaptionStylePanel live render follow; event-log off the
+request hot path + bounded metric labels + recursive scrub; atomic engine swap + last_used_at
+throttle (notify-PII residual: not-an-issue).
+
+**Round 2b (PR #44) — 191, 352-F, 352-I + hermetic unit lane:** recap 16:9 concat render
+(`render_summary_file` + `render_summary` task, real-ffmpeg verified); derived visibility_timeout +
+rollback-before-unlock (7 sites) + soft-timeout status fixes + keyset-paginated sweeps; chat model/
+cache attribution + bounded pause_turn. **Test-infra root-cause:** the "order-dependent test_health
+flake" was the unit suite probing the LIVE R2 bucket (developer .env leak) — conftest now pins
+STORAGE_BACKEND=local; suite 3× faster.
+
+**Round 3 (PR #45) — 231 + 82a:** worker RLS sweep — `db.tenant_session`, 35 sites off BYPASSRLS,
+AST-pinned 18-site AdminSessionLocal allowlist, migration `0044_rls_signals`, WITH-CHECK write proofs,
+150 integration tests on real PG16; AsyncAnthropic migration — 12 modules + async stream helper,
+structural no-sync/no-to_thread guards, transport-only (cache bytes identical), 2141 unit + 147
+integration green. Final branch state: **2150 passed / 0 failed**, Layer-0 all green, tsc clean.
+
+**Off-course log grew by 7 entries** (all in OFF_COURSE_BUGS 2026-07-02): styled re-render no-op
+(SEV2, promote); NULLIF GUC policy hardening (SEV2, promote); live-R2 unit lane (fixed); Squawk gate
+(fixed); eval_efficacy import defect; 2 test flakes. **W1 operator checklist outstanding:** Cloudflare
+`/auth/*` rule (docs/EDGE_SECURITY.md), Redis backup cron + restart drill (RUNBOOKS), Better Stack
+status page (#282), #228 live 429 smoke, rotate the Anthropic key exposed in-session.
+
+---
+
 ## 2026-07-02 — W1 round 1 complete: Issues 190, 203, 284, 148, 82b, 200/202 residuals, 288/286 config, 352 Batch A (parallel build)
 
 **Branch** `w1/round1` (off main `2dbd17c`) — 7 parallel worktree agents + integrator; all merged, full

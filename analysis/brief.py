@@ -22,7 +22,7 @@ import logging
 from typing import Any
 
 import httpx
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
@@ -30,7 +30,8 @@ from observability import record_llm_metric, warn_if_truncated
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC = Anthropic(
+# Module-level AsyncAnthropic singleton (Issue 82a) — prefork-safe lazy pool bind.
+_ANTHROPIC = AsyncAnthropic(
     api_key=settings.ANTHROPIC_API_KEY,
     timeout=httpx.Timeout(120.0, connect=10.0),
     max_retries=2,
@@ -125,7 +126,7 @@ def _build_request(
     return system, messages
 
 
-def generate_video_analysis(
+async def generate_video_analysis(
     channel_title: str,
     youtube_video_id: str,
     video_title: str | None,
@@ -162,7 +163,7 @@ def generate_video_analysis(
 
         client = _ANTHROPIC.with_options(timeout=120.0)
         try:
-            final_text, usage = stream_and_emit(
+            final_text, usage = await stream_and_emit(
                 client,
                 task_id,
                 model=settings.ANTHROPIC_MODEL_ANALYSIS,
@@ -195,7 +196,7 @@ def generate_video_analysis(
         messages=messages,
     )
     try:
-        response = _ANTHROPIC.with_options(timeout=120.0).messages.create(
+        response = await _ANTHROPIC.with_options(timeout=120.0).messages.create(
             model=settings.ANTHROPIC_MODEL_ANALYSIS,
             max_tokens=2000,
             system=system,

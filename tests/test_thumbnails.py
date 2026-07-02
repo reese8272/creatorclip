@@ -414,12 +414,12 @@ class TestAnalyzeThumbnailPatterns:
         resp.usage.output_tokens = 50
         return resp
 
-    def test_empty_ids_returns_empty_patterns(self):
-        result = analyze_thumbnail_patterns([], "Test Channel")
+    async def test_empty_ids_returns_empty_patterns(self):
+        result = await analyze_thumbnail_patterns([], "Test Channel")
         assert result["face_present"] == "unknown"
         assert result["dominant_emotions"] == []
 
-    def test_calls_claude_with_image_urls(self):
+    async def test_calls_claude_with_image_urls(self):
         expected = {
             "face_present": "always",
             "dominant_emotions": ["excited"],
@@ -431,8 +431,8 @@ class TestAnalyzeThumbnailPatterns:
         mock_resp = self._mock_response(json.dumps(expected))
 
         with patch("knowledge.thumbnails._ANTHROPIC") as mock_client:
-            mock_client.messages.create.return_value = mock_resp
-            result = analyze_thumbnail_patterns(["dQw4w9WgXcQ", "abc123"], "My Channel")
+            mock_client.messages.create = AsyncMock(return_value=mock_resp)
+            result = await analyze_thumbnail_patterns(["dQw4w9WgXcQ", "abc123"], "My Channel")
 
         call_args = mock_client.messages.create.call_args
         messages = call_args.kwargs["messages"]
@@ -443,16 +443,16 @@ class TestAnalyzeThumbnailPatterns:
         assert content[0]["source"]["url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
         assert result["face_present"] == "always"
 
-    def test_bad_json_returns_empty_patterns(self):
+    async def test_bad_json_returns_empty_patterns(self):
         mock_resp = self._mock_response("not valid json at all")
 
         with patch("knowledge.thumbnails._ANTHROPIC") as mock_client:
-            mock_client.messages.create.return_value = mock_resp
-            result = analyze_thumbnail_patterns(["vid1"], "Test")
+            mock_client.messages.create = AsyncMock(return_value=mock_resp)
+            result = await analyze_thumbnail_patterns(["vid1"], "Test")
 
         assert result["face_present"] == "unknown"
 
-    def test_caps_at_10_thumbnails(self):
+    async def test_caps_at_10_thumbnails(self):
         mock_resp = self._mock_response(
             json.dumps(
                 {
@@ -468,8 +468,8 @@ class TestAnalyzeThumbnailPatterns:
         ids = [f"video{i}" for i in range(15)]
 
         with patch("knowledge.thumbnails._ANTHROPIC") as mock_client:
-            mock_client.messages.create.return_value = mock_resp
-            analyze_thumbnail_patterns(ids, "Channel")
+            mock_client.messages.create = AsyncMock(return_value=mock_resp)
+            await analyze_thumbnail_patterns(ids, "Channel")
 
         call_args = mock_client.messages.create.call_args
         content = call_args.kwargs["messages"][0]["content"]
@@ -478,7 +478,7 @@ class TestAnalyzeThumbnailPatterns:
 
 
 class TestGenerateThumbnailConcepts:
-    def test_returns_final_text_from_stream(self):
+    async def test_returns_final_text_from_stream(self):
         expected_json = json.dumps(
             {
                 "concepts": [
@@ -511,12 +511,12 @@ class TestGenerateThumbnailConcepts:
         with (
             patch(
                 "worker.anthropic_stream.stream_message",
-                return_value=(mock_msg, mock_usage),
+                AsyncMock(return_value=(mock_msg, mock_usage)),
             ),
             patch("knowledge.thumbnails._ANTHROPIC") as mock_client,
         ):
             mock_client.with_options.return_value = mock_client
-            result, _usage = generate_thumbnail_concepts(
+            result, _usage = await generate_thumbnail_concepts(
                 channel_title="Test Channel",
                 dna_brief="DNA brief",
                 patterns=_empty_patterns(),

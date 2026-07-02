@@ -3,7 +3,7 @@ Unit tests for upload_intel/timing.py and improvement/brief.py.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -138,17 +138,17 @@ def _mock_brief_response(text: str) -> MagicMock:
     return resp
 
 
-def test_improvement_brief_disclaimer_always_present():
+async def test_improvement_brief_disclaimer_always_present():
     mock_resp = _mock_brief_response("Here are 3 improvements.")
     with patch("improvement.brief._ANTHROPIC") as mock_client:
-        mock_client.with_options.return_value.messages.create.return_value = mock_resp
-        result, _usage = generate_improvement_brief("TestChannel", {})
+        mock_client.with_options.return_value.messages.create = AsyncMock(return_value=mock_resp)
+        result, _usage = await generate_improvement_brief("TestChannel", {})
 
     assert _DISCLAIMER in result
     assert "does not promise virality" in result
 
 
-def test_improvement_brief_uses_web_search_tool():
+async def test_improvement_brief_uses_web_search_tool():
     """Must pass web_search tool to Claude per the approved plan.
 
     Issue 84: bumped from `web_search_20250305` to `web_search_20260209`
@@ -159,8 +159,8 @@ def test_improvement_brief_uses_web_search_tool():
 
     mock_resp = _mock_brief_response("Recommendations here.")
     with patch("improvement.brief._ANTHROPIC") as mock_client:
-        mock_client.with_options.return_value.messages.create.return_value = mock_resp
-        generate_improvement_brief("TestChannel", {"avg_views": 5000})
+        mock_client.with_options.return_value.messages.create = AsyncMock(return_value=mock_resp)
+        await generate_improvement_brief("TestChannel", {"avg_views": 5000})
 
     call_kwargs = mock_client.with_options.return_value.messages.create.call_args.kwargs
     tools = call_kwargs.get("tools", [])
@@ -169,22 +169,22 @@ def test_improvement_brief_uses_web_search_tool():
     assert tools[0]["name"] == "web_search"
 
 
-def test_improvement_brief_uses_prompt_caching():
+async def test_improvement_brief_uses_prompt_caching():
     mock_resp = _mock_brief_response("Content here.")
     with patch("improvement.brief._ANTHROPIC") as mock_client:
-        mock_client.with_options.return_value.messages.create.return_value = mock_resp
-        generate_improvement_brief("TestChannel", {})
+        mock_client.with_options.return_value.messages.create = AsyncMock(return_value=mock_resp)
+        await generate_improvement_brief("TestChannel", {})
 
     call_kwargs = mock_client.with_options.return_value.messages.create.call_args.kwargs
     system = call_kwargs.get("system", [])
     assert system[0].get("cache_control") == {"type": "ephemeral"}
 
 
-def test_improvement_brief_raises_on_empty_response():
+async def test_improvement_brief_raises_on_empty_response():
     resp = MagicMock()
     resp.content = []
     resp.usage = MagicMock(input_tokens=0, output_tokens=0)
     with patch("improvement.brief._ANTHROPIC") as mock_client:
-        mock_client.with_options.return_value.messages.create.return_value = resp
+        mock_client.with_options.return_value.messages.create = AsyncMock(return_value=resp)
         with pytest.raises(RuntimeError, match="no text"):
-            generate_improvement_brief("TestChannel", {})
+            await generate_improvement_brief("TestChannel", {})

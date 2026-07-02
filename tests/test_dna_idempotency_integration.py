@@ -54,7 +54,7 @@ async def test_build_dna_redelivery_is_noop(db_session: AsyncSession):
             "dna.builder.build_patterns",
             new=AsyncMock(return_value=(patterns, [], [], None, None, None)),
         ),
-        patch("dna.brief.generate_brief", return_value=("brief", {})) as mock_brief,
+        patch("dna.brief.generate_brief", new=AsyncMock(return_value=("brief", {}))) as mock_brief,
         patch("dna.embeddings.embed_patterns", new=AsyncMock()),
         patch("dna.embeddings.embed_brief", new=AsyncMock()),
     ):
@@ -92,14 +92,13 @@ async def test_build_dna_concurrent_redelivery_builds_once(db_session: AsyncSess
     patterns = {"dummy": True}
     brief_calls = 0
 
-    def _slow_brief(*_args, **_kwargs):
+    async def _slow_brief(*_args, **_kwargs):
         # Count invocations; the small sleep widens the race window so a missing
-        # lock would let both deliveries enter the paid path.
+        # lock would let both deliveries enter the paid path. (Async sleep since
+        # Issue 82a — generate_brief is awaited natively on the loop.)
         nonlocal brief_calls
         brief_calls += 1
-        import time
-
-        time.sleep(0.2)
+        await asyncio.sleep(0.2)
         return "brief", {}
 
     with (
@@ -107,7 +106,7 @@ async def test_build_dna_concurrent_redelivery_builds_once(db_session: AsyncSess
             "dna.builder.build_patterns",
             new=AsyncMock(return_value=(patterns, [], [], None, None, None)),
         ),
-        patch("dna.brief.generate_brief", side_effect=_slow_brief),
+        patch("dna.brief.generate_brief", new=AsyncMock(side_effect=_slow_brief)),
         patch("dna.embeddings.embed_patterns", new=AsyncMock()),
         patch("dna.embeddings.embed_brief", new=AsyncMock()),
     ):

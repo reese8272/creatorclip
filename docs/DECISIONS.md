@@ -10459,3 +10459,31 @@ All unsafe-operation rules remain active — the Issue-270 DEC scope is preserve
 **Why.** PR #41 (migrations 0041–0043) was the first PR to trip the gate; investigation showed it was
 structurally unable to fail. **Source/evidence.** CI run 28603117834 exit-127 log; local squawk 2.59.0
 runs before/after (3/3 clean). **Date:** 2026-07-02
+
+## 2026-07-02 — W1 rounds 2–3 execution decisions (352 batches, 231 allowlist, 82a) [DEC]
+
+**Issue 231 — AdminSessionLocal allowlist as a structural invariant.** The worker BYPASSRLS surface
+is now an enumerated, AST-test-pinned allowlist (18 sites in 16 functions: cross-tenant sweeps,
+id-bootstraps, failure-path status writers — each WHY-commented). Any new `AdminSessionLocal()` call
+site outside the allowlist fails `tests/test_worker_invariants.py` — chosen over convention/review
+because one forgotten `WHERE creator_id` in a BYPASSRLS task is a silent cross-tenant leak (the
+Issue-33 class). 35 per-creator sites migrated to `db.tenant_session(creator_id)`. WITH CHECK write
+paths proven on real PG16 under `creatorclip_app` (first time). Follow-up promoted: harden all tenant
+policies to `NULLIF(current_setting('app.creator_id', true), '')::uuid` — an empty-string GUC on a
+reused pooled connection currently 500s (fails closed, but as an error) — OFF_COURSE 2026-07-02.
+
+**Issue 82a — async migration is transport-only by contract.** All remaining sync Anthropic clients
+migrated to module-level `AsyncAnthropic` (worker's per-child singleton event loop makes this
+prefork-safe; decided earlier today). Guarded structurally in `test_llm_conformance.py` (no sync
+client construction, no `asyncio.to_thread` on any LLM call path). Prompt bytes and `cache_control`
+placement verified byte-identical (git-diff audit + unchanged caching tests). Deliberate to_thread
+survivors: Voyage embeddings (per the morning DEC), CPU-bound feature computation, ffmpeg/boto3
+wraps, standalone diagnostic scripts.
+
+**Unit lane declared hermetic (test-infra).** `tests/conftest.py` now pins `STORAGE_BACKEND=local`:
+the "order-dependent test_health flake" was actually the unit suite probing the LIVE R2 bucket via a
+developer `.env` (`STORAGE_BACKEND=r2` + real credentials) — green when the network probe succeeded.
+Also 3× suite speedup (60–113s → ~24s). Full account in OFF_COURSE 2026-07-02.
+
+**Source/evidence.** Per-batch agent reports (this session); RLS integration suite 150 green on local
+PG16 at head 0044; conformance/caching suites. **Date:** 2026-07-02

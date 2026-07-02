@@ -90,7 +90,8 @@ async def _compute_patterns_single_flight(
     callers poll the cache briefly for the holder's result, then fall through
     and compute themselves so a stuck holder never blocks them. Fully fail-open
     on Redis errors — the rate limit still bounds total exposure. ``compute`` is
-    a zero-arg sync callable run in a worker thread; it returns the patterns dict.
+    a zero-arg async callable awaited on the loop (AsyncAnthropic — Issue 82a);
+    it returns the patterns dict.
     """
     lock_key = f"thumbnail-patterns-lock:{lock_id}"
     lock_token = str(_uuid_mod.uuid4())
@@ -109,7 +110,7 @@ async def _compute_patterns_single_flight(
         # Holder still working — proceed rather than hang the request.
 
     try:
-        patterns = await asyncio.to_thread(compute)
+        patterns = await compute()
         try:
             await redis.setex(cache_key, cache_ttl, json.dumps(patterns))
         except aredis.RedisError as exc:
@@ -227,7 +228,7 @@ async def get_thumbnail_patterns(
         redis,
         lock_id=creator.id,
         cache_key=cache_key,
-        compute=lambda: analyze_thumbnail_patterns(youtube_ids, channel_title),
+        compute=lambda: analyze_thumbnail_patterns(youtube_ids, channel_title),  # coroutine
         cache_ttl=PATTERNS_CACHE_TTL,
     )
 

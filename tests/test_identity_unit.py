@@ -339,7 +339,7 @@ def test_get_identity_no_conflict_when_no_identity(monkeypatch):
 # ── brief.py wiring ─────────────────────────────────────────────────────────
 
 
-def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatch):
+async def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatch):
     """Issue 224 update: stated_identity is now in the user turn (not a system block)
     so the model receives it from the user role, not as trusted operator instructions.
     System blocks are now: (0) instructions (no cache_control — Issue 315), (1) volatile
@@ -363,7 +363,7 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
 
         content = [_Block()]
 
-    def fake_create(**kwargs):
+    async def fake_create(**kwargs):
         captured["system"] = kwargs["system"]
         captured["messages"] = kwargs["messages"]
         return _FakeResponse()
@@ -371,7 +371,7 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
     monkeypatch.setattr(brief_module._ANTHROPIC.messages, "create", fake_create)
 
     identity_block = "CREATOR-STATED IDENTITY:\n- Niche(s): Education\n- Audience: devs"
-    brief_module.generate_brief(
+    await brief_module.generate_brief(
         patterns={"top_videos": []},
         channel_title="TestChannel",
         stated_identity=identity_block,
@@ -410,7 +410,7 @@ def test_generate_brief_includes_identity_block_with_cache_breakpoint(monkeypatc
         )
 
 
-def test_generate_brief_skips_identity_block_when_none(monkeypatch):
+async def test_generate_brief_skips_identity_block_when_none(monkeypatch):
     """No identity → just 2 system blocks (instructions + corpus). No cache_control
     on any block (Issue 315 — prefix ~570–650 tokens, below Sonnet 4.6's 1024-token
     cacheable floor; an inert marker charges the write-premium with zero reads)."""
@@ -431,13 +431,13 @@ def test_generate_brief_skips_identity_block_when_none(monkeypatch):
 
         content = [_Block()]
 
-    def fake_create(**kwargs):
+    async def fake_create(**kwargs):
         captured["system"] = kwargs["system"]
         return _FakeResponse()
 
     monkeypatch.setattr(brief_module._ANTHROPIC.messages, "create", fake_create)
 
-    brief_module.generate_brief(
+    await brief_module.generate_brief(
         patterns={"top_videos": []},
         channel_title="TestChannel",
         stated_identity=None,

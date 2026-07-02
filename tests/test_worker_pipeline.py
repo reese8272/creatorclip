@@ -563,10 +563,10 @@ async def test_load_clip_render_plan_logs_anomaly_running_with_render_uri(db_ses
             patch("worker.storage.alocal_path", _dummy_local_path),
             patch("worker.progress.aemit", new_callable=AsyncMock),
         ):
-            # _load_clip_render_plan opens its own AdminSessionLocal — drive it
-            # directly; the function returns the render plan (not None) since the
-            # clip is 'running', not 'done'.
-            plan = await _load_clip_render_plan(str(clip.id))
+            # _load_clip_render_plan opens its own tenant_session (Issue 231) —
+            # drive it directly; the function returns the render plan (not None)
+            # since the clip is 'running', not 'done'.
+            plan = await _load_clip_render_plan(str(clip.id), str(creator.id))
 
         assert plan is not None, "_load_clip_render_plan must return a plan (not skip)"
         assert any(
