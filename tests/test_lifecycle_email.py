@@ -168,6 +168,66 @@ class TestLifecycleScan:
         assert reengage_call.args[2] == f"reengage-{expected_window}"
 
 
+# ── Re-engagement sunset cap (Issue 246 residual) ─────────────────────────────
+
+
+class TestReengagementSunsetCap:
+    """LIFECYCLE_REENGAGE_MAX_ATTEMPTS caps lifetime re_engagement sends —
+    without it the 14-day period bucket re-enqueues a dormant creator forever."""
+
+    def _sunset_session(self, reengage_id: uuid.UUID, prior_sends: int) -> AsyncMock:
+        """A scan session with one re-engagement-eligible creator whose scalar()
+        calls answer the 48h cap check (None → not capped) then the ledger
+        count (prior re_engagement deliveries)."""
+        session = _scan_session([], [reengage_id])
+        session.scalar = AsyncMock(side_effect=[None, prior_sends])
+        return session
+
+    @pytest.mark.asyncio
+    async def test_under_cap_enqueues(self) -> None:
+        """2 prior sends < default cap of 3 — re_engagement still enqueues."""
+        reengage_id = _cid()
+        session = self._sunset_session(reengage_id, prior_sends=2)
+        with (
+            patch("config.settings.MAILING_ADDRESS", "CreatorClip, 1 Main St, USA"),
+            patch("db.AdminSessionLocal", return_value=session),
+            patch("worker.tasks.send_notification") as mock_send,
+        ):
+            from worker.tasks import _run_lifecycle_scan_async
+
+            await _run_lifecycle_scan_async()
+        reengage_calls = [c for c in mock_send.delay.call_args_list if c.args[1] == "re_engagement"]
+        assert len(reengage_calls) == 1
+        assert reengage_calls[0].args[0] == str(reengage_id)
+
+    @pytest.mark.asyncio
+    async def test_at_cap_skips(self) -> None:
+        """3 prior sends == default cap of 3 — the sequence has sunset."""
+        session = self._sunset_session(_cid(), prior_sends=3)
+        with (
+            patch("config.settings.MAILING_ADDRESS", "CreatorClip, 1 Main St, USA"),
+            patch("db.AdminSessionLocal", return_value=session),
+            patch("worker.tasks.send_notification") as mock_send,
+        ):
+            from worker.tasks import _run_lifecycle_scan_async
+
+            await _run_lifecycle_scan_async()
+        mock_send.delay.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cap_honors_config_override(self) -> None:
+        """Raising LIFECYCLE_REENGAGE_MAX_ATTEMPTS reopens the sequence."""
+        from worker.tasks import _reengagement_sunset
+
+        session = AsyncMock()
+        session.scalar = AsyncMock(return_value=3)
+
+        with patch("config.settings.LIFECYCLE_REENGAGE_MAX_ATTEMPTS", 5):
+            assert await _reengagement_sunset(session, _cid()) is False
+        with patch("config.settings.LIFECYCLE_REENGAGE_MAX_ATTEMPTS", 3):
+            assert await _reengagement_sunset(session, _cid()) is True
+
+
 # ── Welcome trigger (OAuth is_new branch) ─────────────────────────────────────
 
 

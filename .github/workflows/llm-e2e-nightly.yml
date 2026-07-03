@@ -32,6 +32,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # conftest.py fail-fasts without a live Redis (slowapi has no in-memory
+    # fallback) — the nightly ran red from 2026-07-02 until this service was
+    # added: exit 4 at collection, the harness never executed.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,7 +64,10 @@ jobs:
           RUN_LLM_LIVE: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Stub env vars required by config.py (no real DB/Redis needed)
-          DATABASE_URL: "postgresql+psycopg://creatorclip:dev@localhost:5432/creatorclip"
+          # Must be BYTE-IDENTICAL to conftest.py's _DEFAULT_DB — any difference makes
+          # the Postgres fail-fast guard treat it as an explicit override and probe a
+          # DB this job doesn't have (the 2026-07-03 exit-4 after the Redis fix).
+          DATABASE_URL: "postgresql+psycopg://creatorclip:dev_password@localhost:5432/creatorclip"
           REDIS_URL: "redis://localhost:6379/0"
           GOOGLE_OAUTH_CLIENT_ID: "stub"
           GOOGLE_OAUTH_CLIENT_SECRET: "stub"

@@ -102,6 +102,68 @@ def test_render_endpoint_no_style_body_still_works(client):
     assert resp.status_code == 202
 
 
+def test_render_endpoint_resets_done_clip_for_rerender(client):
+    """Issue 353: a styled render on a `done` clip resets render state so the
+    worker's redelivery guard doesn't no-op the re-render."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id, style={"subtitle": "bold_pop"})
+    clip.render_status = RenderStatus.done
+    clip.render_uri = f"s3://test/clips/{clip.id}.mp4"
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.return_value = MagicMock(id="task-rerender")
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/render",
+                json={"background": "blur"},
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    # Endpoint owns the re-render intent: state reset in the same transaction
+    # as the merged style, then the task is enqueued.
+    assert clip.render_status == RenderStatus.pending
+    assert clip.render_uri is None
+    assert clip.style_preset == {"subtitle": "bold_pop", "background": "blur"}
+    mock_task.delay.assert_called_once_with(str(clip.id))
+
+
+def test_render_endpoint_running_clip_still_409s(client):
+    """Issue 353 keeps the existing guard: a render on a `running` clip is 409."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.render_status = RenderStatus.running
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/render",
+                json={"subtitle": "white_large"},
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
+    mock_task.delay.assert_not_called()
+
+
 def test_render_clip_file_passes_style_to_vf(tmp_path):
     """render_clip_file with bold_pop + transcript appends a subtitles= filter
     pointing at a generated ASS file (Issue 133)."""

@@ -10542,3 +10542,44 @@ Crypto-shredding rejected as beta over-scope. Sources: EDPB CEF-2025 right-to-er
 **283/291/292 beta rescopes** as recorded in their tracker status lines (solo-responder incident
 doc; counter+operator-clicks with anomaly layer parked; dashboard parked for lack of attribution
 data and revenue denominator). **Date:** 2026-07-02
+
+## 2026-07-02 — W3 wave scope + five approved decisions [DEC]
+
+Phase-2 CHECK (4 research agents, literal-URL gate) found 246 already shipped (the third stale-tracker
+casualty of the 2026-06-24 `ef62b44` merge) and corrected the NULLIF scope. Approved wave ("good to go
+on all"): **353** (re-render fix), **354** (NULLIF policies), **296** (downgrade CI), **246-residual**
+(sunset cap + integration test), **303 pulled forward from W4** (GO_LIVE.md — 5/9 blockers done; the
+open ones are rows the ledger records, not inputs; the dry-run AC defers to the Issue-30 runway).
+
+**353 — endpoint owns re-render intent; overwrite-in-place R2 key.** The task's done-guard exists for
+Celery redelivery of the SAME intent; NEW intent (a styled re-render) is reset at the endpoint inside
+the style-merge transaction. Key stays `clips/{id}.mp4`: all delivery is per-request presigned GETs
+(unique URLs — no cache can pin stale bytes; 302s not heuristically cacheable per RFC 9110 §15.4.3),
+and clearing `render_uri` remounts the player for a fresh fetch. Versioned keys become right ONLY if
+clips ever move behind a public/CDN-cached bucket — recorded as the revisit trigger.
+
+**354 — policy-side NULLIF is the only complete fix; 27 tables not 22.** PostgreSQL docs prove the app
+layer cannot restore NULL for a once-set transaction-local custom GUC (`set_config(NULL)` resets to the
+`''` placeholder default): functions-admin.html, sql-set.html, runtime-config-custom.html,
+functions-conditional.html, sql-alterpolicy.html (all fetched 2026-07-02) + policy.c source for the
+AccessExclusive lock (catalog-only, timeout-bounded per Issue 270/env.py). Pool-checkin RESET, COALESCE
+sentinel-UUID, and DROP+CREATE all ruled out in the brief.
+
+**296 — changed-migrations-only round-trip in the Squawk job; explicit irreversibility allowlist.**
+Online downgrade→re-upgrade + `pg_dump --schema-only` diff (offline `--sql` can't execute
+data-dependent downgrades like 0035); no-op-downgrade detector with `alembic/DOWNGRADE_EXCEPTIONS`
+seeded by 0014 (the one documented irreversible backfill); pytest-alembic's up_down_consistency is the
+cited pattern (pytest-alembic.readthedocs.io + alembic.sqlalchemy.org, fetched 2026-07-02) but wholesale
+adoption rejected (whole-chain scope + a dependency for ~20 lines on infra the job already has).
+
+**246 — close as shipped (ef62b44); descope nudge-blocker-branching; ADD a re-engagement sunset cap.**
+Everything but one AC shipped in June. The branching AC is descoped (no beta evidence the min-data gate
+is the real blocker; single honest nudge). NEW hardening from the research: re-engagement recurs every
+14-day bucket FOREVER for dormant creators — cap at `LIFECYCLE_REENGAGE_MAX_ATTEMPTS=3` then suppress
+(sunset-policy deliverability norm; mailflowauthority.com + postmarkapp.com guides + 15 U.S.C. §7702
+scope check, fetched 2026-07-02). Live activation stays operator (`MAILING_ADDRESS` deliberately unset).
+
+**303 — GO_LIVE.md format per the Google SRE launch chapter** (sre.google/sre-book/reliable-product-
+launches, fetched 2026-07-02): question+action rows, domain-grouped, automation-backed signals,
+two-stage (beta / public), reference-by-issue-id only. It must also reconcile the three gate lists that
+currently disagree (CLAUDE.md vs PROJECT_STATE vs stale COMPLIANCE). **Date:** 2026-07-02

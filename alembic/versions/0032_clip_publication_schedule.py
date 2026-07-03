@@ -93,6 +93,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # DOWNGRADE-RISK (data-dependent): re-imposing NOT NULL on task_id fails if any
+    # scheduled-but-unenqueued rows (NULL task_id) exist — clean them up first (Issue 296).
     op.drop_index("ix_clip_publications_scheduled_at", table_name="clip_publications")
 
     # Restore task_id to NOT NULL.  Any NULL rows must be cleaned up first in

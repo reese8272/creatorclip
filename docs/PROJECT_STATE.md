@@ -4,6 +4,31 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-03 — W3 wave complete: 353, 354 (migration 0045), 296, 246-residual, 303 GO_LIVE capstone
+
+**Branch** `w3/round1` — 5 parallel worktree agents + integrator. Four agents stalled at their final
+test-wait on a shared-DB wedge (an idle-in-transaction backend from the prior night held locks ~10h,
+blocking every integration TRUNCATE behind it) — cleared the zombie pytest pids + PG backends and
+re-verified serially: 354's lane went hung→152/152 in 107s. Final: **2219 unit + 155 integration
+passed / 0 failed**, venv Layer-0 all green, tsc clean.
+
+**Shipped:** 353 styled re-render fix (endpoint owns intent; worker redelivery guard untouched);
+**354 migration 0045** — NULLIF-hardened all 27 tenant RLS policies (clean deny replaces the
+empty-string-GUC 500; reused-connection regression pinned; ordering workaround retired); 296
+downgrade round-trip + irreversibility detector in the migration-lint job (incl. the pg_dump≥16.10
+randomized-token filter find; 34-revision local round-trip byte-identical); 246 reconciled-shipped
+(ef62b44) + re-engagement sunset cap (`LIFECYCLE_REENGAGE_MAX_ATTEMPTS=3`, was unbounded) + the
+real-PG lifecycle integration test; **303 GO_LIVE.md** — 41-gate two-stage scorecard, three stale
+gate lists reconciled to it. **Stage-A beta distance: 13 hard-OPEN gates + 7 verification residuals**
+(critical path: #24→#25→#26→#28 operator chain).
+
+**The roadmap's build track is now EMPTY** below W4: remaining open issues are operator/external
+gates (24/25/26/28/29/30), DESCOPED-BETA scale items, and staging-verify residuals — all enumerated
+in GO_LIVE.md. This wave's PR carries 0045 and will be the first migration through the staging gate
+AND the first PR through its own downgrade check.
+
+---
+
 ## 2026-07-02 — W2 wave complete: 192, 290+291, 245, 302, 254, 298+271-fix, 293/283/292, 78-R, 109 (+310/78 reconciled-closed)
 
 **Branch** `w2/round1` — 7 parallel worktree agents (round 1) + 109 (round 2) + integrator; survived a
@@ -2571,12 +2596,15 @@ Previous: Wave 3 hotfix batch (3 SEV1s + 3 SEV2s).
 
 ## Pre-Public-Launch Gates (all must be green before opening to outside creators)
 
-- [x] Lock `ALLOWED_ORIGINS` to production domain; disable `/docs` — env-driven: `docs_url` conditional on `ENV=="development"`; `ALLOWED_ORIGINS` from `.env`
-- [x] Per-creator rate limiting + usage quotas before each LLM/render job — Issue 18 (slowapi, 10/h LLM, 20/h render, 120/min rest)
-- [x] YouTube data-retention/refresh fully compliant (see `docs/COMPLIANCE.md`) — Issue 17 (Beat purge + analytics refresh)
-- [x] `TOKEN_ENCRYPTION_KEY` rotation runbook written — see `docs/RUNBOOKS.md`
-- [x] Terms of Service + Privacy Policy pages live — Issue 14 (`/static/tos.html`, `/static/privacy.html`)
+> **Status is maintained in `docs/GO_LIVE.md`** — the canonical two-stage go/no-go
+> scorecard (Issue 303, 2026-07-02). This list names the gates; status lives there.
+
+- [x] Lock `ALLOWED_ORIGINS` to production domain; disable `/docs` — env-driven: `docs_url` conditional on `ENV=="development"`; `ALLOWED_ORIGINS` from `.env`; live-prod verification pass is Issue 24
+- [x] Per-creator rate limiting + usage quotas before each LLM/render job — Issue 18 (slowapi baseline), hardened by Issues 228 (stacked limits on all LLM/render routes) / 312 (async storage) / 321 (brief quota); residual live 429 smoke in `docs/GO_LIVE.md`
+- [x] YouTube data-retention/refresh fully compliant (see `docs/COMPLIANCE.md`) — Issue 17 (Beat purge + analytics refresh) + Issue 75b (30-day partial-staleness purge)
+- [x] `TOKEN_ENCRYPTION_KEY` rotation runbook written — see `docs/RUNBOOKS.md`; end-to-end staging rotation drill is a Stage-B gate (Issue 30)
+- [x] Terms of Service + Privacy Policy pages live — Issue 14 (`/static/tos.html`, `/static/privacy.html`); accuracy rewrite Issue 252
 - [ ] Google OAuth app verification completed for requested scopes — external Google process (Issue 29)
-- [x] Account-deletion endpoint (right-to-erasure: token revocation + media purge) — Issue 19
-- [x] Billing wired — Issue 21 (minute packs, atomic balance, 60-min free trial, Stripe Checkout)
+- [x] Account-deletion endpoint (right-to-erasure: token revocation + media purge) — Issue 19, superseded/hardened by Issues 158 (Danger-zone UI) and 247/248 (erasure completeness)
+- [x] Billing wired — Issue 21 (minute packs, atomic balance, 60-min free trial, Stripe Checkout); plan tiers beyond minute packs = open Stage-B product decision (`docs/GO_LIVE.md`)
 - [x] Eval harness hardened with adversarial/edge cases — Issue 199 (2026-06-27): 8 adversarial geometry scenarios + 1 ranking-aware fixture + aggregate 100%-pass-rate gate + `SCENARIO_FLOOR=14`. (Earlier: 3 fixtures + early-peak MIN_CLIP_S fix.) Gate now genuinely satisfied — reconciled with CLAUDE.md.

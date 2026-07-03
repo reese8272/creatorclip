@@ -130,6 +130,34 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
     (under-fills); `optimal_gap_hours` ignores week wraparound.
   - **frontend** `VideoTable.tsx:59` — raw `fetch` POST with no try/catch → button stuck `busy` on a blip.
 
+### Issue 353: review — styled re-render of a done clip is a worker no-op (promoted OFF_COURSE 2026-07-02)
+
+- **Status:** DONE (2026-07-03, W3) — endpoint resets `render_status=pending` + `render_uri=None` in the style-merge transaction (body-optional, so plain retry also re-renders); worker guard byte-identical (redelivery no-op test untouched-green); 3 regression tests. · **Wave:** W3 · **Lane:** L16 UI Core / Review surface · **Size:** S · **Verify:** local · **Sev:** SEV2
+- `POST /clips/{id}/render` persists the new `style_preset` but never resets `render_status`, and the
+  render task's redelivery guard skips `done AND render_uri` clips — "Render with style" on a done clip
+  silently shows the OLD render as "ready ✓". APPROVED fix: the ENDPOINT (transactional owner of intent)
+  sets `render_status=pending` + `render_uri=None` in the same transaction as the style merge; the worker
+  guard stays byte-identical (redelivery still no-ops); R2 key stays `clips/{id}.mp4` overwrite-in-place
+  (presigned-only delivery defeats caching — versioned keys deferred by DEC until a CDN-cached bucket
+  exists); clearing `render_uri` makes ClipPlayer unmount → remount → fresh presigned fetch. Known
+  residual accepted: two rapid style posts while pending may lose the second until re-click.
+- **Tests:** done-clip re-render resets + re-enqueues; running still 409s; worker re-renders after reset;
+  existing redelivery-no-op test stays green untouched.
+
+### Issue 354: security — NULLIF-harden all 27 tenant RLS policies against the empty-string GUC (promoted OFF_COURSE 2026-07-02)
+
+- **Status:** DONE (2026-07-03, W3) — migration `0045_rls_nullif_guc`: ALTER POLICY in place on all 27 tenant tables (21 direct + 6 subquery), symmetric downgrade, Squawk-clean; reused-connection regression test pins the `''` quirk + zero-rows-no-exception (152 integration tests green at head 0045); test-ordering workaround retired. · **Wave:** W3 · **Lane:** Security — Platform · **Size:** S · **Verify:** local · **Sev:** SEV2 · **[DEC]**
+- On reused pooled connections `current_setting('app.creator_id', true)` returns `''` (placeholder
+  default — doc-proven that NO app-side SQL can restore NULL), and every bare `::uuid` policy cast
+  500s instead of cleanly denying. SCOPE CORRECTION vs the OFF_COURSE entry: **27 policies across 11
+  migrations** (0010/0026/0027/0029/0030/0031/0037/0038/0040/0041/0044 — 21 direct-column + 6
+  parent-subquery). APPROVED fix: migration `0045_rls_nullif_guc` — `ALTER POLICY ... USING/WITH CHECK`
+  in place (docs-confirmed alterable; AccessExclusive but catalog-only + timeout-bounded; Squawk-safe;
+  plain op.execute SQL only per the 0041 lesson), predicate `NULLIF(current_setting('app.creator_id',
+  true), '')::uuid`; symmetric downgrade. Regression test pins the reused-connection repro (asserts the
+  `''` quirk itself + zero-rows-no-exception post-fix) and retires the test-ordering workaround at
+  tests/test_rls_isolation_integration.py:559.
+
 ---
 
 ## How to use this file (deploy agents in batches)
@@ -2780,7 +2808,7 @@ Resend mailer, notification data model + idempotent send, triggers, in-app cente
 
 ### Issue 193: "Your clips are ready" completion notification
 
-**Status** `DONE` · **Wave** W3 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `external`  
+**Status** `DONE (reconciled 2026-07-03)` — the full sequence SHIPPED 2026-06-24 in `ef62b44` (welcome on is_new; day-3 nudge; 14-day-bucket re-engagement; 48h shared cap; email_lifecycle + MAILING_ADDRESS gates; templates; 10 unit tests; DECISIONS+COMPLIANCE) — tracker was stale. W3 residual added: **re-engagement sunset cap** `LIFECYCLE_REENGAGE_MAX_ATTEMPTS=3` (was unbounded ~2/mo forever) + the planned real-PG `tests/test_lifecycle_integration.py` (3-creator scan, dedupe, sunset case). Nudge-blocker-branching DESCOPED by DEC 2026-07-02. **Operator activation:** set prod `MAILING_ADDRESS` + the Gmail one-click round-trip. · **Wave** W3 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `staging`  
 **Src** `01 / 184 (overlaps 11/176c)` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/01_ux_product_gaps.md`  
 **Blocked by** #242, #243, #244 · **Coordinate (hot files)** `notify/mailer.py`, `worker/tasks.py`  
 
@@ -4936,7 +4964,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 296: Migration reversibility / downgrade exercised as a CI check
 
-**Status** `OPEN` · **Wave** W3 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `staging`  
+**Status** `DONE (2026-07-03, W3)` — migration-lint job gained: online downgrade round-trip (oldest-changed down_revision → head, `pg_dump --schema-only` byte-diff with the pg_dump≥16.10 randomized-`\restrict`-token filter) + `scripts/check_downgrades.py` irreversibility detector with `alembic/DOWNGRADE_EXCEPTIONS` (seeded 0014; stale entries fail too); DOWNGRADE-RISK notes on 0011/0032/0035; local dry-run round-tripped 34 revisions byte-identical; 6 CI-config pins + 4 detector tests; actionlint clean. First real exercise = this wave's own PR (carries 0045). · **Wave** W3 · **Lane** QA & Release Engineering · **Size** `S` · **Verify** `staging`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #257, #270 · **Enables** #303 · **Coordinate (hot files)** `.github/workflows/ci.yml`  
 
@@ -4955,7 +4983,7 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 303: Consolidated go/no-go launch checklist (docs/GO_LIVE.md) — CAPSTONE
 
-**Status** `OPEN` · **Wave** W4 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `local`  
+**Status** `DONE — authored (2026-07-03, pulled forward to W3 by DEC); dry-run AC deferred to the Issue-30 runway` — `docs/GO_LIVE.md`: 41 gates (Stage A beta: 32 across 6 domains; Stage B public: 9 + parked-10k note), SRE question+action shape, T-minus plan, abort/rollback criterion (#298 `:rollback` + INCIDENT_RESPONSE.md), dated sign-off. Reconciled the 3 disagreeing gate lists (COMPLIANCE 4 stale boxes flipped with evidence; CLAUDE.md + PROJECT_STATE corrected) — all three now point at GO_LIVE.md as canonical. **Stage-A honest distance: 13 hard-OPEN + 7 verification residuals** (critical path = #24→#25→#26→#28 operator chain). 4 doc tests. · **Wave** W4 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `local`  
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #29, #261, #270, #271, #294, #295, #296, #297, #298 · **Enables** #30  
 
