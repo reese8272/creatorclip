@@ -2960,6 +2960,32 @@ async def _lifecycle_capped(session: Any, creator_id: uuid.UUID, now: datetime) 
     return existing is not None
 
 
+async def _reengagement_sunset(session: Any, creator_id: uuid.UUID) -> bool:
+    """Return True when this creator has hit ``LIFECYCLE_REENGAGE_MAX_ATTEMPTS``
+    lifetime re-engagement sends — the win-back sequence must sunset (Issue 246
+    residual), otherwise the 14-day period bucket re-enqueues a permanently
+    dormant creator forever.
+
+    Counts rows in the ``notification_deliveries`` idempotency ledger: a row is
+    written for every attempted send (the send_notification task inserts it
+    before calling the mailer), so the count covers sent AND later-failed
+    attempts — not just confirmed provider deliveries. Skipped sends (opt-out /
+    CAN-SPAM gate) never reach the ledger and correctly do not consume attempts.
+    """
+    from sqlalchemy import func, select
+
+    from config import settings
+    from models import NotificationDelivery
+
+    prior = await session.scalar(
+        select(func.count())
+        .select_from(NotificationDelivery)
+        .where(NotificationDelivery.creator_id == creator_id)
+        .where(NotificationDelivery.event_type == "re_engagement")
+    )
+    return int(prior or 0) >= settings.LIFECYCLE_REENGAGE_MAX_ATTEMPTS
+
+
 async def _run_lifecycle_scan_async() -> None:
     """Issue 246 — daily lifecycle-sequence sweep.
 
@@ -2970,7 +2996,8 @@ async def _run_lifecycle_scan_async() -> None:
         with no Video rows. entity_id = creator_id ⇒ once ever per creator.
       * RE-ENGAGEMENT — creators with ≥1 Video but no ClipFeedback within
         ``LIFECYCLE_INACTIVITY_DAYS``. entity_id = a stable period bucket so it
-        recurs at most once per inactivity window.
+        recurs at most once per inactivity window, and sunsets permanently after
+        ``LIFECYCLE_REENGAGE_MAX_ATTEMPTS`` lifetime sends (``_reengagement_sunset``).
 
     The shared 48h frequency cap (``_lifecycle_capped``) is checked before every
     enqueue so welcome / nudge / re-engagement share one budget. The
@@ -3037,6 +3064,13 @@ async def _run_lifecycle_scan_async() -> None:
         )
         for (cid,) in reengage_rows.all():
             if await _lifecycle_capped(session, cid, now):
+                continue
+            if await _reengagement_sunset(session, cid):
+                logger.debug(
+                    "re_engagement sunset: creator=%s already received %s attempts — skipping",
+                    cid,
+                    settings.LIFECYCLE_REENGAGE_MAX_ATTEMPTS,
+                )
                 continue
             try:
                 send_notification.delay(str(cid), "re_engagement", period_bucket, {})
