@@ -249,12 +249,15 @@ canonical user-facing disclosure of refund behavior.
 
 ## Pre-Public-Launch Compliance Gates
 
+> **Status is maintained in `docs/GO_LIVE.md`** — the canonical two-stage go/no-go
+> scorecard (Issue 303). This list names the compliance gates; status lives there.
+
 - [x] YouTube data-retention refresh cadence confirmed and implemented (Wave-4 Fix 3 / Issue 75b — 30 days, partial-staleness purge daily; 2026-05-31)
-- [ ] Google OAuth app verification submitted (requires ToS + Privacy Policy pages)
-- [ ] `yt-dlp` guard verified in code (off by default; own-content-only path documented)
-- [ ] Account-deletion endpoint implemented (right-to-erasure: tokens + media + data)
-- [ ] Token revocation handler implemented
-- [ ] Scope review: no unnecessary scopes requested
+- [ ] Google OAuth app verification submitted (Issue 29 — external Google review; ToS + Privacy Policy prerequisites are live)
+- [x] `yt-dlp` guard verified in code (off by default; own-content-only path documented) — `youtube/ingest.py:89` raises unless `YTDLP_ENABLED` (default `False`, `config.py:421`); verified 2026-07-02
+- [x] Account-deletion endpoint implemented (right-to-erasure: tokens + media + data) — Issue 158: `DELETE /auth/me` erasure path in `routers/auth.py` (media purge + cascade delete), hardened by Issues 247/248 (no PII in audit row; event_logs purged); verified 2026-07-02
+- [x] Token revocation handler implemented — the erasure path POSTs each token to Google's `/revoke` endpoint (`routers/auth.py`, tolerating `invalid_token`/`token_revoked`); verified 2026-07-02
+- [x] Scope review: no unnecessary scopes requested — base login `SCOPES` is the read-only set (`youtube/oauth.py`); `youtube.upload` is requested only via incremental consent when a creator opts into publishing (Issue 194); verified 2026-07-02
 - [x] Accessibility Statement published at `/static/accessibility.html` (Issue 301 — EAA enforceable since 2025-06-28, WCAG 2.1 AA target, EN 301 549 v3.2.1 conformance standard, 'Partially conforms' posture)
 - [x] Privacy Policy GDPR Art. 13-14 / CCPA rewrite complete (Issue 252 — sub-processors named, SCCs disclosed, CCPA notice-at-collection, demographics aggregation, breach contact, cookies clause; Draft marker retained pending counsel sign-off)
 
