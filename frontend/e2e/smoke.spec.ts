@@ -22,6 +22,8 @@ const AUTHED_PAGES = [
   { name: 'insights', path: 'insights' },
   { name: 'analysis', path: 'analysis?video_id=v1' },
   { name: 'review', path: 'review?video_id=v1' },
+  { name: 'video-detail', path: 'video/v1' },
+  { name: 'recap', path: 'video/v1/recap' }, // Issue 353b: guarded against the summaries[0] white-screen
   { name: 'profile', path: 'profile' },
   { name: 'chat', path: 'chat' },
   { name: 'onboarding', path: 'onboarding' },
