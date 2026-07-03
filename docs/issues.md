@@ -130,6 +130,34 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
     (under-fills); `optimal_gap_hours` ignores week wraparound.
   - **frontend** `VideoTable.tsx:59` — raw `fetch` POST with no try/catch → button stuck `busy` on a blip.
 
+### Issue 353: review — styled re-render of a done clip is a worker no-op (promoted OFF_COURSE 2026-07-02)
+
+- **Status:** OPEN — IN BUILD (W3, 2026-07-02) · **Wave:** W3 · **Lane:** L16 UI Core / Review surface · **Size:** S · **Verify:** local · **Sev:** SEV2
+- `POST /clips/{id}/render` persists the new `style_preset` but never resets `render_status`, and the
+  render task's redelivery guard skips `done AND render_uri` clips — "Render with style" on a done clip
+  silently shows the OLD render as "ready ✓". APPROVED fix: the ENDPOINT (transactional owner of intent)
+  sets `render_status=pending` + `render_uri=None` in the same transaction as the style merge; the worker
+  guard stays byte-identical (redelivery still no-ops); R2 key stays `clips/{id}.mp4` overwrite-in-place
+  (presigned-only delivery defeats caching — versioned keys deferred by DEC until a CDN-cached bucket
+  exists); clearing `render_uri` makes ClipPlayer unmount → remount → fresh presigned fetch. Known
+  residual accepted: two rapid style posts while pending may lose the second until re-click.
+- **Tests:** done-clip re-render resets + re-enqueues; running still 409s; worker re-renders after reset;
+  existing redelivery-no-op test stays green untouched.
+
+### Issue 354: security — NULLIF-harden all 27 tenant RLS policies against the empty-string GUC (promoted OFF_COURSE 2026-07-02)
+
+- **Status:** OPEN — IN BUILD (W3, 2026-07-02) · **Wave:** W3 · **Lane:** Security — Platform · **Size:** S · **Verify:** local (integration lane on the native PG16) · **Sev:** SEV2 · **[DEC]**
+- On reused pooled connections `current_setting('app.creator_id', true)` returns `''` (placeholder
+  default — doc-proven that NO app-side SQL can restore NULL), and every bare `::uuid` policy cast
+  500s instead of cleanly denying. SCOPE CORRECTION vs the OFF_COURSE entry: **27 policies across 11
+  migrations** (0010/0026/0027/0029/0030/0031/0037/0038/0040/0041/0044 — 21 direct-column + 6
+  parent-subquery). APPROVED fix: migration `0045_rls_nullif_guc` — `ALTER POLICY ... USING/WITH CHECK`
+  in place (docs-confirmed alterable; AccessExclusive but catalog-only + timeout-bounded; Squawk-safe;
+  plain op.execute SQL only per the 0041 lesson), predicate `NULLIF(current_setting('app.creator_id',
+  true), '')::uuid`; symmetric downgrade. Regression test pins the reused-connection repro (asserts the
+  `''` quirk itself + zero-rows-no-exception post-fix) and retires the test-ordering workaround at
+  tests/test_rls_isolation_integration.py:559.
+
 ---
 
 ## How to use this file (deploy agents in batches)
