@@ -1,0 +1,70 @@
+name: Staging drills
+
+# GO_LIVE.md Stage-A verification drills (#284 flags-flip, #290 spend-trip,
+# #228 rate-limit) executed against the persistent ccstage staging stack on the
+# VM via the self-hosted runner — no SSH required. The workflow RUN is the
+# recorded evidence for the scorecard row: link it in GO_LIVE.md with the date.
+#
+# Safe by construction: targets compose project `ccstage` only, the drills
+# restore all state in `finally` blocks (flags re-enabled, spend counters and
+# trip latch cleared), and the stack's app/worker are stopped afterwards
+# exactly like the deploy-time staging gate leaves them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drill:
+        description: Which drill to run
+        type: choice
+        default: all
+        options: [all, flags-flip, spend-trip, rate-limit]
+
+permissions:
+  contents: read
+
+jobs:
+  drills:
+    name: Run staging drills (${{ inputs.drill }})
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Authenticate with GHCR
+        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
+
+      - name: Bring up the staging stack on the current prod image
+        # :latest == what prod runs (deploys push it); drills verify behavior,
+        # not a release candidate, so the released image is the right target.
+        run: |
+          docker pull ghcr.io/reese8272/creatorclip:latest
+          STAGING_IMAGE=ghcr.io/reese8272/creatorclip:latest docker compose -p ccstage \
+            -f docker-compose.staging.yml up -d --no-build --pull missing
+
+      - name: Wait for staging /health
+        run: |
+          for i in $(seq 1 12); do
+            BODY=$(docker compose -p ccstage -f docker-compose.staging.yml exec -T app \
+              python3 -c "import urllib.request; r=urllib.request.urlopen('http://localhost:8000/health',timeout=10); print(r.read().decode())" \
+              2>/dev/null) && break || sleep 5
+          done
+          echo "health: ${BODY:-unreachable}"
+          test -n "${BODY:-}"
+
+      - name: Migrations + idempotent seed
+        run: |
+          docker compose -p ccstage -f docker-compose.staging.yml exec -T app alembic upgrade head
+          docker compose -p ccstage -f docker-compose.staging.yml exec -T app python tests/perf/seed_staging.py
+
+      - name: Run the drills
+        run: |
+          docker compose -p ccstage -f docker-compose.staging.yml exec -T app \
+            python scripts/drills.py "${{ inputs.drill }}"
+
+      - name: Staging logs (on failure)
+        if: failure()
+        run: docker compose -p ccstage -f docker-compose.staging.yml logs --tail 150 app worker || true
+
+      - name: Stop the stack (keep volumes)
+        if: always()
+        run: docker compose -p ccstage -f docker-compose.staging.yml stop app worker || true

@@ -64,11 +64,11 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
-| Does every prod deploy pass a data-bearing staging gate first? | First VM run: tear down the old `cc139` project (or one `skip_staging` dispatch) | operator | CODE-GREEN | #298 (+#271 rollback fix); `docs/DEPLOYMENT.md` "Staging-Parity Gate" |
+| Does every prod deploy pass a data-bearing staging gate first? | None — first runs completed | build | GREEN | #298 (+#271 fix); gate blocked 3 real problems then passed W3 clean, 2026-07-02/03 (runs on PRs #46–#50); seed idempotency fixed PR #50 |
 | Is migration safety enforced (Squawk, timeouts, expand/contract, rollback runbook)? | None | build | GREEN | #270, #294; `docs/MIGRATIONS.md` |
 | Do deploys verify the critical journey and tag every promotion? | None | build | GREEN | #295, #297 |
-| Are all external APIs provisioned with `/health` green? | Run `scripts/doctor.py --full` on the VM; Deepgram/R2 round-trips; no key in logs | operator | OPEN | #25 |
-| Are the W1/W2 staging-verify residuals exercised? | Run the queued staging checks once the staging gate is live (not individually beta-blocking) | staging-verify | OPEN | "Remaining (staging)" lines on #190/#192/#198/#200/#201/#202/#245/#284/#290 in `docs/issues.md` |
+| Are all external APIs provisioned with `/health` green? | Run `scripts/doctor.py --full` on the VM; Deepgram/R2 round-trips; no key in logs | operator | CODE-GREEN | #25; partial evidence 2026-07-03: prod `/health` all-ok (PG/Redis/R2), **LLM E2E nightly fully green live vs Anthropic** (workflow `llm-e2e-nightly`, incl. no-key-in-logs test); Deepgram round-trip pending |
+| Are the W1/W2 staging-verify residuals exercised? | Dispatch the `staging-drills` workflow (#284 flags-flip, #290 spend-trip, #228 rate-limit); remaining rows per issue | staging-verify | OPEN | `.github/workflows/staging-drills.yml` (2026-07-03) + "Remaining (staging)" lines in `docs/issues.md` |
 | Has the full pipeline run end-to-end on prod with real friends for 48h? | Execute the #28 beta smoke + friend onboarding — the Stage-A capstone | operator | OPEN | #28 (blocked by #24/#25/#26) |
 
 ### Observability & Cost
@@ -87,7 +87,7 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Does no surface promise virality; is every score estimate-framed? | None — structural test runs in every suite | build | GREEN | `tests/test_compliance_no_virality.py` + `tests/test_static.py` pins; FitBadge tiers (#192) |
 | Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | Confirm Stripe LIVE keys during #25 | build | GREEN | Issue 21; #205, #206; spend guard #290 |
 
-**Stage A totals:** 32 gates — **12 GREEN · 7 CODE-GREEN · 13 OPEN**.
+**Stage A totals:** 32 gates — **13 GREEN · 7 CODE-GREEN · 12 OPEN** (updated 2026-07-03).
 The honest distance-to-beta number is **20 gates not fully green** (13 OPEN + 7
 CODE-GREEN verification residuals); the hard blockers for inviting the first friends are
 the #24 → #25 → #26 → #28 chain.
