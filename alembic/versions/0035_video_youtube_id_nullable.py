@@ -47,6 +47,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # DOWNGRADE-RISK (data-dependent): NULL youtube_video_id rows are overwritten
+    # with placeholders below — the original NULL-ness is not recoverable (Issue 296).
     # Stamp a deterministic placeholder onto any standalone-upload rows so the
     # NOT NULL constraint can be re-imposed without dropping data. The first
     # 32 chars of the row's own UUID (hyphens removed) are unique per creator.

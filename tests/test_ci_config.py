@@ -256,6 +256,66 @@ def test_staging_prod_compose_parity() -> None:
     )
 
 
+# ── Migration downgrade round-trip + irreversibility detector (Issue 296) ────
+
+
+def _migration_lint_steps() -> list[dict]:
+    ci = yaml.safe_load(_load_workflow("ci.yml"))
+    return ci["jobs"]["migration-lint"]["steps"]
+
+
+def test_migration_lint_has_downgrade_round_trip_after_squawk() -> None:
+    """The migration-lint job must exercise downgrade reversibility ONLINE
+    (Issue 296): after the Squawk lint, dump the schema, downgrade to the oldest
+    changed migration's parent, re-upgrade to head, and require the schema dumps
+    to be byte-identical. Offline --sql cannot execute data-dependent downgrades
+    (e.g. 0035's placeholder stamping), so this must stay a live-DB step."""
+    steps = _migration_lint_steps()
+    names = [s.get("name", "") for s in steps]
+    assert "Downgrade round-trip (Issue 296)" in names, (
+        "ci.yml's migration-lint job must keep the 'Downgrade round-trip "
+        "(Issue 296)' step — it is the only place downgrade() paths are executed."
+    )
+    assert names.index("Downgrade round-trip (Issue 296)") > names.index(
+        "Lint changed migrations with Squawk"
+    ), "The round-trip must run AFTER the Squawk lint (DB is at head by then)."
+    run = steps[names.index("Downgrade round-trip (Issue 296)")]["run"]
+    assert "alembic downgrade" in run and "alembic upgrade head" in run, (
+        "The round-trip step must actually run `alembic downgrade` then "
+        "`alembic upgrade head` against the throwaway Postgres."
+    )
+    assert "pg_dump --schema-only" in run, (
+        "The round-trip must schema-dump before AND after — succeeding commands "
+        "alone don't prove the schema round-trips."
+    )
+    assert "diff -u before.sql after.sql" in run, (
+        "The schema-diff assertion (diff before.sql after.sql must be empty) is "
+        "the load-bearing check — removing it reduces the gate to 'commands ran'."
+    )
+
+
+def test_migration_lint_runs_irreversibility_detector() -> None:
+    """The detector step must invoke scripts/check_downgrades.py over the changed
+    migration files, and the reviewed-exception allowlist it reads must exist
+    with the 0014 seed (state backfill — Issue 98 banner-stuck bug)."""
+    steps = _migration_lint_steps()
+    detector = [s for s in steps if "check_downgrades" in s.get("run", "")]
+    assert detector, (
+        "ci.yml's migration-lint job must keep a step invoking "
+        "scripts/check_downgrades.py — it is what fails the PR on a no-op or "
+        "raising downgrade() outside the reviewed allowlist (Issue 296)."
+    )
+    allowlist = _REPO_ROOT / "alembic" / "DOWNGRADE_EXCEPTIONS"
+    assert allowlist.exists(), (
+        "alembic/DOWNGRADE_EXCEPTIONS must exist — scripts/check_downgrades.py "
+        "reads it as the reviewed-exception allowlist."
+    )
+    assert "0014" in allowlist.read_text(), (
+        "The 0014 onboarding-state backfill is the seeded irreversible exception "
+        "— removing it makes any future change to 0014 fail the detector."
+    )
+
+
 def test_notify_backend_is_console_in_test_env() -> None:
     """NOTIFY_BACKEND must default to 'console' so tests (and CI) never call Resend.
 

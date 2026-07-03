@@ -1,0 +1,5 @@
+# Reviewed exceptions for scripts/check_downgrades.py (Issue 296).
+# One revision per line (exact revision id, or the NNNN filename prefix),
+# `# rationale` after it. Entries whose downgrade() later becomes real are
+# flagged as STALE and fail CI — keep this list honest.
+0014  # onboarding-state backfill not safely reversible — would re-trigger the Issue 98 banner-stuck bug
