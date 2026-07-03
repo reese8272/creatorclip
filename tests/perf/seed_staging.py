@@ -74,8 +74,12 @@ def _seed(conn: psycopg.Connection) -> None:
     # endpoints from short-circuiting before the real query logic runs.
     video_ids: list[str] = []
     for i in range(12):
+        # Idempotency: the id must survive re-runs against the PERSISTENT staging
+        # DB. A fresh uuid4 + ON CONFLICT (youtube_video_id) DO NOTHING left the
+        # new id nonexistent on run #2, so the video_metrics insert FK-violated
+        # (first staging-gate run after PR #49). Insert with a candidate id, then
+        # resolve the REAL id by the natural key.
         vid_id = str(uuid.uuid4())
-        video_ids.append(vid_id)
         kind = "long" if i < 8 else "short"
         duration = 720.0 + i * 60 if kind == "long" else 55.0 + i * 5
         published = now - timedelta(days=30 + i * 7)
@@ -97,6 +101,13 @@ def _seed(conn: psycopg.Connection) -> None:
                 now,
             ),
         )
+        # Resolve the surviving row's id (pre-existing on re-runs).
+        row = conn.execute(
+            "SELECT id FROM videos WHERE youtube_video_id = %s",
+            (f"yt_staging_{i:03d}",),
+        ).fetchone()
+        vid_id = str(row[0])
+        video_ids.append(vid_id)
         # VideoMetrics so /videos and /creators/me/upload-intel return real numbers.
         conn.execute(
             """
