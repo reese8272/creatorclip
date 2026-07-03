@@ -2571,12 +2571,15 @@ Previous: Wave 3 hotfix batch (3 SEV1s + 3 SEV2s).
 
 ## Pre-Public-Launch Gates (all must be green before opening to outside creators)
 
-- [x] Lock `ALLOWED_ORIGINS` to production domain; disable `/docs` — env-driven: `docs_url` conditional on `ENV=="development"`; `ALLOWED_ORIGINS` from `.env`
-- [x] Per-creator rate limiting + usage quotas before each LLM/render job — Issue 18 (slowapi, 10/h LLM, 20/h render, 120/min rest)
-- [x] YouTube data-retention/refresh fully compliant (see `docs/COMPLIANCE.md`) — Issue 17 (Beat purge + analytics refresh)
-- [x] `TOKEN_ENCRYPTION_KEY` rotation runbook written — see `docs/RUNBOOKS.md`
-- [x] Terms of Service + Privacy Policy pages live — Issue 14 (`/static/tos.html`, `/static/privacy.html`)
+> **Status is maintained in `docs/GO_LIVE.md`** — the canonical two-stage go/no-go
+> scorecard (Issue 303, 2026-07-02). This list names the gates; status lives there.
+
+- [x] Lock `ALLOWED_ORIGINS` to production domain; disable `/docs` — env-driven: `docs_url` conditional on `ENV=="development"`; `ALLOWED_ORIGINS` from `.env`; live-prod verification pass is Issue 24
+- [x] Per-creator rate limiting + usage quotas before each LLM/render job — Issue 18 (slowapi baseline), hardened by Issues 228 (stacked limits on all LLM/render routes) / 312 (async storage) / 321 (brief quota); residual live 429 smoke in `docs/GO_LIVE.md`
+- [x] YouTube data-retention/refresh fully compliant (see `docs/COMPLIANCE.md`) — Issue 17 (Beat purge + analytics refresh) + Issue 75b (30-day partial-staleness purge)
+- [x] `TOKEN_ENCRYPTION_KEY` rotation runbook written — see `docs/RUNBOOKS.md`; end-to-end staging rotation drill is a Stage-B gate (Issue 30)
+- [x] Terms of Service + Privacy Policy pages live — Issue 14 (`/static/tos.html`, `/static/privacy.html`); accuracy rewrite Issue 252
 - [ ] Google OAuth app verification completed for requested scopes — external Google process (Issue 29)
-- [x] Account-deletion endpoint (right-to-erasure: token revocation + media purge) — Issue 19
-- [x] Billing wired — Issue 21 (minute packs, atomic balance, 60-min free trial, Stripe Checkout)
+- [x] Account-deletion endpoint (right-to-erasure: token revocation + media purge) — Issue 19, superseded/hardened by Issues 158 (Danger-zone UI) and 247/248 (erasure completeness)
+- [x] Billing wired — Issue 21 (minute packs, atomic balance, 60-min free trial, Stripe Checkout); plan tiers beyond minute packs = open Stage-B product decision (`docs/GO_LIVE.md`)
 - [x] Eval harness hardened with adversarial/edge cases — Issue 199 (2026-06-27): 8 adversarial geometry scenarios + 1 ranking-aware fixture + aggregate 100%-pass-rate gate + `SCENARIO_FLOOR=14`. (Earlier: 3 fixtures + early-peak MIN_CLIP_S fix.) Gate now genuinely satisfied — reconciled with CLAUDE.md.
