@@ -114,7 +114,11 @@ async def test_titles_cache_hit_live() -> None:
     """knowledge/titles.py: 2nd same-DNA call shows cache_read > 0 (1h TTL prefix)."""
     from knowledge.titles import generate_title_suggestions
 
-    fake_dna = "Cooking channel. " * 50  # ~100 words — enough to clear the 1024-token floor
+    # Batch G (Issue 352) gates the 1h cache marker on a MEASURED prefix ≥1024
+    # tokens ((len(static)+len(dna))//4) — 50 reps (~850 chars) fell under the
+    # floor post-G, so the marker was correctly omitted and cache_read stayed 0
+    # (2026-07-03 nightly). 300 reps ≈ 5,100 chars ≈ 1,275 tokens clears it.
+    fake_dna = "Cooking channel. " * 300
     kwargs = dict(
         channel_title="TestChannel",
         dna_brief=fake_dna,
