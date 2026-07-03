@@ -68,9 +68,13 @@ jobs:
           docker compose -p ccstage -f docker-compose.staging.yml exec -T app python tests/perf/seed_staging.py
 
       - name: Run the drills
+        # `python -m scripts.drills`, NOT `python scripts/drills.py`: the latter
+        # puts scripts/ on sys.path[0], so `import flags` in the drill would
+        # resolve to scripts/flags.py (the ops CLI, which has _set_flag) instead
+        # of the root flags.py (set_flag). Module invocation keeps cwd /app first.
         run: |
           docker compose -p ccstage -f docker-compose.staging.yml exec -T app \
-            python scripts/drills.py "${{ inputs.drill }}"
+            python -m scripts.drills "${{ inputs.drill }}"
 
       - name: Staging logs (on failure)
         if: failure()
