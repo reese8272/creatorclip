@@ -100,7 +100,7 @@ envSecretName: "creatorclip-env"
 # Pinned by digest to prevent supply-chain tag-mutation (Issue 264).
 pgbouncer:
   enabled: true
-  image: "edoburu/pgbouncer:v1.25.2-p0@sha256:37a605d6f06ed3c7e04fd96af01f8e8374e77c73d2b3a8d77bef527f9e83fc34"
+  image: "edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340"
   poolMode: "transaction"
   maxClientConn: 1000
   # defaultPoolSize per-pod: app pool_size+max_overflow = 20 (db.py), sidecar
@@ -119,7 +119,7 @@ pgbouncer:
 worker:
   pgbouncer:
     enabled: true
-    image: "edoburu/pgbouncer:v1.25.2-p0@sha256:37a605d6f06ed3c7e04fd96af01f8e8374e77c73d2b3a8d77bef527f9e83fc34"
+    image: "edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340"
     poolMode: "transaction"
     maxClientConn: 200
     # 5 server-side connections per worker pod: sized for --concurrency=2
