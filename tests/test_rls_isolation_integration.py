@@ -556,10 +556,10 @@ async def test_rls_child_tables_block_cross_tenant_reads(admin_engine, db_sessio
     try:
         factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
 
-        # App role, NO GUC: deny-by-default on every child table. Runs FIRST —
-        # once a pooled connection has carried the GUC, current_setting() on it
-        # returns '' (not NULL) after commit, so this check needs clean
-        # connections to exercise the truly-never-set predicate path.
+        # App role, NO GUC: deny-by-default on every child table. The
+        # reused-connection variant of this (current_setting() returning ''
+        # after a prior transaction carried the GUC) is covered by
+        # test_reused_connection_guc_less_query_denies_cleanly (Issue 354).
         async with factory() as s:
             await s.execute(text("SET LOCAL ROLE creatorclip_app"))
             for table, _fk in _CHILD_TABLES:
@@ -647,6 +647,56 @@ async def test_rls_child_table_writes_enforce_with_check(admin_engine, db_sessio
             assert "row-level security" in str(exc_info.value).lower()
     finally:
         await _cleanup(db_session, [a["creator_id"], b["creator_id"]])
+
+
+@pytest.mark.asyncio
+async def test_reused_connection_guc_less_query_denies_cleanly(admin_engine, db_session):
+    """Issue 354 — the empty-string-GUC quirk on a reused pooled connection.
+
+    ``set_config('app.creator_id', ..., true)`` is transaction-local; at commit
+    the setting reverts to the session-level *empty-string placeholder*, not to
+    "never set" — so ``current_setting('app.creator_id', true)`` on the SAME
+    connection returns ``''`` (not NULL) in the next transaction. Before
+    migration 0045 the bare ``::uuid`` cast in every tenant_isolation policy
+    raised ``invalid input syntax for type uuid: ""`` (SQLSTATE 22P02) → a 500.
+    Post-0045 the ``NULLIF(..., '')::uuid`` form degrades '' to NULL and the
+    policy denies cleanly: zero rows, no exception — the same deny-by-default
+    behaviour as a fresh connection with the GUC truly unset.
+    """
+    seeded = await _seed_creator_with_children(db_session, label="reuse")
+    try:
+        # ONE raw connection held across both transactions — the pooled-reuse shape.
+        async with admin_engine.connect() as conn:
+            # ── txn1: a "previous request" sets the GUC and reads tenant data ──
+            await conn.execute(text("SET LOCAL ROLE creatorclip_app"))
+            await conn.execute(
+                text("SELECT set_config('app.creator_id', :cid, true)"),
+                {"cid": str(seeded["creator_id"])},
+            )
+            n = (await conn.execute(text("SELECT count(*) FROM clips"))).scalar_one()
+            assert n >= 1, "creator must see their own clip while the GUC is set"
+            await conn.commit()
+
+            # ── txn2: same connection, NO GUC — the placeholder quirk fires ──
+            guc = (
+                await conn.execute(text("SELECT current_setting('app.creator_id', true)"))
+            ).scalar_one()
+            assert guc == "", (
+                f"expected the empty-string placeholder on a reused connection, got {guc!r} — "
+                "if this returns NULL, the reused-connection quirk this test pins has changed"
+            )
+            await conn.execute(text("SET LOCAL ROLE creatorclip_app"))
+            # Direct-column policy (clips) and parent-subquery policy (signals):
+            # both must deny CLEANLY — zero rows, no uuid-cast exception.
+            for table in ("clips", "signals"):
+                rows = (await conn.execute(text(f"SELECT * FROM {table}"))).all()
+                assert rows == [], (
+                    f"clean deny failed on {table}: {len(rows)} rows visible with the "
+                    "empty-string GUC placeholder"
+                )
+            await conn.rollback()
+    finally:
+        await _cleanup(db_session, [seeded["creator_id"]])
 
 
 @pytest_asyncio.fixture
