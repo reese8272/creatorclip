@@ -1,8 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-02 (end of the W2 wave session)
-**Branch at close:** `w2/round1` — PR to main pending (no migrations)
-**Prod:** at W1 content (PR #45, DB head `0044`); W2 deploys when its PR merges
+**Last updated:** 2026-07-03 (end of the W3 wave — the final build wave)
+**Branch at close:** `w3/round1` — PR to main pending (carries migration **0045**)
+**Prod:** at W2 content (PR #46-48, DB head `0044`); W3 deploys when its PR merges (first migration through the staging gate)
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -10,34 +10,22 @@
 
 ## CURRENT FOCUS
 
-**W1 and W2 are both code-complete.** W2 shipped today on `w2/round1`: recap UI (192 — the
-Stream-VOD lane is user-reachable end to end), spend guard (290+291, approved $5/$50/$400
-thresholds onto the llm_generation kill switch), one-click-unsubscribe compliance fix (245),
-GPC (302), deletion-on-restore (254), the staging-parity deploy gate + the #271 rollback fix
-(298), nova-3 price fix + R2 gauges + Deepgram-stays DEC (293), incident-response index (283),
-cost-review runbook (292), the mypy strictness ratchet (78-R), and all 5 rescoped 109 cleanups
-(incl. a measured 4.6–17.6× scoring-loop speedup). 310/78 were reconciled-closed as
-already-shipped.
+**W1, W2, and W3 are all code-complete — the build track of the roadmap is EMPTY.** W3 shipped:
+the styled re-render fix (353), NULLIF-hardened RLS policies via migration 0045 (354), the
+downgrade-reversibility CI check (296), the re-engagement sunset cap + lifecycle integration test
+(246), and **docs/GO_LIVE.md** (303) — the canonical 41-gate go/no-go ledger.
 
 ### → NEXT ACTIONS
 
-1. **Open + merge the W2 PR** from `w2/round1` (all gates green locally: 2204 tests, venv
-   Layer-0 clean, 240 vitest + tsc, eval 100%). ⚠️ The merge triggers the **first run of the
-   new staging gate**: EITHER tear down the old `cc139` staging project on the VM first
-   (`docker compose -p cc139 -f docker-compose.staging.yml down` — it holds port 8001) OR
-   dispatch the deploy with `skip_staging=true` once, then do the teardown.
-2. **Operator checklist** (accumulated, all documented): rotate the exposed Anthropic key;
-   Cloudflare `/auth/*` rule (`docs/EDGE_SECURITY.md`); Redis backup cron + drill
-   (`docs/RUNBOOKS.md`); Better Stack page (#282); #228 live 429 smoke; DO billing alert;
-   Grafana cost rule + `docs/dashboards/llm-cost-panel.json` after #326 activation; R2
-   lifecycle-numbers dashboard check (#254); spend-guard staging trip drill (#290).
-3. **Promote from OFF_COURSE_BUGS:** styled re-render no-op (SEV2); NULLIF GUC policy
-   hardening migration (SEV2); LLM E2E Nightly red; Playwright runner gap.
-4. **Next wave: W3** — open items incl. 246 (lifecycle sequence), 300 (COPPA gate), 296
-   (migration reversibility CI), 197 (published-clips outcome loop), 96-fold residuals; plus
-   the W1/W2 staging-verify residuals once the staging gate is exercised.
-
----
+1. **Merge the W3 PR** from `w3/round1` once CI is green (Playwright/visual red as always). The
+   deploy applies 0045 through the staging gate — expected to just work now.
+2. **Work docs/GO_LIVE.md Stage A** — that IS the plan now: 13 hard-open gates (critical path
+   #24→#25→#26→#28: prod env config check → external API provisioning check → OAuth consent
+   screen + test users → beta go-live smoke with a friend) + 7 verification residuals + the
+   standing operator checklist (key rotation, Cloudflare rule, Redis cron+drill, Better Stack,
+   DO billing alert, Grafana rule, R2 lifecycle check, MAILING_ADDRESS + Gmail round-trip).
+3. **Stage B (public launch, Issue 30)** stays gated on #29 OAuth verification + #261 load test —
+   post-beta.
 
 ## KEY FACTS / GOTCHAS (delta from the W1 handoff)
 

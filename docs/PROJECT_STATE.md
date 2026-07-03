@@ -4,6 +4,31 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-03 — W3 wave complete: 353, 354 (migration 0045), 296, 246-residual, 303 GO_LIVE capstone
+
+**Branch** `w3/round1` — 5 parallel worktree agents + integrator. Four agents stalled at their final
+test-wait on a shared-DB wedge (an idle-in-transaction backend from the prior night held locks ~10h,
+blocking every integration TRUNCATE behind it) — cleared the zombie pytest pids + PG backends and
+re-verified serially: 354's lane went hung→152/152 in 107s. Final: **2219 unit + 155 integration
+passed / 0 failed**, venv Layer-0 all green, tsc clean.
+
+**Shipped:** 353 styled re-render fix (endpoint owns intent; worker redelivery guard untouched);
+**354 migration 0045** — NULLIF-hardened all 27 tenant RLS policies (clean deny replaces the
+empty-string-GUC 500; reused-connection regression pinned; ordering workaround retired); 296
+downgrade round-trip + irreversibility detector in the migration-lint job (incl. the pg_dump≥16.10
+randomized-token filter find; 34-revision local round-trip byte-identical); 246 reconciled-shipped
+(ef62b44) + re-engagement sunset cap (`LIFECYCLE_REENGAGE_MAX_ATTEMPTS=3`, was unbounded) + the
+real-PG lifecycle integration test; **303 GO_LIVE.md** — 41-gate two-stage scorecard, three stale
+gate lists reconciled to it. **Stage-A beta distance: 13 hard-OPEN gates + 7 verification residuals**
+(critical path: #24→#25→#26→#28 operator chain).
+
+**The roadmap's build track is now EMPTY** below W4: remaining open issues are operator/external
+gates (24/25/26/28/29/30), DESCOPED-BETA scale items, and staging-verify residuals — all enumerated
+in GO_LIVE.md. This wave's PR carries 0045 and will be the first migration through the staging gate
+AND the first PR through its own downgrade check.
+
+---
+
 ## 2026-07-02 — W2 wave complete: 192, 290+291, 245, 302, 254, 298+271-fix, 293/283/292, 78-R, 109 (+310/78 reconciled-closed)
 
 **Branch** `w2/round1` — 7 parallel worktree agents (round 1) + 109 (round 2) + integrator; survived a
