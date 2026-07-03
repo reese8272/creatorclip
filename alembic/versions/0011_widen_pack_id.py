@@ -38,6 +38,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # DOWNGRADE-RISK (data-dependent): narrowing back to VARCHAR(32) fails if any
+    # over-length pack_id rows exist — operators must purge them first (Issue 296).
     op.alter_column(
         "minute_packs",
         "pack_id",

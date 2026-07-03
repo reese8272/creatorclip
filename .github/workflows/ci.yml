@@ -318,6 +318,62 @@ jobs:
             alembic upgrade "${DOWN}:${REV}" --sql | squawk || FAIL=1
           done
           exit $FAIL
+      - name: Downgrade round-trip (Issue 296)
+        if: steps.filter.outputs.migrations == 'true'
+        run: |
+          # Exercise the rollback story ONLINE: schema-dump at head, downgrade to
+          # the OLDEST changed migration's parent, re-upgrade to head, and require
+          # a byte-identical schema dump. Runs against the job's throwaway PG —
+          # offline (--sql) cannot execute data-dependent downgrades (e.g. 0035's
+          # placeholder stamping). pg_dump runs INSIDE the pgvector service
+          # container so client/server versions always match.
+          set -o pipefail  # a pg_dump failure must fail the gate, not diff two empty files
+          # --diff-filter=d: a DELETED migration has no file to parse (and is not
+          # part of the upgraded chain) — only added/modified files round-trip.
+          CHANGED=$(git diff --diff-filter=d --name-only origin/main...HEAD -- alembic/versions/*.py)
+          if [ -z "$CHANGED" ]; then
+            echo "No migration files changed vs origin/main — skipping round-trip."
+            exit 0
+          fi
+          OLDEST=$(echo "$CHANGED" | sort | head -n 1)
+          read -r REV DOWN <<< "$(python3 -c "
+          import re, sys
+          s = open(sys.argv[1]).read()
+          rev = re.search(r'^revision\s*=\s*[\"\']([^\"\']+)[\"\']', s, re.M)
+          down = re.search(r'^down_revision\s*=\s*[\"\']([^\"\']+)[\"\']', s, re.M)
+          print(rev.group(1) if rev else '', down.group(1) if down else 'base')
+          " "$OLDEST")"
+          if [ -z "$REV" ]; then
+            echo "Cannot parse revision from $OLDEST — failing the round-trip gate." >&2
+            exit 1
+          fi
+          echo "=== Round-trip: head → $DOWN → head (oldest changed migration: $REV) ==="
+          # pg_dump ≥16.10 emits a RANDOMIZED \restrict/\unrestrict token pair
+          # (CVE-2025-1094 hardening) — strip those two lines or the byte-diff
+          # always fails (found in the Issue 296 local dry-run on PG 16.14).
+          docker exec ${{ job.services.postgres.id }} \
+            pg_dump --schema-only -U creatorclip creatorclip_squawk \
+            | grep -vE '^\\(un)?restrict ' > before.sql
+          alembic downgrade "$DOWN"
+          alembic upgrade head
+          docker exec ${{ job.services.postgres.id }} \
+            pg_dump --schema-only -U creatorclip creatorclip_squawk \
+            | grep -vE '^\\(un)?restrict ' > after.sql
+          if ! diff -u before.sql after.sql; then
+            echo "::error::Schema did not round-trip — downgrade to ${DOWN} + upgrade head left a different schema (diff above)."
+            exit 1
+          fi
+          echo "Schema round-trip OK — before/after dumps identical."
+      - name: Detect no-op / irreversible downgrades (Issue 296)
+        if: steps.filter.outputs.migrations == 'true'
+        run: |
+          # A downgrade() that is pass-only/empty or raises fails the gate unless
+          # the revision is a reviewed exception in alembic/DOWNGRADE_EXCEPTIONS
+          # (stale allowlist entries fail too — see scripts/check_downgrades.py).
+          # --diff-filter=d: deleted files cannot be read; the allowlist staleness
+          # check still runs even when $CHANGED is empty.
+          CHANGED=$(git diff --diff-filter=d --name-only origin/main...HEAD -- alembic/versions/*.py)
+          python3 scripts/check_downgrades.py $CHANGED
 
   static-gates:
     name: Types + SAST + deps (mypy, bandit, pip-audit)
