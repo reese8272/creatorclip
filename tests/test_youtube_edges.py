@@ -434,30 +434,20 @@ def test_clamp_ingest_field_emoji_at_boundary_does_not_split_codepoint():
     assert "\ud83c" not in result  # no surrogate half
 
 
-def test_check_captions_available_empty_items_returns_false():
+async def test_check_captions_available_empty_items_returns_false() -> None:
     """check_captions_available returns False when the API returns no caption tracks."""
-    import asyncio
-
     from youtube.data_api import check_captions_available
 
-    async def _run():
-        with patch("youtube.data_api._get_json", AsyncMock(return_value={"items": []})):
-            return await check_captions_available("tok", "vid123")
-
-    assert asyncio.get_event_loop().run_until_complete(_run()) is False
+    with patch("youtube.data_api._get_json", AsyncMock(return_value={"items": []})):
+        assert await check_captions_available("tok", "vid123") is False
 
 
-def test_check_captions_available_missing_key_returns_false():
+async def test_check_captions_available_missing_key_returns_false() -> None:
     """check_captions_available returns False when the API response has no 'items' key."""
-    import asyncio
-
     from youtube.data_api import check_captions_available
 
-    async def _run():
-        with patch("youtube.data_api._get_json", AsyncMock(return_value={})):
-            return await check_captions_available("tok", "vid123")
-
-    assert asyncio.get_event_loop().run_until_complete(_run()) is False
+    with patch("youtube.data_api._get_json", AsyncMock(return_value={})):
+        assert await check_captions_available("tok", "vid123") is False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
