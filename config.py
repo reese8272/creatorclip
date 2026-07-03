@@ -585,6 +585,13 @@ class Settings(BaseSettings):
     # re-engagement): at most one lifecycle email per creator per this window.
     # 48h prevents a welcome + nudge landing on the same day.
     LIFECYCLE_FREQUENCY_CAP_HOURS: int = 48
+    # Re-engagement sunset cap (Issue 246 residual): lifetime maximum number of
+    # re_engagement emails per creator. Without this, the 14-day period bucket
+    # re-enqueues a permanently-dormant creator FOREVER — the win-back sequence
+    # must sunset. Counted from the notification_deliveries ledger (attempted
+    # sends, not just confirmed provider deliveries). 3 is the standard win-back
+    # sequence length in creator SaaS before a cohort is considered churned.
+    LIFECYCLE_REENGAGE_MAX_ATTEMPTS: int = 3
     # Per-request HTTP timeout for the Stripe SDK. Default SDK timeout is ~80s;
     # one stuck call would pin an asyncio.to_thread executor slot for that long.
     # Scale-checklist E (backpressure): every external call needs a bounded
