@@ -474,7 +474,17 @@ async def render_clip(
         if body.aspect is not None:
             merged["aspect"] = body.aspect
         clip.style_preset = merged or None
-        await session.commit()
+
+    # Issue 353: a render request on a `done` clip is an explicit re-render —
+    # reset the render state HERE (the endpoint owns intent) so the worker's
+    # done-with-render_uri redelivery guard doesn't no-op it. Clearing
+    # render_uri also unmounts the stale player so the fresh render is fetched.
+    # Applied with or without a style body (a plain retry also re-renders),
+    # in the same transaction as the merged style so both persist atomically.
+    if clip.render_status == RenderStatus.done:
+        clip.render_status = RenderStatus.pending
+        clip.render_uri = None
+    await session.commit()
 
     import redis as _redis_pkg
 
