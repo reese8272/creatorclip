@@ -82,14 +82,22 @@ async def drill_flags_flip() -> None:
     llm_probe = "/creators/me/improvement-brief"  # POST is require_flag-gated
     try:
         async with AsyncSessionLocal() as s:
-            await flags.set_flag("llm_generation", False, updated_by="drill", reason="flags-flip drill", session=s)
+            await flags.set_flag(
+                "llm_generation", False, updated_by="drill", reason="flags-flip drill", session=s
+            )
         flags._reset_cache()
         code = await _post(llm_probe, token)
         assert code == 503, f"expected 503 while disabled, got {code}"
         log.info("flags-flip: disabled -> %s (503 confirmed)", code)
     finally:
         async with AsyncSessionLocal() as s:
-            await flags.set_flag("llm_generation", True, updated_by="drill", reason="flags-flip drill restore", session=s)
+            await flags.set_flag(
+                "llm_generation",
+                True,
+                updated_by="drill",
+                reason="flags-flip drill restore",
+                session=s,
+            )
         flags._reset_cache()
     code = await _post(llm_probe, token)
     assert code != 503, f"still 503 after re-enable: {code}"
@@ -137,7 +145,13 @@ async def drill_spend_trip() -> None:
             f"creatorclip:spend:{today}:creator:00000000-1111-2222-3333-444444444444",
         )
         async with AsyncSessionLocal() as s:
-            await flags.set_flag("llm_generation", True, updated_by="drill", reason="spend-trip drill restore", session=s)
+            await flags.set_flag(
+                "llm_generation",
+                True,
+                updated_by="drill",
+                reason="spend-trip drill restore",
+                session=s,
+            )
         flags._reset_cache()
     assert await flags.flag_enabled("llm_generation"), "flag not restored"
     log.info("spend-trip: manual reset restored the flag. PASS")
