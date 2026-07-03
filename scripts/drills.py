@@ -58,7 +58,7 @@ async def _get(path: str, token: str) -> int:
     import httpx
 
     async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.get(f"{_BASE}{path}", cookies={"session": token})
+        r = await c.get(f"{_BASE}{path}", cookies={"cc_session": token})
         return r.status_code
 
 
@@ -66,7 +66,7 @@ async def _post(path: str, token: str) -> int:
     import httpx
 
     async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.post(f"{_BASE}{path}", cookies={"session": token})
+        r = await c.post(f"{_BASE}{path}", cookies={"cc_session": token})
         return r.status_code
 
 

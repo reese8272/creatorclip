@@ -158,6 +158,31 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
   `''` quirk itself + zero-rows-no-exception post-fix) and retires the test-ordering workaround at
   tests/test_rls_isolation_integration.py:559.
 
+### Issue 355: UX — first-run information architecture: naming, primary-CTA, empty-state clarity
+
+- **Status:** OPEN · **Wave:** W3 · **Lane:** L16 UI Core / UX · **Size:** M · **Verify:** local · **Sev:** SEV2 (adoption)
+- Source: first-user walkthrough of the SPA (2026-07-03, mocked Playwright). The app is visually
+  polished and the honesty framing is strong, but a new creator gets lost in the information
+  architecture. Itemized findings (each independently fixable):
+  1. **Nav vocabulary ≠ page names.** Top nav says *Assistant / Analyze / Editor*; the pages title
+     themselves *"Ask about your channel" / "Analyze a video" / (Editor)*. Rename nav to match, or add
+     one-line "what is this" subtitles/tooltips.
+  2. **Three overlapping "ask the AI" surfaces** — Assistant (channel chat), Analyze (per-video +
+     Title/Hook/Chapter/Thumbnail generators), Insights (auto-generated version of much of the same).
+     A first user can't tell them apart from the nav. Consider merging Assistant+Analyze or clearer
+     labels + a one-liner each.
+  3. **No "start here" on the dashboard** — three co-equal primary buttons (Upload / Browse my channel /
+     Analyze a video) + per-row "Generate clips". Pick ONE primary CTA; demote the rest.
+  4. **Empty states read as dead ends** — Review Queue "0", the near-blank video-detail page below the
+     timeline, "0 clips rendered" stated 3×. Turn each into a next-step prompt ("Generate clips to fill
+     this").
+  5. Minor: brand identity is a little muddy (AutoClip vs Creator DNA vs the purple-monster mascot vs
+     the channel name) — not blocking, but adds to the "what am I looking at" feeling.
+- **Not a redesign** — the visual design, dark theme, and data density are good. This is a naming +
+  first-run pass. The clip-review core loop ("Why this clip" + Keep/Drop) is already excellent; don't
+  touch it. Recommend for a focused UX round after the beta operator gates, informed by real friend
+  feedback (Issue 28).
+
 ---
 
 ## How to use this file (deploy agents in batches)

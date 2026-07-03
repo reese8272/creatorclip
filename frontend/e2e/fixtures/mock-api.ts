@@ -287,6 +287,36 @@ const ANALYTICS: Analytics = {
   metrics_available: true,
 }
 
+const SUMMARIES = {
+  summaries: [
+    {
+      id: 'sum1',
+      video_id: 'v1',
+      status: 'ready',
+      render_status: 'done',
+      target_duration_s: 300,
+      render_uri: null,
+      created_at: '2026-07-01T08:00:00Z',
+      segments: [
+        {
+          start_s: 30,
+          end_s: 75,
+          score: 0.86,
+          principle: 'Open Loop',
+          rationale: 'Poses the build question before the reveal.',
+        },
+        {
+          start_s: 240,
+          end_s: 290,
+          score: 0.71,
+          principle: 'Pattern Interrupt',
+          rationale: 'The soldering mishap breaks the rhythm and re-hooks.',
+        },
+      ],
+    },
+  ],
+}
+
 // Static GET endpoints → fixture body.
 const GET_TABLE: Record<string, unknown> = {
   '/billing/balance': BALANCE,
@@ -319,6 +349,8 @@ async function dispatch(route: Route, seed: Seed): Promise<void> {
 
   // Dynamic sub-resources.
   if (/^\/videos\/[^/]+\/clips$/.test(pathname)) return json(route, REVIEW_CLIPS)
+  if (method === 'GET' && /^\/videos\/[^/]+\/summaries$/.test(pathname))
+    return json(route, SUMMARIES)
   if (pathname === '/creators/me/insights/analytics') return json(route, ANALYTICS)
 
   // Static GETs.

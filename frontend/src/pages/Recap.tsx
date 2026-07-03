@@ -86,8 +86,10 @@ export function Recap() {
     return () => clearInterval(id)
   }, [stream.status])
 
-  // Newest first from the server; the newest summary is THE recap.
-  const latest: Summary | undefined = summariesQuery.data?.summaries[0]
+  // Newest first from the server; the newest summary is THE recap. Guard the
+  // array itself (not just `data`): a malformed/empty 200 body leaves
+  // `data.summaries` undefined, and `undefined[0]` would white-screen the page.
+  const latest: Summary | undefined = summariesQuery.data?.summaries?.[0]
   const segments = [...(latest?.segments ?? [])].sort((a, b) => a.start_s - b.start_s)
   const renderInFlight =
     latest != null && (latest.render_status === 'pending' || latest.render_status === 'running')
@@ -105,6 +107,26 @@ export function Recap() {
     return (
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
         <p className="py-8 text-center text-sm text-subtle">Loading…</p>
+      </main>
+    )
+  }
+
+  if (summariesQuery.isError) {
+    return (
+      <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
+        <div className="rounded-md border border-default bg-surface px-6 py-10 text-center">
+          <p className="text-sm text-fg">Couldn&apos;t load recaps for this video.</p>
+          <p className="mt-1 text-xs text-subtle">
+            The video may still be processing, or its source has expired. Try again in a moment.
+          </p>
+          <button
+            type="button"
+            onClick={() => void summariesQuery.refetch()}
+            className="mt-4 rounded-md border border-default px-3 py-1.5 text-xs text-fg hover:bg-elevated"
+          >
+            Retry
+          </button>
+        </div>
       </main>
     )
   }
