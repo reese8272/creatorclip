@@ -27,8 +27,19 @@ jobs:
     name: Run staging drills (${{ inputs.drill }})
     runs-on: self-hosted
     timeout-minutes: 20
+    # Same posture as the deploy-time staging gate: run compose from
+    # /opt/autoclip so the VM's .env supplies POSTGRES_PASSWORD etc. (the
+    # first drills run failed with "env file .env not found" from the bare
+    # checkout dir). The checkout only provides the compose file + scripts,
+    # which the copy step below stages.
+    defaults:
+      run:
+        working-directory: /opt/autoclip
     steps:
       - uses: actions/checkout@v6
+
+      - name: Copy staging compose file to deploy dir
+        run: cp ${{ github.workspace }}/docker-compose.staging.yml /opt/autoclip/docker-compose.staging.yml
 
       - name: Authenticate with GHCR
         run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
