@@ -290,7 +290,11 @@ jobs:
         if: steps.filter.outputs.migrations == 'true'
         run: |
           # For each changed migration file, render its SQL and lint with squawk.
-          CHANGED=$(git diff --name-only origin/main...HEAD -- alembic/versions/*.py)
+          # --diff-filter=A: lint only NEW migrations. Historical migrations are
+          # immutable-in-effect (already applied in prod) and predate current rules —
+          # a comment-only edit must not re-gate them (bit PR #49 when Issue 296
+          # added DOWNGRADE-RISK notes to 0011/0032/0035).
+          CHANGED=$(git diff --diff-filter=A --name-only origin/main...HEAD -- alembic/versions/*.py)
           if [ -z "$CHANGED" ]; then
             echo "No migration files changed vs origin/main — skipping squawk."
             exit 0
@@ -330,7 +334,7 @@ jobs:
           set -o pipefail  # a pg_dump failure must fail the gate, not diff two empty files
           # --diff-filter=d: a DELETED migration has no file to parse (and is not
           # part of the upgraded chain) — only added/modified files round-trip.
-          CHANGED=$(git diff --diff-filter=d --name-only origin/main...HEAD -- alembic/versions/*.py)
+          CHANGED=$(git diff --diff-filter=A --name-only origin/main...HEAD -- alembic/versions/*.py)
           if [ -z "$CHANGED" ]; then
             echo "No migration files changed vs origin/main — skipping round-trip."
             exit 0
