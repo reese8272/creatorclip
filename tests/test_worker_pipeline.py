@@ -297,6 +297,63 @@ async def test_render_clip_async_retried_does_not_duplicate(db_session):
 
 
 @pytest.mark.asyncio
+async def test_render_clip_async_rerenders_after_endpoint_reset(db_session):
+    """Issue 353: after the render endpoint resets a done clip (pending +
+    render_uri=None), a second _render_clip_async actually re-renders — the
+    redelivery guard only no-ops when done AND render_uri are both set."""
+    from worker.tasks import _render_clip_async
+
+    creator = await _seed_creator(db_session, sub_prefix="rerender")
+    video = await _seed_video(db_session, creator_id=creator.id, duration_s=300.0)
+    clip = await _seed_clip(
+        db_session,
+        video_id=video.id,
+        creator_id=creator.id,
+        render_status=RenderStatus.pending,
+    )
+
+    render_calls = 0
+
+    def _count_render(*_a, **_kw):
+        nonlocal render_calls
+        render_calls += 1
+
+    try:
+        with (
+            patch("worker.storage.alocal_path", _dummy_local_path),
+            patch("clip_engine.render.render_clip_file", side_effect=_count_render),
+            patch(
+                "worker.storage.upload_file",
+                return_value=f"s3://test/clips/{clip.id}.mp4",
+            ),
+        ):
+            await _render_clip_async(str(clip.id))
+
+            # Simulate the endpoint's re-render reset (routers/clips.py, Issue 353).
+            await db_session.refresh(clip)
+            assert clip.render_status == RenderStatus.done
+            clip.render_status = RenderStatus.pending
+            clip.render_uri = None
+            await db_session.commit()
+
+            await _render_clip_async(str(clip.id))
+
+        assert render_calls == 2  # the second run re-encoded, not a no-op skip
+
+        engine = create_async_engine(settings.DATABASE_URL)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as s:
+            persisted = await s.get(Clip, clip.id)
+            status, uri = persisted.render_status, persisted.render_uri
+        await engine.dispose()
+
+        assert status == RenderStatus.done
+        assert uri == f"s3://test/clips/{clip.id}.mp4"
+    finally:
+        await _cleanup_creator(db_session, creator.id)
+
+
+@pytest.mark.asyncio
 async def test_render_video_clips_downloads_source_once(db_session):
     """The batch render fetches the source from R2 exactly ONCE for N clips and
     renders them all to done — the redundant per-clip download is gone."""
