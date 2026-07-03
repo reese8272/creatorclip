@@ -51,12 +51,12 @@ def test_llm_live_mark_excluded_from_default_lane() -> None:
 
 @pytest.mark.llm_live
 @_skip_unless_live
-def test_titles_live() -> None:
+async def test_titles_live() -> None:
     """knowledge/titles.py returns valid candidates with honesty language."""
     from knowledge.titles import generate_title_suggestions, parse_candidates
 
     fake_dna = "Cooking channel for beginners. Top hooks: 3-ingredient reveals."
-    raw, usage = generate_title_suggestions(
+    raw, usage = await generate_title_suggestions(
         channel_title="TestChannel",
         dna_brief=fake_dna,
         stated_identity=None,
@@ -76,12 +76,12 @@ def test_titles_live() -> None:
 
 @pytest.mark.llm_live
 @_skip_unless_live
-def test_hooks_live() -> None:
+async def test_hooks_live() -> None:
     """knowledge/hooks.py returns a HookReport with honesty disclaimer."""
     from knowledge.hooks import analyze_hook, parse_hook_report
 
     fake_dna = "Cooking channel for beginners."
-    raw, usage = analyze_hook(
+    raw, usage = await analyze_hook(
         channel_title="TestChannel",
         dna_brief=fake_dna,
         retention_drop_at_s=5.0,
@@ -98,19 +98,19 @@ def test_hooks_live() -> None:
 
 @pytest.mark.llm_live
 @_skip_unless_live
-def test_dna_brief_usage_nonempty_live() -> None:
+async def test_dna_brief_usage_nonempty_live() -> None:
     """dna/brief.py: response is non-empty and usage dict is populated."""
     from dna.brief import generate_brief
 
     patterns: dict = {"avg_views": 5000, "channel_title": "TestChannel"}
-    text, usage = generate_brief(patterns=patterns, channel_title="TestChannel", task_id=None)
+    text, usage = await generate_brief(patterns=patterns, channel_title="TestChannel", task_id=None)
     assert text and len(text) > 50, "dna_brief: response too short"
     assert usage.get("input_tokens", 0) > 0, f"dna_brief: usage empty: {usage}"
 
 
 @pytest.mark.llm_live
 @_skip_unless_live
-def test_titles_cache_hit_live() -> None:
+async def test_titles_cache_hit_live() -> None:
     """knowledge/titles.py: 2nd same-DNA call shows cache_read > 0 (1h TTL prefix)."""
     from knowledge.titles import generate_title_suggestions
 
@@ -123,8 +123,8 @@ def test_titles_cache_hit_live() -> None:
         transcript_summary="Salt, olive oil, pasta.",
         task_id="live-cache-test",
     )
-    _, usage1 = generate_title_suggestions(**kwargs)  # type: ignore[arg-type]
-    _, usage2 = generate_title_suggestions(**kwargs)  # type: ignore[arg-type]
+    _, usage1 = await generate_title_suggestions(**kwargs)  # type: ignore[arg-type]
+    _, usage2 = await generate_title_suggestions(**kwargs)  # type: ignore[arg-type]
     assert usage2.get("cache_read", 0) > 0, (
         f"titles: cache_read_input_tokens not > 0 on 2nd call. usage2={usage2}"
     )
