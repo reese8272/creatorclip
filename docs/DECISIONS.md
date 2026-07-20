@@ -10583,3 +10583,15 @@ scope check, fetched 2026-07-02). Live activation stays operator (`MAILING_ADDRE
 launches, fetched 2026-07-02): question+action rows, domain-grouped, automation-backed signals,
 two-stage (beta / public), reference-by-issue-id only. It must also reconcile the three gate lists that
 currently disagree (CLAUDE.md vs PROJECT_STATE vs stale COMPLIANCE). **Date:** 2026-07-02
+
+**361 (frontend batch) — query-error retry cards inlined per page, NOT the assessment's shared
+`<QueryErrorState>` extraction.** The 2026-07-20 frontend assessment suggested extracting the
+Recap.tsx retry card into a shared component reused by Dashboard/Review/VideoClipsMap/Editor. The
+Dashboard/Review fixes inline the same ~10-line pattern instead: the wave runs file-disjoint batches
+in parallel, and a new `components/` file used by pages owned by other agents invites duplicate
+creations and merge conflicts; VideoClipsMap/Editor were outside this batch's file list. Extraction
+remains the right refactor once all four pages carry the branch — do it in the Issue-361 sweep that
+touches VideoClipsMap/Editor. Also: the batch brief described Dashboard.tsx:154-160/Review.tsx:114-158
+as "raw fetch POSTs without try/catch" — verified false (no raw fetches remain there; VideoTable/
+ChannelBrowser were fixed in Issue 352); the real defect at those lines is the assessment's
+query-error-as-empty-state finding, which is what was fixed. **Date:** 2026-07-20

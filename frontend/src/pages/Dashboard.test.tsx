@@ -179,6 +179,30 @@ describe('Dashboard', () => {
     )
   })
 
+  it('shows a retry card — not the first-run empty hero — when the videos query fails', async () => {
+    // A transient 500/network failure must not tell a creator with videos that
+    // they have none (the `?? []` fallback used to render the EmptyHero).
+    const base = mockFetch([])
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/videos'))
+        return { status: 500, ok: false, json: async () => ({ detail: 'boom' }) }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderDashboard()
+    expect(await screen.findByText("Couldn't load your videos.")).toBeInTheDocument()
+    expect(screen.queryByText("Let's get your first clip.")).toBeNull()
+
+    // Retry refires the videos query.
+    const before = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/videos')).length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/videos')).length,
+      ).toBeGreaterThan(before),
+    )
+  })
+
   it('uses the batched /videos/clips/counts endpoint (not per-video /clips calls)', async () => {
     // Issue 213: Dashboard should make exactly one clip-count call regardless of video count.
     const fetchMock = mockFetch(

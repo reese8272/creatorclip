@@ -153,6 +153,22 @@ export function Dashboard() {
 
         {videosQuery.isPending ? (
           <p className="py-8 text-center text-sm text-subtle">Loading…</p>
+        ) : videosQuery.isError ? (
+          // A failed load must NOT fall through to the first-run empty hero —
+          // a creator with videos would be told they have none (Recap idiom).
+          <div className="rounded-md border border-default bg-surface px-6 py-10 text-center">
+            <p className="text-sm text-fg">Couldn&apos;t load your videos.</p>
+            <p className="mt-1 text-xs text-subtle">
+              This is usually temporary — try again in a moment.
+            </p>
+            <button
+              type="button"
+              onClick={() => void videosQuery.refetch()}
+              className="mt-4 rounded-md border border-default px-3 py-1.5 text-xs text-fg hover:bg-elevated"
+            >
+              Retry
+            </button>
+          </div>
         ) : isEmpty ? (
           <>
             <EmptyHero onUploadClick={() => setUploadOpen(true)} />
