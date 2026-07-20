@@ -218,7 +218,13 @@ async def get_clip_counts(
     return {"counts": counts}
 
 
-@router.post("/{video_id}/clips/generate", response_model=ClipListOut)
+@router.post(
+    "/{video_id}/clips/generate",
+    response_model=ClipListOut,
+    # Kill switch (Issue 284) + spend breaker (Issue 290): 503 when the
+    # llm_generation flag is off, 429 during a creator spend cool-down.
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
+)
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def generate_clips(
