@@ -44,12 +44,29 @@ jobs:
       - name: Authenticate with GHCR
         run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u reese8272 --password-stdin
 
-      - name: Bring up the staging stack on the current prod image
-        # :latest == what prod runs (deploys push it); drills verify behavior,
-        # not a release candidate, so the released image is the right target.
+      - name: Resolve the image prod actually runs
+        # Drills verify the behavior prod RUNS, so pin the running app container's
+        # RepoDigest (same inspect as deploy.yml's PREV_IMAGE capture) instead of
+        # trusting :latest — after an auto-rollback prod runs :rollback while
+        # :latest IS the bad image, and a concurrent main-push can swap :latest
+        # mid-workflow. Fall back to :latest only when prod isn't running.
         run: |
-          docker pull ghcr.io/reese8272/creatorclip:latest
-          STAGING_IMAGE=ghcr.io/reese8272/creatorclip:latest docker compose -p ccstage \
+          CID=$(docker compose -f docker-compose.prod.yml ps -q app 2>/dev/null || true)
+          PROD_IMAGE=""
+          if [ -n "$CID" ]; then
+            PROD_IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "$CID" 2>/dev/null || true)
+          fi
+          if [ -z "$PROD_IMAGE" ]; then
+            echo "::warning::Prod app container not running — drilling against :latest instead of the deployed digest."
+            PROD_IMAGE=ghcr.io/reese8272/creatorclip:latest
+          fi
+          echo "STAGING_IMAGE=${PROD_IMAGE}" >> "$GITHUB_ENV"
+          echo "Drilling against: ${PROD_IMAGE}"
+
+      - name: Bring up the staging stack on the deployed prod image
+        run: |
+          docker pull "$STAGING_IMAGE"
+          docker compose -p ccstage \
             -f docker-compose.staging.yml up -d --no-build --pull missing
 
       - name: Wait for staging /health

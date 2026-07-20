@@ -10,11 +10,11 @@
 #   VPS_SSH_KEY  — path to SSH private key (default: ~/.ssh/id_ed25519)
 #   VPS_PORT     — SSH port (default: 22)
 #
-# This script follows deploy.yml's core sequence (pull → doctor → safety dump →
-# migrate → verify head → roll out → smoke) but is NOT an exact mirror: it has
-# no staging-parity gate, no PREV_IMAGE capture, and no automatic rollback.
-# A failed manual deploy must be recovered by hand (docs/RUNBOOKS.md) — prefer
-# re-running the GH Actions deploy whenever Actions is available.
+# This script follows deploy.yml's core sequence (capture rollback image →
+# pull → doctor → safety dump → migrate → verify head → roll out → smoke →
+# auto-rollback on smoke failure → prune) but is NOT an exact mirror: it has
+# no staging-parity gate and no GitHub-secret sync. Prefer re-running the GH
+# Actions deploy whenever Actions is available.
 
 set -euo pipefail
 
@@ -59,6 +59,36 @@ echo "==> Deploying..."
 ssh $SSH_OPTS "${USER}@${HOST}" << 'REMOTE'
 set -euo pipefail
 cd /opt/autoclip
+
+# Capture the digest of the CURRENT running image before pulling the new one, so
+# there is an immutable rollback target if the smoke test fails (mirrors
+# deploy.yml's Issue 271 capture). Empty on a first-ever deploy.
+echo "  Capturing pre-pull image for rollback..."
+CID=$(docker compose -f docker-compose.prod.yml ps -q app 2>/dev/null || true)
+PREV_IMAGE=""
+if [ -n "$CID" ]; then
+  PREV_IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "$CID" 2>/dev/null || true)
+fi
+echo "  Previous image: ${PREV_IMAGE:-<none — first deploy>}"
+
+# Mirrors deploy.yml's _rollback_and_fail. PREV_IMAGE is a repo DIGEST ref
+# (ghcr.io/...@sha256:...) which can't sit in the compose tag slot, so re-tag it
+# locally as :rollback and select it via the ${IMAGE_TAG:-latest} interpolation
+# in docker-compose.prod.yml. Rollback is a safety net, not a success signal —
+# the deploy still exits 1.
+_rollback_and_fail() {
+  echo "  Auto-rolling back to previous image: ${PREV_IMAGE}"
+  if [ -n "${PREV_IMAGE}" ]; then
+    docker pull "${PREV_IMAGE}" || true
+    docker tag "${PREV_IMAGE}" ghcr.io/reese8272/creatorclip:rollback || true
+    docker compose -f docker-compose.prod.yml down --timeout 30 || true
+    IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d || true
+    echo "  Rollback complete. Verify with: curl http://localhost:8000/health"
+  else
+    echo "  No previous image captured (first deploy?) — manual recovery required (docs/RUNBOOKS.md)."
+  fi
+  exit 1
+}
 
 echo "  Pulling latest image..."
 docker compose -f docker-compose.prod.yml pull
@@ -117,14 +147,14 @@ for i in 1 2 3 4 5; do
   fi
   [ $i -lt 5 ] && sleep 10
 done
-[ "$STATUS" = "ok" ] || { echo "Smoke test /health FAILED after 5 attempts"; exit 1; }
+[ "$STATUS" = "ok" ] || { echo "Smoke test /health FAILED after 5 attempts"; _rollback_and_fail; }
 
 echo "  Smoke test — critical journey (llm_harness --flow core)..."
 # Requires CC_BASE_URL, CC_JWT_SECRET, CC_CREATOR_ID to be set in the deploy .env.
 # On a non-zero exit the harness prints which REQUIRED step failed; the caller exits 1.
 docker compose -f docker-compose.prod.yml exec -T app \
   python3 scripts/llm_harness.py --flow core \
-  || { echo "Critical journey smoke FAILED — see harness output above"; exit 1; }
+  || { echo "Critical journey smoke FAILED — see harness output above"; _rollback_and_fail; }
 
 # Prune only AFTER the smoke tests pass — deploy.yml deliberately moved prune
 # post-smoke so a failed deploy never deletes the image needed to roll back.
