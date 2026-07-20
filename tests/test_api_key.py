@@ -225,3 +225,66 @@ async def test_get_current_creator_via_api_key_orphaned_row_returns_401():
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Invalid or revoked API key"
+
+
+# ── Dependency: RLS GUC on the live transaction (Issue 358) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_current_creator_via_api_key_sets_guc_on_no_stamp_path():
+    """Regression for Issue 358: the key lookup auto-begins the request
+    transaction BEFORE ``session.info['creator_id']`` is set, so db.py's
+    after_begin listener emits no GUC. On the no-stamp path (fresh
+    last_used_at — the Issue 352 throttle) there is no mid-dependency commit
+    to start a fresh transaction either, so the dependency itself must emit
+    ``set_config('app.creator_id', ...)`` on the live transaction (mirroring
+    auth.py's Issue 344 fix). Without it, enforced RLS returns zero tenant
+    rows and check_positive_balance falsely 402s funded creators."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock
+
+    from api_key import get_current_creator_via_api_key
+    from models import Creator
+    from models import CreatorApiKey as CreatorApiKeyModel
+
+    raw_key = generate_api_key()
+
+    class _Req:
+        headers = {"authorization": f"Bearer {raw_key}"}
+        state = type("S", (), {})()
+
+    creator_id = uuid.uuid4()
+    mock_row = MagicMock(spec=CreatorApiKeyModel)
+    mock_row.creator_id = creator_id
+    mock_row.revoked_at = None
+    mock_row.last_used_at = datetime.now(UTC)  # fresh stamp → no-stamp path
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_row
+
+    mock_creator = MagicMock(spec=Creator)
+    mock_creator.id = creator_id
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.get = AsyncMock(return_value=mock_creator)
+    mock_session.info = {}
+
+    resolved = await get_current_creator_via_api_key(_Req(), mock_session)
+
+    assert resolved is mock_creator
+    # Confirms this exercised the no-stamp path — no commit, so no fresh
+    # transaction for the after_begin listener to inject the GUC into.
+    mock_session.commit.assert_not_awaited()
+    assert mock_session.info["creator_id"] == creator_id
+    set_config_calls = [
+        call
+        for call in mock_session.execute.await_args_list
+        if "set_config" in str(call.args[0]).lower()
+        and "app.creator_id" in str(call.args[0]).lower()
+    ]
+    assert set_config_calls, (
+        "dependency must emit set_config('app.creator_id', ...) on the live "
+        "transaction — without it enforced RLS denies every tenant read"
+    )
+    assert set_config_calls[0].args[1] == {"cid": str(creator_id)}
