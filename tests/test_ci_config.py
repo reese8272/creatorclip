@@ -222,6 +222,50 @@ def test_prod_compose_interpolates_image_tag_for_rollback() -> None:
     )
 
 
+def test_manual_deploy_script_mirrors_auto_rollback() -> None:
+    """scripts/deploy.sh must carry the same rollback safety net as deploy.yml
+    (Issue 271 port): capture the running app's RepoDigest BEFORE pulling, and
+    on smoke failure re-tag it as :rollback and relaunch via IMAGE_TAG=rollback.
+    Without this, a failed manual deploy has no recovery path."""
+    src = (_REPO_ROOT / "scripts" / "deploy.sh").read_text()
+    assert "{{index .RepoDigests 0}}" in src, (
+        "scripts/deploy.sh must capture PREV_IMAGE (docker inspect RepoDigests) "
+        "before `docker compose pull` — it is the immutable rollback target."
+    )
+    assert 'docker tag "${PREV_IMAGE}" ghcr.io/reese8272/creatorclip:rollback' in src, (
+        "scripts/deploy.sh rollback must re-tag the PREV_IMAGE digest as "
+        ":rollback — a digest ref cannot sit in the compose tag slot."
+    )
+    assert "IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d" in src, (
+        "scripts/deploy.sh rollback must launch with IMAGE_TAG=rollback so the "
+        "${IMAGE_TAG:-latest} interpolation selects the previous image."
+    )
+    assert src.index("RepoDigests") < src.index("docker-compose.prod.yml pull"), (
+        "PREV_IMAGE must be captured BEFORE the pull — pulling first can retag "
+        "and lose the running image's digest reference."
+    )
+    assert src.index("docker image prune -f") > src.index("_rollback_and_fail"), (
+        "Prune must stay AFTER the smoke/rollback block so a failed deploy never "
+        "deletes its own rollback image."
+    )
+
+
+def test_staging_drills_pin_deployed_prod_image() -> None:
+    """staging-drills.yml must drill the image prod actually RUNS (the app
+    container's RepoDigest), not :latest — after an auto-rollback prod runs
+    :rollback while :latest IS the bad image, so a :latest drill would
+    green-stamp behavior prod doesn't run."""
+    src = _load_workflow("staging-drills.yml")
+    assert "{{index .RepoDigests 0}}" in src, (
+        "staging-drills.yml must resolve the prod app container's RepoDigest "
+        "as the drill target (same inspect as deploy.yml's PREV_IMAGE capture)."
+    )
+    assert "STAGING_IMAGE=ghcr.io/reese8272/creatorclip:latest" not in src, (
+        "staging-drills.yml must not hardcode STAGING_IMAGE=:latest — :latest "
+        "diverges from prod after an auto-rollback and can race a main-push."
+    )
+
+
 def test_staging_prod_compose_parity() -> None:
     """Staging must exercise the same infra images as prod (Issue 298) — a
     version skew (e.g. postgres major) would make the gate's green meaningless.
