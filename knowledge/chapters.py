@@ -1,7 +1,10 @@
 """Auto chapter marker generation from silence gaps + transcript (Issue 131).
 
-Prompt structure (one cached system block):
-  Block 1 — static instructions (cache_control breakpoint): title rules, JSON schema.
+Prompt structure (one system block):
+  Block 1 — static instructions: untrusted-content policy, title rules, JSON schema.
+
+The transcript segment text is UNTRUSTED creator content — it travels in the USER
+turn, JSON-wrapped via wrap_untrusted, never as bare interpolated text (OWASP LLM01).
 
 No DNA required. Claude titles transcript segments delimited by silence boundaries.
 The first chapter is always 0:00. Minimum 4 chapters; maximum 1 per 3 minutes.
@@ -16,7 +19,7 @@ import httpx
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, RateLimitError
 
 from config import settings
-from knowledge.util import extract_json_block
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_json_block, wrap_untrusted
 from observability import record_llm_metric
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,8 @@ MAX_CHAPTER_PERIOD_S = 180.0  # 1 chapter per 3 minutes max density
 SILENCE_THRESHOLD_S = 2.0
 _SEGMENT_MAX_CHARS = 300  # text per chapter segment sent to Claude
 
-_SYSTEM_INSTRUCTIONS = """\
+_SYSTEM_INSTRUCTIONS = f"""\
+{UNTRUSTED_CONTENT_POLICY}
 You are a YouTube chapter generator. Given video transcript segments and their
 timestamps, generate concise chapter titles for each segment.
 
@@ -46,15 +50,15 @@ Rules:
   - All timestamps are provided to you; do not change them
 
 Return ONLY a valid JSON object with this exact schema:
-{
+{{
   "chapters": [
-    {
+    {{
       "timestamp_s": <float>,
       "timestamp_formatted": "<YouTube format, e.g. 0:00 or 4:23 or 1:02:45>",
       "title": "<string, max 40 chars>"
-    }
+    }}
   ]
-}
+}}
 
 Return valid JSON ONLY — no preamble, no markdown code fences, no extra text."""
 
@@ -192,12 +196,16 @@ async def generate_chapters(
             "text": _SYSTEM_INSTRUCTIONS,
         }
     ]
+    # Transcript segment text is untrusted creator content — JSON-wrap it in the
+    # user turn so it cannot escape its structural bounds (OWASP LLM01;
+    # Anthropic prompt-injection guide; Issue 352 posture, applied to chapters).
     messages = [
         {
             "role": "user",
             "content": (
-                f"Generate chapter titles for a {format_timestamp(video_duration_s)} video.\n\n"
-                "Segments:\n" + "\n".join(segment_lines)
+                wrap_untrusted("video_transcript_segments", "\n".join(segment_lines))
+                + f"Generate chapter titles for a {format_timestamp(video_duration_s)} video "
+                "using the timestamped segments above."
             ),
         }
     ]

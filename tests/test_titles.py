@@ -250,6 +250,93 @@ def test_parse_candidates_raises_on_missing_candidates_key() -> None:
 # ── Unit: transcript summary extraction ───────────────────────────────────────
 
 
+# ── Unit: pause_turn continuation loop ────────────────────────────────────────
+
+
+def _stream_msg(stop_reason: str, text: str):
+    """Build a fake stream_message Message with one text block."""
+    import types
+
+    block = types.SimpleNamespace(type="text", text=text)
+    return types.SimpleNamespace(stop_reason=stop_reason, content=[block])
+
+
+async def test_generate_title_suggestions_pause_turn_loop_continues_on_web_search() -> None:
+    """When stop_reason == 'pause_turn' the loop re-calls stream_message with
+    the assistant turn appended (same tools), uses the final synthesised
+    answer, and sums usage across rounds (mirrors
+    test_improvement_brief_pause_turn_loop_continues_on_web_search)."""
+    from knowledge.titles import generate_title_suggestions
+
+    responses = [
+        (
+            _stream_msg("pause_turn", "let me search…"),
+            {"input_tokens": 10, "output_tokens": 5, "cache_read": 1, "cache_creation": 2},
+        ),
+        (
+            _stream_msg("end_turn", '{"candidates":[]}'),
+            {"input_tokens": 20, "output_tokens": 30, "cache_read": 3, "cache_creation": 4},
+        ),
+    ]
+    call_kwargs: list[dict] = []
+
+    async def _fake_stream(client, task_id, **kwargs):
+        call_kwargs.append(kwargs)
+        return responses[len(call_kwargs) - 1]
+
+    with patch("worker.anthropic_stream.stream_message", AsyncMock(side_effect=_fake_stream)):
+        result, usage = await generate_title_suggestions(
+            channel_title="Test Channel",
+            dna_brief=None,
+            stated_identity=None,
+            video_title="A video",
+            transcript_summary="hello",
+            task_id="t-pause",
+        )
+
+    assert len(call_kwargs) == 2, "pause_turn must trigger exactly one continuation call"
+    # Resume round re-sends the assistant content with the SAME tools.
+    assert call_kwargs[0]["tools"] == call_kwargs[1]["tools"]
+    assert call_kwargs[1]["messages"][-1]["role"] == "assistant"
+    # Final answer is the second round's text, not the search preamble.
+    assert result == '{"candidates":[]}'
+    # Usage is summed across BOTH rounds (billing correctness).
+    assert usage == {
+        "input_tokens": 30,
+        "output_tokens": 35,
+        "cache_read": 4,
+        "cache_creation": 6,
+    }
+
+
+async def test_generate_title_suggestions_bounds_pause_turn_rounds() -> None:
+    """A model that never leaves pause_turn cannot loop forever."""
+    from knowledge.titles import generate_title_suggestions
+
+    calls = {"n": 0}
+
+    async def _always_pause(client, task_id, **kwargs):
+        calls["n"] += 1
+        return (
+            _stream_msg("pause_turn", "still going…"),
+            {"input_tokens": 1, "output_tokens": 1, "cache_read": 0, "cache_creation": 0},
+        )
+
+    with patch("worker.anthropic_stream.stream_message", AsyncMock(side_effect=_always_pause)):
+        result, usage = await generate_title_suggestions(
+            channel_title="Test Channel",
+            dna_brief=None,
+            stated_identity=None,
+            video_title=None,
+            transcript_summary="",
+            task_id="t-pause-cap",
+        )
+
+    assert calls["n"] == 6  # initial call + _MAX_SEARCH_ROUNDS resumes
+    assert result == "still going…"
+    assert usage["input_tokens"] == 6
+
+
 def test_extract_transcript_summary_none() -> None:
     assert _extract_transcript_summary(None) == ""
 

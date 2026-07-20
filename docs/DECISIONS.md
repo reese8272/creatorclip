@@ -10629,3 +10629,17 @@ auditable. The newest active row is kept — the same row `create_summary`'s ide
 probe (`ORDER BY created_at DESC LIMIT 1`) would return. Clips dedupe DOES delete (keep
 earliest-created per `(video_id, rank)`): duplicates there are whole re-inserted sets and
 any feedback/outcomes attach to the earlier canonical rows. **Date:** 2026-07-20
+=======
+**Issues 356-361 batch llm-sdk — inline pause_turn loops + chat rate fallback (2026-07-20).**
+(1) titles.py/hooks.py got the pause_turn continuation as INLINE 5-round loops mirroring
+thumbnails.py/improvement-brief verbatim, not the assessment-suggested shared
+`stream_until_final()` helper in worker/anthropic_stream.py — that file is outside this
+build batch's scope (owned by another lane); the DRY extraction of the now-four identical
+loops (titles, hooks, thumbnails, brief-streaming) is deferred to the supervisor as a
+follow-up cleanup. (2) chat/runner.py now derives billing rates + the `record_llm_cost`
+tier label from `ANTHROPIC_MODEL_CHAT` (haiku→haiku rates, sonnet→sonnet rates); an
+UNKNOWN model family (e.g. an Opus SKU, which has no price-book entry in config.py) falls
+back to the Sonnet rates — the highest configured — with label "other" and a WARNING log,
+so a misconfigured model can never under-bill the ledger/spend guard relative to the known
+price book. Adding real Opus rates requires a config.py price-book entry (out of batch
+scope). **Date:** 2026-07-20

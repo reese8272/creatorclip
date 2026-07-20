@@ -205,6 +205,15 @@ async def generate_improvement_brief(
     _client = _ANTHROPIC.with_options(timeout=120.0)
     loop_messages = messages
     response = None
+    # Accumulate usage across EVERY pause_turn round — mirrors the streaming
+    # path above. Billing from the final round only drops the earlier rounds'
+    # tokens (search preamble + tool_use) and under-bills multi-round searches.
+    _usage: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
     try:
         for _round in range(_MAX_SEARCH_ROUNDS + 1):
             response = await _client.messages.create(
@@ -213,6 +222,12 @@ async def generate_improvement_brief(
                 system=system,
                 tools=tools,
                 messages=loop_messages,
+            )
+            _usage["input_tokens"] += response.usage.input_tokens
+            _usage["output_tokens"] += response.usage.output_tokens
+            _usage["cache_read"] += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            _usage["cache_creation"] += (
+                getattr(response.usage, "cache_creation_input_tokens", 0) or 0
             )
             if getattr(response, "stop_reason", None) != "pause_turn":
                 break
@@ -226,26 +241,18 @@ async def generate_improvement_brief(
         raise RuntimeError("Claude returned no response in improvement brief generation")
     vlog_llm_response("improvement_brief", response=response)
 
-    _tokens_in = response.usage.input_tokens
-    _tokens_out = response.usage.output_tokens
     logger.info(
         "improvement_brief tokens: in=%d cached_read=%d cached_write=%d out=%d",
-        _tokens_in,
-        getattr(response.usage, "cache_read_input_tokens", 0),
-        getattr(response.usage, "cache_creation_input_tokens", 0),
-        _tokens_out,
+        _usage["input_tokens"],
+        _usage["cache_read"],
+        _usage["cache_creation"],
+        _usage["output_tokens"],
     )
 
     text_blocks = [b for b in response.content if b.type == "text"]
     if not text_blocks:
         raise RuntimeError("Claude returned no text in improvement brief generation")
 
-    _usage = {
-        "input_tokens": _tokens_in,
-        "output_tokens": _tokens_out,
-        "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-        "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
-    }
     record_llm_metric(settings.ANTHROPIC_MODEL_IMPROVEMENT, _usage)
     warn_if_truncated(settings.ANTHROPIC_MODEL_IMPROVEMENT, getattr(response, "stop_reason", None))
     # web_search interleaves blocks (preamble text → tool_use → final answer); the
