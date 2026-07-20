@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_key import get_current_creator_via_api_key
@@ -1483,6 +1484,28 @@ def _summary_response(summary: Summary) -> dict:
     }
 
 
+async def _active_summary(
+    session: AsyncSession, video_id: uuid.UUID, creator_id: uuid.UUID
+) -> Summary | None:
+    """The video's newest in-flight (pending/running, not failed) recap, if any.
+
+    Used twice by ``create_summary``: the idempotency probe before insert, and
+    the winner re-select when the ``uq_summaries_active`` partial unique index
+    (migration 0046) rejects the loser of a concurrent double-POST (Issue 361).
+    """
+    return await session.scalar(
+        select(Summary)
+        .where(
+            Summary.video_id == video_id,
+            Summary.creator_id == creator_id,
+            Summary.render_status.in_([RenderStatus.pending, RenderStatus.running]),
+            Summary.status != SummaryStatus.failed,
+        )
+        .order_by(Summary.created_at.desc())
+        .limit(1)
+    )
+
+
 @router.post(
     "/{video_id}/summaries",
     status_code=202,
@@ -1533,17 +1556,7 @@ async def create_summary(
 
     # Idempotency: a summary whose render is still in flight is THE recap for
     # this video — return it rather than enqueue a duplicate render.
-    existing = await session.scalar(
-        select(Summary)
-        .where(
-            Summary.video_id == video_id,
-            Summary.creator_id == creator.id,
-            Summary.render_status.in_([RenderStatus.pending, RenderStatus.running]),
-            Summary.status != SummaryStatus.failed,
-        )
-        .order_by(Summary.created_at.desc())
-        .limit(1)
-    )
+    existing = await _active_summary(session, video_id, creator.id)
     if existing:
         return {
             "summary_id": str(existing.id),
@@ -1612,7 +1625,27 @@ async def create_summary(
         status=SummaryStatus.ready,
     )
     session.add(summary)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Double-click race (Issue 361): both requests passed the in-flight probe;
+        # the loser violates the uq_summaries_active partial unique index at
+        # commit. Same pattern as videos.py link/upload — rollback, then return
+        # the winner so exactly ONE render_summary job is ever enqueued.
+        await session.rollback()
+        winner = await _active_summary(session, video_id, creator.id)
+        if winner is None:
+            # The winner left the pending/running window inside the race — a
+            # clean conflict beats a duplicate render; the client re-fetches.
+            raise HTTPException(
+                status_code=409,
+                detail="A recap for this video was just created — refresh to see it.",
+            ) from None
+        return {
+            "summary_id": str(winner.id),
+            "status": "queued",
+            "stream_url": f"/tasks/{winner.id}/events",
+        }
     await session.refresh(summary)
 
     import redis as _redis_pkg

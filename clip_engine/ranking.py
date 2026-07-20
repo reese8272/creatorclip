@@ -10,6 +10,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clip_engine.candidates import extract_candidates
@@ -183,6 +184,13 @@ async def persist_ranked_clips(
     delete+reinsert, because Clip.feedback / Clip.outcome cascade-delete and that
     would destroy the creator's feedback labels and published-clip outcomes.
     Returns persisted Clip ORM objects in rank order.
+
+    Concurrent-safe (Issue 361): the check above is check-then-insert, so two
+    concurrent executions (router racing the worker pipeline, or two at-least-once
+    Celery deliveries) can BOTH pass the guard. The ``uq_clips_video_rank``
+    constraint (migration 0046, DEFERRABLE so its check runs at COMMIT) makes the
+    loser's commit raise ``IntegrityError`` — it rolls back and returns the
+    winner's set instead of double-inserting.
     """
     existing = await load_existing_clips(session, video_id, creator_id)
     if existing:
@@ -226,7 +234,18 @@ async def persist_ranked_clips(
         session.add(clip)
         clips.append(clip)
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Lost the concurrent-generation race: another execution committed the
+        # clip set between the guard and this commit (uq_clips_video_rank is
+        # deferred, so the violation surfaces here). The winner's set IS the
+        # ranking — return it; never double-insert.
+        await session.rollback()
+        logger.info(
+            "Concurrent clip persist detected for video %s — returning existing set", video_id
+        )
+        return await load_existing_clips(session, video_id, creator_id)
     for clip in clips:
         await session.refresh(clip)
 
