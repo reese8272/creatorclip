@@ -454,6 +454,22 @@ async def render_clip(
     await check_positive_balance(creator.id, session)
 
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    # Pre-check the source BEFORE enqueuing (OFF_COURSE 2026-07-20 / Issue 362):
+    # past the retention purge the worker can only fail permanently, so the user
+    # got a generic "Render failed" with no explanation. Mirrors the recap
+    # endpoint's expired-source 409. The worker keeps its own guard for the
+    # enqueue-to-run race.
+    video = await session.get(Video, clip.video_id)
+    if not video or not video.source_uri:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                "retention) — re-upload the video to render this clip."
+            ),
+        )
+
     if clip.render_status == RenderStatus.running:
         from worker.tasks import ais_render_stale
 
