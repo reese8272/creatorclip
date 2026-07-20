@@ -185,6 +185,135 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
 
 ---
 
+## 🔴 2026-07-20 Production-Assessment findings — TRIAGE FIRST (Issues 356–361)
+
+Filed from the full `/assess` run at commit `ca3305c` (report: `docs/assessment/REPORT.md`, snapshot
+`docs/assessment/history/2026-07-20-REPORT.md`). **VERDICT: CONDITIONAL** — 1 BLOCKER-class live
+symptom · 4 SEV1 · ~37 SEV2. **All six 2026-07-01 SEV1s verified FIXED**; ruff/mypy back to 0;
+coverage 81.02%. This run also triaged the user's four live-prod artifacts (`error.png`,
+`render loop.png`, `rendered-clip.png`, `autoclip.studio.har`) → `docs/assessment/modules/_live_smoke_triage.md`.
+**Issue 356 (one SSH session) is the single highest-leverage action** — it confirms or clears the
+only BLOCKER and the SEV1-#4 trigger in minutes.
+
+### Issue 356: live — prod sign-in failure + stuck-render triage: run the four decisive VM checks
+- **Status:** OPEN · **Wave:** W0 · **Lane:** L22 Live Smoke · **Size:** S · **Verify:** external (prod VM) · **Sev:** BLOCKER-class (needs-runtime-confirmation)
+- The user's live test hit "We couldn't complete sign-in with Google" (`error.png`). Only two backend
+  sites emit that banner (`routers/auth.py:277-284` HTTP-error path, `:285-292` catch-all). Ranked
+  candidates (full analysis in `modules/_live_smoke_triage.md`): (1) double-consumed OAuth code
+  (`invalid_grant` — the callback does exchange+userinfo+channels+multi-write DB before redirecting,
+  a wide double-request window); (2) YouTube Data API 403 at the login-time `channels` fetch (shares
+  the 10k-unit read quota); (3) DB/migration/RLS failure in `_persist_oauth_grant`. State-cookie and
+  redirect-uri causes are ruled out (they produce raw JSON 400s, not the banner).
+- **The four checks (one SSH session):**
+  1. `docker compose logs --tail 2000 app | grep -Ei "oauth callback (exchange )?failed"` — HTTP status ⇒ path A cause; exception type ⇒ path B.
+  2. `psql: SELECT id, render_status, updated_at FROM clips WHERE render_status='running' ORDER BY updated_at;` — hours-old row confirms Issue 359's trigger.
+  3. `docker compose ps` + `dmesg | grep -i oom` — worker liveness/OOM.
+  4. `curl -sI https://autoclip.studio/app/ | grep -i content-security-policy` + `grep CSP_EXTRA_SOURCES /opt/autoclip/.env` — confirms the fonts-CSP SEV2.
+- **Fix directions per outcome** are pre-written in `_live_smoke_triage.md` (idempotent-ish callback /
+  quota / migrations / env).
+
+### Issue 357: routers — `/clips/generate` bypasses the `llm_generation` kill switch AND `require_budget`
+- **Status:** OPEN · **Wave:** W0 · **Lane:** L05 Cost/Agentic · **Size:** S · **Verify:** local · **Sev:** SEV1
+- `routers/clips.py:221-227` — the most expensive LLM route (in-request per-candidate scoring) has
+  neither `require_flag("llm_generation")` nor `require_budget`, while every sibling LLM surface got
+  both this cycle (analysis router-level; chat/improvement/titles/thumbnails/insights + the three clip
+  LLM sub-routes per-route). `score_and_rank` runs in-request, so the worker-side
+  `ensure_within_budget` never fires either. Net: the Issue-290 global spend breaker (which trips by
+  flipping `llm_generation` off) and the per-creator cool-down **cannot stop the main burn path** —
+  only the balance check + 10/h rate limit bound it.
+- **Fix:** add `dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)]` to the
+  route decorator, exactly like the sibling clip LLM routes; test asserting 503 with the flag off.
+
+### Issue 358: _root_infra — API-key auth path missing the Issue-344 GUC → prod-RLS false 402s
+- **Status:** OPEN · **Wave:** W0 · **Lane:** Security — Platform · **Size:** S · **Verify:** staging (real RLS) · **Sev:** SEV1
+- `api_key.py:105-136` — `get_current_creator_via_api_key` never received the Issue-344
+  `set_config('app.creator_id', …)` fix that `auth.py:157` has, and the Issue-352 5-min
+  `last_used_at` stamp throttle removed the per-request commit that masked it. On every no-stamp
+  request the transaction begins before `session.info["creator_id"]` is set → no GUC → under enforced
+  prod RLS every tenant read denies → `check_positive_balance` sees zero minute-packs and **falsely
+  402s funded creators** on `/clips/ingest` (works once per 5-min window, then 402s). Fails closed
+  (no leak). Dev/unit lanes can't catch it (single-role owner bypass) — prod-only intermittent.
+- **Fix:** mirror auth.py — immediately after `session.info["creator_id"] = creator.id`, execute
+  `SELECT set_config('app.creator_id', :cid, true)`; add an `-m integration` test calling the
+  dependency twice inside the stamp window and asserting the second request still sees minute packs.
+
+### Issue 359: render — no stale-`running` recovery: a dead worker leaves the clip spinning forever (the `render loop.png` bug)
+- **Status:** OPEN · **Wave:** W0 · **Lane:** L16 UI Core / Review surface · **Size:** M · **Verify:** local (+ staging for the sweep) · **Sev:** SEV1
+- Worker sets `running` at `worker/tasks.py:1580` (commit :1595); `done` only at :1656-1661; `failed`
+  only via except-paths. A SIGKILL (OOM during ffmpeg, deploy exceeding stop-grace, VM reboot) skips
+  every `failed` write; redelivery waits ≥3600s `visibility_timeout` or never comes (Redis restart).
+  Then `POST /clips/{id}/render` 409s on `running` (`routers/clips.py:450`) and the frontend treats
+  409 as in-progress (`ClipPlayer.tsx:49`) → **permanently unrecoverable without manual SQL**. No
+  TTL/heartbeat on `running` exists anywhere. Secondary (Issue 353 interaction): the endpoint nulls
+  `render_uri` and commits (`clips.py:484-487`) BEFORE `.delay()` (:496) — a broker failure destroys
+  a previously-watchable clip.
+- **Fix:** (a) Beat sweep flipping `running` rows with `updated_at` older than
+  `CELERY_TIME_LIMIT + margin` to `failed` (admin session, idempotent), OR allow re-render at
+  `clips.py:450` when `updated_at` exceeds the hard limit; (b) reorder Issue 353's reset: enqueue
+  before nulling `render_uri` (or null on task start). Tests: stale-running row recovers; fresh
+  running still 409s; broker-throw leaves the old render watchable.
+
+### Issue 360: deploy_ci — prod-VM self-hosted runner executes `pull_request` code with docker-group + prod `.env` access
+- **Status:** OPEN · **Wave:** W0 · **Lane:** L14 CI/CD · **Size:** M · **Verify:** external (runner infra) · **Sev:** SEV1 · **[DEC]**
+- `scripts/setup-runner.sh:58,96` + `.github/workflows/ci.yml:33` — the runner lives on the prod VM,
+  is in the `docker` group (root-equivalent host control), owns `/opt/autoclip` incl. the prod `.env`
+  (all secrets), and `ci.yml` triggers on `pull_request`. Any code executing during a PR job —
+  including a malicious transitive dep pulled by `npm ci`/`pip install` — can read every prod secret
+  and control prod containers. Bounded today (private solo repo, self-authored PRs) but a
+  full-prod-compromise supply-chain path. The 2026-06-23 hybrid-CI DECISIONS entry weighs billing,
+  not this blast radius — record the residual either way.
+- **Fix:** restrict the prod-VM runner to deploy-track workflows (deploy.yml, docker-publish.yml,
+  staging-drills.yml); move PR CI to GitHub-hosted (or a second runner off the VM — already the
+  documented second-runner TODO); at minimum a distinct runner user with no docker-group membership
+  and no `.env` read.
+
+### Issue 361: 2026-07-20 assessment SEV2 backlog (grouped) — ~37 SEV2s
+- **Status:** OPEN · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** mixed · **Sev:** SEV2
+- Full lists per module in `docs/assessment/modules/<module>.md` (all re-verified 2026-07-20).
+  Load-bearing leads:
+  - **deploy_ci ×7** — `docker-compose.staging.yml:74,103` staging loads the PROD `.env` (prod R2
+    creds → staging renders write into the prod media bucket; live Stripe key; prod Sentry/OTel;
+    prod `TOKEN_ENCRYPTION_KEY`) → explicit `environment:` overrides or `.env.staging`; `deploy.sh`
+    `SendEnv=GHCR_TOKEN` won't transmit under default sshd (manual fallback broken) → pipe via stdin;
+    `rotate_token_key.py` keys on argv; `backup_redis.sh` `source`s prod `.env`; `activate-rls.yml`
+    sanity gaps.
+  - **live-smoke** — CSP blocks Google Fonts in prod (`main.py:285-292` no style-src/font-src;
+    `CSP_EXTRA_SOURCES` empty by default — SPA on system-font fallback since Issue 229) → set the env
+    or self-host woff2; `ClipPlayer.tsx:68-76` `autoPlay` without `muted` (Chrome blocks) + no
+    poster/preload → black frame at 0:00.
+  - **worker** — `tasks.py:5106-5118` `send_notification` commits the dedupe row as `sent` BEFORE the
+    send and swallows failures → a Resend blip permanently loses the email → status-aware dedupe +
+    re-raise after marking failed.
+  - **races (unique-index fixes specified in module files)** — `clip_engine/ranking.py:187-229`
+    `persist_ranked_clips` check-then-insert, no unique on `clips(video_id, rank)`;
+    `routers/clips.py:1534-1615` `create_summary` double-enqueue, no unique backstop.
+  - **routers** — `/clips/generate` still runs the 30–120s LLM pass in-request (carry-forward; convert
+    to 202+Celery+SSE); retrain enqueue after commit.
+  - **knowledge** — `titles.py:239` + `hooks.py:243` web-search STREAMING builders have no
+    `pause_turn` continuation (thumbnails/improvement/chat all handle it) → partial/empty JSON;
+    `chapters.py:195-203` raw transcript text un-wrapped in the user turn.
+  - **improvement** — `brief.py:209-248` `.create()` pause_turn loop bills only the final round's
+    usage (streaming path accumulates) → under-billing on multi-round searches.
+  - **youtube** — `publish.py:126-162` residual duplicate-upload window (raw httpx error escaping
+    `_query_offset` → full retry opens a NEW upload session).
+  - **preference ×5** — `model.py:46-65` LightGBM allowlist still has no serialization round-trip
+    test (drift silently disables personalization for all mature creators); `efficacy.py` unbounded
+    `load_labeled_clips`, CPU-bound `fit` on the loop; per-retrain row growth.
+  - **frontend** — `Recap.tsx:51-55,92-96` phantom poll (comment claims a poll that doesn't exist)
+    latches "Recap rendering…" until reload; remaining raw-fetch mutations (Dashboard/Review).
+  - **billing** — `spend_guard.py:328-337` trip-latch SETNX before `_flip_llm_flag` → failed flip
+    blocks retries ~1h while the breach goes unenforced.
+  - **chat** — `runner.py:180-186` cost hardcoded to Sonnet rates while `ANTHROPIC_MODEL_CHAT` is
+    configurable (carry-forward).
+  - **dna** — `builder.py:87-96` `_optimal_upload_gap_h` near-duplicates
+    `upload_intel.optimal_gap_hours` without its wraparound/malformed-row fixes → delegate.
+  - **_root_infra** — `TOKEN_ENCRYPTION_KEY`/`_PREVIOUS` format not validated at boot
+    (first-decrypt 500 instead of fail-fast) → `field_validator` attempting `Fernet(v)`.
+  - **harness** — `run_layer0.py` deletes `_coverage.xml` before `gate_module_coverage` runs, so the
+    Issue-269 per-module floors gate has NEVER executed → reorder.
+
+---
+
 ## How to use this file (deploy agents in batches)
 
 The plan gives every open issue three coordinates so independent agents run in safe parallel:

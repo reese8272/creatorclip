@@ -1,49 +1,113 @@
-# knowledge — assessed 2026-07-01
+# knowledge — assessed 2026-07-20
 
-Slice: `knowledge/{chapters,clip_captions,clip_explain,clip_titles,hooks,thumbnails,titles,util}.py`, `knowledge/__init__.py`.
+Slice: `knowledge/{chapters,clip_captions,clip_explain,clip_titles,hooks,thumbnails,titles,util}.py`, `knowledge/__init__.py` (empty).
+Prior run: 2026-07-01. Diff scrutinized: `git diff f70a857..HEAD -- knowledge/` (all 8 source files
+changed — Issue 82a sync→async migration, Issue 352 untrusted-content relocation, Issues 315/352
+measured-floor cache gating via new `knowledge/util.py:dna_system_block`, Issue 350-adjacent
+pause_turn loop in thumbnails).
 
-All Anthropic-SDK claims below are verified against **live** Anthropic docs (fetched 2026-07-01),
-not memory or DECISIONS.md (which the user flagged as having flip-flopped). Sources:
-- Prompt caching floors & pricing multipliers: https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching (fetched 2026-07-01)
-- Structured outputs shape + citation incompatibility: https://platform.claude.com/docs/en/docs/build-with-claude/structured-outputs (fetched 2026-07-01)
-- Web search tool version / dynamic filtering / model support: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool (fetched 2026-07-01)
+Load-bearing claims verified by reading, not assuming:
+- `worker/celery_app.py:112-133` — `run_async` executes on a per-worker-process singleton loop
+  installed at `worker_process_init`; the module-level `AsyncAnthropic` clients therefore bind their
+  httpx pool to one persistent loop per process (no dead-loop rebind under prefork). The "prefork-safe
+  lazy pool bind" comments hold.
+- All call sites now `await` the async builders (`routers/clips.py:1169/1267/1373`, `chat/tools.py:500`,
+  `worker/tasks.py` via `run_async`, `routers/thumbnails.py:233` passes the coroutine into the
+  single-flight cache) — no stale `asyncio.to_thread(builder, …)` wrapper remains.
+- `verbose.vlog_llm_request` (full-prompt logging incl. DNA/transcripts) is double-gated
+  (`VERBOSE_LOGGING` + `VERBOSE_LOGGING_ALLOW_PROD` in production, config.py:525-532).
+- Floor-gated cache marker is unit-tested (`tests/test_knowledge_util.py:152-164`,
+  `tests/test_llm_conformance.py`).
 
-Verified facts used below (verbatim from the live docs):
-- **Claude Sonnet 4.6 minimum cacheable prefix = 1,024 tokens; Claude Haiku 4.5 = 4,096 tokens.**
-  (So DECISIONS.md's 1024/4096 values are CORRECT; a synthesized web-search summary claiming
-  Sonnet 4.6 = 2048 was wrong — the authoritative doc table says 1,024.)
-- Cache-write multiplier: 5-min = **1.25×** base input; **1-hour = 2×** base input; cache read = **0.1×**. `ttl: "1h"` on `cache_control: {type: ephemeral}` is valid.
-- Structured outputs: `output_config.format = {type:"json_schema", schema:{…}}`; objects **must** set `additionalProperties: false`; **returns 400 if citations are enabled** (i.e. cannot be combined with the web_search tool). Sonnet 4.6 + Haiku 4.5 both support structured outputs.
-- Web search: latest version is `web_search_20260318`; `web_search_20260209` (used here) remains available; dynamic filtering requires the code-execution tool and is limited to Opus 4.7/4.6, Sonnet 4.6 etc. — **Haiku 4.5 is not in the dynamic-filtering list**, corroborating hooks.py's rationale for `allowed_callers=["direct"]`.
-- Vision: image inputs are billed as input tokens and surface in `usage.input_tokens`.
+## Resolved since 2026-07-01
+- **[SEV2 → FIXED] Inert 1h cache marker below the 1,024-token floor for empty DNA briefs.**
+  `knowledge/util.py:39-61` adds `dna_system_block(static_text, dna_text)` which attaches
+  `cache_control {ttl:"1h"}` only when `(chars // 4) >= 1024` — the Issue-315 pattern from
+  clip_engine/scoring.py, now adopted in titles.py:134, thumbnails.py:225, clip_titles.py:157,
+  clip_captions.py:129, clip_explain.py:158. hooks.py:190-201 and chapters.py:186-194 correctly
+  carry NO marker (Haiku 4.5's 4,096-token floor, per the Issue-135 audit comments). The misleading
+  "~1,550 tokens clears the floor" comments were corrected everywhere.
+- **[SEV2 → FIXED] Untrusted transcript/title text in the SYSTEM role in the older builders.**
+  Issue 352: titles.py:155-161 now moves `video_title` + `transcript_summary` to the user turn via
+  `wrap_untrusted`; thumbnails.py:248-252 moves `transcript_hook`; hooks.py:224-228 moves
+  `transcript_excerpt`. System Block 3 in each now carries only trusted computed/factual context
+  (channel name, retention stats, pattern lines). Posture now matches the clip builders.
 
 ## Findings
 
-- [SEV2] titles.py:136-140, thumbnails.py:231-235, clip_titles.py:150-154, clip_captions.py:120-124, clip_explain.py:149-153 — the `cache_control {ttl:"1h"}` marker on Block 2 (DNA brief) is emitted **unconditionally**, but the cacheable prefix = Block1(static) + Block2(DNA). Measured static blocks incl. UNTRUSTED_CONTENT_POLICY are only ~471–709 tokens (chars/4: titles 709, thumbnails 621, clip_titles 596, clip_explain 544, clip_captions 471). When `dna_brief is None` the DNA text is "No DNA profile available yet." (~10 tok), so the prefix is **~480–720 tokens — well below Sonnet 4.6's 1,024-token floor** and the marker is INERT (Anthropic silently declines to cache). The inline comments assert "~1,550 tokens … clears the 1024 floor," which only holds when the DNA brief is near its full 3,000-char cap; for every new creator (no DNA yet) caching does nothing. This is the exact defect DECISIONS #315 fixed in `clip_engine/scoring.py` by gating the marker on measured prefix size; the knowledge builders never adopted the guard. No over-bill (usage is read post-hoc from the response, so `cache_creation=0` is recorded honestly), but zero cache benefit + misleading comment. Secondary cost note: the 1h TTL write is **2× base**; for the effectively one-shot-per-video Sonnet calls, if a same-creator read does not follow within 1h you pay 2× on the write with no 0.1× read to amortize — net costlier than not caching. | fix: gate the marker exactly like scoring.py — only attach `cache_control` when `(len(block1_text)+len(block2_text))//4 >= 1024` (Sonnet) and drop it when `dna_brief` is falsy; correct the comments to say the floor is cleared only with a populated DNA brief.
+- [SEV2] titles.py:239 + hooks.py:243 — the two web-search streaming builders call
+  `stream_and_emit`, which has **no `pause_turn` continuation**: it returns
+  `text_blocks[-1].text` of whatever turn the server paused (or raises "Claude returned no
+  text block"), so a long web-search turn that pauses yields partial/empty JSON →
+  `parse_candidates` / `parse_hook_report` raise ValueError and the task fails. The codebase
+  treats pause_turn as a real live behavior everywhere else: thumbnails.py:336-356 got an
+  inline 5-round loop this cycle, improvement/brief.py handles it (Issue 350,
+  tests/test_brief_caching.py:268), and the chat runner resumes it (tests/test_chat.py:156).
+  titles/hooks are the only remaining web-search callers without the loop. | fix: extract the
+  thumbnails loop into `worker/anthropic_stream.py` as e.g.
+  `stream_until_final(client, task_id, *, max_rounds=5, **kwargs)` (append
+  `{"role":"assistant","content":msg.content}` and re-call while `stop_reason == "pause_turn"`,
+  summing usage) and use it from titles, hooks, AND thumbnails — which also removes the
+  function-local `_MAX_SEARCH_ROUNDS`/agentic loop from thumbnails.py:323-356 (DRY).
+- [SEV2] chapters.py:195-203 — raw transcript segment text is interpolated into the user
+  message with no `wrap_untrusted`, and chapters' `_SYSTEM_INSTRUCTIONS` (lines 36-59) is the
+  only builder prompt that does NOT include `UNTRUSTED_CONTENT_POLICY` — making the
+  util.py:15 comment ("All nine builders import and prepend this string") inaccurate. Bounded
+  blast radius (output is validated, titles truncated to 40 chars, content sits in the correct
+  user role), but the module's own injection posture is violated by its one unwrapped
+  transcript surface. | fix: prepend `UNTRUSTED_CONTENT_POLICY` to chapters'
+  `_SYSTEM_INSTRUCTIONS` (~230 tokens, still far below Haiku's 4,096 floor so no caching
+  implication) and wrap the joined segment block as
+  `wrap_untrusted("video_transcript_segments", "\n".join(segment_lines))`; update the util.py
+  comment.
+- [cleanup] (carry-forward) 7 separate module-level `AsyncAnthropic` clients —
+  chapters.py:25, clip_captions.py:39, clip_explain.py:42, clip_titles.py:37, hooks.py:32,
+  thumbnails.py:38, titles.py:42 — the sync→async migration preserved the 7-pools-for-one-provider
+  duplication. | fix: one shared `AsyncAnthropic` in `knowledge/_client.py`; keep per-call
+  `.with_options(timeout=…)` (shares the underlying pool).
+- [cleanup] (carry-forward) Identical `usage_dict` construction duplicated at
+  clip_titles.py:276-281, clip_captions.py:224-229, clip_explain.py:278-283 (same 4-key
+  `getattr(response.usage, …) or 0` block; `worker/anthropic_stream.py:113/186` builds the same
+  shape a 4th/5th time). | fix: `usage_from_response(usage) -> dict[str, int]` in knowledge/util.py
+  (or observability) used by all.
+- [cleanup] (carry-forward) The per-call `logger.info("… tokens: in=%d cached_read=%d
+  cached_write=%d out=%d", …)` block is still duplicated in all 7 builders (chapters.py:225,
+  clip_captions.py:230, clip_explain.py:284, clip_titles.py:282, hooks.py:255, thumbnails.py:366,
+  titles.py:251). | fix: fold into `record_llm_metric` / `record_llm_tokens`.
+- [cleanup] (carry-forward) Bare unparameterized `-> tuple:` on titles.py:117 `_build_request`
+  and thumbnails.py:199 `_build_concepts_request` (clip builders use
+  `-> tuple[list[dict], list[dict]]`). | fix: `-> tuple[list[dict], list[dict], list[dict]]`.
+- [cleanup / needs-runtime-confirmation] (carry-forward) `ANTHROPIC_WEB_SEARCH_TOOL` still pins
+  `web_search_20260209` (config.py:131) with `allowed_callers=["direct"]` forced at titles.py:143,
+  thumbnails.py:236, hooks.py:214 to suppress dynamic filtering. Works per the 2026-07-01 live-doc
+  check; a live smoke asserting a non-empty final text block remains the guard against a routing
+  regression on this version.
+- [cleanup] hooks.py:181-186 — inside the `retention_drop_at_s is not None` branch,
+  `f"video at {retention_at_drop:.1%}"` raises TypeError if `retention_at_drop` is None while the
+  sibling values are `or 0`-guarded on the same lines. The pair always co-varies when it comes from
+  `compute_retention_drop` (returns both-None or both-set), so latent only — but the signature
+  permits the mismatch. | fix: `{(retention_at_drop or 0):.1%}` to match the neighbors.
 
-- [SEV2] titles.py:141-143, thumbnails.py:236-240, hooks.py:197-204 — untrusted content is placed in the **system role**. titles Block 3 interpolates `transcript_summary` and `video_title` directly into a system `text` block (`f"VIDEO TO TITLE:\n{video_context}"`); thumbnails Block 3 interpolates `transcript_hook`; hooks Block 3 interpolates `transcript_excerpt`. The module's own `UNTRUSTED_CONTENT_POLICY` explicitly names "Video transcripts" and "YouTube video titles" as untrusted, and the Anthropic prompt-injection guidance cited in util.py states untrusted content **must never go in the system role**. The newer clip builders (clip_titles/clip_captions/clip_explain) do this correctly — they `wrap_untrusted(...)` the transcript in the **user** turn — so the posture is internally inconsistent; only the older Issue-128/129/130 builders leak untrusted text into system. Mitigant: the in-context UNTRUSTED_CONTENT_POLICY reduces (does not remove) the risk, and the attacker is largely the creator's own uploaded video. | fix: move `transcript_summary`/`video_title` (titles), `transcript_hook` (thumbnails), and `transcript_excerpt` (hooks) out of the system blocks and into the user-turn message via `wrap_untrusted("video_transcript", …)` / `wrap_untrusted("video_title", …)`, matching clip_titles.py's pattern.
-
-- [cleanup] 7 separate module-level `Anthropic()` clients — clip_titles.py:31, titles.py:32, clip_explain.py:34, chapters.py:24, hooks.py:27, clip_captions.py:31, thumbnails.py:32 — each builds its own httpx connection pool (DRY / resource duplication). They are module-level (not per-call) so the rubric's singleton rule is technically met, but 7 pools for one provider is wasteful. | fix: one shared client in `knowledge/_client.py` (or a common `llm/client.py`) imported by all builders; keep the `.with_options(timeout=…)` per-call override where needed (it shares the underlying pool).
-
-- [cleanup] Identical `usage_dict` construction duplicated at clip_titles.py:273-278, clip_captions.py:219-224, clip_explain.py:273-278 (same 4-key `getattr(response.usage, …)` block). | fix: extract `usage_from_response(usage) -> dict` into knowledge/util.py and call it in all three.
-
-- [cleanup] The per-call `logger.info("… tokens: in=%d cached_read=%d cached_write=%d out=%d", …)` block is duplicated in all 7 builders (titles.py:252, thumbnails.py:344, hooks.py:244, chapters.py:226, clip_titles.py:279, clip_captions.py:225, clip_explain.py:279). | fix: fold the log line into `record_llm_metric` / `record_llm_tokens` (both already receive the same four numbers) so each call site is one line.
-
-- [cleanup] Bare unparameterized `-> tuple:` return annotation on titles.py:107 `_build_request` and thumbnails.py:193 `_build_concepts_request` (the clip builders correctly use `-> tuple[list[dict], list[dict]]`). | fix: parameterize to `-> tuple[list[dict], list[dict], list[dict]]` (system, tools, messages).
-
-- [cleanup / needs-runtime-confirmation] Web-search builders pin `settings.ANTHROPIC_WEB_SEARCH_TOOL = "web_search_20260209"` and force `allowed_callers=["direct"]` because they do NOT want dynamic filtering (which, per the live doc, additionally requires the code-execution tool). The current basic-search version is `web_search_20250305`; the natural "direct, no dynamic filtering" choice. 20260209 remains available so this is not a defect, but the direct-call workaround on a dynamic-filtering-oriented version is worth confirming on a live call (mocked tests won't catch a routing regression). | fix (optional): consider `web_search_20250305` for the direct-only paths, or add a live smoke assertion that the streamed text block is non-empty.
+Note (not a finding): `dna_system_block` measures only Block 1 + Block 2 chars, but for the
+web-search builders the tool definition also precedes the breakpoint in the cacheable prefix
+(tools → system ordering). The error is in the conservative direction (marker occasionally
+omitted just above the true floor), never an inert marker — acceptable per the Issue-315 pattern.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 1 cleanup (7 duplicate clients); no DB/temp-media in this module |
-| 2 Concurrency & scale | ok — sync `messages.create` builders are documented "call via asyncio.to_thread"; caller-side (out of slice). Bounded inputs (images `[:10]`, transcript char-capped) |
-| 3 Security & compliance | 1 SEV2 (untrusted transcript/title in system role, older builders); virality/honesty guards + injection hardening otherwise strong; no tokens/PII/SQL here |
-| 4 Clip-quality | n/a (generation module, not clip selection) — clip_explain correctly constrains `cited_principle` to the canonical enum |
-| 5 Anthropic SDK | 1 SEV2 (inert cache marker below 1024 floor for empty DNA). Verified OK: token usage logged after EVERY call (record_llm_metric/record_llm_tokens + info log, all 7); thumbnail vision call IS metered+billed (image tokens in usage.input_tokens, logged); structured outputs correctly used on non-web-search paths with `additionalProperties:false` and correctly NOT used on web_search paths (would 400 with citations) |
-| 6 Cleanliness & typing | 4 cleanup (dup clients, dup usage_dict, dup token-log line, bare `tuple`); no TODO/print/pdb |
-| 7 Error handling / API | n/a (not a router; builders raise typed SDK errors to caller as documented) |
-| 8 Config & paths | ok — model IDs + web-search tool are config-driven; no filesystem paths; thumbnail URLs are absolute https |
+| 1 Resource lifecycle | 1 cleanup (7 duplicate AsyncAnthropic clients, carried); loop binding of the async clients verified against the worker's singleton loop; no DB/temp-media here |
+| 2 Concurrency & scale | 1 SEV2 (no pause_turn continuation in titles/hooks streaming paths); Issue 82a removed the to_thread hops — builders are truly async end-to-end; inputs bounded (images `[:10]`, transcript char caps, search rounds capped where the loop exists) |
+| 3 Security & compliance | 1 SEV2 (chapters: unwrapped transcript + missing UNTRUSTED_CONTENT_POLICY); both prior system-role SEV2s fixed (Issue 352); verbose full-prompt logging double-gated off in prod; no tokens/PII/SQL in this module; honesty disclaimers Python-appended in every builder |
+| 4 Clip-quality | n/a (generation module) — clip_explain still constrains `cited_principle` to the canonical enum at the API layer + parse-time |
+| 5 Anthropic SDK | ok — prior inert-marker SEV2 fixed via floor-gated `dna_system_block` (tested); usage logged + metered after every call incl. the vision call; structured outputs (`additionalProperties: false`) on non-web-search paths only (would 400 with citations); Haiku paths correctly uncached below the 4,096 floor |
+| 6 Cleanliness & typing | 5 cleanup (4 carried DRY/typing + hooks None-format); no TODO/print/pdb |
+| 7 Error handling / API | n/a (not a router; typed SDK errors propagated to callers as documented) |
+| 8 Config & paths | ok — models + web-search tool version config-driven and described in .env.example; no filesystem paths; thumbnail URLs absolute https |
 
 ## Module verdict
-NEEDS-WORK — no blockers; two SEV2s to fix (unconditional 1h cache marker goes inert below Sonnet 4.6's live-confirmed 1,024-token floor when the DNA brief is empty/short, and the older streaming builders put untrusted transcript/title in the system role — both already solved elsewhere in the codebase and just need to be adopted here), plus DRY cleanups.
+NEEDS-WORK — both 2026-07-01 SEV2s are verifiably fixed (floor-gated cache marker + untrusted
+content relocated to the user turn), and the async migration is sound; two SEV2s remain:
+titles/hooks web-search streams lack the pause_turn continuation the rest of the codebase already
+implements, and chapters is the one builder with an unwrapped transcript and no untrusted-content
+policy block. Plus carried DRY cleanups (7 clients, duplicated usage/log blocks).

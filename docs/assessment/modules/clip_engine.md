@@ -1,99 +1,127 @@
-# clip_engine — assessed 2026-07-01
+# clip_engine — assessed 2026-07-20
 
 Slice: candidates.py, captions.py, edits.py, filler.py, ranking.py, reframe.py,
-render.py, scoring.py, window.py, __init__.py.
+render.py, scoring.py, summary_select.py, window.py, __init__.py.
 
-Method note (per user hard constraint): every best-practice / SDK / library claim
-below is backed by the CURRENT official docs, cited with the URL + date checked.
-Claims about this codebase are cited to `file:line` read directly.
+Method note: re-verified every 2026-07-01 finding against HEAD (git diff
+f70a857..HEAD touched candidates/ranking/reframe/render/scoring + new
+summary_select.py — the Issue 109d signal-array hoist and 109e scoped-select
+sweep were traced for correctness and tenant scoping). Codebase claims cited to
+`file:line` read directly.
+
+## Resolved since 2026-07-01
+
+- **ranking.py idempotency guard missing `creator_id`** — FIXED. The guard now
+  lives in `load_existing_clips` (ranking.py:122-127) with
+  `.where(Clip.video_id == video_id, Clip.creator_id == creator_id)`; both call
+  sites (routers/clips.py:254/284, worker/tasks.py:2559/2582) pass a matching
+  `creator_id` and stamp `session.info["creator_id"]` for the RLS GUC before
+  first query. The 109e refactor (split into `load_existing_clips` /
+  `score_and_rank` / `persist_ranked_clips`) preserved tenant scoping and
+  correctly moved the guard BEFORE the LLM spend on both paths.
+- **Post-snap `end_s` exceeding source duration** — FIXED. candidates.py:350-360
+  clamps `end_s` to `duration_s` after forward snap + MIN_CLIP_S re-extension and
+  drops the candidate if the clamp breaks the MIN_CLIP_S invariant (same handling
+  as the pre-NMS filter). See cleanup below: the fix landed without the
+  regression test / tail-peak eval scenario the prior finding asked for.
+- **MediaPipe Tasks model path (legacy Solutions asset)** — FIXED.
+  `_mediapipe_model_path()` (reframe.py:212-254) now resolves
+  `settings.MEDIAPIPE_FACE_MODEL_PATH` first (present in config.py:344 +
+  .env.example:139; Dockerfile:29-34 fetches the hub
+  `blaze_face_short_range.tflite` to a pinned path and sets the env var), falls
+  back to the package `.task` bundle, and returns "" → center-fallback. The
+  legacy `face_detection_short_range.tflite` path is gone.
+- **FaceDetector constructed per sampled frame** — FIXED. `_create_face_detector`
+  (reframe.py:116-151) builds ONE detector per track; `build_crop_center_track`
+  (reframe.py:340-361) passes it per frame and releases it via
+  `_close_face_detector` in a `finally`.
+- **Issue 109d signal-array hoist** — verified correct: `score_candidates`
+  builds the signal once inside the `asyncio.to_thread` worker
+  (scoring.py:267-273) and threads it through `compute_features(candidate,
+  timeline, signal)`; the `signal is None` fallback (scoring.py:132-133) keeps
+  single-candidate callers unchanged. Cold-start principle citation corrected to
+  "Pattern interrupt" (Issue 109c, scoring.py:182-196) — an honest match for a
+  ~60% energy-weighted score, and a valid name in docs/CLIPPING_PRINCIPLES.md.
 
 ## Findings
 
-- [SEV2] clip_engine/ranking.py:127 — the idempotency guard
-  `select(Clip).where(Clip.video_id == video_id)` reads the creator-scoped `clips`
-  table with NO `creator_id` predicate. This is an internal Celery-worker path (not a
-  request handler) and `video_id` is a primary key that maps to exactly one creator, so
-  it is not a live cross-tenant leak — but it violates the "per-creator isolation on
-  EVERY creator-scoped query" rule (rubric §3) and would silently return the wrong
-  creator's clips if the pipeline were ever invoked with a mismatched
-  `(creator_id, video_id)` pair | fix: add `.where(Clip.creator_id == creator_id)` to
-  the guard query so the tenant predicate is structural, matching the always-filter
-  posture the COMPLIANCE log (2026-05-28 Issue 33) mandates. Cheap defense-in-depth,
-  no behavior change on the happy path.
+- [SEV2] clip_engine/ranking.py:187-229 — `persist_ranked_clips` idempotency is
+  check-then-insert with NO database backstop: `models.py` defines no unique
+  constraint on `clips` covering `(video_id, rank)` or `(video_id, creator_id,
+  rank)` (verified: the model at models.py:616-660 has none). Two concurrent
+  executions — e.g. the router's `POST /generate` racing the worker pipeline for
+  the same video, or two at-least-once Celery deliveries running simultaneously —
+  can BOTH pass the `load_existing_clips` guard and insert the full clip set
+  twice (duplicate clips, double LLM spend already happened upstream). The
+  docstring's "can never delete+reinsert" guarantee holds, but "safe to run twice
+  concurrently" (rubric §1) does not | fix: Alembic migration adding
+  `sa.UniqueConstraint("video_id", "rank", name="uq_clips_video_rank")` (rank is
+  always set on this path), and in `persist_ranked_clips` catch `IntegrityError`
+  → `await session.rollback()` → return `await load_existing_clips(...)`. Add a
+  test inserting the same ranked list twice on two sessions.
 
-- [SEV2] clip_engine/candidates.py:347-349 — after sentence-boundary snapping, `end_s`
-  is re-extended to `setup_start_s + MIN_CLIP_S` and forward-snapped to a word `end`,
-  but is never re-clamped to the timeline `duration_s`. Transcript word `end` values can
-  marginally exceed the ffprobe container duration (encoder/transcriber rounding), so a
-  clip whose window sits at the tail of the video can emit `end_s > source_duration`.
-  `render.py:367` then raises `ValueError("end_s … exceeds source duration …")` and that
-  clip's render fails | fix: after the snap block clamp
-  `c["end_s"] = min(c["end_s"], duration_s)` (and re-apply the min-clip guard), so the
-  persisted `Clip.end_s` can never fall outside the renderable range. Add an eval
-  scenario with a peak in the final 30s of the video to pin it.
+- [SEV2] clip_engine/reframe.py:446-481 — (carry-forward, gated,
+  needs-runtime-confirmation) the sendcmd line format
+  `"<t> [enter] crop x <v>;"` (single instantaneous timestamp + `[enter]` flag,
+  build_sendcmd_script) remains unverified on a real ffmpeg build; the whole
+  path is still behind `ACTIVE_SPEAKER_REFRAME_ENABLED=False`. The detector
+  half of the original finding is fixed; this format check must happen in the
+  render-env smoke test before the flag is ever flipped | fix: run one gated
+  render on real media in the render image and pin the produced crop-x sequence.
 
-- [SEV2] clip_engine/reframe.py:193,197 — `_mediapipe_model_path()` returns the legacy
-  Solutions asset `modules/face_detection/face_detection_short_range.tflite` as the
-  `model_asset_path` for the **Tasks** `FaceDetectorOptions`. The MediaPipe Tasks
-  FaceDetector expects a metadata-bearing `.task`/blaze-face bundle from the model hub,
-  not the raw Solutions `.tflite`; loading the bare graph asset is likely to raise at
-  `create_from_options` and drop the whole track to center-fallback. (needs-runtime-
-  confirmation — the entire per-frame path is gated OFF by
-  `ACTIVE_SPEAKER_REFRAME_ENABLED=False` and the code already marks it
-  "render-env/staging-pending".) | fix: ship the hub `blaze_face_short_range.tflite`
-  (Tasks-compatible) as a pinned asset under a known path (e.g. alongside the Dockerfile
-  fonts) and point `_mediapipe_model_path()` at it; assert `Path(...).exists()` at
-  worker start when the flag is on. Verified param name `min_detection_confidence` is
-  valid on FaceDetectorOptions:
-  https://developers.google.com/mediapipe/api/solutions/python/mp/tasks/vision/FaceDetectorOptions
-  (checked 2026-07-01).
+- [cleanup] clip_engine/candidates.py:193-207 — (carry-forward) `derive_skip_reason`
+  still re-derives the exact `find_peaks(signal, distance=max(1,
+  int(MIN_CLIP_S/resolution_s)), prominence=0.5)` setup that `extract_candidates`
+  owns at lines 246-253 (DRY): a future tweak to peak params must be made twice
+  or the skip-reason will lie | fix: extract `_detect_peaks(timeline) -> (times,
+  signal, peak_indices, properties)` and call from both.
 
-- [SEV2] clip_engine/reframe.py:151 — `FaceDetector.create_from_options(...)` is invoked
-  **inside `_detect_faces_mediapipe`, i.e. once per sampled frame**. At the default
-  5 fps over a 60–90s clip that is 300–450 detector constructions (each parsing the model
-  asset) per render — an avoidable order-of-magnitude cost that scales with clip length.
-  The inline comment concedes this. (gated OFF today, so not a live regression) | fix:
-  construct the detector once in `build_crop_center_track` and pass it into the per-frame
-  call (BlazeFace IMAGE-mode `.detect()` is safe to reuse serially within one thread);
-  keep the lazy import. Also confirm the `sendcmd` single-timestamp `"<t> [enter] crop x
-  <v>;"` line format on a real ffmpeg build before flipping the flag
-  (needs-runtime-confirmation) — the `crop` filter's `x` IS commandable
-  (ffmpeg-filters.html §crop "Commands", checked 2026-07-01), but the instantaneous
-  interval + `[enter]` flag combo is unverified on real media.
+- [cleanup] clip_engine/reframe.py:50-51 — (carry-forward) dead
+  `if TYPE_CHECKING: pass` block | fix: delete. Also line 164-167:
+  `frame_width` is still a parameter of `_detect_faces_mediapipe` and still
+  unused in the body | fix: drop it (update the call at line 351).
 
-- [cleanup] clip_engine/candidates.py:193-207 — `derive_skip_reason` re-derives the
-  exact `find_peaks(signal, distance=max(1, int(MIN_CLIP_S/resolution_s)),
-  prominence=0.5)` setup that `extract_candidates` (lines 246-253) already owns (DRY). A
-  future tweak to the peak params must be made in two places or the skip-reason will lie
-  | fix: extract a `_detect_peaks(timeline) -> (times, signal, peak_indices, properties)`
-  helper and call it from both.
+- [cleanup] clip_engine/render.py:499-502 — (carry-forward) the burned-in
+  `subtitles={ass_path}:fontsdir={_FONTS_DIR}` filter arg is still built by
+  f-string with no libass escaping of `:` `,` `'` `\` in the path. Worker-created
+  temp paths today (low risk, list argv, no shell), but a metacharacter in the
+  path corrupts the `-vf` chain rather than failing cleanly | fix: quoted form
+  `subtitles=filename='…'` via a small `_escape_ffmpeg_filter_path()` helper
+  shared with the `sendcmd=f=` arg (render.py:465).
 
-- [cleanup] clip_engine/reframe.py:50-51 — dead `if TYPE_CHECKING: pass` block (no
-  type-only imports guarded) | fix: delete it. Also line 119: `frame_width` is a
-  parameter of `_detect_faces_mediapipe` but never used in the body | fix: drop the
-  parameter (call site at line 300 passes it positionally — update it) or use it.
+- [cleanup] clip_engine/scoring.py:215-221 — `_transcript_context._gather`
+  selects segments by full containment (`seg.start >= start_min AND
+  seg.end <= end_max`), so a transcript segment straddling `setup_s` is dropped
+  from BOTH the [BEFORE] and [CLIP] sections — the clip's opening sentence can
+  vanish from the LLM's context when transcriber segment bounds don't align with
+  the snapped boundary. captions.py:206-210 already uses the correct overlap
+  semantics (`end > lo and start < hi`) | fix: switch `_gather` to overlap
+  selection with the boundary assigning a straddler to exactly one section
+  (e.g. by segment midpoint).
 
-- [cleanup] clip_engine/render.py:504 — the burned-in `subtitles={ass_path}:fontsdir=…`
-  filter arg is built by f-string with no libass escaping of `:` `,` `'` `\` in the
-  path. Paths are worker-created temp files today (low risk, no shell — args are a list),
-  but a path containing a filtergraph metacharacter would corrupt the `-vf` chain rather
-  than fail cleanly | fix: use the quoted form `subtitles=filename='…'` with `\`/`:`/`'`
-  escaped, or route the value through a small `_escape_ffmpeg_filter_path()` helper
-  shared with the `sendcmd=f=` path (render.py:467).
+- [cleanup] tests/test_clip_engine.py — the end_s-clamp fix
+  (candidates.py:350-360) landed without the regression test / eval scenario the
+  2026-07-01 finding specified (no scenario with a peak in the final 30s and
+  word `end` values past `duration_s`; verified none of the 16 scenarios nor the
+  37 unit tests pin it) | fix: add a unit test where forward-snap words extend
+  past `duration_s` and assert `end_s <= duration_s` or the candidate is
+  dropped.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — every temp artifact (keyframe, ASS, sendcmd, measure/apply filter scripts) unlinked in a `finally`; `_ANTHROPIC` is a module-level singleton; DB commits/refreshes on the async session are caller-managed |
-| 2 Concurrency & scale | 2 findings — CPU work (`find_peaks`, feature build) correctly offloaded via `asyncio.to_thread`; async Anthropic client awaited; render fns are sync (Celery); detector-per-frame + reframe path gated off |
-| 3 Security & compliance | 1 finding (creator_id defense-in-depth, ranking.py:127) — no OAuth token / PII / secret in any log line; no f-string/`%` SQL (parameterized ORM); no virality language in any skip-reason label or the scoring system prompt (verified strings) |
-| 4 Clip-quality | 1 finding (end-clamp, candidates.py) — setup is anchored by backward look from peak (Principle #2); Clean-Context-Boundary snapping present (#12); every score carries a named principle; DNA-first with honest signal-only cold start; recency decay lives in preference/ (out of slice) |
-| 5 Anthropic SDK | ok — prompt caching used (two-block system, DNA marked `ttl:"1h"` only above the 1024-token floor); tokens + cost logged every call; `max_tokens=1200` set; truncation warned. Verified current docs need NO beta header for the 1h TTL (platform.claude.com/docs prompt-caching, checked 2026-07-01) — code is correct |
-| 6 Cleanliness & typing | 3 cleanups (DRY peak-detect, dead TYPE_CHECKING block + unused param, filter-path escaping) — no TODO/print/debug; signatures typed |
-| 7 Error handling / API | n/a (no router / HTTP surface in this slice) |
-| 8 Config & paths | ok — reframe/render read absolute `Path`s; `ACTIVE_SPEAKER_REFRAME_ENABLED`/`REFRAME_SAMPLE_FPS` gated via settings; no new config introduced here |
+| 1 Resource lifecycle | 1 finding (no DB backstop for concurrent double-insert) — temp artifacts (keyframe, ASS, sendcmd, `.filter`/`.measure.filter` scripts) all unlinked in `finally`; MediaPipe detector closed in `finally`; `_ANTHROPIC` module-level singleton; ledger session via context manager |
+| 2 Concurrency & scale | ok — Issue 82b split verified: no DB session held across the 30–120 s LLM call on either call path; CPU work (find_peaks, feature build incl. the 109d single signal build) offloaded via `asyncio.to_thread`; render fns sync (Celery); recap render bounded by a duration-derived timeout |
+| 3 Security & compliance | ok — creator_id predicate now structural on the clips guard (backs RLS); no token/PII in any logger call (checked all); parameterized ORM only; no virality language in skip-reason labels, principles, or the scoring system prompt; transcript context routed through `wrap_untrusted` |
+| 4 Clip-quality | 1 cleanup (straddling-segment context gap) — setup anchored by backward look from peak (#2); Clean Context Boundary snapping with post-snap invariants + duration clamp (#12); every score path cites a valid named principle (cold-start now honestly "Pattern interrupt", Issue 109c); DNA-first with explicit signal-only fallback; recap selection is chronological + budget-capped and carries score/principle per segment |
+| 5 Anthropic SDK | ok — two-block cached system with 1024-token floor guard (`ttl:"1h"` only above floor); tokens + cache tiers logged every call; `max_tokens=1200`; truncation warned; fenced-JSON extraction (Issue 342) |
+| 6 Cleanliness & typing | 5 cleanups (3 carried forward + 2 new) — no TODO/print/debug; signatures typed |
+| 7 Error handling / API | n/a (no router/HTTP surface in this slice) |
+| 8 Config & paths | ok — `MEDIAPIPE_FACE_MODEL_PATH` and `RECAP_TARGET_DURATION_MIN/MAX_S` present in config.py + .env.example with descriptions; Dockerfile ships the model asset; all paths absolute worker-provided `Path`s |
 
 ## Module verdict
-NEEDS-WORK — no blocker; two live SEV2s worth fixing now (add `creator_id` to the
-idempotency guard, clamp post-snap `end_s` to source duration), plus two gated-path
-SEV2s to resolve before `ACTIVE_SPEAKER_REFRAME_ENABLED` is ever flipped on.
+NEEDS-WORK — no blocker; one live SEV2 (the clip idempotency guard has no DB
+unique constraint behind it, so concurrent generation can double-insert), one
+gated SEV2 to settle before the reframe flag flips, plus five cleanups. All four
+substantive 2026-07-01 findings are fixed and the 109d/109e refactors are
+correct and tenant-safe.

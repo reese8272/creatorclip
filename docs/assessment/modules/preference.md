@@ -1,95 +1,136 @@
-# preference — assessed 2026-07-01
+# preference — assessed 2026-07-20
 
-Slice: `preference/_scorer_cache.py`, `preference/decay.py`, `preference/features.py`,
-`preference/model.py`, `preference/style_learn.py`, `preference/train.py`, `preference/__init__.py`.
+Slice: `preference/__init__.py`, `preference/_scorer_cache.py`, `preference/decay.py`,
+`preference/efficacy.py` (new since prior pass), `preference/features.py`, `preference/model.py`,
+`preference/style_learn.py`, `preference/train.py`.
 
-All best-practice / library-behaviour claims below were verified against current official
-docs / security research (URLs + dates inline), not from memory, per the hard constraint.
+Changed since f70a857 (extra scrutiny): `decay.py`, `efficacy.py`, `features.py`, `style_learn.py`.
+Unit lane green at assessment time: `tests/test_preference.py` + `tests/test_preference_metrics.py`
+(32 passed).
 
 ## Findings
 
-- [SEV2] preference/features.py:22-34 — the non-finite guard covers ONLY `dna_match`; the other
-  six numeric features (`signal_density`, `hook_energy`, `silence_ratio`, `clip_duration_s`,
-  `setup_length_s`) are passed through unsanitised. train.py:61-69 pulls them straight from
-  `clip.signals_jsonb["features"]`, so a single NaN/inf stored there poisons the vector: at train
-  time `sklearn` rejects non-finite input by default (`check_array(..., ensure_all_finite=True)` —
-  scikit-learn 1.5 `LogisticRegression.fit` docs,
-  https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html,
-  accessed 2026-07-01) so `asyncio.to_thread(fit, ...)` (train.py:97) raises and the whole retrain
-  fails; at predict time a NaN feature makes `predict_proba` return NaN → poisons the rerank sort —
-  the exact failure the Issue-338 `dna_match` guard exists to prevent. | fix: route every feature
-  through one finite-clamp helper (`_finite(x, 0.0)`) inside `clip_features`, not just `dna_match`;
-  add a test passing NaN in `hook_energy` and asserting a finite vector.
-  (needs-runtime-confirmation that `signals_jsonb` can hold NaN — depends on the ingestion writer.)
+- [SEV2] preference/model.py:46-65 — (carry-forward from 2026-07-01) the LightGBM serialization
+  branch of `_ALLOWED_CLASSES` still has NO round-trip test. Verified today: every round-trip test
+  (`tests/test_preference.py:176,186`) fits `_training_data()` (n=10) with `threshold=20`, so only
+  the LogisticRegression path is exercised; `tests/test_preference_edges.py` and
+  `tests/test_preference_scorer_cache.py` also never serialize an LGBM scorer. The LGBM-only
+  allowlist entries (`lightgbm.basic.Booster`, `collections.defaultdict`, `OrderedDict`,
+  `NumpyArrayWrapper`) and the pinned numpy-2.x internal path (`numpy._core.multiarray`) are
+  unasserted; a dep bump or incomplete allowlist makes `from_bytes` raise, `load_latest` catches
+  broadly (train.py:180-184) and silently falls back to DNA for ALL mature/personalized models,
+  logged only at `warning`. | fix: add one round-trip test that fits n ≥ threshold (forcing the
+  LGBM branch; keep the existing `OSError → pytest.skip` libgomp guard from
+  test_fit_lgbm_at_threshold), serializes, and asserts `from_bytes` predictions match — so
+  allowlist/dep drift fails CI loudly instead of disabling personalization fleet-wide.
 
-- [SEV2] preference/model.py:46-65 + tests/test_preference.py:173,183 — the LightGBM serialization
-  branch of `_ALLOWED_CLASSES` has NO round-trip test. Both round-trip tests fit
-  `_training_data()` (n=10) with `threshold=20`, so they only exercise the LogisticRegression path;
-  the LightGBM-only allowlist entries (`lightgbm.basic.Booster`, `collections.defaultdict`,
-  `collections.OrderedDict`, `joblib.numpy_pickle.NumpyArrayWrapper`) are never asserted to
-  round-trip through `_RestrictedUnpickler`. The allowlist also pins exact *internal* module paths
-  of pinned deps (`sklearn.linear_model._logistic`, `numpy._core.multiarray` — the numpy-2.x path,
-  which differs from numpy-1.x `numpy.core.multiarray`; NumPy 2.0 release notes,
-  https://numpy.org/devdocs/release/2.0.0-notes.html, accessed 2026-07-01). A dep bump or an
-  incomplete LGBM allowlist makes `from_bytes` raise `UnpicklingError`; `load_latest` catches it
-  broadly (train.py:181-184) and silently falls back to DNA for ALL mature/personalized models,
-  logged only at `warning`. | fix: add a round-trip test that fits with n ≥
-  `PERSONALIZATION_THRESHOLD_LABELS` (forces the LightGBM branch), serializes, and asserts
-  `from_bytes` returns a scorer with matching predictions — run in CI so allowlist/dep drift fails
-  loudly instead of silently disabling personalization fleet-wide.
+- [SEV2] preference/efficacy.py:414-431 — `load_labeled_clips` is unbounded: no `LIMIT`, and it
+  fetches ALL feedback rows (including skip/format, filtered only afterwards in Python at :438).
+  train.py:53 caps the very same join at `PREFERENCE_MAX_TRAINING_LABELS` precisely to avoid this
+  (Issue 102), but the harness runs on EVERY retrain via `worker/tasks.py:_emit_preference_metrics`
+  → `evaluate_creator`. Compounding: `kendall_tau` (efficacy.py:88-113) is O(n²) pure Python and
+  runs 3× (one per ranking) over the 30% eval split — a power creator with thousands of labels
+  costs millions of pair iterations per retrain, inside the session that still holds the
+  `retrain:{cid}` advisory lock. | fix: mirror train.py — add
+  `.where(ClipFeedback.action.in_(TRAINABLE_ACTIONS) | <outcome-positive>)` semantics in SQL and
+  `.order_by(created_at.desc()).limit(settings.PREFERENCE_MAX_TRAINING_LABELS)` (then re-sort asc
+  for the chronological split).
 
-- [SEV2] preference/style_learn.py:36-58 & 61-88 — `dominant_style` / `style_suggestion` return
-  the FIRST value whose count ≥ threshold in dict insertion (first-seen) order, not the most
-  frequent. If value B occurs 12× and value A 6× but A is seen first in `history`, the "make this
-  your default?" suggestion surfaces A — a wrong, confusing default that contradicts the
-  smart-default UX the module cites (NNG default-effect literature per the docstring / DECISIONS
-  Issue 187). | fix: among values meeting the threshold pick the arg-max by count deterministically
-  (`max((v for v,c in counts.items() if c>=threshold), key=counts.get, default=None)`), and add a
-  test with two qualifying values asserting the higher-count one wins.
+- [SEV2] preference/efficacy.py:267-302 — `_train_scorer` docstring claims it "reproduc[es]
+  preference.train.build_and_save's label/weight construction", but the label rule diverges:
+  `y = 1 if relevance >= _REL_KEEP`, and `_relevance_for` (:200-208) returns 2.0 whenever
+  `performed_well is True` REGARDLESS of action — so a downvoted clip whose outcome performed well
+  trains as a positive (and gets the 3× weight at :295), whereas production (train.py:71-73) labels
+  it negative with 3× weight. The "dna_preference" arm therefore isn't the production trainer,
+  biasing the moat metric the harness exists to measure. Bounded (downvote+performed_well is rare).
+  | fix: carry the raw action on `LabeledClip` and derive the train label from action only
+  (downvote → 0), keeping graded relevance for eval; or document the deviation in DECISIONS.
 
-- [cleanup] preference/style_learn.py:76-88 — `style_suggestion` re-implements the exact per-field
-  counting loop of `dominant_style` (48-53) (DRY, rubric 6). | fix: have `dominant_style` return
-  `(value, count)` or extract a shared `_dominant(history, field, threshold)` helper and call it
-  from `style_suggestion`.
+- [SEV2] preference/efficacy.py:302 (`fit` inside `_train_scorer`) — CPU-bound
+  LightGBM/LogisticRegression fit runs synchronously inside the `async` chain
+  `evaluate_creator → compute_creator_metrics → _blend_scores → _train_scorer`; train.py:97
+  deliberately offloads the identical fit via `asyncio.to_thread` for this reason. Today's only
+  caller is the worker's private `run_async` loop (bounded harm: it just serializes the task while
+  holding the session + advisory lock), but any future API-loop caller — the module docstring
+  invites reuse — would stall the server for seconds. `sweep_half_life` (:341-384) multiplies this
+  by the 4-point grid per creator. | fix: make `_train_scorer` async-aware or wrap the fit at the
+  call sites with `await asyncio.to_thread(fit, ...)` like train.py.
 
-## Verified OK (no finding — checked, not assumed)
+- [SEV2] preference/train.py:106-123 — every retrain inserts a new `PreferenceModel` row
+  (weights_blob up to ~100s of KB for LGBM) and no code path ever deletes old versions; retrain is
+  feedback-debounced (worker/tasks.py:1010-1027) but still fires on every new-feedback batch, so
+  rows/blob storage grow without bound per creator over the product's lifetime. Only the newest 2
+  versions are ever read (load_latest:139-144; the worker's NDCG warn-ratchet reads `.limit(2)`).
+  | fix: after the commit in `build_and_save`, delete rows with
+  `version < new_version - 4` for this creator (keep last 5) — safe under the same advisory lock.
 
-- Security posture of the restricted unpickler is *defensible*, not the common bypassable pattern:
-  `find_class` (model.py:78-82) allowlists the full `(module, name)` TUPLE, which is exactly the
-  mitigation the research recommends — the documented bypasses ("RestrictedUnpickler is Bypassable",
-  https://github.com/maurosoria/dirsearch/issues/1073; "Pain Pickle", ResearchGate 369410624,
-  accessed 2026-07-01) rely on restricting only module OR only name, or on `collections` gadget
-  names like `_itemgetter` / `__builtins__` that are NOT in this allowlist. `defaultdict`'s
-  `__reduce__` factory is itself a separate GLOBAL that re-enters `find_class`. joblib's own docs
-  confirm plain `joblib.load` executes arbitrary code and "should never be used to load objects from
-  an untrusted source" (https://joblib.readthedocs.io/en/stable/persistence.html, accessed
-  2026-07-01) — so the allowlist is correct defense-in-depth; the blob's only writer is the app's own
-  `to_bytes` into a per-creator DB row. The module-global `NumpyUnpickler` swap is serialized by
-  `_UNPICKLER_LOCK` (model.py:37,134) and effective because joblib resolves `NumpyUnpickler` via the
-  `numpy_pickle` module global. Residual risk is acceptable for a DB-write threat model.
-- Exponential recency decay (decay.py:20-22, `w=e^(-ln2/H·age)`) and honest below-threshold fallback
-  (model.py:147-162, weight 0 below `PERSONALIZATION_THRESHOLD_LABELS`) both satisfy rubric-4 and the
-  CLAUDE.md Clip-Engine rules. `DECAY_HALF_LIFE_DAYS` / `PERSONALIZATION_THRESHOLD_LABELS` are guarded
-  `> 0` by a config validator (config.py:648-663), so the import-time `_LAMBDA` division cannot divide
-  by zero.
-- Per-creator isolation present on EVERY query: train.py:49 (`ClipFeedback.creator_id`), 108-110,
-  166-169 (blob fetch by creator_id+version), load_latest 140-142. Advisory lock + version max+1
-  (train.py:102-113) guards the `UNIQUE(creator_id, version)` race. SQL is parameterized
-  (`text(...)`, `{"k": ...}`). Only `creator_id` UUIDs are logged — no PII, no tokens.
+- [cleanup] preference/efficacy.py:254-255 + 463 — `creator_id` is smuggled onto `LabeledClip` as a
+  dynamic attribute (`lc.creator_id = creator_id  # type: ignore[attr-defined]`) and read back with
+  `getattr(..., "creator_id", m.creator_id)` after seeding `CreatorMetrics.creator_id` with a
+  *clip* UUID as fallback — any caller that builds `LabeledClip`s directly (the sweep, tests) gets
+  metrics attributed to a clip id. | fix: add `creator_id: uuid.UUID | None = None` as a real
+  dataclass field on `LabeledClip` (or pass `creator_id` into `compute_creator_metrics`).
+
+- [cleanup] preference/efficacy.py:235 — imports the private `_signal_score` from
+  `clip_engine.scoring`; a rename inside clip_engine silently breaks the harness's
+  generic-signal baseline. | fix: export a public `signal_score` alias from clip_engine.scoring
+  and import that.
+
+## Resolved since 2026-07-01
+
+- features.py NaN guard covering only `dna_match` — **FIXED** (Issue 352): `_finite()`
+  (features.py:8-16) now clamps every float feature; regression tests
+  `tests/test_preference_edges.py:64,78` cover NaN in both `dna_match` and a non-dna feature.
+- style_learn returning first-over-threshold instead of most-frequent — **FIXED**
+  (Issue 352 Batch J): `_dominant` (style_learn.py:38-58) takes the argmax by count, ties to
+  first-seen; tests `test_*_returns_argmax_not_first_over_threshold`
+  (tests/preference/test_style_learn.py:58,122) pin it.
+- style_learn DRY (duplicated counting loop) — **FIXED**: both `dominant_style` and
+  `style_suggestion` now delegate to the shared `_dominant` helper.
+
+## Verified OK (checked, not assumed)
+
+- Recency decay (decay.py:29-35): `w = e^(-ln2/H · age)` with the Issue-200 per-call
+  `half_life_days` override validated `> 0` (:24-25); production default `_LAMBDA` derives from the
+  config-validated `DECAY_HALF_LIFE_DAYS`. Rubric-4 recency-decay requirement satisfied.
+- Personalization-threshold honesty (model.py:147-162): weight 0 below
+  `PERSONALIZATION_THRESHOLD_LABELS`, linear ramp to `PREFERENCE_WEIGHT_CAP` at 2×; the efficacy
+  blend (`_blend_scores`:305-324) reproduces the same honest fallback (weight 0 → pure DNA
+  composite). `preference_weight` gating unchanged since the prior pass.
+- Per-creator isolation on every query: train.py:49, 109, 141, 166-169
+  (`creator_id` in every WHERE); efficacy.py:429 (`ClipFeedback.creator_id == creator_id`); the
+  worker retrain additionally runs under `db.tenant_session(cid)` RLS (worker/tasks.py:985).
+  Parameterized SQL only (`text(...)` with bound params). Logs contain only creator UUIDs — no
+  PII, no tokens, no virality promises.
+- Restricted-unpickler posture unchanged from the 2026-07-01 verification (full `(module, name)`
+  tuple allowlist; `_UNPICKLER_LOCK` serializes the module-global swap; `from_bytes` offloaded via
+  `to_thread` in load_latest).
+- Metric math in efficacy.py spot-checked: DCG/NDCG discount `log2(i+2)` matches Järvelin &
+  Kekäläinen; `kendall_tau` tie counting is correct tau-b (pairs tied in x counted toward `ties_x`
+  regardless of y and vice versa); `bootstrap_ci` quantile indices are correct for ci=0.95 and
+  deterministic per seed; `chronological_split` rejects out-of-range `train_frac` and never
+  shuffles.
+- Config: all module tunables (`PREFERENCE_WEIGHT_CAP`, `PERSONALIZATION_THRESHOLD_LABELS`,
+  `DECAY_HALF_LIFE_DAYS`, `STYLE_LEARN_THRESHOLD`, `PREFERENCE_SCORER_CACHE_SIZE`,
+  `PREFERENCE_MAX_TRAINING_LABELS`) present in `.env.example` with descriptions.
+- `_scorer_cache` LRU is lock-guarded, bounded by `PREFERENCE_SCORER_CACHE_SIZE`, keyed by
+  immutable `(creator_id, version)` — no stale-model risk.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — session injected + committed (train.py:123); fit offloaded via `to_thread`; LRU bounded by `PREFERENCE_SCORER_CACHE_SIZE` |
-| 2 Concurrency & scale | ok — advisory xact lock, per-worker LRU cache, `to_thread` offload; global unpickler lock serializes cold-cache `from_bytes` but bounded by the cache |
-| 3 Security & compliance | ok — per-creator isolation on all queries, parameterized SQL, full-tuple pickle allowlist (verified vs research), only UUIDs logged |
-| 4 Clip-quality | 3 findings (partial NaN guard; style-learn returns first-not-max); recency decay + honest fallback verified OK |
-| 5 Anthropic SDK | n/a (no LLM calls in this module) |
-| 6 Cleanliness & typing | 1 cleanup (style_learn DRY); signatures typed |
+| 1 Resource lifecycle | 1 finding (unbounded PreferenceModel version accumulation); sessions injected + committed; fit offloaded in train.py |
+| 2 Concurrency & scale | 2 findings (unbounded load_labeled_clips + O(n²) tau per retrain; sync fit inside async efficacy chain) |
+| 3 Security & compliance | ok — per-creator isolation on all queries incl. new efficacy loader, RLS tenant_session on retrain, parameterized SQL, allowlist unpickler, UUID-only logs |
+| 4 Clip-quality | 1 finding (harness train-label divergence vs production); recency decay + honest threshold fallback verified OK |
+| 5 Anthropic SDK | n/a (no LLM calls) |
+| 6 Cleanliness & typing | 2 cleanup (dynamic creator_id attr + type:ignore; private `_signal_score` import) |
 | 7 Error handling / API | n/a (not a router) |
-| 8 Config & paths | ok — all tunables in `.env.example` w/ descriptions + validators; no filesystem paths |
+| 8 Config & paths | ok — all tunables in `.env.example` with descriptions; no filesystem paths |
 
 ## Module verdict
-NEEDS-WORK — no blockers and per-creator isolation + the pickle allowlist are sound, but three
-SEV2s (partial NaN guard, untested LightGBM serialization branch that silently disables
-personalization, first-not-most-frequent style default) should be fixed.
+NEEDS-WORK — three of four prior findings fixed (NaN guard, style argmax, DRY) and isolation /
+decay / threshold-honesty are sound, but the LightGBM serialization branch remains untested
+(carry-forward — silent fleet-wide personalization loss on dep drift) and the new efficacy harness
+adds four defects: unbounded per-retrain load + O(n²) tau, sync fit on the async path, a
+train-label divergence that biases the moat metric, and unbounded model-version accumulation.
