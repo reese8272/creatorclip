@@ -17,20 +17,17 @@
 #   on the same VM that already runs the app costs nothing and removes the
 #   billing dependency for both workflows permanently. (Issue 101)
 #
-#   After running this script:
-#     - docker-publish.yml (build + push to GHCR) runs on this VM
-#     - deploy.yml (pull + migrate + roll out) runs on this VM
-#     - ci.yml ALSO runs on this VM as of 2026-06-23 (hybrid CI/CD, DECISIONS.md).
-#       The CI jobs apt-install ffmpeg/libpq-dev/gcc and run Postgres/Redis service
-#       containers; this script now pre-installs those host deps (see below) so the
-#       jobs don't depend on passwordless sudo at job time. Prod Postgres/Redis are
-#       NOT published on host ports (docker-compose.prod.yml), so CI's :5432/:6379
-#       service containers do not collide with production.
+#   After running this script, ONLY the deploy-track workflows run on this VM:
+#     - docker-publish.yml (build + push to GHCR)
+#     - deploy.yml (pull + migrate + roll out)
+#     - staging-drills.yml (dispatch-only drills against the ccstage stack)
 #
-#   SINGLE RUNNER = SERIAL: with one runner, a main push queues ci.yml's jobs and
-#   docker-publish on the same runner, so a deploy can wait behind CI. To decouple,
-#   register a SECOND runner (re-run this script in a second dir / second systemd
-#   unit). docs/runbooks/local-ci-cd.md has the exact steps.
+#   SECURITY BOUNDARY (Issue 360, 2026-07-20): this runner is in the `docker`
+#   group (root-equivalent host control) and owns /opt/autoclip including the
+#   prod .env — so it must NEVER execute pull_request-triggered code. ci.yml and
+#   mutation.yml moved to GitHub-hosted ubuntu-latest; any future workflow that
+#   targets `runs-on: self-hosted` must trigger only from trusted refs
+#   (push to main / workflow_dispatch / schedule), never pull_request.
 
 set -euo pipefail
 
@@ -78,14 +75,13 @@ sudo -u "$RUNNER_USER" ./config.sh \
   --unattended \
   --replace
 
-echo "==> Pre-installing CI system dependencies (ffmpeg, libpq-dev, gcc)..."
-# ci.yml jobs run `sudo apt-get install ffmpeg libpq-dev gcc` and use Node 22 +
-# Python 3.12. Installing them once here means the CI jobs find them already
-# present (apt-get is then a fast no-op) and do not require the github-runner user
-# to have passwordless sudo. Re-run this block standalone on an existing runner to
-# add CI support without re-registering the runner.
+echo "==> Pre-installing host dependencies (python3.12)..."
+# The deploy-track workflows run everything inside containers; python3.12 on the
+# host is kept for operator tooling (backup scripts' helpers, ad-hoc debugging).
+# The former ffmpeg/libpq-dev/gcc pre-install existed only for ci.yml, which
+# moved to GitHub-hosted runners (Issue 360).
 apt-get update -q
-apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc python3.12 python3.12-venv
+apt-get install -y --no-install-recommends python3.12 python3.12-venv
 
 echo "==> Granting the runner write access to the deploy directory..."
 # deploy.yml runs `cp` into /opt/autoclip and `sed -i` on /opt/autoclip/.env;
@@ -105,9 +101,9 @@ echo ""
 echo "==> Runner installed and running."
 echo "    Verify at: $REPO_URL/settings/actions/runners"
 echo ""
-echo "    The 'Docker publish', 'Deploy to production', AND 'CI' workflows will"
-echo "    now run on this VM instead of consuming GitHub-hosted minutes."
+echo "    The deploy-track workflows ('Docker publish', 'Deploy to production',"
+echo "    'Staging drills') will now run on this VM."
 echo ""
-echo "    For a main push, CI and the deploy path share this one runner (serial)."
-echo "    To run them concurrently, register a SECOND runner —"
-echo "    see docs/runbooks/local-ci-cd.md."
+echo "    CI runs on GitHub-hosted runners (Issue 360) — never point a"
+echo "    pull_request-triggered workflow at this runner: it can read the prod"
+echo "    .env and controls the prod containers via the docker group."

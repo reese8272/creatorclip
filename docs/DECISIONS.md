@@ -10681,3 +10681,63 @@ touches VideoClipsMap/Editor. Also: the batch brief described Dashboard.tsx:154-
 as "raw fetch POSTs without try/catch" — verified false (no raw fetches remain there; VideoTable/
 ChannelBrowser were fixed in Issue 352); the real defect at those lines is the assessment's
 query-error-as-empty-state finding, which is what was fixed. **Date:** 2026-07-20
+
+## 2026-07-20 — Issue 360: PR CI moved off the prod-VM runner [DEC]
+
+**What changed.** `ci.yml` (all 12 jobs) and `mutation.yml` now run on GitHub-hosted
+`ubuntu-latest`. The self-hosted runner on the prod VM is reserved for the deploy-track
+workflows only (`deploy.yml`, `docker-publish.yml`, `staging-drills.yml`), which trigger
+exclusively from trusted refs (push to main / workflow_dispatch) — never `pull_request`.
+This partially supersedes the 2026-06-23 "hybrid self-hosted CI/CD" entry, which weighed
+GitHub-hosted billing but not this blast radius.
+
+**Why.** The runner user is in the `docker` group (root-equivalent host control) and owns
+`/opt/autoclip` including the prod `.env` (every secret). `ci.yml` triggered on
+`pull_request`, so any code executing during a PR job — including a malicious transitive
+dependency pulled by `npm ci` / `pip install -r requirements.txt` — could read all prod
+secrets and control the prod containers. GitHub-hosted runners support the Docker service
+containers (postgres/redis), buildx, and Playwright installs the CI jobs need, so nothing
+is functionally lost.
+
+**Residual risk (accepted).**
+- GitHub-hosted minutes billing is a dependency again for PR CI — the exact failure the
+  2026-06-23 decision removed. If the spending limit fast-fails CI, the fix is billing,
+  not moving jobs back to the VM. Layer 1 (the local pre-push hook) still gives
+  Docker-free gate coverage when hosted CI is unavailable.
+- The deploy-track workflows still run on the VM runner with docker-group + `.env`
+  access; they execute only main/dispatch code, so the trust boundary is "whatever merges
+  to main" — the same boundary the deploy itself already has. A distinct low-privilege
+  runner user remains the documented hardening follow-up.
+
+**Evidence.** `docs/assessment/modules/deploy_ci.md` (2026-07-20 SEV1),
+`docs/issues.md` Issue 360.
+
+## 2026-07-20 — deploy_ci SEV2 hardening judgment calls [DEC]
+
+**Staging compose: explicit `environment:` overrides, not `.env.staging`.**
+`docker-compose.staging.yml` keeps `env_file: .env` (the deploy gate and drills run it
+from `/opt/autoclip`, where that file is the prod env) and now overrides the values that
+must not bleed: `STORAGE_BACKEND=local`, `SENTRY_DSN=""`, `OTEL_EXPORTER_OTLP_ENDPOINT=""`,
+and `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` from optional `STAGING_STRIPE_*` vars
+(empty = Stripe disabled outside production). Chosen over pointing `env_file` at
+`/opt/autoclip/.env.staging` because a missing file hard-fails compose — the gate and
+drills would break until an operator provisions a second secret file, and the overrides
+are visible in-repo rather than living in unversioned VM state. `TOKEN_ENCRYPTION_KEY` is
+deliberately NOT overridden: the data-bearing `staging_postgres_data` volume already
+holds tokens encrypted with the prod key; swapping it would break every persisted staging
+row. Known caveat: `STORAGE_BACKEND=local` means the staging worker cannot read app-side
+uploads (separate containers, no shared volume) — acceptable because the gate and drills
+never render; a dedicated staging bucket is the upgrade path if they ever do.
+
+**`rotate_token_key.py` no longer accepts keys on argv.** Keys come from
+`OLD_TOKEN_ENCRYPTION_KEY` / `NEW_TOKEN_ENCRYPTION_KEY` env vars with a `getpass` prompt
+fallback (argv is visible in `ps` and shell history — the same posture backup_pg.sh
+established with `-pass env:`). The old `--old-key/--new-key` flags now fail loudly via
+argparse. `docs/RUNBOOKS.md` Step 3 was updated to match: interactive `docker compose exec`
+(no `-T` — getpass needs a TTY) with the env-var form documented for non-interactive runs.
+
+**`backup_redis.sh` duplicates backup_pg.sh's `read_env` verbatim** (plus the
+`BACKUP_R2_BUCKET != R2_BUCKET` guard) instead of extracting a shared sourced snippet —
+two copies of an 8-line helper beat introducing a new shared file both cron entry points
+must locate, and it restores the no-exec parsing posture the `source .env` regression
+dropped. **Date:** 2026-07-20

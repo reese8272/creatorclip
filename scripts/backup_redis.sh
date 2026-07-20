@@ -28,17 +28,39 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 COMPOSE_FILE="${COMPOSE_FILE:-${REPO_DIR}/docker-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-${REPO_DIR}/.env}"
 
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  set -a && source "$ENV_FILE" && set +a
-fi
+# Read a single key from .env WITHOUT executing it (duplicated verbatim from
+# backup_pg.sh — sourcing the prod .env runs any value containing $(...) as shell
+# and exports every secret; this parses only the vars we need). Env takes precedence.
+read_env() {
+  local key="$1"
+  if [ -n "${!key:-}" ]; then printf '%s' "${!key}"; return; fi
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^${key}[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" | head -1 | sed -e 's/^"//' -e 's/"$//'
+}
 
+BACKUP_R2_BUCKET="$(read_env BACKUP_R2_BUCKET)"
+BACKUP_ENCRYPTION_KEY="$(read_env BACKUP_ENCRYPTION_KEY)"
+R2_ACCOUNT_ID="$(read_env R2_ACCOUNT_ID)"
+R2_ACCESS_KEY_ID="$(read_env R2_ACCESS_KEY_ID)"
+R2_SECRET_ACCESS_KEY="$(read_env R2_SECRET_ACCESS_KEY)"
+BACKUP_HEALTHCHECK_URL="$(read_env BACKUP_HEALTHCHECK_URL)"
+export BACKUP_ENCRYPTION_KEY  # so `openssl -pass env:` can read it
+
+# Validate required config (report NAMES only, never values).
 for var in BACKUP_R2_BUCKET BACKUP_ENCRYPTION_KEY R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: required env var ${var} is not set" >&2
     exit 1
   fi
 done
+
+# Guard the 3-2-1 invariant (same as backup_pg.sh): backups must go to a
+# DIFFERENT bucket than media, so a media-bucket mistake can never touch backups.
+R2_BUCKET="$(read_env R2_BUCKET)"
+if [[ -n "$R2_BUCKET" && "$BACKUP_R2_BUCKET" == "$R2_BUCKET" ]]; then
+  echo "ERROR: BACKUP_R2_BUCKET must differ from R2_BUCKET ('$R2_BUCKET')" >&2
+  exit 1
+fi
 
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 

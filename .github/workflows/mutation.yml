@@ -16,7 +16,11 @@ permissions:
 jobs:
   mutation:
     name: Mutation score — load-bearing core (>80% target)
-    runs-on: self-hosted
+    # GitHub-hosted (Issue 360): only deploy-track workflows (deploy.yml,
+    # docker-publish.yml, staging-drills.yml) may use the prod-VM self-hosted
+    # runner. This job is non-gating and weekly, so a hosted-minutes billing
+    # fast-fail costs a report, never a merge.
+    runs-on: ubuntu-latest
     # The unit lane talks to a real Redis (slowapi limiter, no in-memory fallback),
     # so mutmut's runner needs Redis up. Postgres is deliberately NOT provisioned:
     # the runner pins `-m 'not integration'`, so an accidental DB hit fails loudly
