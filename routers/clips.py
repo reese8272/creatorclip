@@ -1691,7 +1691,20 @@ async def create_summary(
     from worker.tasks import render_summary as render_summary_task
 
     # `.delay()` is sync Redis I/O; offload from the request loop (scale-checklist B).
-    await asyncio.to_thread(render_summary_task.delay, str(summary.id))
+    # A broker throw here would strand the just-committed `pending` row: the
+    # uq_summaries_active backstop + the idempotency probe would then block
+    # every retry, and the stale sweep only recovers `running`. Mark it failed
+    # (leaves the partial-index predicate) so a retry can start fresh — the
+    # summary-side mirror of the Issue-359c render_clip guard.
+    try:
+        await asyncio.to_thread(render_summary_task.delay, str(summary.id))
+    except Exception as exc:
+        summary.render_status = RenderStatus.failed
+        await session.commit()
+        logger.error("recap enqueue failed for summary %s: %s", summary.id, exc)
+        raise HTTPException(
+            status_code=503, detail="Could not queue the recap render — please try again."
+        ) from exc
     # summary_id is the SSE stream key (the worker emits to task:{summary_id}:events).
     # Fail-open posture (Wave-5 Fix 1): a Redis blip returns stream_url=None
     # instead of 500-ing — the render is already enqueued and will run.

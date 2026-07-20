@@ -2388,7 +2388,7 @@ async def _sweep_stale_renders_async() -> None:
     with the entity + creator so an operator can correlate with worker OOM /
     deploy events.
     """
-    from sqlalchemy import select, text
+    from sqlalchemy import select, text, update
 
     lock_key = "sweep_stale_renders"
     stale_after = render_stale_after_s()
@@ -2424,19 +2424,31 @@ async def _sweep_stale_renders_async() -> None:
                 .scalars()
                 .all()
             )
-            for kind, rows in (("clip", clip_rows), ("summary", summary_rows)):
+            for kind, model, rows in (
+                ("clip", Clip, clip_rows),
+                ("summary", Summary, summary_rows),
+            ):
                 for row in rows:
                     if not await ais_render_stale(str(row.id)):
                         continue
-                    row.render_status = RenderStatus.failed
-                    logger.warning(
-                        "sweep_stale_renders: %s %s stuck in running past the hard time "
-                        "limit (stale_after=%ss, creator %s) — flipped to failed",
-                        kind,
-                        row.id,
-                        stale_after,
-                        row.creator_id,
+                    # Conditional UPDATE, not an ORM attribute write: a render
+                    # that finished between our SELECT and this commit has
+                    # already written `done` — the WHERE guard makes the flip
+                    # a no-op instead of clobbering it back to `failed`.
+                    result = await session.execute(
+                        update(model)
+                        .where(model.id == row.id, model.render_status == RenderStatus.running)
+                        .values(render_status=RenderStatus.failed)
                     )
+                    if result.rowcount:
+                        logger.warning(
+                            "sweep_stale_renders: %s %s stuck in running past the hard time "
+                            "limit (stale_after=%ss, creator %s) — flipped to failed",
+                            kind,
+                            row.id,
+                            stale_after,
+                            row.creator_id,
+                        )
             await session.commit()
         except Exception:
             await session.rollback()

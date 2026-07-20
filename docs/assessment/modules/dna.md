@@ -1,4 +1,8 @@
-# dna — assessed 2026-07-20
+# dna — assessed 2026-07-20 (post-fix)
+
+**Post-fix status:** clean (cleanups only) — the morning's SEV2 (upload-gap duplicate
+missing circular-week wrap + malformed-row guard) is verified FIXED via delegation to
+`upload_intel.timing.optimal_gap_hours`; see "Post-fix verification" below.
 
 Slice: `dna/brief.py`, `dna/builder.py`, `dna/conflict.py`, `dna/embeddings.py`,
 `dna/identity.py`, `dna/onboarding.py`, `dna/profile.py`, `dna/__init__.py` (empty).
@@ -115,3 +119,25 @@ NEEDS-WORK (minor) — prior SEV2 (retry predicate) fixed; one new SEV2 (builder
 upload-gap duplicates upload_intel/timing.py but lacks its circular-week wrap +
 malformed-row guard) plus two carried-forward cleanups; isolation, async, caching,
 and concurrency all sound.
+
+## Post-fix verification (2026-07-20, diff ca3305c..e92b93a)
+
+- **[was SEV2] builder.py `_optimal_upload_gap_h` duplicate — FIXED.** The helper is
+  deleted; `build_patterns` (dna/builder.py:314) now calls
+  `upload_intel.timing.optimal_gap_hours(activity_rows)` directly (import at
+  builder.py:25). Delegation verified signature-correct by reading: `_coerce_row`
+  (upload_intel/timing.py:20-35) duck-types `.day_of_week`/`.hour`/`.activity_index`,
+  exactly what the `AudienceActivity` ORM rows passed at builder.py:308-313 carry. Both
+  Batch-J fixes now apply on the DNA path: the circular-week wrap
+  (`min(gap, 168 - gap)`, timing.py:94-97) and the malformed-row filter
+  (timing.py:84-86). No circular import — `upload_intel/` imports nothing from `dna/`.
+- **Tests updated as prescribed.** `tests/test_dna.py:147-162` replaces the old
+  duplicate's tests with `test_builder_upload_gap_uses_circular_week_wrap`
+  (Sunday 23:00 vs Monday 01:00 → 26.0 h, not 142 h) importing the shared function;
+  `tests/test_dna.py` + `tests/test_upload_intel.py` = 46 passed. ruff check + format
+  clean on dna/builder.py.
+- **Carry-forwards unchanged:** the two cleanups (stale `generate_brief` docstring at
+  brief.py:125-130; `_voyage()` lazy-singleton race at embeddings.py:22-29) remain open
+  — no diff touched brief.py or embeddings.py in this window.
+- **Verdict revised: clean** (was NEEDS-WORK minor) — 0 blockers, 0 SEV1, 0 SEV2,
+  2 cleanups.

@@ -1,4 +1,7 @@
-# ingestion — assessed 2026-07-20
+# ingestion — assessed 2026-07-20 (post-fix)
+
+**Post-fix status:** clean, unchanged — `git diff ca3305c..e92b93a -- ingestion/` is empty;
+verdict and all carry-forward cleanups stand as written below.
 
 Slice: `ingestion/__init__.py` (empty), `ingestion/audio.py`, `ingestion/signals.py`,
 `ingestion/transcribe.py`. Pure transformation layer: a media/audio path goes in, a dict comes

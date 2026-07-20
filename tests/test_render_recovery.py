@@ -60,9 +60,21 @@ def _mock_session(
         result.scalars = MagicMock(return_value=scalars)
         return result
 
-    session.execute = AsyncMock(
-        side_effect=[lock_result, _rows_result(clips), _rows_result(summaries), MagicMock()]
-    )
+    update_result = MagicMock()
+    update_result.rowcount = 1
+    select_calls = {"n": 0}
+
+    def _dispatch(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        from sqlalchemy.sql.dml import Update
+
+        if isinstance(stmt, Update):
+            return update_result
+        if "advisory" in str(stmt).lower():
+            return lock_result
+        select_calls["n"] += 1
+        return _rows_result(clips if select_calls["n"] == 1 else summaries)
+
+    session.execute = AsyncMock(side_effect=_dispatch)
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
     return session
@@ -161,9 +173,25 @@ def test_sweep_flips_only_stale_rows_to_failed():
     ):
         asyncio.run(_sweep_stale_renders_async())
 
-    assert stale_clip.render_status == RenderStatus.failed
-    assert stale_summary.render_status == RenderStatus.failed
-    assert live_clip.render_status == RenderStatus.running
+    # Flips are conditional UPDATEs (not ORM writes) so a render finishing
+    # between the SELECT and the commit keeps its `done` — assert the two
+    # stale rows are targeted, the live row is not, and every UPDATE carries
+    # the render_status='running' WHERE guard.
+    from sqlalchemy.sql.dml import Update
+
+    update_stmts = [
+        c.args[0] for c in session.execute.await_args_list if isinstance(c.args[0], Update)
+    ]
+    assert len(update_stmts) == 2
+    targeted_ids = set()
+    for stmt in update_stmts:
+        params = stmt.compile().params
+        targeted_ids.update(
+            v for v in params.values() if v in (stale_clip.id, stale_summary.id, live_clip.id)
+        )
+        assert RenderStatus.running in params.values()
+        assert str(stmt).count("render_status") >= 2  # SET clause + WHERE guard
+    assert targeted_ids == {stale_clip.id, stale_summary.id}
     session.commit.assert_awaited_once()
 
 

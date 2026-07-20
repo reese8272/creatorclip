@@ -1,136 +1,115 @@
-# preference — assessed 2026-07-20
+# preference — assessed 2026-07-20 (post-fix)
 
 Slice: `preference/__init__.py`, `preference/_scorer_cache.py`, `preference/decay.py`,
-`preference/efficacy.py` (new since prior pass), `preference/features.py`, `preference/model.py`,
+`preference/efficacy.py`, `preference/features.py`, `preference/model.py`,
 `preference/style_learn.py`, `preference/train.py`.
 
-Changed since f70a857 (extra scrutiny): `decay.py`, `efficacy.py`, `features.py`, `style_learn.py`.
-Unit lane green at assessment time: `tests/test_preference.py` + `tests/test_preference_metrics.py`
-(32 passed).
+Re-assessment after the two fix waves (diff ca3305c..e92b93a; module commits 2279720 +
+f29a2be touching efficacy.py, model.py, train.py). Every finding from the 2026-07-20
+morning pass re-verified against HEAD. Unit lane green at assessment time:
+`tests/test_preference*.py` + `tests/eval/test_efficacy.py` + `tests/preference/` —
+86 passed (the new LGBM round-trip test ran, not skipped, on this host).
 
 ## Findings
 
-- [SEV2] preference/model.py:46-65 — (carry-forward from 2026-07-01) the LightGBM serialization
-  branch of `_ALLOWED_CLASSES` still has NO round-trip test. Verified today: every round-trip test
-  (`tests/test_preference.py:176,186`) fits `_training_data()` (n=10) with `threshold=20`, so only
-  the LogisticRegression path is exercised; `tests/test_preference_edges.py` and
-  `tests/test_preference_scorer_cache.py` also never serialize an LGBM scorer. The LGBM-only
-  allowlist entries (`lightgbm.basic.Booster`, `collections.defaultdict`, `OrderedDict`,
-  `NumpyArrayWrapper`) and the pinned numpy-2.x internal path (`numpy._core.multiarray`) are
-  unasserted; a dep bump or incomplete allowlist makes `from_bytes` raise, `load_latest` catches
-  broadly (train.py:180-184) and silently falls back to DNA for ALL mature/personalized models,
-  logged only at `warning`. | fix: add one round-trip test that fits n ≥ threshold (forcing the
-  LGBM branch; keep the existing `OSError → pytest.skip` libgomp guard from
-  test_fit_lgbm_at_threshold), serializes, and asserts `from_bytes` predictions match — so
-  allowlist/dep drift fails CI loudly instead of disabling personalization fleet-wide.
+- [cleanup] preference/efficacy.py:482 + 263 — (carried) `creator_id` still smuggled onto
+  `LabeledClip` as a dynamic attribute (`lc.creator_id = creator_id  # type: ignore[attr-defined]`)
+  and read back via `getattr(..., "creator_id", m.creator_id)` after seeding
+  `CreatorMetrics.creator_id` with a *clip* UUID fallback — direct `LabeledClip` builders
+  (the sweep, tests) get metrics attributed to a clip id. | fix: real
+  `creator_id: uuid.UUID | None = None` dataclass field, or pass `creator_id` into
+  `compute_creator_metrics`.
 
-- [SEV2] preference/efficacy.py:414-431 — `load_labeled_clips` is unbounded: no `LIMIT`, and it
-  fetches ALL feedback rows (including skip/format, filtered only afterwards in Python at :438).
-  train.py:53 caps the very same join at `PREFERENCE_MAX_TRAINING_LABELS` precisely to avoid this
-  (Issue 102), but the harness runs on EVERY retrain via `worker/tasks.py:_emit_preference_metrics`
-  → `evaluate_creator`. Compounding: `kendall_tau` (efficacy.py:88-113) is O(n²) pure Python and
-  runs 3× (one per ranking) over the 30% eval split — a power creator with thousands of labels
-  costs millions of pair iterations per retrain, inside the session that still holds the
-  `retrain:{cid}` advisory lock. | fix: mirror train.py — add
-  `.where(ClipFeedback.action.in_(TRAINABLE_ACTIONS) | <outcome-positive>)` semantics in SQL and
-  `.order_by(created_at.desc()).limit(settings.PREFERENCE_MAX_TRAINING_LABELS)` (then re-sort asc
-  for the chronological split).
-
-- [SEV2] preference/efficacy.py:267-302 — `_train_scorer` docstring claims it "reproduc[es]
-  preference.train.build_and_save's label/weight construction", but the label rule diverges:
-  `y = 1 if relevance >= _REL_KEEP`, and `_relevance_for` (:200-208) returns 2.0 whenever
-  `performed_well is True` REGARDLESS of action — so a downvoted clip whose outcome performed well
-  trains as a positive (and gets the 3× weight at :295), whereas production (train.py:71-73) labels
-  it negative with 3× weight. The "dna_preference" arm therefore isn't the production trainer,
-  biasing the moat metric the harness exists to measure. Bounded (downvote+performed_well is rare).
-  | fix: carry the raw action on `LabeledClip` and derive the train label from action only
-  (downvote → 0), keeping graded relevance for eval; or document the deviation in DECISIONS.
-
-- [SEV2] preference/efficacy.py:302 (`fit` inside `_train_scorer`) — CPU-bound
-  LightGBM/LogisticRegression fit runs synchronously inside the `async` chain
-  `evaluate_creator → compute_creator_metrics → _blend_scores → _train_scorer`; train.py:97
-  deliberately offloads the identical fit via `asyncio.to_thread` for this reason. Today's only
-  caller is the worker's private `run_async` loop (bounded harm: it just serializes the task while
-  holding the session + advisory lock), but any future API-loop caller — the module docstring
-  invites reuse — would stall the server for seconds. `sweep_half_life` (:341-384) multiplies this
-  by the 4-point grid per creator. | fix: make `_train_scorer` async-aware or wrap the fit at the
-  call sites with `await asyncio.to_thread(fit, ...)` like train.py.
-
-- [SEV2] preference/train.py:106-123 — every retrain inserts a new `PreferenceModel` row
-  (weights_blob up to ~100s of KB for LGBM) and no code path ever deletes old versions; retrain is
-  feedback-debounced (worker/tasks.py:1010-1027) but still fires on every new-feedback batch, so
-  rows/blob storage grow without bound per creator over the product's lifetime. Only the newest 2
-  versions are ever read (load_latest:139-144; the worker's NDCG warn-ratchet reads `.limit(2)`).
-  | fix: after the commit in `build_and_save`, delete rows with
-  `version < new_version - 4` for this creator (keep last 5) — safe under the same advisory lock.
-
-- [cleanup] preference/efficacy.py:254-255 + 463 — `creator_id` is smuggled onto `LabeledClip` as a
-  dynamic attribute (`lc.creator_id = creator_id  # type: ignore[attr-defined]`) and read back with
-  `getattr(..., "creator_id", m.creator_id)` after seeding `CreatorMetrics.creator_id` with a
-  *clip* UUID as fallback — any caller that builds `LabeledClip`s directly (the sweep, tests) gets
-  metrics attributed to a clip id. | fix: add `creator_id: uuid.UUID | None = None` as a real
-  dataclass field on `LabeledClip` (or pass `creator_id` into `compute_creator_metrics`).
-
-- [cleanup] preference/efficacy.py:235 — imports the private `_signal_score` from
+- [cleanup] preference/efficacy.py:243 — (carried) imports the private `_signal_score` from
   `clip_engine.scoring`; a rename inside clip_engine silently breaks the harness's
-  generic-signal baseline. | fix: export a public `signal_score` alias from clip_engine.scoring
-  and import that.
+  generic-signal baseline. | fix: export a public `signal_score` alias and import that.
 
-## Resolved since 2026-07-01
+- [cleanup] preference/efficacy.py:443-449 — (new, residual of the LIMIT fix) the harness
+  query has no SQL-side action/outcome filter, so non-trainable rows (skip/format without
+  a positive outcome — dropped later at :456) consume the `PREFERENCE_MAX_TRAINING_LABELS`
+  budget; a skip-heavy creator's harness window is smaller/older than the trainer's
+  (train.py:56 filters `action.in_(TRAINABLE_ACTIONS)` before its LIMIT). Bounded either
+  way — an eval-window skew, not a correctness or scale bug. | fix: add
+  `.where(ClipFeedback.action.in_([a.value for a in TRAINABLE_ACTIONS]) |
+  ClipOutcome.performed_well.is_(True))` (the outcome arm keeps the rel-2.0 eval-only
+  rows) so both queries budget over the same population.
 
-- features.py NaN guard covering only `dna_match` — **FIXED** (Issue 352): `_finite()`
-  (features.py:8-16) now clamps every float feature; regression tests
-  `tests/test_preference_edges.py:64,78` cover NaN in both `dna_match` and a non-dna feature.
-- style_learn returning first-over-threshold instead of most-frequent — **FIXED**
-  (Issue 352 Batch J): `_dominant` (style_learn.py:38-58) takes the argmax by count, ties to
-  first-seen; tests `test_*_returns_argmax_not_first_over_threshold`
-  (tests/preference/test_style_learn.py:58,122) pin it.
-- style_learn DRY (duplicated counting loop) — **FIXED**: both `dominant_style` and
-  `style_suggestion` now delegate to the shared `_dominant` helper.
+## Resolved since the 2026-07-20 morning pass (verified by reading + running, not assumed)
 
-## Verified OK (checked, not assumed)
+- **LGBM allowlist round-trip — FIXED.** `model.py:49-58` adds
+  `("sklearn.preprocessing._label", "LabelEncoder")` to `_ALLOWED_CLASSES` (LGBMClassifier
+  stores its target `LabelEncoder`; the missing entry meant `from_bytes` on ANY mature
+  LightGBM model raised and `load_latest`'s broad catch (train.py:194-198) silently
+  disabled personalization fleet-wide — the prior pass's exact predicted failure, real,
+  now caught). New test `tests/test_preference.py:194`
+  (`test_lgbm_scorer_round_trips_through_allowlist`) fits n=30 ≥ threshold=20 (forcing
+  the LGBMClassifier branch, `OSError → pytest.skip` libgomp guard kept), asserts
+  `type(scorer._model).__name__ == "LGBMClassifier"`, round-trips through
+  `_RestrictedUnpickler`, and asserts identical `predict_score` + `label_count`. Ran and
+  passed here — allowlist/dep drift now fails CI loudly.
+- **`load_labeled_clips` unbounded — FIXED.** efficacy.py:443-449 now mirrors train.py:
+  `.order_by(created_at.desc()).limit(settings.PREFERENCE_MAX_TRAINING_LABELS)` (=5000,
+  config.py:415 / .env.example:167), then re-sorts ascending (:484) for the chronological
+  split. The O(n²) `kendall_tau` is thereby bounded (~1500-row eval split worst case)
+  AND no longer on the event loop (next item).
+- **Sync fit inside the async efficacy chain — FIXED.** `evaluate_creator` (efficacy.py:504)
+  now runs `await asyncio.to_thread(compute_creator_metrics, train, eval_clips, k)` —
+  the CPU-bound scorer fit + tau never block the caller's loop, mirroring train.py:103.
+  `sweep_half_life` remains sync, but its only callers are the offline CLI
+  `scripts/eval_efficacy.py` and tests — no async caller exists; acceptable.
+- **PreferenceModel version accumulation — FIXED.** train.py:129-136 prunes
+  `version <= new_version - _KEEP_MODEL_VERSIONS` (keep last 5; only newest 2 ever read)
+  in the same transaction, still under the `pg_advisory_xact_lock` (:108-110), so a
+  concurrent retrain cannot race the delete. Creator-scoped WHERE on the delete.
+- **Efficacy train-label divergence — FIXED, exact parity with train.py verified line by
+  line.** `LabeledClip` gains a real `action` field (:189) set from the raw feedback
+  action (:463). `_train_scorer` (:292-313) now (a) filters to
+  `_TRAINABLE_ACTIONS = {upvote, trim, downvote}` — string-identical to train.py:28-31's
+  enum set; (b) derives `y = 1 iff action in _POSITIVE_ACTIONS` — matches train.py:77,
+  so a downvoted clip whose outcome performed well trains NEGATIVE with the 3× weight,
+  exactly like production; (c) weight parity holds: `performed_well=(relevance >= 2.0)`
+  ⇔ `performed_well is True` for loader-built rows (`_relevance_for` returns 2.0 only
+  then), and `sample_weight` (decay.py:57) applies the multiplier only on `is True`, so
+  the False-vs-None coercion is behaviorally identical to train.py:79; (d) `_blend_scores`
+  (:331) now feeds `preference_weight(scorer.label_count)` — `label_count` = fitted
+  trainable rows (model.py:198), the same count production uses
+  (clip_engine/ranking.py:65) — instead of the old `len(train)` that counted eval-only
+  rows. Pinned by two new tests (`tests/eval/test_efficacy.py:105`
+  `test_downvote_with_good_outcome_trains_negative_like_production`, :128
+  `test_non_trainable_actions_are_excluded_from_the_fit`), both passing.
 
-- Recency decay (decay.py:29-35): `w = e^(-ln2/H · age)` with the Issue-200 per-call
-  `half_life_days` override validated `> 0` (:24-25); production default `_LAMBDA` derives from the
-  config-validated `DECAY_HALF_LIFE_DAYS`. Rubric-4 recency-decay requirement satisfied.
-- Personalization-threshold honesty (model.py:147-162): weight 0 below
-  `PERSONALIZATION_THRESHOLD_LABELS`, linear ramp to `PREFERENCE_WEIGHT_CAP` at 2×; the efficacy
-  blend (`_blend_scores`:305-324) reproduces the same honest fallback (weight 0 → pure DNA
-  composite). `preference_weight` gating unchanged since the prior pass.
-- Per-creator isolation on every query: train.py:49, 109, 141, 166-169
-  (`creator_id` in every WHERE); efficacy.py:429 (`ClipFeedback.creator_id == creator_id`); the
-  worker retrain additionally runs under `db.tenant_session(cid)` RLS (worker/tasks.py:985).
-  Parameterized SQL only (`text(...)` with bound params). Logs contain only creator UUIDs — no
-  PII, no tokens, no virality promises.
-- Restricted-unpickler posture unchanged from the 2026-07-01 verification (full `(module, name)`
-  tuple allowlist; `_UNPICKLER_LOCK` serializes the module-global swap; `from_bytes` offloaded via
-  `to_thread` in load_latest).
-- Metric math in efficacy.py spot-checked: DCG/NDCG discount `log2(i+2)` matches Järvelin &
-  Kekäläinen; `kendall_tau` tie counting is correct tau-b (pairs tied in x counted toward `ties_x`
-  regardless of y and vice versa); `bootstrap_ci` quantile indices are correct for ci=0.95 and
-  deterministic per seed; `chronological_split` rejects out-of-range `train_frac` and never
-  shuffles.
-- Config: all module tunables (`PREFERENCE_WEIGHT_CAP`, `PERSONALIZATION_THRESHOLD_LABELS`,
-  `DECAY_HALF_LIFE_DAYS`, `STYLE_LEARN_THRESHOLD`, `PREFERENCE_SCORER_CACHE_SIZE`,
-  `PREFERENCE_MAX_TRAINING_LABELS`) present in `.env.example` with descriptions.
-- `_scorer_cache` LRU is lock-guarded, bounded by `PREFERENCE_SCORER_CACHE_SIZE`, keyed by
-  immutable `(creator_id, version)` — no stale-model risk.
+## Verified OK (rubric sweep, re-checked at HEAD)
+
+- Recency decay (decay.py:29-35): `w = e^(-ln2/H · age)`, per-call `half_life_days`
+  override validated `> 0`; default λ from config-validated `DECAY_HALF_LIFE_DAYS`.
+- Personalization-threshold honesty (model.py:152-166): weight 0 below
+  `PERSONALIZATION_THRESHOLD_LABELS`, linear ramp to `PREFERENCE_WEIGHT_CAP` at 2×;
+  the efficacy blend reproduces the same honest fallback (weight 0 → pure DNA
+  composite, efficacy.py:332-337). No virality promise anywhere in the module.
+- Per-creator isolation: creator_id in every WHERE — train.py:55, :115, :132-134 (new
+  pruning delete), :154-156, :180-183; efficacy.py:447. Parameterized SQL only.
+  Logs carry creator UUIDs only — no PII, no tokens.
+- Restricted-unpickler posture unchanged (full `(module, name)` allowlist,
+  `_UNPICKLER_LOCK`, `from_bytes` offloaded via `to_thread` in load_latest) — now with
+  the LGBM branch actually asserted by CI.
+- New-regression scan of `git diff ca3305c..HEAD -- preference/`: nothing beyond the
+  three intended fixes; the loader's ascending re-sort (:484) is redundant with
+  `chronological_split`'s internal sort but harmless.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 1 finding (unbounded PreferenceModel version accumulation); sessions injected + committed; fit offloaded in train.py |
-| 2 Concurrency & scale | 2 findings (unbounded load_labeled_clips + O(n²) tau per retrain; sync fit inside async efficacy chain) |
-| 3 Security & compliance | ok — per-creator isolation on all queries incl. new efficacy loader, RLS tenant_session on retrain, parameterized SQL, allowlist unpickler, UUID-only logs |
-| 4 Clip-quality | 1 finding (harness train-label divergence vs production); recency decay + honest threshold fallback verified OK |
+| 1 Resource lifecycle | ok — version pruning added under the advisory lock; sessions injected + committed; fits offloaded |
+| 2 Concurrency & scale | ok — harness load bounded at 5000, metrics offloaded via to_thread; sweep sync path is CLI-only |
+| 3 Security & compliance | ok — isolation on all queries incl. the new pruning delete, allowlist unpickler now CI-asserted for LGBM, UUID-only logs |
+| 4 Clip-quality | ok — recency decay + honest threshold fallback verified; harness now trains with production's exact label/weight/count rule |
 | 5 Anthropic SDK | n/a (no LLM calls) |
-| 6 Cleanliness & typing | 2 cleanup (dynamic creator_id attr + type:ignore; private `_signal_score` import) |
+| 6 Cleanliness & typing | 3 cleanup (dynamic creator_id attr; private `_signal_score` import; harness LIMIT budget counts non-trainable rows) |
 | 7 Error handling / API | n/a (not a router) |
 | 8 Config & paths | ok — all tunables in `.env.example` with descriptions; no filesystem paths |
 
 ## Module verdict
-NEEDS-WORK — three of four prior findings fixed (NaN guard, style argmax, DRY) and isolation /
-decay / threshold-honesty are sound, but the LightGBM serialization branch remains untested
-(carry-forward — silent fleet-wide personalization loss on dep drift) and the new efficacy harness
-adds four defects: unbounded per-retrain load + O(n²) tau, sync fit on the async path, a
-train-label divergence that biases the moat metric, and unbounded model-version accumulation.
+clean — all five targeted findings from the morning pass are genuinely fixed and
+test-pinned (LGBM round-trip ran green here; efficacy trainer parity verified
+symbol-by-symbol against train.py including the 3×-weight downvote edge and the
+`label_count` feed); only three cleanup-grade items remain.

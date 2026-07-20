@@ -1,151 +1,128 @@
-# frontend — assessed 2026-07-20
+# frontend — assessed 2026-07-20 (post-fix)
 
 Slice: the React SPA under `frontend/src` (React 19, react-router-dom 7 Data Mode,
-TanStack Query v5, Vite, Tailwind v4) **plus the residual `static/` pages** — this file
-now folds in what was previously `static_frontend.md`, because the legacy vanilla app
-was physically deleted in the assessed range (see Resolved section): `static/` today is
-only `tos.html`, `privacy.html`, `accessibility.html`, `_design-tokens.css`.
+TanStack Query v5, Vite, Tailwind v4) plus the residual `static/` pages
+(`tos.html`, `privacy.html`, `accessibility.html`, `_design-tokens.css`).
 
-Method: verified every 2026-07-01 finding against HEAD (ca3305c); scrutinized the
-`f70a857..HEAD` diff (20 frontend + 13 static files — PR #54 Recap fix, Issue 352
-Batch K, Issue 346 error boundary, static retirement); ran the requested Google-Fonts
-malformed-URL hunt; swept query error/loading states, mutation handling, auth expiry,
-XSS posture.
+Method: re-verified every finding from this morning's assessment against HEAD
+(e92b93a); reviewed the full `ca3305c..HEAD` frontend diff (15 files — the Issue 361
+frontend-tail QueryErrorState refactor, Recap poll + SSE-cap fix, ClipPlayer
+autoplay fix); traced the Recap poll's server-side dependencies end-to-end; ran the
+seven touched test files (63/63 pass); re-swept XSS sinks, `any`-typing, debug
+statements, auth-expiry, honesty copy.
 
-## Resolved since 2026-07-01
+## Resolved since this morning (2026-07-20 AM)
 
-- [RESOLVED, was SEV1] No root `errorElement`/`onUncaughtError` — **FIXED (Issue 346)**.
-  App.tsx:67 sets `errorElement: <RootError />` on the root `RootLayout` route with a
-  branded Reload / Back-to-dashboard recovery UI (App.tsx:30-55); main.tsx:8-14 adds
-  `onUncaughtError` + `onRecoverableError` to `createRoot`. A render throw no longer
-  blanks the SPA.
-- [RESOLVED, was SEV2] VideoTable `act()` raw fetch with no try/catch (stuck-busy
-  latch) — **FIXED (Issue 352 Batch K)**. VideoTable.tsx:67-84 now derives busy/label
-  from a TanStack `useMutation` over `api()`; `isError` resets the button to "Retry".
-- [RESOLVED, was SEV2] ChannelBrowser `clip()` identical latch — **FIXED**.
-  ChannelBrowser.tsx:28-66 wraps the (documented, intentional) multipart raw fetch in a
-  mutation; non-ok throws; error → "Retry".
-- [RESOLVED, was SEV2 needs-runtime-confirmation] ActivityPanel `useTaskSubscriptions`
-  open-then-teardown of each task SSE — **FIXED (Issue 352 Batch K)**.
-  ActivityPanel.tsx:61-128 keeps open connections in a `useRef` map and diffs it
-  against the store instead of closure-scoped cleanup; the code comment explicitly
-  cites the 2026-07-01 finding.
-- [RESOLVED, was cleanup] Raw-fetch consolidation — substantially done. The JSON POSTs
-  now route through `api()`; the four remaining raw fetches are each a documented
-  exception (Editor.tsx:165 arrayBuffer waveform, lib/activity.ts:23 keepalive beacon,
-  ChannelBrowser.tsx:32 FormData, BrandKitSection.tsx:42 optional 204-aware suggestion
-  probe with its own catch).
-- [RESOLVED by deletion] **The entire 2026-06-16 `static_frontend.md` open backlog is
-  moot**: the legacy pages/JS it targeted (onboarding.html, profile.html, pricing.html,
-  index.html, review.html, insights.html, analysis.html, early-access.html, auth.js,
-  editor.js, activeTasks.js, activityPanel.js, progressStream.js, util.js, all page
-  CSS) were removed in the assessed range (Issue 226 retirement — 2,355 deletions in
-  `f70a857..HEAD`). That closes: the onboarding channel_title innerHTML XSS sink, the
-  profile JS-in-attribute escape bug, both pricing auth bugs, the htmx-CDN-without-SRI
-  supply-chain risk, the early-access contradictory pricing page, the camelCase
-  registerTask bug, and all related cleanups. Remaining static pages re-checked below.
+- [RESOLVED, was SEV2] **Recap in-flight render latched forever (no poll fallback)
+  + SSE-cap misreported as render failure** — FIXED (commit ae1ce68).
+  - Recap.tsx:65-69 adds `refetchInterval` on the summaries query: 4000ms while
+    `summaries[0].render_status` is pending/running, `false` once settled — the
+    exact fix prescribed. Verified end-to-end against the backend contract:
+    POST `/videos/{id}/summaries` commits the Summary row **synchronously** with
+    `render_status=pending` before returning (routers/clips.py:1656-1666,
+    models.py:863-867 default), and GET orders `created_at.desc()`
+    (routers/clips.py:1730), so `summaries?.[0]` is genuinely the newest and the
+    poll engages both on the Redis-blip `stream_url=null` path and when the page
+    is opened mid-render. Busy state (Recap.tsx:109-111) clears from the same
+    poll. Test Recap.test.tsx:198-235 exercises the full cycle with fake timers:
+    poll while running → settle without reload → polling stops.
+  - Recap.tsx:18 + 198-209 adds `SSE_CAP_MESSAGE` and maps it to a subtle
+    "still running, this page updates when it finishes" notice instead of
+    "Render failed" (the CaptionStylePanel idiom). String verified verbatim
+    end-to-end: routers/tasks.py:78 emits `{"message": "too many open streams"}`
+    → lib/taskStream.ts:183 passes `data.message` through unchanged →
+    useTaskStream:53 → exact-equality check. Tests cover both the cap mapping
+    and that a real SSE failure still renders as a failure (Recap.test.tsx:237-259).
+- [RESOLVED, was SEV2] **Query failure rendered as misleading empty state on four
+  core pages** — FIXED (commit ae1ce68 + prior wave). Shared
+  `components/QueryErrorState.tsx` (typed props, page-specific title/detail,
+  uniform Retry) extracted from the Recap idiom and adopted on **all five pages**,
+  each with a regression test asserting the retry card renders (not the empty
+  state) on a 500 and that Retry refires the query:
+  - Dashboard.tsx:157-163 — `videosQuery.isError` → retry card, EmptyHero no
+    longer shown on failure (Dashboard.test.tsx:182-204).
+  - Review.tsx:158-173 — `isError` branch before `reviewed`/`!clip`, disclaimer
+    band preserved (Review.test.tsx:82-107).
+  - VideoClipsMap.tsx:151-163 — `videosQuery.isError || clipsQuery.isError` →
+    retry card before "Video not found."; onRetry refetches only the failed
+    query/queries (VideoClipsMap.test.tsx:228-248).
+  - Editor.tsx:359-375 — `clipsError` branch after `clipsPending`, before the
+    no-clips UI; **bonus**: transcript failure now shows an explicit
+    "Couldn't load the transcript" notice (Editor.tsx:517-521) instead of the
+    misleading "No transcript available" (Editor.test.tsx:142-161).
+  - Recap.tsx:129-139 — refactored to consume the shared component (was inline).
+  Branch ordering audited on every page: `isPending` precedes `isError` precedes
+  the empty state — **no page lost its loading/empty distinction** in the
+  refactor.
+- [RESOLVED] **ClipPlayer black-frame autoplay** (Issue 359d, live-smoke triage) —
+  FIXED. ClipPlayer.tsx:73-78 adds `muted` + `preload="auto"` alongside
+  `autoPlay`: Chrome blocks unmuted autoplay, which left the element paused on a
+  black first frame (the "black render" symptom); muted autoplay is allowed and
+  `controls` lets the user unmute. Test asserts all three attributes
+  (ClipPlayer.test.tsx:48-57).
 
-## Findings
+## Findings (all carry-forward cleanups; no new defects introduced by the fix waves)
 
-- [SEV2] frontend/src/pages/Recap.tsx:51-55, 92-96 + components/recap/RecapPlayer.tsx:13-25
-  — an in-flight recap render has **no poll fallback**: the summaries query has no
-  `refetchInterval`, so when `stream_url` is null (the acknowledged Redis-blip
-  fail-open, Recap.tsx:61-63) or when the page is opened while a render is already
-  running (streamUrl state starts null), `renderInFlight` keeps `busy` latched, the
-  button shows "Recap rendering…" and RecapPlayer spins "this takes a few minutes"
-  **indefinitely until a manual reload** — the comment "the list poll/refresh picks up
-  the result" describes a poll that does not exist (queryClient defaults:
-  `refetchOnWindowFocus: false`). Compounding: an SSE cap rejection ("too many open
-  streams") surfaces via useTaskStream as "Render failed — too many open streams"
-  (Recap.tsx:191-193) even though the render is still queued — CaptionStylePanel
-  special-cases exactly this (`SSE_CAP_MESSAGE`, CaptionStylePanel.tsx:22-24,63-68);
-  Recap does not. | fix: add
-  `refetchInterval: () => (latest is pending/running ? 4000 : false)` to the summaries
-  query (the Review.tsx:121-128 idiom), and map the cap message to a
-  "queued — progress unavailable" status instead of a failure.
-
-- [SEV2] frontend/src/pages/Dashboard.tsx:154-160, pages/Review.tsx:114-158,
-  pages/VideoClipsMap.tsx:140-154, pages/Editor.tsx:121-138 — **query failure renders
-  as a misleading empty state** on four core pages: after the single retry, `isError`
-  is never branched, `data` is undefined, and the `?? []` fallbacks make a 500/network
-  failure look like first-run emptiness — Dashboard shows the EmptyHero "No videos
-  yet — pick a path above", Review shows "No clips yet — generate them from the
-  Dashboard", VideoClipsMap shows "Video not found.", Editor shows its no-clips UI. A
-  creator with 50 videos who hits a transient API error is told they have none (401 is
-  handled — `api()` redirects to login — this is the 5xx/network path). | fix: branch
-  on `query.isError` with the retry-affordance card Recap.tsx:114-132 already
-  implements; extract that block into a shared `<QueryErrorState onRetry={refetch}>`.
-
-- [cleanup] (carry-forward) frontend/src/components/ActivityPanel.tsx:193-199
+- [cleanup] frontend/src/components/ActivityPanel.tsx:193-195
   (`<Link to={item.link_url}>`) and components/dashboard/DashboardBanners.tsx:32
-  (`href={setup.next_action_url ?? '/app/onboarding'}`) — server-supplied URLs rendered
-  directly; currently server-controlled (low risk) but unvalidated against
-  `javascript:`/external schemes if those fields ever become user-influenced. | fix:
-  assert leading `/` (same-origin path) before rendering; OWASP DOM-XSS safe-URL
-  guidance.
+  (`href={setup.next_action_url ?? '/app/onboarding'}`) — server-supplied URLs
+  rendered directly; currently server-controlled (low risk) but unvalidated
+  against `javascript:`/external schemes if those fields ever become
+  user-influenced. | fix: assert leading `/` (same-origin path) before rendering;
+  OWASP DOM-XSS safe-URL guidance. STILL OPEN.
 
-- [cleanup] (carry-forward, extended) frontend/src/index.css:14 and
-  static/_design-tokens.css:20 — Google Fonts loaded via render-blocking CSS `@import`
-  from fonts.googleapis.com (index.css pulls three families: Geist, Geist Mono, Inter);
-  leaks visitor IPs to Google on every page view (German GDPR rulings) and is on the
-  pre-EU-launch critical path. | fix: self-host the woff2 files (Fontsource or
-  `google-webfonts-helper`) and drop both @imports.
+- [cleanup] frontend/src/index.css:14 and static/_design-tokens.css:20 — Google
+  Fonts still loaded via render-blocking CSS `@import` from fonts.googleapis.com;
+  leaks visitor IPs to Google on every page view (German GDPR rulings), on the
+  pre-EU-launch critical path. (The "CSP fonts" work in this range was the
+  backend CSP header allowing the CDN, not self-hosting.) | fix: self-host the
+  woff2 files (Fontsource or google-webfonts-helper) and drop both @imports.
+  STILL OPEN.
 
-- [cleanup] frontend/src/pages/Pricing.tsx:20 — `// TODO: drive from /billing/packs
-  API…` — CLAUDE.md forbids TODO comments in closed work. | fix: file the follow-up in
-  docs/issues.md (it already says "follow-up issue") and delete the comment.
+- [cleanup] frontend/src/pages/Pricing.tsx:20 — `// TODO: drive from
+  /billing/packs API…` — CLAUDE.md forbids TODO comments in closed work. | fix:
+  file the follow-up in docs/issues.md and delete the comment. STILL OPEN.
 
 - [cleanup] static/tos.html:55 + static/privacy.html:91,94,149,171 — external
   `target="_blank"` anchors carry no `rel="noopener noreferrer"`. Modern browsers
-  default `noopener` for target=_blank so exploitation risk is nil; flagged only for
-  consistency (Login.tsx:86-98 sets it). | fix: add the rel attribute.
+  default `noopener`, so exploitation risk is nil; flagged for consistency
+  (Login.tsx sets it). | fix: add the rel attribute. STILL OPEN.
 
-- [info / NOT a repo defect — requested malformed-font-URL investigation] The HAR
-  (`autoclip.studio.har`) request
-  `fonts.googleapis.com/css2?family=Open+Sans:...&display=swap%CC%A6` (stray U+0326
-  combining comma) **does not originate from this codebase**. Evidence: (1) repo-wide
-  grep for `Open+Sans` / `ital,wght` / `Poppins` across frontend/, static/, docs, the
-  design-handoff files and untracked files — zero hits outside the HAR itself;
-  (2) `git log --all -S "Open+Sans"` — never existed in history; (3) the live deployed
-  bundle (fetched `https://autoclip.studio/app/assets/index-Bx-OecO_.css`, 2026-07-20)
-  contains only the well-formed Geist/Geist-Mono/Inter URL matching index.css:14;
-  (4) in the HAR both Open+Sans entries have empty Referer, initiator `{"type":
-  "other"}` and status 0 (blocked/cancelled), unlike the app's own font request. All
-  four signals point to a **browser-extension-injected stylesheet** in the capture
-  session. No file:line exists to fix; recommend re-capturing the HAR in a clean
-  profile before spending more time on it. (Self-hosting fonts — cleanup above — would
-  also make any third-party font request trivially attributable.)
+- [info, carried] The HAR malformed-font-URL (`display=swap%CC%A6`, Open+Sans) was
+  confirmed this morning to be extension-injected, not from this codebase (zero
+  repo/history hits, deployed bundle clean, empty-Referer status-0 requests).
+  No action; re-capture the HAR in a clean profile if it recurs.
 
 - [cleanup / NOT-a-defect, retained so the next audit doesn't re-raise it]
   src/components/chip/ChipStates.tsx `ChipAnalyzing`/`ChipRendering` exported but
-  unmounted — confirmed intentional Issue 314 deferral (documented in-file). Leave.
+  unmounted — intentional Issue 314 deferral (documented in-file). Leave.
 
-Re-verified this run: no `dangerouslySetInnerHTML`/`innerHTML`/`eval` anywhere in
-frontend/src (LLM brief output rendered as auto-escaped React children, brief.ts);
-zero `: any`/`as any` outside tests; no secrets/tokens in client code or storage;
-401 → login redirect centralized in api.ts:42-46; honesty disclaimer present on
-Dashboard/Review DisclaimerBands, Recap copy, tos.html:52/68 — no virality promise
-anywhere (Onboarding's new small-catalog path and Login's signup-paused notice both
-keep the honest framing); SSE lifecycles all close on unmount/URL change
-(useTaskStream:55, ActivityPanel:121-127, CaptionStylePanel subRef cleanup); the
-corrected SSE-cap posture (server is sole enforcer, activeTasks.ts header) matches the
-consumers.
+Re-verified this run: 63/63 tests pass across the seven touched files; no
+`dangerouslySetInnerHTML`/`innerHTML`/`eval` sinks in frontend/src (only comments
+referencing the structural avoidance, brief.ts); no `console.log`/`: any`/`as any`
+outside tests; 401 → login redirect centralized in api.ts unchanged; disclaimer
+bands preserved on the new Review/Editor error branches (honesty copy intact — no
+virality promise anywhere, including the new SSE-cap and retry copy); Profile
+in-text link change (hover:underline → underline) is the axe link-in-text-block
+a11y fix, no behavior change; QueryErrorState is fully typed with no state of its
+own (pure presentational, retry delegated to the caller's `refetch`).
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle (EventSource/subscription cleanup) | ok — prior F4 double-open fixed with ref-diff pattern; all SSE hooks close on unmount; CaptionStylePanel new subscription closes via subRef cleanup |
-| 2 Concurrency & scale | ok / 1 SEV2 facet — Recap lacks the poll fallback every other in-flight surface has (Review/Dashboard/CleanedUriPoll all bound their refetchIntervals) |
-| 3 Security & compliance (XSS/secrets/auth) | ok / 2 cleanup — no HTML sinks; legacy static XSS surfaces deleted; server-URL Link hardening + static rel=noopener remain; fonts-CDN IP leak (GDPR) open |
+| 1 Resource lifecycle (EventSource/subscription cleanup) | ok — no SSE lifecycle changes in this range; ref-diff pattern intact; Recap poll is TanStack-managed (stops on settle/unmount) |
+| 2 Concurrency & scale | ok — Recap poll gap closed; interval is bounded (4s, stops when settled), matching the Review/Dashboard idiom |
+| 3 Security & compliance (XSS/secrets/auth) | ok / 2 cleanup — no HTML sinks; server-URL Link hardening + static rel=noopener remain; fonts-CDN IP leak (GDPR) open |
 | 4 Clip-quality | n/a (not a clip module; principle/fit-tier surfaced read-only, honest) |
 | 5 Anthropic SDK | n/a (frontend; LLM consumed via SSE only) |
-| 6 Cleanliness & typing | ok / 1 cleanup — one TODO (Pricing.tsx:20); no `any`, signatures typed |
-| 7 Error handling / user-facing error states | 2 SEV2 — four pages render query errors as empty states; Recap's no-poll/cap-message gap. Mutations across changed files now surface errors correctly (Retry labels, ApiError messages) |
+| 6 Cleanliness & typing | ok / 1 cleanup — one TODO (Pricing.tsx:20); new component and branches fully typed |
+| 7 Error handling / user-facing error states | ok — both AM SEV2s fixed and regression-tested on every page; loading vs error vs empty now distinct on Dashboard, Review, VideoClipsMap, Editor, Recap; SSE cap honestly mapped |
 | 8 Config & paths | ok — relative fetch paths, `BASE_URL` respected, no client secrets |
 
 ## Module verdict
-NEEDS-WORK — the two headline 2026-07-01 defects (missing root error boundary SEV1,
-stuck-busy raw fetches) are verified fixed and the legacy static backlog closed by
-deletion; what remains is one SEV2 pair in the error-state layer: Recap can latch
-"rendering" forever with no poll fallback, and four core pages present API failures
-as first-run empty states.
+clean — both SEV2s from this morning (Recap forever-latch/no-poll + four pages
+rendering API failures as first-run empty states) are verified fixed with
+regression tests and correct branch ordering, the ClipPlayer black-frame autoplay
+fix landed, and the diff introduced no regressions; only four pre-existing
+cleanups remain (server-URL scheme guard, self-hosted fonts, Pricing TODO,
+static rel=noopener).
