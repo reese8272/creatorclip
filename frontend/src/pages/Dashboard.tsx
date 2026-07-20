@@ -12,6 +12,7 @@ import { ChannelBrowser } from '@/components/dashboard/ChannelBrowser'
 import { EmptyHero } from '@/components/dashboard/EmptyHero'
 import { VideoTable, type ClipInfo } from '@/components/dashboard/VideoTable'
 import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/DashboardBanners'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import type { ClipCountsResponse, DnaProfile, DnaResponse, VideoListResponse } from '@/types'
 
 // Poll while any clip-trackable video is mid-pipeline; stop once everything has
@@ -156,19 +157,10 @@ export function Dashboard() {
         ) : videosQuery.isError ? (
           // A failed load must NOT fall through to the first-run empty hero —
           // a creator with videos would be told they have none (Recap idiom).
-          <div className="rounded-md border border-default bg-surface px-6 py-10 text-center">
-            <p className="text-sm text-fg">Couldn&apos;t load your videos.</p>
-            <p className="mt-1 text-xs text-subtle">
-              This is usually temporary — try again in a moment.
-            </p>
-            <button
-              type="button"
-              onClick={() => void videosQuery.refetch()}
-              className="mt-4 rounded-md border border-default px-3 py-1.5 text-xs text-fg hover:bg-elevated"
-            >
-              Retry
-            </button>
-          </div>
+          <QueryErrorState
+            title="Couldn't load your videos."
+            onRetry={() => void videosQuery.refetch()}
+          />
         ) : isEmpty ? (
           <>
             <EmptyHero onUploadClick={() => setUploadOpen(true)} />

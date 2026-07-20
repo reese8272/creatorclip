@@ -224,4 +224,26 @@ describe('VideoClipsMap', () => {
     await screen.findByRole('button', { name: /Clip at/i })
     expect(screen.queryByText(/No clips were generated/i)).toBeNull()
   })
+
+  // ── Issue 361 sweep: query failure must not read as "Video not found." ────
+
+  it('shows a retry card — not "Video not found." — when the videos query fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/videos'))
+        return { status: 500, ok: false, json: async () => ({ detail: 'boom' }) }
+      return { status: 200, ok: true, json: async () => ({ clips: [] }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderMap()
+    expect(await screen.findByText(/Couldn’t load this video’s clip map/)).toBeInTheDocument()
+    expect(screen.queryByText('Video not found.')).toBeNull()
+
+    // Retry refires the failed query.
+    const gets = () =>
+      fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/videos')).length
+    const before = gets()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(gets()).toBeGreaterThan(before))
+  })
 })

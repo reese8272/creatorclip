@@ -10682,6 +10682,18 @@ as "raw fetch POSTs without try/catch" — verified false (no raw fetches remain
 ChannelBrowser were fixed in Issue 352); the real defect at those lines is the assessment's
 query-error-as-empty-state finding, which is what was fixed. **Date:** 2026-07-20
 
+**361 (frontend-tail batch) — the deferred extraction shipped; two small judgment calls.**
+(1) `components/QueryErrorState.tsx` now carries the retry card for Dashboard, Review,
+VideoClipsMap, Editor AND Recap (the original donor of the pattern — leaving it inlined there
+would have kept the duplication the extraction exists to remove). (2) Recap's SSE-cap notice
+duplicates the `SSE_CAP_MESSAGE = 'too many open streams'` constant already local to
+CaptionStylePanel.tsx: that file is outside this batch's file list, so hoisting the constant to a
+shared module (natural home: hooks/useTaskStream.ts, the layer that surfaces the error) is left
+to a follow-up rather than risking a cross-batch conflict. Copy-wise, the cap notice says "close
+one and retry, or just wait — the render is still running" (not the assessment's terser "queued —
+progress unavailable"): Recap now HAS the summaries poll, so "just wait" is true and the honest
+framing. **Date:** 2026-07-20
+
 ## 2026-07-20 — Issue 360: PR CI moved off the prod-VM runner [DEC]
 
 **What changed.** `ci.yml` (all 12 jobs) and `mutation.yml` now run on GitHub-hosted

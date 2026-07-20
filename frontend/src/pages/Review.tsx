@@ -9,6 +9,7 @@ import { ClipPlayer } from '@/components/review/ClipPlayer'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 
@@ -138,7 +139,7 @@ export function Review() {
     }
   }, [reviewed, navigate])
 
-  function message(text: string, onRetry?: () => void) {
+  function message(text: string) {
     return (
       <>
         <DisclaimerBand>
@@ -147,15 +148,6 @@ export function Review() {
         </DisclaimerBand>
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 text-center">
           <p className="text-sm text-muted">{text}</p>
-          {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="mt-4 rounded-md border border-default px-3 py-1.5 text-xs text-fg hover:bg-elevated"
-            >
-              Retry
-            </button>
-          )}
         </main>
       </>
     )
@@ -166,8 +158,19 @@ export function Review() {
   // A failed load must NOT fall through to "No clips yet" — a creator whose
   // clips exist would be told to regenerate them (Recap retry idiom).
   if (isError)
-    return message('Couldn’t load clips for this video — try again in a moment.', () =>
-      void refetch(),
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+          <QueryErrorState
+            title="Couldn’t load clips for this video."
+            onRetry={() => void refetch()}
+          />
+        </main>
+      </>
     )
   if (reviewed) return message('All clips reviewed! Great work. Taking you back to the dashboard…')
   if (!clip) return message('No clips yet — generate them from the Dashboard.')
