@@ -380,7 +380,7 @@ def test_missing_resend_api_key_fails_at_settings_load() -> None:
         "GOOGLE_OAUTH_CLIENT_ID": "gci",
         "GOOGLE_OAUTH_CLIENT_SECRET": "gcs",
         "OAUTH_REDIRECT_URI": "http://localhost/cb",
-        "TOKEN_ENCRYPTION_KEY": "dGVzdGtleXZhbHVldGVzdGtleXZhbHVldGVzdA==",
+        "TOKEN_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "JWT_SECRET_KEY": "test-jwt-secret-32-bytes-minimum-!",
         "ALLOWED_ORIGINS": "http://localhost",
     }
@@ -412,7 +412,7 @@ def test_missing_email_from_fails_at_settings_load() -> None:
         "GOOGLE_OAUTH_CLIENT_ID": "gci",
         "GOOGLE_OAUTH_CLIENT_SECRET": "gcs",
         "OAUTH_REDIRECT_URI": "http://localhost/cb",
-        "TOKEN_ENCRYPTION_KEY": "dGVzdGtleXZhbHVldGVzdGtleXZhbHVldGVzdA==",
+        "TOKEN_ENCRYPTION_KEY": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "JWT_SECRET_KEY": "test-jwt-secret-32-bytes-minimum-!",
         "ALLOWED_ORIGINS": "http://localhost",
     }
