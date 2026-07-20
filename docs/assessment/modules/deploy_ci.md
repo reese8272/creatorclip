@@ -1,160 +1,135 @@
-# deploy_ci — assessed 2026-07-20
+# deploy_ci — assessed 2026-07-20 (post-fix)
 
 Slice: `.github/workflows/` (9 workflows), `docker-compose{,.prod,.staging}.yml`, `Dockerfile`,
 `render.yaml`, `deploy/charts/creatorclip/`, `scripts/` (operational), `.env.example`.
 
-## Method notes (this run)
+Re-assessment after two fix waves merged since the morning run (diff `ca3305c..e92b93a`,
+PRs #55/#56/#57). Every prior finding re-verified against HEAD; new-regression sweep done on
+the full diff of `.github/`, `scripts/`, `docker-compose.staging.yml`, `.env.example`.
 
-- **Off-course bug verification (2026-07-02 SEV2 "rollback is a no-op image swap"): FIXED at
-  HEAD.** `docker-compose.prod.yml:7,36,55` now interpolate
-  `image: ghcr.io/reese8272/creatorclip:${IMAGE_TAG:-latest}` on app/worker/beat, and
-  `deploy.yml:321-338` (`_rollback_and_fail`) re-tags the captured `PREV_IMAGE` digest as
-  `:rollback` and rolls out with `IMAGE_TAG=rollback`. The fix landed with Issue 298. The
-  `docs/OFF_COURSE_BUGS.md:71` entry is still marked "📋 Open" — stale, see cleanup below.
-  Residual (accepted roll-forward posture, not re-filed): rollback swaps the image but not the
-  schema; old code runs against the migrated DB. Mitigated by the squawk gate + downgrade
-  round-trip lint + the data-bearing staging gate.
-- **Module-shadow class sweep** (root `flags.py` vs `scripts/flags.py`, cause of ca3305c):
-  checked every `scripts/*.py` name against root modules — `flags` is the only collision, and
-  both importers are guarded (`drills.py` documented -m-only + workflow uses
-  `python -m scripts.drills`; `scripts/flags.py:24` inserts repo root ahead of `scripts/`).
-  The *missing-root-on-sys.path* sibling of this class does exist in three scripts (cleanup
-  below).
-- Diff-scoped scrutiny of `f70a857..HEAD` churn (deploy.yml staging gate, staging-drills.yml,
-  migration-lint downgrade round-trip, drills.py, backup_redis.sh, deploy.sh) done file-by-file.
+## Prior findings — disposition
 
-## Findings
+- **[SEV1] prod-VM self-hosted runner executing PR code — FIXED (Issue 360, commit fe777a2;
+  DECISIONS.md:10697 entry written).** All 12 `ci.yml` jobs and `mutation.yml` now
+  `runs-on: ubuntu-latest`. The self-hosted runner is reserved for deploy-track workflows
+  only, and all three trigger exclusively from trusted refs: `docker-publish.yml`
+  (`push: main` + release), `deploy.yml` (`workflow_run` on main + dispatch),
+  `staging-drills.yml` (dispatch-only). `scripts/setup-runner.sh:17-33` now documents the
+  security boundary ("never point a pull_request-triggered workflow at this runner") and
+  dropped the CI dep pre-install. Live evidence: three GitHub-hosted PR runs passed today
+  (PRs #56, #57) and Deploy-to-production succeeded twice — the split works in practice.
+  Residual (documented in the ci.yml header): hosted-minutes billing is a dependency again;
+  a billing fast-fail must be fixed by paying, not by moving jobs back.
+- **[SEV2] staging stack borrowing prod .env values — FIXED with documented residual
+  (Issue 361).** `docker-compose.staging.yml:79-94,122-130` now override on both app and
+  worker: `STORAGE_BACKEND: local`, `SENTRY_DSN: ""`, `OTEL_EXPORTER_OTLP_ENDPOINT: ""`,
+  and `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` from optional `STAGING_STRIPE_*`
+  (test-mode) vars, both added to `.env.example:191-192`. `TOKEN_ENCRYPTION_KEY` is
+  deliberately NOT overridden — the inline comment explains the data-bearing
+  `staging_postgres_data` volume holds tokens encrypted under the prod key, so a swap would
+  break every persisted row. Accepted residual: staging shares the prod Fernet key; the
+  compensating control is that the staging stack never runs untrusted code (dispatch/deploy
+  refs only, per the SEV1 fix above).
+- **[SEV2] deploy.sh `SendEnv=GHCR_TOKEN` silently dropped — FIXED (commit 1e60ded).**
+  `scripts/deploy.sh:96-106`: the token now travels over stdin into
+  `docker login --password-stdin` in a dedicated pre-step; the heredoc no longer references
+  `$GHCR_TOKEN` at all. `GHCR_TOKEN` presence is validated up front (deploy.sh:29-32).
+- **[SEV2] deploy.sh false "mirrors deploy.yml exactly" + no rollback + pre-smoke prune —
+  FIXED (commit 1e60ded).** Header (deploy.sh:13-17) now states honestly what is and isn't
+  mirrored ("NOT an exact mirror: no staging-parity gate, no secret sync; prefer Actions").
+  The heredoc now captures `PREV_IMAGE` by RepoDigest before pulling, defines
+  `_rollback_and_fail` (pull digest → re-tag `:rollback` → `IMAGE_TAG=rollback` compose up →
+  exit 1) invoked on both smoke failures, and `docker image prune -f` moved to AFTER the
+  smoke tests — a failed manual deploy can no longer delete its own rollback target.
+- **[SEV2] rotate_token_key.py keys on argv — FIXED (commit fe777a2 + 141d17b).** Keys now
+  read from `OLD_TOKEN_ENCRYPTION_KEY`/`NEW_TOKEN_ENCRYPTION_KEY` env vars with
+  `getpass.getpass()` interactive fallback (scripts/rotate_token_key.py:75-85); argv flags
+  removed entirely; `docs/RUNBOOKS.md:194-226` invocations (forward + reverse rotation)
+  updated to match.
+- **[SEV2] backup_redis.sh sourcing/executing the prod .env — FIXED (commit fe777a2).**
+  `scripts/backup_redis.sh:31-45` replaces `set -a && source` with the no-exec `read_env`
+  parser (duplicated verbatim from backup_pg.sh, with a comment saying so), exports only
+  `BACKUP_ENCRYPTION_KEY` for `openssl -pass env:`, and adds the missing
+  `BACKUP_R2_BUCKET != R2_BUCKET` 3-2-1 guard (lines 57-63).
+- **[SEV2] activate-rls.yml `.venv/bin/alembic` — FIXED.** All three occurrences are bare
+  `alembic` (activate-rls.yml:117,120,131). The password-interpolation secondary is
+  mitigated the other way round: a fail-fast charset guard (lines 71-82) rejects passwords
+  containing `' | & \` or whitespace before SSH, names-only output. Acceptable — the values
+  are self-controlled secrets; injection is now unreachable.
+- **[SEV2] staging-drills against `:latest` — FIXED (commit 1e60ded).**
+  `staging-drills.yml:47-63` resolves the running prod app container's RepoDigest (same
+  inspect as deploy.yml's PREV_IMAGE capture) and passes it as `STAGING_IMAGE`, falling back
+  to `:latest` only with an explicit `::warning` when prod isn't running. Runs with
+  `working-directory: /opt/autoclip` so the prod-compose `ps` resolves.
+- **[cleanup] OFF_COURSE_BUGS rollback entry stale — FIXED.** `docs/OFF_COURSE_BUGS.md:71`
+  now reads "✅ Fixed (verified 2026-07-20 assessment...)".
 
-- [SEV1] scripts/setup-runner.sh:58,96 + .github/workflows/ci.yml:33 — the self-hosted runner
-  lives ON the prod VM, is in the `docker` group (root-equivalent host control), and owns
-  `/opt/autoclip` including the prod `.env` (all secrets), while `ci.yml` triggers on
-  `pull_request`. Any code that executes during a PR job — including a malicious transitive
-  dependency pulled by `npm ci` / `pip install -r requirements.txt` — can read every prod
-  secret and control the prod containers. Bounded today (private solo repo, self-authored
-  PRs), but this is a full-prod-compromise supply-chain path with no isolation. | fix: keep the
-  prod-VM runner for deploy-track workflows only (deploy.yml, docker-publish.yml,
-  staging-drills.yml) and move PR-triggered CI to a second runner OFF the prod VM (already the
-  documented second-runner TODO), or at minimum a distinct runner user with no docker-group
-  membership and no read access to `/opt/autoclip/.env`. The 2026-06-23 hybrid-CI DECISIONS
-  entry weighs billing, not this blast radius — record the residual there either way.
-- [SEV2] docker-compose.staging.yml:74,103 — staging app/worker load `env_file: .env`, which is
-  the PROD `/opt/autoclip/.env` when run by deploy.yml's gate and staging-drills.yml.
-  DATABASE_URL/REDIS_URL are overridden (DB/Redis isolation is real), but everything else
-  bleeds: `STORAGE_BACKEND=r2` + prod R2 creds (staging renders/uploads write into the PROD
-  media bucket), live `STRIPE_SECRET_KEY`, prod `SENTRY_DSN`/OTel (staging errors pollute prod
-  telemetry), prod `TOKEN_ENCRYPTION_KEY`. `scripts/live_smoke.py:36-39` already defines an
-  `.env.staging` convention that the compose file ignores. | fix: add explicit `environment:`
-  overrides in docker-compose.staging.yml — `STORAGE_BACKEND: local` (or a dedicated
-  `creatorclip-staging` bucket), `SENTRY_DSN: ""`, `OTEL_EXPORTER_OTLP_ENDPOINT: ""`, test-mode
-  Stripe key — or point `env_file` at `/opt/autoclip/.env.staging`.
-- [SEV2] scripts/deploy.sh:31,45 — `ssh -o SendEnv=GHCR_TOKEN` only transmits the variable if
-  the VM's sshd has `AcceptEnv GHCR_TOKEN` (default config accepts only `LANG LC_*`); the
-  remote heredoc runs `set -euo pipefail`, so an untransmitted `${GHCR_TOKEN}` aborts at line 50
-  — the documented manual-fallback deploy most likely fails at GHCR login
-  (needs-runtime-confirmation on the VM's sshd_config). | fix: stop relying on SendEnv — pipe
-  the token over stdin, e.g. `printf '%s' "$GHCR_TOKEN" | ssh ... 'cat > /tmp/.ghcr && docker
-  login ghcr.io -u reese8272 --password-stdin < /tmp/.ghcr && rm /tmp/.ghcr; ...'` (or restructure
-  so login reads the piped stdin directly).
-- [SEV2] scripts/deploy.sh:13,94 — header claims it "mirrors the GH Actions deploy.yml exactly";
-  it doesn't: no staging gate, no PREV_IMAGE capture, no auto-rollback, and `docker image prune
-  -f` runs BEFORE the smoke test (deploy.yml:379-383 deliberately moved prune after smoke to
-  preserve the rollback target). A failed manual deploy prunes its own rollback image and has
-  no recovery path. | fix: port the PREV_IMAGE capture + `:rollback` re-tag + post-smoke prune
-  from deploy.yml into the heredoc; until then, correct the header so an operator under
-  incident pressure knows the guarantees differ.
-- [SEV2] scripts/rotate_token_key.py:73-74 — `--old-key`/`--new-key` put both Fernet keys on
-  argv, visible in `ps` on the shared VM and persisted in shell history; backup_pg.sh:12-15
-  exists specifically to avoid this pattern for its passphrase. | fix: read
-  `OLD_TOKEN_ENCRYPTION_KEY`/`NEW_TOKEN_ENCRYPTION_KEY` from the environment (or
-  `getpass.getpass()` prompts) and update the RUNBOOKS invocation.
-- [SEV2] scripts/backup_redis.sh:31-34 — `set -a && source "$ENV_FILE"` EXECUTES the prod .env
-  as shell (a value containing `$(...)` runs code) and exports every secret into the process
-  environment; backup_pg.sh:50-56 built the no-exec `read_env` helper to prevent exactly this,
-  and backup_redis.sh (same Issue family, 288) regressed it. Also missing backup_pg.sh:70-73's
-  `BACKUP_R2_BUCKET != R2_BUCKET` guard. | fix: extract `read_env` (and the bucket guard) into
-  a shared sourced snippet or duplicate them verbatim; drop the `source`.
-- [SEV2] .github/workflows/activate-rls.yml:106,109,119 — the sanity step calls
-  `.venv/bin/alembic` inside the app container, but the image has no `.venv` (deps live in
-  `/root/.local`; deploy.yml correctly calls bare `alembic`). A re-run of this
-  idempotent-by-design workflow aborts at step 0 with "history does not mention
-  0010_rls_policies". Latent (activation already done 2026-06-30), but this is the documented
-  re-activation/verification tool. | fix: `.venv/bin/alembic` → `alembic` (3 occurrences).
-  Secondary (cleanup-grade): lines 131-132/192-210 interpolate `APP_PW`/`MIGRATE_PW` into SQL
-  and `sed` replacement text — a password containing `'`, `|`, or `&` breaks or injects; use
-  `psql -v pw=...` variables and a charset check.
-- [SEV2] .github/workflows/staging-drills.yml:47-53 — drills run against `:latest` on the claim
-  ":latest == what prod runs", which is false in exactly the scenario drills exist for: after an
-  auto-rollback, prod runs `:rollback` while `:latest` IS the bad image — the drills would then
-  green-stamp behavior prod doesn't run; a concurrent main-push can also swap `:latest`
-  mid-workflow. | fix: resolve the prod app container's RepoDigest (same `docker inspect
-  --format='{{index .RepoDigests 0}}'` as deploy.yml:270) and pass that as STAGING_IMAGE,
-  falling back to `:latest` only when prod isn't running.
-- [cleanup] docs/OFF_COURSE_BUGS.md:71 — the 2026-07-02 rollback entry is still "📋 Open" but
-  the fix shipped (see Method notes) | fix: mark ✅ Fixed 2026-07-02 (Issue 298), citing
-  docker-compose.prod.yml `${IMAGE_TAG:-latest}` + the `:rollback` re-tag.
-- [cleanup] scripts/eval_efficacy.py, scripts/repro_render.py:17, scripts/repro_ingest_render.py
-  — the only DB-importing scripts WITHOUT the `sys.path.insert(0, <repo root>)` guard that
-  flags.py/doctor.py/rotate_token_key.py/reapply_erasures.py/llm_e2e.py/live_smoke.py all carry;
-  their documented bare invocations (`python3 scripts/eval_efficacy.py`) ImportError anywhere
-  PYTHONPATH≠/app (same failure class as the drills flags-shadow) | fix: add the 2-line guard.
-- [cleanup] scripts/drills.py:92,104,127,158 — reaches into `flags._reset_cache()` (private
-  API); and staging-drills.yml:8-11 claims "the drills restore all state in finally blocks" but
-  drill_rate_limit (scripts/drills.py:163-186) leaves the seeded creator's daily render buckets
-  consumed (staging-only, self-expiring) | fix: export a public `flags.reset_cache()` (or accept
-  the private use with a comment) and amend the workflow comment to name the rate-limit
-  exception.
-- [cleanup] docker-compose.prod.yml:101 — `cloudflare/cloudflared:latest` is the last floating
-  third-party tag in prod (autoheal and pgbouncer are pinned; the inline comment already says
-  to pin) | fix: pin to a dated release (e.g. `cloudflare/cloudflared:2026.x.y`).
-- [cleanup] Dockerfile:57-84 — runtime image has no `USER`; app/worker/beat run as root in the
-  container (standard beta hardening gap; `pip install --user` under /root needs a small move
-  to make a non-root user work). Also Anton TTF (raw.githubusercontent `main`) and the
-  BlazeFace model (`.../latest/...`) are fetched from mutable URLs at build — non-reproducible
-  layers, failure-tolerated but content-unpinned | fix: add a non-root USER stage; pin both
-  assets by commit/version URL (checksum-verify the model).
-- [cleanup] .env.example — `CC_BASE_URL`/`CC_JWT_SECRET`/`CC_CREATOR_ID` (required in the prod
-  .env by scripts/deploy.sh:112-117's in-container smoke) and `BACKUP_HEALTHCHECK_URL`
-  (read by both backup scripts) are undocumented; `IMAGE_TAG` (deploy-time compose interpolation)
-  deserves a one-line note | fix: add the four entries with descriptions.
+## Findings (still open — all carried-over cleanups; no prior SEV1/SEV2 remains)
 
-## Verified-good (load-bearing claims traced, no finding)
+- [cleanup] scripts/eval_efficacy.py, scripts/repro_render.py, scripts/repro_ingest_render.py
+  — still the only DB-importing scripts without the `sys.path.insert(0, <repo root>)` guard
+  that flags.py:24/doctor.py:35 carry; bare `python3 scripts/...` invocations ImportError
+  anywhere PYTHONPATH≠/app (same class as the drills flags-shadow). Note f29a2be touched
+  eval_efficacy.py without adding it. | fix: add the 2-line guard.
+- [cleanup] scripts/drills.py:91,104,126,158 — still reaches into `flags._reset_cache()`
+  (private API); and staging-drills.yml:8-11 still claims "the drills restore all state in
+  `finally` blocks" while `drill_rate_limit` (drills.py:163-186) leaves the seeded creator's
+  daily render buckets consumed (staging-only, self-expiring). | fix: export a public
+  `flags.reset_cache()` (or comment the accepted private use) and amend the workflow comment
+  to name the rate-limit exception.
+- [cleanup] docker-compose.prod.yml:101 — `cloudflare/cloudflared:latest` still the last
+  floating third-party tag in prod (inline comment already says to pin). | fix: pin to a
+  dated release.
+- [cleanup] Dockerfile:57-84 — runtime image still has no `USER` (app/worker/beat run as
+  root in-container); Anton TTF (raw.githubusercontent `main`) and BlazeFace model
+  (`.../latest/...`) still fetched from mutable URLs at build. | fix: non-root USER stage;
+  pin both assets by commit/version URL with checksum verification.
+- [cleanup] .env.example — `CC_BASE_URL`/`CC_JWT_SECRET`/`CC_CREATOR_ID` (required by both
+  deploy paths' in-container smoke) and `BACKUP_HEALTHCHECK_URL` (read by both backup
+  scripts) still undocumented; `IMAGE_TAG` deserves a one-line note. (`STAGING_STRIPE_*` and
+  the Opus rates WERE added this wave.) | fix: add the entries with descriptions.
 
-- deploy.yml secret sync (lines 192-257): values passed via `env:` not interpolation, awk
-  exact-key rewrite, guarded no-blank semantics, nothing echoed; GHCR login via
-  `--password-stdin` everywhere.
-- Staging-parity gate (Issue 298): sha-pinned image (never `:latest`), in-container alembic with
-  current==heads assertion, persistent data-bearing volume kept via `stop` not `down`.
-- Migration gates: squawk per-file `down:rev` render with `set -o pipefail` (off-by-one fixed),
-  online downgrade round-trip with byte-diffed schema dumps, check_downgrades.py allowlist with
-  staleness self-check — coherent and hard to hollow out.
-- backup_pg.sh: fully streamed, creds container-side, `-pass env:`, separate-bucket guard,
-  server-side lifecycle retention — the strongest file in the slice.
-- `python -m scripts.drills` fix (ca3305c) is correct: -m keeps cwd (/app) at sys.path[0], so
-  `import flags` resolves to the root module; drills' DB/Redis writes are confined to the
-  ccstage stack's own postgres/redis services.
-- ci.yml / all workflows: `permissions: contents: read` default (least privilege), escalated
-  per-job only where needed (eval statuses, publish packages).
-- render.yaml: secrets all `sync: false`, no values committed; VERBOSE_LOGGING=true is the
-  documented 2026-06-29 beta DECISION with the launch-off note inline. Helm chart holds only
-  placeholders; parked behind Issue 275 (descoped for v1).
+## New-regression sweep of ca3305c..HEAD (deploy/CI paths) — none found
+
+- ci.yml runner move is complete (no job left on `self-hosted`); `permissions: contents:
+  read` posture unchanged; the `@visual` grep-invert in the gating Playwright job is correct
+  (the non-gating `visual` job owns those tests, Issue 272).
+- deploy.sh: bash-only `2> >(grep ...)` stderr filter is safe under the `#!/usr/bin/env
+  bash` shebang and preserves ssh's exit status; login credential persists in remote
+  `~/.docker/config.json` (same posture as deploy.yml's runner login).
+- staging-drills digest pin: a `ghcr.io/...@sha256:` ref is valid for `docker pull` and for
+  the `image:` interpolation slot in docker-compose.staging.yml (`${STAGING_IMAGE:-...}`).
+- backup_redis `read_env` uses guarded indirect expansion (`${!key:-}`) — safe under
+  `set -u`; validation prints names only.
+- rotate_token_key: `getpass` in a non-TTY (CI) context raises rather than hangs —
+  acceptable for an operator-run script.
+- activate-rls charset guard glob patterns are POSIX-correct; values never echoed.
+
+## Verified-good (unchanged from the morning run, re-spot-checked)
+
+- deploy.yml secret sync (env-passed, awk exact-key, `--password-stdin`); staging-parity
+  gate (sha-pinned image, in-container alembic current==heads, data-bearing volume kept via
+  `stop`); migration gates (squawk per-file `down:rev` with pipefail, downgrade round-trip
+  byte-diff, check_downgrades allowlist self-check); backup_pg.sh (streamed, `-pass env:`,
+  separate-bucket guard); `python -m scripts.drills` module-shadow fix; render.yaml secrets
+  all `sync: false`; Helm chart placeholder-only (parked, Issue 275).
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — sessions via context managers (rotate/drills/flags CLI); backups streamed, no temp plaintext; single-transaction rotation |
-| 2 Concurrency & scale | ok — single-runner serialization is documented + mitigated (concurrency groups); RedBeat confirmed in worker config (prod compose beat is safe without `-S`) |
-| 3 Security & compliance | 6 findings (SEV1 runner blast radius; staging env bleed; SendEnv token; argv keys; sourced .env; RLS workflow) |
+| 1 Resource lifecycle | ok — no change; rotation single-transaction, backups streamed |
+| 2 Concurrency & scale | ok — hosted CI removes the single-runner serialization for PRs; deploy-track concurrency groups unchanged |
+| 3 Security & compliance | ok — all 6 prior findings (incl. the SEV1) verified fixed; TOKEN_ENCRYPTION_KEY staging residual documented in-file |
 | 4 Clip-quality | n/a (deploy module) |
-| 5 Anthropic SDK | n/a (no LLM calls; doctor probes models.list only) |
-| 6 Cleanliness & typing | 3 findings (private `_reset_cache`, missing sys.path guards, backup_redis DRY regression folded into its SEV2) |
-| 7 Error handling / API | n/a (no routers; scripts exit non-zero correctly, secrets scrubbed from doctor output) |
-| 8 Config & paths | 2 findings (stale `.venv/bin/alembic` path; CC_*/BACKUP_HEALTHCHECK_URL absent from .env.example) |
+| 5 Anthropic SDK | n/a (no LLM calls) |
+| 6 Cleanliness & typing | 2 findings (missing sys.path guards; private `_reset_cache` + stale workflow comment) |
+| 7 Error handling / API | n/a (no routers; scripts exit non-zero correctly) |
+| 8 Config & paths | 1 finding (CC_*/BACKUP_HEALTHCHECK_URL/IMAGE_TAG absent from .env.example) |
 
 ## Module verdict
 
-NEEDS-WORK — the deploy pipeline's core safety mechanisms (staging gate, rollback, migration
-lint, backups) are genuinely strong and the flagged off-course rollback bug is verified fixed,
-but the prod-VM self-hosted runner running PR code with docker-group access to all prod secrets
-is an unmitigated full-compromise path, and the staging stack silently borrows prod's live
-Stripe/R2/Sentry credentials.
+clean — all eight SEV1/SEV2 findings from the morning run are verified fixed at HEAD (runner
+split live-proven by today's hosted PR runs and two successful deploys; staging env bleed
+guarded with the TOKEN_ENCRYPTION_KEY residual explicitly documented; deploy.sh now carries
+the real rollback path); only five bounded cleanups remain.

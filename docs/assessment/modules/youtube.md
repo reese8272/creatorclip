@@ -1,95 +1,112 @@
-# youtube — assessed 2026-07-20
+# youtube — assessed 2026-07-20 (post-fix)
 
 Scope: youtube/_http.py, _redis.py, analytics.py, categories.py, data_api.py, errors.py,
-ingest.py, oauth.py, publish.py, quota.py, __init__.py. Re-assessment against the
-2026-07-01 findings: each prior finding verified FIXED or carried forward by reading the
-current code and the `git diff f70a857..HEAD -- youtube/` changes (oauth.py, publish.py,
-quota.py, data_api.py, analytics.py, _http.py), plus call-site verification in
-worker/tasks.py (`_publish_to_youtube_async`) and config.py/.env.example.
+ingest.py, oauth.py, publish.py, quota.py, __init__.py. Re-assessment of the
+2026-07-20 (morning) findings after the two fix waves (`git diff ca3305c..e92b93a --
+youtube/`: oauth.py +27/−8, publish.py +31/−2 in commits 2279720 + f29a2be). Each prior
+finding verified FIXED or STILL OPEN by reading current code, the new tests
+(tests/test_publish.py, tests/test_youtube_edges.py), the Celery caller
+(worker/tasks.py:604-799, celery_app.py acks_late config), and the DECISIONS 2026-07-20
+fix-batch entry.
 
-## Resolved since 2026-07-01
+## Resolved since the morning assessment
 
-- **[SEV2 → FIXED] videos.insert quota mischarge** — `COST_DATA_VIDEOS_INSERT = 100`
-  against the shared read pool is gone. quota.py:159-188 adds `consume_insert()` with a
-  dedicated PT-anchored key (`_insert_quota_key()`, quota.py:92-96) limited by
-  `YOUTUBE_QUOTA_INSERT_DAILY_CALLS` (config.py:436 = 100; documented in
-  .env.example:170), reusing `_LUA_CONSUME` atomically. Call-site verified:
-  worker/tasks.py:673 calls `consume_insert()`; no remaining `COST_DATA_VIDEOS_INSERT`
-  references outside stale worktrees. Uploads no longer debit the shared budget.
-- **[SEV2 → FIXED] completed resumable upload misreported as failed** —
-  `_query_offset` (publish.py:86-107) now returns `(offset, video_id)`; a 200/201 on the
-  status query surfaces the created resource id, and both resume paths in
-  `upload_video` (publish.py:155-161 exception path, 179-186 5xx path) return
-  `completed_id` instead of falling through to the terminal raise. The residual
-  all-bytes-received-but-no-id state raises a permanent `YouTubeUploadError(0, ...)`
-  (publish.py:191-194), which the Celery wrapper treats as terminal (never retried) —
-  correct anti-duplicate posture.
-- **[SEV2 → FIXED] base re-login silently stripping publish scope** —
-  `build_authorization_url` now sets `include_granted_scopes=true` on the BASE flow too
-  (oauth.py:96-102), and `store_or_update_tokens` unions the incoming scope with the
-  stored grant (oauth.py:253-260; `scope` is `nullable=False` in models.py:292, so
-  `row.scope.split()` is safe). See new finding below on the union's inability to ever
-  narrow.
+- **[SEV2 → FIXED] publish.py residual duplicate-upload window (resume probe transport
+  error escaping untyped)** — new `_resume_offset` (publish.py:112-134) wraps
+  `_query_offset` in `except httpx.HTTPError` with exponential backoff (1→16s cap,
+  `_MAX_RESUME_ATTEMPTS=5`) against the SAME session URI; on exhaustion it raises a
+  terminal `YouTubeUploadError(0, ...)`, which the task wrapper (worker/tasks.py:622-625)
+  treats as permanent — never the generic `self.retry` that would open a new resumable
+  session. Both call sites converted (publish.py:182 chunk-transport path, :206 5xx
+  path). Exception-path audit of `upload_video`: no `httpx.HTTPError` can now escape
+  with a live session — `_initiate` (publish.py:60) can still leak a raw transport
+  error, but at that point zero bytes have been PUT, so a task-level retry's new session
+  cannot create a duplicate video (the orphaned empty session just expires). Regression
+  tests: `test_offset_query_transport_error_retries_same_session` (asserts
+  `post.assert_called_once()` — never a second session) and
+  `test_offset_query_transport_errors_exhausted_raise_typed_terminal`.
+- **[SEV2 → FIXED] oauth.py scope union could never narrow** — union replaced with
+  replace-on-grant (oauth.py:263-271): the token response `scope` is treated as Google's
+  authoritative CURRENT grant (valid because `include_granted_scopes=true` is on every
+  auth URL, so a re-auth response carries the combined authorization); a scope unchecked
+  on the granular-consent screen now genuinely narrows the stored grant, and the
+  narrowing is logged (scope names + creator_id only — no token/PII). The `if scope:`
+  guard keeps the stored grant when the field is empty/omitted (routers/auth passes ""
+  as default), so a scope-less response cannot wipe the record. Refresh flow verified:
+  `_do_token_refresh` passes `scope=new_tokens.get("scope", row.scope)` (oauth.py:324) —
+  a refresh response without a scope field replaces the grant with itself (no-op), and a
+  refresh response WITH scope reflects the current grant, so refresh-path narrowing is
+  also correct and never wipes. Tests:
+  `test_store_or_update_tokens_narrows_scope_on_downgraded_regrant` +
+  `test_store_or_update_tokens_empty_scope_keeps_stored_grant`. Residual runtime
+  uncertainty (base re-login `scope` field actually carrying the combined grant under
+  granular consent) now fails CLOSED — worst case is a re-consent prompt via
+  `has_publish_scope()=False`, not the old permanent-403 fail-open.
+  (needs-runtime-confirmation, but the failure direction is now safe.)
+- DECISIONS entry present ("Publish resume probe: in-process retry, not session
+  persistence", 2026-07-20) and matches what shipped.
 
 ## Findings
 
-- [SEV2] youtube/publish.py:126-162 — residual duplicate-upload window: a raw
-  `httpx.HTTPError` raised INSIDE `_query_offset` (line 95, network still down when the
-  resume probe fires) or inside `_initiate` escapes `upload_video` untyped. The Celery
-  caller's failure handler only catches `(YouTubeAuthError, YouTubeUploadError)`
-  (worker/tasks.py:686), so the raw error falls to the generic `except Exception:
-  self.retry` in the sync wrapper — the retry re-runs `upload_video` from scratch with a
-  NEW resumable session. If the original session had in fact completed at Google, a
-  duplicate video is created; the 2026-07-01 fix only covers the case where
-  `_query_offset` is reachable. | fix: wrap the `_query_offset` call in
-  `try/except httpx.HTTPError`, count it as a resume attempt with backoff instead of
-  escaping; longer-term, persist `session_uri` on `ClipPublication` so a task-level
-  retry resumes the SAME session (the resumable protocol's intended crash-recovery
-  shape) rather than initiating a new one. (needs-runtime-confirmation)
-- [SEV2] youtube/oauth.py:253-260 — the scope union can never NARROW, so a creator who
-  unchecks `youtube.upload` on Google's granular-consent screen during a re-consent gets
-  a token response without that scope, but the union re-adds it: `has_publish_scope()`
-  stays `True` forever and every publish 403s with no self-heal — the only reset path is
-  row deletion on refresh `invalid_grant` (oauth.py:291-300), which partial scope
-  removal does not trigger. The inline comment "the reconnect path re-syncs the record"
-  is untrue under union semantics (reconnect also unions). | fix: evidence-based
-  narrowing — when the publish path gets a 403 insufficient-permission
-  `YouTubeAuthError`, strip `PUBLISH_SCOPE` from `row.scope`; or validate the actual
-  grant via Google's tokeninfo endpoint at exchange time and store that authoritative
-  scope set. (needs-runtime-confirmation of granular-consent × include_granted_scopes
-  interplay.)
-- [cleanup] youtube/publish.py:165 — `resp.json().get("id")` on the final-chunk 200 can
-  raise an uncaught `ValueError` on a non-JSON body; `_query_offset` (lines 100-103)
-  guards the identical parse. | fix: apply the same `try/except ValueError` and raise
-  `YouTubeUploadError(resp.status_code, "upload finished without a video id")` so the
-  typed-error contract holds.
-- [cleanup] (carry-forward) youtube/analytics.py:47 vs data_api.py:226 — Analytics
-  reports still charge `consume(COST_ANALYTICS_REPORT)` against the same shared
-  `_quota_key()` counter as the Data API, though the YouTube Analytics API is a separate
-  product with its own quota. Conservative (throttles early, never leaks), but the
-  insert-bucket split (Issue 352 Batch D) shows the intended per-product shape. | fix:
-  give Analytics its own daily counter, or document the deliberate single-budget choice
-  in a comment/DECISIONS entry.
-- [cleanup] (carry-forward) youtube/analytics.py:47 — `consume()` is still charged
-  up-front before the HTTP GET and its retry loop, so a report that ultimately fails on
-  a network error debits a unit; data_api.py:226 defers `consume` until a real non-304
-  200. Minor over-count (1 unit), noted for consistency.
+- [SEV2] youtube/publish.py + worker/tasks.py — the DECISIONS-accepted residual:
+  `session_uri` is still not persisted on `ClipPublication`, so a hard worker death
+  (SIGKILL/OOM/soft-time-limit kill — `task_acks_late=True` in celery_app.py:71
+  redelivers the task) or a user re-trigger after the terminal probe failure re-runs
+  `upload_video` with a NEW session; if the original session had completed at Google, a
+  duplicate video results. The idempotency guard (worker/tasks.py:686-705) only
+  short-circuits `status == done` rows — a crash mid-upload leaves `running`. Window is
+  now narrow (requires session-completed-at-Google AND process death before the
+  success-path commit) and explicitly accepted in DECISIONS 2026-07-20 with session
+  persistence named the follow-up. | fix (the named follow-up): migration adding
+  `clip_publications.session_uri`; write it after `_initiate`, and on re-run resume that
+  session (probe first) instead of initiating. (needs-runtime-confirmation)
+- [SEV2 → downgraded, tracked as accepted] the terminal `YouTubeUploadError(0, ...)`
+  from an exhausted probe marks the publication failed even when the upload may have
+  succeeded at Google (success misreported as failure — the safe, non-duplicating
+  direction, chosen deliberately). Folded into the session-persistence follow-up above;
+  not counted separately.
+- [cleanup] (carry-forward, STILL OPEN) youtube/publish.py:192 — final-chunk 200
+  `resp.json().get("id")` can raise an uncaught `ValueError` on a non-JSON body;
+  `_query_offset` (publish.py:102-105) guards the identical parse. Note the stakes rose
+  slightly: this is now the ONLY untyped escape reachable with a completed upload (a
+  ValueError here falls to the generic Celery retry → new session → duplicate), though a
+  non-JSON 200 from Google's upload endpoint is essentially theoretical. | fix: same
+  `try/except ValueError` → `YouTubeUploadError(resp.status_code, "upload finished
+  without a video id")`.
+- [cleanup] (carry-forward, STILL OPEN) youtube/analytics.py:45 vs data_api.py:226 —
+  Analytics reports still charge `consume(COST_ANALYTICS_REPORT)` against the shared
+  Data-API daily counter although the Analytics API is a separate quota product.
+  Conservative (throttles early, never overspends). | fix: dedicated counter à la
+  `consume_insert()`, or a one-line DECISIONS note documenting the single-budget choice.
+- [cleanup] (carry-forward, STILL OPEN) youtube/analytics.py:45 — `consume()` charged
+  up-front before the HTTP GET + retry loop, so a report that dies on the network debits
+  a unit; data_api.py:226 defers until a real non-304 2xx. Minor over-count.
+
+## New-regression check (`git diff ca3305c..HEAD -- youtube/`)
+
+Only oauth.py and publish.py changed; no new defects found. `_resume_offset` uses
+`asyncio.sleep` (no loop blocking); worst-case added wall time is bounded (≤5 probes ×
+≤15s backoff per outer attempt, inside the existing Celery soft time limit for typical
+clips); its warning log carries the httpx exception only (same pattern as the existing
+chunk-failure log — no token). The narrowing log line carries creator_id + scope URLs,
+no PII/secret. Stray `=======` conflict markers left in docs/DECISIONS.md by the
+integration merge are outside this slice — logged in docs/OFF_COURSE_BUGS.md.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — `_http` singleton now registered with `shared_resources.register_aclose` for app-shutdown close (_http.py:42, new since 07-01); `_redis` lazy singleton; publish.py file handle in `with`; ffprobe/ffmpeg/yt-dlp subprocesses time-bounded (ingest.py:36,71); token refresh commits on an internal `AdminSessionLocal` (oauth.py:296-316), never the caller's session |
-| 2 Concurrency & scale | 1 finding (SEV2 duplicate-upload window) — otherwise ok: no sync/blocking calls inside `async def` in-slice (subprocess helpers are sync `def`); quota check-then-incr atomic via `_LUA_CONSUME` for both the shared and the new insert bucket; refresh lock is SET NX EX + Lua compare-and-delete with fail-open on Redis outage (oauth.py:352-365); backoff with jitter + Retry-After honored (data_api.py:233-258, analytics.py:76-100); catalog fan-out paginated (in-memory maps fine at ≤100-user beta) |
-| 3 Security & compliance | 1 finding (SEV2 scope-union never narrows — a stale capability record, not a token leak) — otherwise ok: tokens read via `decrypt()` (oauth.py:284,343,395) and never logged (log lines carry creator_id/video_id only); per-creator isolation on every creator-scoped query (analytics.py:264,340,403-423; ETag cache key folds creator_id, data_api.py:53-66); parameterized SQLAlchemy throughout; yt-dlp gated off by default and own-content-only (ingest.py:89, COMPLIANCE §ingest); 30-day staleness purge posture unchanged and honored outside slice; no virality strings |
+| 1 Resource lifecycle | ok — `_http` singleton registered for app-shutdown aclose; publish file handle in `with`; token refresh commits on internal `AdminSessionLocal` (oauth.py:307-327), caller session read-only; subprocesses time-bounded (ingest.py) |
+| 2 Concurrency & scale | 1 finding (SEV2 crash-window duplicate — DECISIONS-accepted residual, session persistence is the named follow-up) — otherwise ok: exception-path duplicate window closed by `_resume_offset`; quota atomic via `_LUA_CONSUME` (shared + insert buckets); refresh lock SET NX EX + Lua CAD, fail-open on Redis outage; backoff + Retry-After honored (data_api.py, analytics.py) |
+| 3 Security & compliance | ok — prior SEV2 (scope stuck-wide) fixed by replace-on-grant with empty-scope guard; tokens read via `decrypt()` (oauth.py:295,354,406) and never logged (new log lines verified: creator_id + scope names / httpx exc only); per-creator isolation on every creator-scoped query; parameterized SQLAlchemy; yt-dlp own-content-only + flag-gated; no virality strings |
 | 4 Clip-quality | n/a (not a clip module) |
 | 5 Anthropic SDK | n/a (no LLM calls in-slice) |
-| 6 Cleanliness & typing | ok — signatures typed; no TODO/print/debug; the stale videos.insert cost comment from 07-01 was removed with the fix; one untrue comment folded into the scope-union finding |
-| 7 Error handling / API | 1 finding (cleanup, publish.py:165 untyped ValueError) — no FastAPI routers in-slice; typed `YouTubeAuthError`/`YouTubeUploadError`/`QuotaExhaustedError`/`QuotaSubBudgetExhaustedError` otherwise used correctly |
-| 8 Config & paths | ok — new `YOUTUBE_QUOTA_INSERT_DAILY_CALLS` in config.py:436 AND .env.example:170 with description; all quota keys PT-anchored (America/Los_Angeles) matching Google's reset; no relative paths |
+| 6 Cleanliness & typing | ok — new `_resume_offset` fully typed + docstringed; the untrue union comment replaced by an accurate replace-on-grant rationale citing the DECISIONS entry |
+| 7 Error handling / API | 1 finding (cleanup, publish.py:192 untyped ValueError on final-chunk parse — carry-forward) — typed error contract otherwise holds end-to-end into the task wrapper |
+| 8 Config & paths | ok — no new config this wave; `YOUTUBE_QUOTA_INSERT_DAILY_CALLS` remains in config.py + .env.example; quota keys PT-anchored; no relative paths |
 
 ## Module verdict
-NEEDS-WORK — all three 2026-07-01 SEV2s (insert-quota mischarge, completed-upload
-misreport, publish-scope stripping) are verified fixed end-to-end, but a residual
-duplicate-upload window remains when the resume probe itself dies on the network (task
-retry opens a new session), and the new scope union can never narrow a genuinely
-reduced grant, leaving publish permanently 403ing for that creator.
+NEEDS-WORK — both morning SEV2s are verified fixed with regression tests (no transport
+error can escape to a session-recreating retry on any exception path; scope handling now
+narrows correctly, guards empty scope, and refresh cannot wipe grants); what remains is
+the DECISIONS-accepted crash-window duplicate (persist `session_uri` follow-up) plus
+three carried-forward cleanups.

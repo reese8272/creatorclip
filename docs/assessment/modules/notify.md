@@ -1,4 +1,8 @@
-# notify — assessed 2026-07-20
+# notify — assessed 2026-07-20 (post-fix)
+
+**Post-fix status:** clean, unchanged in-slice — `git diff ca3305c..e92b93a -- notify/` is
+empty; the only wave touch was `tests/test_mailer.py` (Issue 358 dummy-Fernet-key fixture
+fix, test-only). Verdict and all cleanups stand as written below.
 
 Slice: `notify/__init__.py`, `notify/copy.py`, `notify/dedupe.py`, `notify/mailer.py`,
 `notify/templates/*` (10 `.txt` + 10 `.html`). Per this run's method additions, also traced the

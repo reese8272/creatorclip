@@ -1,81 +1,71 @@
-# analysis + improvement + upload_intel — assessed 2026-07-20
+# analysis + improvement + upload_intel — assessed 2026-07-20 (post-fix)
 
-Anthropic-SDK claims re-verified against the current /claude-api skill reference (2026-07-20):
-- **pause_turn** — server-tool turns can return `stop_reason:"pause_turn"`; caller must re-send the
-  assistant content with the same `tools` and re-call, capping continuations (~5). Confirmed still the
-  required pattern.
-- **web_search `max_uses`** — supported optional field on `web_search_20260209`; dynamic filtering
-  activates automatically on Sonnet 4.6 (no beta header, no `allowed_callers` requirement documented).
-- **Prompt-caching floors (current reference)** — Sonnet 4.5/4.1/4/3.7: 1,024 tok; **Sonnet 4.6 /
-  Fable 5: 2,048 tok**; Opus 4.5–4.8 / Haiku 4.5: 4,096 tok. Below-floor markers are silent no-ops
-  (no charge, `cache_creation_input_tokens: 0`).
+Re-assessment after the two fix waves (diff ca3305c..e92b93a). In this slice only
+`improvement/brief.py` changed (plus the new shared helper `worker/anthropic_stream.py:stream_until_final`
+it now calls); `analysis/` and `upload_intel/` are byte-identical to this morning's assessment.
 
-## Resolved since 2026-07-01
-- **[SEV1 → FIXED] improvement/brief.py web_search `pause_turn` never handled** — Issue 350 added the
-  loop to BOTH paths: `.create()` (:209-221) and streaming via `stream_message` (:153-173), each capped
-  at `_MAX_SEARCH_ROUNDS = 5`, appending `{"role":"assistant","content":msg.content}` per round exactly
-  as the docs prescribe. Streaming switched from `stream_and_emit` to `stream_message` (full `Message`
-  with visible `stop_reason`). Continuation test exists
-  (`tests/test_brief_caching.py::test_improvement_brief_pause_turn_loop_continues_on_web_search`).
-  DECISIONS entry 2026-07-01 records the change.
-- **[SEV2 → FIXED] no `max_uses` on web_search + `_20260209` config concerns** — `max_uses: 5` now on
-  the tool definition (improvement/brief.py:98); model is `claude-sonnet-4-6` (config.py:120), which the
-  current reference lists as fully supporting `web_search_20260209` dynamic filtering with no
-  `allowed_callers` requirement. The prior ZDR/`allowed_callers` concern is moot per current docs.
-- **[SEV2 → FIXED] `best_upload_windows` filtered malformed rows AFTER the top-N slice** — Issue 352
-  Batch J: upload_intel/timing.py:54-55 now filters+coerces via `_coerce_row` BEFORE
-  `sorted(...)[:top_n]`. Regression test present
-  (`tests/test_upload_intel.py::test_best_windows_malformed_row_does_not_underfill_top_n`).
-- **[SEV2 → FIXED] `optimal_gap_hours` ignored week wraparound** — Issue 352 Batch J:
-  upload_intel/timing.py:94-97 uses the shorter arc of the 168-hour circular week
-  (`min(diff, 168 - diff)`), fixing the Sat 23:00 → Sun 01:00 = 166h case. Test present
-  (`test_optimal_gap_hours_week_wraparound`).
-- **[prior note, still good] analysis/brief.py** has no `cache_control` marker (removed Issue 315);
-  tokens logged on both paths; singleton client; no web_search so pause_turn n/a.
+## Resolved since 2026-07-20 (morning)
+- **[SEV2 → FIXED] improvement/brief.py `.create()` path did not accumulate usage across pause_turn
+  rounds** — commit 319d53d: a zeroed `_usage` dict is initialized before the loop (:192-197) and every
+  round adds `response.usage.{input,output,cache_read,cache_creation}` inside the loop (:207-212);
+  `record_llm_metric` (:237), the token log line (:225-231), and the returned usage dict (:241) all use
+  the summed figure. Regression test asserts summed usage across a two-round pause_turn sequence
+  (`tests/test_brief_caching.py::test_improvement_brief_pause_turn_loop_continues_on_web_search`,
+  :339-346 — `input 10+20=30`, `output 5+30=35`). The `.create()` and streaming paths now agree.
+- **[VERIFIED — refactor preserved behavior] streaming path switched from an inline loop to the shared
+  `stream_until_final` helper** (improvement/brief.py:144-154 → worker/anthropic_stream.py:201-256).
+  Traced, not assumed:
+  - **Summed usage preserved**: helper initializes the same 4-key zeroed dict and does
+    `usage[k] += round_usage.get(k, 0)` per round (anthropic_stream.py:231-249) — identical to the
+    removed inline code; the summed dict flows to `record_llm_metric` (brief.py:171) and is returned
+    to callers for `billing.ledger.record_llm_usage` (brief.py:172).
+  - **Warn behavior preserved**: `warn_if_truncated` still fires per round inside `stream_message`
+    (anthropic_stream.py:184); the round-cap warning still fires via the loop's `for/else` with the
+    caller-supplied format `"improvement_brief streaming: hit max search rounds (%d)"`
+    (brief.py:153, anthropic_stream.py:254-255) — same message, same trigger condition (all
+    `max_rounds + 1` calls paused), and the last paused message is returned exactly as before.
+  - Error handling unchanged: API errors propagate out of the helper; the caller's
+    `log_llm_error` + re-raise wrapper is intact (brief.py:155-157).
 
-## Findings
+## Resolved earlier (2026-07-01 wave — spot-rechecked, still fixed)
+- [SEV1] pause_turn never handled → loop on BOTH paths, capped at 5, continuation test present.
+- [SEV2] no `max_uses` on web_search → `max_uses: 5` on the tool definition (improvement/brief.py:98)
+  + `test_improvement_brief_tool_max_uses_is_set`.
+- [SEV2] `best_upload_windows` filtered malformed rows after the top-N slice → `_coerce_row` before
+  `sorted(...)[:top_n]` (upload_intel/timing.py) + regression test.
+- [SEV2] `optimal_gap_hours` week wraparound → shorter arc of the 168-hour circular week + test.
+
+## Findings (all carry-forward cleanups; no new findings from the diff)
 
 ### improvement (`improvement/brief.py`)
-- [SEV2] improvement/brief.py:209-248 — the `.create()` pause_turn loop does NOT accumulate `usage`
-  across rounds: `response` is overwritten each iteration and `_usage`/`record_llm_metric`/the returned
-  usage dict (which callers pass to `billing.ledger.record_llm_usage`) are built from the FINAL round
-  only, dropping earlier rounds' output tokens (search preamble + tool_use). The streaming path
-  correctly accumulates per-round (`usage[k] += round_usage.get(k, 0)`, :163-164) — the two paths
-  disagree, and multi-round searches under-bill on the `.create()` path. | fix: mirror the streaming
-  path — initialize a zeroed usage dict before the loop and add each round's
-  `response.usage.{input,output,cache_*}` inside it; add a two-round pause_turn test asserting summed
-  usage.
 - [cleanup, carry-forward] improvement/brief.py:84-93 — `cache_control:{"type":"ephemeral"}` on the
-  ~400-token static prefix is still an inert no-op (below both the 1,024 and the current 2,048 Sonnet 4.6
-  floor). Now explicitly documented in the module docstring (:5-7) with a DECISIONS pointer, and per
-  current docs a below-floor marker carries no charge — downgraded from the prior SEV2. Still dead code
-  inconsistent with sibling `analysis/brief.py` (marker removed, Issue 315). | fix: drop the marker to
-  match Issue 315, or consolidate a shared static prefix that clears the floor so caching actually
-  engages.
-- [cleanup] improvement/brief.py:6,63 and analysis/brief.py:5,8,85,111-112 — comments cite "Sonnet
-  4.6's 1024-token floor"; the current reference lists Sonnet 4.6 at **2,048** tokens (1,024 is the
-  Sonnet 4.5 floor). No behavioral impact (~400-660 tok is below either), but the Issue-315 DECISIONS
-  claim "1024 supersedes ALL 2048 refs" conflicts with today's docs. | fix: update the comments to
-  "below the cacheable floor (1–2K tokens depending on model)" or re-verify and correct the number;
-  amend the DECISIONS entry.
-- [cleanup, carry-forward] improvement/brief.py:71 — `_build_request(...) -> tuple` bare return | fix:
-  `-> tuple[list[dict], list[dict], list[dict]]`. Same in analysis/brief.py:78:
+  ~400-token static prefix is still an inert no-op (below the Sonnet 4.6 cacheable floor). Documented
+  in the docstring (:4-7) and carries no charge per current docs, but remains dead code inconsistent
+  with sibling `analysis/brief.py` (marker removed, Issue 315). | fix: drop the marker to match
+  Issue 315, or consolidate a shared static prefix that clears the floor.
+- [cleanup, carry-forward] improvement/brief.py:63 and analysis/brief.py:5,8,85,111-112 — comments
+  still cite a "Sonnet 4.6 1024-token floor"; current reference lists Sonnet 4.6 at **2,048** tokens
+  (1,024 is the Sonnet 4.5 floor). The improvement docstring (:6-7) was reworded to drop the number,
+  but :63 and all analysis/brief.py sites still say 1024. No behavioral impact (~400-660 tok is below
+  either). | fix: reword to "below the cacheable floor (1-2K tokens depending on model)" or correct
+  the number; amend the Issue-315 DECISIONS claim.
+- [cleanup, carry-forward] improvement/brief.py:71 — `_build_request(...) -> tuple` bare return |
+  fix: `-> tuple[list[dict], list[dict], list[dict]]`. Same in analysis/brief.py:78:
   `-> tuple[list[dict], list[dict]]`.
-- Note (no finding): on max-rounds exhaustion both paths return the last pause_turn message's final
-  text block (possibly the search preamble) — but a warning is logged (:170-173, :221) and `max_uses: 5`
-  makes 6 consecutive pause_turns effectively unreachable. Acceptable bounded degenerate case.
+- Note (no finding): on max-rounds exhaustion both paths still return the last paused message's final
+  text block; a warning is logged on both (:217, anthropic_stream.py:254-255) and `max_uses: 5` makes
+  6 consecutive pause_turns effectively unreachable. Acceptable bounded degenerate case.
 
-### analysis (`analysis/brief.py`)
-- [cleanup] analysis/brief.py:46-47 — comment "Static instruction block — carries the cache breakpoint
-  (same pattern as improvement/brief.py and dna/brief.py)" is stale: this file has NO `cache_control`
-  marker (removed Issue 315, as the docstring itself says). | fix: reword to "Static instruction block
-  (no cache marker — below the cacheable floor, Issue 315)".
-- Otherwise clean: singleton `AsyncAnthropic` (:34), tokens logged + `record_llm_metric` on both paths
-  (:179-186, :211-227), `warn_if_truncated` on `.create` (:228) and inside `stream_and_emit`
-  (worker/anthropic_stream.py:106), no tools → no pause_turn exposure, disclaimer appended in Python,
-  no PII/token in logs, error paths log exception type only.
+### analysis (`analysis/brief.py`) — unchanged since morning
+- [cleanup, carry-forward] analysis/brief.py:46-47 — comment "Static instruction block — carries the
+  cache breakpoint (same pattern as improvement/brief.py and dna/brief.py)" is stale: this file has NO
+  `cache_control` marker (removed Issue 315, as its own docstring says). | fix: reword to "Static
+  instruction block (no cache marker — below the cacheable floor, Issue 315)".
+- Otherwise clean: singleton `AsyncAnthropic`, tokens logged + `record_llm_metric` on both paths,
+  `warn_if_truncated` on both paths, no tools → no pause_turn exposure, disclaimer appended in Python,
+  no PII/token in logs.
 
-### upload_intel (`upload_intel/timing.py`)
+### upload_intel (`upload_intel/timing.py`) — unchanged since morning
 - No findings. Pure deterministic, no LLM, rows pre-scoped per creator by callers, bounded ≤168
   rows/creator, shared `_coerce_row` validation, both Issue 352 Batch J fixes verified with tests.
 
@@ -86,14 +76,15 @@ Anthropic-SDK claims re-verified against the current /claude-api skill reference
 | 2 Concurrency & scale | ok (async, bounded) | ok (rounds capped 5, max_uses 5) | ok (≤168 rows, sync) |
 | 3 Security & compliance | ok | ok (no secrets logged; disclaimer) | ok (rows pre-scoped) |
 | 4 Clip-quality | n/a (not a clip module) | n/a | n/a |
-| 5 Anthropic SDK | 1 (cleanup: stale comment) | 1 SEV2 (usage under-count) + 2 cleanup (inert marker, floor number) | n/a |
-| 6 Cleanliness & typing | 1 (cleanup: untyped tuple) | 1 (cleanup: untyped tuple) | ok |
+| 5 Anthropic SDK | 1 cleanup (stale comment) | 2 cleanup (inert marker, floor number); usage summing now correct on BOTH paths | n/a |
+| 6 Cleanliness & typing | 1 cleanup (untyped tuple) | 1 cleanup (untyped tuple) | ok |
 | 7 Error handling / API | n/a (not a router) | n/a | n/a |
-| 8 Config & paths | ok | ok (tool version + max_uses in code; env documented) | ok |
+| 8 Config & paths | ok | ok | ok |
 
-Totals: **blockers 0 · sev1 0 · sev2 1 · cleanup 4.**
+Totals: **blockers 0 · sev1 0 · sev2 0 · cleanup 4.**
 
 ## Module verdict
-NEEDS-WORK — all four prior SEV findings (incl. the SEV1 pause_turn) are fixed and tested; the one
-remaining defect is the `.create()`-path usage under-accumulation across pause_turn rounds
-(billing correctness, bounded blast radius). analysis and upload_intel are clean.
+clean — the last open defect (`.create()`-path usage under-accumulation) is fixed with a summed-usage
+regression test, the `stream_until_final` refactor demonstrably preserved summed usage + both warn
+behaviors, and only cosmetic cleanups (inert cache marker, stale floor comments, two bare tuple
+returns) remain.

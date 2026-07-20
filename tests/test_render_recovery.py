@@ -186,7 +186,9 @@ def test_sweep_flips_only_stale_rows_to_failed():
     targeted_ids = set()
     for stmt in update_stmts:
         params = stmt.compile().params
-        targeted_ids.update(v for v in params.values() if v in (stale_clip.id, stale_summary.id, live_clip.id))
+        targeted_ids.update(
+            v for v in params.values() if v in (stale_clip.id, stale_summary.id, live_clip.id)
+        )
         assert RenderStatus.running in params.values()
         assert str(stmt).count("render_status") >= 2  # SET clause + WHERE guard
     assert targeted_ids == {stale_clip.id, stale_summary.id}
