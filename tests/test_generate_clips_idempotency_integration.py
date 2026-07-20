@@ -9,6 +9,7 @@ Integration tests for Batch 1 (Issues 61 + 62) against a real Postgres.
 Marked `integration` (excluded from the default run — see pytest.ini).
 """
 
+import asyncio
 import uuid
 from unittest.mock import patch
 
@@ -109,6 +110,68 @@ async def test_regeneration_preserves_existing_clips_and_feedback(db_session: As
     finally:
         await db_session.execute(delete(Clip).where(Clip.creator_id == creator.id))
         await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_persist_inserts_exactly_one_clip_set():
+    """Issue 361 race: two sessions run persist_ranked_clips for the SAME video
+    concurrently — both pass the load_existing_clips guard, the loser hits
+    uq_clips_video_rank (deferred → surfaces at COMMIT), rolls back, and returns
+    the winner's set. Exactly one clip set survives; both callers see the same ids."""
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    ranked = [
+        {
+            "setup_start_s": 1.0,
+            "start_s": 2.0,
+            "end_s": 30.0 + i,
+            "peak_s": 20.0,
+            "score": 0.9 - i * 0.1,
+            "rank": i + 1,
+        }
+        for i in range(3)
+    ]
+    async with factory() as seed_session:
+        creator = Creator(
+            google_sub=f"test_race_{uuid.uuid4().hex[:8]}",
+            channel_id=f"UC_race_{uuid.uuid4().hex[:6]}",
+            channel_title="Race Test",
+            onboarding_state=OnboardingState.active,
+        )
+        seed_session.add(creator)
+        await seed_session.flush()
+        video = Video(
+            creator_id=creator.id,
+            youtube_video_id=f"yt_{uuid.uuid4().hex[:8]}",
+            title="Race fixture",
+            kind=VideoKind.long,
+            source_uri=f"source/{creator.id}/x.mp4",
+        )
+        seed_session.add(video)
+        await seed_session.commit()
+        creator_id, video_id = creator.id, video.id
+
+    async def _persist() -> list:
+        async with factory() as session:
+            return await persist_ranked_clips(session, video_id, creator_id, list(ranked))
+
+    try:
+        results = await asyncio.gather(_persist(), _persist())
+        async with factory() as check:
+            rows = (
+                (await check.execute(select(Clip).where(Clip.video_id == video_id)))
+                .scalars()
+                .all()
+            )
+        assert len(rows) == len(ranked)  # ONE set persisted, never two
+        ids = {c.id for c in rows}
+        for result in results:
+            assert {c.id for c in result} == ids  # both callers converge on it
+    finally:
+        async with factory() as cleanup:
+            await cleanup.execute(delete(Clip).where(Clip.creator_id == creator_id))
+            await cleanup.commit()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -10607,3 +10607,25 @@ Issue-336 guard).
 **Source/evidence:** `docs/assessment/modules/_live_smoke_triage.md` symptom 2 (proposed either the
 Beat sweep or the endpoint override; both shipped), `worker/celery_app.py` time-limit invariants,
 Issue-353 regression tests (kept green). **Date:** 2026-07-20
+
+## 2026-07-20 — Issue 361 (races batch): shape of the two unique backstops [DEC]
+
+**clips: `UNIQUE (video_id, rank)` is DEFERRABLE INITIALLY DEFERRED, not immediate.** The
+assessment spec asked for a plain unique index; reading `persist_ranked_clips` showed
+`rerank_with_preference` (clip_engine/ranking.py:99-104) permutes rank values across the
+just-inserted set via per-row UPDATEs in a follow-up transaction — a non-deferred unique
+check is evaluated per statement and would raise on the transient rank swap whenever a
+preference model is active. Deferred, the check runs at COMMIT: the permutation is
+self-consistent by then, and the concurrent double-insert race is still rejected (the
+loser's COMMIT raises `IntegrityError` → rollback → return the winner's set). Evidence:
+ranking.py rerank path; PostgreSQL constraint-timing semantics (immediate checks are
+per-row/per-statement; only DEFERRABLE constraints move to commit).
+
+**summaries dedupe demotes, not deletes.** Migration 0046 must clear pre-existing
+duplicate active recaps before creating `uq_summaries_active`. Older duplicates are
+`UPDATE ... SET render_status='failed'` (removed from the partial-index predicate) rather
+than DELETEd: a worker may be mid-render against that summary id, and the row stays
+auditable. The newest active row is kept — the same row `create_summary`'s idempotency
+probe (`ORDER BY created_at DESC LIMIT 1`) would return. Clips dedupe DOES delete (keep
+earliest-created per `(video_id, rank)`): duplicates there are whole re-inserted sets and
+any feedback/outcomes attach to the earlier canonical rows. **Date:** 2026-07-20

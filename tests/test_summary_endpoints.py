@@ -3,6 +3,7 @@
 Unit lane: DB/Redis mocked at the session boundary; selection
 (clip_engine.summary_select) runs for real — it is pure. Covers:
   - 202 enqueue happy path + idempotent re-POST (no duplicate render job)
+  - concurrent double-POST loser (uq_summaries_active IntegrityError → winner)
   - origin != upload → honest 400
   - purged source (72h retention) → 409
   - cross-creator video/summary → 404 (never 403)
@@ -12,6 +13,8 @@ Unit lane: DB/Redis mocked at the session boundary; selection
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from sqlalchemy.exc import IntegrityError
 
 from auth import get_current_creator
 from db import get_session
@@ -98,12 +101,16 @@ def _fake_session(
     existing_summary: MagicMock | None = None,
     summary: MagicMock | None = None,
     signals: MagicMock | None = None,
+    commit_exc: Exception | None = None,
+    reselect_summary: MagicMock | None = None,
 ):
     """Async get_session override. Ownership fetches (Video/Summary) go through
     the get_owned single-shot select (Issue 109e) — emulated with
     owned_lookup_result so foreign rows genuinely miss; other execute calls
     return the clip list (POST) or summary list (GET); session.get still serves
-    the non-ownership Signals fetch; scalar returns the idempotency probe."""
+    the non-ownership Signals fetch; scalar returns the idempotency probe.
+    ``commit_exc`` makes commit raise (the uq_summaries_active loser path,
+    Issue 361); the post-rollback re-select then serves ``reselect_summary``."""
 
     async def _session():
         session = AsyncMock()
@@ -114,7 +121,11 @@ def _fake_session(
             return None
 
         session.get = AsyncMock(side_effect=_get)
-        session.scalar = AsyncMock(return_value=existing_summary)
+        if commit_exc is not None:
+            session.commit = AsyncMock(side_effect=commit_exc)
+            session.scalar = AsyncMock(side_effect=[existing_summary, reselect_summary])
+        else:
+            session.scalar = AsyncMock(return_value=existing_summary)
 
         async def _execute(stmt, *a, **kw):
             entity = stmt.column_descriptions[0]["type"]
@@ -187,6 +198,64 @@ def test_create_summary_idempotent_repost_returns_existing(client):
 
     assert resp.status_code == 202, resp.text
     assert resp.json()["summary_id"] == str(existing.id)
+    task_mock.delay.assert_not_called()
+
+
+def test_create_summary_commit_race_returns_winner(client):
+    """Concurrent double-POST (Issue 361): the loser's commit violates the
+    uq_summaries_active partial index → rollback, return the winner's summary,
+    and enqueue NO duplicate render_summary job."""
+    creator = _creator()
+    video = _video(creator.id)
+    clips = [_clip(start_s=10, end_s=70, score=0.9), _clip(start_s=200, end_s=260, score=0.7)]
+    winner = _summary(creator.id, render_status=RenderStatus.pending)
+    _set_overrides(
+        creator,
+        _fake_session(
+            video=video,
+            clips=clips,
+            commit_exc=IntegrityError("stmt", {}, Exception("uq_summaries_active")),
+            reselect_summary=winner,
+        ),
+    )
+
+    with (
+        patch("routers.clips.check_positive_balance", new=AsyncMock()),
+        patch("dna.profile.get_active", new=AsyncMock(return_value=None)),
+        patch("worker.tasks.render_summary") as task_mock,
+    ):
+        resp = _post(client, video.id)
+
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["summary_id"] == str(winner.id)
+    assert body["stream_url"] == f"/tasks/{winner.id}/events"
+    task_mock.delay.assert_not_called()
+
+
+def test_create_summary_commit_race_winner_gone_409(client):
+    """Loser's commit conflicts but the winner already left pending/running —
+    a clean 409, never a duplicate enqueue or a raw 500."""
+    creator = _creator()
+    video = _video(creator.id)
+    clips = [_clip(start_s=10, end_s=70, score=0.9)]
+    _set_overrides(
+        creator,
+        _fake_session(
+            video=video,
+            clips=clips,
+            commit_exc=IntegrityError("stmt", {}, Exception("uq_summaries_active")),
+        ),
+    )
+
+    with (
+        patch("routers.clips.check_positive_balance", new=AsyncMock()),
+        patch("dna.profile.get_active", new=AsyncMock(return_value=None)),
+        patch("worker.tasks.render_summary") as task_mock,
+    ):
+        resp = _post(client, video.id)
+
+    assert resp.status_code == 409
     task_mock.delay.assert_not_called()
 
 
