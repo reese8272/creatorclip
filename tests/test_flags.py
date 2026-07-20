@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 import flags
 from auth import get_current_creator
@@ -177,6 +178,49 @@ def test_llm_gate_passes_when_enabled(client) -> None:
     with patch("routers.titles.check_positive_balance", new=AsyncMock()):
         resp = client.post(f"/creators/me/videos/{uuid.uuid4()}/titles")
     assert resp.status_code == 404  # gate passed; route body ran
+
+
+# ── Gate: llm_generation + spend guard on clips/generate (Issue 357) ───────────
+
+
+def test_generate_clips_gate_blocks_when_llm_disabled(client: TestClient) -> None:
+    _seed_cache("llm_generation", False)
+    app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
+    app.dependency_overrides[get_session] = _override_session(AsyncMock())
+
+    resp = client.post(f"/videos/{uuid.uuid4()}/clips/generate")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "llm_generation_disabled"
+
+
+def test_generate_clips_blocked_by_spend_cooldown_returns_429(client: TestClient) -> None:
+    _seed_cache("llm_generation", True)
+    app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
+    app.dependency_overrides[get_session] = _override_session(AsyncMock())
+
+    with patch(
+        "billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(True, 1800))
+    ):
+        resp = client.post(f"/videos/{uuid.uuid4()}/clips/generate")
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "1800"
+
+
+def test_generate_clips_gates_pass_when_enabled_and_under_cap(client: TestClient) -> None:
+    _seed_cache("llm_generation", True)
+    session = AsyncMock()
+    stub_get_owned(session, None)  # video not found → 404 past both gates
+    app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
+    app.dependency_overrides[get_session] = _override_session(session)
+
+    with (
+        patch(
+            "billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))
+        ),
+        patch("routers.clips.check_positive_balance", new=AsyncMock()),
+    ):
+        resp = client.post(f"/videos/{uuid.uuid4()}/clips/generate")
+    assert resp.status_code == 404
 
 
 # ── Gate: render_intake (routes) ───────────────────────────────────────────────
