@@ -353,3 +353,37 @@ def test_render_clip_file_no_style_unchanged(tmp_path):
     vf = called_args["cmd"][vf_arg_index + 1]
     assert "subtitles=" not in vf
     assert "drawtext" not in vf
+
+
+def test_render_endpoint_409_when_source_expired(client):
+    """Issue 362: a render request for a clip whose source video was purged by
+    the retention sweep must 409 with the re-upload message BEFORE enqueuing —
+    not enqueue a render that can only fail permanently."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.video_id = uuid.uuid4()
+
+    expired_video = MagicMock()
+    expired_video.source_uri = None
+
+    async def _session():
+        session = AsyncMock()
+        stub_get_owned(session, clip)
+        session.get = AsyncMock(return_value=expired_video)
+        yield session
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _session
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+    ):
+        try:
+            resp = client.post(f"/clips/{clip.id}/render", cookies={"session": "x"})
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
+    assert "re-upload" in resp.json()["detail"]
+    mock_task.delay.assert_not_called()
