@@ -101,7 +101,8 @@ def _clear_overrides():
 def test_render_clip_409_when_already_running(client):
     """POST /clips/{id}/render → 409 when render_status is already 'running'.
 
-    The code path is implemented; this test locks it as an untested defect.
+    Issue 359 scopes the guard to a FRESH running render (live render-start
+    marker → ais_render_stale False); a stale one is allowed to re-render.
     """
     creator = _creator()
     running_clip = _clip(creator.id, render_status=RenderStatus.running)
@@ -114,7 +115,10 @@ def test_render_clip_409_when_already_running(client):
     app.dependency_overrides[get_current_creator] = override_current_creator(creator)
     app.dependency_overrides[get_session] = _session
 
-    with patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)):
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.ais_render_stale", AsyncMock(return_value=False)),
+    ):
         resp = client.post(f"/clips/{running_clip.id}/render")
 
     assert resp.status_code == 409

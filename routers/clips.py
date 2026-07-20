@@ -448,7 +448,19 @@ async def render_clip(
 
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if clip.render_status == RenderStatus.running:
-        raise HTTPException(status_code=409, detail="Render already in progress")
+        from worker.tasks import ais_render_stale
+
+        # Issue 359: a worker SIGKILL (OOM/deploy) after the `running` commit
+        # skips every `failed` write, leaving the row `running` forever — this
+        # 409 then blocks recovery permanently. When the render-start marker
+        # shows the run exceeded the Celery hard time limit (or never existed),
+        # allow the re-render override; a fresh running render keeps the 409.
+        # The worker's Issue-336 guard tolerates re-rendering a `running` clip.
+        if not await ais_render_stale(str(clip_id)):
+            raise HTTPException(status_code=409, detail="Render already in progress")
+        logger.warning(
+            "render override: clip %s stuck in stale running state — re-rendering", clip_id
+        )
 
     # Persist style choice before enqueuing so the worker task reads it fresh.
     # Issue 186: start from the creator's brand-kit defaults so omitted fields
@@ -481,7 +493,11 @@ async def render_clip(
     # render_uri also unmounts the stale player so the fresh render is fetched.
     # Applied with or without a style body (a plain retry also re-renders),
     # in the same transaction as the merged style so both persist atomically.
-    if clip.render_status == RenderStatus.done:
+    # Snapshot first (Issue 359c) so a failed enqueue below can restore the
+    # watchable render instead of leaving the clip stripped with no task coming.
+    reset_applied = clip.render_status == RenderStatus.done
+    prior_render_uri = clip.render_uri
+    if reset_applied:
         clip.render_status = RenderStatus.pending
         clip.render_uri = None
     await session.commit()
@@ -493,7 +509,22 @@ async def render_clip(
 
     # Audit fix (scale-checklist B): `.delay()` is sync Redis I/O; offload from
     # the request loop so a slow Redis doesn't stall every concurrent handler.
-    task = await asyncio.to_thread(render_task.delay, str(clip_id))
+    # Issue 359c: a broker throw here used to leave the Issue-353 reset
+    # committed with NO task enqueued — destroying the previous render_uri of a
+    # `done` clip. No task exists when `.delay()` raises, so restoring the
+    # snapshot is race-free; the reset-commit-before-enqueue ordering that the
+    # worker's redelivery guard depends on is preserved on the success path.
+    try:
+        task = await asyncio.to_thread(render_task.delay, str(clip_id))
+    except Exception as exc:
+        if reset_applied:
+            clip.render_status = RenderStatus.done
+            clip.render_uri = prior_render_uri
+            await session.commit()
+        logger.error("render enqueue failed for clip %s: %s", clip_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Could not queue the render — please try again."
+        ) from exc
     # Issue 92: use clip_id (not task.id) as the SSE stream key — the worker
     # task emits to task:{clip_id}:events for the same deterministic-lookup
     # reason as the upload chain (the frontend already has clip_id in URL).

@@ -138,7 +138,11 @@ def test_render_endpoint_resets_done_clip_for_rerender(client):
 
 
 def test_render_endpoint_running_clip_still_409s(client):
-    """Issue 353 keeps the existing guard: a render on a `running` clip is 409."""
+    """Issue 353 keeps the existing guard: a render on a FRESH `running` clip is 409.
+
+    Issue 359 scopes the guard: `running` only 409s while the render-start
+    marker shows a live render (ais_render_stale → False here).
+    """
     creator = _mock_creator()
     clip = _mock_clip(creator.id)
     clip.render_status = RenderStatus.running
@@ -149,6 +153,7 @@ def test_render_endpoint_running_clip_still_409s(client):
     with (
         patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
         patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.tasks.ais_render_stale", AsyncMock(return_value=False)),
         patch("worker.progress.aset_owner", AsyncMock()),
     ):
         try:
@@ -162,6 +167,68 @@ def test_render_endpoint_running_clip_still_409s(client):
 
     assert resp.status_code == 409
     mock_task.delay.assert_not_called()
+
+
+def test_render_endpoint_stale_running_clip_allows_rerender(client):
+    """Issue 359b: `running` past the hard time limit (orphaned by a worker
+    SIGKILL) must NOT 409 forever — the stale override re-enqueues the render."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.render_status = RenderStatus.running
+    clip.render_uri = None
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.tasks.ais_render_stale", AsyncMock(return_value=True)),
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.return_value = MagicMock(id="task-stale-override")
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/render",
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    mock_task.delay.assert_called_once_with(str(clip.id))
+
+
+def test_render_endpoint_enqueue_failure_restores_done_state(client):
+    """Issue 359c: a broker throw on `.delay()` must not destroy a watchable
+    clip — the Issue-353 reset (pending + render_uri=None) is rolled back."""
+    creator = _mock_creator()
+    clip = _mock_clip(creator.id)
+    clip.render_status = RenderStatus.done
+    prior_uri = f"s3://test/clips/{clip.id}.mp4"
+    clip.render_uri = prior_uri
+
+    app.dependency_overrides[get_current_creator] = lambda: creator
+    app.dependency_overrides[get_session] = _fake_session(clip)
+
+    with (
+        patch("routers.clips.check_positive_balance", AsyncMock(return_value=None)),
+        patch("worker.tasks.render_clip") as mock_task,
+        patch("worker.progress.aset_owner", AsyncMock()),
+    ):
+        mock_task.delay.side_effect = RuntimeError("broker down")
+        try:
+            resp = client.post(
+                f"/clips/{clip.id}/render",
+                cookies={"session": "x"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    assert resp.status_code == 503
+    # The previous render survives the failed enqueue.
+    assert clip.render_status == RenderStatus.done
+    assert clip.render_uri == prior_uri
 
 
 def test_render_clip_file_passes_style_to_vf(tmp_path):

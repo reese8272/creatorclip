@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import tempfile
+import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -63,23 +64,85 @@ from youtube.quota import QuotaExhaustedError, QuotaSubBudgetExhaustedError, rem
 
 logger = logging.getLogger(__name__)
 
-# Module-level async Redis singleton for the thumbnail-patterns cache.
+# Module-level async Redis singleton for worker-side caching/markers (the
+# thumbnail-patterns cache + the render-start staleness markers, Issue 359).
 # Mirrors the pattern in worker/progress.py::_async_client().
-_THUMB_REDIS: aredis.Redis | None = None
+_WORKER_REDIS: aredis.Redis | None = None
 
 
-def _thumb_redis() -> aredis.Redis:
-    global _THUMB_REDIS
-    if _THUMB_REDIS is None:
+def _worker_redis() -> aredis.Redis:
+    global _WORKER_REDIS
+    if _WORKER_REDIS is None:
         from config import settings as _s
 
-        _THUMB_REDIS = aredis.from_url(
+        _WORKER_REDIS = aredis.from_url(
             _s.REDIS_URL,
             decode_responses=True,
             socket_timeout=2.0,
             socket_connect_timeout=2.0,
         )
-    return _THUMB_REDIS
+    return _WORKER_REDIS
+
+
+# ── Stale-render recovery (Issue 359) ────────────────────────────────────────
+# A worker SIGKILL (OOM, deploy teardown) after the `running` commit skips
+# every `failed` write, leaving the clip/summary row `running` forever — the
+# render endpoint 409s and the review UI spins indefinitely. The worker stamps
+# a Redis marker when it flips a row to `running`; the Beat sweep and the
+# render endpoint treat a `running` row whose marker is absent or older than
+# the Celery hard time limit (+ margin) as orphaned. An ABSENT marker counts
+# as stale by design: rows stuck from before this fix (or after a Redis flush)
+# must be recoverable, and a spurious re-render is safe — the upload key is
+# idempotent and the Issue-336 guard tolerates re-rendering a `running` clip.
+_RENDER_STARTED_TTL_S = 7 * 24 * 3600
+_RENDER_STALE_MARGIN_S = 300
+
+
+def _render_started_key(entity_id: str) -> str:
+    return f"render:started:{entity_id}"
+
+
+def render_stale_after_s() -> int:
+    """Age in seconds past which a ``running`` render is considered orphaned."""
+    from config import settings as _s
+    from worker.celery_app import HARD_LIMIT_MARGIN_S
+
+    return _s.CELERY_SOFT_TIME_LIMIT_S + HARD_LIMIT_MARGIN_S + _RENDER_STALE_MARGIN_S
+
+
+async def _amark_render_started(entity_id: str) -> None:
+    """Stamp the render-start marker for *entity_id* (clip or summary UUID).
+
+    Best-effort: a Redis blip must not fail the render — an absent marker only
+    means the row is eligible for stale recovery earlier than strictly needed.
+    """
+    try:
+        await _worker_redis().set(
+            _render_started_key(entity_id), str(time.time()), ex=_RENDER_STARTED_TTL_S
+        )
+    except Exception as exc:
+        logger.warning("render-started marker write failed for %s: %s", entity_id, exc)
+
+
+async def ais_render_stale(entity_id: str) -> bool:
+    """True when a ``running`` clip/summary shows no live render behind it.
+
+    Fail-closed on Redis errors (report fresh) so an outage cannot trigger a
+    duplicate-render storm; absent or unparseable markers report stale so
+    pre-marker rows and post-flush rows stay recoverable (see module comment).
+    """
+    try:
+        raw = await _worker_redis().get(_render_started_key(entity_id))
+    except Exception as exc:
+        logger.warning("render-started marker read failed for %s: %s", entity_id, exc)
+        return False
+    if raw is None:
+        return True
+    try:
+        started = float(raw)
+    except ValueError:
+        return True
+    return (time.time() - started) > render_stale_after_s()
 
 
 async def _rollback_then_unlock(session: Any, lock_key: str) -> None:
@@ -932,6 +995,25 @@ def sweep_scheduled_publications() -> None:
     run_async(_sweep_scheduled_publications_async())
 
 
+@celery.task(name="worker.tasks.sweep_stale_renders")
+def sweep_stale_renders() -> None:
+    """Issue 359 — Celery Beat recovery sweep for orphaned ``running`` renders.
+
+    A worker killed by SIGKILL (OOM, deploy teardown) after committing
+    ``running`` never reaches any ``failed`` write, so the clip/summary row
+    stays ``running`` forever — the render endpoint 409s and the review UI
+    spins indefinitely. This sweep flips any ``running`` row whose
+    render-start marker is absent or older than the Celery hard time limit
+    (+ margin) to ``failed``, restoring the normal retry affordance.
+
+    Idempotent: flipped rows leave the ``running`` selection; a genuinely-live
+    render caught by the Redis-flush edge still finishes and overwrites the
+    row with ``done``. Advisory lock inside the body serializes concurrent
+    sweeps across multi-worker deploys.
+    """
+    run_async(_sweep_stale_renders_async())
+
+
 @celery.task(bind=True, max_retries=3, default_retry_delay=60, name="worker.tasks.build_dna")
 def build_dna(self: Task, creator_id: str) -> str:
     """
@@ -1593,6 +1675,9 @@ async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPl
                 if isinstance(segments, list):
                     transcript_segments = segments
         await session.commit()
+        # Issue 359: stamp the render-start marker only after `running` commits,
+        # so the sweep never sees a marker without the row state it explains.
+        await _amark_render_started(clip_id)
         return _ClipRenderPlan(
             source_uri=video.source_uri,
             setup_start_s=setup_start_s,
@@ -2288,6 +2373,71 @@ async def _sweep_scheduled_publications_async() -> None:
                     args=[str(clip_id)],
                     task_id=task_id,
                 )
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await _rollback_then_unlock(session, lock_key)
+
+
+async def _sweep_stale_renders_async() -> None:
+    """Flip stale ``running`` clips/summaries to ``failed`` (Issue 359).
+
+    Staleness is decided per row by ``ais_render_stale`` (render-start marker
+    absent or older than the hard time limit + margin). Each flip is logged
+    with the entity + creator so an operator can correlate with worker OOM /
+    deploy events.
+    """
+    from sqlalchemy import select, text
+
+    lock_key = "sweep_stale_renders"
+    stale_after = render_stale_after_s()
+
+    # AdminSessionLocal: genuine cross-tenant sweep — recovers stuck rows for
+    # ALL creators (same posture as the other Beat sweeps in this file).
+    async with db.AdminSessionLocal() as session:
+        acquired = (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
+            )
+        ).scalar_one()
+        if not acquired:
+            logger.info("advisory lock held — skipping sweep_stale_renders")
+            return
+
+        try:
+            clip_rows = (
+                (
+                    await session.execute(
+                        select(Clip).where(Clip.render_status == RenderStatus.running)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            summary_rows = (
+                (
+                    await session.execute(
+                        select(Summary).where(Summary.render_status == RenderStatus.running)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for kind, rows in (("clip", clip_rows), ("summary", summary_rows)):
+                for row in rows:
+                    if not await ais_render_stale(str(row.id)):
+                        continue
+                    row.render_status = RenderStatus.failed
+                    logger.warning(
+                        "sweep_stale_renders: %s %s stuck in running past the hard time "
+                        "limit (stale_after=%ss, creator %s) — flipped to failed",
+                        kind,
+                        row.id,
+                        stale_after,
+                        row.creator_id,
+                    )
+            await session.commit()
         except Exception:
             await session.rollback()
             raise
@@ -4351,7 +4501,7 @@ async def _generate_thumbnail_concepts_async(
         # Uses the module-level singleton to avoid creating a new connection pool
         # per-task invocation (SEV1 fix: was creating per-task via _aredis.from_url).
         patterns: dict | None = None
-        _rc = _thumb_redis()
+        _rc = _worker_redis()
         try:
             cached_raw = await _rc.get(f"{PATTERNS_CACHE_KEY_PREFIX}{creator_id}")
             if cached_raw:
@@ -4888,8 +5038,11 @@ def send_notification(
     2. Compute ``dedupe_key = sha256(creator_id:event_type:entity_id)`` — stable
        across retries, unique per notification event.
     3. INSERT ``notification_deliveries`` row with the dedupe_key.  If Postgres
-       raises ``IntegrityError``, the delivery already succeeded on a prior
-       attempt — return immediately without sending again.
+       raises ``IntegrityError``, check the existing row's status: ``sent`` /
+       ``skipped`` means the delivery already succeeded (or was deliberately
+       suppressed) on a prior attempt — return without sending again. A
+       ``failed`` row means the send itself blew up; adopt the row and retry
+       the send (Issue 359 companion).
     4. Render and send the email via ``notify.mailer.send()`` (which uses Resend's
        own ``Idempotency-Key`` header as a second deduplication layer).
     5. INSERT a ``notifications`` row (in-app center).
@@ -4936,6 +5089,7 @@ async def _send_notification_async(
     Per-creator isolation is enforced by the WHERE creator_id = cid predicate on
     every query, which is equivalent to what the RLS policy would enforce.
     """
+    from sqlalchemy import select
     from sqlalchemy.exc import IntegrityError
 
     from models import (
@@ -5029,18 +5183,54 @@ async def _send_notification_async(
             status=NotificationDeliveryStatus.sent,
         )
         session.add(delivery)
+        retry_of_failed = False
         try:
             await session.flush()
         except IntegrityError:
-            # UNIQUE dedupe_key violation → already delivered on a prior attempt.
+            # UNIQUE dedupe_key violation → a prior attempt reached this point.
+            # Status-aware dedupe (Issue 359 companion): only a delivery that
+            # actually went out (`sent`) or was deliberately `skipped`
+            # short-circuits. A `failed` row means the SEND itself blew up after
+            # the dedupe row committed — adopt that row and retry the send,
+            # otherwise a single Resend blip permanently loses the email.
             await session.rollback()
+            existing = (
+                await session.execute(
+                    select(NotificationDelivery).where(
+                        NotificationDelivery.dedupe_key == dedupe_key
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None or existing.status != NotificationDeliveryStatus.failed:
+                logger.info(
+                    "send_notification: dedupe_key=%s already delivered — skipping %s "
+                    "for creator %s",
+                    dedupe_key,
+                    event_type,
+                    creator_id,
+                )
+                return
+            retry_of_failed = True
+            delivery = existing
+            delivery.status = NotificationDeliveryStatus.sent
+            # The rollback expired the rows loaded in steps 1-2 — reload before
+            # any attribute access (an async lazy refresh would raise
+            # MissingGreenlet). Both rows were committed by the first attempt.
+            creator = await session.get(Creator, cid)
+            prefs = await session.get(NotificationPreference, cid)
+            if creator is None or prefs is None:
+                logger.warning(
+                    "send_notification: creator/prefs vanished on failed-send retry "
+                    "for creator %s — skipping",
+                    creator_id,
+                )
+                return
             logger.info(
-                "send_notification: dedupe_key=%s already delivered — skipping %s for creator %s",
+                "send_notification: dedupe_key=%s previously failed — retrying send "
+                "for creator %s",
                 dedupe_key,
-                event_type,
                 creator_id,
             )
-            return
 
         # ── 6. Build email send context while the session is still open ─────────
         # Capture everything needed for the mailer call BEFORE committing, so
@@ -5070,7 +5260,9 @@ async def _send_notification_async(
             delivery.channel = NotificationChannel.inapp
 
         # ── 7. Insert in-app notification row ────────────────────────────────
-        if prefs.inapp_enabled:
+        # On a failed-send retry the in-app row already committed with the first
+        # attempt (this commit runs before the send) — don't duplicate it.
+        if prefs.inapp_enabled and not retry_of_failed:
             notification = _build_inapp_notification(cid, event_type, payload)
             session.add(notification)
 
@@ -5116,6 +5308,13 @@ async def _send_notification_async(
                 if fail_delivery is not None:
                     fail_delivery.status = NotificationDeliveryStatus.failed
                 await fail_session.commit()
+            # Re-raise so the Celery task's retry ladder fires (Issue 359
+            # companion — the failure was previously swallowed, so a transient
+            # Resend blip permanently lost the email). The now-`failed` dedupe
+            # row lets the retry proceed past the guard in step 5, and Resend's
+            # Idempotency-Key dedupes a timeout-but-actually-sent race
+            # server-side.
+            raise
 
 
 def _build_inapp_notification(
@@ -5290,6 +5489,9 @@ async def _load_summary_render_plan(summary_id: str, creator_id: str) -> _Summar
         source_uri = video.source_uri
         summary.render_status = RenderStatus.running
         await session.commit()
+        # Issue 359: same render-start marker as the clip path — the stale
+        # sweep covers summaries too (identical render_status lifecycle).
+        await _amark_render_started(summary_id)
         return _SummaryRenderPlan(source_uri=source_uri, segments=segments)
 
 
