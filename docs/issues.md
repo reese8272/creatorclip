@@ -213,7 +213,7 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   quota / migrations / env).
 
 ### Issue 357: routers — `/clips/generate` bypasses the `llm_generation` kill switch AND `require_budget`
-- **Status:** OPEN · **Wave:** W0 · **Lane:** L05 Cost/Agentic · **Size:** S · **Verify:** local · **Sev:** SEV1
+- **Status:** BUILT 2026-07-20 on `integration/assess-2026-07-20` (workflow wf_822d2374, reviewed + gates green: ruff/mypy 0, coverage 81.4%, full suite pass) — pending merge to main · **Wave:** W0 · **Lane:** L05 Cost/Agentic · **Size:** S · **Verify:** local · **Sev:** SEV1
 - `routers/clips.py:221-227` — the most expensive LLM route (in-request per-candidate scoring) has
   neither `require_flag("llm_generation")` nor `require_budget`, while every sibling LLM surface got
   both this cycle (analysis router-level; chat/improvement/titles/thumbnails/insights + the three clip
@@ -225,7 +225,7 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   route decorator, exactly like the sibling clip LLM routes; test asserting 503 with the flag off.
 
 ### Issue 358: _root_infra — API-key auth path missing the Issue-344 GUC → prod-RLS false 402s
-- **Status:** OPEN · **Wave:** W0 · **Lane:** Security — Platform · **Size:** S · **Verify:** staging (real RLS) · **Sev:** SEV1
+- **Status:** BUILT 2026-07-20 on `integration/assess-2026-07-20` (workflow wf_822d2374, reviewed + gates green: ruff/mypy 0, coverage 81.4%, full suite pass) — pending merge to main + staging run of the new `-m integration` RLS test · **Wave:** W0 · **Lane:** Security — Platform · **Size:** S · **Verify:** staging (real RLS) · **Sev:** SEV1
 - `api_key.py:105-136` — `get_current_creator_via_api_key` never received the Issue-344
   `set_config('app.creator_id', …)` fix that `auth.py:157` has, and the Issue-352 5-min
   `last_used_at` stamp throttle removed the per-request commit that masked it. On every no-stamp
@@ -238,7 +238,7 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   dependency twice inside the stamp window and asserting the second request still sees minute packs.
 
 ### Issue 359: render — no stale-`running` recovery: a dead worker leaves the clip spinning forever (the `render loop.png` bug)
-- **Status:** OPEN · **Wave:** W0 · **Lane:** L16 UI Core / Review surface · **Size:** M · **Verify:** local (+ staging for the sweep) · **Sev:** SEV1
+- **Status:** BUILT 2026-07-20 on `integration/assess-2026-07-20` (workflow wf_822d2374, reviewed + gates green: ruff/mypy 0, coverage 81.4%, full suite pass) — pending merge to main. Staleness via Redis `render:started:{id}` marker, NOT `updated_at` (column doesn't exist — DECISIONS 2026-07-20); absent-marker=stale recovers the currently-stuck prod row on first sweep · **Wave:** W0 · **Lane:** L16 UI Core / Review surface · **Size:** M · **Verify:** local (+ staging for the sweep) · **Sev:** SEV1
 - Worker sets `running` at `worker/tasks.py:1580` (commit :1595); `done` only at :1656-1661; `failed`
   only via except-paths. A SIGKILL (OOM during ffmpeg, deploy exceeding stop-grace, VM reboot) skips
   every `failed` write; redelivery waits ≥3600s `visibility_timeout` or never comes (Redis restart).
@@ -254,7 +254,7 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   running still 409s; broker-throw leaves the old render watchable.
 
 ### Issue 360: deploy_ci — prod-VM self-hosted runner executes `pull_request` code with docker-group + prod `.env` access
-- **Status:** OPEN · **Wave:** W0 · **Lane:** L14 CI/CD · **Size:** M · **Verify:** external (runner infra) · **Sev:** SEV1 · **[DEC]**
+- **Status:** BUILT 2026-07-20 on `integration/assess-2026-07-20` (workflow wf_822d2374, reviewed + gates green: ruff/mypy 0, coverage 81.4%, full suite pass) — pending merge to main + live verify: first PR run on GitHub-hosted runners (needs hosted-minutes billing enabled for the private repo) · **Wave:** W0 · **Lane:** L14 CI/CD · **Size:** M · **Verify:** external (runner infra) · **Sev:** SEV1 · **[DEC]**
 - `scripts/setup-runner.sh:58,96` + `.github/workflows/ci.yml:33` — the runner lives on the prod VM,
   is in the `docker` group (root-equivalent host control), owns `/opt/autoclip` incl. the prod `.env`
   (all secrets), and `ci.yml` triggers on `pull_request`. Any code executing during a PR job —
@@ -268,7 +268,7 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   and no `.env` read.
 
 ### Issue 361: 2026-07-20 assessment SEV2 backlog (grouped) — ~37 SEV2s
-- **Status:** OPEN · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** mixed · **Sev:** SEV2
+- **Status:** PARTIALLY BUILT 2026-07-20 on `integration/assess-2026-07-20` — the load-bearing leads all shipped (staging env bleed, deploy.sh stdin token, rotate/backup script hardening, CSP fonts, send_notification status-aware dedupe, both race unique-backstops + migration 0046, knowledge pause_turn ×2 + chapters wrap_untrusted, improvement usage accumulation, chat model-aware rates, youtube same-session resume, dna delegate, spend-guard latch order, preference LGBM allowlist FIX (real bug: missing LabelEncoder silently disabled personalization) + bounds + to_thread + row pruning, run_layer0 module-coverage reorder, Recap poll, Dashboard/Review error states). **Remaining (agent-flagged, not built):** youtube/oauth.py scope-union-never-narrows; preference efficacy train-label divergence (:267-302); VideoClipsMap.tsx + Editor.tsx query-error-as-empty-state; Recap SSE-cap message mapping; staging-drills.yml `:latest` claim; deploy.sh full PREV_IMAGE rollback port; DRY-consolidate the 4× pause_turn loops into worker/anthropic_stream.py; Opus rates in the config price book · **Wave:** W1 · **Lane:** Carry-over & Cleanup · **Size:** L (tracker) · **Verify:** mixed · **Sev:** SEV2
 - Full lists per module in `docs/assessment/modules/<module>.md` (all re-verified 2026-07-20).
   Load-bearing leads:
   - **deploy_ci ×7** — `docker-compose.staging.yml:74,103` staging loads the PROD `.env` (prod R2

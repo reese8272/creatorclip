@@ -4,6 +4,27 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-20 (later) — Issues 357–361 built via 8-batch parallel workflow → `integration/assess-2026-07-20`
+
+**Workflow wf_822d2374:** 8 file-disjoint build agents in isolated worktrees + 8 independent
+reviewers + 1 fix round (deploy-ci), 17 agents total. All 4 SEV1s (357–360) and every load-bearing
+361 SEV2 lead built and reviewed; branches merged sequentially into `integration/assess-2026-07-20`
+(only DECISIONS.md append conflicts, union-resolved; the three-way `routers/clips.py` region merge
+was clean). **Gates on the merged branch: ruff 0 · mypy 0 · coverage 81.4% · bandit 0/0 · full
+unit suite exit-0 (pipefail-verified) · frontend tsc clean + 244/244 vitest · alembic single head
+0046 · module-coverage gate ran for the FIRST time ever** (the Issue-269 harness bug was fixed in
+this wave: clip_engine 92.6 / preference 91.3 / crypto+limiter+auth 100). One post-merge fixture
+fix: test_mailer's 28-byte dummy Fernet key rejected by the new Issue-358 boot validator.
+**Real bug caught by a new test:** preference LGBM allowlist was missing
+`sklearn.preprocessing._label.LabelEncoder` — every mature LightGBM model failed deserialization
+and silently fell back to DNA; fixed. Notable [DEC]s: render staleness via Redis marker (no
+`updated_at` column exists); deferrable `uq_clips_video_rank` (rerank permutes ranks in-txn);
+summaries dedupe demotes-not-deletes. **Still human-owned:** Issue 356 (VM SSH checks — sign-in
+BLOCKER unconfirmed), first hosted-runner PR run (360 live verify), staging run of the new
+integration tests, merge-to-main decision.
+
+---
+
 ## 2026-07-20 — Full /assess re-run @ `ca3305c` + live-prod artifact triage → Issues 356–361 filed
 
 **VERDICT: CONDITIONAL** (report `docs/assessment/REPORT.md`, snapshot `history/2026-07-20-REPORT.md`).
