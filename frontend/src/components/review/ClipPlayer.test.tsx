@@ -45,6 +45,16 @@ describe('ClipPlayer render states', () => {
     expect(screen.queryByText(/Render this clip/)).not.toBeInTheDocument()
   })
 
+  it('autoplays muted with preload so Chrome does not block on a black frame (Issue 359d)', () => {
+    // Chrome blocks unmuted autoplay: the element would stay paused on a black
+    // first frame until a user gesture — the "black render" symptom.
+    renderPlayer(BASE)
+    const video = document.querySelector('video')!
+    expect(video).toHaveAttribute('autoplay')
+    expect(video.muted).toBe(true)
+    expect(video).toHaveAttribute('preload', 'auto')
+  })
+
   it('shows a "Rendering…" status while a render is in flight (no manual button)', () => {
     renderPlayer({ ...BASE, render_status: 'running', render_uri: null })
     expect(screen.getByText(/Rendering your clip/)).toBeInTheDocument()

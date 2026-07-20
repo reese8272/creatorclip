@@ -348,10 +348,11 @@ class TestSendNotificationDedupeShortCircuit:
 
     @pytest.mark.asyncio
     async def test_integrity_error_on_flush_causes_early_return(self) -> None:
-        """When the dedupe_key row already exists, the task returns without calling mailer."""
+        """When the dedupe_key row already exists as `sent`, the task returns
+        without calling mailer (status-aware guard — Issue 359 companion)."""
         from sqlalchemy.exc import IntegrityError
 
-        from models import NotificationPreference
+        from models import NotificationDeliveryStatus, NotificationPreference
 
         cid = uuid.uuid4()
         prefs = NotificationPreference(
@@ -380,6 +381,12 @@ class TestSendNotificationDedupeShortCircuit:
         mock_session.rollback = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
+        # The status-aware guard re-reads the existing row: `sent` short-circuits.
+        existing = MagicMock()
+        existing.status = NotificationDeliveryStatus.sent
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none = MagicMock(return_value=existing)
+        mock_session.execute = AsyncMock(return_value=exec_result)
 
         with (
             patch("db.AdminSessionLocal", return_value=mock_session),
@@ -460,8 +467,10 @@ class TestSendNotificationCommitBeforeMailer:
         )
 
     @pytest.mark.asyncio
-    async def test_mailer_failure_marks_delivery_failed(self) -> None:
-        """A mailer exception opens a fresh session and marks the delivery row failed."""
+    async def test_mailer_failure_marks_delivery_failed_and_reraises(self) -> None:
+        """A mailer exception marks the delivery row failed AND re-raises so the
+        Celery retry ladder fires (Issue 359 companion — previously swallowed,
+        permanently losing the email behind the dedupe guard)."""
         import sys
 
         from models import NotificationDelivery, NotificationDeliveryStatus, NotificationPreference
@@ -517,10 +526,87 @@ class TestSendNotificationCommitBeforeMailer:
         ):
             from worker.tasks import _send_notification_async
 
-            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+            with pytest.raises(RuntimeError, match="simulated mailer failure"):
+                await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
 
         assert fail_delivery.status == NotificationDeliveryStatus.failed
         fail_session.commit.assert_awaited_once()
+
+
+# ── Issue 359 companion: failed sends are retryable ──────────────────────────
+
+
+class TestSendNotificationFailedRetry:
+    """Status-aware dedupe: a `failed` delivery row does NOT block a retry —
+    the row is adopted, flipped back to `sent`, and the send re-attempted."""
+
+    @staticmethod
+    def _prefs(cid: uuid.UUID) -> object:
+        from models import NotificationPreference
+
+        return NotificationPreference(
+            creator_id=cid,
+            email_transactional=True,
+            email_lifecycle=False,
+            inapp_enabled=True,
+            push_enabled=False,
+            unsubscribe_token=uuid.uuid4(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_failed_delivery_row_is_retried(self) -> None:
+        """IntegrityError + existing `failed` row → the send runs again."""
+        import sys
+
+        from sqlalchemy.exc import IntegrityError
+
+        from models import NotificationDelivery, NotificationDeliveryStatus
+
+        cid = uuid.uuid4()
+        prefs = self._prefs(cid)
+
+        mock_creator = MagicMock()
+        mock_creator.id = cid
+        mock_creator.email = "test@example.com"
+
+        existing = MagicMock(spec=NotificationDelivery)
+        existing.id = uuid.uuid4()
+        existing.status = NotificationDeliveryStatus.failed
+
+        mock_session = AsyncMock()
+        # Steps 1-2 load creator + prefs; the retry path re-gets both after rollback.
+        mock_session.get = AsyncMock(side_effect=[mock_creator, prefs, mock_creator, prefs])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.flush = AsyncMock(
+            side_effect=IntegrityError(
+                "UNIQUE constraint violated", params=None, orig=Exception("duplicate key")
+            )
+        )
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none = MagicMock(return_value=existing)
+        mock_session.execute = AsyncMock(return_value=exec_result)
+        mock_session.rollback = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        fake_mailer = MagicMock()
+        fake_mailer.send = MagicMock()
+
+        with (
+            patch("db.AdminSessionLocal", return_value=mock_session),
+            patch.dict(sys.modules, {"notify.mailer": fake_mailer}),
+        ):
+            from worker.tasks import _send_notification_async
+
+            await _send_notification_async(str(cid), "clips_ready", "vid-123", {})
+
+        # The send ran, the row was adopted back to `sent`, and no duplicate
+        # in-app notification was added (only the initial delivery add).
+        fake_mailer.send.assert_called_once()
+        assert existing.status == NotificationDeliveryStatus.sent
+        assert mock_session.add.call_count == 1
+        mock_session.commit.assert_awaited_once()
 
 
 # ── No-PII assertion on provider payload ────────────────────────────────────

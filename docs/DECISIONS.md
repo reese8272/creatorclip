@@ -10583,3 +10583,27 @@ scope check, fetched 2026-07-02). Live activation stays operator (`MAILING_ADDRE
 launches, fetched 2026-07-02): question+action rows, domain-grouped, automation-backed signals,
 two-stage (beta / public), reference-by-issue-id only. It must also reconcile the three gate lists that
 currently disagree (CLAUDE.md vs PROJECT_STATE vs stale COMPLIANCE). **Date:** 2026-07-02
+
+## 2026-07-20 — Issue 359: stale-render staleness signal is a Redis render-start marker, not `updated_at` [DEC]
+
+**What changed:** The Issue-359 spec assumed the recovery sweep and the render-endpoint stale override
+could compare `clips.updated_at` / `summaries.updated_at` against the Celery hard time limit. Neither
+table HAS an `updated_at` column (verified in `models.py` + `alembic/versions/0001_initial_schema.py`
+— only `videos`/`clip_publications`/etc. carry one). Instead of adding a column + migration, the worker
+now stamps a Redis key `render:started:{id}` (epoch value, 7-day TTL, best-effort write) immediately
+after the `running` commit; `ais_render_stale()` reports stale when the marker is absent OR older than
+`CELERY_SOFT_TIME_LIMIT_S + HARD_LIMIT_MARGIN_S + 300`. Both the Beat sweep (`sweep_stale_renders`,
+15-min cadence) and `POST /clips/{id}/render` consume it.
+
+**Why:** (1) A migration + model change was outside the batch's file scope and adds schema churn for a
+recovery heuristic; (2) an ORM `onupdate` timestamp is written by ANY column touch, so it is a noisier
+staleness signal than an explicit render-start stamp; (3) absent-marker-means-stale gives free recovery
+for rows stuck from before the fix (including the live prod row) and after a Redis flush. Failure
+posture: marker READ errors report fresh (fail-closed — a Redis outage cannot trigger a re-render
+storm); a live render wrongly flipped by the flush edge self-heals because the completion path writes
+`done` unconditionally, and duplicate renders are safe (idempotent `clips/{id}.mp4` upload key,
+Issue-336 guard).
+
+**Source/evidence:** `docs/assessment/modules/_live_smoke_triage.md` symptom 2 (proposed either the
+Beat sweep or the endpoint override; both shipped), `worker/celery_app.py` time-limit invariants,
+Issue-353 regression tests (kept green). **Date:** 2026-07-20
