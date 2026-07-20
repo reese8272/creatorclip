@@ -16,8 +16,8 @@ from dna.builder import (
     _best_source_region,
     _hook_text,
     _optimal_clip_len_s,
-    _optimal_upload_gap_h,
     _recency_weight,
+    optimal_gap_hours,
 )
 
 # ── _recency_weight ────────────────────────────────────────────────────────────
@@ -143,31 +143,23 @@ def test_optimal_clip_len_skips_none_values():
     assert _optimal_clip_len_s(videos) == pytest.approx(50.0)
 
 
-# ── _optimal_upload_gap_h ──────────────────────────────────────────────────────
+# ── upload-gap delegation (2026-07-20 assessment) ─────────────────────────────
+# The builder's former `_optimal_upload_gap_h` near-duplicated
+# `upload_intel.timing.optimal_gap_hours` without its circular-week wrap or
+# malformed-row guard. It now delegates; the full behavior (wrap, bounds,
+# malformed rows) is covered by tests/test_upload_intel.py. This pins the
+# delegation itself: the imported function applies the circular-week wrap.
 
 
 def _make_activity(day: int, hour: int, idx: float):
     return SimpleNamespace(day_of_week=day, hour=hour, activity_index=idx)
 
 
-def test_optimal_upload_gap_h_basic():
-    rows = [
-        _make_activity(0, 8, 0.9),  # hour_of_week = 8
-        _make_activity(0, 12, 0.95),  # hour_of_week = 12
-        _make_activity(0, 20, 0.7),  # hour_of_week = 20
-    ]
-    gap = _optimal_upload_gap_h(rows)
-    # top 3: 12, 8, 20 → sorted [8, 12, 20] → gaps [4, 8] → avg 6.0
-    assert gap == pytest.approx(6.0)
-
-
-def test_optimal_upload_gap_h_none_on_single_row():
-    rows = [_make_activity(0, 10, 0.9)]
-    assert _optimal_upload_gap_h(rows) is None
-
-
-def test_optimal_upload_gap_h_none_on_empty():
-    assert _optimal_upload_gap_h([]) is None
+def test_builder_upload_gap_uses_circular_week_wrap():
+    # Saturday 23:00 (slot 167) vs Monday 01:00 (slot 25): shorter arc is 26 h,
+    # not 142 h — the exact defect the duplicated helper reintroduced.
+    rows = [_make_activity(6, 23, 0.9), _make_activity(1, 1, 0.95)]
+    assert optimal_gap_hours(rows) == pytest.approx(26.0)
 
 
 # ── generate_brief ─────────────────────────────────────────────────────────────

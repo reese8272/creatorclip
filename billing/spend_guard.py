@@ -334,14 +334,23 @@ async def _record_and_enforce(creator_id: str, amount: int) -> None:
                 f"spend cap tripped: {breached_global} "
                 f"(see docs/RUNBOOKS.md 'Spend guard trip & reset')"
             )
-            await _flip_llm_flag(reason)
-            await _emit_spend_event(
-                "spend_cap_tripped",
-                None,
-                cap=breached_global,
-                scope="global",
-                flag="llm_generation",
-            )
+            try:
+                await _flip_llm_flag(reason)
+                await _emit_spend_event(
+                    "spend_cap_tripped",
+                    None,
+                    cap=breached_global,
+                    scope="global",
+                    flag="llm_generation",
+                )
+            except Exception:
+                # A latch with no flip would silence the breaker for the full
+                # cool-down TTL while the breach keeps burning. Release it so
+                # the next record_spend re-attempts the flip; set_flag is an
+                # idempotent upsert, so a rare double-flip under the race is
+                # harmless. record_spend's catch-all still fails open.
+                await r.delete(_TRIP_LATCH_KEY)
+                raise
 
 
 async def creator_block_status(creator_id: uuid.UUID | str) -> tuple[bool, int]:

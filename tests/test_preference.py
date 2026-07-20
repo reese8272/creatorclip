@@ -191,6 +191,24 @@ def test_scorer_round_trips_preserves_label_count():
     assert reloaded.label_count == scorer.label_count
 
 
+def test_lgbm_scorer_round_trips_through_allowlist():
+    """The LightGBM branch of the serialization allowlist round-trips (2026-07-20
+    assessment): fit ABOVE the threshold (LGBMClassifier + Booster path), dump,
+    restore through _RestrictedUnpickler, and predict identically. Without this,
+    a dep bump or an incomplete allowlist makes from_bytes raise and load_latest
+    silently disables personalization for every mature model."""
+    X, y, w = _training_data(15, 15)
+    try:
+        scorer = fit(X, y, w, threshold=20)  # n=30 ≥ threshold → LightGBM
+    except OSError:
+        pytest.skip("libgomp.so.1 not available on this host")
+    assert type(scorer._model).__name__ == "LGBMClassifier"
+    reloaded = PreferenceScorer.from_bytes(scorer.to_bytes())
+    feats = clip_features(signal_density=0.5, hook_energy=0.7)
+    assert reloaded.predict_score(feats) == pytest.approx(scorer.predict_score(feats))
+    assert reloaded.label_count == 30
+
+
 def _make_malicious_joblib_blob() -> bytes:
     """Return a joblib-format blob whose pickle payload references os.system.
 

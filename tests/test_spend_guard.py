@@ -68,6 +68,9 @@ class _FakeRedis:
     async def get(self, key: str) -> Any:
         return self.store.get(key)
 
+    async def delete(self, key: str) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
 
 @pytest.fixture(autouse=True)
 def _pin_caps():
@@ -171,6 +174,21 @@ async def test_global_trip_flips_flag_exactly_once() -> None:
     assert "global_daily" in mock_flip.await_args.args[0]
     trips = [c for c in mock_emit.await_args_list if c.args[0] == "spend_cap_tripped"]
     assert len(trips) == 1 and trips[0].kwargs["scope"] == "global"
+
+
+async def test_failed_flag_flip_releases_latch_so_next_call_retries() -> None:
+    """2026-07-20 assessment: a latch set before a FAILED flip must be released
+    — otherwise the breach goes unenforced for the full latch TTL while every
+    worker sees the latch held. The next record_spend must re-attempt the flip."""
+    r = _FakeRedis(totals=[100, usd_to_micro(50.00), 100, 100, 100])
+    p1, p2, _ = _patched(r)
+    flip = AsyncMock(side_effect=[RuntimeError("db down"), None])
+    with p1, p2, patch("billing.spend_guard._flip_llm_flag", new=flip):
+        await record_spend(CID, 0.01)  # flip fails → latch released (fail-open, no raise)
+        assert spend_guard._TRIP_LATCH_KEY not in r.store
+        await record_spend(CID, 0.01)  # retry: latch re-acquired, flip succeeds
+    assert flip.await_count == 2
+    assert spend_guard._TRIP_LATCH_KEY in r.store  # latch held after successful flip
 
 
 async def test_velocity_rolling_window_sums_last_three_buckets() -> None:
