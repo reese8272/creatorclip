@@ -60,10 +60,10 @@ async def _seed(session: AsyncSession) -> tuple[Creator, Video]:
     return creator, video
 
 
-def _summary(creator: Creator, video: Video) -> Summary:
+def _summary(creator_id: uuid.UUID, video_id: uuid.UUID) -> Summary:
     return Summary(
-        creator_id=creator.id,
-        video_id=video.id,
+        creator_id=creator_id,
+        video_id=video_id,
         target_duration_s=600,
         segments=[],
         status=SummaryStatus.ready,
@@ -76,29 +76,30 @@ async def test_second_active_summary_rejected_then_allowed_after_done(
     db_session: AsyncSession,
 ):
     creator, video = await _seed(db_session)
-    creator_id = creator.id
+    # Plain-value ids: rollback() expires ORM attribute state regardless of
+    # expire_on_commit, and touching an expired attribute lazy-loads
+    # synchronously (MissingGreenlet under the async session).
+    creator_id, video_id = creator.id, video.id
     try:
-        first = _summary(creator, video)
+        first = _summary(creator_id, video_id)
         db_session.add(first)
         await db_session.commit()
         first_id = first.id
 
         # A second in-flight recap for the same video violates the partial index.
-        db_session.add(_summary(creator, video))
+        db_session.add(_summary(creator_id, video_id))
         with pytest.raises(IntegrityError):
             await db_session.commit()
         await db_session.rollback()
 
-        # rollback() expires ORM state regardless of expire_on_commit — re-fetch
-        # before mutating, or the attribute set lazy-loads synchronously
-        # (MissingGreenlet under the async session).
+        # Re-fetch after rollback before mutating (same expiry hazard).
         first = await db_session.get(Summary, first_id)
         assert first is not None
 
         # Once the first render leaves pending/running, a re-render is allowed.
         first.render_status = RenderStatus.done
         await db_session.commit()
-        db_session.add(_summary(creator, video))
+        db_session.add(_summary(creator_id, video_id))
         await db_session.commit()
     finally:
         await db_session.rollback()

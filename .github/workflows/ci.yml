@@ -552,7 +552,10 @@ jobs:
       - name: Run Playwright (smoke + a11y)
         # playwright.config.ts already has: forbidOnly: !!CI, retries: CI?1:0,
         # reuseExistingServer: !CI — all CI behavour is pre-configured.
-        run: npm run test:e2e
+        # @visual is excluded here: the dedicated non-gating `visual` job owns
+        # those tests (Issue 272); without baselines committed they would fail
+        # this gating job too.
+        run: npm run test:e2e -- --grep-invert "@visual"
 
   visual:
     # Issue 272: visual regression baselines on stable routes (login, pricing,
