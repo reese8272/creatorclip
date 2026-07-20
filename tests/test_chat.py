@@ -224,6 +224,82 @@ async def test_runner_flags_max_tokens_truncation(_patch_runner):
     assert usage["truncated"] == 1
 
 
+def test_chat_model_rates_follow_configured_model(monkeypatch):
+    """Billing rates + tier label derive from ANTHROPIC_MODEL_CHAT, with a safe
+    (never-under-billing) fallback for unknown model families."""
+    from chat import runner
+    from config import settings
+
+    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-haiku-4-5")
+    assert runner._chat_model_rates() == (
+        settings.COST_PER_MTOK_IN_HAIKU,
+        settings.COST_PER_MTOK_OUT_HAIKU,
+        "haiku-tier",
+    )
+
+    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-sonnet-4-6")
+    assert runner._chat_model_rates() == (
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+        "sonnet-tier",
+    )
+
+    # Unknown family: falls back to the highest configured rate + "other" label.
+    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-opus-4-8")
+    rate_in, rate_out, label = runner._chat_model_rates()
+    assert (rate_in, rate_out) == (
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+    assert label == "other"
+
+
+async def test_runner_bills_at_configured_model_rates(_patch_runner):
+    """SEV2: with a non-default ANTHROPIC_MODEL_CHAT the ledger must be charged
+    at that model's rates and the cost metric labelled by its tier — not the
+    previously hardcoded Sonnet rates / "sonnet-tier" label."""
+    from unittest.mock import AsyncMock
+
+    from chat import runner
+    from config import settings
+
+    calls, monkeypatch = _patch_runner
+    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-haiku-4-5")
+
+    async def _answer(client, task_id, **kwargs):
+        return (
+            _msg("end_turn", [_text_block("hi")]),
+            _usage(input_tokens=1000, output_tokens=100),
+        )
+
+    monkeypatch.setattr("chat.runner.stream_message", _answer)
+
+    captured = {}
+
+    def _fake_estimate(tokens_in, tokens_out, rate_in, rate_out, **kw):
+        captured["rates"] = (rate_in, rate_out)
+        return 0.5
+
+    def _fake_cost(provider, tier, cost):
+        captured["tier"] = tier
+
+    # runner imports these inside the function, so patch at the source modules.
+    monkeypatch.setattr("billing.ledger._estimate_cost_usd", _fake_estimate)
+    monkeypatch.setattr("billing.ledger.increment_usage", AsyncMock())
+    monkeypatch.setattr("billing.spend_guard.record_spend", AsyncMock())
+    monkeypatch.setattr("observability.record_llm_cost", _fake_cost)
+
+    await runner.run_chat_turn(
+        "task-rates", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+    )
+
+    assert captured["rates"] == (
+        settings.COST_PER_MTOK_IN_HAIKU,
+        settings.COST_PER_MTOK_OUT_HAIKU,
+    )
+    assert captured["tier"] == "haiku-tier"
+
+
 async def test_runner_records_usage_against_chat_model(_patch_runner):
     """Cost attribution: usage is logged against ANTHROPIC_MODEL_CHAT (the model
     actually invoked), not the generic ANTHROPIC_MODEL default (Issue 352)."""

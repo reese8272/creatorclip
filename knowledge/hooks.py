@@ -171,8 +171,9 @@ async def analyze_hook(
 ) -> tuple[str, dict]:
     """Call Claude with web_search; stream tokens to the SSE consumer.
 
-    Returns ``(raw_json, usage)`` where usage is the token-count dict from
-    ``stream_and_emit``. Callers should pass usage to ``billing.ledger.increment_usage``.
+    Returns ``(raw_json, usage)`` where usage sums the token counts across every
+    ``stream_message`` round in the pause_turn loop (Issue 350). Callers should
+    pass usage to ``billing.ledger.increment_usage``.
     Raises on network / API errors so the Celery task can retry.
     """
     dna_text = (dna_brief or "No DNA profile available yet.")[:_DNA_BRIEF_MAX_CHARS]
@@ -236,22 +237,52 @@ async def analyze_hook(
         }
     ]
 
-    from worker.anthropic_stream import stream_and_emit
+    # pause_turn loop: a long server-side web_search turn can pause; resume by
+    # re-sending the assistant content with the SAME tools, bounded — mirrors
+    # the shipped pattern in thumbnails.py / improvement/brief.py (Issue 350).
+    from worker.anthropic_stream import stream_message
+
+    _MAX_SEARCH_ROUNDS = 5
 
     client = _ANTHROPIC.with_options(timeout=120.0)
+    usage: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
+    loop_messages = messages
+    final_msg = None
+    msg = None
     try:
-        final_text, usage = await stream_and_emit(
-            client,
-            task_id,
-            model=settings.ANTHROPIC_MODEL_HOOKS,
-            max_tokens=1024,
-            system=system,
-            messages=messages,
-            tools=tools,
-        )
+        for _round in range(_MAX_SEARCH_ROUNDS + 1):
+            msg, round_usage = await stream_message(
+                client,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_HOOKS,
+                max_tokens=1024,
+                system=system,
+                messages=loop_messages,
+                tools=tools,
+            )
+            for k in usage:
+                usage[k] += round_usage.get(k, 0)
+            if getattr(msg, "stop_reason", None) != "pause_turn":
+                final_msg = msg
+                break
+            loop_messages = loop_messages + [{"role": "assistant", "content": msg.content}]
+        else:
+            logger.warning("analyze_hook: hit max web_search rounds (%d)", _MAX_SEARCH_ROUNDS)
+            final_msg = msg
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         log_llm_error(logger, exc, task=task_id)
         raise
+    if final_msg is None:
+        raise RuntimeError("Claude returned no message in hook analysis")
+    text_blocks = [b for b in final_msg.content if getattr(b, "type", None) == "text"]
+    if not text_blocks:
+        raise RuntimeError("Claude returned no text in hook analysis")
+    final_text = text_blocks[-1].text
     logger.info(
         "hook_analysis tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],

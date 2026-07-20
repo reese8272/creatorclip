@@ -14,7 +14,8 @@ in the USER turn, JSON-wrapped via wrap_untrusted — never in the system role
 (OWASP LLM01; Issues 224 / 352).
 
 Claude generates 10 ranked candidates; the caller surfaces the top 5.
-Results stream via stream_and_emit and are returned as a JSON string for the
+Results stream via stream_message (with a pause_turn continuation loop for
+multi-round web_search — Issue 350) and are returned as a JSON string for the
 caller to parse and emit as an SSE result event.
 
 The honesty disclaimer is always appended by Python — never left to the LLM.
@@ -224,30 +225,63 @@ async def generate_title_suggestions(
     Always uses the streaming path (task_id is mandatory for this feature —
     the caller emits the result event from the returned JSON string).
 
-    Returns ``(raw_json, usage)`` where usage is the token-count dict from
-    ``stream_and_emit``. Callers should pass usage to ``billing.ledger.increment_usage``
-    to populate the aggregate cost ledger. Raises on network / API errors.
+    Returns ``(raw_json, usage)`` where usage sums the token counts across every
+    ``stream_message`` round in the pause_turn loop. Callers should pass usage to
+    ``billing.ledger.increment_usage`` to populate the aggregate cost ledger.
+    Raises on network / API errors.
     """
     system, tools, messages = _build_request(
         channel_title, dna_brief, stated_identity, video_title, transcript_summary
     )
 
-    from worker.anthropic_stream import stream_and_emit
+    # pause_turn loop: a long server-side web_search turn can pause; resume by
+    # re-sending the assistant content with the SAME tools, bounded — mirrors
+    # the shipped pattern in thumbnails.py / improvement/brief.py (Issue 350).
+    from worker.anthropic_stream import stream_message
+
+    _MAX_SEARCH_ROUNDS = 5
 
     client = _ANTHROPIC.with_options(timeout=120.0)
+    usage: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
+    loop_messages = messages
+    final_msg = None
+    msg = None
     try:
-        final_text, usage = await stream_and_emit(
-            client,
-            task_id,
-            model=settings.ANTHROPIC_MODEL_TITLES,
-            max_tokens=2000,
-            system=system,
-            messages=messages,
-            tools=tools,
-        )
+        for _round in range(_MAX_SEARCH_ROUNDS + 1):
+            msg, round_usage = await stream_message(
+                client,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_TITLES,
+                max_tokens=2000,
+                system=system,
+                messages=loop_messages,
+                tools=tools,
+            )
+            for k in usage:
+                usage[k] += round_usage.get(k, 0)
+            if getattr(msg, "stop_reason", None) != "pause_turn":
+                final_msg = msg
+                break
+            loop_messages = loop_messages + [{"role": "assistant", "content": msg.content}]
+        else:
+            logger.warning(
+                "generate_title_suggestions: hit max web_search rounds (%d)", _MAX_SEARCH_ROUNDS
+            )
+            final_msg = msg
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         log_llm_error(logger, exc, task=task_id)
         raise
+    if final_msg is None:
+        raise RuntimeError("Claude returned no message in title suggestion generation")
+    text_blocks = [b for b in final_msg.content if getattr(b, "type", None) == "text"]
+    if not text_blocks:
+        raise RuntimeError("Claude returned no text in title suggestion generation")
+    final_text = text_blocks[-1].text
     logger.info(
         "title_suggestions tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],
