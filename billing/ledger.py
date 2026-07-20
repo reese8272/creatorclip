@@ -164,6 +164,8 @@ def _model_tier(cost_per_mtok_in: float) -> str:
         return "sonnet-tier"
     if cost_per_mtok_in == settings.COST_PER_MTOK_IN_HAIKU:
         return "haiku-tier"
+    if cost_per_mtok_in == settings.COST_PER_MTOK_IN_OPUS:
+        return "opus-tier"
     return "other"
 
 

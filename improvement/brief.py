@@ -134,43 +134,24 @@ async def generate_improvement_brief(
     _MAX_SEARCH_ROUNDS = 5
 
     if task_id is not None:
-        # Streaming path — uses stream_message (returns full Message with stop_reason)
-        # so we can detect pause_turn and continue the agentic loop when web_search
-        # fires server-side. stream_and_emit only returns text and cannot see stop_reason.
-        from worker.anthropic_stream import stream_message
+        # Streaming path — the shared pause_turn helper wraps stream_message
+        # (returns full Message with stop_reason) so long server-side web_search
+        # turns resume with the SAME tools, bounded (Issues 350 / 361).
+        from worker.anthropic_stream import stream_until_final
 
         client = _ANTHROPIC.with_options(timeout=120.0)
-        usage: dict[str, int] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read": 0,
-            "cache_creation": 0,
-        }
-        loop_messages = messages
-        final_msg = None
-        msg = None
         try:
-            for _round in range(_MAX_SEARCH_ROUNDS + 1):
-                msg, round_usage = await stream_message(
-                    client,
-                    task_id,
-                    model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
-                    max_tokens=2000,
-                    system=system,
-                    messages=loop_messages,
-                    tools=tools,
-                )
-                for k in usage:
-                    usage[k] += round_usage.get(k, 0)
-                if getattr(msg, "stop_reason", None) != "pause_turn":
-                    final_msg = msg
-                    break
-                loop_messages = loop_messages + [{"role": "assistant", "content": msg.content}]
-            else:
-                logger.warning(
-                    "improvement_brief streaming: hit max search rounds (%d)", _MAX_SEARCH_ROUNDS
-                )
-                final_msg = msg
+            final_msg, usage = await stream_until_final(
+                client,
+                task_id,
+                model=settings.ANTHROPIC_MODEL_IMPROVEMENT,
+                max_tokens=2000,
+                system=system,
+                messages=messages,
+                tools=tools,
+                max_rounds=_MAX_SEARCH_ROUNDS,
+                round_cap_warning="improvement_brief streaming: hit max search rounds (%d)",
+            )
         except (RateLimitError, APIStatusError, APIConnectionError) as exc:
             log_llm_error(logger, exc, task=task_id)
             raise

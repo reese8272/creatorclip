@@ -10753,3 +10753,19 @@ argparse. `docs/RUNBOOKS.md` Step 3 was updated to match: interactive `docker co
 two copies of an 8-line helper beat introducing a new shared file both cron entry points
 must locate, and it restores the no-exec parsing posture the `source .env` regression
 dropped. **Date:** 2026-07-20
+
+## 2026-07-20 — Chat billing: unknown-model fallback moved from Sonnet to Opus rates
+
+**What changed:** Adding the Opus price-book constants (`COST_PER_MTOK_IN_OPUS=5.0`,
+`COST_PER_MTOK_OUT_OPUS=25.0` — Opus 4.8 list price per the /claude-api model reference,
+fetched 2026-07-20) and mapping the opus family in `chat/runner.py::_chat_model_rates()`
+("opus-tier") also changed the *unknown-family* fallback from Sonnet rates to Opus rates.
+**Why:** the fallback's documented invariant is "the highest in the price book, so a
+misconfigured model never under-bills against the spend guard" — with Opus ($5/$25) now in
+the book, a Sonnet fallback ($3/$15) would violate that invariant. The pinned test
+(`test_chat_model_rates_follow_configured_model`) previously asserted the defect
+(opus → Sonnet fallback + "other") and was updated: opus asserts opus rates + "opus-tier";
+the unknown-family check now uses a genuinely unknown model string and asserts Opus rates.
+`billing/ledger.py::_model_tier` gained the matching `opus-tier` rate branch so the cost
+counter labels Opus traffic correctly. **Source:** Issue 361 tail batch (llm-tail);
+/claude-api reference pricing table. **Date:** 2026-07-20

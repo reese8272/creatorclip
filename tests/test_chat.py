@@ -244,12 +244,20 @@ def test_chat_model_rates_follow_configured_model(monkeypatch):
         "sonnet-tier",
     )
 
-    # Unknown family: falls back to the highest configured rate + "other" label.
+    # Opus family: bills at the Opus price-book rates, not the fallback (Issue 361).
     monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-opus-4-8")
+    assert runner._chat_model_rates() == (
+        settings.COST_PER_MTOK_IN_OPUS,
+        settings.COST_PER_MTOK_OUT_OPUS,
+        "opus-tier",
+    )
+
+    # Unknown family: falls back to the highest configured rate + "other" label.
+    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-mystery-9")
     rate_in, rate_out, label = runner._chat_model_rates()
     assert (rate_in, rate_out) == (
-        settings.COST_PER_MTOK_IN_SONNET,
-        settings.COST_PER_MTOK_OUT_SONNET,
+        settings.COST_PER_MTOK_IN_OPUS,
+        settings.COST_PER_MTOK_OUT_OPUS,
     )
     assert label == "other"
 

@@ -198,6 +198,63 @@ async def stream_message(
     return final, usage_dict
 
 
+async def stream_until_final(
+    client: Any,
+    task_id: str,
+    *,
+    model: str,
+    max_tokens: int,
+    system: Any,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+    max_rounds: int = 5,
+    round_cap_warning: str = "stream_until_final: hit max pause_turn rounds (%d)",
+) -> tuple[Any, dict[str, int]]:
+    """Run ``stream_message`` in a bounded ``pause_turn`` continuation loop.
+
+    Consolidates the four near-identical loops previously copy-pasted across
+    ``knowledge/titles.py``, ``knowledge/hooks.py``, ``knowledge/thumbnails.py``
+    and ``improvement/brief.py`` (Issues 350 / 361). A long server-side
+    web_search turn can pause (``stop_reason == "pause_turn"``); the resume
+    re-sends the assistant content with the SAME tools, bounded at
+    ``max_rounds`` continuations (``max_rounds + 1`` total calls).
+
+    Returns ``(final_message, usage)`` where usage sums ``input_tokens``,
+    ``output_tokens``, ``cache_read`` and ``cache_creation`` across every round
+    (billing correctness — a final-round-only figure drops the earlier rounds).
+    ``warn_if_truncated`` fires per round inside ``stream_message``. On hitting
+    the round cap, ``round_cap_warning`` is logged (``%d``-formatted with
+    ``max_rounds``) and the last paused message is returned. API errors
+    propagate so callers keep their own ``log_llm_error`` handling.
+    """
+    usage: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
+    loop_messages = messages
+    msg: Any = None
+    for _round in range(max_rounds + 1):
+        msg, round_usage = await stream_message(
+            client,
+            task_id,
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=loop_messages,
+            tools=tools,
+        )
+        for k in usage:
+            usage[k] += round_usage.get(k, 0)
+        if getattr(msg, "stop_reason", None) != "pause_turn":
+            break
+        loop_messages = loop_messages + [{"role": "assistant", "content": msg.content}]
+    else:
+        logger.warning(round_cap_warning, max_rounds)
+    return msg, usage
+
+
 async def _forward_event(task_id: str, event: Any) -> None:
     """Forward a single SDK event to the progress stream.
 
