@@ -1,6 +1,9 @@
 """Staging verification drills (GO_LIVE.md Stage-A residuals) — run INSIDE the
 staging app container via the staging-drills workflow (or manually:
-``docker compose -p ccstage exec app python scripts/drills.py <drill>``).
+``docker compose -p ccstage exec app python -m scripts.drills <drill>``).
+MUST be invoked as a module (-m): a bare ``python scripts/drills.py`` puts
+scripts/ on sys.path[0], shadowing the root ``flags`` module with
+scripts/flags.py (the ops CLI).
 
 Each drill proves one CODE-GREEN scorecard row against the LIVE staging stack
 (real Redis, real Postgres, real middleware order) and exits non-zero on
