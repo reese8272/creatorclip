@@ -7,29 +7,28 @@ name: CI
 # (Issue 144): integration was main-only, so a poll-task regression sat red for 9+
 # days without ever blocking a PR.
 #
-# RUNNER: self-hosted (2026-06-23, DECISIONS.md "hybrid self-hosted + local CI/CD").
-# All jobs run on the self-hosted runner on the prod VM — zero GitHub-hosted minutes,
-# which is what the billing-disabled hosted runner kept fast-failing. Layer 1 of the
-# hybrid model is the local pre-push hook (.githooks/pre-push → scripts/ci_local.sh):
-# it runs the fast Docker-free gates (ruff/mypy/bandit/frontend/unit) before a push
-# ever leaves a dev machine. This workflow (Layer 2) is the authoritative full suite,
-# incl. the Docker-only gates (integration, eval, playwright, migration-lint, build).
-#
-# Self-hosted PREREQUISITES (one-time on the VM — see docs/runbooks/local-ci-cd.md):
-#   1. ffmpeg, libpq-dev, gcc, python3.12, node 22 installed on the runner host, OR
-#      the `github-runner` user has passwordless sudo (the `sudo apt-get` steps need
-#      one or the other). scripts/setup-runner.sh now provisions these.
-#   2. STRONGLY RECOMMENDED: register a SECOND self-hosted runner so CI does not
-#      queue ahead of docker-publish/deploy on a main push (single runner = serial).
-# `concurrency: cancel-in-progress` already keeps only the latest commit's CI queued.
+# RUNNER: GitHub-hosted ubuntu-latest (2026-07-20, Issue 360 — supersedes the
+# 2026-06-23 "hybrid self-hosted" DECISIONS entry for THIS workflow only). This
+# workflow triggers on pull_request, and the self-hosted runner lives ON the prod
+# VM with docker-group membership and read access to /opt/autoclip/.env: any code
+# executing during a PR job (including a malicious transitive dep pulled by
+# `npm ci` / `pip install`) could read every prod secret and control the prod
+# containers. PR-triggered code must therefore NEVER run on that runner. The
+# self-hosted runner is reserved for deploy-track workflows (deploy.yml,
+# docker-publish.yml, staging-drills.yml) that run only trusted main/dispatch
+# refs. Layer 1 of the hybrid model is unchanged: the local pre-push hook
+# (.githooks/pre-push → scripts/ci_local.sh) runs the fast Docker-free gates
+# before a push ever leaves a dev machine; this workflow (Layer 2) is the
+# authoritative full suite, incl. the Docker-only gates (integration, eval,
+# playwright, migration-lint, build). Residual: GitHub-hosted minutes billing is
+# a dependency again — if the spending limit fast-fails PR CI, fix billing; do
+# NOT move these jobs back to the prod-VM runner.
 
 on:
-  # NOTE (2026-06-24): the `push` trigger is intentionally omitted while CI shares
-  # the SINGLE self-hosted runner with docker-publish/deploy — a push to main must
-  # not queue CI's ~12 jobs ahead of the deploy path on the same runner. The local
-  # pre-push hook (.githooks/pre-push) gates direct-to-main pushes; CI runs on PRs
-  # and on-demand here. Restore `push: branches: [main, staging]` once a SECOND
-  # self-hosted runner is registered (docs/runbooks/local-ci-cd.md).
+  # NOTE: the `push` trigger stays omitted — every change reaches main via a PR
+  # (which runs this workflow) and the local pre-push hook gates direct pushes;
+  # adding `push: [main]` would double-run the ~12 jobs per merge and burn
+  # GitHub-hosted minutes for no extra signal.
   pull_request:
     branches: [main, staging]
   workflow_dispatch:
@@ -47,7 +46,7 @@ permissions:
 jobs:
   lint:
     name: Lint (ruff)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -62,7 +61,7 @@ jobs:
 
   unit:
     name: Unit tests (pytest)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # conftest.py injects fake creds and DB/external APIs are overridden, but the
     # slowapi rate limiter talks to a real Redis (no in-memory fallback), so the
     # unit suite needs a Redis service. conftest defaults REDIS_URL to
@@ -85,10 +84,10 @@ jobs:
           cache: pip
       - name: Install system deps (ffmpeg + libpq)
         run: |
-          # Best-effort: the self-hosted runner is normally pre-provisioned
-          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
-          # ffmpeg matters (render/integration). Never hard-fail on a runner
-          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          # GitHub-hosted runners have passwordless sudo, so this always works
+          # there. psycopg uses the binary wheel, so only ffmpeg matters
+          # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
+          # if the workflow is ever run on a runner without passwordless sudo.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
           sudo -n apt-get update -q \
             && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
@@ -107,7 +106,7 @@ jobs:
 
   integration:
     name: Integration tests (postgres + redis)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -150,10 +149,10 @@ jobs:
           cache: pip
       - name: Install system deps
         run: |
-          # Best-effort: the self-hosted runner is normally pre-provisioned
-          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
-          # ffmpeg matters (render/integration). Never hard-fail on a runner
-          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          # GitHub-hosted runners have passwordless sudo, so this always works
+          # there. psycopg uses the binary wheel, so only ffmpeg matters
+          # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
+          # if the workflow is ever run on a runner without passwordless sudo.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
           sudo -n apt-get update -q \
             && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
@@ -167,7 +166,7 @@ jobs:
 
   coverage:
     name: Coverage floor (pytest-cov ratchet)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # Mirrors the unit job: the slowapi limiter needs a real Redis.
     services:
       redis:
@@ -191,10 +190,10 @@ jobs:
           cache: pip
       - name: Install system deps (ffmpeg + libpq)
         run: |
-          # Best-effort: the self-hosted runner is normally pre-provisioned
-          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
-          # ffmpeg matters (render/integration). Never hard-fail on a runner
-          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          # GitHub-hosted runners have passwordless sudo, so this always works
+          # there. psycopg uses the binary wheel, so only ffmpeg matters
+          # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
+          # if the workflow is ever run on a runner without passwordless sudo.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
           sudo -n apt-get update -q \
             && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
@@ -221,7 +220,7 @@ jobs:
     # Squawk rules enforced: ban-concurrent-index-creation-in-transaction,
     # constraint-missing-not-valid, disallowed-unique-constraint, etc.
     name: Migration lint (Squawk)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # dorny/paths-filter calls the PR Files API on pull_request events; without
     # pull-requests:read it errors "Resource not accessible by integration".
     permissions:
@@ -280,8 +279,8 @@ jobs:
         if: steps.filter.outputs.migrations == 'true'
         run: |
           pip install -r requirements.txt
-          # squawk is installed from PyPI, not npm — the self-hosted runner has no
-          # node toolchain (npm-missing failure, 2026-07-02; OFF_COURSE_BUGS.md).
+          # squawk is installed from PyPI, not npm — no node toolchain needed for
+          # this job (the npm form bit the VM runner on 2026-07-02; OFF_COURSE_BUGS.md).
           pip install squawk-cli
       - name: Bootstrap schema to previous head
         if: steps.filter.outputs.migrations == 'true'
@@ -381,7 +380,7 @@ jobs:
 
   static-gates:
     name: Types + SAST + deps (mypy, bandit, pip-audit)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # No DB/Redis needed — these gates are static. Fast feedback (~1 min). All gating
     # logic lives in scripts/run_layer0.py so CI and a local `/assess` measure identically.
     steps:
@@ -399,7 +398,7 @@ jobs:
 
   frontend:
     name: Frontend (lint, test, build)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # The React + TS SPA (frontend/). Mirrors the local gates: eslint, vitest unit
     # tests (incl. the brief-parser XSS-safety assertion), and a production build.
     # The Docker image compiles the SPA in its own stage, but this job gives fast,
@@ -431,7 +430,7 @@ jobs:
     # The commit-status API always reports the real outcome (pending / success /
     # failure) regardless of skip state, so branch protection can require it.
     name: Clip eval gate (setup-before-peak)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       statuses: write          # needed to post the commit status
@@ -465,10 +464,10 @@ jobs:
       - name: Install system deps (ffmpeg + libpq)
         if: steps.filter.outputs.clip_engine == 'true'
         run: |
-          # Best-effort: the self-hosted runner is normally pre-provisioned
-          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
-          # ffmpeg matters (render/integration). Never hard-fail on a runner
-          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          # GitHub-hosted runners have passwordless sudo, so this always works
+          # there. psycopg uses the binary wheel, so only ffmpeg matters
+          # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
+          # if the workflow is ever run on a runner without passwordless sudo.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
           sudo -n apt-get update -q \
             && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
@@ -525,7 +524,7 @@ jobs:
     # Vite dev server with the mocked backend (e2e/fixtures/mock-api.ts).
     # Chromium-only install keeps CI fast; other browsers are CI-unused.
     name: Playwright (smoke + a11y)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
@@ -564,7 +563,7 @@ jobs:
     # positives. Update workflow: run with --update-snapshots, commit the
     # __snapshots__ PNGs in a dedicated PR.
     name: Visual regression (non-gating until baselines committed)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true  # becomes gating once baselines are committed
     defaults:
       run:
@@ -608,7 +607,7 @@ jobs:
     # until the root cause is fixed. Blanket rerun-as-gate is EXPLICITLY PROHIBITED
     # (see docs/BRANCHING.md and docs/DECISIONS.md — Issue 268).
     name: Flake detection (non-gating)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true  # NEVER gating — flake detection is informational only
     services:
       redis:
@@ -628,10 +627,10 @@ jobs:
           cache: pip
       - name: Install system deps (ffmpeg + libpq)
         run: |
-          # Best-effort: the self-hosted runner is normally pre-provisioned
-          # (scripts/setup-runner.sh). psycopg uses the binary wheel, so only
-          # ffmpeg matters (render/integration). Never hard-fail on a runner
-          # without passwordless sudo — `sudo -n` fails fast instead of hanging.
+          # GitHub-hosted runners have passwordless sudo, so this always works
+          # there. psycopg uses the binary wheel, so only ffmpeg matters
+          # (render/integration). `sudo -n` fails fast (never hangs on a prompt)
+          # if the workflow is ever run on a runner without passwordless sudo.
           command -v ffmpeg >/dev/null 2>&1 && exit 0
           sudo -n apt-get update -q \
             && sudo -n apt-get install -y --no-install-recommends ffmpeg libpq-dev gcc \
@@ -689,7 +688,7 @@ jobs:
 
   docker-build:
     name: Docker build (smoke test)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # Verifies the image builds without a push — runs on every PR. Push to GHCR
     # happens only on merge to main (see docker-publish.yml).
     steps:

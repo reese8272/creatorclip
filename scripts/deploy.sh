@@ -10,8 +10,11 @@
 #   VPS_SSH_KEY  — path to SSH private key (default: ~/.ssh/id_ed25519)
 #   VPS_PORT     — SSH port (default: 22)
 #
-# This script mirrors the GH Actions deploy.yml exactly so prod behaviour
-# is identical regardless of how the deploy was triggered.
+# This script follows deploy.yml's core sequence (pull → doctor → safety dump →
+# migrate → verify head → roll out → smoke) but is NOT an exact mirror: it has
+# no staging-parity gate, no PREV_IMAGE capture, and no automatic rollback.
+# A failed manual deploy must be recovered by hand (docs/RUNBOOKS.md) — prefer
+# re-running the GH Actions deploy whenever Actions is available.
 
 set -euo pipefail
 
@@ -40,14 +43,19 @@ echo "==> Copying backup script to server..."
 ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p ${REMOTE_DIR}/scripts"
 scp $SSH_OPTS "${SCRIPT_DIR}/backup_pg.sh" "${USER}@${HOST}:${REMOTE_DIR}/scripts/backup_pg.sh"
 
+echo "==> Authenticating with GHCR..."
+# The token travels over stdin into `docker login --password-stdin` — never on
+# argv, never in the heredoc body, and never via SendEnv (default sshd AcceptEnv
+# only passes LANG/LC_*, so `-o SendEnv=GHCR_TOKEN` silently dropped the var and
+# the remote login aborted under `set -u`). The login credential persists in the
+# remote ~/.docker/config.json for the deploy session below.
+printf '%s\n' "$GHCR_TOKEN" | ssh $SSH_OPTS "${USER}@${HOST}" \
+  "docker login ghcr.io -u reese8272 --password-stdin"
+
 echo "==> Deploying..."
-# Pass GHCR_TOKEN via env so it never appears in the heredoc body (no shell history leakage).
-ssh $SSH_OPTS -o SendEnv=GHCR_TOKEN "${USER}@${HOST}" << 'REMOTE'
+ssh $SSH_OPTS "${USER}@${HOST}" << 'REMOTE'
 set -euo pipefail
 cd /opt/autoclip
-
-echo "  Authenticating with GHCR..."
-echo "${GHCR_TOKEN}" | docker login ghcr.io -u reese8272 --password-stdin 2>&1 | grep -v password
 
 echo "  Pulling latest image..."
 docker compose -f docker-compose.prod.yml pull
@@ -91,7 +99,6 @@ echo "  Migrations confirmed at head ($CUR_REV)."
 
 echo "  Rolling out..."
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
-docker image prune -f
 
 echo "  Smoke test — /health gate..."
 STATUS=""
@@ -115,6 +122,11 @@ echo "  Smoke test — critical journey (llm_harness --flow core)..."
 docker compose -f docker-compose.prod.yml exec -T app \
   python3 scripts/llm_harness.py --flow core \
   || { echo "Critical journey smoke FAILED — see harness output above"; exit 1; }
+
+# Prune only AFTER the smoke tests pass — deploy.yml deliberately moved prune
+# post-smoke so a failed deploy never deletes the image needed to roll back.
+echo "  Pruning dangling images..."
+docker image prune -f
 REMOTE
 
 echo "==> CreatorClip is live at https://autoclip.studio"
