@@ -183,6 +183,40 @@ def test_create_summary_enqueues_render_202(client):
     task_mock.delay.assert_called_once_with(body["summary_id"])
 
 
+def test_create_summary_enqueue_failure_marks_failed_503(client):
+    """A broker throw on `.delay()` must not strand the committed pending row
+    behind uq_summaries_active — it is flipped to failed so a retry can start
+    fresh (summary-side mirror of the Issue-359c render_clip guard)."""
+    creator = _creator()
+    video = _video(creator.id)
+    clips = [_clip(start_s=10, end_s=70, score=0.9), _clip(start_s=200, end_s=260, score=0.7)]
+    factory = _fake_session(video=video, clips=clips)
+    holder: dict = {}
+
+    async def _capturing_session():
+        async for session in factory():
+            holder["session"] = session
+            yield session
+
+    _set_overrides(creator, _capturing_session)
+
+    with (
+        patch("routers.clips.check_positive_balance", new=AsyncMock()),
+        patch("dna.profile.get_active", new=AsyncMock(return_value=None)),
+        patch("worker.tasks.render_summary") as task_mock,
+        patch("worker.progress.aset_owner", new=AsyncMock()),
+    ):
+        task_mock.delay.side_effect = RuntimeError("broker down")
+        resp = _post(client, video.id)
+
+    assert resp.status_code == 503
+    added_summaries = [
+        c.args[0] for c in holder["session"].add.call_args_list if isinstance(c.args[0], Summary)
+    ]
+    assert added_summaries, "the summary row should have been created before the enqueue"
+    assert added_summaries[-1].render_status == RenderStatus.failed
+
+
 def test_create_summary_idempotent_repost_returns_existing(client):
     """A pending/running Summary for the video is returned — no duplicate job."""
     creator = _creator()

@@ -236,12 +236,14 @@ async def persist_ranked_clips(
 
     try:
         await session.commit()
-    except IntegrityError:
-        # Lost the concurrent-generation race: another execution committed the
-        # clip set between the guard and this commit (uq_clips_video_rank is
-        # deferred, so the violation surfaces here). The winner's set IS the
-        # ranking — return it; never double-insert.
+    except IntegrityError as exc:
         await session.rollback()
+        # Only a uq_clips_video_rank violation means we lost the
+        # concurrent-generation race (the constraint is deferred, so it
+        # surfaces here). Any other integrity error (FK, NOT NULL) is a real
+        # defect — re-raise instead of mislabeling it as a lost race.
+        if "uq_clips_video_rank" not in str(exc.orig):
+            raise
         logger.info(
             "Concurrent clip persist detected for video %s — returning existing set", video_id
         )
