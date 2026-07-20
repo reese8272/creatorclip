@@ -22,6 +22,7 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
+from upload_intel.timing import optimal_gap_hours
 
 logger = logging.getLogger(__name__)
 
@@ -82,18 +83,6 @@ def _optimal_clip_len_s(videos: list[dict]) -> float | None:
     if len(durations) % 2:
         return durations[mid]
     return (durations[mid - 1] + durations[mid]) / 2
-
-
-def _optimal_upload_gap_h(activity_rows: list) -> float | None:
-    """Average gap between top-3 activity peaks expressed in hours."""
-    if len(activity_rows) < 2:
-        return None
-    top = sorted(activity_rows, key=lambda r: r.activity_index, reverse=True)[:3]
-    times = sorted(r.day_of_week * 24 + r.hour for r in top)
-    if len(times) < 2:
-        return None
-    gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]
-    return sum(gaps) / len(gaps)
 
 
 # ── Async data helpers ────────────────────────────────────────────────────────
@@ -322,7 +311,8 @@ async def build_patterns(
         select(AudienceActivity).where(AudienceActivity.creator_id == creator_id)
     )
     activity_rows = list(activity_result.scalars())
-    upload_gap_h = _optimal_upload_gap_h(activity_rows)
+    # Shared with upload_intel — circular-week wrap + malformed-row guard live there.
+    upload_gap_h = optimal_gap_hours(activity_rows)
     clip_len_s = _optimal_clip_len_s(top_all)
 
     all_regions = [v.get("best_source_region") for v in top_all if v.get("best_source_region")]

@@ -10643,3 +10643,29 @@ back to the Sonnet rates — the highest configured — with label "other" and a
 so a misconfigured model can never under-bill the ledger/spend guard relative to the known
 price book. Adding real Opus rates requires a config.py price-book entry (out of batch
 scope). **Date:** 2026-07-20
+
+## 2026-07-20 — Assessment fix batch (backend-misc) judgment calls [DEC]
+
+**CSP: Google Fonts allowance baked into the default `_CSP_BASE`** (main.py). The 2026-07-20
+assessment found the Issue-229 CSP had no `style-src`/`font-src`, so `default-src 'self'` governed
+both and the browser blocked the SPA's `@import` of fonts.googleapis.com — prod has silently run on
+system-font fallback. Deviation from "keep the base CSP minimal, extend via `CSP_EXTRA_SOURCES`":
+the fonts are a hard dependency of the shipped stylesheet (frontend/src/index.css), not an optional
+CDN, so they belong in the default rather than in per-deploy env config that every environment must
+remember. `style-src` also carries `'unsafe-inline'` because the retained static pages
+(tos/privacy/accessibility) use `<style>` blocks — previously blocked by `default-src 'self'`,
+i.e. this legalises styling those compliance pages, and CSS injection without script execution is
+low-risk (script-src remains governed by `default-src 'self'`, no inline scripts).
+
+**Preference model retention: keep newest 5 versions per creator** (preference/train.py). No spec
+stated a retention count; only the newest 2 are ever read (load_latest + the worker NDCG
+warn-ratchet), so 5 keeps a manual-rollback margin while bounding per-retrain row/blob growth.
+Pruning runs in the same transaction as the insert, under the existing per-creator advisory xact
+lock, so it cannot race a concurrent retrain.
+
+**Publish resume probe: in-process retry, not session persistence** (youtube/publish.py). The
+assessment's long-term fix (persist `session_uri` on ClipPublication so a task-level retry resumes
+the same session) needs a schema migration — out of this batch's scope. Shipped the module-file
+fix: transport errors inside the offset probe are retried with backoff against the SAME session URI
+and, when exhausted, surface as a terminal `YouTubeUploadError` (never a blind task retry that
+opens a new session). Session persistence remains the follow-up. **Date:** 2026-07-20

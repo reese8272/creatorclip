@@ -18,6 +18,7 @@ shared client's 60s timeout bounds each chunk PUT (not the whole upload), which
 is why we chunk rather than stream the whole file in one request.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -34,6 +35,7 @@ _INIT_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 # non-final chunks.
 _UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 _MAX_RESUME_ATTEMPTS = 5
+_RESUME_BACKOFF_CAP_S = 16.0
 _SERVER_ERROR_CODES = frozenset({500, 502, 503, 504})
 
 
@@ -107,6 +109,31 @@ async def _query_offset(session_uri: str, total_bytes: int) -> tuple[int, str | 
     raise YouTubeUploadError(resp.status_code, "offset query failed")
 
 
+async def _resume_offset(session_uri: str, total_bytes: int) -> tuple[int, str | None]:
+    """``_query_offset`` with its own transport-error retry + backoff.
+
+    A raw ``httpx.HTTPError`` escaping the resume probe (network still down
+    when it fires) would fall to the Celery wrapper's generic retry, which
+    re-runs ``upload_video`` with a NEW resumable session — if the original
+    session had in fact completed at Google, that retry creates a duplicate
+    video. Transport failures on the probe are therefore retried in-process
+    against the SAME session URI and, when exhausted, converted to a terminal
+    ``YouTubeUploadError`` that the task wrapper never blindly retries.
+    """
+    for attempt in range(1, _MAX_RESUME_ATTEMPTS + 1):
+        try:
+            return await _query_offset(session_uri, total_bytes)
+        except httpx.HTTPError as exc:
+            if attempt >= _MAX_RESUME_ATTEMPTS:
+                raise YouTubeUploadError(
+                    0, f"resume offset query failed after {attempt} attempts: {exc}"
+                ) from exc
+            delay = min(2.0 ** (attempt - 1), _RESUME_BACKOFF_CAP_S)
+            logger.warning("offset query failed (%s) — retrying in %.1fs", exc, delay)
+            await asyncio.sleep(delay)
+    raise YouTubeUploadError(0, "resume offset query failed")  # pragma: no cover
+
+
 async def upload_video(
     access_token: str,
     file_path: str | Path,
@@ -152,7 +179,7 @@ async def upload_video(
                 if attempts > _MAX_RESUME_ATTEMPTS:
                     raise YouTubeUploadError(0, f"resume attempts exhausted: {exc}") from exc
                 logger.warning("upload chunk failed (%s) — resuming", exc)
-                offset, completed_id = await _query_offset(session_uri, total)
+                offset, completed_id = await _resume_offset(session_uri, total)
                 if completed_id:
                     logger.info(
                         "upload session already complete despite chunk error — video %s",
@@ -176,7 +203,7 @@ async def upload_video(
                 attempts += 1
                 if attempts > _MAX_RESUME_ATTEMPTS:
                     raise YouTubeUploadError(resp.status_code, "server errors exhausted resume")
-                offset, completed_id = await _query_offset(session_uri, total)
+                offset, completed_id = await _resume_offset(session_uri, total)
                 if completed_id:
                     logger.info(
                         "upload session already complete despite %d on chunk — video %s",

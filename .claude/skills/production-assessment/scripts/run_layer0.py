@@ -136,8 +136,10 @@ def gate_coverage() -> dict:
         # failure of the harness — coverage simply could not be measured here.
         tail = "\n".join(proc.stdout.splitlines()[-5:])
         return {"status": "skipped", "detail": f"no coverage.xml; tail: {tail}"}
+    # NOTE: _coverage.xml is deliberately left on disk — gate_module_coverage and
+    # gate_diff_cover parse it next; main() removes it after all gates have run.
+    # (Unlinking here made the Issue-269 per-module floors gate skip on every run.)
     rate = float(ET.parse(xml_out).getroot().get("line-rate", "0")) * 100
-    xml_out.unlink(missing_ok=True)
     return {
         "status": "ok",
         "value": round(rate, 2),
@@ -433,6 +435,9 @@ def main() -> int:
     ASSESS_DIR.mkdir(parents=True, exist_ok=True)
     baselines = _load_baselines()
     results = {name: fn() for name, fn in selected.items()}
+    # Coverage XML is shared by the coverage → module_coverage → diff_cover
+    # gates; clean it up only after every selected gate has run.
+    (ASSESS_DIR / "_coverage.xml").unlink(missing_ok=True)
     status, measured = _evaluate(results, baselines)
 
     if args.update_baseline:

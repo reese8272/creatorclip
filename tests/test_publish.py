@@ -85,6 +85,52 @@ def test_upload_final_chunk_error_but_session_complete_returns_id(tmp_path):
     assert vid == "VID_ALREADY_DONE"
 
 
+def test_offset_query_transport_error_retries_same_session(tmp_path):
+    """Residual duplicate-upload window (2026-07-20 assessment): a transport
+    error INSIDE the resume probe must be retried against the SAME session URI
+    — never escape untyped, which would make the Celery retry open a NEW
+    session (and a duplicate video if the first one completed at Google)."""
+    import httpx
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x" * 100)
+    client = _fake_client(post=_resp(200, headers={"Location": "https://upload.session/abc"}))
+    # chunk PUT dies → probe PUT dies → probe retry → 200 + resource.
+    client.put = AsyncMock(
+        side_effect=[
+            httpx.ConnectError("chunk reset"),
+            httpx.ConnectError("probe reset"),
+            _resp(200, json_body={"id": "VID_PROBE_RETRY"}),
+        ]
+    )
+    with (
+        patch("youtube.publish._http.client", return_value=client),
+        patch("youtube.publish.asyncio.sleep", AsyncMock()),
+    ):
+        vid = asyncio.run(upload_video("tok", media, title="T", description="d"))
+    assert vid == "VID_PROBE_RETRY"
+    client.post.assert_called_once()  # never a second resumable session
+
+
+def test_offset_query_transport_errors_exhausted_raise_typed_terminal(tmp_path):
+    """When the network stays down through every probe retry, the failure must
+    surface as YouTubeUploadError (terminal in the task wrapper) — a raw httpx
+    error would fall to the generic task retry and restart the upload."""
+    import httpx
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x" * 100)
+    client = _fake_client(post=_resp(200, headers={"Location": "https://upload.session/abc"}))
+    client.put = AsyncMock(side_effect=httpx.ConnectError("network down"))
+    with (
+        patch("youtube.publish._http.client", return_value=client),
+        patch("youtube.publish.asyncio.sleep", AsyncMock()),
+        pytest.raises(YouTubeUploadError),
+    ):
+        asyncio.run(upload_video("tok", media, title="T", description="d"))
+    client.post.assert_called_once()
+
+
 def test_upload_5xx_on_chunk_but_session_complete_returns_id(tmp_path):
     """Same duplicate-upload guard for the 5xx chunk-response branch."""
     media = tmp_path / "clip.mp4"
