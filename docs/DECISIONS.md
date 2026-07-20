@@ -10635,8 +10635,8 @@ never render; a dedicated staging bucket is the upgrade path if they ever do.
 `OLD_TOKEN_ENCRYPTION_KEY` / `NEW_TOKEN_ENCRYPTION_KEY` env vars with a `getpass` prompt
 fallback (argv is visible in `ps` and shell history — the same posture backup_pg.sh
 established with `-pass env:`). The old `--old-key/--new-key` flags now fail loudly via
-argparse. `docs/RUNBOOKS.md` line ~194 still shows the argv invocation and needs the
-one-line update (out of this batch's file scope).
+argparse. `docs/RUNBOOKS.md` Step 3 was updated to match: interactive `docker compose exec`
+(no `-T` — getpass needs a TTY) with the env-var form documented for non-interactive runs.
 
 **`backup_redis.sh` duplicates backup_pg.sh's `read_env` verbatim** (plus the
 `BACKUP_R2_BUCKET != R2_BUCKET` guard) instead of extracting a shared sourced snippet —

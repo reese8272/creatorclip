@@ -49,8 +49,11 @@ echo "==> Authenticating with GHCR..."
 # only passes LANG/LC_*, so `-o SendEnv=GHCR_TOKEN` silently dropped the var and
 # the remote login aborted under `set -u`). The login credential persists in the
 # remote ~/.docker/config.json for the deploy session below.
+# The stderr filter drops docker's 3-line "password stored unencrypted" warning
+# (cosmetic noise on every manual deploy) without touching ssh's exit status.
 printf '%s\n' "$GHCR_TOKEN" | ssh $SSH_OPTS "${USER}@${HOST}" \
-  "docker login ghcr.io -u reese8272 --password-stdin"
+  "docker login ghcr.io -u reese8272 --password-stdin" \
+  2> >(grep -vE 'unencrypted|credential|docs\.docker\.com' >&2 || true)
 
 echo "==> Deploying..."
 ssh $SSH_OPTS "${USER}@${HOST}" << 'REMOTE'
