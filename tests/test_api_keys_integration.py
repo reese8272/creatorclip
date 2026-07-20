@@ -470,18 +470,16 @@ async def test_bearer_dependency_sets_rls_guc_inside_stamp_window():
                     # mid-dependency, which would revert a transaction-scoped role
                     # switch back to the BYPASSRLS admin and mask the regression.
                     await s.execute(text("SET ROLE creatorclip_app"))
-                    resolved = await get_current_creator_via_api_key(
-                        _bearer_request(raw_key), s
-                    )
+                    resolved = await get_current_creator_via_api_key(_bearer_request(raw_key), s)
                     assert resolved.id == creator.id
                     # The falsely-402ing shape: an unfiltered tenant read in the
                     # SAME transaction the dependency left open. RLS returns zero
                     # rows unless app.creator_id is set on the live transaction.
                     rows = (
-                        await s.execute(
-                            select(Video).where(Video.creator_id == creator.id)
-                        )
-                    ).scalars().all()
+                        (await s.execute(select(Video).where(Video.creator_id == creator.id)))
+                        .scalars()
+                        .all()
+                    )
                     assert rows, (
                         f"{label} request saw zero tenant rows — app.creator_id GUC "
                         "is not set on the live transaction (Issue 358 regression)"

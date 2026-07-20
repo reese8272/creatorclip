@@ -76,16 +76,24 @@ async def test_second_active_summary_rejected_then_allowed_after_done(
     db_session: AsyncSession,
 ):
     creator, video = await _seed(db_session)
+    creator_id = creator.id
     try:
         first = _summary(creator, video)
         db_session.add(first)
         await db_session.commit()
+        first_id = first.id
 
         # A second in-flight recap for the same video violates the partial index.
         db_session.add(_summary(creator, video))
         with pytest.raises(IntegrityError):
             await db_session.commit()
         await db_session.rollback()
+
+        # rollback() expires ORM state regardless of expire_on_commit — re-fetch
+        # before mutating, or the attribute set lazy-loads synchronously
+        # (MissingGreenlet under the async session).
+        first = await db_session.get(Summary, first_id)
+        assert first is not None
 
         # Once the first render leaves pending/running, a re-render is allowed.
         first.render_status = RenderStatus.done
@@ -94,5 +102,5 @@ async def test_second_active_summary_rejected_then_allowed_after_done(
         await db_session.commit()
     finally:
         await db_session.rollback()
-        await db_session.execute(delete(Summary).where(Summary.creator_id == creator.id))
+        await db_session.execute(delete(Summary).where(Summary.creator_id == creator_id))
         await db_session.commit()

@@ -214,9 +214,7 @@ def test_generate_clips_gates_pass_when_enabled_and_under_cap(client: TestClient
     app.dependency_overrides[get_session] = _override_session(session)
 
     with (
-        patch(
-            "billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))
-        ),
+        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
         patch("routers.clips.check_positive_balance", new=AsyncMock()),
     ):
         resp = client.post(f"/videos/{uuid.uuid4()}/clips/generate")

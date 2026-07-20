@@ -5226,8 +5226,7 @@ async def _send_notification_async(
                 )
                 return
             logger.info(
-                "send_notification: dedupe_key=%s previously failed — retrying send "
-                "for creator %s",
+                "send_notification: dedupe_key=%s previously failed — retrying send for creator %s",
                 dedupe_key,
                 creator_id,
             )

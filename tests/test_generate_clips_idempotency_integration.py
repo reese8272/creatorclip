@@ -159,9 +159,7 @@ async def test_concurrent_persist_inserts_exactly_one_clip_set():
         results = await asyncio.gather(_persist(), _persist())
         async with factory() as check:
             rows = (
-                (await check.execute(select(Clip).where(Clip.video_id == video_id)))
-                .scalars()
-                .all()
+                (await check.execute(select(Clip).where(Clip.video_id == video_id))).scalars().all()
             )
         assert len(rows) == len(ranked)  # ONE set persisted, never two
         ids = {c.id for c in rows}

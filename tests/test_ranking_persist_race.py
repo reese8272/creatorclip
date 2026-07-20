@@ -43,9 +43,7 @@ async def test_persist_integrity_error_returns_winner_set() -> None:
     session.add = MagicMock()
     # First execute: the pre-insert guard sees no clips; second: the
     # post-rollback re-select returns the winner's committed set.
-    session.execute = AsyncMock(
-        side_effect=[_select_result([]), _select_result(winner_clips)]
-    )
+    session.execute = AsyncMock(side_effect=[_select_result([]), _select_result(winner_clips)])
     session.commit = AsyncMock(
         side_effect=IntegrityError("stmt", {}, Exception("uq_clips_video_rank"))
     )
