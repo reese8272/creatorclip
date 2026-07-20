@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { fitTier } from '@/lib/fit'
 import { FitBadge } from '@/components/ui/fit-badge'
@@ -141,6 +142,22 @@ export function VideoClipsMap() {
     return (
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
         <p className="py-8 text-center text-sm text-subtle">Loading…</p>
+      </main>
+    )
+  }
+
+  // A failed load must NOT fall through to "Video not found." — a creator whose
+  // video exists would be told it doesn't (Recap retry idiom, Issue 361 sweep).
+  if (videosQuery.isError || clipsQuery.isError) {
+    return (
+      <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
+        <QueryErrorState
+          title="Couldn’t load this video’s clip map."
+          onRetry={() => {
+            if (videosQuery.isError) void videosQuery.refetch()
+            if (clipsQuery.isError) void clipsQuery.refetch()
+          }}
+        />
       </main>
     )
   }
