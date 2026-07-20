@@ -223,7 +223,8 @@ Sign in / trigger a YouTube refresh for one creator; confirm a clean `decrypt()`
 - **Before step 4:** if the re-encrypt errors it already rolled itself back — leave the key
   unchanged and keep `TOKEN_ENCRYPTION_KEY_PREVIOUS` as-is.
 - **After step 4:** set `TOKEN_ENCRYPTION_KEY` back to `OLD_KEY` and re-run step 3 in reverse
-  (`--old-key NEW --new-key OLD`), or restore the pre-rotation DB backup.
+  (export `OLD_TOKEN_ENCRYPTION_KEY=<new>` / `NEW_TOKEN_ENCRYPTION_KEY=<old>`), or restore the
+  pre-rotation DB backup.
 
 ---
 
