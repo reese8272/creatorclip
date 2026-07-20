@@ -62,7 +62,7 @@ def _chat_model_rates() -> tuple[float, float, str]:
     tier vocabulary of ``billing.ledger._model_tier``. Chat's model is
     configurable (config.py), so billing must follow the configured model —
     the previous hardcoded Sonnet rates silently mis-billed any other model.
-    Unknown model families fall back to the Sonnet rates (the highest in the
+    Unknown model families fall back to the Opus rates (the highest in the
     price book) with the "other" label, so a misconfigured model never
     under-bills against the spend guard.
     """
@@ -71,10 +71,12 @@ def _chat_model_rates() -> tuple[float, float, str]:
         return settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU, "haiku-tier"
     if "sonnet" in model:
         return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "sonnet-tier"
+    if "opus" in model:
+        return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "opus-tier"
     logger.warning(
-        "chat billing: no price-book rates for model %s — falling back to Sonnet rates", model
+        "chat billing: no price-book rates for model %s — falling back to Opus rates", model
     )
-    return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "other"
+    return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "other"
 
 
 async def run_chat_turn(
