@@ -10769,3 +10769,34 @@ the unknown-family check now uses a genuinely unknown model string and asserts O
 `billing/ledger.py::_model_tier` gained the matching `opus-tier` rate branch so the cost
 counter labels Opus traffic correctly. **Source:** Issue 361 tail batch (llm-tail);
 /claude-api reference pricing table. **Date:** 2026-07-20
+
+## 2026-07-20 — OAuth stored scope: replace-on-grant (reverses the Issue 352 Batch D union) [DEC]
+
+**What changed.** `store_or_update_tokens` (youtube/oauth.py) now REPLACES the stored
+`YoutubeToken.scope` with the token response's scope whenever the response carries one,
+instead of unioning it with the stored grant. Narrowing is logged
+(`OAuth grant narrowed for creator …`); an empty/omitted scope keeps the stored grant.
+
+**Why.** The union could never narrow (assessment 2026-07-20, youtube SEV2): a creator
+who unchecks `youtube.upload` on Google's granular-consent screen during a re-consent
+gets a token response without that scope, but the union re-added it —
+`has_publish_scope()` stayed True forever and every publish 403'd with no self-heal
+(partial scope removal never triggers the refresh `invalid_grant` row-delete). The
+union's original purpose (a base re-login must not strip a previously granted publish
+scope) is already served by `include_granted_scopes=true`, which is set on BOTH auth
+flows since Issue 352 Batch D.
+
+**Evidence.** Google OAuth 2.0 web-server docs
+(developers.google.com/identity/protocols/oauth2/web-server, fetched 2026-07-20):
+the token response `scope` is "the scopes of access granted by the access_token" — the
+authoritative grant; with `include_granted_scopes=true` "the new access token will also
+cover any scopes to which the user previously granted the application access", so
+still-granted scopes are present in the response and their absence means a genuine
+downgrade; granular-permissions guidance says apps "must verify which scopes were
+actually granted and gracefully handle situations where some permissions are denied".
+Replace-on-grant is exactly that verification. The refresh path reconciles the same way
+(`_do_token_refresh` passes the refresh response's scope; falls back to the stored scope
+when Google omits it). Regression tests:
+`test_store_or_update_tokens_narrows_scope_on_downgraded_regrant`,
+`test_store_or_update_tokens_empty_scope_keeps_stored_grant`
+(tests/test_youtube_edges.py). **Date:** 2026-07-20

@@ -169,6 +169,12 @@ _REL_PERFORMED_WELL = 2.0
 _REL_KEEP = 1.0
 _REL_DOWNVOTE = 0.0
 
+# Training-label rule — mirrors preference.train exactly: the label comes from the ACTION
+# alone (downvote is negative even when its outcome performed well), and skip/format never
+# contribute a training row. Graded relevance above is EVAL-only.
+_POSITIVE_ACTIONS = frozenset({"upvote", "trim"})
+_TRAINABLE_ACTIONS = _POSITIVE_ACTIONS | {"downvote"}
+
 DEFAULT_K = 5
 DEFAULT_MIN_LABELS = 30  # per-creator metrics below this are noise → pooled only
 
@@ -180,6 +186,7 @@ class LabeledClip:
     clip_id: uuid.UUID
     created_at: datetime  # the chronological-split key
     relevance: float
+    action: str  # raw feedback action — the TRAIN label source (relevance is eval-only)
     features: list[float]
     dna_composite: float  # clip.score (the DNA composite the production blend uses)
     signal_features: dict  # signals_jsonb['features'] for the generic-signal baseline
@@ -202,7 +209,7 @@ def _relevance_for(action_value: str, performed_well: bool | None) -> float | No
     """Graded relevance from a feedback action + outcome. None means 'exclude this label'."""
     if performed_well is True:
         return _REL_PERFORMED_WELL
-    if action_value in ("upvote", "trim"):
+    if action_value in _POSITIVE_ACTIONS:
         return _REL_KEEP
     if action_value == "downvote":
         return _REL_DOWNVOTE
@@ -269,26 +276,29 @@ def _train_scorer(
     train: list[LabeledClip], half_life_days: float | None = None
 ) -> PreferenceScorer | None:
     """Fit a PreferenceScorer on the train split, reproducing preference.train.build_and_save's
-    label/weight construction. Returns None when there aren't 2 classes to fit.
+    label/weight construction: the label comes from the ACTION alone (a downvoted clip whose
+    outcome performed well trains as a NEGATIVE with the 3× outcome weight, exactly like
+    train.py), and rows whose action is not trainable (skip/format) are excluded from the fit.
+    Graded relevance stays eval-only. Returns None when there aren't 2 classes to fit.
 
     ``half_life_days`` overrides the configured recency half-life for the sample weights —
     the Issue-200 sweep retrains per candidate half-life; None keeps production behavior.
     """
     import numpy as np
 
+    from preference.decay import sample_weight
     from preference.model import fit
 
-    if len(train) < 2:
+    trainable = [c for c in train if c.action in _TRAINABLE_ACTIONS]
+    if len(trainable) < 2:
         return None
-    y = [1 if c.relevance >= _REL_KEEP else 0 for c in train]
+    y = [1 if c.action in _POSITIVE_ACTIONS else 0 for c in trainable]
     if len(set(y)) < 2:
         return None
-    # Recency/outcome sample weights mirror production (decay × outcome multiplier). We pass a
-    # flat weight here when created_at handling differs per fixture; the production weighting is
-    # exercised by preference.decay's own tests. Keep the fit identical otherwise.
-    from preference.decay import sample_weight
-
-    X = np.array([c.features for c in train], dtype=float)
+    # Recency/outcome sample weights mirror production (decay × outcome multiplier).
+    # relevance >= _REL_PERFORMED_WELL ⇔ performed_well is True for rows built by
+    # load_labeled_clips, so the outcome multiplier matches train.py's.
+    X = np.array([c.features for c in trainable], dtype=float)
     w = np.array(
         [
             sample_weight(
@@ -296,7 +306,7 @@ def _train_scorer(
                 performed_well=(c.relevance >= _REL_PERFORMED_WELL),
                 half_life_days=half_life_days,
             )
-            for c in train
+            for c in trainable
         ],
         dtype=float,
     )
@@ -316,7 +326,9 @@ def _blend_scores(
     from preference.model import preference_weight
 
     scorer = _train_scorer(train, half_life_days=half_life_days)
-    weight = preference_weight(len(train)) if scorer is not None else 0.0
+    # scorer.label_count == fitted trainable labels — the same count production feeds
+    # preference_weight (clip_engine/ranking.py), excluding eval-only rows.
+    weight = preference_weight(scorer.label_count) if scorer is not None else 0.0
     if scorer is not None and weight > 0.0:
         return [
             (1.0 - weight) * c.dna_composite + weight * scorer.predict_score(c.features)
@@ -439,9 +451,8 @@ async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> li
     labeled: list[LabeledClip] = []
     for feedback, clip, outcome in result.all():
         performed_well = outcome.performed_well if outcome else None
-        rel = _relevance_for(
-            getattr(feedback.action, "value", str(feedback.action)), performed_well
-        )
+        action_value = getattr(feedback.action, "value", str(feedback.action))
+        rel = _relevance_for(action_value, performed_well)
         if rel is None:
             continue
         feats_dict = (clip.signals_jsonb or {}).get("features", {})
@@ -449,6 +460,7 @@ async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> li
             clip_id=clip.id,
             created_at=feedback.created_at,
             relevance=rel,
+            action=action_value,
             features=clip_features(
                 signal_density=feats_dict.get("signal_density", 0.0),
                 hook_energy=feats_dict.get("hook_energy", 0.0),
