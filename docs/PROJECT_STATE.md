@@ -4,6 +4,24 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-20 (evening) — Fresh /assess: **VERDICT FLIPS TO YES-for-beta** (report `history/2026-07-20-postfix-REPORT.md`)
+
+Everything shipped and deployed: PRs **#56** (4 SEV1s + SEV2 leads), **#57** (Issue-361 tail:
+QueryErrorState across 5 pages, pause_turn→`stream_until_final` consolidation, Opus rates,
+oauth replace-on-grant, efficacy parity, drills RepoDigest pin, deploy.sh rollback port),
+**#58** (the re-run's 3 new findings — recap enqueue guard, sweep conditional-UPDATE race,
+scoped IntegrityError). Post-fix 15-module re-verification: **0 BLOCKER · 0 SEV1**; 11/15
+modules clean. Layer 0: ruff/mypy 0, coverage 79.73 (floor 75.2), module-coverage gate ran for
+the FIRST time. **Load evidence closed the YES gate** (tests/perf runbook, staging pinned to
+prod digest): 50 users → 4,327 req, **0 failures, p99 180 ms** (bar 500 ms); 300 users (3× the
+whole beta) → zero 5xx/pool errors, limiter sheds per-creator correctly, box saturates at p99
+4.2 s (documented single-VM boundary; GKE track stays descoped). Bonus live proof: the staging
+gate **blocked** a prod deploy when the load test degraded staging Postgres — the fail-safe
+works. Issues 356–361 all CLOSED/DONE. Remaining for public launch: GO_LIVE Stage-A operator
+gates (#24/25/26/28/29), visual baselines (#272), cleanup tail in module files.
+
+---
+
 ## 2026-07-20 (later) — Issues 357–361 built via 8-batch parallel workflow → `integration/assess-2026-07-20`
 
 **Workflow wf_822d2374:** 8 file-disjoint build agents in isolated worktrees + 8 independent
