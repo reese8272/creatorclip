@@ -236,6 +236,28 @@ describe('Recap', () => {
     }
   })
 
+  it('maps the SSE stream-cap rejection to a still-running notice, not a render failure', async () => {
+    // routers/tasks.py rejects a 4th concurrent stream with a named error event
+    // ("too many open streams") — the render itself is still queued (Issue 361
+    // sweep; CaptionStylePanel idiom).
+    vi.stubGlobal('fetch', mockFetch([]))
+    renderRecap()
+    await userEvent.click(await screen.findByRole('button', { name: 'Create recap' }))
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => FakeEventSource.instances[0].emit('error', { message: 'too many open streams' }))
+    expect(await screen.findByText(/close one and retry/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Render failed/)).toBeNull()
+  })
+
+  it('still surfaces a real SSE render failure as a failure', async () => {
+    vi.stubGlobal('fetch', mockFetch([]))
+    renderRecap()
+    await userEvent.click(await screen.findByRole('button', { name: 'Create recap' }))
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => FakeEventSource.instances[0].emit('error', { message: 'ffmpeg exited 1' }))
+    expect(await screen.findByText(/Render failed — ffmpeg exited 1/)).toBeInTheDocument()
+  })
+
   it('surfaces the honest server detail when the request is rejected', async () => {
     vi.stubGlobal(
       'fetch',

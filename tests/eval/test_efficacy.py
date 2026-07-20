@@ -22,12 +22,17 @@ from tests.eval.efficacy import (
 )
 
 
-def _clip(rel, sig_density, dna, when):
-    """A LabeledClip whose features/baseline/composite all track `rel` (separable)."""
+def _clip(rel, sig_density, dna, when, action=None):
+    """A LabeledClip whose features/baseline/composite all track `rel` (separable).
+    `action` defaults to the action a plain (no-outcome) row with that relevance
+    would carry; pass it explicitly to model action/outcome divergence."""
+    if action is None:
+        action = "downvote" if rel == 0.0 else "upvote"
     return LabeledClip(
         clip_id=f"clip-{when.isoformat()}",
         created_at=when,
         relevance=rel,
+        action=action,
         features=[sig_density, 0.0, 0.0, dna, 30.0, 5.0, 0.0, 0.0],
         dna_composite=dna,
         signal_features={
@@ -97,6 +102,37 @@ def test_trained_scorer_path_ranks_correctly() -> None:
     assert m.ndcg["dna_preference"] == pytest.approx(1.0)
 
 
+def test_downvote_with_good_outcome_trains_negative_like_production() -> None:
+    """Assessment 2026-07-20: _train_scorer labels from the ACTION, exactly like
+    preference.train — a downvoted clip whose outcome performed well (eval
+    relevance 2.0) still trains as a NEGATIVE. Under the old relevance-derived
+    rule this train set is single-class (every rel >= 1.0) and would return None."""
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    train = []
+    for i in range(5):  # n=10 → LogisticRegression path (below LGBM threshold)
+        train.append(_clip(1.0, 5.0, 0.9, base + timedelta(days=i)))  # upvote, hi features
+        train.append(  # downvote whose outcome performed well → rel 2.0, lo features
+            _clip(2.0, 0.0, 0.1, base + timedelta(days=i, hours=1), action="downvote")
+        )
+    scorer = _train_scorer(train)
+    assert scorer is not None  # old rule: None (single class)
+    hi = _clip(1.0, 5.0, 0.9, base + timedelta(days=30))
+    lo = _clip(1.0, 0.0, 0.1, base + timedelta(days=30))
+    assert scorer.predict_score(hi.features) > scorer.predict_score(lo.features), (
+        "upvoted-feature clips must outrank downvoted ones regardless of outcome"
+    )
+
+
+def test_non_trainable_actions_are_excluded_from_the_fit() -> None:
+    """skip rows are eval-only even when performed_well grades them 2.0 — they never
+    reach the fit (train.py filters them in SQL). With only one trainable class
+    left, _train_scorer honestly returns None."""
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    train = [_clip(1.0, 5.0, 0.9, base + timedelta(days=i)) for i in range(3)]
+    train += [_clip(2.0, 0.0, 0.1, base + timedelta(days=10 + i), action="skip") for i in range(3)]
+    assert _train_scorer(train) is None
+
+
 def _pivot_clip(style: str, rel: float, when: datetime) -> LabeledClip:
     """A LabeledClip whose ONLY discriminative feature is its style flag: style A =
     has_laughter, style B = has_retention_spike. Everything else is constant so the
@@ -107,6 +143,7 @@ def _pivot_clip(style: str, rel: float, when: datetime) -> LabeledClip:
         clip_id=f"pivot-{style}-{when.isoformat()}",
         created_at=when,
         relevance=rel,
+        action="downvote" if rel == 0.0 else "upvote",
         features=[1.0, 0.0, 0.0, 0.5, 30.0, 5.0, retention, laughter],
         dna_composite=0.5,
         signal_features={

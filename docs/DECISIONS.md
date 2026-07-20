@@ -10682,6 +10682,18 @@ as "raw fetch POSTs without try/catch" — verified false (no raw fetches remain
 ChannelBrowser were fixed in Issue 352); the real defect at those lines is the assessment's
 query-error-as-empty-state finding, which is what was fixed. **Date:** 2026-07-20
 
+**361 (frontend-tail batch) — the deferred extraction shipped; two small judgment calls.**
+(1) `components/QueryErrorState.tsx` now carries the retry card for Dashboard, Review,
+VideoClipsMap, Editor AND Recap (the original donor of the pattern — leaving it inlined there
+would have kept the duplication the extraction exists to remove). (2) Recap's SSE-cap notice
+duplicates the `SSE_CAP_MESSAGE = 'too many open streams'` constant already local to
+CaptionStylePanel.tsx: that file is outside this batch's file list, so hoisting the constant to a
+shared module (natural home: hooks/useTaskStream.ts, the layer that surfaces the error) is left
+to a follow-up rather than risking a cross-batch conflict. Copy-wise, the cap notice says "close
+one and retry, or just wait — the render is still running" (not the assessment's terser "queued —
+progress unavailable"): Recap now HAS the summaries poll, so "just wait" is true and the honest
+framing. **Date:** 2026-07-20
+
 ## 2026-07-20 — Issue 360: PR CI moved off the prod-VM runner [DEC]
 
 **What changed.** `ci.yml` (all 12 jobs) and `mutation.yml` now run on GitHub-hosted
@@ -10741,3 +10753,50 @@ argparse. `docs/RUNBOOKS.md` Step 3 was updated to match: interactive `docker co
 two copies of an 8-line helper beat introducing a new shared file both cron entry points
 must locate, and it restores the no-exec parsing posture the `source .env` regression
 dropped. **Date:** 2026-07-20
+
+## 2026-07-20 — Chat billing: unknown-model fallback moved from Sonnet to Opus rates
+
+**What changed:** Adding the Opus price-book constants (`COST_PER_MTOK_IN_OPUS=5.0`,
+`COST_PER_MTOK_OUT_OPUS=25.0` — Opus 4.8 list price per the /claude-api model reference,
+fetched 2026-07-20) and mapping the opus family in `chat/runner.py::_chat_model_rates()`
+("opus-tier") also changed the *unknown-family* fallback from Sonnet rates to Opus rates.
+**Why:** the fallback's documented invariant is "the highest in the price book, so a
+misconfigured model never under-bills against the spend guard" — with Opus ($5/$25) now in
+the book, a Sonnet fallback ($3/$15) would violate that invariant. The pinned test
+(`test_chat_model_rates_follow_configured_model`) previously asserted the defect
+(opus → Sonnet fallback + "other") and was updated: opus asserts opus rates + "opus-tier";
+the unknown-family check now uses a genuinely unknown model string and asserts Opus rates.
+`billing/ledger.py::_model_tier` gained the matching `opus-tier` rate branch so the cost
+counter labels Opus traffic correctly. **Source:** Issue 361 tail batch (llm-tail);
+/claude-api reference pricing table. **Date:** 2026-07-20
+
+## 2026-07-20 — OAuth stored scope: replace-on-grant (reverses the Issue 352 Batch D union) [DEC]
+
+**What changed.** `store_or_update_tokens` (youtube/oauth.py) now REPLACES the stored
+`YoutubeToken.scope` with the token response's scope whenever the response carries one,
+instead of unioning it with the stored grant. Narrowing is logged
+(`OAuth grant narrowed for creator …`); an empty/omitted scope keeps the stored grant.
+
+**Why.** The union could never narrow (assessment 2026-07-20, youtube SEV2): a creator
+who unchecks `youtube.upload` on Google's granular-consent screen during a re-consent
+gets a token response without that scope, but the union re-added it —
+`has_publish_scope()` stayed True forever and every publish 403'd with no self-heal
+(partial scope removal never triggers the refresh `invalid_grant` row-delete). The
+union's original purpose (a base re-login must not strip a previously granted publish
+scope) is already served by `include_granted_scopes=true`, which is set on BOTH auth
+flows since Issue 352 Batch D.
+
+**Evidence.** Google OAuth 2.0 web-server docs
+(developers.google.com/identity/protocols/oauth2/web-server, fetched 2026-07-20):
+the token response `scope` is "the scopes of access granted by the access_token" — the
+authoritative grant; with `include_granted_scopes=true` "the new access token will also
+cover any scopes to which the user previously granted the application access", so
+still-granted scopes are present in the response and their absence means a genuine
+downgrade; granular-permissions guidance says apps "must verify which scopes were
+actually granted and gracefully handle situations where some permissions are denied".
+Replace-on-grant is exactly that verification. The refresh path reconciles the same way
+(`_do_token_refresh` passes the refresh response's scope; falls back to the stored scope
+when Google omits it). Regression tests:
+`test_store_or_update_tokens_narrows_scope_on_downgraded_regrant`,
+`test_store_or_update_tokens_empty_scope_keeps_stored_grant`
+(tests/test_youtube_edges.py). **Date:** 2026-07-20

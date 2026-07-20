@@ -318,42 +318,25 @@ async def generate_thumbnail_concepts(
         channel_title, dna_brief, patterns, transcript_hook, stated_identity
     )
 
-    from worker.anthropic_stream import stream_message
+    # pause_turn loop: a long server-side web_search turn can pause; resume via
+    # the shared bounded continuation helper (Issues 350 / 361).
+    from worker.anthropic_stream import stream_until_final
 
     _MAX_SEARCH_ROUNDS = 5
 
     client = _ANTHROPIC.with_options(timeout=120.0)
-    usage: dict[str, int] = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read": 0,
-        "cache_creation": 0,
-    }
-    loop_messages = messages
-    final_msg = None
-    msg = None
     try:
-        for _round in range(_MAX_SEARCH_ROUNDS + 1):
-            msg, round_usage = await stream_message(
-                client,
-                task_id,
-                model=settings.ANTHROPIC_MODEL_THUMBNAILS,
-                max_tokens=2000,
-                system=system,
-                messages=loop_messages,
-                tools=tools,
-            )
-            for k in usage:
-                usage[k] += round_usage.get(k, 0)
-            if getattr(msg, "stop_reason", None) != "pause_turn":
-                final_msg = msg
-                break
-            loop_messages = loop_messages + [{"role": "assistant", "content": msg.content}]
-        else:
-            logger.warning(
-                "generate_thumbnail_concepts: hit max web_search rounds (%d)", _MAX_SEARCH_ROUNDS
-            )
-            final_msg = msg
+        final_msg, usage = await stream_until_final(
+            client,
+            task_id,
+            model=settings.ANTHROPIC_MODEL_THUMBNAILS,
+            max_tokens=2000,
+            system=system,
+            messages=messages,
+            tools=tools,
+            max_rounds=_MAX_SEARCH_ROUNDS,
+            round_cap_warning="generate_thumbnail_concepts: hit max web_search rounds (%d)",
+        )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:
         log_llm_error(logger, exc, task=task_id)
         raise

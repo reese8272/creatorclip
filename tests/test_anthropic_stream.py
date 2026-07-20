@@ -386,3 +386,77 @@ async def test_tools_kwarg_dropped_when_none(monkeypatch) -> None:
         "No-tools callers must produce a call without the tools kwarg "
         "(older SDKs reject tools=None) — pinning the dna/brief.py shape."
     )
+
+
+# ── stream_until_final: shared pause_turn continuation loop (Issue 361) ──────
+
+
+async def test_stream_until_final_continues_on_pause_turn_and_sums_usage(monkeypatch) -> None:
+    """pause_turn re-calls stream_message with the assistant turn appended
+    (same tools), returns the final message, and sums usage across rounds."""
+    calls: list[dict] = []
+    responses = [
+        (
+            _build_final_message(
+                "searching…", in_tok=10, out_tok=5, cr=1, cc=2, stop_reason="pause_turn"
+            ),
+            {"input_tokens": 10, "output_tokens": 5, "cache_read": 1, "cache_creation": 2},
+        ),
+        (
+            _build_final_message("answer", in_tok=20, out_tok=30, cr=3, cc=4),
+            {"input_tokens": 20, "output_tokens": 30, "cache_read": 3, "cache_creation": 4},
+        ),
+    ]
+
+    async def _fake_stream_message(client, task_id, **kwargs):
+        calls.append(kwargs)
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(anthropic_stream, "stream_message", _fake_stream_message)
+
+    tools = [{"type": "web_search_20260209", "name": "web_search"}]
+    msg, usage = await anthropic_stream.stream_until_final(
+        MagicMock(),
+        "task-suf",
+        model="m",
+        max_tokens=2000,
+        system=[],
+        messages=[{"role": "user", "content": "go"}],
+        tools=tools,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["tools"] is tools and calls[1]["tools"] is tools
+    assert calls[1]["messages"][-1]["role"] == "assistant"
+    assert msg is responses[1][0]
+    assert usage == {"input_tokens": 30, "output_tokens": 35, "cache_read": 4, "cache_creation": 6}
+
+
+async def test_stream_until_final_bounds_rounds_and_warns(monkeypatch, caplog) -> None:
+    """A model that never leaves pause_turn stops after max_rounds resumes and
+    logs the caller-supplied round-cap warning."""
+    calls = {"n": 0}
+    paused = _build_final_message("still going…", in_tok=1, out_tok=1, stop_reason="pause_turn")
+
+    async def _always_pause(client, task_id, **kwargs):
+        calls["n"] += 1
+        return paused, {"input_tokens": 1, "output_tokens": 1, "cache_read": 0, "cache_creation": 0}
+
+    monkeypatch.setattr(anthropic_stream, "stream_message", _always_pause)
+
+    with caplog.at_level("WARNING", logger="worker.anthropic_stream"):
+        msg, usage = await anthropic_stream.stream_until_final(
+            MagicMock(),
+            "task-suf-cap",
+            model="m",
+            max_tokens=2000,
+            system=[],
+            messages=[{"role": "user", "content": "go"}],
+            max_rounds=2,
+            round_cap_warning="caller_x: hit max web_search rounds (%d)",
+        )
+
+    assert calls["n"] == 3  # initial call + max_rounds resumes
+    assert msg is paused
+    assert usage["input_tokens"] == 3
+    assert "caller_x: hit max web_search rounds (2)" in caplog.text

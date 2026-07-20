@@ -13,6 +13,7 @@ import { CleanPassPanel } from '@/components/review/CleanPassPanel'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
 import { LongFormEditor } from '@/components/editor/LongFormEditor'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import type {
   ClipTranscript,
@@ -118,7 +119,12 @@ export function Editor() {
 
   // ── Clip data ────────────────────────────────────────────────────────────
 
-  const { data: clipsData, isPending: clipsPending } = useQuery({
+  const {
+    data: clipsData,
+    isPending: clipsPending,
+    isError: clipsError,
+    refetch: refetchClips,
+  } = useQuery({
     queryKey: ['review-clips', videoId],
     queryFn: () => api<ReviewClipListResponse>(`/videos/${videoId}/clips`),
     enabled: !!videoId,
@@ -131,7 +137,7 @@ export function Editor() {
 
   // ── Transcript ───────────────────────────────────────────────────────────
 
-  const { data: transcriptData, isPending: txPending } = useQuery({
+  const { data: transcriptData, isPending: txPending, isError: txError } = useQuery({
     queryKey: ['transcript', clip?.id ?? ''],
     queryFn: () => api<ClipTranscript>(`/clips/${clip!.id}/transcript`),
     enabled: !!clip,
@@ -350,6 +356,24 @@ export function Editor() {
     )
   }
   if (clipsPending) return message('Loading…')
+  // A failed load must NOT fall through to the no-clips UI — a creator whose
+  // clips exist would be told there are none (Recap retry idiom, Issue 361 sweep).
+  if (clipsError) {
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+          <QueryErrorState
+            title="Couldn’t load clips for this video."
+            onRetry={() => void refetchClips()}
+          />
+        </main>
+      </>
+    )
+  }
 
   const mediaSrc = clip ? `/clips/${clip.id}/download?disposition=inline` : ''
 
@@ -490,7 +514,13 @@ export function Editor() {
               <Chip pose="papers" size={22} />
               Transcript
             </h2>
-            {words.length === 0 && !txPending && (
+            {txError && (
+              <p className="text-xs text-danger">
+                Couldn’t load the transcript — cuts by word selection are unavailable until it
+                loads. Try reopening the clip in a moment.
+              </p>
+            )}
+            {words.length === 0 && !txPending && !txError && (
               <p className="text-xs text-subtle">No transcript available for this clip.</p>
             )}
             {words.length > 0 && (

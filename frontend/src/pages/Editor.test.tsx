@@ -138,6 +138,27 @@ describe('Editor', () => {
     renderEditor('/app/editor?video_id=v1')
     expect(await screen.findByText('Suggested clips')).toBeInTheDocument()
   })
+
+  // ── Issue 361 sweep: query failure must not read as the no-clips UI ──
+  it('shows a retry card — not the no-clips UI — when the clips query fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/videos/v1/clips'))
+        return { status: 500, ok: false, json: async () => ({ detail: 'boom' }) }
+      return { status: 200, ok: true, json: async () => ({}) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    expect(await screen.findByText(/Couldn’t load clips for this video/)).toBeInTheDocument()
+    expect(screen.queryByText(/No clip selected/i)).toBeNull()
+
+    // Retry refires the clips query.
+    const gets = () =>
+      fetchMock.mock.calls.filter(([u]) => String(u).includes('/videos/v1/clips')).length
+    const before = gets()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(gets()).toBeGreaterThan(before)
+  })
 })
 
 // ── Issue 188 AC: Review no longer renders the moved panels ──────────────────

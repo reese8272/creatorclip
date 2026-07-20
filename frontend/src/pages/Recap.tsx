@@ -5,11 +5,17 @@ import { api, ApiError } from '@/lib/api'
 import { sendActivity } from '@/lib/activity'
 import { useTaskStream } from '@/hooks/useTaskStream'
 import { TaskStepper } from '@/components/TaskStepper'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import { RecapPlayer } from '@/components/recap/RecapPlayer'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
 import { Button } from '@/components/ui/button'
 import type { Summary, SummaryListResponse, SummaryQueued, SummarySegment } from '@/types'
+
+// The server rejects a 4th concurrent SSE stream with this named error event
+// (routers/tasks.py) — the render itself is still queued and running, so it
+// must NOT read as a render failure (CaptionStylePanel idiom).
+const SSE_CAP_MESSAGE = 'too many open streams'
 
 // mm:ss for segment boundaries — recap sources are long VODs, so raw seconds
 // (the clip pages' idiom) read poorly past the ten-minute mark.
@@ -123,19 +129,11 @@ export function Recap() {
   if (summariesQuery.isError) {
     return (
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
-        <div className="rounded-md border border-default bg-surface px-6 py-10 text-center">
-          <p className="text-sm text-fg">Couldn&apos;t load recaps for this video.</p>
-          <p className="mt-1 text-xs text-subtle">
-            The video may still be processing, or its source has expired. Try again in a moment.
-          </p>
-          <button
-            type="button"
-            onClick={() => void summariesQuery.refetch()}
-            className="mt-4 rounded-md border border-default px-3 py-1.5 text-xs text-fg hover:bg-elevated"
-          >
-            Retry
-          </button>
-        </div>
+        <QueryErrorState
+          title="Couldn't load recaps for this video."
+          detail="The video may still be processing, or its source has expired. Try again in a moment."
+          onRetry={() => void summariesQuery.refetch()}
+        />
       </main>
     )
   }
@@ -197,9 +195,18 @@ export function Recap() {
           </p>
         )}
         <TaskStepper steps={stream.steps} status={stream.status} elapsedMs={elapsedMs} />
-        {stream.status === 'error' && stream.error && (
-          <p className="text-xs text-danger">Render failed — {stream.error}</p>
-        )}
+        {stream.status === 'error' &&
+          stream.error &&
+          (stream.error === SSE_CAP_MESSAGE ? (
+            // Cap rejection ≠ render failure: the render is still queued and the
+            // summaries poll picks up the result — say so honestly.
+            <p className="text-xs text-subtle">
+              Too many open progress streams (other AutoClip tabs?) — close one and retry, or just
+              wait: the render is still running and this page updates when it finishes.
+            </p>
+          ) : (
+            <p className="text-xs text-danger">Render failed — {stream.error}</p>
+          ))}
       </div>
     </main>
   )

@@ -250,14 +250,25 @@ async def store_or_update_tokens(
         row.access_token_encrypted = encrypt(access_token)
         if refresh_token:
             row.refresh_token_encrypted = encrypt(refresh_token)
-        # Union with the stored grant (Issue 352 Batch D) — defense-in-depth
-        # alongside `include_granted_scopes=true` in build_authorization_url:
-        # a narrower re-grant must never silently strip an already-granted
-        # scope (e.g. youtube.upload → has_publish_scope() flipping off).
-        # Google's own OAuth client libraries merge scopes the same way. If a
-        # scope was truly revoked at Google, the API call 401/403s and the
-        # reconnect path re-syncs the record.
-        row.scope = " ".join(sorted(set(scope.split()) | set(row.scope.split())))
+        # The token response `scope` is Google's authoritative statement of the
+        # CURRENT grant: with `include_granted_scopes=true` on every auth URL
+        # (build_authorization_url) a re-auth returns the COMBINED
+        # authorization, so still-granted scopes are already present in the
+        # response — while a scope the creator unchecked on the
+        # granular-consent screen is genuinely gone and must narrow our
+        # record. The previous union here could never narrow, leaving e.g.
+        # has_publish_scope() True forever after a consent downgrade
+        # (DECISIONS 2026-07-20, reverses Issue 352 Batch D). An empty scope
+        # (field omitted from the response) keeps the stored grant.
+        if scope:
+            removed = set(row.scope.split()) - set(scope.split())
+            if removed:
+                logger.info(
+                    "OAuth grant narrowed for creator %s — removed scopes: %s",
+                    creator_id,
+                    " ".join(sorted(removed)),
+                )
+            row.scope = " ".join(sorted(set(scope.split())))
         row.expires_at = expires_at
         row.updated_at = datetime.now(UTC)
 

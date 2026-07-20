@@ -230,10 +230,12 @@ async def test_store_or_update_tokens_preserves_stored_refresh_when_omitted():
 
 
 @pytest.mark.asyncio
-async def test_store_or_update_tokens_never_narrows_stored_scope():
-    """Issue 352 Batch D: a base re-login returning only the read scopes must NOT
-    strip a previously-granted youtube.upload from the stored grant — the update
-    path unions new + stored scopes (defense alongside include_granted_scopes)."""
+async def test_store_or_update_tokens_narrows_scope_on_downgraded_regrant():
+    """Assessment 2026-07-20 (youtube SEV2): the token response scope is the
+    authoritative CURRENT grant — every auth URL sets include_granted_scopes=true,
+    so a re-auth response that omits youtube.upload means the creator unchecked it
+    on Google's granular-consent screen. The stored grant must shrink; the old
+    union could never narrow, leaving has_publish_scope() True forever."""
     from crypto import encrypt
     from youtube.oauth import PUBLISH_SCOPE, has_publish_scope, store_or_update_tokens
 
@@ -254,12 +256,43 @@ async def test_store_or_update_tokens_never_narrows_stored_scope():
         uuid.uuid4(),
         access_token="new-access",
         refresh_token=None,
-        scope="openid",  # narrower re-grant (no upload scope)
+        scope="openid",  # downgraded re-grant (upload scope unchecked/revoked)
         expires_in=3600,
     )
 
-    assert has_publish_scope(existing_row.scope)  # publish opt-in survived
-    assert "openid" in existing_row.scope.split()
+    assert not has_publish_scope(existing_row.scope)  # stored grant narrowed
+    assert existing_row.scope == "openid"
+
+
+@pytest.mark.asyncio
+async def test_store_or_update_tokens_empty_scope_keeps_stored_grant():
+    """Defensive edge: a token response WITHOUT a scope field (routers/auth passes
+    "" as the default) must not wipe the stored grant."""
+    from crypto import encrypt
+    from youtube.oauth import PUBLISH_SCOPE, has_publish_scope, store_or_update_tokens
+
+    existing_row = MagicMock()
+    existing_row.access_token_encrypted = encrypt("old-access")
+    existing_row.refresh_token_encrypted = encrypt("stored-refresh")
+    existing_row.scope = f"openid {PUBLISH_SCOPE}"
+    existing_row.expires_at = datetime.now(UTC)
+    existing_row.updated_at = None
+
+    session_mock = AsyncMock()
+    session_mock.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=lambda: existing_row)
+    )
+
+    await store_or_update_tokens(
+        session_mock,
+        uuid.uuid4(),
+        access_token="new-access",
+        refresh_token=None,
+        scope="",  # Google omitted the field
+        expires_in=3600,
+    )
+
+    assert has_publish_scope(existing_row.scope)  # stored grant untouched
 
 
 # ──────────────────────────────────────────────────────────────────────────────

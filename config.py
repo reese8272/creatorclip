@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     COST_PER_MTOK_OUT_SONNET: float = 15.0  # Sonnet 4.6 output: $15/MTok standard
     COST_PER_MTOK_IN_HAIKU: float = 1.0  # Haiku 4.5 input: $1/MTok standard
     COST_PER_MTOK_OUT_HAIKU: float = 5.0  # Haiku 4.5 output: $5/MTok standard
+    # Opus 4.8 list price per the /claude-api model reference (claude-opus-4-8,
+    # fetched 2026-07-20): $5/MTok in, $25/MTok out — chat billing maps any
+    # opus-family ANTHROPIC_MODEL_CHAT to these instead of under-billing at
+    # Sonnet fallback rates (Issue 361).
+    COST_PER_MTOK_IN_OPUS: float = 5.0  # Opus 4.8 input: $5/MTok standard
+    COST_PER_MTOK_OUT_OPUS: float = 25.0  # Opus 4.8 output: $25/MTok standard
     # Cache-read multiplier: prompt-cache hits are billed at 10% of the base input rate.
     # Source: platform.claude.com/docs/en/about-claude/pricing (fetched 2026-06-23).
     COST_CACHE_READ_MULTIPLIER: float = 0.1
