@@ -1502,6 +1502,16 @@ def test_security_headers_present_on_every_response(client):
             f"{path}: CSP must include frame-ancestors 'none' — clickjacking defence."
         )
         assert "default-src" in csp, f"{path}: CSP must include default-src directive."
+        # 2026-07-20 assessment: the SPA @imports Google Fonts — without these
+        # directives the browser blocks the stylesheet/woff2 and prod silently
+        # falls back to system fonts (regression since Issue 229).
+        assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com" in csp, (
+            f"{path}: CSP style-src must allow the Google Fonts stylesheet + the "
+            "retained static pages' inline <style> blocks."
+        )
+        assert "font-src 'self' https://fonts.gstatic.com" in csp, (
+            f"{path}: CSP font-src must allow fonts.gstatic.com (woff2 files)."
+        )
         assert resp.headers.get("x-frame-options") == "DENY", (
             f"{path}: X-Frame-Options must be DENY (defence-in-depth for legacy browsers)."
         )

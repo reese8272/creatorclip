@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_key import get_current_creator_via_api_key
@@ -218,7 +219,13 @@ async def get_clip_counts(
     return {"counts": counts}
 
 
-@router.post("/{video_id}/clips/generate", response_model=ClipListOut)
+@router.post(
+    "/{video_id}/clips/generate",
+    response_model=ClipListOut,
+    # Kill switch (Issue 284) + spend breaker (Issue 290): 503 when the
+    # llm_generation flag is off, 429 during a creator spend cool-down.
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
+)
 @limiter.limit("10/hour", key_func=creator_key)
 @limiter.limit(LLM_DAILY_LIMIT, key_func=creator_key)
 async def generate_clips(
@@ -448,7 +455,19 @@ async def render_clip(
 
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
     if clip.render_status == RenderStatus.running:
-        raise HTTPException(status_code=409, detail="Render already in progress")
+        from worker.tasks import ais_render_stale
+
+        # Issue 359: a worker SIGKILL (OOM/deploy) after the `running` commit
+        # skips every `failed` write, leaving the row `running` forever — this
+        # 409 then blocks recovery permanently. When the render-start marker
+        # shows the run exceeded the Celery hard time limit (or never existed),
+        # allow the re-render override; a fresh running render keeps the 409.
+        # The worker's Issue-336 guard tolerates re-rendering a `running` clip.
+        if not await ais_render_stale(str(clip_id)):
+            raise HTTPException(status_code=409, detail="Render already in progress")
+        logger.warning(
+            "render override: clip %s stuck in stale running state — re-rendering", clip_id
+        )
 
     # Persist style choice before enqueuing so the worker task reads it fresh.
     # Issue 186: start from the creator's brand-kit defaults so omitted fields
@@ -481,7 +500,11 @@ async def render_clip(
     # render_uri also unmounts the stale player so the fresh render is fetched.
     # Applied with or without a style body (a plain retry also re-renders),
     # in the same transaction as the merged style so both persist atomically.
-    if clip.render_status == RenderStatus.done:
+    # Snapshot first (Issue 359c) so a failed enqueue below can restore the
+    # watchable render instead of leaving the clip stripped with no task coming.
+    reset_applied = clip.render_status == RenderStatus.done
+    prior_render_uri = clip.render_uri
+    if reset_applied:
         clip.render_status = RenderStatus.pending
         clip.render_uri = None
     await session.commit()
@@ -493,7 +516,22 @@ async def render_clip(
 
     # Audit fix (scale-checklist B): `.delay()` is sync Redis I/O; offload from
     # the request loop so a slow Redis doesn't stall every concurrent handler.
-    task = await asyncio.to_thread(render_task.delay, str(clip_id))
+    # Issue 359c: a broker throw here used to leave the Issue-353 reset
+    # committed with NO task enqueued — destroying the previous render_uri of a
+    # `done` clip. No task exists when `.delay()` raises, so restoring the
+    # snapshot is race-free; the reset-commit-before-enqueue ordering that the
+    # worker's redelivery guard depends on is preserved on the success path.
+    try:
+        task = await asyncio.to_thread(render_task.delay, str(clip_id))
+    except Exception as exc:
+        if reset_applied:
+            clip.render_status = RenderStatus.done
+            clip.render_uri = prior_render_uri
+            await session.commit()
+        logger.error("render enqueue failed for clip %s: %s", clip_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Could not queue the render — please try again."
+        ) from exc
     # Issue 92: use clip_id (not task.id) as the SSE stream key — the worker
     # task emits to task:{clip_id}:events for the same deterministic-lookup
     # reason as the upload chain (the frontend already has clip_id in URL).
@@ -1483,6 +1521,28 @@ def _summary_response(summary: Summary) -> dict:
     }
 
 
+async def _active_summary(
+    session: AsyncSession, video_id: uuid.UUID, creator_id: uuid.UUID
+) -> Summary | None:
+    """The video's newest in-flight (pending/running, not failed) recap, if any.
+
+    Used twice by ``create_summary``: the idempotency probe before insert, and
+    the winner re-select when the ``uq_summaries_active`` partial unique index
+    (migration 0046) rejects the loser of a concurrent double-POST (Issue 361).
+    """
+    return await session.scalar(
+        select(Summary)
+        .where(
+            Summary.video_id == video_id,
+            Summary.creator_id == creator_id,
+            Summary.render_status.in_([RenderStatus.pending, RenderStatus.running]),
+            Summary.status != SummaryStatus.failed,
+        )
+        .order_by(Summary.created_at.desc())
+        .limit(1)
+    )
+
+
 @router.post(
     "/{video_id}/summaries",
     status_code=202,
@@ -1533,17 +1593,7 @@ async def create_summary(
 
     # Idempotency: a summary whose render is still in flight is THE recap for
     # this video — return it rather than enqueue a duplicate render.
-    existing = await session.scalar(
-        select(Summary)
-        .where(
-            Summary.video_id == video_id,
-            Summary.creator_id == creator.id,
-            Summary.render_status.in_([RenderStatus.pending, RenderStatus.running]),
-            Summary.status != SummaryStatus.failed,
-        )
-        .order_by(Summary.created_at.desc())
-        .limit(1)
-    )
+    existing = await _active_summary(session, video_id, creator.id)
     if existing:
         return {
             "summary_id": str(existing.id),
@@ -1612,7 +1662,27 @@ async def create_summary(
         status=SummaryStatus.ready,
     )
     session.add(summary)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Double-click race (Issue 361): both requests passed the in-flight probe;
+        # the loser violates the uq_summaries_active partial unique index at
+        # commit. Same pattern as videos.py link/upload — rollback, then return
+        # the winner so exactly ONE render_summary job is ever enqueued.
+        await session.rollback()
+        winner = await _active_summary(session, video_id, creator.id)
+        if winner is None:
+            # The winner left the pending/running window inside the race — a
+            # clean conflict beats a duplicate render; the client re-fetches.
+            raise HTTPException(
+                status_code=409,
+                detail="A recap for this video was just created — refresh to see it.",
+            ) from None
+        return {
+            "summary_id": str(winner.id),
+            "status": "queued",
+            "stream_url": f"/tasks/{winner.id}/events",
+        }
     await session.refresh(summary)
 
     import redis as _redis_pkg

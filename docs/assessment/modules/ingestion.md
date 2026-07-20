@@ -1,117 +1,93 @@
-# ingestion — assessed 2026-07-01
+# ingestion — assessed 2026-07-20
 
 Slice: `ingestion/__init__.py` (empty), `ingestion/audio.py`, `ingestion/signals.py`,
-`ingestion/transcribe.py`. Pure transformation layer: a media/audio path goes in, a dict
-comes out. No DB queries, no creator-scoped tables, no OAuth/token handling, no Anthropic
-calls live in this slice — so the isolation/token/LLM rubric rows are `n/a` here and are
-enforced at the worker caller boundary (verified: the only creator-owned read is
-`worker/tasks.py:1136-1139` `RetentionCurve.video_id == video.id`, and both heavy entry
-points are offloaded via `asyncio.to_thread` at `worker/tasks.py:1064` and `:1145`, bounded
-by `asyncio.wait_for(..., TRANSCRIPTION_TIMEOUT_S)`).
+`ingestion/transcribe.py`. Pure transformation layer: a media/audio path goes in, a dict comes
+out. No DB queries, no creator-scoped tables, no OAuth/token handling, no Anthropic calls in
+this slice — the isolation/token/LLM rubric rows are `n/a` and enforced at the worker caller
+boundary (re-verified: heavy entry points offloaded via `asyncio.to_thread` at
+`worker/tasks.py:1463` and the transcribe path, bounded by `TRANSCRIPTION_TIMEOUT_S`; source-media
+purge lives in `worker/tasks.py:756` `purge_stale_source_media`, outside this slice). Ingestion
+itself creates no temp files — `generate_waveform_image` writes only to the caller-supplied
+`output_path`; Deepgram streams the WAV via `with open()`.
 
-`audio.py` + `transcribe.py` changed this run (Issue 334). **Verified fixed** since the
-2026-06-24 assessment: the audio-OOM cap is now present (`audio.py:59-78` — `librosa.get_duration`
-probe + `AUDIO_ANALYSIS_MAX_DURATION_S=14400` truncation + 16 kHz resample), the
-degenerate <2-sample WAV guard (`:84-94`), and the AssemblyAI `None`-timestamp filter
-(`transcribe.py:260-264`). **Verified STILL open:** the AssemblyAI error-status →
-silent-empty-segments concern flagged last run was NOT addressed — Issue 334 only added the
-`None`-timestamp filter, not a `transcript.status` check (see finding 1).
+`git diff f70a857..HEAD -- ingestion/` touched `audio.py` and `transcribe.py` (Issue 352 Batch E)
+— both diffs reviewed line-by-line and verified against real ffmpeg / the regression tests below.
+
+## Resolved since 2026-07-01
+
+- **[was SEV2] transcribe.py — AssemblyAI `status=error` → silent empty-segments "success"
+  (charged, no refund): FIXED.** `transcribe.py:257-258` now raises
+  `RuntimeError(f"AssemblyAI transcription failed: {transcript.error}")` when
+  `transcript.status == aai.TranscriptStatus.error`, so the worker retry → terminal-failure →
+  refund chain engages (the COMPLIANCE.md "automatic refund on terminal ingest failure"
+  guarantee now fires for this path). Regression test verified at
+  `tests/ingestion/test_transcribe.py:179-193` (error-status stub → raises); the happy-path stub
+  in `tests/test_ingest.py:225-228` was updated to `status="completed"` to pass the new gate.
+- **[was SEV2] audio.py — `showwavespic:bg_color` invalid ffmpeg option (100% broken helper):
+  FIXED.** `audio.py:202-206` composites the transparent-background waveform over a `color`
+  source via `overlay` — the correct pattern, since `showwavespic` has no background option.
+  Verified 2026-07-20 by running the exact new filter string against local ffmpeg: exit 0, PNG
+  produced, and byte-size delta vs a bg-only render (1894 B vs 1234 B) confirms the waveform is
+  actually drawn. The mock-masked-test gap is closed: `tests/test_signals.py:323-336` runs REAL
+  ffmpeg, and `:303-320` asserts the built filter contains no `bg_color` token. (The helper is
+  still unwired — see carry-forward cleanup below.)
+- **[was SEV2] audio.py — peak-relative silence threshold undermining the dead-air principle:
+  FIXED.** Silence is now gated absolutely at `_SILENCE_DBFS = -60.0` dBFS
+  (`audio.py:27,109,116`) via `librosa.amplitude_to_db(rms, ref=1.0, top_db=None)`, matching the
+  ffmpeg silencedetect default noise floor; an all-silent file logs a warning
+  (`audio.py:117-123`) and energy/laughter frames below the floor are masked out
+  (`:127,130-132`), killing the near-silent-file false-spike vector. Regression tests at
+  `tests/test_signals.py:263-297` (near-silent file → one silence run, zero energy spikes;
+  audible content not misflagged). Energy spikes/laughter deliberately remain relative to the
+  creator's own baseline — a documented design choice in the code comment, acceptable.
 
 ## Findings
 
-- [SEV2] ingestion/transcribe.py:250-251 — `aai.Transcriber().transcribe(audio_path)` is
-  normalized with **no `transcript.status` check** (the previously-flagged concern; NOT
-  fixed by Issue 334). Verified against AssemblyAI's official Python SDK docs: `.transcribe()`
-  does **not raise** on a failed job — it returns a transcript with
-  `status == aai.TranscriptStatus.error`, and in that state `transcript.words` is `None`, so
-  `_normalize_assemblyai` (transcribe.py:254-277) silently returns
-  `{"source": "assemblyai", "segments": []}`. Traced downstream: `_transcribe_async`
-  (worker/tasks.py:1075-1088) commits that empty transcript and the task **succeeds** — no
-  exception, so `RefundableTask.on_failure` (worker/tasks.py:88-146, "fires only on TERMINAL
-  failure") never runs. Net: the creator is charged, gets an empty transcript + garbage clip
-  windows, and the docs/COMPLIANCE.md "automatic refund on terminal ingest failure" guarantee
-  does not fire. Blast radius bounded — AssemblyAI is config-selectable, not the default
-  (`deepgram`), and Deepgram's SDK *does* raise on API errors. | fix: after `transcribe()`,
-  `if transcript.status == aai.TranscriptStatus.error: raise RuntimeError(f"AssemblyAI transcription failed: {transcript.error}")`
-  so the worker retry→refund chain engages; add a unit test feeding an error-status stub.
-  Source: https://github.com/AssemblyAI/assemblyai-python-sdk/blob/master/README.md
-  (status-check pattern; verified 2026-07-01).
-
-- [SEV2] ingestion/audio.py:183-184 — `generate_waveform_image` passes
-  `showwavespic=...:bg_color={bg_color}` but **`bg_color` is not a valid `showwavespic`
-  option**, so ffmpeg exits non-zero and the function raises `RuntimeError` on *every* real
-  call. Verified locally against the repo's own ffmpeg with the code's exact filter string:
-  `Error applying option 'bg_color' to filter 'showwavespic': Option not found`; the same
-  command without `bg_color` succeeds. `ffmpeg -h filter=showwavespic` lists only
-  `size/s, split_channels, colors, scale, draw, filter` — no background option. The function
-  has **no production caller** (grep: only its own def, the config comment, and tests), and
-  its test (`tests/test_signals.py:250-273`) monkeypatches `subprocess.run`, so the broken
-  invocation is never exercised — a green test over dead-and-broken code. | fix: drop the
-  `bg_color` token (background is transparent by default) or composite a background via a
-  `color` source + `overlay` filterchain; then either wire the helper into `_signals_async`
-  or delete it until the Editor surface consumes it. Add a test that runs real ffmpeg (or
-  asserts the built `cmd` contains no invalid option). Source: `ffmpeg -h filter=showwavespic`
-  (ffmpeg on PATH, verified 2026-07-01); https://ffmpeg.org/ffmpeg-filters.html#showwavespic.
-
-- [SEV2] ingestion/audio.py:99-114, 21-24 — RMS and ZCR are normalized to the **per-file
-  peak** (`rms / (rms.max() + 1e-8)`), so `_ENERGY_THRESHOLD=0.6` / `_SILENCE_THRESHOLD=0.03`
-  are relative to that file, not anchored to physical loudness. Consequence: a uniformly
-  quiet clip still "spikes" at 0.6 of its own peak and a constantly-loud room **never emits a
-  silence event**, which undermines the dead-air-elimination principle the downstream clip
-  engine relies on. Industry standard for loudness/silence is an **absolute** measure —
-  ITU-R BS.1770-4 / EBU R128 gate silence at an absolute −70 LUFS, not a per-file ratio.
-  (heuristic-quality; needs-runtime-confirmation on real-clip impact.) | fix: threshold
-  against dBFS via `librosa.amplitude_to_db` (or a `pyloudnorm` LUFS meter) with an absolute
-  floor, or at minimum log a warning when the absolute peak is so low the relative signal is
-  meaningless. Sources: https://tech.ebu.ch/publications/r128 ;
-  https://en.wikipedia.org/wiki/EBU_R_128 (silence gate −70 LUFS; verified 2026-07-01).
-
-- [cleanup] ingestion/audio.py:241 — in `_emit`, `end_s = float(times[min(end_idx-1, len-1)])
-  + frame_duration` can push the final run's `end_s` past `duration_s`. The Issue 327 geometry
-  validator (`signals.py:25-53`) only rejects `start_s > duration_s`, not `end_s > duration_s`,
-  so the slightly-over event is written into `signals.timeline_jsonb`. Downstream scoring
-  clamps the grid index, so it is cosmetic in the stored JSON. | fix: pass `duration_s` into
-  `_emit` and `end_s = min(end_s, duration_s)` before append, or extend
-  `_event_geometry_is_valid` to also cap `end`.
-
-- [cleanup] .env.example:91 — `TRANSCRIPTION_BACKEND=whisperx` contradicts `config.py:197`
-  (default `deepgram`) and CLAUDE.md, which names Deepgram the GPU-free launch default. An
-  operator copying `.env.example` verbatim silently flips off the intended default. | fix:
-  set the example to `deepgram`; keep `whisperx` in the inline comment as the alternative.
-
-- [cleanup] ingestion/audio.py:30-35 — `_EMPTY_EVENTS` module constant is defined but never
-  referenced; the <2-sample early-return (`:89-94`) builds its own dict literal instead. Dead
-  code. | fix: either return `_EMPTY_EVENTS` (with `duration_s` overridden) from the guard, or
-  delete the constant.
-
-- [cleanup] ingestion/transcribe.py:250 — a fresh `aai.Transcriber()` (with its own HTTP
+- [cleanup] ingestion/audio.py:143-231 — `generate_waveform_image` is now *correct* but still
+  has **no production caller** (carry-forward, downgraded from the SEV2 wrapper: grep shows only
+  its own def, the config comment, and tests reference it). Dead code since Issue 188. | fix:
+  wire it into the signals stage (or the Editor asset pipeline) or delete it until a surface
+  consumes it — the real-ffmpeg test now protects it either way.
+- [cleanup] ingestion/audio.py:270 + ingestion/signals.py:53 — (carry-forward) in `_emit`,
+  `end_s = float(times[min(end_idx-1, len-1)]) + frame_duration` can push the final run's
+  `end_s` past `duration_s`, and `_event_geometry_is_valid` still validates only
+  `start_s > duration_s`, not `end_s`, so the slightly-over event lands in
+  `signals.timeline_jsonb`. Cosmetic (downstream clamps the grid index). | fix: pass
+  `duration_s` into `_emit` and clamp, or extend the validator to cap `end`.
+- [cleanup] .env.example:91 — (carry-forward) `TRANSCRIPTION_BACKEND=whisperx` still contradicts
+  `config.py:200` (default `deepgram`) and CLAUDE.md's GPU-free launch default; an operator
+  copying `.env.example` verbatim silently flips the backend. | fix: set the example to
+  `deepgram`; keep `whisperx` in the inline comment.
+- [cleanup] ingestion/audio.py:35-40 — (carry-forward) `_EMPTY_EVENTS` module constant still
+  defined but never referenced; the <2-sample guard (`:94-99`) builds its own dict literal.
+  Dead code. | fix: use it in the guard (overriding `duration_s`) or delete it.
+- [cleanup] ingestion/transcribe.py:250 — (carry-forward) a fresh `aai.Transcriber()` (own HTTP
   client/pool) is constructed per call, contrary to the module-singleton pattern used for
   Deepgram (`_deepgram_client`) and the lock-guarded `_ASSEMBLYAI_READY` init right above it.
-  Bounded churn (non-default backend). | fix: cache a module-level `Transcriber` singleton
-  alongside `_ASSEMBLYAI_READY`.
+  Bounded churn (non-default backend). | fix: cache a module-level `Transcriber` singleton.
+- [cleanup] ingestion/signals.py:90 — (carry-forward) `"relative_retention": rrp or 0.0` uses
+  truthiness where line 84 uses explicit `rrp is not None`; identical behaviour for
+  `float | None` but a readability trap. | fix: `rrp if rrp is not None else 0.0`.
 
-- [cleanup] ingestion/signals.py:91 — `"relative_retention": rrp or 0.0` uses truthiness where
-  line 84 uses explicit `rrp is not None`. Identical behaviour for `float | None`, but a
-  readability trap. | fix: `rrp if rrp is not None else 0.0`.
-
-Observation (not a finding): `transcribe.py:104` logs the full joined transcript via `vlog`.
-`vlog` is a hard no-op unless `settings.verbose_logging_enabled` (prod requires the explicit
-`VERBOSE_LOGGING_ALLOW_PROD=true` opt-in per `verbose.py:3-8`), so this is gated and low-risk,
-but note it dumps creator-authored spoken content to the verbose log when enabled.
+Observation (not a finding, carried): `transcribe.py:104` dumps the full joined transcript via
+`vlog` — a hard no-op unless `verbose_logging_enabled` (prod requires the explicit
+`VERBOSE_LOGGING_ALLOW_PROD=true` opt-in), so gated and low-risk, but it emits creator-authored
+spoken content to the verbose log when enabled.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — Deepgram streams via `with open()`; `subprocess.run` bounded by timeout; no DB/handle leak (1 cleanup: per-call Transcriber) |
-| 2 Concurrency & scale | ok — sync functions offloaded via `asyncio.to_thread`; audio-OOM cap now present (Issue 334); Deepgram streams the file handle |
-| 3 Security & compliance | ok — no tokens/PII in log lines; Deepgram `mip_opt_out` enforced; no creator-scoped queries in slice (isolation enforced at caller) |
-| 4 Clip-quality | 1 finding — peak-relative loudness thresholds weaken the dead-air principle |
+| 1 Resource lifecycle | ok — Deepgram streams via `with open()`; `subprocess.run` timeout-bounded; no temp files created in-slice (1 cleanup: per-call Transcriber) |
+| 2 Concurrency & scale | ok — sync functions offloaded via `asyncio.to_thread` at the worker boundary; audio-OOM cap + 16 kHz resample; size guard `TRANSCRIPTION_MAX_MB` before upload |
+| 3 Security & compliance | ok — no tokens/PII in log lines; Deepgram `mip_opt_out` enforced (Issue 251); AssemblyAI failure now triggers the refund guarantee; no creator-scoped queries in slice |
+| 4 Clip-quality | ok — absolute −60 dBFS silence gate restores the dead-air principle (was 1 finding, now resolved) |
 | 5 Anthropic SDK | n/a (no LLM calls in this module) |
-| 6 Cleanliness & typing | 3 cleanups (dead `_EMPTY_EVENTS`, per-call Transcriber, `rrp or 0.0`) |
+| 6 Cleanliness & typing | 4 cleanups (dead `_EMPTY_EVENTS`, dead-but-working waveform helper, per-call Transcriber, `rrp or 0.0`) |
 | 7 Error handling / API | n/a (not a router) |
-| 8 Config & paths | 1 cleanup — `.env.example` backend default mismatch; paths handled via `Path`/absolute |
+| 8 Config & paths | 1 cleanup — `.env.example` backend default mismatch; all new config (`WAVEFORM_TIMEOUT_S`, `AUDIO_ANALYSIS_MAX_DURATION_S`, timeouts) present in `.env.example` with descriptions |
 
 ## Module verdict
-NEEDS-WORK — no blockers, but the previously-flagged AssemblyAI error-status → silent-empty
-"success" (no refund, garbage clips) is still unfixed, and the Issue 188 waveform helper is
-both dead code and 100% broken (invalid `bg_color` ffmpeg option) with a mock-masked test.
+clean — all three 2026-07-01 SEV2s (AssemblyAI silent-failure/no-refund, broken showwavespic
+filter, peak-relative silence gate) verified fixed with real regression tests; only
+carry-forward cleanups remain, the largest being the still-unwired waveform helper and the
+`.env.example` backend-default mismatch.

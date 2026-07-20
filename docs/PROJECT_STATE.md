@@ -4,6 +4,46 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-20 (later) — Issues 357–361 built via 8-batch parallel workflow → `integration/assess-2026-07-20`
+
+**Workflow wf_822d2374:** 8 file-disjoint build agents in isolated worktrees + 8 independent
+reviewers + 1 fix round (deploy-ci), 17 agents total. All 4 SEV1s (357–360) and every load-bearing
+361 SEV2 lead built and reviewed; branches merged sequentially into `integration/assess-2026-07-20`
+(only DECISIONS.md append conflicts, union-resolved; the three-way `routers/clips.py` region merge
+was clean). **Gates on the merged branch: ruff 0 · mypy 0 · coverage 81.4% · bandit 0/0 · full
+unit suite exit-0 (pipefail-verified) · frontend tsc clean + 244/244 vitest · alembic single head
+0046 · module-coverage gate ran for the FIRST time ever** (the Issue-269 harness bug was fixed in
+this wave: clip_engine 92.6 / preference 91.3 / crypto+limiter+auth 100). One post-merge fixture
+fix: test_mailer's 28-byte dummy Fernet key rejected by the new Issue-358 boot validator.
+**Real bug caught by a new test:** preference LGBM allowlist was missing
+`sklearn.preprocessing._label.LabelEncoder` — every mature LightGBM model failed deserialization
+and silently fell back to DNA; fixed. Notable [DEC]s: render staleness via Redis marker (no
+`updated_at` column exists); deferrable `uq_clips_video_rank` (rerank permutes ranks in-txn);
+summaries dedupe demotes-not-deletes. **Still human-owned:** Issue 356 (VM SSH checks — sign-in
+BLOCKER unconfirmed), first hosted-runner PR run (360 live verify), staging run of the new
+integration tests, merge-to-main decision.
+
+---
+
+## 2026-07-20 — Full /assess re-run @ `ca3305c` + live-prod artifact triage → Issues 356–361 filed
+
+**VERDICT: CONDITIONAL** (report `docs/assessment/REPORT.md`, snapshot `history/2026-07-20-REPORT.md`).
+**All six 2026-07-01 SEV1s verified FIXED** (Stripe retries, ErrorBoundary, event-log pool, chat RLS,
+Resend timeout, pause_turn); ruff/mypy back to 0; coverage **81.02%**; ingestion + notify came back
+clean. New: **1 BLOCKER-class live symptom** (prod Google sign-in failure — 2 emit sites traced,
+3 ranked causes, one VM log-grep decisive) and **4 new SEV1s**: `/clips/generate` bypasses the
+`llm_generation` kill switch + `require_budget` (spend breaker can't stop the main burn path);
+`api_key.py` missed the Issue-344 GUC fix → prod-RLS false 402s within the 5-min stamp window;
+prod-VM self-hosted runner executes `pull_request` code with docker-group + prod `.env`; **no
+stale-`running` render recovery** — the mechanism behind the user's stuck "Rendering your clip…"
+screenshot. ~37 SEV2s (lead cluster: staging compose bleeds the prod `.env`; CSP silently blocks
+Google Fonts in prod; `send_notification` commits dedupe-as-sent before sending). Live-triage detail
+in `modules/_live_smoke_triage.md`; filed as **Issues 356 (VM checks, do first) / 357–360 (SEV1s) /
+361 (SEV2 backlog)**. Also: 2026-07-02 rollback off-course bug verified fixed at HEAD (log updated);
+`run_layer0.py` module-coverage gate found to have never run (deletes coverage.xml first — in 361).
+
+---
+
 ## 2026-07-03 — W3 wave complete: 353, 354 (migration 0045), 296, 246-residual, 303 GO_LIVE capstone
 
 **Branch** `w3/round1` — 5 parallel worktree agents + integrator. Four agents stalled at their final

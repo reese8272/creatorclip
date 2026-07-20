@@ -55,6 +55,28 @@ def _text_of(message: Any) -> str:
     return "\n".join(t for t in blocks if t).strip()
 
 
+def _chat_model_rates() -> tuple[float, float, str]:
+    """Resolve (input_rate, output_rate, tier_label) from ``ANTHROPIC_MODEL_CHAT``.
+
+    Rates are USD per MTok from the config price book; the label matches the
+    tier vocabulary of ``billing.ledger._model_tier``. Chat's model is
+    configurable (config.py), so billing must follow the configured model —
+    the previous hardcoded Sonnet rates silently mis-billed any other model.
+    Unknown model families fall back to the Sonnet rates (the highest in the
+    price book) with the "other" label, so a misconfigured model never
+    under-bills against the spend guard.
+    """
+    model = settings.ANTHROPIC_MODEL_CHAT
+    if "haiku" in model:
+        return settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU, "haiku-tier"
+    if "sonnet" in model:
+        return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "sonnet-tier"
+    logger.warning(
+        "chat billing: no price-book rates for model %s — falling back to Sonnet rates", model
+    )
+    return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "other"
+
+
 async def run_chat_turn(
     task_id: str,
     creator_id: uuid.UUID,
@@ -177,11 +199,12 @@ async def run_chat_turn(
     from billing.ledger import _estimate_cost_usd, increment_usage
 
     try:
+        rate_in, rate_out, tier_label = _chat_model_rates()
         cost = _estimate_cost_usd(
             total["input_tokens"],
             total["output_tokens"],
-            settings.COST_PER_MTOK_IN_SONNET,
-            settings.COST_PER_MTOK_OUT_SONNET,
+            rate_in,
+            rate_out,
             cache_read_tokens=total.get("cache_read", 0),
             cache_creation_tokens=total.get("cache_creation", 0),
         )
@@ -199,7 +222,7 @@ async def run_chat_turn(
         from billing.spend_guard import record_spend
         from observability import record_llm_cost
 
-        record_llm_cost("anthropic", "sonnet-tier", cost)
+        record_llm_cost("anthropic", tier_label, cost)
         await record_spend(creator_id, cost)
     except Exception as _exc:  # noqa: BLE001 — best-effort; never block chat
         logger.warning("chat usage ledger write failed creator=%s: %s", creator_id, _exc)

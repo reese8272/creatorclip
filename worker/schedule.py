@@ -32,6 +32,17 @@ celery.conf.beat_schedule = {
         "task": "worker.tasks.sweep_scheduled_publications",
         "schedule": timedelta(minutes=5),
     },
+    # Issue 359 — recovery sweep for renders orphaned by a worker SIGKILL
+    # (OOM / deploy teardown): flips clips/summaries stuck `running` past the
+    # Celery hard time limit (+ margin) to `failed` so the review UI regains
+    # its retry affordance instead of spinning forever. 15-minute cadence
+    # bounds the worst-case stuck window at ~hard-limit + 15 min; each tick is
+    # one cheap SELECT per table, and the advisory lock + one-way flip make
+    # re-runs and overlaps safe.
+    "sweep-stale-renders": {
+        "task": "worker.tasks.sweep_stale_renders",
+        "schedule": timedelta(minutes=15),
+    },
     "poll-clip-outcomes-hourly": {
         "task": "worker.tasks.poll_clip_outcomes",
         "schedule": timedelta(hours=1),

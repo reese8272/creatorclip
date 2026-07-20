@@ -52,6 +52,15 @@ export function Recap() {
     queryKey: ['summaries', videoId],
     queryFn: () => api<SummaryListResponse>(`/videos/${videoId}/summaries`),
     enabled: Boolean(videoId),
+    // The recap renders in the background; poll while the newest summary is
+    // still queued/rendering so the page settles without a manual reload — the
+    // SSE is best-effort (stream_url is null on a Redis blip, and opening the
+    // page mid-render never had a stream). Review.tsx clip-poll idiom.
+    refetchInterval: (query) => {
+      const newest = query.state.data?.summaries?.[0]
+      const inFlight = newest?.render_status === 'pending' || newest?.render_status === 'running'
+      return inFlight ? 4000 : false
+    },
   })
 
   const create = useMutation({

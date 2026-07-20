@@ -33,6 +33,7 @@ NEVER calls live Anthropic or YouTube — it reads already-persisted clip featur
 
 from __future__ import annotations
 
+import asyncio
 import math
 import random
 import uuid
@@ -419,15 +420,21 @@ async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> li
     """
     from sqlalchemy import select
 
+    from config import settings
     from models import Clip, ClipFeedback, ClipOutcome
     from preference.features import clip_features
 
+    # Bounded like train.py's training query (Issue 102): newest-first + LIMIT
+    # so a power creator with years of feedback doesn't pull the entire join
+    # into the per-retrain harness (which also runs O(n²) tau on the eval
+    # split). Rows are re-sorted ascending below for the chronological split.
     result = await session.execute(
         select(ClipFeedback, Clip, ClipOutcome)
         .join(Clip, Clip.id == ClipFeedback.clip_id)
         .outerjoin(ClipOutcome, ClipOutcome.clip_id == ClipFeedback.clip_id)
         .where(ClipFeedback.creator_id == creator_id)
-        .order_by(ClipFeedback.created_at.asc())
+        .order_by(ClipFeedback.created_at.desc())
+        .limit(settings.PREFERENCE_MAX_TRAINING_LABELS)
     )
     labeled: list[LabeledClip] = []
     for feedback, clip, outcome in result.all():
@@ -462,6 +469,7 @@ async def load_labeled_clips(session: AsyncSession, creator_id: uuid.UUID) -> li
         )
         lc.creator_id = creator_id  # type: ignore[attr-defined]
         labeled.append(lc)
+    labeled.sort(key=lambda c: c.created_at)  # chronological order for the split
     return labeled
 
 
@@ -477,4 +485,8 @@ async def evaluate_creator(
     )
     if len(eval_clips) < 2 or len(train) < 2:
         return None
-    return compute_creator_metrics(train, eval_clips, k=k)
+    # compute_creator_metrics runs a CPU-bound scorer fit (LightGBM/sklearn)
+    # plus O(n²) Kendall tau — offload so the surrounding async caller (the
+    # worker's retrain loop today, potentially the API loop tomorrow) is never
+    # blocked for seconds; mirrors train.py's asyncio.to_thread(fit, ...).
+    return await asyncio.to_thread(compute_creator_metrics, train, eval_clips, k)

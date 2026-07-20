@@ -166,6 +166,7 @@ _ADMIN_SESSION_ALLOWLIST = frozenset(
         "_set_summary_render_status",
         # Genuine cross-tenant sweeps (Beat tasks over ALL creators).
         "_sweep_scheduled_publications_async",
+        "_sweep_stale_renders_async",
         "_poll_clip_outcomes_async",
         "_purge_stale_source_media_async",
         "_purge_stale_youtube_analytics_async",

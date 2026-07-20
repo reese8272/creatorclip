@@ -79,6 +79,21 @@ services:
       REDIS_URL: "redis://redis_staging:6379/1"
       ENV: staging
       VERBOSE_LOGGING: "true"
+      # ── Prod-.env bleed guards (2026-07-20 assessment, Issue 361) ──────────
+      # When deploy.yml's staging gate or staging-drills.yml runs this stack,
+      # env_file above is the PROD /opt/autoclip/.env. DB/Redis are already
+      # isolated by the URLs above; these overrides stop everything else from
+      # leaking into prod systems. TOKEN_ENCRYPTION_KEY is deliberately NOT
+      # overridden: the data-bearing staging_postgres_data volume holds tokens
+      # encrypted with it, and a key swap would break every persisted row.
+      STORAGE_BACKEND: local            # staging renders must never touch the prod R2 bucket
+      SENTRY_DSN: ""                    # staging errors must not pollute prod error tracking
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""   # empty = OTel fully disabled (config.py)
+      # Live billing must never run in staging: empty disables Stripe (allowed
+      # outside ENV=production); set STAGING_STRIPE_* in the VM .env to a
+      # TEST-MODE key pair if a drill ever needs real Stripe calls.
+      STRIPE_SECRET_KEY: ${STAGING_STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STAGING_STRIPE_WEBHOOK_SECRET:-}
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
     depends_on:
       pgbouncer:
@@ -107,6 +122,12 @@ services:
       REDIS_URL: "redis://redis_staging:6379/1"
       ENV: staging
       VERBOSE_LOGGING: "true"
+      # Same prod-.env bleed guards as the app service (see comment there).
+      STORAGE_BACKEND: local
+      SENTRY_DSN: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      STRIPE_SECRET_KEY: ${STAGING_STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STAGING_STRIPE_WEBHOOK_SECRET:-}
     command: celery -A worker.celery_app worker --loglevel=info --concurrency=2
     depends_on:
       pgbouncer:

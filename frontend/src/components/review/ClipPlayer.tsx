@@ -70,7 +70,12 @@ export function ClipPlayer({
           src={mediaSrc}
           controls
           playsInline
+          // Chrome blocks unmuted autoplay: the element stays paused on a black
+          // first frame until a user gesture (Issue 359d — the "black render"
+          // symptom). Muted autoplay is allowed; the controls let the user unmute.
           autoPlay
+          muted
+          preload="auto"
           onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
           className="aspect-[9/16] w-full max-w-[340px] rounded-xl border border-default bg-black shadow-accent-glow"
         />

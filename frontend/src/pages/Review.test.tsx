@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -77,6 +77,32 @@ describe('Review', () => {
     expect(screen.queryByRole('button', { name: /caption style/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /clean filler/i })).toBeNull()
     expect(screen.queryByRole('textbox', { name: /transcript/i })).toBeNull()
+  })
+
+  it('shows a retry affordance — not "No clips yet" — when the clips query fails', async () => {
+    // A transient 500 must not masquerade as first-run emptiness and tell the
+    // creator to regenerate clips that already exist.
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/videos/v1/clips'))
+        return { status: 500, ok: false, json: async () => ({ detail: 'boom' }) }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderReview('/app/review?video_id=v1')
+    expect(await screen.findByText(/Couldn.t load clips for this video/)).toBeInTheDocument()
+    expect(screen.queryByText(/No clips yet/)).toBeNull()
+
+    // Retry refires the clips query.
+    const before = fetchMock.mock.calls.filter(([u]) =>
+      String(u).endsWith('/videos/v1/clips'),
+    ).length
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/videos/v1/clips')).length,
+      ).toBeGreaterThan(before),
+    )
   })
 
   it('opens the tag-feedback panel when Keep is clicked', async () => {

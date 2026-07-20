@@ -195,6 +195,47 @@ describe('Recap', () => {
     expect(btn).toBeDisabled()
   })
 
+  it('polls while a render is in flight and settles without a reload, then stops', async () => {
+    // The SSE is best-effort (null stream_url on a Redis blip; opening the page
+    // mid-render never had a stream) — the summaries poll is the fallback that
+    // clears "Recap rendering…" without a manual reload.
+    vi.useFakeTimers()
+    try {
+      let summaries: Summary[] = [makeSummary({ render_status: 'running', render_uri: null })]
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.match(/\/videos\/[^/]+\/summaries$/))
+          return { status: 200, ok: true, json: async () => ({ summaries }) }
+        return { status: 200, ok: true, json: async () => ({}) }
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      renderRecap()
+      const gets = () =>
+        fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/videos/v1/summaries')).length
+      const tick = (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms))
+
+      await tick(20)
+      expect(screen.getByRole('button', { name: 'Recap rendering…' })).toBeDisabled()
+
+      // In flight → the list refetches on the poll interval.
+      const before = gets()
+      await tick(4100)
+      expect(gets()).toBeGreaterThan(before)
+
+      // Server settles the render — the next poll clears the latched state.
+      summaries = [makeSummary()]
+      await tick(4100)
+      expect(screen.getByRole('button', { name: 'Create a new recap' })).toBeEnabled()
+
+      // Settled → polling stops.
+      const settled = gets()
+      await tick(9000)
+      expect(gets()).toBe(settled)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('surfaces the honest server detail when the request is rejected', async () => {
     vi.stubGlobal(
       'fetch',

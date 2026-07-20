@@ -211,13 +211,21 @@ def test_hook_analysis_no_retention_data() -> None:
 # ── Unit: analyze_hook prompt assembly ────────────────────────────────────────
 
 
+def _stream_msg(stop_reason: str, text: str):
+    """Build a fake stream_message Message with one text block."""
+    import types
+
+    block = types.SimpleNamespace(type="text", text=text)
+    return types.SimpleNamespace(stop_reason=stop_reason, content=[block])
+
+
 async def test_analyze_hook_builds_prompt_with_drop() -> None:
-    """analyze_hook delegates to stream_and_emit with cached DNA + drop stats."""
+    """analyze_hook delegates to stream_message with DNA + drop stats."""
     from knowledge.hooks import analyze_hook
 
     fake_stream = AsyncMock(
         return_value=(
-            '{"diagnosis":"x"}',
+            _stream_msg("end_turn", '{"diagnosis":"x"}'),
             {
                 "input_tokens": 100,
                 "output_tokens": 50,
@@ -226,7 +234,7 @@ async def test_analyze_hook_builds_prompt_with_drop() -> None:
             },
         )
     )
-    with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
+    with patch("worker.anthropic_stream.stream_message", fake_stream):
         result, _usage = await analyze_hook(
             channel_title="Test Channel",
             dna_brief="DNA brief text " * 100,
@@ -266,7 +274,7 @@ async def test_analyze_hook_no_drop_path() -> None:
 
     fake_stream = AsyncMock(
         return_value=(
-            "{}",
+            _stream_msg("end_turn", "{}"),
             {
                 "input_tokens": 10,
                 "output_tokens": 5,
@@ -275,7 +283,7 @@ async def test_analyze_hook_no_drop_path() -> None:
             },
         )
     )
-    with patch("worker.anthropic_stream.stream_and_emit", fake_stream):
+    with patch("worker.anthropic_stream.stream_message", fake_stream):
         await analyze_hook(
             channel_title="Channel",
             dna_brief=None,
@@ -292,6 +300,85 @@ async def test_analyze_hook_no_drop_path() -> None:
     # Issue 352: the transcript (and its fallback) lives in the user turn now.
     user_content = fake_stream.call_args.kwargs["messages"][0]["content"]
     assert "No transcript available" in user_content
+
+
+async def test_analyze_hook_pause_turn_loop_continues_on_web_search() -> None:
+    """When stop_reason == 'pause_turn' the loop re-calls stream_message with
+    the assistant turn appended (same tools), uses the final synthesised
+    answer, and sums usage across rounds (mirrors
+    test_improvement_brief_pause_turn_loop_continues_on_web_search)."""
+    from knowledge.hooks import analyze_hook
+
+    responses = [
+        (
+            _stream_msg("pause_turn", "let me search…"),
+            {"input_tokens": 10, "output_tokens": 5, "cache_read": 1, "cache_creation": 2},
+        ),
+        (
+            _stream_msg("end_turn", '{"diagnosis":"final"}'),
+            {"input_tokens": 20, "output_tokens": 30, "cache_read": 3, "cache_creation": 4},
+        ),
+    ]
+    call_kwargs: list[dict] = []
+
+    async def _fake_stream(client, task_id, **kwargs):
+        call_kwargs.append(kwargs)
+        return responses[len(call_kwargs) - 1]
+
+    with patch("worker.anthropic_stream.stream_message", AsyncMock(side_effect=_fake_stream)):
+        result, usage = await analyze_hook(
+            channel_title="Channel",
+            dna_brief=None,
+            retention_drop_at_s=None,
+            retention_at_drop=None,
+            creator_median_at_drop=None,
+            transcript_excerpt="",
+            task_id="t-pause",
+        )
+
+    assert len(call_kwargs) == 2, "pause_turn must trigger exactly one continuation call"
+    # Resume round re-sends the assistant content with the SAME tools.
+    assert call_kwargs[0]["tools"] == call_kwargs[1]["tools"]
+    second_messages = call_kwargs[1]["messages"]
+    assert second_messages[-1]["role"] == "assistant"
+    # Final answer is the second round's text, not the search preamble.
+    assert result == '{"diagnosis":"final"}'
+    # Usage is summed across BOTH rounds (billing correctness).
+    assert usage == {
+        "input_tokens": 30,
+        "output_tokens": 35,
+        "cache_read": 4,
+        "cache_creation": 6,
+    }
+
+
+async def test_analyze_hook_bounds_pause_turn_rounds() -> None:
+    """A model that never leaves pause_turn cannot loop forever."""
+    from knowledge.hooks import analyze_hook
+
+    calls = {"n": 0}
+
+    async def _always_pause(client, task_id, **kwargs):
+        calls["n"] += 1
+        return (
+            _stream_msg("pause_turn", "still going…"),
+            {"input_tokens": 1, "output_tokens": 1, "cache_read": 0, "cache_creation": 0},
+        )
+
+    with patch("worker.anthropic_stream.stream_message", AsyncMock(side_effect=_always_pause)):
+        result, usage = await analyze_hook(
+            channel_title="Channel",
+            dna_brief=None,
+            retention_drop_at_s=None,
+            retention_at_drop=None,
+            creator_median_at_drop=None,
+            transcript_excerpt="",
+            task_id="t-pause-cap",
+        )
+
+    assert calls["n"] == 6  # initial call + _MAX_SEARCH_ROUNDS resumes
+    assert result == "still going…"
+    assert usage["input_tokens"] == 6
 
 
 # ── extract_transcript_excerpt ────────────────────────────────────────────────

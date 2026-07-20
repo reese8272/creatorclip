@@ -404,3 +404,87 @@ async def test_bearer_dependency_rejects_non_canonical_prefix(client):
         headers={"Authorization": "Bearer not-our-format"},
     )
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_bearer_dependency_sets_rls_guc_inside_stamp_window():
+    """Regression for Issue 358 (mirrors auth.py's Issue 344 fix, under real RLS).
+
+    The bearer dependency's key lookup auto-begins the request transaction
+    before ``session.info['creator_id']`` is set, so db.py's after_begin
+    listener emits no GUC. The Issue 352 throttle removed the per-request
+    commit that masked this: on a NO-stamp request (last_used_at fresh) the
+    transaction never restarts, so without the dependency's own
+    ``set_config('app.creator_id', ...)`` enforced RLS denies all tenant reads
+    and check_positive_balance falsely 402s funded creators.
+
+    Drives the real dependency twice inside the stamp window under the
+    non-BYPASSRLS ``creatorclip_app`` role: request 1 stamps last_used_at
+    (commit restarts the transaction), request 2 hits the no-stamp path — the
+    regression — and must still see the creator's tenant rows.
+    """
+    from sqlalchemy import text
+    from starlette.requests import Request
+
+    from api_key import get_current_creator_via_api_key
+    from models import IngestStatus, Video, VideoKind
+
+    admin_engine = create_async_engine(settings.database_migration_url, pool_pre_ping=True)
+    admin_factory = async_sessionmaker(admin_engine, class_=AsyncSession, expire_on_commit=False)
+
+    def _bearer_request(raw_key: str) -> Request:
+        return Request(
+            {
+                "type": "http",
+                "headers": [(b"authorization", f"Bearer {raw_key}".encode())],
+                "state": {},
+            }
+        )
+
+    async with admin_factory() as admin:
+        creator = await _seed_creator(admin)
+        raw_key = generate_api_key()
+        admin.add(
+            CreatorApiKey(
+                creator_id=creator.id,
+                name="guc regression",
+                key_hash=hash_api_key(raw_key),
+                key_prefix=raw_key[len("ack_") : len("ack_") + 8],
+            )
+        )
+        admin.add(
+            Video(
+                creator_id=creator.id,
+                kind=VideoKind.long,
+                duration_s=120.0,
+                source_uri="s3://test/source/guc-358.mp4",
+                ingest_status=IngestStatus.done,
+            )
+        )
+        await admin.commit()
+
+        try:
+            for label in ("stamp", "no-stamp"):
+                async with admin_factory() as s:
+                    # Session-level SET ROLE (not LOCAL): the stamp path commits
+                    # mid-dependency, which would revert a transaction-scoped role
+                    # switch back to the BYPASSRLS admin and mask the regression.
+                    await s.execute(text("SET ROLE creatorclip_app"))
+                    resolved = await get_current_creator_via_api_key(_bearer_request(raw_key), s)
+                    assert resolved.id == creator.id
+                    # The falsely-402ing shape: an unfiltered tenant read in the
+                    # SAME transaction the dependency left open. RLS returns zero
+                    # rows unless app.creator_id is set on the live transaction.
+                    rows = (
+                        (await s.execute(select(Video).where(Video.creator_id == creator.id)))
+                        .scalars()
+                        .all()
+                    )
+                    assert rows, (
+                        f"{label} request saw zero tenant rows — app.creator_id GUC "
+                        "is not set on the live transaction (Issue 358 regression)"
+                    )
+        finally:
+            async with admin_factory() as admin2:
+                await _cleanup(admin2, creator.id)
+            await admin_engine.dispose()

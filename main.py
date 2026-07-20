@@ -278,7 +278,13 @@ class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
 # CSP uses frame-ancestors 'none' for structural clickjacking defence (supersedes
 # X-Frame-Options for supporting browsers; both are set for defence-in-depth per
 # OWASP). HSTS is only emitted in production to avoid breaking non-TLS dev hosts.
-# CSP_EXTRA_SOURCES appends additional allowed origins for CDN fonts/analytics.
+# style-src/font-src allow Google Fonts by default — the SPA stylesheet @imports
+# fonts.googleapis.com (CSS) which loads fonts.gstatic.com (woff2); without them
+# the browser blocks the fonts and prod falls back to system fonts. 'unsafe-inline'
+# covers the retained static pages' <style> blocks (tos/privacy/accessibility);
+# script-src stays governed by default-src 'self' — no inline scripts allowed.
+# CSP_EXTRA_SOURCES appends additional allowed origins for further CDN/analytics.
+# (DECISIONS 2026-07-20 — fonts allowance baked into the default CSP.)
 #
 # Source: https://owasp.org/www-project-secure-headers/
 
@@ -288,6 +294,8 @@ _CSP_BASE = (
     "base-uri 'self'; "
     "object-src 'none'; "
     "frame-ancestors 'none'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
     "upgrade-insecure-requests"
 )
 

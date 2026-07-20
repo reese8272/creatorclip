@@ -1,137 +1,121 @@
-# chat — assessed 2026-07-01
+# chat — assessed 2026-07-20
 
-Slice: `chat/intake.py`, `chat/prompt.py`, `chat/runner.py`, `chat/tools.py`, `chat/__init__.py`.
-Anthropic SDK claims verified against current official docs (platform.claude.com,
-fetched 2026-07-01) — citations inline.
+Slice: `chat/intake.py`, `chat/prompt.py`, `chat/runner.py`, `chat/tools.py`, `chat/__init__.py`,
+plus the `chat_respond` entry in `worker/tasks.py` (session/RLS posture only).
+Prior findings (2026-07-01) re-verified one by one; Anthropic SDK claims re-checked against the
+claude-api skill docs (2026-07-20). Diff scrutiny: `git diff f70a857..HEAD -- chat/` touched
+`intake.py`, `runner.py`, `tools.py` (Issues 82a AsyncAnthropic, 231 RLS, 352-Batch-I attribution).
+
+## Resolved since 2026-07-01
+
+- **[was SEV1] BYPASSRLS agentic loop — FIXED** (Issue 231, commit 1c5c720 + migrations 0040/0044).
+  `worker/tasks.py:4795` now opens the chat turn with `db.tenant_session(cid)` — app role
+  (no BYPASSRLS), `session.info["creator_id"]` stamped before the first statement so the
+  `after_begin` listener (`db.py:154-184`) emits `SET LOCAL app.creator_id` on every transaction.
+  RLS is FORCE'd on every chat-reachable table: parents in `alembic 0010` (`videos`, `clips`,
+  `creator_dna`, `audience_activity`, `usage`), `chat_conversations` in `0026`, and the previously
+  missing child tables (`video_metrics`, `retention_curves`, `transcripts`, `clip_outcomes`,
+  `chat_messages`) in `0040` via parent-subquery policies with WITH CHECK. Regression coverage:
+  `tests/test_rls_isolation_integration.py:548` (child-table cross-tenant read blocked, includes
+  `chat_messages`) and `:602` (WITH CHECK on writes). RLS is now a real backstop behind the
+  app-layer filters on the most injection-exposed surface.
+- **[was SEV2] model attribution — FIXED** (Issue 352 Batch I, commit 2826b50).
+  `runner.py:209` records `model=settings.ANTHROPIC_MODEL_CHAT`; `intake.py:277` records
+  `model=settings.ANTHROPIC_MODEL_INTAKE` — no longer the generic `ANTHROPIC_MODEL`.
+- **[was SEV2] silent truncation in runner — FIXED.** `runner.py:139-142` calls
+  `warn_if_truncated` on the final round and surfaces `usage["truncated"] = 1` to the caller
+  instead of passing a cut-off reply as complete. Explicit `pause_turn` handling was also added
+  (`runner.py:95-134`, bounded by `_MAX_PAUSE_ROUNDS = 5`) matching the documented resume pattern.
+- **[was cleanup] intake cache-token accounting — FIXED.** `intake.py:220-221` sums
+  `cache_read_input_tokens` / `cache_creation_input_tokens` and forwards both to
+  `record_llm_tokens` (`intake.py:276-283`), matching runner.
 
 ## Tenant-isolation verdict (the load-bearing check)
 
-**Isolation holds today, but has NO RLS backstop — it rests entirely on app-layer
-`WHERE creator_id` filters on the app's most prompt-injection-exposed surface.**
-
-Traced the full chain:
-- `routers/chat.py:103` enqueues the task with `str(creator.id)` taken from the
-  authenticated `get_current_creator` dependency — the creator id is the session
-  owner, never model input.
-- `worker/tasks.py:4364` opens the turn on **`db.AdminSessionLocal()`** — the
-  `creatorclip_migrate` role, which has **BYPASSRLS** (`db.py:22-26,148-149`), and
-  it sets **no** `session.info["creator_id"]`, so the `after_begin` GUC listener
-  (`db.py:139-168`) emits nothing. The RLS policies in `alembic 0010` therefore do
-  **not** gate any query in the chat tool path.
-- Every one of the 8 executors in `chat/tools.py` filters explicitly by the injected
-  `creator_id`, and the model never supplies it (no `creator_id` in any tool schema):
-  `_get_recent_videos` (:216), `_get_video_performance` (:245,:250), `_get_channel_averages`
-  (:320), `_get_upload_timing` (:342), `_list_top_clips` (:374), `_get_clip_detail` (:423),
-  `_suggest_clip_titles` (:481), and `_get_channel_dna` → `dna.profile.get_active`
-  (`dna/profile.py:164-176`, filters `CreatorDna.creator_id == creator_id`). The
-  child-table reads (`VideoMetrics`, `RetentionCurve`, `ClipOutcome`, `Transcript`) filter
-  by a `video_id`/`clip_id` that was itself resolved under a `creator_id` filter, so they
-  are transitively isolated. Model-supplied `clip_id`/`video_query` are validated
-  (UUID parse / `ilike`) and re-scoped by `creator_id`, so the model cannot pivot to
-  another creator's row.
-
-The gap: this is the one surface where an adversary's free text (the chat message) is
-fed to an LLM that then chooses DB tool calls. RLS is the app's belt-and-suspenders
-everywhere else, and here it is switched off. Compounding it, `alembic 0010`'s
-`_TENANT_TABLES` doesn't even include `video_metrics`, `retention_curves`,
-`clip_outcomes`, `transcripts`, or the `chat_*` tables — so RLS would not backstop those
-reads even if the app role were used. Any future tool added to `_EXECUTORS` that forgets
-a `WHERE creator_id` is an immediate cross-tenant leak with nothing to catch it.
-
-The **intake** path (`chat/intake.py`) touches no DB at all (pure LLM + `dna.identity`
-validators) and only ever *proposes* a profile the creator later confirms — no isolation
-concern there.
+**Isolation holds and now has the RLS backstop.** Re-traced the chain: the creator id enters as
+the authenticated session owner (never model input; no `creator_id` in any tool schema —
+`tools.py:45-178`), the worker re-checks conversation ownership without leaking existence
+(`worker/tasks.py:4799-4804`), and every one of the 8 executors filters by the injected
+`creator_id` (`tools.py:214, 244, 249, 341, 372, 422, 478`); child-table reads resolve their
+`video_id`/`clip_id` under a creator-scoped query first and are additionally gated by the 0040
+RLS policies. Model-supplied `clip_id`/`video_query` are UUID-parsed / `ilike`'d and re-scoped.
+A future executor that forgets `WHERE creator_id` is now caught by RLS (deny-by-default policies,
+pinned by `tests/test_rls_isolation_integration.py`).
 
 ## Findings
-- [SEV1] worker/tasks.py:4364 (+ chat/runner.py:53, chat/tools.py:529) — the Pro chat
-  agentic loop runs under the BYPASSRLS `AdminSessionLocal` with no `creator_id` GUC, so
-  RLS is **not** a second line of defense on the app's most injection-exposed surface;
-  cross-tenant safety depends solely on every executor remembering `WHERE creator_id`
-  (verified present today, but one forgotten filter in a future tool = silent leak) |
-  fix: run the chat turn on the app-role `AsyncSessionLocal` with
-  `session.info["creator_id"] = cid` set before the first query (same pattern as
-  `db.get_session` + the auth dependency), so RLS gates every query as a backstop; keep
-  the explicit filters. Then extend `alembic 0010._TENANT_TABLES` to cover the
-  chat-reachable child tables (`video_metrics`, `retention_curves`, `clip_outcomes`,
-  `transcripts`, `chat_conversations`, `chat_messages`) so the backstop is real. Add a
-  regression test: with a chat session scoped to creator B and the GUC set, a tool call
-  crafted to reach creator A's clip/video id returns empty. (needs-runtime-confirmation
-  that all chat-touched tables get RLS policies + that ChatMessage/Conversation writes
-  still succeed under the app role.)
-- [SEV2] chat/runner.py:169-175 & chat/intake.py:272-277 — token usage is recorded with
-  `model=settings.ANTHROPIC_MODEL` (the generic default) instead of the model actually
-  invoked (`ANTHROPIC_MODEL_CHAT` / `ANTHROPIC_MODEL_INTAKE`). Correct **only by
-  coincidence** today because all three equal `"claude-sonnet-4-6"` (config.py:100,117,118);
-  the moment chat or intake is pointed at Opus/Haiku, the Prometheus `model` label and
-  cost dashboards misattribute usage | fix: pass the model that was used —
-  `model=settings.ANTHROPIC_MODEL_CHAT` / `...INTAKE`.
-- [SEV2] chat/runner.py:148-156 — the billing-ledger cost is computed with
-  `COST_PER_MTOK_IN_SONNET` / `...OUT_SONNET` hardcoded, decoupled from
-  `ANTHROPIC_MODEL_CHAT`. This feeds real usage-based billing (`increment_usage`), so if
-  the chat model ever changes to Haiku (cheaper) or Opus (dearer) the charge is wrong |
-  fix: select the cost rate from the model in use (a small `{model: (in,out)}` map) or
-  assert `ANTHROPIC_MODEL_CHAT` is a Sonnet SKU, so cost tracks the model.
-- [SEV2] chat/runner.py:110-111 — the loop treats any `stop_reason != "tool_use"` as a
-  finished answer; a `max_tokens` truncation (CHAT_MAX_TOKENS=1500, config.py:194) mid-answer
-  is returned to the creator silently, and intake calls `warn_if_truncated` (intake.py:218)
-  while runner does not, so the two paths are inconsistent | fix: call
-  `warn_if_truncated(ANTHROPIC_MODEL_CHAT, message.stop_reason, task=task_id)` after each
-  round in runner, matching intake. `pause_turn` is correctly **n/a** here — it only fires
-  for server tools (web_search/web_fetch/code_execution) and chat uses only client-side
-  custom tools (Anthropic handling-stop-reasons, fetched 2026-07-01).
-- [cleanup] chat/intake.py:200-217,272-277 — the non-streaming intake call never records
-  `cache_read_input_tokens` / `cache_creation_input_tokens`; only `input_tokens`/`output_tokens`
-  are summed and passed to `record_llm_tokens`, so intake's cache-hit ratio is invisible and
-  `total_in` undercounts when the cache is warm (the API reports cached tokens separately —
-  Anthropic prompt-caching usage fields, fetched 2026-07-01) | fix: read
-  `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens` and forward them to
-  `record_llm_tokens(cache_read_tokens=…, cache_creation_tokens=…)`, as runner already does.
-- [cleanup] chat/tools.py:46 (TOOLS) & chat/intake.py:60 (PROPOSE_PROFILE_TOOL) — schemas use
-  `additionalProperties: false` but not `strict: true`. Current Anthropic docs recommend
-  strict tool use to *guarantee* schema conformance and eliminate invalid tool calls
-  (Anthropic tool-use, fetched 2026-07-01), which is especially cheap insurance on the
-  injection-facing `propose_profile` and `clip_id` inputs | fix: add `"strict": true` to the
-  custom tool definitions (validators stay as defense-in-depth).
-- [cleanup] chat/runner.py:72 — `client = _ANTHROPIC.with_options(timeout=120.0)` re-wraps the
-  singleton that is already constructed with a 120s timeout (runner.py:41-45); redundant |
-  fix: drop the `with_options` call and use `_ANTHROPIC` directly.
+
+- [SEV2] chat/runner.py:180-186,202 (carry-forward) — billing cost is still computed from the
+  hardcoded `COST_PER_MTOK_IN_SONNET` / `COST_PER_MTOK_OUT_SONNET` rates and labelled
+  `record_llm_cost("anthropic", "sonnet-tier", cost)`, decoupled from the configurable
+  `ANTHROPIC_MODEL_CHAT` (config.py:118). Correct only while chat stays on Sonnet; pointing chat
+  at Haiku/Opus silently charges the wrong rate into the real usage ledger and spend guard |
+  fix: select `(in, out)` rates from a `{model_family: rates}` map keyed off
+  `ANTHROPIC_MODEL_CHAT` (or assert at startup that the model is a Sonnet SKU), and derive the
+  `record_llm_cost` tier label from the same lookup.
+- [cleanup] worker/tasks.py:4831-4848 + chat/runner.py:188-203 — on the empty-reply path
+  (`final_text` falsy, tasks.py:4833-4835) the worker returns before `session.commit()`, rolling
+  back the `increment_usage` ledger row written inside `run_chat_turn` — but `record_spend`
+  (Redis spend-guard counter) and `record_llm_cost` (Prometheus) already fired, so ledger and
+  spend guard diverge for that turn (tokens spent, ledger not charged). Rare and in the
+  creator's favor, but a reconciliation mismatch | fix: commit the usage write before the
+  early return (or move the empty-reply check ahead of the billing block).
+- [cleanup] chat/runner.py:139 — `warn_if_truncated` fires here AND inside `stream_message`
+  (worker/anthropic_stream.py:184) for the same round, so a truncated reply logs the WARNING
+  twice | fix: branch on `stop_reason == "max_tokens"` directly in runner for the flag and let
+  the stream helper own the log line (warn_if_truncated is log-only — observability.py:315-333).
+- [cleanup] chat/tools.py:45 (TOOLS) & chat/intake.py:60 (PROPOSE_PROFILE_TOOL)
+  (carry-forward) — schemas use `additionalProperties: false` but not `"strict": true`. Strict
+  tool use guarantees schema conformance and is supported on Sonnet 4.6 (verified via claude-api
+  skill, 2026-07-20) — cheap insurance on the injection-facing `propose_profile` and `clip_id`
+  inputs | fix: add `"strict": true` to both custom tool definitions (keep the validators as
+  defense-in-depth).
+- [cleanup] chat/runner.py:85 (carry-forward) — `client = _ANTHROPIC.with_options(timeout=120.0)`
+  re-wraps the singleton already built with `httpx.Timeout(120.0, connect=10.0)` (runner.py:46-50),
+  and the flat float actually *loses* the granular 10s connect timeout | fix: drop the
+  `with_options` call and pass `_ANTHROPIC` directly.
 
 ## Verified-correct (no action)
-- Prompt caching is set up per the docs: one `cache_control: ephemeral` breakpoint on the
-  last (stable) system block caches the tool schemas + instructions together, with per-creator
-  channel context in a second uncached block (prompt.py:54-71, intake.py:177-179). Confirmed
-  against Anthropic prompt-caching "cache prefix ordering (tools→system→messages)" and
-  "breakpoint on last system block caches tools too" (fetched 2026-07-01). Both models are
-  Sonnet (min 1024 cacheable tokens) — the chat prompt with 8 tool schemas clears this;
-  intake's single tool + niche list is likely near the threshold (needs-runtime-confirmation
-  via `usage.cache_*` non-zero).
-- `is_error: true` is set on tool_result exactly when the executor fails (runner.py:131-132,
-  tools.py:544,549; intake.py:258) — matches the documented recovery signal, and the
-  worker never propagates tool exceptions into the loop (tools.py:547-550).
-- tool_result message shape is correct: results-only user message, no leading text
-  (runner.py:134), satisfying the "tool_result must come first / no text before it" rule.
-- Honesty constraint is embedded verbatim in both system prompts (prompt.py:19-24,49-51;
-  intake.py:110-125) with explicit no-virality language — matches CLAUDE.md.
-- Runaway guards present: `CHAT_MAX_TOOL_ITERATIONS` with a forced text-only final round
-  (runner.py:71-77), `MAX_INTAKE_TURNS` (intake.py:54,167), output capped at CHAT_MAX_TOKENS.
-- Concurrency: the blocking sync Anthropic stream is offloaded via `asyncio.to_thread`
-  (runner.py:79); tools are awaited **sequentially** over one AsyncSession, so no concurrent
-  use of a single async session. Clients are module-level singletons (runner.py:41, intake.py:46).
+
+- Prompt caching: one `cache_control: ephemeral` breakpoint on the last stable system block
+  (prompt.py:60-66, intake.py:177-179); tools render before system so the tool schemas cache with
+  it; per-creator channel title sits in a second uncached block. Matches current guidance
+  (prefix-match, tools→system→messages, breakpoint on last system block).
+- AsyncAnthropic migration (Issue 82a): both clients are module-level `AsyncAnthropic` singletons
+  (runner.py:46, intake.py:46) awaited directly on the loop — the old `asyncio.to_thread` hop is
+  gone; no blocking call inside async paths. Tools execute sequentially on one AsyncSession (no
+  concurrent session use).
+- `is_error: true` set exactly when an executor fails (runner.py:157-164, tools.py:540,545,
+  intake.py:264); `execute_tool` never raises into the loop (tools.py:541-546). tool_result
+  message shape correct (results-only user message, runner.py:165).
+- Runaway guards: `CHAT_MAX_TOOL_ITERATIONS` with a forced no-tools final round (runner.py:87-90),
+  `_MAX_PAUSE_ROUNDS = 5` on pause_turn resumes with a warning on exhaustion (runner.py:95-134),
+  `MAX_INTAKE_TURNS = 12` (intake.py:54,167), output capped at `CHAT_MAX_TOKENS`.
+- Honesty constraint verbatim in both system prompts (prompt.py:19-33, intake.py:110-111) plus
+  `UNTRUSTED_CONTENT_POLICY` on both injection surfaces (prompt.py:27, intake.py:105); no
+  virality promise anywhere in the module.
+- Bounded reads everywhere: `_MAX_VIDEOS=25`, `_MAX_CLIPS=20`, channel averages LIMIT 50; model
+  cannot exceed the caps (server-side clamp at tools.py:203-207, 361-365).
+- Error paths log exception *types*, not token/PII content (runner.py:107-112, intake.py:208-212);
+  full-prompt logging only via `vlog_*`, which is a no-op unless `verbose_logging_enabled`
+  (verbose.py:45,86) with an explicit prod opt-in.
+- Chat billing feeds the spend guard and per-creator monthly ledger via an atomic upsert in a
+  savepoint (`billing/ledger.increment_usage`), with cache tiers priced separately.
 
 ## Rubric coverage
+
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — clients are singletons; the DB session is owned/closed by the worker context manager (worker/tasks.py:4364), chat module borrows it |
-| 2 Concurrency & scale | ok — sync client off-loaded to thread; sequential tool exec on one session; all fetches bounded (limits capped _MAX_VIDEOS/_MAX_CLIPS) |
-| 3 Security & compliance | 1 SEV1 — isolation correct today but no RLS backstop under BYPASSRLS; honesty constraint verified |
+| 1 Resource lifecycle | ok — singletons; DB session owned/closed by `db.tenant_session` context manager in the worker; chat borrows it |
+| 2 Concurrency & scale | ok — fully async SDK path (82a), sequential tool exec, all fetches bounded |
+| 3 Security & compliance | ok — prior SEV1 resolved; RLS backstop active + tested; isolation re-traced on all 8 executors; honesty constraint verified |
 | 4 Clip-quality | n/a — reads clips/scores, does not compute them |
-| 5 Anthropic SDK | caching/is_error/tool_result-shape verified correct; 1 SEV2 (missing truncation warn in runner) + 2 cleanup (cache-token accounting, strict) |
-| 6 Cleanliness & typing | 1 cleanup (redundant with_options); signatures fully typed |
+| 5 Anthropic SDK | 1 SEV2 (cost-rate coupling) + 3 cleanup (double warn, strict, with_options); caching/pause_turn/is_error/tool_result verified correct |
+| 6 Cleanliness & typing | ok — fully typed; 1 cleanup counted above (with_options) |
 | 7 Error handling / API | n/a — not a router; HTTP surface owned by routers/chat.py & routers/creators.py |
-| 8 Config & paths | ok — CHAT_* config in config.py with defaults and documented in .env.example; no filesystem paths |
+| 8 Config & paths | ok — CHAT_* documented in .env.example:41-44; no filesystem paths |
 
 ## Module verdict
-NEEDS-WORK — cross-tenant isolation is correct today but rides entirely on app-layer
-filters with the RLS backstop switched off on the app's most injection-exposed surface;
-close the SEV1 (app-role session + GUC + extend RLS table list) and fix the model/cost
-attribution SEV2s.
+
+NEEDS-WORK — the 2026-07-01 SEV1 (BYPASSRLS agentic loop) and both attribution SEV2s are
+verifiably fixed; what remains is one SEV2 (billing rate/label hardcoded to Sonnet while the
+chat model is configurable) and four small cleanups.

@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 
 import numpy as np
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -29,6 +29,12 @@ _POSITIVE_ACTIONS = {FeedbackAction.upvote, FeedbackAction.trim}
 _NEGATIVE_ACTIONS = {FeedbackAction.downvote}
 # Feedback actions that contribute a training label (skip/format are excluded).
 TRAINABLE_ACTIONS = _POSITIVE_ACTIONS | _NEGATIVE_ACTIONS
+
+# Superseded PreferenceModel rows to retain per creator. Only the newest 2
+# versions are ever read (load_latest + the worker's NDCG warn-ratchet), but a
+# few extra are kept as a manual-rollback margin; everything older is pruned on
+# each retrain so weights_blob storage doesn't grow without bound.
+_KEEP_MODEL_VERSIONS = 5
 
 
 async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> PreferenceScorer | None:
@@ -120,6 +126,14 @@ async def build_and_save(session: AsyncSession, creator_id: uuid.UUID) -> Prefer
         updated_at=datetime.now(UTC),
     )
     session.add(model_row)
+    # Prune superseded versions in the same transaction — still under the
+    # advisory xact lock, so no concurrent retrain can race the delete.
+    await session.execute(
+        delete(PreferenceModel).where(
+            PreferenceModel.creator_id == creator_id,
+            PreferenceModel.version <= new_version - _KEEP_MODEL_VERSIONS,
+        )
+    )
     await session.commit()
 
     logger.info(

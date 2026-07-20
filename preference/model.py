@@ -49,6 +49,11 @@ _ALLOWED_CLASSES: frozenset[tuple[str, str]] = frozenset(
         ("preference.model", "PreferenceScorer"),
         # sklearn LogisticRegression
         ("sklearn.linear_model._logistic", "LogisticRegression"),
+        # LGBMClassifier stores its target LabelEncoder (`_le`) — required to
+        # round-trip the LightGBM branch (caught by the round-trip test,
+        # 2026-07-20 assessment: missing entry silently disabled every mature
+        # personalized model via load_latest's broad from_bytes catch).
+        ("sklearn.preprocessing._label", "LabelEncoder"),
         # LightGBM classifier + internal booster
         ("lightgbm.sklearn", "LGBMClassifier"),
         ("lightgbm.basic", "Booster"),

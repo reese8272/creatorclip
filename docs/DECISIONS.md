@@ -10583,3 +10583,161 @@ scope check, fetched 2026-07-02). Live activation stays operator (`MAILING_ADDRE
 launches, fetched 2026-07-02): question+action rows, domain-grouped, automation-backed signals,
 two-stage (beta / public), reference-by-issue-id only. It must also reconcile the three gate lists that
 currently disagree (CLAUDE.md vs PROJECT_STATE vs stale COMPLIANCE). **Date:** 2026-07-02
+
+## 2026-07-20 — Issue 359: stale-render staleness signal is a Redis render-start marker, not `updated_at` [DEC]
+
+**What changed:** The Issue-359 spec assumed the recovery sweep and the render-endpoint stale override
+could compare `clips.updated_at` / `summaries.updated_at` against the Celery hard time limit. Neither
+table HAS an `updated_at` column (verified in `models.py` + `alembic/versions/0001_initial_schema.py`
+— only `videos`/`clip_publications`/etc. carry one). Instead of adding a column + migration, the worker
+now stamps a Redis key `render:started:{id}` (epoch value, 7-day TTL, best-effort write) immediately
+after the `running` commit; `ais_render_stale()` reports stale when the marker is absent OR older than
+`CELERY_SOFT_TIME_LIMIT_S + HARD_LIMIT_MARGIN_S + 300`. Both the Beat sweep (`sweep_stale_renders`,
+15-min cadence) and `POST /clips/{id}/render` consume it.
+
+**Why:** (1) A migration + model change was outside the batch's file scope and adds schema churn for a
+recovery heuristic; (2) an ORM `onupdate` timestamp is written by ANY column touch, so it is a noisier
+staleness signal than an explicit render-start stamp; (3) absent-marker-means-stale gives free recovery
+for rows stuck from before the fix (including the live prod row) and after a Redis flush. Failure
+posture: marker READ errors report fresh (fail-closed — a Redis outage cannot trigger a re-render
+storm); a live render wrongly flipped by the flush edge self-heals because the completion path writes
+`done` unconditionally, and duplicate renders are safe (idempotent `clips/{id}.mp4` upload key,
+Issue-336 guard).
+
+**Source/evidence:** `docs/assessment/modules/_live_smoke_triage.md` symptom 2 (proposed either the
+Beat sweep or the endpoint override; both shipped), `worker/celery_app.py` time-limit invariants,
+Issue-353 regression tests (kept green). **Date:** 2026-07-20
+
+## 2026-07-20 — Issue 361 (races batch): shape of the two unique backstops [DEC]
+
+**clips: `UNIQUE (video_id, rank)` is DEFERRABLE INITIALLY DEFERRED, not immediate.** The
+assessment spec asked for a plain unique index; reading `persist_ranked_clips` showed
+`rerank_with_preference` (clip_engine/ranking.py:99-104) permutes rank values across the
+just-inserted set via per-row UPDATEs in a follow-up transaction — a non-deferred unique
+check is evaluated per statement and would raise on the transient rank swap whenever a
+preference model is active. Deferred, the check runs at COMMIT: the permutation is
+self-consistent by then, and the concurrent double-insert race is still rejected (the
+loser's COMMIT raises `IntegrityError` → rollback → return the winner's set). Evidence:
+ranking.py rerank path; PostgreSQL constraint-timing semantics (immediate checks are
+per-row/per-statement; only DEFERRABLE constraints move to commit).
+
+**summaries dedupe demotes, not deletes.** Migration 0046 must clear pre-existing
+duplicate active recaps before creating `uq_summaries_active`. Older duplicates are
+`UPDATE ... SET render_status='failed'` (removed from the partial-index predicate) rather
+than DELETEd: a worker may be mid-render against that summary id, and the row stays
+auditable. The newest active row is kept — the same row `create_summary`'s idempotency
+probe (`ORDER BY created_at DESC LIMIT 1`) would return. Clips dedupe DOES delete (keep
+earliest-created per `(video_id, rank)`): duplicates there are whole re-inserted sets and
+any feedback/outcomes attach to the earlier canonical rows. **Date:** 2026-07-20
+=======
+**Issues 356-361 batch llm-sdk — inline pause_turn loops + chat rate fallback (2026-07-20).**
+(1) titles.py/hooks.py got the pause_turn continuation as INLINE 5-round loops mirroring
+thumbnails.py/improvement-brief verbatim, not the assessment-suggested shared
+`stream_until_final()` helper in worker/anthropic_stream.py — that file is outside this
+build batch's scope (owned by another lane); the DRY extraction of the now-four identical
+loops (titles, hooks, thumbnails, brief-streaming) is deferred to the supervisor as a
+follow-up cleanup. (2) chat/runner.py now derives billing rates + the `record_llm_cost`
+tier label from `ANTHROPIC_MODEL_CHAT` (haiku→haiku rates, sonnet→sonnet rates); an
+UNKNOWN model family (e.g. an Opus SKU, which has no price-book entry in config.py) falls
+back to the Sonnet rates — the highest configured — with label "other" and a WARNING log,
+so a misconfigured model can never under-bill the ledger/spend guard relative to the known
+price book. Adding real Opus rates requires a config.py price-book entry (out of batch
+scope). **Date:** 2026-07-20
+
+## 2026-07-20 — Assessment fix batch (backend-misc) judgment calls [DEC]
+
+**CSP: Google Fonts allowance baked into the default `_CSP_BASE`** (main.py). The 2026-07-20
+assessment found the Issue-229 CSP had no `style-src`/`font-src`, so `default-src 'self'` governed
+both and the browser blocked the SPA's `@import` of fonts.googleapis.com — prod has silently run on
+system-font fallback. Deviation from "keep the base CSP minimal, extend via `CSP_EXTRA_SOURCES`":
+the fonts are a hard dependency of the shipped stylesheet (frontend/src/index.css), not an optional
+CDN, so they belong in the default rather than in per-deploy env config that every environment must
+remember. `style-src` also carries `'unsafe-inline'` because the retained static pages
+(tos/privacy/accessibility) use `<style>` blocks — previously blocked by `default-src 'self'`,
+i.e. this legalises styling those compliance pages, and CSS injection without script execution is
+low-risk (script-src remains governed by `default-src 'self'`, no inline scripts).
+
+**Preference model retention: keep newest 5 versions per creator** (preference/train.py). No spec
+stated a retention count; only the newest 2 are ever read (load_latest + the worker NDCG
+warn-ratchet), so 5 keeps a manual-rollback margin while bounding per-retrain row/blob growth.
+Pruning runs in the same transaction as the insert, under the existing per-creator advisory xact
+lock, so it cannot race a concurrent retrain.
+
+**Publish resume probe: in-process retry, not session persistence** (youtube/publish.py). The
+assessment's long-term fix (persist `session_uri` on ClipPublication so a task-level retry resumes
+the same session) needs a schema migration — out of this batch's scope. Shipped the module-file
+fix: transport errors inside the offset probe are retried with backoff against the SAME session URI
+and, when exhausted, surface as a terminal `YouTubeUploadError` (never a blind task retry that
+opens a new session). Session persistence remains the follow-up. **Date:** 2026-07-20
+=======
+**361 (frontend batch) — query-error retry cards inlined per page, NOT the assessment's shared
+`<QueryErrorState>` extraction.** The 2026-07-20 frontend assessment suggested extracting the
+Recap.tsx retry card into a shared component reused by Dashboard/Review/VideoClipsMap/Editor. The
+Dashboard/Review fixes inline the same ~10-line pattern instead: the wave runs file-disjoint batches
+in parallel, and a new `components/` file used by pages owned by other agents invites duplicate
+creations and merge conflicts; VideoClipsMap/Editor were outside this batch's file list. Extraction
+remains the right refactor once all four pages carry the branch — do it in the Issue-361 sweep that
+touches VideoClipsMap/Editor. Also: the batch brief described Dashboard.tsx:154-160/Review.tsx:114-158
+as "raw fetch POSTs without try/catch" — verified false (no raw fetches remain there; VideoTable/
+ChannelBrowser were fixed in Issue 352); the real defect at those lines is the assessment's
+query-error-as-empty-state finding, which is what was fixed. **Date:** 2026-07-20
+
+## 2026-07-20 — Issue 360: PR CI moved off the prod-VM runner [DEC]
+
+**What changed.** `ci.yml` (all 12 jobs) and `mutation.yml` now run on GitHub-hosted
+`ubuntu-latest`. The self-hosted runner on the prod VM is reserved for the deploy-track
+workflows only (`deploy.yml`, `docker-publish.yml`, `staging-drills.yml`), which trigger
+exclusively from trusted refs (push to main / workflow_dispatch) — never `pull_request`.
+This partially supersedes the 2026-06-23 "hybrid self-hosted CI/CD" entry, which weighed
+GitHub-hosted billing but not this blast radius.
+
+**Why.** The runner user is in the `docker` group (root-equivalent host control) and owns
+`/opt/autoclip` including the prod `.env` (every secret). `ci.yml` triggered on
+`pull_request`, so any code executing during a PR job — including a malicious transitive
+dependency pulled by `npm ci` / `pip install -r requirements.txt` — could read all prod
+secrets and control the prod containers. GitHub-hosted runners support the Docker service
+containers (postgres/redis), buildx, and Playwright installs the CI jobs need, so nothing
+is functionally lost.
+
+**Residual risk (accepted).**
+- GitHub-hosted minutes billing is a dependency again for PR CI — the exact failure the
+  2026-06-23 decision removed. If the spending limit fast-fails CI, the fix is billing,
+  not moving jobs back to the VM. Layer 1 (the local pre-push hook) still gives
+  Docker-free gate coverage when hosted CI is unavailable.
+- The deploy-track workflows still run on the VM runner with docker-group + `.env`
+  access; they execute only main/dispatch code, so the trust boundary is "whatever merges
+  to main" — the same boundary the deploy itself already has. A distinct low-privilege
+  runner user remains the documented hardening follow-up.
+
+**Evidence.** `docs/assessment/modules/deploy_ci.md` (2026-07-20 SEV1),
+`docs/issues.md` Issue 360.
+
+## 2026-07-20 — deploy_ci SEV2 hardening judgment calls [DEC]
+
+**Staging compose: explicit `environment:` overrides, not `.env.staging`.**
+`docker-compose.staging.yml` keeps `env_file: .env` (the deploy gate and drills run it
+from `/opt/autoclip`, where that file is the prod env) and now overrides the values that
+must not bleed: `STORAGE_BACKEND=local`, `SENTRY_DSN=""`, `OTEL_EXPORTER_OTLP_ENDPOINT=""`,
+and `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` from optional `STAGING_STRIPE_*` vars
+(empty = Stripe disabled outside production). Chosen over pointing `env_file` at
+`/opt/autoclip/.env.staging` because a missing file hard-fails compose — the gate and
+drills would break until an operator provisions a second secret file, and the overrides
+are visible in-repo rather than living in unversioned VM state. `TOKEN_ENCRYPTION_KEY` is
+deliberately NOT overridden: the data-bearing `staging_postgres_data` volume already
+holds tokens encrypted with the prod key; swapping it would break every persisted staging
+row. Known caveat: `STORAGE_BACKEND=local` means the staging worker cannot read app-side
+uploads (separate containers, no shared volume) — acceptable because the gate and drills
+never render; a dedicated staging bucket is the upgrade path if they ever do.
+
+**`rotate_token_key.py` no longer accepts keys on argv.** Keys come from
+`OLD_TOKEN_ENCRYPTION_KEY` / `NEW_TOKEN_ENCRYPTION_KEY` env vars with a `getpass` prompt
+fallback (argv is visible in `ps` and shell history — the same posture backup_pg.sh
+established with `-pass env:`). The old `--old-key/--new-key` flags now fail loudly via
+argparse. `docs/RUNBOOKS.md` Step 3 was updated to match: interactive `docker compose exec`
+(no `-T` — getpass needs a TTY) with the env-var form documented for non-interactive runs.
+
+**`backup_redis.sh` duplicates backup_pg.sh's `read_env` verbatim** (plus the
+`BACKUP_R2_BUCKET != R2_BUCKET` guard) instead of extracting a shared sourced snippet —
+two copies of an 8-line helper beat introducing a new shared file both cron entry points
+must locate, and it restores the no-exec parsing posture the `source .env` regression
+dropped. **Date:** 2026-07-20

@@ -324,7 +324,7 @@ async def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker)
     mock_client.messages.create = AsyncMock(side_effect=_create)
     mocker.patch.object(b._ANTHROPIC, "with_options", return_value=mock_client)
 
-    result, _usage = await b.generate_improvement_brief(channel_title="Ch", analytics={})
+    result, usage = await b.generate_improvement_brief(channel_title="Ch", analytics={})
 
     assert mock_client.messages.create.call_count == 2, (
         "pause_turn must trigger exactly one continuation call"
@@ -336,6 +336,14 @@ async def test_improvement_brief_pause_turn_loop_continues_on_web_search(mocker)
     # Final answer is the second response's text, not the search preamble
     assert "SYNTHESISED ANSWER" in result
     assert "let me search" not in result
+    # Usage must be summed across BOTH rounds, not just the final one — the
+    # earlier rounds' tokens (search preamble + tool_use) are billed too.
+    assert usage == {
+        "input_tokens": 30,  # 10 + 20
+        "output_tokens": 35,  # 5 + 30
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
 
 
 async def test_improvement_brief_tool_max_uses_is_set(mocker):

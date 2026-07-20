@@ -68,7 +68,19 @@ jobs:
             echo "Add them under Settings → Secrets and variables → Actions."
             exit 1
           fi
-          echo "Secret presence verified (values redacted)."
+          # Charset guard: both passwords are interpolated into SQL single-quoted
+          # literals and sed replacement text on the VM — a value containing
+          # ' | & \ or whitespace would break the statement or inject into it.
+          # Reject up front (names only, values never printed).
+          for name in POSTGRES_APP_PASSWORD POSTGRES_MIGRATE_PASSWORD; do
+            case "${!name}" in
+              *[\'\|\&\\]*|*[[:space:]]*)
+                echo "::error::${name} contains a forbidden character (' | & \\ or whitespace) — regenerate it without those characters."
+                exit 1
+                ;;
+            esac
+          done
+          echo "Secret presence + charset verified (values redacted)."
 
       - name: SSH → activate RLS
         uses: appleboy/ssh-action@v1.0.3
@@ -103,10 +115,10 @@ jobs:
             # pinning a specific head string.
             log "Verifying migration 0010_rls_policies has been applied"
             CURRENT=$(docker compose -f docker-compose.prod.yml exec -T app \
-              .venv/bin/alembic current 2>/dev/null | tail -1 || true)
+              alembic current 2>/dev/null | tail -1 || true)
             echo "  alembic current: $CURRENT"
             HISTORY=$(docker compose -f docker-compose.prod.yml exec -T app \
-              .venv/bin/alembic history 2>/dev/null || true)
+              alembic history 2>/dev/null || true)
             if ! echo "$HISTORY" | grep -q "0010_rls_policies"; then
               echo "::error::alembic history does not mention 0010_rls_policies — aborting."
               echo "  Run deploy first so migration 0010 lands, then re-run this workflow."
@@ -116,7 +128,7 @@ jobs:
             # >= 0010 in the chain — the simplest check: 0010 appears in history
             # AND a downgrade to 0009 would be possible from current).
             if ! docker compose -f docker-compose.prod.yml exec -T app \
-                 .venv/bin/alembic show "0010_rls_policies" >/dev/null 2>&1; then
+                 alembic show "0010_rls_policies" >/dev/null 2>&1; then
               echo "::error::Cannot resolve 0010_rls_policies revision — aborting."
               exit 1
             fi

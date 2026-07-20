@@ -615,6 +615,22 @@ class DnaEmbedding(Base):
 
 class Clip(Base):
     __tablename__ = "clips"
+    __table_args__ = (
+        # Backstop for persist_ranked_clips' check-then-insert (Issue 361): the
+        # loser of a concurrent double-generation hits this instead of
+        # double-inserting the clip set. DEFERRABLE INITIALLY DEFERRED because
+        # rerank_with_preference permutes rank values via per-row UPDATEs — an
+        # immediate check would raise on the transient swap; deferred, it runs
+        # at COMMIT and still catches the race. Migration 0046. NULL ranks are
+        # distinct, so unranked rows never conflict.
+        sa.UniqueConstraint(
+            "video_id",
+            "rank",
+            name="uq_clips_video_rank",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
     video_id: Mapped[uuid.UUID] = mapped_column(
@@ -818,6 +834,18 @@ class Summary(Base):
     """
 
     __tablename__ = "summaries"
+    __table_args__ = (
+        # At most ONE in-flight recap per video (Issue 361): backstops
+        # create_summary's check-then-insert so a double-click cannot enqueue
+        # two render_summary jobs. Partial — done/failed rows leave the index,
+        # allowing a later re-render. Migration 0046.
+        sa.Index(
+            "uq_summaries_active",
+            "video_id",
+            unique=True,
+            postgresql_where=sa.text("render_status IN ('pending', 'running')"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
     creator_id: Mapped[uuid.UUID] = mapped_column(

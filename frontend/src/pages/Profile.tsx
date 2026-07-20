@@ -68,7 +68,7 @@ export function Profile() {
     <>
       <DisclaimerBand>
         A snapshot of your channel — your synced Creator DNA, identity, and saved work. Edit how clips
-        are produced in <Link to="/settings" className="text-accent-text hover:underline">Settings</Link>.
+        are produced in <Link to="/settings" className="text-accent-text underline">Settings</Link>.
       </DisclaimerBand>
 
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">

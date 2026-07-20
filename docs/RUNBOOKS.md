@@ -190,9 +190,14 @@ docker compose -f docker-compose.prod.yml up -d app worker beat
 ### Step 3 — Re-encrypt every stored token (atomic)
 
 ```bash
-docker compose -f docker-compose.prod.yml exec -T app \
-  python3 scripts/rotate_token_key.py --old-key "<OLD_KEY>" --new-key "<NEW_KEY>"
+docker compose -f docker-compose.prod.yml exec app \
+  python3 scripts/rotate_token_key.py
 ```
+
+The script prompts (hidden input) for the current and new keys — paste `<OLD_KEY>` then
+`<NEW_KEY>`. Keys are never passed on argv (visible in `ps` / shell history); for
+non-interactive runs export `OLD_TOKEN_ENCRYPTION_KEY` / `NEW_TOKEN_ENCRYPTION_KEY` in the
+container environment instead.
 
 The script re-encrypts every `youtube_tokens` row old→new in one transaction and prints a
 final `Done. N rows re-encrypted, 0 errors.` If any row fails it rolls the whole transaction
@@ -218,7 +223,8 @@ Sign in / trigger a YouTube refresh for one creator; confirm a clean `decrypt()`
 - **Before step 4:** if the re-encrypt errors it already rolled itself back — leave the key
   unchanged and keep `TOKEN_ENCRYPTION_KEY_PREVIOUS` as-is.
 - **After step 4:** set `TOKEN_ENCRYPTION_KEY` back to `OLD_KEY` and re-run step 3 in reverse
-  (`--old-key NEW --new-key OLD`), or restore the pre-rotation DB backup.
+  (export `OLD_TOKEN_ENCRYPTION_KEY=<new>` / `NEW_TOKEN_ENCRYPTION_KEY=<old>`), or restore the
+  pre-rotation DB backup.
 
 ---
 

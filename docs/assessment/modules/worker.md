@@ -1,197 +1,182 @@
-# worker — assessed 2026-07-01
+# worker — assessed 2026-07-20
 
 Slice: `worker/__init__.py`, `worker/anthropic_stream.py`, `worker/celery_app.py`,
 `worker/progress.py`, `worker/schedule.py`, `worker/storage.py`, `worker/tasks.py`
-(now 4765 lines; +1016 in tasks.py + anthropic_stream/celery_app/schedule/storage churn
-since a503ade). Reconciled against the prior 2026-06-24 assessment; carried findings
-re-verified against current line numbers (dispositions in the table at the bottom).
-
-Pinned versions grounding the findings (requirements.txt): `celery[redis]==5.4.0`,
-`redis[hiredis]==5.2.0`, `celery-redbeat==2.3.3`, `anthropic==0.105.2`, `boto3==1.35.54`,
-Python `>=3.12`. Admin DB pool (db.py:65-66): `pool_size=2 + max_overflow=2 = 4` connections.
+(now 5413 lines; all six non-init files changed since f70a857 — Issues 352 Batch B/D/F,
+231 RLS sweep, 82a AsyncAnthropic, 290/291 spend guard, 284 kill switches, 191
+render_summary, 78-R typing ratchet, 109b aclose registry, 349 mailer offload, 246
+lifecycle sunset). Every prior (2026-07-01) finding re-verified against HEAD; dispositions
+in "Resolved since 2026-07-01" and the reconciliation table. Issue 353 (styled re-render
+resets render state) verified end-to-end per this run's method additions.
 
 ## Findings
 
-- [SEV1] worker/tasks.py:4626 — `mailer_send(...)` is a **synchronous, blocking** call
-  (`notify.mailer.send` → `_send_resend` → `resend.Emails.send(params, options)` at
-  notify/mailer.py:260, a blocking HTTP round-trip to Resend with **no timeout** — verified:
-  no `timeout` anywhere in notify/mailer.py and no RESEND timeout in config.py) invoked
-  **directly inside `async def _send_notification_async` with no `asyncio.to_thread`**, while
-  the `async with db.AdminSessionLocal()` session is open (opened :4519, committed :4660). Two
-  compounding problems: (a) it blocks the worker's singleton event loop for the whole email
-  round-trip; (b) it pins one of only **4** admin DB connections across that round-trip.
-  `send_notification` is fan-out-heavy (clips_ready, dna_built, trial_ending, refund_issued,
-  reauth_required, first_clip_nudge, re_engagement — fired per creator from the pipeline +
-  daily Beat sweeps), so a Resend slowdown can exhaust the admin pool and stall the loop. The
-  sibling blocking call `list_recent_paid_sessions` IS offloaded (tasks.py:2723), so this is an
-  inconsistency, not an unavoidable constraint. STILL PRESENT (carried, unchanged in HEAD). |
-  fix: commit the delivery + in-app rows first to release the DB connection, THEN send outside
-  the session via `await asyncio.to_thread(mailer_send, ...)`; add a Resend HTTP timeout in
-  config and thread it through notify/mailer.py.
+- [SEV2] worker/tasks.py:5106-5118 — `_send_notification_async` swallows a FAILED email
+  send: the dedupe `notification_deliveries` row is committed `status=sent` BEFORE the
+  mailer call (:5029, :5078 — correct for the Issue-349 connection-release), but when
+  `mailer_send` then times out or errors, the except block only marks the row `failed`
+  and returns without re-raising — the task "succeeds", Celery never retries, and any
+  FUTURE retry/redelivery hits the dedupe IntegrityError (:5034-5043) and skips. A
+  transient Resend blip therefore permanently loses the email (in-app row survives;
+  `clips_ready`/`trial_ending`/`refund_issued` all affected). | fix: re-raise after
+  marking the row failed so the task-level `self.retry` (max_retries=3) fires, and make
+  the dedupe short-circuit status-aware: on IntegrityError load the existing row and
+  proceed with the send iff `status == failed` (flip it back to `sent` in the same
+  transaction); add a unit test for fail-then-redeliver actually sending.
 
-- [SEV2] worker/celery_app.py:62-64 — the broker `visibility_timeout` (hardcoded `3600`) is
-  decoupled from `CELERY_SOFT_TIME_LIMIT_S`, and the load-bearing invariant *soft < hard <
-  visibility_timeout* is stated only in a comment, not enforced. At the default (soft `3000`,
-  hard `soft+300=3300`, visibility `3600`) the margin is a thin 300 s; a task reserved briefly
-  under acks_late+prefetch=1 before running to the hard limit can exceed the 3600 s window, at
-  which point the Redis broker **redelivers a still-running copy** (documented Redis-broker
-  behaviour — an unacked message past the visibility timeout is requeued and re-executed:
-  celery/celery#6229, Celery Redis-broker docs). The same file's comment explicitly invites
-  operators to *raise* `CELERY_SOFT_TIME_LIMIT_S` ("Long-form sources on CPU WhisperX may need a
-  per-task override"); pushing soft past `3300` makes hard exceed `3600` and *guarantees*
-  concurrent double-execution. The per-row idempotency guards (`with_for_update`, done-checks)
-  prevent double *completion* but NOT double *paid work* — two ffmpeg encodes / two paid
-  Anthropic calls run concurrently before either commits `done`; `task_reject_on_worker_lost`
-  cannot help because the original worker never crashed. (needs-runtime-confirmation on the
-  exact reserved-buffer timing at default) | fix: derive it —
-  `broker_transport_options={"visibility_timeout": settings.CELERY_SOFT_TIME_LIMIT_S + 600}` (or
-  hardcode `7200`) so it comfortably exceeds `task_time_limit`, AND add a config.py validator
-  asserting `CELERY_SOFT_TIME_LIMIT_S + 300 < visibility_timeout` next to the existing
-  transcription-timeout validator (config.py:696).
+- [SEV2] worker/tasks.py:2559-2582 + clip_engine/ranking.py:187-192 (carry-forward) —
+  `generate_clips` check-then-insert race still open: `load_existing_clips` runs in one
+  session, the paid 30–120 s LLM `score_and_rank` runs sessionless, and
+  `persist_ranked_clips` merely re-runs the same SELECT guard on a fresh session — no
+  advisory lock, no UNIQUE backstop (clips are legitimately many-per-video). Duplicate
+  concurrent deliveries are a real path: the `build_signals` wrapper enqueues
+  `generate_clips.delay(video_id)` at :401 even when `_signals_async` idempotently
+  skipped, so a redelivered build_signals spawns a second generate_clips that can run in
+  a sibling prefork process. Both pass the empty-clips check → double paid Anthropic
+  scoring; a photo-finish on persist can still double-insert rows (cascade-deleting
+  feedback is NOT at risk — the guard never deletes). Contrast `_build_dna_async`
+  (:2060-2077), which closes the identical race with `pg_advisory_xact_lock` + re-check
+  under the lock. (needs-runtime-confirmation on observed frequency) | fix: take
+  `pg_advisory_xact_lock(hashtext('genclips:' || video_id))` in the pre-scoring read
+  session AND re-check existing clips under the same lock in `persist_ranked_clips`; or
+  skip the :401 enqueue when the signals body reports it short-circuited.
 
-- [SEV2] worker/tasks.py:201-205, 234-236, 262-264 — the `except SoftTimeLimitExceeded: raise`
-  branch in `ingest_video` / `transcribe_video` / `build_signals` re-raises BEFORE the generic
-  `except Exception` that runs `_set_status(video_id, IngestStatus.failed)`. Because
-  `SoftTimeLimitExceeded` is an `Exception` subclass the specific clause wins and the failed-set
-  never runs; `ingest_status` is left `running` forever → perpetual UI spinner, no retry
-  affordance. The refund still fires (RefundOnFailureTask.on_failure) but the video looks stuck.
-  Note `render_clip` (tasks.py:330-341) DOES set failed in its soft-timeout branch — the three
-  ingest-chain tasks are the inconsistent ones. STILL PRESENT (carried, unchanged). | fix: in
-  each `SoftTimeLimitExceeded` branch call `run_async(_set_status(video_id, IngestStatus.failed))`
-  before re-raising (the 300 s soft→hard headroom fits a 1-row UPDATE).
+- [SEV2] worker/tasks.py:3842 (`_generate_improvement_brief_async`), :4050
+  (`_generate_video_analysis_async`), :4831 (`_chat_respond_async` — multi-round agentic
+  loop via `run_chat_turn(..., session)`) — each holds an open `tenant_session`
+  transaction across the 30–120 s Claude round-trip: one idle-in-transaction Postgres
+  connection pinned per busy worker process for the LLM duration (blocks vacuum xmin,
+  counts against Cloud SQL max_connections × worker processes). Inconsistent with the
+  slice's own better pattern: title (:4180), thumbnail (:4389), hook (:4571), and
+  chapters (:4703) all close the session before the call, and Issue 82b explicitly
+  established release-across-external-calls. `_build_dna_async` (:2116) is the one
+  justified exception — its `pg_advisory_xact_lock` idempotency serializer must live in
+  the transaction. Bounded blast radius under prefork (one task per process), so SEV2
+  not SEV1. (needs-runtime-confirmation under load) | fix: snapshot the needed fields,
+  close the session before the LLM call, reopen to persist (exact shape of
+  `_generate_title_suggestions_async`); for chat, pass a session-FACTORY into
+  `run_chat_turn` so tool calls open short sessions instead of pinning one.
 
-- [SEV2] worker/tasks.py:836-837 (`_retrain_preference_async`) and 2516-2520
-  (`_purge_stale_youtube_analytics_async`) — both hold a session-scoped `pg_try_advisory_lock`
-  and release it in `finally: session.execute(pg_advisory_unlock)` **without rolling back
-  first**. If the session is in a failed-transaction state when `finally` runs (e.g. the
-  `await session.commit()` at :2515 raises), the unlock `execute` itself raises, the connection
-  returns to the pool with the lock STILL HELD, and db.py has no `pg_advisory_unlock_all`
-  pool-reset listener. For the purge the key is the **global** `"purge_stale_youtube_analytics"`,
-  so a leak silently disables the ToS §III.E.4.b analytics-staleness purge until `pool_recycle`
-  (30 min) cycles the connection — and re-leaks each tick if the commit keeps failing. The
-  poll/sweep/refresh sites the prior report flagged have SINCE been fixed (poll rolls back before
-  unlock at :2117 w/ the Issue-143 comment; sweep rolls back in its `except` at :1953-1955;
-  refresh rolls back per-creator) — these two are the residual unguarded sites.
-  (needs-runtime-confirmation on commit-failure frequency) | fix: add `await session.rollback()`
-  as the first line of each `finally` (mirroring poll:2117), OR migrate both to
-  `pg_advisory_xact_lock` (auto-released on commit/rollback — the pattern `_build_dna_async`
-  uses at :1722), OR register a `PoolEvents.reset` listener running `SELECT pg_advisory_unlock_all()`.
+- [SEV2] routers/clips.py:478-487 (flagged here because this run was asked to verify
+  Issue 353; owner is the routers module) — the re-render reset clears `render_uri`
+  BEFORE the new render succeeds. Worker-side the change is correct and idempotent
+  (verified: the skip guard at worker/tasks.py:1556 requires `done AND render_uri`, so
+  the reset re-renders; a stale-message redelivery still no-ops; the fixed R2 key
+  `clips/{clip_id}.mp4` makes the re-encode overwrite-idempotent). But on a PERMANENT
+  re-render failure the clip ends `failed` with `render_uri=None` — the pointer to the
+  previously-good artifact (still sitting un-overwritten at `clips/{id}.mp4`) is lost
+  and the player unmounts a clip the creator had already reviewed. | fix: don't null
+  `render_uri` in the endpoint (the worker overwrites it on success anyway); if the UI
+  needs to unmount the stale player, key that off `render_status != done` instead.
 
-- [SEV2] worker/tasks.py:400-407, 568-582, 1470/1602 — `clean_clip(clip_id)` /
-  `edit_clip(clip_id, cut_segments)` and their async bodies (`_clean_clip_async`,
-  `_edit_clip_async`) never re-verify clip ownership; authorization lives solely in
-  routers/clips.py. A malformed/forged Celery message re-encodes any creator's clip.
-  Defence-in-depth gap, not a live exploit (broker not internet-facing). STILL PRESENT
-  (tracked Issue 231). | fix: add `creator_id` to the task signature (mirrors
-  `generate_chapters`/`analyze_hook`, which already take it) and assert `clip.creator_id == cid`
-  at the top of each async body.
-
-- [SEV2] worker/tasks.py:3094-3098 (`_refresh_youtube_analytics_async`) — loads ALL videos for
-  a creator (`select(Video).where(Video.creator_id == creator.id)`, no cap) and calls
-  `sync_video_analytics` sequentially per video while holding the global refresh advisory lock +
-  one admin connection for the whole per-creator loop. The catalog-sync path deliberately caps
-  this to `DNA_LONGS_CAP + DNA_SHORTS_CAP` (tasks.py:2928-2960); the daily refresh does not, so
-  one large channel can hold the global lock a long time and starve the rest of the daily run.
-  Quota-gated (breaks on `QuotaExhaustedError`) and off the request path, so bounded.
-  (needs-runtime-confirmation) | fix: cap the per-creator video set the same way catalog-sync
-  does (most-recent N longs + N shorts by `published_at`), letting older videos age in over ticks.
-
-- [SEV2] worker/tasks.py:3174 (`_collect_creator_export`) — the GDPR export loads a creator's
-  entire history into memory unbounded (`select(Video)...all()`, then all clips, all
-  chat_messages via `conversation_id.in_(convo_ids)`, all metrics/feedback/outcomes), assembles
-  one in-memory dict and `json.dump`s it. A power user with very large history spikes a worker
-  process's RSS with no ceiling. Single-tenant + infrequent, so bounded.
-  (needs-runtime-confirmation on the memory ceiling) | fix: stream the export as NDJSON
-  per data-class (write each `.all()` batch to the temp file then release it) or paginate by PK
-  rather than holding all classes simultaneously.
-
-- [SEV2] worker/tasks.py:465-473 (`_publish_to_youtube_async`) — acknowledged idempotency hole
-  (flagged Issue 336 in-code): a `ClipPublication` row that is `status==done` but has NULL
-  `youtube_video_id` (prior run uploaded to YouTube but crashed before the success-commit)
-  bypasses the guard, so the redelivery re-uploads — a **duplicate Short on the creator's
-  channel** — and re-consumes `COST_DATA_VIDEOS_INSERT` quota. Narrow crash window but real
-  double-post + non-refundable quota burn. | fix: write `youtube_video_id` and `status=done` in
-  a single atomic transaction (currently split across two sessions at :494-496 and :536-563),
-  OR treat `done`-with-NULL as "already uploaded, do not re-post" and reconcile the id
-  out-of-band.
-
-- [cleanup] worker/anthropic_stream.py:16-24, :231-234 — stale comments assert "For 0.40, do not
-  pass thinking={...}" / "won't fire on anthropic==0.40 (SDK predates extended thinking) … wakes
-  up once Issue 84 bumps the SDK". The SDK is now pinned at `anthropic==0.105.2` (extended
-  thinking shipped long before this), so Issue 84's bump landed but the comments and the
-  decision not to enable thinking were never revisited; the `thinking_delta` branch is dead
-  because neither `stream_and_emit` nor `stream_message` accepts/sets a `thinking` param. | fix:
-  correct the comments to the real pin and either delete the dead branch or expose a `thinking`
-  kwarg; capture the choice in docs/DECISIONS.md.
-
-- [cleanup] worker/tasks.py:2723 — `await asyncio.get_event_loop().run_in_executor(None,
-  list_recent_paid_sessions, ...)` works but `get_event_loop()` is soft-deprecated inside a
-  running loop (3.12) and is inconsistent with the `asyncio.to_thread(...)` idiom used
-  everywhere else. | fix:
+- [cleanup] worker/tasks.py:3106 (carry-forward) —
+  `asyncio.get_event_loop().run_in_executor(None, list_recent_paid_sessions, ...)`:
+  `get_event_loop()` inside a running loop is soft-deprecated on 3.12 and inconsistent
+  with the `asyncio.to_thread` idiom used everywhere else in the file. | fix:
   `await asyncio.to_thread(list_recent_paid_sessions, settings.STRIPE_RECONCILE_LOOKBACK_HOURS)`.
 
-- [cleanup] typing gaps the mypy gate hasn't caught: worker/storage.py:29 `def _r2():` (no
-  return type); worker/tasks.py:2928 `def _unmeasured_query(kind, cap):` (no `-> Select`);
-  worker/tasks.py:3169 `def _row_to_dict(obj) -> dict:` (`obj` untyped); worker/tasks.py:3174
-  `async def _collect_creator_export(session, creator) -> dict:` (both params untyped). Ruff
-  clean. | fix: `_r2() -> Any`, `_unmeasured_query(...) -> Select[tuple[Video]]`,
-  `_row_to_dict(obj: Any)`, `_collect_creator_export(session: AsyncSession, creator: Creator)`.
+- [cleanup] worker/tasks.py:71-82 + worker/celery_app.py:136-152 (carry-forward,
+  partially addressed) — `_thumb_redis()` still lacks the loop-rebind guard that
+  `progress._async_client()` (progress.py:148-167) documents, and the worker shutdown
+  hook still closes only the engine + youtube `_http`: `progress.aclose` is registered
+  in the Issue-109b `shared_resources` registry but `close_all()` is only invoked from
+  the FastAPI lifespan (main.py:111), never from `_shutdown_worker_loop`; `_THUMB_REDIS`
+  is registered nowhere. Shutdown-time connection leak only. | fix: route
+  `_thumb_redis` through a shared loop-aware factory with progress's client, register
+  its aclose, and call `shared_resources.close_all()` inside `_shutdown_worker_loop`.
 
-- [cleanup] worker/tasks.py:63-77 — `_thumb_redis()` singleton does NOT rebind on event-loop
-  mismatch, unlike `progress._async_client()` (progress.py:146-165) which documents exactly the
-  pytest per-test-loop hazard. Fine in production (one loop/worker); DRY: the two async-redis
-  singletons should share one loop-aware factory. | fix: route `_thumb_redis()` through the same
-  loop-aware builder as `progress._async_client` (extract a shared `_aio_redis(url)`).
+- [cleanup] worker/tasks.py:3558-3631, 3673-3675 (carry-forward, downgraded SEV2 →
+  cleanup) — the GDPR export now reads every table through `_keyset_batches` (bounded
+  500-row round-trips, plain column dicts — Issue 352 Batch F), but `_collect_creator_export`
+  still accumulates the creator's ENTIRE history into one payload dict and `json.dump`s
+  it (a second full-size string buffer). Constant factor much improved; total memory
+  still O(history). Acceptable for the ≤100-user beta. | fix (when scheduled): stream
+  NDJSON per data-class to the temp file, releasing each batch.
 
-- [cleanup] worker/celery_app.py:110-126 — `_shutdown_worker_loop` closes the engine
-  (`db.dispose_engine`) and the youtube HTTP client (`_http.aclose`) but never closes
-  `worker.progress._AIO` (an unused `progress.aclose()` exists at progress.py:269) nor
-  `worker.tasks._THUMB_REDIS`; shutdown-time connection leak only. | fix: also run
-  `progress.aclose()` and aclose the thumb singleton in the hook.
+- [cleanup] worker/tasks.py — 5413 lines and growing (carry-forward): the six
+  brief-style LLM tasks still share the same ~120-line shape (spend-guard → emit →
+  load context → call → `record_llm_usage` → parse → done/error), and render_summary
+  now mirrors render_clip's plan/encode/status trio nearly verbatim
+  (:5249-5356 vs :1522-1710). | fix: extract `worker/_brief_runner.py` and a shared
+  render-plan helper parametrized on model/status-column.
 
-- [cleanup] worker/tasks.py — the six brief-style LLM tasks share the same ~120-line shape (emit
-  step → load DNA/identity/transcript → `asyncio.to_thread` Claude → `record_llm_usage` → parse
-  JSON → emit done/error), driving the file to 4765 lines. | fix: extract a
-  `worker/_brief_runner.py` helper (job_id, load_context_fn, call_fn, parse_fn, stage).
+- [cleanup] worker/tasks.py:3558 `_collect_creator_export(session: Any, ...)`, :2455
+  `_brand_kit_style(session: Any, ...)`, :2937/:2963 lifecycle helpers — residual
+  `session: Any` params after the Issue-78-R ratchet (which fixed `_r2`,
+  `_unmeasured_query`, `_row_to_dict`). | fix: annotate `session: AsyncSession`.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | 2 findings — SEV1 holds an admin DB connection across the blocking Resend send (:4519-4660); SEV2 advisory-lock leak at two unguarded `finally: unlock` sites (:836-837, :2516-2520) with no pool-reset in db.py. Otherwise solid: DB sessions always via `async with`; every temp file `unlink(missing_ok=True)` in `finally` (ingest, render, clean, edit, export); external clients (`_r2`, sync/async Redis, `_thumb_redis`) are module-level singletons; render uses `with_for_update` + status-skip for idempotency; per-worker singleton loop + engine rebind (celery_app.py:99-126) with clean engine/HTTP dispose on shutdown. |
-| 2 Concurrency & scale | 4 findings — SEV1 blocking `mailer_send` on the singleton loop; SEV2 visibility_timeout/hard-limit invariant unenforced; SEV2 uncapped per-creator video loop in the daily refresh; SEV2 unbounded GDPR-export accumulation. All other blocking work (ffmpeg, librosa, transcription, boto3, Stripe, Anthropic SDK) is correctly offloaded via `asyncio.to_thread`/`run_in_executor`. `prefetch_multiplier=1` + `acks_late` + `reject_on_worker_lost` give at-least-once with idempotent bodies. |
-| 3 Security & compliance | ok — tokens read only via `get_valid_access_token` → `decrypt()`; no OAuth token or email in any `logger.*`/`aemit` line (`_expire_trials_async` logs `creator=%s` id-only; `send_notification` logs creator_id/event_type/dedupe_key; progress `error` events carry `type(exc).__name__` only, never `str(exc)`; `_humanize_failure` returns coarse stage-only strings). Per-creator isolation enforced on every creator-scoped query — cross-tenant Beat sweeps use `AdminSessionLocal` (BYPASSRLS, justified) but each query carries an explicit `WHERE creator_id ==` / `video.creator_id != cid` re-check (video-analysis/title/thumbnail/hook/chapters/export/chat verified); `_generate_improvement_brief_async` sets `session.info["creator_id"]` for the RLS listener. Parameterized SQL only (advisory-lock `text()` binds `:k`). Source-media + audio purge honored (`_purge_stale_source_media_async` gated on `ingest_done_at`, migration-0039 posture); 30-day analytics purge implemented; refund idempotent on `pack_id`. No virality promise (honesty copy at tasks.py:4726). |
-| 4 Clip-quality | n/a — orchestration; clip math lives in clip_engine. `_render_start_for` (:1190) renders from `setup_start_s` per CLIPPING_PRINCIPLE #2 with a `start_s` fallback. |
-| 5 Anthropic SDK | ok (worker side) w/ 1 cleanup — every sync streaming SDK call is offloaded via `asyncio.to_thread`; `messages.stream()` + `get_final_message()` usage is current for 0.105.2; `task_id` threaded so cache/token deltas stream as SSE; token usage logged after every call via `vlog_llm_response` + `record_llm_usage`; `warn_if_truncated` on stop_reason. Prompt caching / max_tokens / structured output are set in the called modules (dna/, knowledge/, improvement/, analysis/, chat/), outside this slice. Stale "0.40" comments = cleanup. |
-| 6 Cleanliness & typing | 5 cleanup — stale SDK comments; `get_event_loop` vs `to_thread`; a few missing param/return annotations (ruff clean); `_thumb_redis` loop-rebind DRY gap; shutdown not closing the Redis singletons; 4765-line file (brief-runner extraction). No TODO/FIXME, no `print()`, no commented-out code in the slice. |
-| 7 Error handling / API | n/a — Celery worker, not a router. Error posture otherwise sound: ValueError/auth errors terminal, transient errors retry, render soft-timeout marks failed; every UI-facing `aemit("error", ...)` carries `exc_type` (class name) only — never the message or a DB error. The ingest-chain soft-timeout branch is the one gap (SEV2 above). |
-| 8 Config & paths | 1 finding (tied to the SEV2 visibility_timeout) — no validator ties `visibility_timeout` to `CELERY_SOFT_TIME_LIMIT_S`, and no Resend HTTP timeout setting exists (tied to the SEV1). Paths absolute (`storage._local_root()` does `expanduser().resolve()`, tempfiles); no new undocumented config introduced in the slice. |
+| 1 Resource lifecycle | 1 finding (sessions across LLM calls, SEV2). Much improved since 2026-07-01: the mailer now commits BEFORE the offloaded send (Issue 349); every `pg_try_advisory_lock` site funnels through the shared `_rollback_then_unlock` epilogue (:85-99 — retrain :1041, sweep :2295, poll :2447, media-purge :2734, analytics-purge :2867, catalog :3420, refresh :3532) so a failed transaction can no longer strand a lock; temp media unlinked in `finally` everywhere (ingest, render, clean, edit, summary, export); external clients singletons; render/summary use `with_for_update` + status-skip. |
+| 2 Concurrency & scale | 2 findings (generate_clips double-spend race; sessions across LLM calls). Fixed since prior: visibility_timeout now DERIVED from the soft limit (`visibility_timeout_s`, celery_app.py:49-90) so the soft<hard<visibility invariant holds even when operators raise `CELERY_SOFT_TIME_LIMIT_S`; daily refresh keyset-paginated (:3479) + per-creator quota sub-budget (Issue 260) bounds one large channel; export keyset-batched. All blocking work (ffmpeg, librosa, transcription, boto3, Stripe, mailer) offloaded; AsyncAnthropic streams natively on the worker loop (Issue 82a). |
+| 3 Security & compliance | ok — Issue 231 moved every per-creator task body onto RLS-gated `db.tenant_session` with the GUC stamped (pipeline, renders, clean/edit, publish, retrain, DNA, briefs, chat — chat additionally re-checks `conv.creator_id != cid` at :4800); `AdminSessionLocal` remains only for documented tenant-id bootstrap, failure-path status writes, and genuine cross-tenant Beat sweeps, each carrying an explicit WHERE. Tokens only via `get_valid_access_token` → `decrypt()`; no PII/token in any logger/aemit line (send_to never logged; SSE errors carry `exc_type` class name only). Parameterized SQL throughout. ToS purges intact (source media, 30-day analytics, event logs); no virality promise. clean/edit still lack a caller-supplied creator_id assert (Issue 231 residual) but RLS + clip-derived tenant now confine any forged message to the clip's own tenant — residual is defense-in-depth polish, tracked. |
+| 4 Clip-quality | n/a — orchestration; renders from `setup_start_s` per CLIPPING_PRINCIPLE #2 (`_render_start_for` :1510, encode :1644). |
+| 5 Anthropic SDK | ok — `anthropic_stream.py` rewritten async (Issue 82a): `AsyncAnthropic.messages.stream` awaited on the worker loop, per-event forward guarded so a Redis hiccup can't lose `get_final_message()`; cache/token/thinking deltas → SSE; `warn_if_truncated` + `vlog_llm_response` + `record_llm_usage` after every call; stale "0.40" comments gone. Spend guard (Issue 290) gates every paid task before the first token. |
+| 6 Cleanliness & typing | 4 cleanup — run_in_executor idiom, `_thumb_redis`/shutdown aclose gap, residual `session: Any` annotations, file-size/brief-runner extraction. No TODO/FIXME/print in the slice. |
+| 7 Error handling / API | ok — n/a as a router; posture sound and now CONSISTENT: all three ingest-chain tasks + render_clip + render_summary set `failed` in their `SoftTimeLimitExceeded` branches (prior stuck-spinner gap closed); 402 is terminal with safe copy; SSE errors never carry exception messages. One gap: the swallowed email-send failure (SEV2 above). |
+| 8 Config & paths | ok — `RESEND_TIMEOUT_S` added to config.py:723 + .env.example:222 (closes the prior no-Resend-timeout gap); visibility timeout derived in code rather than validated apart; paths absolute (`storage._local_root()` resolves; tempfiles). |
+
+## Resolved since 2026-07-01
+- **SEV1 blocking `mailer_send` holding an admin DB conn (tasks.py old :4626)** — FIXED
+  (Issue 349): context captured in-session, `session.commit()` frees the connection
+  BEFORE the send (:5077-5078), then `asyncio.wait_for(asyncio.to_thread(mailer_send,…),
+  timeout=RESEND_TIMEOUT_S)` (:5089-5098) with a fresh short session only to mark
+  failure. New `RESEND_TIMEOUT_S=10` in config + .env.example. (Follow-on SEV2 above:
+  the failure branch swallows instead of retrying.)
+- **SEV2 visibility_timeout ↔ hard-limit invariant unenforced (celery_app.py old
+  :62-64)** — FIXED (Issue 352 Batch F): `visibility_timeout_s(soft) = max(3600,
+  soft + 300 + 300)` derives the broker setting from `CELERY_SOFT_TIME_LIMIT_S`
+  (celery_app.py:49-90); raising the soft limit now raises visibility with it.
+- **SEV2 soft-timeout left `ingest_status=running`** — FIXED: `ingest_video` (:288-294),
+  `transcribe_video` (:347-353), `build_signals` (:388-394) all set
+  `IngestStatus.failed` with a user-facing reason before re-raising terminally.
+- **SEV2 advisory-lock unlock-without-rollback (`_retrain` + global analytics purge)** —
+  FIXED: shared `_rollback_then_unlock` helper (:85-99) is the `finally` epilogue at all
+  seven `pg_try_advisory_lock` sites, including retrain (:1041) and the global
+  `purge_stale_youtube_analytics` key (:2867).
+- **SEV2 publish done-but-NULL `youtube_video_id` double-post window** — FIXED:
+  `youtube_video_id` + `status=done` + the ClipOutcome upsert now commit atomically in
+  ONE session (:707-734); legacy done-with-NULL rows are detected and logged (:634-642).
+  Uploads also debit a dedicated `videos.insert` bucket (`consume_insert`, :673 — Issue
+  352 Batch D) instead of the shared read pool.
+- **SEV2 uncapped daily-refresh per-creator video loop** — RESOLVED: keyset-paginated
+  batches (:3479-3485) bound memory, and the per-creator daily refresh sub-budget
+  (Issue 260, `QuotaSubBudgetExhaustedError` handled :3491-3502) bounds one channel's
+  quota/time without starving the fan-out.
+- **SEV2 chat under AdminSessionLocal/BYPASSRLS** — RESOLVED (Issue 231):
+  `_chat_respond_async` runs on `tenant_session` with an explicit ownership re-check
+  (:4795-4804).
+- **SEV2 clean/edit ownership re-check** — SUBSTANTIALLY MITIGATED (Issue 231): both
+  bodies resolve the tenant FROM the clip row and run under RLS `tenant_session`
+  (:1801, :1936), confining any forged message to the clip's own tenant. Residual
+  (caller-asserted `creator_id` in the task signature) folded into the security row
+  above as tracked polish, no longer a standalone SEV2.
+- **SEV2 GDPR export unbounded accumulation** — PARTIALLY RESOLVED (keyset batches,
+  plain dicts); residual single-payload assembly downgraded to cleanup (above).
+- **cleanup stale anthropic "0.40" comments / dead thinking branch** — RESOLVED:
+  anthropic_stream.py rewritten async (Issue 82a); the `thinking_delta` forward is now
+  intentional and documented.
+- **cleanup typing gaps** — MOSTLY RESOLVED (Issue 78-R ratchet): `_r2() -> Any`,
+  `_unmeasured_query(...) -> Select[tuple[Video]]`, `_row_to_dict(obj: db.Base)`.
+  Residual `session: Any` params re-flagged as cleanup.
+- **Issue 353 verification (this run's method addition)** — CORRECT worker-side: the
+  endpoint's done→pending + `render_uri=None` reset (single transaction with the merged
+  style) defeats the worker's `done AND render_uri` skip guard (:1556) exactly as
+  intended; redelivered stale messages still no-op; the fixed R2 key keeps re-renders
+  idempotent. One failure-path defect filed (SEV2 above: prior-good `render_uri`
+  discarded if the re-render fails permanently).
+- **Carried unchanged**: `get_event_loop().run_in_executor` (:3106); `_thumb_redis`
+  loop-rebind + shutdown-aclose gap (now partially addressed by the Issue-109b registry,
+  which the worker shutdown hook doesn't invoke); brief-runner extraction / file size
+  (4765 → 5413 lines).
 
 ## Module verdict
-NEEDS-WORK — a well-engineered, idempotent, isolation-clean worker with no BLOCKER and no
-cross-tenant leak. Highest-risk item is the blocking `resend.Emails.send` run on the event loop
-while holding one of only four admin DB connections (SEV1). Then: the unenforced
-visibility_timeout↔hard-limit invariant (silent double-execution/double-spend if the soft limit
-is raised as the code itself suggests), the soft-timeout `ingest_status=running` stuck state, two
-unguarded advisory-lock `finally: unlock` sites (one on the global ToS-purge key), the uncapped
-refresh/GDPR-export loops, the clean/edit ownership-recheck gap, and the publish done-but-NULL
-double-post window. Offloading the mailer (outside the session), deriving+validating the
-visibility_timeout, adding `rollback()` to the two `finally` blocks, and the soft-timeout
-failed-status fix close the top risks.
-
-## Reconciliation with prior (2026-06-24) findings
-| Prior finding | Disposition in HEAD (4765-line tasks.py) |
-|---|---|
-| SEV1 blocking `mailer_send` holding admin conn | STILL PRESENT — tasks.py:4626 (session :4519-4660); resend SDK sync, no timeout (notify/mailer.py:260). Re-flagged SEV1. |
-| SEV2 soft-timeout leaves ingest_status=running | STILL PRESENT — tasks.py:201-205/234-236/262-264. Re-flagged SEV2. |
-| SEV2 advisory-lock leak (2 residual sites) | STILL PRESENT — `_retrain` (:836-837) + global `purge_stale_youtube_analytics` (:2516-2520) still unguarded; poll/sweep/refresh now roll back. Re-flagged SEV2. |
-| SEV2 unbounded GDPR export accumulation | STILL PRESENT — tasks.py:3174. Re-flagged SEV2. |
-| SEV2 uncapped daily-refresh per-creator video loop | STILL PRESENT — tasks.py:3094-3098. Re-flagged SEV2. |
-| SEV2 clean/edit lack ownership re-check | STILL PRESENT (Issue 231) — tasks.py:400/568, bodies :1470/:1602. Re-flagged SEV2. |
-| cleanup `get_event_loop` vs `to_thread` | STILL PRESENT — tasks.py:2723. Re-flagged cleanup. |
-| cleanup typing gaps (_r2/_unmeasured_query/_row_to_dict/_collect_creator_export) | STILL PRESENT — re-flagged cleanup (updated line nums). |
-| cleanup shutdown not closing progress/_thumb Redis | STILL PRESENT — celery_app.py:110-126. Re-flagged cleanup. |
-| cleanup brief-runner extraction / file size | STILL PRESENT (now 4765 lines). Re-flagged cleanup. |
-| SEV2 purge lock released before R2 sweep | NON-ISSUE — `_purge_stale_source_media_async` holds the lock only for the read (:2355-2385) then deletes+commits in a separate session; both ops idempotent. Not re-flagged. |
-| SEV2 re-renders invisible to billing | WONT-FIX (free-by-design, docs/DECISIONS.md). Not re-flagged. |
-| SEV1 PII in `expire_trials` log | CLOSED (Issue 138) — re-verified id-only. |
-| NEW this pass | visibility_timeout↔hard-limit invariant unenforced (SEV2, celery_app.py:62-64); publish done-but-NULL double-post (SEV2, :465-473); stale anthropic 0.40 comments (cleanup). |
+NEEDS-WORK — a markedly improved slice: all four highest-risk 2026-07-01 findings (the
+blocking-mailer SEV1, the visibility-timeout invariant, the stuck-spinner soft-timeout
+gap, and the advisory-lock leak) are verifiably fixed, and Issue 231 put every tenant
+task under RLS. No BLOCKER, no cross-tenant leak. Remaining work: the swallowed
+transient email-send failure (permanent email loss behind the dedupe ledger), the
+generate_clips double-LLM-spend race (still lacking build_dna's xact-lock pattern), DB
+transactions held across LLM calls in three tasks, and the Issue-353 failure path
+discarding a previously-good render pointer.

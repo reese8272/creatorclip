@@ -111,7 +111,7 @@ export function Review() {
   const navigate = useNavigate()
   const [index, setIndex] = useState(0)
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, refetch } = useQuery({
     queryKey: ['review-clips', videoId],
     queryFn: () => api<ReviewClipListResponse>(`/videos/${videoId}/clips`),
     enabled: !!videoId,
@@ -138,15 +138,24 @@ export function Review() {
     }
   }, [reviewed, navigate])
 
-  function message(text: string) {
+  function message(text: string, onRetry?: () => void) {
     return (
       <>
         <DisclaimerBand>
           AutoClip predicts fit with your style and audience — it does not promise virality. All
           scores are estimates grounded in your own channel data.
         </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
-          <p className="text-center text-sm text-muted">{text}</p>
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 text-center">
+          <p className="text-sm text-muted">{text}</p>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-4 rounded-md border border-default px-3 py-1.5 text-xs text-fg hover:bg-elevated"
+            >
+              Retry
+            </button>
+          )}
         </main>
       </>
     )
@@ -154,6 +163,12 @@ export function Review() {
 
   if (!videoId) return message('No video selected — go to Dashboard to pick a video.')
   if (isPending) return message('Loading clip…')
+  // A failed load must NOT fall through to "No clips yet" — a creator whose
+  // clips exist would be told to regenerate them (Recap retry idiom).
+  if (isError)
+    return message('Couldn’t load clips for this video — try again in a moment.', () =>
+      void refetch(),
+    )
   if (reviewed) return message('All clips reviewed! Great work. Taking you back to the dashboard…')
   if (!clip) return message('No clips yet — generate them from the Dashboard.')
 
