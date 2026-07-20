@@ -35,6 +35,42 @@ def test_config_requires_token_encryption_key():
     )
 
 
+def test_settings_rejects_malformed_token_encryption_key():
+    """A malformed TOKEN_ENCRYPTION_KEY must fail at Settings construction —
+    crypto._fernet() is a lazy lru_cache singleton, so without boot validation
+    the error would surface as a 500 on the FIRST OAuth encrypt/decrypt in
+    production. (2026-07 assessment, _root_infra)"""
+    from pydantic import ValidationError
+
+    from config import Settings
+
+    with pytest.raises(ValidationError, match="TOKEN_ENCRYPTION_KEY"):
+        Settings(TOKEN_ENCRYPTION_KEY="not_a_valid_fernet_key")
+
+
+def test_settings_rejects_malformed_previous_key():
+    """A malformed TOKEN_ENCRYPTION_KEY_PREVIOUS silently breaks a live
+    rotation window (old-key tokens become undecryptable) — fail at boot."""
+    from pydantic import ValidationError
+
+    from config import Settings
+
+    with pytest.raises(ValidationError, match="TOKEN_ENCRYPTION_KEY_PREVIOUS"):
+        Settings(TOKEN_ENCRYPTION_KEY_PREVIOUS="garbage-previous-key")
+
+
+def test_settings_accepts_valid_and_absent_previous_key():
+    """None / '' mean 'no rotation in progress' and must not trip the
+    validator; a real Fernet key must pass."""
+    from config import Settings
+
+    assert Settings(TOKEN_ENCRYPTION_KEY_PREVIOUS=None).TOKEN_ENCRYPTION_KEY_PREVIOUS is None
+    assert Settings(TOKEN_ENCRYPTION_KEY_PREVIOUS="").TOKEN_ENCRYPTION_KEY_PREVIOUS == ""
+    valid = Fernet.generate_key().decode()
+    s = Settings(TOKEN_ENCRYPTION_KEY_PREVIOUS=valid)
+    assert valid == s.TOKEN_ENCRYPTION_KEY_PREVIOUS
+
+
 def test_malformed_fernet_key_raises_value_error(monkeypatch):
     """A TOKEN_ENCRYPTION_KEY that is not valid Fernet material raises ValueError
     from Fernet() inside _fernet(). This is a CONFIGURATION error, not a data

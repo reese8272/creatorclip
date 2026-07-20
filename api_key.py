@@ -29,7 +29,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_session
@@ -130,6 +130,18 @@ async def get_current_creator_via_api_key(
         await session.commit()
 
     session.info["creator_id"] = creator.id
+    # Issue 358 (mirrors auth.py's Issue 344 fix): the key lookup above already
+    # auto-began this request's transaction, so `after_begin` fired before
+    # `session.info["creator_id"]` was set and emitted no GUC. On the no-stamp
+    # path (Issue 352 throttle) there is no intervening commit to start a fresh
+    # transaction, so downstream tenant queries would run with `app.creator_id`
+    # unset — enforced RLS then returns zero rows and check_positive_balance
+    # falsely 402s funded creators. Set the GUC on the live transaction now;
+    # `is_local=true` clears it at commit, matching the listener's semantics.
+    await session.execute(
+        text("SELECT set_config('app.creator_id', :cid, true)"),
+        {"cid": str(creator.id)},
+    )
     # Stash on request.state so creator_key() in limiter.py can read the
     # already-resolved identity without re-decoding the bearer token. (Issue 104)
     request.state.creator_id = creator.id

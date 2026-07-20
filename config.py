@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+from cryptography.fernet import Fernet
 from pydantic import ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -778,6 +779,31 @@ class Settings(BaseSettings):
                 "JWT_SECRET_KEY must be at least 32 bytes (256 bits) for HS256; "
                 f"got {len(v.encode())} bytes. Generate one with: openssl rand -base64 32"
             )
+        return v
+
+    @field_validator("TOKEN_ENCRYPTION_KEY", "TOKEN_ENCRYPTION_KEY_PREVIOUS")
+    @classmethod
+    def _fernet_key_format(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Fail fast at boot on a malformed Fernet key (2026-07 assessment, _root_infra).
+
+        crypto._fernet() is a lazy lru_cache singleton, so a malformed key would
+        otherwise surface only as a 500 on the FIRST OAuth encrypt/decrypt — and a
+        bad TOKEN_ENCRYPTION_KEY_PREVIOUS silently breaks a live rotation window.
+        Fernet requires 32 url-safe-base64-encoded bytes; validate the format here
+        (pydantic-settings fail-fast mandate, CLAUDE.md). _PREVIOUS is optional, so
+        None/empty passes through untouched.
+        """
+        if v is None or (info.field_name == "TOKEN_ENCRYPTION_KEY_PREVIOUS" and not v):
+            return v
+        try:
+            Fernet(v.encode())
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"{info.field_name} is not a valid Fernet key — it must be 32 "
+                "url-safe base64-encoded bytes. Generate one with: "
+                'python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"'
+            ) from exc
         return v
 
     @model_validator(mode="after")
