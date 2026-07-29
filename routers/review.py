@@ -25,6 +25,7 @@ from db import get_session
 from flags import require_flag
 from limiter import RENDER_DAILY_LIMIT, creator_key, limiter
 from models import Clip, ClipFeedback, Creator, FeedbackAction
+from routers._enqueue import enqueue_stream_task
 from routers._owned import get_owned
 from routers._schemas import TaskQueuedOut
 
@@ -188,17 +189,16 @@ async def submit_feedback(
 
     # Issue 235 — emit clip_kept (ACTIVATION EVENT) on first keep per creator.
     # Best-effort: record_event never raises; a telemetry failure must not block
-    # the response.  Scheduled on the running event loop via ensure_future.
+    # the response.  Scheduled via record_event_nowait (Issue 352) so the task
+    # is strongly referenced until done — never GC'd mid-execution.
     if is_activation:
-        from event_log import record_event
+        from event_log import record_event_nowait
 
-        asyncio.ensure_future(
-            record_event(
-                source="backend",
-                event="clip_kept",
-                creator_id=creator.id,
-                extra={"action": body.action.value},
-            )
+        record_event_nowait(
+            source="backend",
+            event="clip_kept",
+            creator_id=creator.id,
+            extra={"action": body.action.value},
         )
         logger.info(
             "clip_kept activation event: creator=%s clip=%s action=%s",
@@ -302,24 +302,18 @@ async def trim_render(
             status_code=422, detail={"code": exc.code, "message": str(exc)}
         ) from exc
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import edit_clip as edit_task
 
-    task = await asyncio.to_thread(edit_task.delay, str(clip_id), cuts)
     # SSE stream key is the clip id, not the Celery task id (sibling
     # convention — see /clips/{id}/cuts).
-    stream_url: str | None = f"/tasks/{clip_id}/events"
-    try:
-        await progress.aset_owner(str(clip_id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "trim-render aset_owner failed (Redis down?) clip_id=%s err=%s",
-            clip_id,
-            exc,
-        )
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        edit_task,
+        str(clip_id),
+        cuts,
+        creator_id=str(creator.id),
+        stream_key=str(clip_id),
+        log_label="trim-render",
+    )
 
     return {
         "task_id": task.id,

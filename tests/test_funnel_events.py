@@ -66,7 +66,7 @@ async def test_is_first_keep_false_when_prior_keep_exists():
 
 # ── clip_kept gate logic — tests the is_activation predicate directly ────────
 # These test the gate logic without going through the full HTTP handler,
-# because ensure_future scheduling in a sync TestClient is unreliable.
+# because background-task scheduling in a sync TestClient is unreliable.
 # The idempotency contract is in _is_first_keep (tested above) + the
 # `is_activation = body.action in _KEEP_ACTIONS and await _is_first_keep(...)`
 # guard in submit_feedback.

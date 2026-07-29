@@ -21,6 +21,7 @@ from db import get_session
 from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, CreatorDna, DnaStatus, Transcript, Video
+from routers._enqueue import enqueue_stream_task
 
 router = APIRouter(prefix="/creators", tags=["thumbnails"])
 logger = logging.getLogger(__name__)
@@ -284,25 +285,15 @@ async def start_thumbnail_concepts(
             detail="Video has not been transcribed yet — wait for ingestion to complete.",
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import generate_thumbnail_concepts as generate_thumbnail_concepts_task
 
-    task = await asyncio.to_thread(
-        generate_thumbnail_concepts_task.delay, str(creator.id), str(video.id)
+    task, stream_url = await enqueue_stream_task(
+        generate_thumbnail_concepts_task,
+        str(creator.id),
+        str(video.id),
+        creator_id=str(creator.id),
+        log_label="thumbnail_concepts",
     )
-
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "thumbnail_concepts aset_owner failed task=%s err=%s",
-            task.id,
-            exc,
-        )
-        stream_url = None
 
     logger.info(
         "Thumbnail concepts queued creator=%s video=%s task=%s",

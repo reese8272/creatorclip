@@ -12,7 +12,6 @@ existing ``/tasks/{id}/events`` SSE channel (Issue 86), reusing the React
 every read is filtered by the owning creator (RLS + app-layer, defense in depth).
 """
 
-import asyncio
 import logging
 import uuid as _uuid_mod
 from datetime import UTC, datetime
@@ -29,6 +28,7 @@ from db import get_session
 from flags import require_flag
 from limiter import creator_key, limiter
 from models import ChatConversation, ChatMessage, ChatRole, Creator
+from routers._enqueue import enqueue_stream_task
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -95,18 +95,15 @@ async def _enqueue_reply(
     creator: Creator, conversation_id: _uuid_mod.UUID
 ) -> tuple[str, str | None]:
     """Dispatch the chat_respond task and register SSE ownership."""
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import chat_respond
 
-    task = await asyncio.to_thread(chat_respond.delay, str(creator.id), str(conversation_id))
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning("chat aset_owner failed task=%s err=%s", task.id, exc)
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        chat_respond,
+        str(creator.id),
+        str(conversation_id),
+        creator_id=str(creator.id),
+        log_label="chat",
+    )
     return task.id, stream_url
 
 
