@@ -939,28 +939,32 @@ def test_upload_response_contract_includes_stream_url():
 
 
 def test_oauth_callback_source_stamps_aset_owner_after_catalog_sync():
-    """Wave-3 Fix D (SEV2): the post-OAuth-callback catalog sync at
-    routers/auth.py:~117 must stamp progress.aset_owner so the Issue-92
-    SSE stream is reachable when Issue 100 wires the onboarding tutorial
-    UI. Source-inspect test — the auth callback is integration-tested
-    elsewhere; this pins the structural fact that the call is present
-    AND wrapped in the fail-open redis.RedisError except clause.
+    """Wave-3 Fix D (SEV2): the post-OAuth-callback catalog sync must stamp
+    SSE ownership so the Issue-92 stream is reachable when Issue 100 wires
+    the onboarding tutorial UI. Source-inspect test — the auth callback is
+    integration-tested elsewhere; this pins the structural fact that the
+    stamp is present. Since the ready-pass W2 routers-DRY lane, the stamp
+    (progress.aset_owner + fail-open redis.RedisError clause) lives in the
+    shared helper routers/_enqueue.stamp_stream_owner.
     """
     import inspect
 
+    import routers._enqueue as enqueue_module
     import routers.auth as auth_module
 
     src = inspect.getsource(auth_module)
-    # The stamp must happen AFTER the .delay() call (mirrors creators.py:167).
+    # The stamp must happen AFTER the .delay() call (mirrors creators.py).
     assert "sync_channel_catalog.delay" in src
-    assert "progress.aset_owner" in src, (
-        "Wave-3 Fix D: routers/auth.py must call progress.aset_owner after "
-        "sync_channel_catalog.delay() so the Issue-92 SSE stream key is "
-        "authorized for the new creator."
+    assert "stamp_stream_owner" in src, (
+        "Wave-3 Fix D: routers/auth.py must stamp SSE ownership (via "
+        "routers._enqueue.stamp_stream_owner) after sync_channel_catalog.delay() "
+        "so the Issue-92 SSE stream key is authorized for the new creator."
     )
     # The fail-open posture is the second half of the fix — Redis-down must
-    # not 500 the OAuth callback.
-    assert "RedisError" in src, (
+    # not 500 the OAuth callback. It lives inside the shared helper.
+    helper_src = inspect.getsource(enqueue_module)
+    assert "progress.aset_owner" in helper_src
+    assert "RedisError" in helper_src, (
         "Wave-3 Fix D: the aset_owner call must be wrapped in "
         "except redis.RedisError so a Redis blip during onboarding doesn't "
         "500 the OAuth redirect."
