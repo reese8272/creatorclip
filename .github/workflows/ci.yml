@@ -569,15 +569,15 @@ jobs:
 
   visual:
     # Issue 272: visual regression baselines on stable routes (login, pricing,
-    # empty-dashboard). Non-gating initially (continue-on-error: true) until
-    # baselines are committed from a Linux CI --update-snapshots run.
+    # empty-dashboard). GATING since 2026-07-29 (ready-pass W2) — baselines
+    # committed from the ubuntu-latest visual-baselines artifact (run
+    # 30482627526).
     # CRITICAL: Baselines must be generated on this ubuntu-latest runner —
     # local WSL2/macOS font anti-aliasing differs from Linux and causes false
-    # positives. Update workflow: run with --update-snapshots, commit the
-    # __snapshots__ PNGs in a dedicated PR.
-    name: Visual regression (non-gating until baselines committed)
+    # positives. Regenerate: gh workflow run ci.yml -f update_snapshots=true,
+    # download the visual-baselines-<sha> artifact, commit the PNGs.
+    name: Visual regression
     runs-on: ubuntu-latest
-    continue-on-error: true  # becomes gating once baselines are committed
     defaults:
       run:
         working-directory: frontend
