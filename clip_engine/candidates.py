@@ -23,6 +23,7 @@ WINDOW_S = 75.0  # max lookback from peak to find setup
 POST_PEAK_S = 20.0  # seconds to include after peak
 MIN_CLIP_S = 30.0  # clips shorter than this are discarded
 _NMS_IOU_THRESHOLD = 0.5  # IoU above which a lower-prominence candidate is suppressed
+_PEAK_PROMINENCE = 0.5  # find_peaks prominence floor shared by detection + skip-reason paths
 
 # Named reasons a video produces no clips — each maps to a CLIPPING_PRINCIPLES.md principle.
 # These are the ONLY valid skip-reason strings; callers and tests should compare against these.
@@ -171,6 +172,28 @@ def _find_setup_start(timeline: dict, peak_s: float, window_s: float = WINDOW_S)
     return earliest
 
 
+def _detect_peaks(timeline: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Shared peak-detection pipeline for extract_candidates and derive_skip_reason.
+
+    Builds the composite signal array, derives the MIN_CLIP_S-based minimum
+    peak distance, and runs scipy.signal.find_peaks with the module's
+    prominence policy. Returns (times, signal, peak_indices, properties);
+    empty arrays and {} when the timeline yields no signal.
+    """
+    times, signal = build_signal_array(timeline)
+    if len(signal) == 0:
+        return times, signal, np.array([], dtype=int), {}
+
+    resolution_s = float(times[1] - times[0]) if len(times) > 1 else RESOLUTION_S
+    min_distance_samples = max(1, int(MIN_CLIP_S / resolution_s))
+    peak_indices, properties = find_peaks(
+        signal,
+        distance=min_distance_samples,
+        prominence=_PEAK_PROMINENCE,
+    )
+    return times, signal, peak_indices, properties
+
+
 def derive_skip_reason(
     timeline: dict,
     source_available: bool = True,
@@ -190,13 +213,9 @@ def derive_skip_reason(
     if not source_available:
         return SKIP_REASON_SOURCE_UNAVAILABLE
 
-    times, signal = build_signal_array(timeline)
+    _, signal, peak_indices, _ = _detect_peaks(timeline)
     if len(signal) == 0:
         return SKIP_REASON_NO_SIGNAL
-
-    resolution_s = float(times[1] - times[0]) if len(times) > 1 else RESOLUTION_S
-    min_distance_samples = max(1, int(MIN_CLIP_S / resolution_s))
-    peak_indices, _ = find_peaks(signal, distance=min_distance_samples, prominence=0.5)
 
     if len(peak_indices) == 0:
         # No peaks — check whether there are any retention events at all to help
@@ -239,20 +258,8 @@ def extract_candidates(
     candidates are sorted by signal prominence (strongest first), then
     returned sorted chronologically.
     """
-    times, signal = build_signal_array(timeline)
-    if len(signal) == 0:
-        return []
-
-    resolution_s = float(times[1] - times[0]) if len(times) > 1 else RESOLUTION_S
-    min_distance_samples = max(1, int(MIN_CLIP_S / resolution_s))
-
-    peak_indices, properties = find_peaks(
-        signal,
-        distance=min_distance_samples,
-        prominence=0.5,
-    )
-
-    if len(peak_indices) == 0:
+    times, signal, peak_indices, properties = _detect_peaks(timeline)
+    if len(signal) == 0 or len(peak_indices) == 0:
         return []
 
     # Sort by prominence descending; take top max_candidates
