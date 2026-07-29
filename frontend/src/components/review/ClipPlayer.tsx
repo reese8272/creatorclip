@@ -77,7 +77,10 @@ export function ClipPlayer({
     <div className="flex animate-fade-in flex-col items-center gap-4">
       {clip.render_uri ? (
         <video
-          key={clip.id}
+          // Keyed on the artifact, not just the clip: a confirmed trim/clean
+          // swap changes render_uri but not the download src, so without a key
+          // change the element would keep playing the old media until reload.
+          key={`${clip.id}:${clip.render_uri}`}
           src={mediaSrc}
           controls
           playsInline

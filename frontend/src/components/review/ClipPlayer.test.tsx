@@ -24,9 +24,8 @@ const BASE: ReviewClip = {
   applied_description: null,
 }
 
-function renderPlayer(clip: ReviewClip) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+function playerUi(clip: ReviewClip, qc: QueryClient) {
+  return (
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <ClipPlayer
@@ -37,8 +36,13 @@ function renderPlayer(clip: ReviewClip) {
           onNext={() => {}}
         />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+}
+
+function renderPlayer(clip: ReviewClip) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(playerUi(clip, qc))
 }
 
 afterEach(() => vi.unstubAllGlobals())
@@ -58,6 +62,22 @@ describe('ClipPlayer render states', () => {
     expect(video).toHaveAttribute('autoplay')
     expect(video.muted).toBe(true)
     expect(video).toHaveAttribute('preload', 'auto')
+  })
+
+  it('remounts the video element when render_uri changes (confirmed trim/clean swap)', () => {
+    // A confirmed swap changes render_uri server-side but the download src is
+    // identical, so only a key change forces the element to reload the new
+    // media. Marker survives a same-artifact rerender (same element) and must
+    // vanish when render_uri changes (fresh element).
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { rerender } = render(playerUi(BASE, qc))
+    document.querySelector('video')!.setAttribute('data-marker', 'old-element')
+
+    rerender(playerUi(BASE, qc))
+    expect(document.querySelector('video')!.getAttribute('data-marker')).toBe('old-element')
+
+    rerender(playerUi({ ...BASE, render_uri: 'http://x/c1-trimmed.mp4' }, qc))
+    expect(document.querySelector('video')!.getAttribute('data-marker')).toBeNull()
   })
 
   it('scales the filmstrip to the setup-origin duration, not end_s - start_s', () => {
