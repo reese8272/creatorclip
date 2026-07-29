@@ -32,6 +32,16 @@ on:
   pull_request:
     branches: [main, staging]
   workflow_dispatch:
+    inputs:
+      update_snapshots:
+        type: boolean
+        default: false
+        description: >-
+          Regenerate visual baselines: the `visual` job runs Playwright with
+          --update-snapshots and uploads frontend/e2e/__snapshots__/ as the
+          visual-baselines-<sha> artifact (Issue 272). Download it, commit the
+          PNGs in a dedicated PR. Baselines MUST come from this ubuntu-latest
+          runner — never from WSL2/macOS (font-rendering diffs).
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -592,8 +602,20 @@ jobs:
       - name: Run visual regression tests
         # Runs only tests tagged @visual. On first run (no baselines committed),
         # this will fail because there are no reference snapshots — that is expected.
-        # Run with --update-snapshots once to generate baselines, then commit them.
-        run: npx playwright test --grep "@visual"
+        # Dispatch this workflow with update_snapshots=true to (re)generate the
+        # baselines here on ubuntu-latest; they are uploaded as an artifact below.
+        # `inputs` is empty on pull_request runs, so the expression is a no-op there.
+        run: npx playwright test --grep "@visual" ${{ inputs.update_snapshots == true && '--update-snapshots' || '' }}
+      - name: Upload regenerated baselines
+        # Only on a `gh workflow run ci.yml -f update_snapshots=true` dispatch.
+        # Download with `gh run download <run-id> -n visual-baselines-<sha> -D
+        # frontend/e2e/`, then commit the PNGs in a dedicated PR.
+        if: ${{ inputs.update_snapshots == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-baselines-${{ github.sha }}
+          path: frontend/e2e/__snapshots__/
+          retention-days: 7
       - name: Upload snapshot diffs on failure
         if: failure()
         uses: actions/upload-artifact@v4
