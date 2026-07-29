@@ -189,17 +189,16 @@ async def submit_feedback(
 
     # Issue 235 — emit clip_kept (ACTIVATION EVENT) on first keep per creator.
     # Best-effort: record_event never raises; a telemetry failure must not block
-    # the response.  Scheduled on the running event loop via ensure_future.
+    # the response.  Scheduled via record_event_nowait (Issue 352) so the task
+    # is strongly referenced until done — never GC'd mid-execution.
     if is_activation:
-        from event_log import record_event
+        from event_log import record_event_nowait
 
-        asyncio.ensure_future(
-            record_event(
-                source="backend",
-                event="clip_kept",
-                creator_id=creator.id,
-                extra={"action": body.action.value},
-            )
+        record_event_nowait(
+            source="backend",
+            event="clip_kept",
+            creator_id=creator.id,
+            extra={"action": body.action.value},
         )
         logger.info(
             "clip_kept activation event: creator=%s clip=%s action=%s",

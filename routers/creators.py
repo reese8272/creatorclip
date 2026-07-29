@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Literal
 
@@ -456,20 +455,19 @@ async def get_data_gate(
 ) -> dict:
     gate = await check_data_gate(session, creator.id)
     # Issue 203 — funnel visibility on the unlock delta: same fire-and-forget
-    # DB-sink pattern as the sibling funnel events in this router (Issue 235).
-    from event_log import record_event
+    # DB-sink pattern as the sibling funnel events in this router (Issue 235),
+    # via the bounded strong-ref scheduler (record_event_nowait, Issue 352).
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(
-        record_event(
-            source="backend",
-            event="data_gate_evaluated",
-            creator_id=creator.id,
-            extra={
-                "ready": gate["ready"],
-                "long_form_videos": gate["long_form_videos"],
-                "shorts": gate["shorts"],
-            },
-        )
+    record_event_nowait(
+        source="backend",
+        event="data_gate_evaluated",
+        creator_id=creator.id,
+        extra={
+            "ready": gate["ready"],
+            "long_form_videos": gate["long_form_videos"],
+            "shorts": gate["shorts"],
+        },
     )
     return gate
 
@@ -500,14 +498,12 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
         task_id=task.id,
     )
     # Issue 235 — route to queryable DB sink alongside the file-only log_event.
-    from event_log import record_event
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(
-        record_event(
-            source="backend",
-            event="catalog_sync_started",
-            creator_id=creator.id,
-        )
+    record_event_nowait(
+        source="backend",
+        event="catalog_sync_started",
+        creator_id=creator.id,
     )
     return {
         "task_id": task.id,
@@ -542,14 +538,12 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
         task_id=task.id,
     )
     # Issue 235 — route to queryable DB sink alongside the file-only log_event.
-    from event_log import record_event
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(
-        record_event(
-            source="backend",
-            event="dna_build_started",
-            creator_id=creator.id,
-        )
+    record_event_nowait(
+        source="backend",
+        event="dna_build_started",
+        creator_id=creator.id,
     )
     return {
         "task_id": task.id,
@@ -612,15 +606,13 @@ async def confirm_dna(
         version=profile.version,
     )
     # Issue 235 — route to queryable DB sink alongside the file-only log_event.
-    from event_log import record_event
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(
-        record_event(
-            source="backend",
-            event="dna_confirmed",
-            creator_id=creator.id,
-            extra={"version": profile.version},
-        )
+    record_event_nowait(
+        source="backend",
+        event="dna_confirmed",
+        creator_id=creator.id,
+        extra={"version": profile.version},
     )
     return {"id": str(profile.id), "version": profile.version, "status": profile.status.value}
 
@@ -717,15 +709,13 @@ async def upsert_identity(
     )
     # Issue 235 — funnel event: creator provided their stated identity, enabling
     # the DNA build step.  niche_count is the only signal — no PII, no content.
-    from event_log import record_event
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(
-        record_event(
-            source="backend",
-            event="identity_saved",
-            creator_id=creator.id,
-            extra={"niche_count": len(niches)},
-        )
+    record_event_nowait(
+        source="backend",
+        event="identity_saved",
+        creator_id=creator.id,
+        extra={"niche_count": len(niches)},
     )
     return _identity_to_dict(row)
 

@@ -79,9 +79,9 @@ async def login(request: Request) -> RedirectResponse:
     )
     # Issue 235 — funnel instrumentation: record that an OAuth flow was initiated.
     # creator_id is unknown at this point (pre-auth), so we omit it.
-    from event_log import record_event
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(record_event(source="backend", event="oauth_started"))
+    record_event_nowait(source="backend", event="oauth_started")
     return resp
 
 
@@ -341,15 +341,13 @@ async def callback(
     # event_logs alongside it.  channel_id is omitted — the _redact() boundary
     # in event_log.py would keep it (it's not a sensitive key), but we keep
     # events minimal to creator_id + signal booleans per the taxonomy.
-    from event_log import record_event
+    from event_log import record_event_nowait
 
-    asyncio.ensure_future(
-        record_event(
-            source="backend",
-            event="oauth_completed",
-            creator_id=creator.id,
-            extra={"is_new": is_new},
-        )
+    record_event_nowait(
+        source="backend",
+        event="oauth_completed",
+        creator_id=creator.id,
+        extra={"is_new": is_new},
     )
 
     # Issue 215: branch on the first-login signal so new creators land on the
