@@ -667,6 +667,13 @@ class Clip(Base):
     # JSONB: {subtitle: "white_large"|"yellow_impact"|"captions_sm"|null,
     #         background: "blur"|"black"|"brand"|null, captions_enabled: bool}
     style_preset: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Creator-approved publish metadata (migration 0047). NULL = no applied
+    # value: publish_to_youtube falls back to video.title / "#Shorts". Set and
+    # cleared via PATCH /clips/{id}; validated there against the YouTube
+    # videos.insert limits (title ≤100 chars, description ≤5000 UTF-8 bytes,
+    # no angle brackets) so the worker never has to truncate an applied value.
+    applied_title: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    applied_description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
