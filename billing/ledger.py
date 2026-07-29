@@ -186,9 +186,7 @@ def model_rates(model: str) -> tuple[float, float, str]:
         return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "sonnet-tier"
     if "opus" in model:
         return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "opus-tier"
-    logger.warning(
-        "billing: no price-book rates for model %s — falling back to Opus rates", model
-    )
+    logger.warning("billing: no price-book rates for model %s — falling back to Opus rates", model)
     return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "other"
 
 
