@@ -1,8 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-20 (end of the assessment-and-fix marathon session)
-**Branch at close:** `main` @ `1ed2473` — working tree clean, 0 ahead/behind origin/main
-**Prod:** deployed and healthy at this exact content (Deploy-to-production green 18:42 UTC; DB head **0046**)
+**Last updated:** 2026-07-29 (end of the "100% ready" pass)
+**Branch at close:** `w3/ready-pass-closeout` — PR #63 to main pending (**merge = Deploy 3**, carries the 8 assess-fixes + all W3 docs)
+**Prod:** healthy at `a50b332` (= Deploys **1+2**, both through the staging gate 2026-07-29); DB head **0047**
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -10,93 +10,67 @@
 
 ## CURRENT FOCUS
 
-**The production-readiness verdict is now `YES for the v1 ≤100-user beta`** — see
-`docs/assessment/REPORT.md` (snapshot `history/2026-07-20-postfix-REPORT.md`). This session ran a
-full /assess (found 1 live BLOCKER-symptom + 4 SEV1s + ~37 SEV2s), fixed everything across three
-parallel agent waves (PRs **#56, #57, #58**, all merged + deployed), cleared the live blocker by
-SSH triage on the VM, and closed the YES gate with real Locust load evidence (50 users: 0 failures,
-p99 180 ms; 300 users: clean saturation, limiter enforcing per-creator). Issues **356–361 are
-CLOSED/DONE** with evidence in `docs/issues.md`.
+**The 2026-07-29 ready-pass is complete** — verdict **YES-for-beta** re-confirmed
+(`docs/assessment/REPORT.md`, snapshot `history/2026-07-29-REPORT.md`). Two build waves shipped and
+deployed same-day: **W1** (PR #61 = publish/schedule UI, applied titles→YouTube, trim→real
+re-render, source-expired UX) and **W2** (PR #62 = flake elimination to literal zero noise, worker
+hardening, self-hosted fonts, enqueue DRY, Issue-272 visual job now GATING, **approved billing
+fixes**). The close-out /assess found 1 SEV1 + 7 SEV2s — **all fixed same day** (on the pending PR).
 
 ### → NEXT ACTIONS
 
-The code track is done. What remains is **operator work — `docs/GO_LIVE.md` Stage A** (unchanged
-critical path #24→#25→#26→#28):
-
-1. **#24** — verify prod env config (`ALLOWED_ORIGINS` locked, `/docs` disabled) on the VM:
-   `ssh creatorclip-vm 'grep -E "ENV|ALLOWED_ORIGINS" /opt/autoclip/.env'` + `curl -si https://autoclip.studio/docs | head -1`.
-2. **#25/#26** — external API provisioning check + Google OAuth consent screen/test users.
-3. **#28** — beta go-live smoke with a real friend account (the 2026-06-30 sign-in failure was
-   triaged as transient/non-recurring — if the friend hits it again, the decisive command is in
-   Issue 356 / `docs/assessment/modules/_live_smoke_triage.md`).
-4. Optional hygiene: commit Playwright visual baselines (#272) to make the visual job gating;
-   ratchet the now-working per-module coverage floors in `run_layer0.py` (currently 0.0).
+1. **Merge PR #63** (`w3/ready-pass-closeout`) once CI is green — Deploy 3. Needs owner merge
+   authorization (prod deploy).
+2. **#26** — Google console (~5 min): confirm the 4 scopes match `youtube/oauth.py:46-51`; add each
+   friend's Gmail under Audience → Test users. NOT skippable: unverified apps hard-block non-test-users.
+3. **#282 uptime monitor** — now beta-critical: prod was down **~31h silently** (Jul 28 11:59 UTC
+   clean poweroff → Jul 29 power-cycle; check DO emails for the cause). Better Stack free tier +
+   `/health` monitor + status page (~30 min operator work).
+4. **#28** — friend beta smoke + 48h window → invite. Also live-smoke the new surfaces: publish
+   flow, trim re-render, source-expired card (owner's expired clip `b4c87d6f` is a natural canary),
+   cleaned-preview playback (the s3:// fix).
 
 ## WHAT WORKS NOW (don't re-investigate)
 
-- **All 2026-07-20 findings fixed and verified in code by an independent re-assessment sweep**
-  (15 modules, `docs/assessment/modules/*.md` all dated "post-fix"): spend-gate on
-  `/clips/generate`, api_key RLS GUC, stale-render recovery (Redis marker + sweep + 409 override),
-  runner split (live-proven by hosted PR runs), staging env-bleed overrides, CSP fonts (live-verified
-  in the prod header), races backstopped by migration 0046, pause_turn consolidated into
-  `worker/anthropic_stream.stream_until_final`, LGBM allowlist fix (real personalization-restoring
-  bug), oauth scope replace-on-grant, deploy.sh full rollback port.
-- **Load evidence recorded** in REPORT.md; staging stack + CSVs torn down per
-  `tests/perf/README.md` (reproducible any time).
-- **Deploy pipeline fail-safes observed working live**: the staging gate blocked a prod deploy when
-  staging Postgres degraded under a load test, then passed on rerun.
-- Layer 0 green: ruff/mypy 0, coverage 79.73 (floor 75.2), module-coverage gate operational for the
-  first time (its coverage.xml-deletion bug is fixed).
-
-## THE ARC THAT LED HERE
-
-1. User asked for remaining bugs + production-testing readiness → full /assess @ `ca3305c` →
-   CONDITIONAL (4 SEV1s, live sign-in screenshot triage, Issues 356–361 filed).
-2. 8-batch parallel worktree workflow built the SEV1s + SEV2 leads → PR #56; 4-batch tail wave →
-   PR #57 (both reviewed per-batch, merged conflict-aware, deployed).
-3. SSH triage on the VM cleared the sign-in BLOCKER (transient, 2 weeks no recurrence) and found
-   no stuck renders; CSP fonts confirmed broken → fixed in code defaults.
-4. Fresh /assess re-run: 0 SEV1 anywhere, but caught 3 wave-introduced defects → fixed in PR #58.
-5. Locust runs per `tests/perf/README.md` closed the load-evidence gate → **verdict YES-for-beta**
-   (PR #59, docs).
+- **Core loop is feature-complete**: upload→clips→review→apply-titles→trim/clean re-render→
+  schedule→private publish→outcomes→retrain. Canonical map: **`docs/PIPELINE.md`** (NEW).
+- **Gates #24/#25 GREEN with live evidence** (doctor 30/30, env locked, /docs 404, no key leaks,
+  deploy proven twice). GO_LIVE Stage A: 15 GREEN · 6 CODE-GREEN · 11 OPEN.
+- **Layer 0 fully green locally** (first time): ruff/mypy 0, coverage 83.51, pip-audit 0 (was venv
+  drift — venv upgraded), module floors ratcheted (crypto/limiter 99, auth 91), visual job gating.
+- **Billing now covers every LLM call site** (intake, thumbnail-patterns, chat tools were unbilled;
+  1h cache-writes at the true 2×) — enforced by a repo-wide AST guard in `tests/test_usage_coverage.py`.
+- Suites at close: backend **2338/0**, frontend **285/0**; zero event-loop noise (the poisoner was
+  the compliance crawler's bare TestClient — root-caused, fixed, regression-locked).
 
 ## KEY COORDINATES & FACTS
 
 | Thing | Value |
 |---|---|
-| Prod | `autoclip.studio` — VM `creatorclip-vm` (147.182.136.107, `ssh creatorclip-vm` works, standing permission granted), `/opt/autoclip`, `docker compose -f docker-compose.prod.yml` |
-| Staging | project `ccstage`, `docker-compose.staging.yml`, app on `:8001`, currently **torn down** (`down -v`) |
-| Load-test runbook | `tests/perf/README.md` (seed fans out via sed-templating for >1 creator; CC_CREATOR_IDS) |
-| DB head | `0046_race_unique_backstops` |
-| Verdict + evidence | `docs/assessment/REPORT.md` + `history/2026-07-20-postfix-REPORT.md` |
-| Session log | `docs/PROJECT_STATE.md` (three 2026-07-20 entries at top) |
-| Cross-project issue log | `~/.claude/ISSUES_LOG.md` (new: ISSUE-2026-07-20-01, rollback-expires-ORM MissingGreenlet) |
+| Prod | `autoclip.studio` — droplet 147.182.136.107 (`ssh creatorclip-vm`), `/opt/autoclip`, compose prod file |
+| DB head | `0047_clip_applied_metadata` |
+| Verdict + register | `docs/assessment/REPORT.md` (+ `history/2026-07-29-REPORT.md`) |
+| Session log | `docs/PROJECT_STATE.md` (2026-07-29 entry at top) |
+| Tracker | `docs/issues.md` — new Issues **363–368** filed; 362 residual + 272 closed; #282 elevated |
+| Open register | 4 carried SEV2s (worker redelivery double-spend; routers ×3) + gated/accepted residuals — REPORT.md table |
+| Wave harness gotcha | memory `worktree-wave-gotcha`: agent worktrees can vanish mid-build — commit early to lane branches |
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Any push/merge to `main` triggers Docker publish → staging gate → prod deploy.** Never run a
-  staging load test with a merge in flight — the gate recycles `ccstage` mid-test (bit us once).
-- **Local toolchain: `.venv/bin/*` ONLY** (bare `python3` is now brew 3.14 without pytest-cov/yaml).
-  Layer-0: `PATH="$PWD/.venv/bin:$PATH" python3 .claude/skills/production-assessment/scripts/run_layer0.py`.
-  Redis: `redis-server --daemonize yes --save '' --appendonly no`.
-- **Piped exit codes lie** (`pytest | tail` → tail's 0 masked 4 failures): `set -o pipefail` or
-  check `.pytest_cache/v/cache/lastfailed`.
-- pip-audit locally = venv-drift noise (pillow/pip/pytest); CI's gate is authoritative.
-- Visual-regression CI job is red by design until #272 baselines are committed (`continue-on-error`).
-- CI runs on GitHub-hosted runners now (Issue 360); only deploy-track workflows use the VM runner.
-- Staging deliberately still shares prod `TOKEN_ENCRYPTION_KEY` (data-bearing volume — documented
-  residual in DECISIONS + compose comment).
-
----
+- **Any merge to main = Docker publish → staging gate → prod deploy.** Merges need owner authorization.
+- Local toolchain: `.venv/bin/*` only (`python -m pip`, not bare pip — venv has no pip shim on PATH).
+- Visual baselines regenerate ONLY via `gh workflow run ci.yml -f update_snapshots=true` →
+  download artifact → commit (never from WSL2 — font rendering).
+- `gh pr edit` dies on a GraphQL projectCards bug — use `gh api repos/.../pulls/N -X PATCH` instead.
+- Piped exit codes lie: check `.pytest_cache/v/cache/lastfailed` or `set -o pipefail`.
 
 ## POINTERS
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/GO_LIVE.md` | THE plan now — Stage-A operator gates to beta |
-| `docs/PROJECT_STATE.md` | Session log (2026-07-20 morning/later/evening entries) |
-| `docs/issues.md` | Tracker — 345–361 all closed with evidence |
-| `docs/assessment/REPORT.md` | Current verdict + full register + load numbers |
-| `docs/assessment/modules/*.md` | Per-module post-fix findings incl. the ~60-item cleanup tail |
-| `docs/DECISIONS.md` | 2026-07-20 entries: Redis staleness marker, deferrable unique, scope replace-on-grant, Opus-rate fallback, runner split, etc. |
+| `docs/PIPELINE.md` | **NEW** — canonical upload→publish flow map (files/functions/error codes) |
+| `docs/GO_LIVE.md` | Stage-A scorecard (updated 2026-07-29 with gate evidence) |
+| `docs/assessment/REPORT.md` | Verdict + ranked register |
+| `docs/DECISIONS.md` | 2026-07-29 W1+W2 sections (~18 entries) |
+| `docs/OFF_COURSE_BUGS.md` | 2026-07-29 rows: outage, fixes, follow-ups |
 | Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |
