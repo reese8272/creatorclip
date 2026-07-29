@@ -300,12 +300,15 @@ async def test_generate_title_suggestions_pause_turn_loop_continues_on_web_searc
     assert call_kwargs[1]["messages"][-1]["role"] == "assistant"
     # Final answer is the second round's text, not the search preamble.
     assert result == '{"candidates":[]}'
-    # Usage is summed across BOTH rounds (billing correctness).
+    # Usage is summed across BOTH rounds (billing correctness). cache_1h is
+    # False here — the short test prompt sits below the 1024-token cache floor,
+    # so no ttl:"1h" marker attached and no 2× write multiplier applies.
     assert usage == {
         "input_tokens": 30,
         "output_tokens": 35,
         "cache_read": 4,
         "cache_creation": 6,
+        "cache_1h": False,
     }
 
 

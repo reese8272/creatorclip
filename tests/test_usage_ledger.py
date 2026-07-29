@@ -150,6 +150,34 @@ async def test_record_llm_usage_calls_increment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_llm_usage_threads_1h_write_multiplier() -> None:
+    """cache_write_multiplier=2.0 must reach the cost math (w2/billing-audit).
+
+    1-hour-TTL cache writes bill 2× base input; before this parameter existed the
+    five dna_system_block features under-billed their cold-cache writes at the
+    1.25× 5-min default. The default (None) must stay 1.25×.
+    """
+    creator_id = uuid.uuid4()
+    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_creation": 1_000_000}
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("billing.ledger.increment_usage", new=AsyncMock()) as mock_inc,
+        patch("db.AdminSessionLocal", return_value=mock_session),
+    ):
+        await record_llm_usage(creator_id, usage, 3.0, 15.0, cache_write_multiplier=2.0)
+        await record_llm_usage(creator_id, usage, 3.0, 15.0)
+
+    # 1M 1h-TTL cache-write tokens at $3/MTok × 2.0 = $6.00
+    assert abs(mock_inc.await_args_list[0].args[5] - 6.0) < 1e-9
+    # Default (5-min TTL): 1M × $3/MTok × 1.25 = $3.75
+    assert abs(mock_inc.await_args_list[1].args[5] - 3.75) < 1e-9
+
+
+@pytest.mark.asyncio
 async def test_record_llm_usage_best_effort_on_error() -> None:
     """record_llm_usage never raises — it swallows DB errors (best-effort)."""
     creator_id = uuid.uuid4()

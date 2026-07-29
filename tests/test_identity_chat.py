@@ -130,6 +130,38 @@ async def test_usage_recorded_against_intake_model_with_cache_tokens(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_intake_turn_writes_billing_ledger_with_cache_tokens(monkeypatch):
+    """Every intake turn must write the billing ledger at Sonnet rates with the
+    cache tiers included (w2/billing-audit 2026-07-29: this endpoint was
+    previously entirely unbilled AND invisible to the Issue-290 spend guard)."""
+    from config import settings
+
+    msg = _msg([_text("What's your channel about?")], in_tok=100, out_tok=40)
+    msg.usage.cache_read_input_tokens = 700
+    msg.usage.cache_creation_input_tokens = 900
+    _patch_create(monkeypatch, return_value=msg)
+
+    ledger = AsyncMock()
+    # run_intake_turn imports record_llm_usage from billing.ledger at call time.
+    monkeypatch.setattr("billing.ledger.record_llm_usage", ledger)
+
+    creator_id = uuid.uuid4()
+    await intake.run_intake_turn(creator_id, [{"role": "user", "content": "hi"}])
+
+    ledger.assert_awaited_once()
+    args = ledger.await_args
+    assert args.args[0] == creator_id
+    assert args.args[1] == {
+        "input_tokens": 100,
+        "output_tokens": 40,
+        "cache_read": 700,
+        "cache_creation": 900,
+    }
+    assert args.args[2] == settings.COST_PER_MTOK_IN_SONNET
+    assert args.args[3] == settings.COST_PER_MTOK_OUT_SONNET
+
+
+@pytest.mark.asyncio
 async def test_runaway_guard_bails_before_calling_the_model(monkeypatch):
     create = _patch_create(monkeypatch, return_value=_msg([_text("...")]))
     long_history = [{"role": "user", "content": "x"}] * (intake.MAX_INTAKE_TURNS * 2 + 1)
