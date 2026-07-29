@@ -4,6 +4,47 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-29 — "100% ready" pass: core-loop UX shipped (Deploys 1+2), 31h silent prod outage found+recovered, Layer 0 fully green
+
+**The big finding first:** prod had been **fully down for ~31 hours** (clean systemd poweroff
+Jul 28 11:59 UTC — DO-side/console action, not a crash) with **zero alerts** — `health-check.yml`'s
+schedule silently died 2026-06-17 and #282 was never stood up. Found by manual curl during the
+#24/#25 gate pass; owner power-cycled the droplet; everything auto-recovered. #282 elevated to
+beta-critical with the outage as evidence.
+
+**Two build waves via parallel worktree workflows** (research CHECK briefs w/ live-doc citations →
+build → per-lane gates → integration → CI → deploy through the staging gate):
+
+- **Wave 1 (PR #61, Deploy 1):** publish/schedule UI (Issue-196 frontend: PublishPanel +
+  SchedulePublishDialog); applied publish metadata end-to-end (migration **0047**
+  `clips.applied_title/applied_description`, tri-state `PATCH /clips/{id}`, publish consumes,
+  title cap [:90]→[:100] per official YouTube limits); trim → real re-render
+  (`POST /clips/{id}/trim-render`, clip-relative, rides edit_clip + confirm swap); structured
+  `{"code":"source_expired"}` 409s + SPA card on Review/Recap (closed the 362 residual; the old
+  ClipPlayer blanket-409-as-success would have swallowed it); worker fixes (SourceExpiredError SSE,
+  log-field relabels, guarded generate_clips enqueue). **Integrator fixes:** Save-trim was broken
+  for nearly every clip (clip-relative vs video-absolute bounds — since Issue 339) and ApiError
+  rendered dict details as "[object Object]".
+- **Wave 2 (PR #62, Deploy 2):** test-suite event-loop noise → **zero** (real poisoner: the
+  compliance crawler's bare TestClient; 6 OFF_COURSE flake rows closed); advisory-lock guarded
+  release + `beat_lock_skips_total`; last 3 open-session-across-LLM holds split; clip_engine
+  peak-dedup + end_s-clamp regression test; **self-hosted fonts** (GDPR) + `safeUrl.ts` +
+  cleaned-preview s3://-URI prod bug fixed; `routers/_enqueue.py` (18 sites collapsed) + strong-ref
+  telemetry tasks; e2e fixtures (brand-kit, Settings/Editor smoke, PublishPanel exercised);
+  **Issue 272 fully closed** — baselines from ubuntu-latest via the new `update_snapshots`
+  dispatch, visual job now GATING; **approved billing fixes** (chat-intake + thumbnail-patterns
+  were entirely unbilled, 1h cache-writes 1.25×→2×, repo-wide unbilled-LLM CI guard).
+
+**Gates:** #24 + #25 verified GREEN live (doctor 30/30, env locked, /docs 404, no key leaks,
+deploy proven). Layer 0 **fully green locally** for the first time (pip-audit 0 after venv
+refresh; module floors ratcheted crypto/limiter 99 / auth 91). Suites at Deploy-2 head: backend
+**2330/0**, frontend 277/0 + build, coverage 82.84. New issues filed: **363–368** (caption-TEXT
+editing, server-side discard, static-page fonts, warning sweep, Redis singletons, coverage
+measurement). New canonical flow doc: **`docs/PIPELINE.md`**. Remaining to beta: #26 test users
+(~5 min console) → #28 friend smoke; #282 uptime monitor; full /assess close-out in flight.
+
+---
+
 ## 2026-07-20 (evening) — Fresh /assess: **VERDICT FLIPS TO YES-for-beta** (report `history/2026-07-20-postfix-REPORT.md`)
 
 Everything shipped and deployed: PRs **#56** (4 SEV1s + SEV2 leads), **#57** (Issue-361 tail:

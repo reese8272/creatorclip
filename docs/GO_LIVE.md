@@ -29,7 +29,7 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
-| Are prod secrets provisioned, unique, and off-git? | Run the #24 verification pass on the VM (`.env` fields, key uniqueness, GH Actions secrets, `workflow_dispatch` deploy green) | operator | OPEN | #24 ACs; `scripts/doctor.py` preflight in `deploy.yml` |
+| Are prod secrets provisioned, unique, and off-git? | None — verified | build | GREEN (2026-07-29) | #24 all ACs verified live post-outage-recovery: `/docs` 404, container env exact (ENV=production, ALLOWED_ORIGINS/OAUTH_REDIRECT_URI/APP_BASE_URL locked), `.env` untracked + no secret values in history, GH secrets present, deploy pipeline proven by the Deploy-1 run (staging gate → prod, 2026-07-29) |
 | Is per-creator tenant isolation structurally enforced in prod? | None — RLS role split active | build | GREEN | #343 (verified live 2026-06-30); `docs/DEPLOYMENT.md` "RLS one-time setup" |
 | Has the exposed Anthropic key been rotated? | Rotate in the provider console + VM `.env` | operator | OPEN | `LEFT_OFF.md` operator checklist |
 | Is edge rate limiting live on `/auth/*`? | Apply the Cloudflare rule + run the 429 verify loop | operator | OPEN | #286 (config committed); `docs/EDGE_SECURITY.md` |
@@ -67,7 +67,7 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Does every prod deploy pass a data-bearing staging gate first? | None — first runs completed | build | GREEN | #298 (+#271 fix); gate blocked 3 real problems then passed W3 clean, 2026-07-02/03 (runs on PRs #46–#50); seed idempotency fixed PR #50 |
 | Is migration safety enforced (Squawk, timeouts, expand/contract, rollback runbook)? | None | build | GREEN | #270, #294; `docs/MIGRATIONS.md` |
 | Do deploys verify the critical journey and tag every promotion? | None | build | GREEN | #295, #297 |
-| Are all external APIs provisioned with `/health` green? | Run `scripts/doctor.py --full` on the VM; Deepgram/R2 round-trips; no key in logs | operator | CODE-GREEN | #25; partial evidence 2026-07-03: prod `/health` all-ok (PG/Redis/R2), **LLM E2E nightly fully green live vs Anthropic** (workflow `llm-e2e-nightly`, incl. no-key-in-logs test); Deepgram round-trip pending |
+| Are all external APIs provisioned with `/health` green? | None — verified | build | GREEN (2026-07-29) | #25: `doctor.py --full` on the VM = **30 ok / 0 fail** (Anthropic, Voyage, Deepgram, R2, Stripe all live-verified), `/health` all-ok, key-leak grep over 30d app+worker logs = 0 hits; LLM E2E nightly green daily |
 | Are the W1/W2 staging-verify residuals exercised? | Dispatch the `staging-drills` workflow (#284 flags-flip, #290 spend-trip, #228 rate-limit); remaining rows per issue | staging-verify | OPEN | `.github/workflows/staging-drills.yml` (2026-07-03) + "Remaining (staging)" lines in `docs/issues.md` |
 | Has the full pipeline run end-to-end on prod with real friends for 48h? | Execute the #28 beta smoke + friend onboarding — the Stage-A capstone | operator | OPEN | #28 (blocked by #24/#25/#26) |
 
@@ -76,7 +76,7 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Gate (question) | Action item | Owner | Status today | Evidence / signal |
 |---|---|---|---|---|
 | Are logs/metrics/traces + error tracking live? | Verify Grafana Cloud + Sentry ingest on the live SaaS side | operator | CODE-GREEN | #326 (code + VM wiring shipped; external verify pending) |
-| Is there an independent status page + uptime monitoring? | Better Stack account, monitors, footer link (+ Cloudflare Health Check per `docs/DEPLOYMENT.md`) | operator | OPEN | #282 (re-scoped for beta) |
+| Is there an independent status page + uptime monitoring? | Better Stack account, monitors, footer link (+ Cloudflare Health Check per `docs/DEPLOYMENT.md`) | operator | **OPEN — gap PROVEN 2026-07-29** | #282: prod was fully down ~31h (Jul 28 poweroff → Jul 29 power-cycle) with zero alerts — `health-check.yml`'s schedule silently died 2026-06-17; found only by manual curl. Beta-critical. |
 | Will we hear about cost blowouts (billing alert + LLM-cost rule)? | DO billing alert + one Grafana rule over `llm_cost_usd_total` after #326 activation | operator | OPEN | #291 (counter shipped); `docs/dashboards/llm-cost-panel.json` |
 | Is unit-economics review in place (COGS runbook + R2 gauges)? | Eyeball the R2 Metrics tab after #326 activation | operator | CODE-GREEN | #292, #293 (price book fixed; gauges shipped) |
 
@@ -87,10 +87,11 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Does no surface promise virality; is every score estimate-framed? | None — structural test runs in every suite | build | GREEN | `tests/test_compliance_no_virality.py` + `tests/test_static.py` pins; FitBadge tiers (#192) |
 | Is billing wired for the beta (minute packs, verified webhooks, reconciliation)? | Confirm Stripe LIVE keys during #25 | build | GREEN | Issue 21; #205, #206; spend guard #290 |
 
-**Stage A totals:** 32 gates — **13 GREEN · 7 CODE-GREEN · 12 OPEN** (updated 2026-07-03).
-The honest distance-to-beta number is **20 gates not fully green** (13 OPEN + 7
-CODE-GREEN verification residuals); the hard blockers for inviting the first friends are
-the #24 → #25 → #26 → #28 chain.
+**Stage A totals:** 32 gates — **15 GREEN · 6 CODE-GREEN · 11 OPEN** (updated 2026-07-29:
+#24 + #25 flipped GREEN with live evidence). The honest distance-to-beta number is **17
+gates not fully green**; the hard blockers for inviting the first friends are now just
+**#26 (OAuth test users, ~5 min console) → #28 (friend smoke)** — plus #282 uptime
+monitoring, which the 2026-07-29 31-hour silent outage proved beta-critical.
 
 ---
 
