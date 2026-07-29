@@ -384,7 +384,10 @@ dna_embeddings
 clips
   id, video_id (FK), creator_id (FK), setup_start_s, start_s, end_s, peak_s,
   score, dna_match, signals_jsonb, format (short/horizontal),
-  render_uri, render_status, rank, created_at
+  render_uri, cleaned_render_uri, render_status, rank, created_at,
+  applied_title, applied_description   -- creator-approved publish metadata
+                                       -- (migration 0047; NULL = publish falls
+                                       -- back to video.title / "#Shorts")
 
 clip_feedback
   id, clip_id (FK), creator_id (FK),
@@ -473,6 +476,14 @@ clip_publications                     -- YouTube publish attempts + scheduled pu
 ---
 
 ## Processing Pipeline (Celery)
+
+> **The detailed stage-by-stage map (files, functions, contracts, error codes) lives in
+> `docs/PIPELINE.md`** (ready-pass W1, 2026-07-29). Highlights added that wave:
+> `PATCH /clips/{clip_id}` (tri-state applied_title/applied_description; consumed by
+> publish), `POST /clips/{clip_id}/trim-render` (clip-relative trim → real re-render via
+> edit_clip → cleaned_render_uri + confirm swap), structured
+> `{"code": "source_expired"}` 409s on render/recap, and the Review-surface publish UI
+> (PublishPanel/SchedulePublishDialog over the Issue-196 publications API).
 
 ```
 creator links/uploads a video

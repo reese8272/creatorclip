@@ -10798,3 +10798,77 @@ when Google omits it). Regression tests:
 `test_store_or_update_tokens_narrows_scope_on_downgraded_regrant`,
 `test_store_or_update_tokens_empty_scope_keeps_stored_grant`
 (tests/test_youtube_edges.py). **Date:** 2026-07-20
+
+---
+
+## 2026-07-29 — Ready-pass Wave 1 (core-loop product: applied metadata, trim re-render, publish UI, expired-source UX)
+
+**Worker enqueue-failure handling follows the Celery call-site pattern, not an outbox.**
+Task-publish failures (broker down) are caught as `OperationalError` — raised only after
+Celery's built-in ~0.4s publish retries — and recorded, per the Celery docs' own
+recommendation. `build_signals`→`generate_clips` hop: on publish failure emit
+`generate_clips_enqueue_failed`, set the video `failed` with reason "Clip generation could
+not be queued — please retry.", and re-raise with no `self.retry` (the retry message would
+publish to the same down broker); `RefundOnFailureTask.on_failure` refunds exactly once
+(idempotent on `pack_id=refund:<video_id>`). Auto-render batch enqueue keeps its
+best-effort no-raise posture, but `auto_render_enqueued` now fires ONLY on a successful
+publish and the failure path emits `auto_render_enqueue_failed`. Ruled out: transactional
+outbox (overkill at beta scale), raised `task_publish_retry_policy` (docs cap publish
+retry deliberately to avoid pile-up). Evidence:
+https://docs.celeryq.dev/en/stable/userguide/calling.html (Connection Error Handling +
+Message Sending Retry), https://docs.celeryq.dev/en/stable/userguide/configuration.html
+(`task_publish_retry` on by default). (w1/worker-fixes e816494) **Date:** 2026-07-29
+
+**Expired-source race surfaces via `SourceExpiredError` SSE message, not a schema change.**
+Renders that lose the source in the enqueue-to-run race window raise
+`SourceExpiredError(ValueError)` from `_load_clip_render_plan`/`_load_summary_render_plan`
+and emit an actionable SSE message ("Source media expired — re-upload the video …")
+instead of adding a `failure_reason` column to Clip/Summary — a migration + API change was
+ruled out for a rare race whose retry path already receives an actionable 409 from both
+endpoints' pre-checks. ValueError subclassing keeps the permanent/no-retry classification.
+(w1/worker-fixes 83dec23) **Date:** 2026-07-29
+
+**Structured `source_expired` 409 contract.** `POST /clips/{id}/render` and the recap
+endpoint now return `detail={"code": "source_expired", "message": ...}` instead of bare
+strings — the SPA needs a machine-readable signal for the re-upload CTA. Evidence: FastAPI
+handling-errors docs (HTTPException accepts any JSON-able detail) + the in-repo
+`pending_clean_or_edit` dict-detail precedent. The recap message's hardcoded "72-hour" now
+interpolates `settings.SOURCE_MEDIA_RETENTION_HOURS`. Companion SPA change: `ApiError`
+preserves raw `.detail` + `.code` (string | {code, message} both supported — the old
+parser rendered dict details as "[object Object]", a live bug on the pending_clean_or_edit
+409s). (w1/metadata 152092d + w1/review-ui 00f2586) **Date:** 2026-07-29
+
+**Publish fallback title cap raised `[:90]` → `[:100]`.** The official `videos.insert`
+`snippet.title` limit is 100 characters (developers.google.com/youtube/v3/docs/videos);
+the undocumented `[:90]` silently shortened long fallback titles. Behavior change: long
+`video.title` fallbacks keep 10 more characters; fallback path also defensively strips
+`<`/`>`; applied titles are pre-validated at PATCH and never truncated.
+(w1/metadata 13930c3) **Date:** 2026-07-29
+
+**Validation-at-boundary over silent truncation for applied publish metadata.**
+`PATCH /clips/{clip_id}` 422s on title >100 chars, description >5000 UTF-8 BYTES (bytes,
+not characters, per the official videos.insert docs), or angle brackets; stripped-empty
+normalizes to None (= clear) so a falsy `''` can never silently trigger the publish
+fallback. Tri-state partial update via `model_dump(exclude_unset=True)` (FastAPI
+body-updates idiom). Client counts description length in UTF-8 bytes
+(`new TextEncoder().encode(v).length`). (w1/metadata d7d2be6) **Date:** 2026-07-29
+
+**`POST /clips/{clip_id}/trim-render` is CLIP-RELATIVE, with no source_expired pre-check.**
+Trim coordinates are clip-relative seconds (origin `setup_start_s ?? start_s`) matching
+/transcript, /cuts and the frontend's 0-based values — the video-absolute mapping the
+original lane text implied is exactly the bug the old feedback bounds check had (fixed at
+integration, dd92fcd). Intentionally NO Issue-362 409 pre-check on this route: `edit_clip`
+re-encodes from `clip.render_uri`, not `video.source_uri`, so trim-render keeps working
+after the retention purge; the correct guard is 400 when `render_uri` is missing.
+(w1/trim-rerender fecb6cc) **Date:** 2026-07-29
+
+**Schedule-publish picker ships with NO calendar dependency.** Suggested-window quick-pick
+chips (3 recurring weekly audience-activity windows; next local-tz occurrence computed in
+`frontend/src/lib/schedule.ts`) + native `<input type="datetime-local">` typed fallback,
+past dates rejected with specific feedback — grounded in NN/g date-input guidance
+(nngroup.com/articles/date-input/: quick-picks suit <10 options; ALWAYS support typed
+input). Ruled out react-day-picker/shadcn Calendar and a Radix Dialog dep (reused the
+bespoke `components/ui/modal.tsx` per ChannelBrowser/ApiKeysSection precedent). Note: the
+"Cancelled" badge is INFERRED from `status=failed` + `error === 'Cancelled by creator'`
+(the backend repurposes `failed` for cancels) — if a real `cancelled` status is added,
+`PublishPanel.statusBadge` must be updated. (w1/review-ui 00d75df) **Date:** 2026-07-29
