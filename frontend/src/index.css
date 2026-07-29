@@ -11,7 +11,9 @@
    land per page as each ports and gets visual QA (see docs/UI.md). This @theme
    styles the React SPA only; legacy static pages keep static/_design-tokens.css.
    See docs/DECISIONS.md (2026-06-18). */
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;650;700&family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+/* Fonts are self-hosted via Fontsource variable packages, imported in main.tsx
+   before this file (no Google Fonts request — GDPR, LG München 3 O 17493/20).
+   Family names follow Fontsource's '<Name> Variable' convention. */
 @import 'tailwindcss';
 
 @theme {
@@ -70,10 +72,10 @@
   --color-fit-exploratory-soft: oklch(17% 0.01 285);
 
   /* Typography (font-ui = Geist for chrome on port; docs/UI.md). */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  --font-ui: 'Geist', 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-ui: 'Geist Variable', 'Geist', 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Legacy size scale — preserved so existing text-2xs..text-2xl utilities keep
      resolving while pages migrate to the semantic scale below. */
