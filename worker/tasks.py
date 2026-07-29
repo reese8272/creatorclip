@@ -505,7 +505,7 @@ def render_clip(self: Task, clip_id: str) -> str:
     """
     creator_id = run_async(_creator_id_for_clip(clip_id))
     log_event(
-        "render_clip_started", creator_id=creator_id, task_id=self.request.id, video_id=clip_id
+        "render_clip_started", creator_id=creator_id, task_id=self.request.id, clip_id=clip_id
     )
     try:
         run_async(_render_clip_async(clip_id, creator_id=creator_id))
@@ -517,7 +517,7 @@ def render_clip(self: Task, clip_id: str) -> str:
             "render_clip_failed_permanent",
             creator_id=creator_id,
             task_id=self.request.id,
-            video_id=clip_id,
+            clip_id=clip_id,
             exc_type=type(exc).__name__,
         )
         raise
@@ -539,7 +539,7 @@ def render_clip(self: Task, clip_id: str) -> str:
         run_async(_set_clip_render_status(clip_id, RenderStatus.failed))
         RENDER_FAILURES_TOTAL.labels(task="render_clip").inc()
         raise self.retry(exc=exc) from exc
-    log_event("render_clip_done", creator_id=creator_id, task_id=self.request.id, video_id=clip_id)
+    log_event("render_clip_done", creator_id=creator_id, task_id=self.request.id, clip_id=clip_id)
     return clip_id
 
 
@@ -5617,7 +5617,7 @@ def render_summary(self: Task, summary_id: str) -> str:
         "render_summary_started",
         creator_id=creator_id,
         task_id=self.request.id,
-        video_id=summary_id,
+        summary_id=summary_id,
     )
     try:
         run_async(_render_summary_async(summary_id, creator_id))
@@ -5629,7 +5629,7 @@ def render_summary(self: Task, summary_id: str) -> str:
             "render_summary_failed_permanent",
             creator_id=creator_id,
             task_id=self.request.id,
-            video_id=summary_id,
+            summary_id=summary_id,
             exc_type=type(exc).__name__,
         )
         raise
@@ -5654,6 +5654,6 @@ def render_summary(self: Task, summary_id: str) -> str:
         "render_summary_done",
         creator_id=creator_id,
         task_id=self.request.id,
-        video_id=summary_id,
+        summary_id=summary_id,
     )
     return summary_id

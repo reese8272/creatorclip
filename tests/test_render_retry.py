@@ -104,6 +104,26 @@ def test_render_clip_soft_timeout_is_terminal(render_harness):
     assert RenderStatus.failed in statuses, "clip must be marked failed on soft-timeout"
 
 
+def test_render_clip_events_carry_clip_id_not_video_id(render_harness, monkeypatch):
+    """2026-07-20 incident (ISSUE-2026-07-20-02 fallout): render_clip's structured
+    events labeled the clip id as video_id, misdirecting triage to the wrong
+    entity. Every render_clip event must carry clip_id and never video_id."""
+    events: list[tuple[str, dict]] = []
+
+    tasks, statuses, retry_calls, set_render_async = render_harness
+    monkeypatch.setattr(tasks, "log_event", lambda event, **kw: events.append((event, kw)))
+    set_render_async(ValueError("Clip not found"))
+
+    with pytest.raises(ValueError):
+        tasks.render_clip("clip-1")
+
+    names = [name for name, _ in events]
+    assert "render_clip_started" in names and "render_clip_failed_permanent" in names
+    for name, fields in events:
+        assert fields.get("clip_id") == "clip-1", (name, fields)
+        assert "video_id" not in fields, (name, fields)
+
+
 async def test_render_clip_async_source_expired_emits_actionable_message(monkeypatch):
     """W1 ready-pass: a source purged in the enqueue-to-run race window must emit
     the ACTIONABLE SSE message (re-upload), not the generic "Render failed." —
