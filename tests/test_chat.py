@@ -14,12 +14,31 @@ tests/test_chat_isolation_integration.py (CI / real Postgres).
 
 import types
 import uuid
+from contextlib import asynccontextmanager
 
 import pytest
 
 from chat.prompt import HONESTY_CONSTRAINT, build_system
 from chat.tools import _EXECUTORS, TOOLS
 from knowledge.util import UNTRUSTED_CONTENT_POLICY
+
+
+@asynccontextmanager
+async def _null_session_factory():
+    """Stand-in for partial(db.tenant_session, cid): yields a null session.
+
+    run_chat_turn opens a session from the factory per tool call and for the
+    ledger write; tests that don't assert on the session pass this.
+    """
+    yield None
+
+
+@asynccontextmanager
+async def _mock_session_factory():
+    """Factory yielding a commit-capable mock session (for ledger-path tests)."""
+    from unittest.mock import AsyncMock
+
+    yield AsyncMock()
 
 
 def test_system_prompt_carries_honesty_constraint():
@@ -115,10 +134,11 @@ def _usage(**kw):
 @pytest.fixture
 def _patch_runner(monkeypatch):
     """Patch the LLM call, tool execution, and SSE emit out of chat.runner."""
-    calls = {"stream": 0, "tools": []}
+    calls = {"stream": 0, "tools": [], "sessions": []}
 
     async def _fake_execute(name, tool_input, creator_id, session):
         calls["tools"].append(name)
+        calls["sessions"].append(session)
         return '{"ok": true}', False  # (result_json, failed) — Issue 222
 
     async def _fake_aemit(*a, **k):
@@ -145,7 +165,11 @@ async def test_runner_executes_tool_then_answers(_patch_runner):
     monkeypatch.setattr("chat.runner.stream_message", _fake_stream)
 
     text, usage = await runner.run_chat_turn(
-        "task-1", uuid.uuid4(), "My Channel", [{"role": "user", "content": "hi"}], session=None
+        "task-1",
+        uuid.uuid4(),
+        "My Channel",
+        [{"role": "user", "content": "hi"}],
+        session_factory=_null_session_factory,
     )
     assert text == "Your best video was X."
     assert calls["tools"] == ["get_recent_videos"]
@@ -173,7 +197,11 @@ async def test_runner_resumes_pause_turn_with_same_tools(_patch_runner):
     monkeypatch.setattr("chat.runner.stream_message", _fake_stream)
 
     text, usage = await runner.run_chat_turn(
-        "task-p", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+        "task-p",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "hi"}],
+        session_factory=_null_session_factory,
     )
     assert text == "Done."
     assert calls["stream"] == 2
@@ -197,7 +225,11 @@ async def test_runner_bounds_pause_turn_rounds(_patch_runner):
     monkeypatch.setattr("chat.runner.stream_message", _always_pause)
 
     text, _ = await runner.run_chat_turn(
-        "task-pb", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+        "task-pb",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "hi"}],
+        session_factory=_null_session_factory,
     )
     # Initial call + at most _MAX_PAUSE_ROUNDS resumes, then the loop bails.
     assert calls["stream"] == runner._MAX_PAUSE_ROUNDS + 1
@@ -218,7 +250,11 @@ async def test_runner_flags_max_tokens_truncation(_patch_runner):
     monkeypatch.setattr("chat.runner.stream_message", _truncated)
 
     text, usage = await runner.run_chat_turn(
-        "task-t", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+        "task-t",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "hi"}],
+        session_factory=_null_session_factory,
     )
     assert text == "Half an ans"
     assert usage["truncated"] == 1
@@ -298,7 +334,11 @@ async def test_runner_bills_at_configured_model_rates(_patch_runner):
     monkeypatch.setattr("observability.record_llm_cost", _fake_cost)
 
     await runner.run_chat_turn(
-        "task-rates", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+        "task-rates",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "hi"}],
+        session_factory=_mock_session_factory,
     )
 
     assert captured["rates"] == (
@@ -332,7 +372,11 @@ async def test_runner_records_usage_against_chat_model(_patch_runner):
     monkeypatch.setattr("chat.runner.record_llm_tokens", _fake_record)
 
     await runner.run_chat_turn(
-        "task-m", uuid.uuid4(), None, [{"role": "user", "content": "hi"}], session=None
+        "task-m",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "hi"}],
+        session_factory=_null_session_factory,
     )
     assert recorded["model"] == settings.ANTHROPIC_MODEL_CHAT
     assert recorded["cache_read_tokens"] == 3
@@ -356,11 +400,70 @@ async def test_runner_caps_tool_iterations(_patch_runner):
     monkeypatch.setattr("chat.runner.stream_message", _always_tool)
 
     text, _ = await runner.run_chat_turn(
-        "task-2", uuid.uuid4(), None, [{"role": "user", "content": "go"}], session=None
+        "task-2",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "go"}],
+        session_factory=_null_session_factory,
     )
     # At most MAX_TOOL_ITERATIONS tool rounds + 1 forced-text round.
     assert calls["stream"] == settings.CHAT_MAX_TOOL_ITERATIONS + 1
     assert text == ""  # never produced a text answer, but did not hang
+
+
+async def test_runner_opens_factory_session_per_tool_call(_patch_runner):
+    """Issue 82b posture (ready-pass W2): every tool executes on a short-lived
+    session from the factory — never a session held across LLM round-trips —
+    and the usage-ledger write opens (and commits) its own."""
+    from unittest.mock import AsyncMock
+
+    from chat import runner
+
+    calls, monkeypatch = _patch_runner
+    scripted = [
+        (_msg("tool_use", [_tool_block("get_recent_videos", {}, "tu_1")]), _usage()),
+        (_msg("tool_use", [_tool_block("get_channel_dna", {}, "tu_2")]), _usage()),
+        (_msg("end_turn", [_text_block("done")]), _usage()),
+    ]
+
+    async def _fake_stream(client, task_id, **kwargs):
+        calls["stream"] += 1
+        return scripted.pop(0)
+
+    monkeypatch.setattr("chat.runner.stream_message", _fake_stream)
+
+    opened: list[object] = []
+    closed: list[object] = []
+
+    @asynccontextmanager
+    async def _tracking_factory():
+        session = AsyncMock()
+        opened.append(session)
+        try:
+            yield session
+        finally:
+            closed.append(session)
+
+    ledger = AsyncMock()
+    monkeypatch.setattr("billing.ledger.increment_usage", ledger)
+    monkeypatch.setattr("billing.spend_guard.record_spend", AsyncMock())
+
+    await runner.run_chat_turn(
+        "task-s",
+        uuid.uuid4(),
+        None,
+        [{"role": "user", "content": "go"}],
+        session_factory=_tracking_factory,
+    )
+
+    # One fresh session per tool call + one for the ledger write; all released.
+    assert len(opened) == 3
+    assert closed == opened
+    # The tool executor received the factory sessions, in order.
+    assert calls["sessions"] == opened[:2]
+    # The ledger write ran on its own factory session and committed it.
+    assert ledger.await_args.args[0] is opened[2]
+    opened[2].commit.assert_awaited_once()
 
 
 # ── Issue 324: new clip/outcome tool schemas ──────────────────────────────────

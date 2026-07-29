@@ -96,6 +96,16 @@ CELERY_TASKS_TOTAL = Counter(
     "Celery tasks by terminal state",
     labelnames=("task", "state"),
 )
+# Beat/worker sweeps skipped because the pg advisory lock was already held.
+# A steady non-zero rate means a lock leaked onto a pooled backend (or a sweep
+# is genuinely overrunning its schedule) — either way the silent no-op is now
+# visible (OFF_COURSE 2026-06-30). Label is the task portion of the lock key
+# (per-creator suffixes stripped — same low-cardinality discipline as above).
+BEAT_LOCK_SKIPS_TOTAL = Counter(
+    "beat_lock_skips_total",
+    "Beat/worker runs skipped because the advisory lock was held",
+    labelnames=("task",),
+)
 # LLM token usage counter — labels aligned to OTel GenAI semconv
 # gen_ai.usage.input_tokens / gen_ai.usage.output_tokens (provider/model/kind).
 # Labels are intentionally low-cardinality: provider and model are a small finite

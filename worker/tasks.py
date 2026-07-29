@@ -57,7 +57,7 @@ from models import (
     VideoKind,
     VideoMetrics,
 )
-from observability import RENDER_FAILURES_TOTAL, log_event
+from observability import BEAT_LOCK_SKIPS_TOTAL, RENDER_FAILURES_TOTAL, log_event
 from worker.celery_app import celery, run_async
 from youtube.errors import YouTubeAuthError
 from youtube.quota import QuotaExhaustedError, QuotaSubBudgetExhaustedError, remaining
@@ -155,11 +155,58 @@ async def _rollback_then_unlock(session: Any, lock_key: str) -> None:
     silently disabling that sweep until ``pool_recycle`` cycles the connection
     (Issue 143). Rolling back first is a no-op on a clean session and guarantees
     the unlock statement can run.
+
+    Hardened (OFF_COURSE 2026-06-30): if the rollback or the unlock itself
+    raises, no other connection can release the lock — session-level advisory
+    locks belong to the acquiring backend (``pg_advisory_unlock`` from another
+    session returns false and releases nothing; postgresql.org
+    functions-admin). The guarded action is ``session.invalidate()``: the
+    connection is DISCARDED rather than returned to the pool, and PostgreSQL
+    frees session-level advisory locks at session end "even if the client
+    disconnects ungracefully" (postgresql.org explicit-locking).
     """
     from sqlalchemy import text
 
-    await session.rollback()
-    await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+    try:
+        await session.rollback()
+        await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": lock_key})
+    except Exception:
+        logger.exception(
+            "advisory unlock failed for %s — invalidating the connection so "
+            "PostgreSQL releases the lock at session end",
+            lock_key,
+        )
+        log_event("beat_lock_unlock_failed", lock_key=lock_key)
+        # Best-effort: even if invalidate raises, never mask the sweep's own
+        # exception propagating through the caller's ``finally``.
+        with contextlib.suppress(Exception):
+            await session.invalidate()
+
+
+async def _try_advisory_lock(session: Any, lock_key: str) -> bool:
+    """Try the session-scoped advisory lock *lock_key*; instrument skips.
+
+    DRY acquire for the eight ``pg_try_advisory_lock`` sites in this file.
+    Returns True when acquired. ``False`` (another instance — or a leaked
+    lock — holds it) silently no-ops the sweep, so it emits a
+    ``beat_lock_skip`` event and increments ``BEAT_LOCK_SKIPS_TOTAL``,
+    labelled by the task portion of the key (per-creator suffixes stripped
+    to keep metric cardinality low). Call sites keep their own log line.
+    """
+    from sqlalchemy import text
+
+    acquired = bool(
+        (
+            await session.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
+            )
+        ).scalar_one()
+    )
+    if not acquired:
+        task_label = lock_key.split(":", 1)[0]
+        log_event("beat_lock_skip", task=task_label, lock_key=lock_key)
+        BEAT_LOCK_SKIPS_TOTAL.labels(task=task_label).inc()
+    return acquired
 
 
 _KEYSET_BATCH_SIZE = 500
@@ -1086,7 +1133,7 @@ def retrain_preference(self: Task, creator_id: str) -> str:
 
 
 async def _retrain_preference_async(creator_id: str) -> None:
-    from sqlalchemy import func, select, text
+    from sqlalchemy import func, select
     from sqlalchemy.exc import IntegrityError
 
     from preference.train import TRAINABLE_ACTIONS, build_and_save
@@ -1103,12 +1150,7 @@ async def _retrain_preference_async(creator_id: str) -> None:
         # here we use the session-scoped non-transactional lock (pg_try_advisory_lock)
         # with an explicit unlock in the finally clause.
         lock_key = f"retrain:{cid}"
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, lock_key):
             logger.info("advisory lock held — skipping retrain_preference for creator %s", cid)
             return
         try:
@@ -2365,19 +2407,14 @@ async def _sweep_scheduled_publications_async() -> None:
        is intentional: the row persists even if the Celery broker is temporarily
        unavailable.
     """
-    from sqlalchemy import select, text
+    from sqlalchemy import select
 
     now = datetime.now(UTC)
     lock_key = "sweep_scheduled_publications"
 
     # AdminSessionLocal: genuine cross-tenant sweep — selects due rows across ALL creators.
     async with db.AdminSessionLocal() as session:
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, lock_key):
             logger.info("advisory lock held — skipping sweep_scheduled_publications")
             return
 
@@ -2442,7 +2479,7 @@ async def _sweep_stale_renders_async() -> None:
     with the entity + creator so an operator can correlate with worker OOM /
     deploy events.
     """
-    from sqlalchemy import select, text, update
+    from sqlalchemy import select, update
 
     lock_key = "sweep_stale_renders"
     stale_after = render_stale_after_s()
@@ -2450,12 +2487,7 @@ async def _sweep_stale_renders_async() -> None:
     # AdminSessionLocal: genuine cross-tenant sweep — recovers stuck rows for
     # ALL creators (same posture as the other Beat sweeps in this file).
     async with db.AdminSessionLocal() as session:
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, lock_key):
             logger.info("advisory lock held — skipping sweep_stale_renders")
             return
 
@@ -2542,7 +2574,7 @@ async def _poll_clip_outcomes_async() -> None:
     from collections import defaultdict
     from datetime import datetime, timedelta
 
-    from sqlalchemy import and_, or_, select, text
+    from sqlalchemy import and_, or_, select
 
     from youtube.data_api import get_video_stats
     from youtube.oauth import get_valid_access_token
@@ -2560,13 +2592,7 @@ async def _poll_clip_outcomes_async() -> None:
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task — only one instance
         # should run at a time. Non-blocking so a slow prior run doesn't queue.
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
-                {"k": "poll_clip_outcomes"},
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, "poll_clip_outcomes"):
             logger.info("advisory lock held — skipping poll_clip_outcomes")
             return
         try:
@@ -2911,7 +2937,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
 async def _purge_stale_source_media_async() -> None:
     from datetime import timedelta
 
-    from sqlalchemy import and_, or_, select, text, update
+    from sqlalchemy import and_, or_, select, update
 
     from config import settings
     from worker.storage import adelete_file
@@ -2929,13 +2955,7 @@ async def _purge_stale_source_media_async() -> None:
     # AdminSessionLocal: genuine cross-tenant sweep — ToS retention purge over ALL creators.
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task.
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
-                {"k": "purge_stale_source_media"},
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, "purge_stale_source_media"):
             logger.info("advisory lock held — skipping purge_stale_source_media")
             return
         try:
@@ -3029,7 +3049,7 @@ async def _purge_stale_youtube_analytics_async() -> None:
     """
     from datetime import timedelta
 
-    from sqlalchemy import delete, select, text
+    from sqlalchemy import delete, select
 
     from config import settings
 
@@ -3038,13 +3058,7 @@ async def _purge_stale_youtube_analytics_async() -> None:
     # AdminSessionLocal: genuine cross-tenant sweep — analytics retention purge over ALL creators.
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task.
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
-                {"k": "purge_stale_youtube_analytics"},
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, "purge_stale_youtube_analytics"):
             logger.info("advisory lock held — skipping purge_stale_youtube_analytics")
             return
         try:
@@ -3468,7 +3482,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
     metric progress. When None (Beat-task callers + tests), emits short-
     circuit silently — no observer.
     """
-    from sqlalchemy import Select, select, text
+    from sqlalchemy import Select, select
 
     from config import settings
     from worker.progress import aemit
@@ -3483,12 +3497,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
     lock_key = f"catalog-sync:{cid}"
     try:
         async with db.tenant_session(cid) as session:
-            acquired = (
-                await session.execute(
-                    text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": lock_key}
-                )
-            ).scalar_one()
-            if not acquired:
+            if not await _try_advisory_lock(session, lock_key):
                 logger.info(
                     "advisory lock held — skipping sync_channel_catalog for creator %s", cid
                 )
@@ -3648,7 +3657,7 @@ async def _sync_channel_catalog_async(creator_id: str, task_id: str | None = Non
 
 
 async def _refresh_youtube_analytics_async() -> None:
-    from sqlalchemy import delete, select, text
+    from sqlalchemy import delete, select
 
     from youtube.analytics import sync_audience_data, sync_video_analytics, sync_video_catalog
     from youtube.oauth import get_valid_access_token
@@ -3657,13 +3666,7 @@ async def _refresh_youtube_analytics_async() -> None:
     async with db.AdminSessionLocal() as session:
         # Advisory lock (Issue 105 — Fix 4): global Beat task — only one instance
         # should iterate all creators at a time.
-        acquired = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(hashtext(:k))"),
-                {"k": "refresh_youtube_analytics"},
-            )
-        ).scalar_one()
-        if not acquired:
+        if not await _try_advisory_lock(session, "refresh_youtube_analytics"):
             logger.info("advisory lock held — skipping refresh_youtube_analytics")
             return
         try:
@@ -3945,6 +3948,11 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     The brief itself streams via the ``task_id`` kwarg on
     ``generate_improvement_brief`` (Issue 92 added this mirroring the DNA
     brief's Issue-86 pattern).
+
+    Issue 82b split (ready-pass W2): the read phase closes its tenant session
+    BEFORE the ~120 s Claude + web_search call, so no pooled connection is held
+    across it; the ready/failed writes each re-acquire a fresh tenant session
+    (RLS GUC re-stamped per transaction by ``tenant_session``).
     """
     from sqlalchemy import select
 
@@ -3954,10 +3962,37 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     from models import ImprovementBrief, ImprovementBriefStatus
     from worker.progress import aemit
 
-    try:
-        await aemit(job_id, "step", label="improvement_brief_start", stage="improvement_brief")
+    cid = uuid.UUID(creator_id)
 
-        cid = uuid.UUID(creator_id)
+    async def _mark_failed(error: str) -> None:
+        """Mark the brief row failed on a FRESH tenant session (best-effort).
+
+        Post-split the read session is closed (or poisoned) by the time a
+        failure lands, so this re-acquires one. Never raises: the caller must
+        re-raise the ORIGINAL exception for Celery retry even if this write
+        fails — in that case the row stays pre-ready until the retry lands.
+        """
+        try:
+            async with db.tenant_session(cid) as fail_session:
+                fail_row = (
+                    await fail_session.execute(
+                        select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
+                    )
+                ).scalar_one_or_none()
+                if fail_row is not None:
+                    fail_row.status = ImprovementBriefStatus.failed
+                    fail_row.error = error
+                    fail_row.completed_at = datetime.now(UTC)
+                    await fail_session.commit()
+        except Exception:
+            logger.exception(
+                "generate_improvement_brief: failed-mark write failed for %s", creator_id
+            )
+
+    await aemit(job_id, "step", label="improvement_brief_start", stage="improvement_brief")
+
+    try:
+        # ── Read phase ────────────────────────────────────────────────────────
         async with db.tenant_session(cid) as session:
             # tenant_session stamps creator_id so the RLS `after_begin` listener
             # sets `app.creator_id` before any query. Without it the brief query
@@ -4023,94 +4058,105 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                 await aemit(job_id, "error", stage="improvement_brief", message=str(exc))
                 return
 
-            try:
-                await aemit(
-                    job_id,
-                    "step",
-                    label="load_analytics",
-                    stage="improvement_brief",
-                )
-                metrics_result = await session.execute(
-                    select(VideoMetrics)
-                    .join(Video, VideoMetrics.video_id == Video.id)
-                    .where(Video.creator_id == creator.id)
-                    .order_by(VideoMetrics.fetched_at.desc())
-                    .limit(50)
-                )
-                all_metrics = list(metrics_result.scalars())
-                views_list = [m.views for m in all_metrics if m.views]
-                eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
-                dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
-
-                def _avg(lst: Sequence[float]) -> float | None:
-                    return sum(lst) / len(lst) if lst else None
-
-                analytics = {
-                    "channel_title": creator.channel_title,
-                    "videos_in_db": len(all_metrics),
-                    "avg_views": _avg(views_list),
-                    "avg_engagement_rate": _avg(eng_list),
-                    "avg_view_duration_s": _avg(dur_list),
-                }
-
-                dna_profile = await get_active(session, creator.id)
-                dna_brief = dna_profile.brief_text if dna_profile else None
-
-                await aemit(
-                    job_id,
-                    "step",
-                    label="call_claude",
-                    stage="improvement_brief",
-                )
-                # task_id propagates into improvement.brief.stream_and_emit,
-                # which forwards cache/token deltas on the same Redis stream.
-                brief_text, _improv_usage = await build_brief(
-                    channel_title=creator.channel_title or "Unknown Channel",
-                    analytics=analytics,
-                    dna_brief=dna_brief,
-                    task_id=job_id,
-                )
-            except Exception as exc:
-                row.status = ImprovementBriefStatus.failed
-                row.error = "Brief generation failed — try again."
-                row.completed_at = datetime.now(UTC)
-                await session.commit()
-                logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
-                await aemit(
-                    job_id,
-                    "error",
-                    stage="improvement_brief",
-                    message="Brief generation failed; retrying.",
-                    exc_type=type(exc).__name__,
-                )
-                raise
-
-            from billing.ledger import record_llm_usage
-
-            await record_llm_usage(
-                cid,
-                _improv_usage,
-                settings.COST_PER_MTOK_IN_SONNET,
-                settings.COST_PER_MTOK_OUT_SONNET,
-            )
-
-            row.status = ImprovementBriefStatus.ready
-            row.brief_text = brief_text
-            row.error = None
-            row.completed_at = datetime.now(UTC)
-            await session.commit()
-            logger.info("Improvement brief ready for creator %s", creator_id)
             await aemit(
                 job_id,
-                "done",
+                "step",
+                label="load_analytics",
                 stage="improvement_brief",
-                message="Brief ready.",
             )
-    except Exception:
-        # The inner try/except above already emitted the error + persisted the
-        # row.failed state. This outer guard exists so a Redis emit failure
-        # at line entry does not silently swallow the original exception.
+            metrics_result = await session.execute(
+                select(VideoMetrics)
+                .join(Video, VideoMetrics.video_id == Video.id)
+                .where(Video.creator_id == creator.id)
+                .order_by(VideoMetrics.fetched_at.desc())
+                .limit(50)
+            )
+            all_metrics = list(metrics_result.scalars())
+            views_list = [m.views for m in all_metrics if m.views]
+            eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
+            dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
+
+            def _avg(lst: Sequence[float]) -> float | None:
+                return sum(lst) / len(lst) if lst else None
+
+            analytics = {
+                "channel_title": creator.channel_title,
+                "videos_in_db": len(all_metrics),
+                "avg_views": _avg(views_list),
+                "avg_engagement_rate": _avg(eng_list),
+                "avg_view_duration_s": _avg(dur_list),
+            }
+
+            dna_profile = await get_active(session, creator.id)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+            channel_title = creator.channel_title or "Unknown Channel"
+
+        # ── LLM phase — read session CLOSED, no pooled connection held ───────
+        await aemit(
+            job_id,
+            "step",
+            label="call_claude",
+            stage="improvement_brief",
+        )
+        # task_id propagates into improvement.brief.stream_and_emit,
+        # which forwards cache/token deltas on the same Redis stream.
+        brief_text, _improv_usage = await build_brief(
+            channel_title=channel_title,
+            analytics=analytics,
+            dna_brief=dna_brief,
+            task_id=job_id,
+        )
+    except Exception as exc:
+        # Any read-phase or LLM failure: mark the row failed on a fresh
+        # session (safe — the read session may be closed or poisoned), emit,
+        # and re-raise so the Celery retry still fires.
+        await _mark_failed("Brief generation failed — try again.")
+        logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
+        await aemit(
+            job_id,
+            "error",
+            stage="improvement_brief",
+            message="Brief generation failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
         raise
+
+    from billing.ledger import record_llm_usage
+
+    # Self-sessioned (admin) ledger write — runs with no tenant session open.
+    await record_llm_usage(
+        cid,
+        _improv_usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+
+    # ── Write phase — fresh tenant session; re-fetch rather than merge the
+    # detached phase-1 row (shipped Issue 82b pattern, tests/test_session_release.py).
+    async with db.tenant_session(cid) as session:
+        row = (
+            await session.execute(
+                select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            # Row deleted mid-LLM (e.g. account erasure) — nothing to store.
+            logger.warning(
+                "generate_improvement_brief: row vanished for %s; dropping result", creator_id
+            )
+            return
+        row.status = ImprovementBriefStatus.ready
+        row.brief_text = brief_text
+        row.error = None
+        row.completed_at = datetime.now(UTC)
+        await session.commit()
+    logger.info("Improvement brief ready for creator %s", creator_id)
+    await aemit(
+        job_id,
+        "done",
+        stage="improvement_brief",
+        message="Brief ready.",
+    )
 
 
 # ── Video analysis (Issue 121) ────────────────────────────────────────────────
@@ -4270,19 +4316,25 @@ async def _generate_video_analysis_async(
             dna_profile = await get_active(session, cid)
             dna_brief = dna_profile.brief_text if dna_profile else None
 
-            await aemit(job_id, "step", label="analyzing", stage="video_analysis")
+        # Issue 82b posture (mirrors the titles task below): the tenant session
+        # is CLOSED before the streaming Claude call, so no pooled connection is
+        # held across the 30–120 s round-trip. Detached attribute reads stay
+        # safe post-close — expire_on_commit=False (db.py). No write phase is
+        # needed: the analysis is ephemeral and record_llm_usage opens its own
+        # short-lived admin session.
+        await aemit(job_id, "step", label="analyzing", stage="video_analysis")
 
-            _analysis_result, _analysis_usage = await build_analysis(
-                channel_title=creator.channel_title or "Unknown Channel",
-                youtube_video_id=youtube_video_id,
-                video_title=video_title,
-                query=query,
-                video_metrics=video_metrics,
-                retention_summary=retention_summary,
-                channel_avg=channel_avg,
-                dna_brief=dna_brief,
-                task_id=job_id,
-            )
+        _analysis_result, _analysis_usage = await build_analysis(
+            channel_title=creator.channel_title or "Unknown Channel",
+            youtube_video_id=youtube_video_id,
+            video_title=video_title,
+            query=query,
+            video_metrics=video_metrics,
+            retention_summary=retention_summary,
+            channel_avg=channel_avg,
+            dna_brief=dna_brief,
+            task_id=job_id,
+        )
 
         from billing.ledger import record_llm_usage
 
@@ -5053,12 +5105,27 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
 
             history = [{"role": m.role.value, "content": m.content} for m in rows]
 
-            final_text, usage = await run_chat_turn(job_id, cid, channel_title, history, session)
+        # Issue 82b split (ready-pass W2): the read session is CLOSED before the
+        # multi-round agentic turn, so no pooled connection is held across the
+        # LLM round-trips. Tools + the usage-ledger write open short-lived
+        # tenant sessions via the factory (precedent: _generate_clips_async's
+        # ledger_session_factory at the score_and_rank call).
+        final_text, usage = await run_chat_turn(
+            job_id, cid, channel_title, history, partial(db.tenant_session, cid)
+        )
 
-            if not final_text:
-                await aemit(job_id, "error", stage="chat", message="No reply generated.")
+        if not final_text:
+            await aemit(job_id, "error", stage="chat", message="No reply generated.")
+            return
+
+        # Write phase — fresh tenant session; re-fetch the conversation rather
+        # than reusing the detached phase-1 instance.
+        async with db.tenant_session(cid) as session:
+            conv = await session.get(ChatConversation, conv_uuid)
+            if conv is None:
+                # Conversation deleted mid-turn (e.g. account erasure).
+                await aemit(job_id, "error", stage="chat", message="Conversation not found.")
                 return
-
             session.add(
                 ChatMessage(
                     conversation_id=conv_uuid,
@@ -5454,8 +5521,8 @@ def _build_inapp_notification(
         "welcome": (
             "Welcome to AutoClip.",
             (
-                "AutoClip predicts fit with your style and audience — it does not promise virality. "
-                "Every recommendation is an estimate grounded in your own data."
+                "AutoClip predicts fit with your style and audience — it does not promise virality."
+                " Every recommendation is an estimate grounded in your own data."
             ),
             "/app/dashboard",
         ),
