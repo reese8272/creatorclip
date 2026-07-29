@@ -362,6 +362,10 @@ def _signals_async_runner(video, *, retention_rows=()):
             patch("worker.storage.alocal_path", FakeLocalPath),
             patch("ingestion.audio.extract_audio_events", return_value={}),
             patch("ingestion.signals.build_signal_timeline", return_value={}),
+            # Real aemit would create progress._AIO on this asyncio.run loop;
+            # the module singleton then outlives the loop and GC emits
+            # 'Event loop is closed' AbstractConnection.__del__ noise.
+            patch("worker.progress.aemit", new_callable=AsyncMock),
         ):
             mock_ctx.return_value.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
