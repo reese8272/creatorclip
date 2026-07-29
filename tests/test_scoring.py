@@ -247,6 +247,22 @@ def test_transcript_context_before_excludes_clip_text():
     assert "clip only" not in before_section
 
 
+def test_transcript_context_straddling_segment_assigned_once():
+    """A segment straddling setup_s must land in exactly ONE section, not vanish.
+
+    Full-containment selection dropped a straddler from both [BEFORE] and [CLIP],
+    so the clip's opening sentence could vanish from the LLM context. Midpoint
+    assignment (mid 10.0 of seg 8.0-12.0 falls in [10, 20)) puts it in the clip
+    section exactly once.
+    """
+    segs = [{"start": 8.0, "end": 12.0, "text": "straddles setup"}]
+    result = _transcript_context(10.0, 20.0, segs)
+    assert "straddles setup" in result
+    assert 'name="transcript_clip"' in result
+    assert 'name="transcript_before"' not in result
+    assert result.count("straddles setup") == 1
+
+
 # ── score_candidates cold-start ────────────────────────────────────────────────
 
 
