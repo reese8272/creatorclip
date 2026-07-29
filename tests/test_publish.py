@@ -559,3 +559,89 @@ def test_publish_done_null_youtube_video_id_logs_warning(caplog):
         for record in caplog.records
         if record.levelno == logging.WARNING
     ), "A warning about done+NULL youtube_video_id must be logged"
+
+
+# ── W1 metadata lane: applied publish metadata reaches upload_video ───────────
+
+
+def _run_publish_success(clip_mock: MagicMock, video_mock: MagicMock) -> AsyncMock:
+    """Drive _publish_to_youtube_async down the success path and return the
+    upload_video mock so callers assert the metadata it actually received."""
+    from worker.tasks import _publish_to_youtube_async
+
+    setup_session = MagicMock()
+    setup_session.flush = AsyncMock()
+    setup_session.commit = AsyncMock()
+    no_existing = MagicMock()
+    no_existing.scalar_one_or_none = MagicMock(return_value=None)
+    setup_session.execute = AsyncMock(return_value=no_existing)
+    setup_session.get = AsyncMock(side_effect=[clip_mock, video_mock])
+    setup_session.add = MagicMock(side_effect=lambda obj: setattr(obj, "id", uuid.uuid4()))
+
+    success_session = MagicMock()
+    success_session.flush = AsyncMock()
+    success_session.commit = AsyncMock()
+    success_session.add = MagicMock()
+    success_session.get = AsyncMock(side_effect=[MagicMock(), MagicMock()])
+
+    sessions = iter([setup_session, success_session])
+
+    local_path_cm = MagicMock()
+    local_path_cm.__aenter__ = AsyncMock(return_value=MagicMock())
+    local_path_cm.__aexit__ = AsyncMock(return_value=False)
+
+    upload = AsyncMock(return_value="YT_META")
+    with (
+        patch("worker.tasks.db.AsyncSessionLocal", lambda: _SessionCM(next(sessions))),
+        patch("worker.tasks._creator_id_for_clip", AsyncMock(return_value=str(uuid.uuid4()))),
+        patch("youtube.oauth.get_valid_access_token", AsyncMock(return_value="tok")),
+        patch("worker.storage.alocal_path", return_value=local_path_cm),
+        patch("youtube.publish.upload_video", upload),
+        patch("youtube.quota.consume_insert", AsyncMock()),
+        patch("config.settings") as mock_settings,
+    ):
+        mock_settings.YOUTUBE_PUBLISH_PRIVACY = "private"
+        asyncio.run(_publish_to_youtube_async("task-meta", str(uuid.uuid4())))
+    return upload
+
+
+def _publishable_clip(**applied) -> MagicMock:
+    clip = MagicMock()
+    clip.render_uri = "/tmp/c.mp4"
+    clip.creator_id = uuid.uuid4()
+    clip.video_id = uuid.uuid4()
+    clip.applied_title = applied.get("applied_title")
+    clip.applied_description = applied.get("applied_description")
+    return clip
+
+
+def test_publish_uses_applied_metadata():
+    """PATCHed applied_title/applied_description win over the video-title
+    fallback — the Issue-322 suggestions must actually land on YouTube."""
+    clip = _publishable_clip(
+        applied_title="Creator Picked Title",
+        applied_description="My description #Shorts",
+    )
+    video = MagicMock()
+    video.title = "Raw upload title"
+
+    upload = _run_publish_success(clip, video)
+
+    kwargs = upload.call_args.kwargs
+    assert kwargs["title"] == "Creator Picked Title"
+    assert kwargs["description"] == "My description #Shorts"
+
+
+def test_publish_falls_back_when_applied_metadata_null():
+    """NULL applied fields fall back to video.title / '#Shorts'; the fallback
+    title is defensively bracket-stripped and capped at YouTube's official
+    100-char limit (raised from the undocumented [:90])."""
+    clip = _publishable_clip()
+    video = MagicMock()
+    video.title = "  <" + "x" * 150 + ">  "
+
+    upload = _run_publish_success(clip, video)
+
+    kwargs = upload.call_args.kwargs
+    assert kwargs["title"] == "x" * 100
+    assert kwargs["description"] == "#Shorts"

@@ -64,6 +64,8 @@ def _clip(
     cl.render_uri = "clips/x.mp4" if render_status == RenderStatus.done else None
     cl.cleaned_render_uri = None
     cl.style_preset = None
+    cl.applied_title = None
+    cl.applied_description = None
     return cl
 
 
@@ -288,6 +290,8 @@ def test_list_clips_truncated_true_when_at_limit(client):
         cl.render_status = RenderStatus.pending
         cl.render_uri = None
         cl.cleaned_render_uri = None
+        cl.applied_title = None
+        cl.applied_description = None
         return cl
 
     # 101 clips → router fetches 101 (limit+1), sets truncated=True, returns 100

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import IntegrityError
 
 from auth import get_current_creator
+from config import settings
 from db import get_session
 from main import app
 from models import (
@@ -314,7 +315,13 @@ def test_create_summary_purged_source_409(client):
         resp = _post(client, video.id)
 
     assert resp.status_code == 409
-    assert "re-upload" in resp.json()["detail"]
+    # Structured detail, unified with the render 409 (W1 metadata lane): the
+    # window comes from settings.SOURCE_MEDIA_RETENTION_HOURS, not a hardcoded
+    # "72-hour" string.
+    detail = resp.json()["detail"]
+    assert detail["code"] == "source_expired"
+    assert "re-upload" in detail["message"]
+    assert f"{settings.SOURCE_MEDIA_RETENTION_HOURS}-hour" in detail["message"]
 
 
 def test_create_summary_cross_creator_404(client):

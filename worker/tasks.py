@@ -732,7 +732,17 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
         creator_id = clip.creator_id
         render_uri = clip.render_uri
         video = await session.get(Video, clip.video_id)
-        base_title = (video.title if video and video.title else "New Short").strip()[:90]
+        # Applied metadata (migration 0047) wins; NULL falls back to the video
+        # title / "#Shorts". Applied values are pre-validated at PATCH
+        # /clips/{id} (≤100 chars / ≤5000 UTF-8 bytes, no angle brackets) so
+        # only the fallback path needs the defensive bracket strip + cap at
+        # YouTube's official 100-char videos.insert limit.
+        if clip.applied_title:
+            publish_title = clip.applied_title
+        else:
+            fallback = (video.title if video and video.title else "New Short").strip()
+            publish_title = fallback.replace("<", "").replace(">", "").strip()[:100] or "New Short"
+        publish_description = clip.applied_description or "#Shorts"
 
         if existing is None:
             pub = ClipPublication(
@@ -762,8 +772,8 @@ async def _publish_to_youtube_async(task_id: str, clip_id: str) -> str:
             video_id = await upload_video(
                 access_token,
                 local_file,
-                title=base_title,
-                description="#Shorts",
+                title=publish_title,
+                description=publish_description,
                 privacy_status=settings.YOUTUBE_PUBLISH_PRIVACY,
             )
     except (YouTubeAuthError, YouTubeUploadError) as exc:
