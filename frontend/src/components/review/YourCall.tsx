@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { AppliedTitleField } from '@/components/review/AppliedTitleField'
+import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { FeedbackAction, FeedbackPayload, ReviewClip } from '@/types'
+import type { FeedbackAction, FeedbackPayload, ReviewClip, TaskQueued } from '@/types'
 
 const APPROVE_TAGS = [
   { id: 'titles_fit_style', label: 'Titles fit my style' },
@@ -36,8 +37,41 @@ export function YourCall({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [note, setNote] = useState('')
   const [flash, setFlash] = useState('')
+  const [trimApplying, setTrimApplying] = useState(false)
+  const [trimStatus, setTrimStatus] = useState<{ text: string; error: boolean } | null>(null)
 
   const downloadUrl = `/clips/${clip.id}/download`
+
+  // Wave-1 trim-rerender contract: clip-relative seconds; the re-render lands in
+  // cleaned_render_uri and rides the same review-then-confirm flow as the clean
+  // pass. Separate from "Save trim", which only logs the preference signal.
+  async function applyTrimRender() {
+    setTrimStatus(null)
+    try {
+      await api<TaskQueued>(`/clips/${clip.id}/trim-render`, {
+        method: 'POST',
+        body: { trim_start_s: trimStart, trim_end_s: trimEnd },
+      })
+      setTrimApplying(true)
+      setTrimStatus({
+        text: 'Re-rendering with your trim — the preview appears below (~20s).',
+        error: false,
+      })
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'pending_clean_or_edit') {
+        // A prior clean/edit is waiting on a decision — surface its preview so
+        // the creator can confirm or discard instead of hitting a dead end.
+        setTrimStatus({ text: e.message, error: true })
+        setTrimApplying(true)
+      } else if (e instanceof ApiError) {
+        // 422 trim_noop / kept_too_short / removed_too_much messages embed
+        // their limits — show them verbatim.
+        setTrimStatus({ text: e.message, error: true })
+      } else {
+        setTrimStatus({ text: 'Could not queue the re-render — try again.', error: true })
+      }
+    }
+  }
 
   async function sendFeedback(action: FeedbackAction, tags?: string[], feedbackNote?: string) {
     const body: FeedbackPayload = { action }
@@ -117,6 +151,38 @@ export function YourCall({
           <span className="inline-flex h-[38px] flex-1 items-center justify-center rounded-sm border border-strong bg-bg text-small text-subtle">
             ⬇ Download
           </span>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-col gap-1.5">
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-[38px] w-full"
+          disabled={trimApplying || !clip.render_uri}
+          onClick={applyTrimRender}
+        >
+          ⟳ Apply trim &amp; re-render
+        </Button>
+        {trimStatus && (
+          <p className={cn('text-xs', trimStatus.error ? 'text-danger' : 'text-subtle')}>
+            {trimStatus.text}
+          </p>
+        )}
+        {trimApplying && (
+          <CleanedPreviewConfirm
+            clip={clip}
+            enabled={trimApplying}
+            onConfirmed={() => {
+              setTrimApplying(false)
+              setTrimStatus({ text: 'Trimmed version is now the main render.', error: false })
+            }}
+            onDiscarded={() => {
+              setTrimApplying(false)
+              setTrimStatus({ text: 'Keeping original render.', error: false })
+            }}
+            onError={(text) => setTrimStatus({ text, error: true })}
+          />
         )}
       </div>
 

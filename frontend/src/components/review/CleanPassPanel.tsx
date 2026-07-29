@@ -1,17 +1,20 @@
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
+import { CleanedPreviewConfirm } from '@/components/review/CleanedPreviewConfirm'
 import { Button } from '@/components/ui/button'
 import type { CleanPreview, ReviewClip } from '@/types'
 
 // Issue 134 — filler + long-silence clean pass: preview the cuts, render a
-// cleaned version, then swap it in (or keep the original).
+// cleaned version, then swap it in (or keep the original). The confirm-swap
+// affordance lives in the shared CleanedPreviewConfirm (also used by the
+// Review trim re-render flow).
 export function CleanPassPanel({ clip }: { clip: ReviewClip }) {
-  const queryClient = useQueryClient()
   const [preview, setPreview] = useState<CleanPreview | null>(null)
   const [applying, setApplying] = useState(false)
   const [status, setStatus] = useState('')
+  // Same query key as the poll inside CleanedPreviewConfirm — TanStack dedupes,
+  // so this only mirrors the URI for the Apply-button visibility below.
   const cleanedUri = useCleanedUriPoll(clip.video_id, clip.id, applying)
 
   async function loadPreview() {
@@ -34,22 +37,6 @@ export function CleanPassPanel({ clip }: { clip: ReviewClip }) {
     } catch (e) {
       setStatus(e instanceof ApiError ? e.message : 'Clean failed — try again.')
     }
-  }
-
-  async function confirmClean() {
-    try {
-      await api(`/clips/${clip.id}/clean/confirm`, { method: 'POST' })
-      setApplying(false)
-      setStatus('Cleaned version is now the main render.')
-      queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
-    } catch {
-      setStatus('Swap failed — try again.')
-    }
-  }
-
-  function discard() {
-    setApplying(false)
-    setStatus('Keeping original render.')
   }
 
   return (
@@ -87,23 +74,19 @@ export function CleanPassPanel({ clip }: { clip: ReviewClip }) {
         </>
       )}
 
-      {cleanedUri && (
-        <div>
-          <video
-            src={cleanedUri}
-            controls
-            className="mt-2 w-full rounded-sm border border-default"
-          />
-          <div className="mt-2 flex gap-2">
-            <Button size="sm" onClick={confirmClean}>
-              Use cleaned version
-            </Button>
-            <Button variant="secondary" size="sm" onClick={discard}>
-              Keep original
-            </Button>
-          </div>
-        </div>
-      )}
+      <CleanedPreviewConfirm
+        clip={clip}
+        enabled={applying}
+        onConfirmed={() => {
+          setApplying(false)
+          setStatus('Cleaned version is now the main render.')
+        }}
+        onDiscarded={() => {
+          setApplying(false)
+          setStatus('Keeping original render.')
+        }}
+        onError={setStatus}
+      />
 
       {status && <div className="text-xs text-subtle">{status}</div>}
     </div>
