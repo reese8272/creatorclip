@@ -1,6 +1,11 @@
 """
 Feedback capture: upvote / downvote / skip / trim / format.
 Each action persists to clip_feedback and is used by the preference model.
+
+Also owns POST /clips/{clip_id}/trim-render (Wave-1 ready pass): turns the
+Review screen's trim window into a real re-render via the existing
+``edit_clip`` machinery — the result lands in ``cleaned_render_uri`` and is
+swapped in by the existing ``POST /clips/{clip_id}/clean/confirm``.
 """
 
 import asyncio
@@ -14,10 +19,14 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.ledger import check_positive_balance
+from billing.spend_guard import require_budget
 from db import get_session
-from limiter import creator_key, limiter
+from flags import require_flag
+from limiter import RENDER_DAILY_LIMIT, creator_key, limiter
 from models import Clip, ClipFeedback, Creator, FeedbackAction
 from routers._owned import get_owned
+from routers._schemas import TaskQueuedOut
 
 router = APIRouter(prefix="/clips", tags=["review"])
 logger = logging.getLogger(__name__)
@@ -36,6 +45,21 @@ class FeedbackOut(BaseModel):
 
 
 _FEEDBACK_NOTE_MAX_LEN = 2000
+
+
+def _validate_trim_pair(s: float | None, e: float | None) -> None:
+    """Issue-339 numeric checks shared by FeedbackRequest and TrimRenderIn.
+
+    Rejects non-finite, negative, or inverted trim windows. Raises
+    ``ValueError`` so pydantic model validators surface it as a 422.
+    """
+    for val, label in ((s, "trim_start_s"), (e, "trim_end_s")):
+        if val is not None and not math.isfinite(val):
+            raise ValueError(f"{label} must be a finite number")
+        if val is not None and val < 0:
+            raise ValueError(f"{label} must be >= 0")
+    if s is not None and e is not None and s >= e:
+        raise ValueError("trim_start_s must be less than trim_end_s")
 
 
 class FeedbackRequest(BaseModel):
@@ -63,18 +87,27 @@ class FeedbackRequest(BaseModel):
         Clip-bounds validation (trim within [clip.start_s, clip.end_s]) is
         performed in the route handler after the clip is fetched from the DB.
         """
-        s, e = self.trim_start_s, self.trim_end_s
-        if s is None and e is None:
+        if self.trim_start_s is None and self.trim_end_s is None:
             return self  # no trim supplied — nothing to validate
-        for val, label in ((s, "trim_start_s"), (e, "trim_end_s")):
-            if val is not None and not math.isfinite(val):
-                raise ValueError(f"{label} must be a finite number")
-        if s is not None and s < 0:
-            raise ValueError("trim_start_s must be >= 0")
-        if e is not None and e < 0:
-            raise ValueError("trim_end_s must be >= 0")
-        if s is not None and e is not None and s >= e:
-            raise ValueError("trim_start_s must be less than trim_end_s")
+        _validate_trim_pair(self.trim_start_s, self.trim_end_s)
+        return self
+
+
+class TrimRenderIn(BaseModel):
+    """Request body for POST /clips/{clip_id}/trim-render.
+
+    ``trim_start_s`` / ``trim_end_s`` are CLIP-RELATIVE seconds over the
+    rendered mp4 — origin is ``setup_start_s`` when set, else ``start_s`` —
+    the same timebase as ``GET /clips/{id}/transcript`` and
+    ``POST /clips/{id}/cuts``.
+    """
+
+    trim_start_s: float
+    trim_end_s: float
+
+    @model_validator(mode="after")
+    def validate_trim(self) -> "TrimRenderIn":
+        _validate_trim_pair(self.trim_start_s, self.trim_end_s)
         return self
 
 
@@ -177,3 +210,114 @@ async def submit_feedback(
     await asyncio.to_thread(retrain_preference.delay, str(creator.id))
 
     return {"id": str(feedback.id), "action": feedback.action.value}
+
+
+@router.post(
+    "/{clip_id}/trim-render",
+    status_code=202,
+    response_model=TaskQueuedOut,
+    # Kill switch (Issue 284): 503 when the render_intake flag is off.
+    dependencies=[Depends(require_flag("render_intake")), Depends(require_budget)],
+)
+@limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
+async def trim_render(
+    request: Request,
+    clip_id: uuid.UUID,
+    body: TrimRenderIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Queue a re-render of the clip trimmed to ``[trim_start_s, trim_end_s]``.
+
+    The trim window is inverted into cut segments for the existing
+    ``edit_clip`` worker (which re-encodes from ``render_uri`` — trims keep
+    working after the retention purge nulls the source video). The result
+    lands in ``Clip.cleaned_render_uri``; the client confirms via the
+    existing ``POST /clips/{clip_id}/clean/confirm`` swap.
+    """
+    from clip_engine.edits import MIN_KEEP_SEGMENT_S, CutValidationError, validate_user_cuts
+
+    await check_positive_balance(creator.id, session)
+
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+    if not clip.render_uri:
+        raise HTTPException(status_code=400, detail="Clip has not been rendered yet")
+    # Mirror /cuts: refuse while a cleaned/edited artifact is pending, else
+    # the worker idempotency probe silently drops this edit.
+    if clip.cleaned_render_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pending_clean_or_edit",
+                "message": "Confirm or discard the pending cleaned/edited version first.",
+            },
+        )
+
+    clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    clip_duration_s = clip.end_s - clip_origin_s
+    # Right-edge tolerance of one frame matches validate_user_cuts' clamp.
+    if body.trim_end_s > clip_duration_s + MIN_KEEP_SEGMENT_S:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "out_of_bounds",
+                "message": (
+                    f"trim_end_s ({body.trim_end_s}) is past the clip duration "
+                    f"({clip_duration_s:.2f}s)"
+                ),
+            },
+        )
+
+    # Invert the trim window into cut segments: drop everything before
+    # trim_start_s and after trim_end_s. Edges narrower than one frame
+    # (MIN_KEEP_SEGMENT_S) are skipped so sub-frame float noise from the UI
+    # doesn't emit a zero-width cut.
+    cuts: list[list[float]] = []
+    if body.trim_start_s >= MIN_KEEP_SEGMENT_S:
+        cuts.append([0.0, body.trim_start_s])
+    if clip_duration_s - body.trim_end_s >= MIN_KEEP_SEGMENT_S:
+        cuts.append([body.trim_end_s, clip_duration_s])
+    if not cuts:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "trim_noop",
+                "message": "Trim covers the full clip — nothing to remove.",
+            },
+        )
+
+    try:
+        validate_user_cuts(
+            [(c[0], c[1]) for c in cuts],
+            clip_duration_s=clip_duration_s,
+        )
+    except CutValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+
+    import redis as _redis_pkg
+
+    from worker import progress
+    from worker.tasks import edit_clip as edit_task
+
+    task = await asyncio.to_thread(edit_task.delay, str(clip_id), cuts)
+    # SSE stream key is the clip id, not the Celery task id (sibling
+    # convention — see /clips/{id}/cuts).
+    stream_url: str | None = f"/tasks/{clip_id}/events"
+    try:
+        await progress.aset_owner(str(clip_id), str(creator.id))
+    except _redis_pkg.RedisError as exc:
+        logger.warning(
+            "trim-render aset_owner failed (Redis down?) clip_id=%s err=%s",
+            clip_id,
+            exc,
+        )
+        stream_url = None
+
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "stream_url": stream_url,
+    }
