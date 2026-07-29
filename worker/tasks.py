@@ -461,7 +461,29 @@ def build_signals(self: Task, video_id: str) -> str:
             _set_status(video_id, IngestStatus.failed, reason=_humanize_failure(exc, "signals"))
         )
         raise self.retry(exc=exc) from exc
-    generate_clips.delay(video_id)
+    try:
+        generate_clips.delay(video_id)
+    except Exception as exc:
+        # Celery raises kombu.OperationalError here only after its built-in
+        # publish retries (~0.4s) are exhausted — the broker is down. Without
+        # this hop the video would sit "done" with zero clips and a hung SSE
+        # stream, so record + mark failed, then re-raise (no self.retry — the
+        # retry message would go to the same down broker) so on_failure refunds.
+        log_event(
+            "generate_clips_enqueue_failed",
+            creator_id=creator_id,
+            task_id=self.request.id,
+            video_id=video_id,
+            exc_type=type(exc).__name__,
+        )
+        run_async(
+            _set_status(
+                video_id,
+                IngestStatus.failed,
+                reason="Clip generation could not be queued — please retry.",
+            )
+        )
+        raise
     log_event(
         "build_signals_done", creator_id=creator_id, task_id=self.request.id, video_id=video_id
     )
@@ -2824,13 +2846,22 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                     len(auto_render_clip_ids),
                     type(enqueue_exc).__name__,
                 )
-        if auto_render_clip_ids:
-            log_event(
-                "auto_render_enqueued",
-                creator_id=str(clip_creator_id) if clip_creator_id else None,
-                video_id=video_id,
-                count=len(auto_render_clip_ids),
-            )
+                log_event(
+                    "auto_render_enqueue_failed",
+                    creator_id=str(clip_creator_id) if clip_creator_id else None,
+                    video_id=video_id,
+                    count=len(auto_render_clip_ids),
+                    exc_type=type(enqueue_exc).__name__,
+                )
+            else:
+                # Only claim success when the publish actually succeeded — the
+                # event previously fired even when the enqueue had just failed.
+                log_event(
+                    "auto_render_enqueued",
+                    creator_id=str(clip_creator_id) if clip_creator_id else None,
+                    video_id=video_id,
+                    count=len(auto_render_clip_ids),
+                )
 
         # Trigger 1: clips-ready notification (Issue 244 / delivers #193).
         # entity_id = video_id so dedupe prevents duplicate notifications on retry.

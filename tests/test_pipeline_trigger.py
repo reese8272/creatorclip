@@ -5,7 +5,7 @@ dashboard includes polling JS, video status endpoint.
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -24,23 +24,79 @@ def test_generate_clips_task_registered():
     assert "worker.tasks.generate_clips" in celery.tasks
 
 
-def test_build_signals_chains_generate_clips():
-    """build_signals should call generate_clips.delay after completing."""
-    with (
-        patch("worker.tasks._signals_async") as mock_signals,
-        patch("worker.tasks.generate_clips") as mock_gen,
-    ):
-        mock_signals.return_value = None
+def test_build_signals_chains_generate_clips(monkeypatch):
+    """build_signals must enqueue generate_clips.delay(video_id) after its body
+    succeeds — the signals→generate_clips stage hop (W1: now guarded by a
+    try/except that must NOT swallow the success path)."""
+    from worker import tasks
 
-        with patch("worker.tasks.run_async", side_effect=lambda coro: None):
-            # Simulate successful build_signals call
-            mock_gen.delay = MagicMock()
-            # Call the underlying logic without Celery machinery
-            import worker.tasks as wt
+    vid = str(uuid.uuid4())
 
-            vid_id = str(uuid.uuid4())
-            wt.generate_clips.delay(vid_id)
-            mock_gen.delay.assert_called_once_with(vid_id)
+    async def _creator(video_id):
+        return "creator-1"
+
+    async def _ok(video_id, creator_id=None):
+        return None
+
+    monkeypatch.setattr(tasks, "_creator_id_for_video", _creator)
+    monkeypatch.setattr(tasks, "_signals_async", _ok)
+    delay = MagicMock()
+    monkeypatch.setattr(tasks.generate_clips, "delay", delay)
+
+    assert tasks.build_signals(vid) == vid
+    delay.assert_called_once_with(vid)
+
+
+def test_build_signals_enqueue_failure_marks_failed_and_refunds_once(monkeypatch):
+    """Broker publish failure on the signals→generate_clips hop (Celery raises
+    OperationalError after its built-in ~0.4s publish retries): the video must
+    be marked failed with the actionable queue reason, the enqueue-failed event
+    emitted, NO task retry (the retry message would go to the same down broker),
+    and the on_failure refund must fire exactly once — no double-refund."""
+    from worker import tasks
+
+    vid = str(uuid.uuid4())
+    statuses: list[tuple[IngestStatus, str | None]] = []
+    events: list[str] = []
+
+    async def _creator(video_id):
+        return "creator-1"
+
+    async def _ok(video_id, creator_id=None):
+        return None
+
+    async def _set_status(video_id, status, reason=None):
+        statuses.append((status, reason))
+
+    def _no_retry(**kwargs):
+        raise AssertionError("a publish failure must not retry — the broker is down")
+
+    monkeypatch.setattr(tasks, "_creator_id_for_video", _creator)
+    monkeypatch.setattr(tasks, "_signals_async", _ok)
+    monkeypatch.setattr(tasks, "_set_status", _set_status)
+    monkeypatch.setattr(tasks, "log_event", lambda event, **kw: events.append(event))
+    monkeypatch.setattr(tasks.build_signals, "retry", _no_retry)
+
+    fake_refund = AsyncMock()
+    monkeypatch.setattr("billing.refund.refund_for_video", fake_refund)
+    monkeypatch.setattr(tasks, "_fire_refund_notification_async", AsyncMock())
+    monkeypatch.setattr(
+        tasks.generate_clips,
+        "delay",
+        MagicMock(side_effect=tasks.generate_clips.OperationalError("broker down")),
+    )
+
+    # .apply() runs eagerly through the Celery tracer so on_failure (the refund
+    # path) fires exactly as it would in a real worker.
+    result = tasks.build_signals.apply(args=[vid], task_id="tid-enqueue-fail")
+
+    assert result.failed()
+    assert statuses == [
+        (IngestStatus.failed, "Clip generation could not be queued — please retry.")
+    ]
+    assert "generate_clips_enqueue_failed" in events
+    assert "build_signals_done" not in events
+    assert fake_refund.await_count == 1, "refund must fire exactly once (idempotent pack_id)"
 
 
 # ── Video status endpoint ─────────────────────────────────────────────────────
