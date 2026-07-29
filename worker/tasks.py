@@ -4466,7 +4466,12 @@ async def _generate_title_suggestions_async(
         from billing.ledger import record_llm_usage
 
         await record_llm_usage(
-            cid, _title_usage, settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET
+            cid,
+            _title_usage,
+            settings.COST_PER_MTOK_IN_SONNET,
+            settings.COST_PER_MTOK_OUT_SONNET,
+            # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+            cache_write_multiplier=2.0 if _title_usage.get("cache_1h") else None,
         )
 
     except Exception as exc:
@@ -4638,9 +4643,19 @@ async def _generate_thumbnail_concepts_async(
 
         if patterns is None and youtube_ids:
             await aemit(job_id, "step", label="analyzing_patterns", stage="thumbnail_concepts")
-            patterns = await analyze_thumbnail_patterns(
+            patterns, _patterns_usage = await analyze_thumbnail_patterns(
                 youtube_ids,
                 creator.channel_title or "Unknown Channel",
+            )
+            # Bill the multimodal vision call at the compute path (w2/billing-audit:
+            # previously entirely unbilled). Redis-cache hits above bill nothing.
+            from billing.ledger import record_llm_usage
+
+            await record_llm_usage(
+                cid,
+                _patterns_usage,
+                settings.COST_PER_MTOK_IN_SONNET,
+                settings.COST_PER_MTOK_OUT_SONNET,
             )
             try:
                 await _rc.setex(
@@ -4679,6 +4694,8 @@ async def _generate_thumbnail_concepts_async(
             _thumb_usage,
             settings.COST_PER_MTOK_IN_SONNET,
             settings.COST_PER_MTOK_OUT_SONNET,
+            # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+            cache_write_multiplier=2.0 if _thumb_usage.get("cache_1h") else None,
         )
 
     except Exception as exc:

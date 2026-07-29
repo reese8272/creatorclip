@@ -174,6 +174,8 @@ async def record_llm_usage(
     usage: dict,
     cost_per_mtok_in: float,
     cost_per_mtok_out: float,
+    *,
+    cache_write_multiplier: float | None = None,
 ) -> None:
     """Open a short-lived admin session to write LLM usage to the cost ledger.
 
@@ -185,6 +187,12 @@ async def record_llm_usage(
 
     ``usage`` is the dict returned by ``worker.anthropic_stream.stream_and_emit``
     (keys: input_tokens, output_tokens, cache_read, cache_creation).
+
+    ``cache_write_multiplier`` is threaded to ``_estimate_cost_usd``: pass 2.0
+    when the call sent a ttl:"1h" cache marker (1-hour writes bill 2× base
+    input); leave None for the 5-min-TTL default (1.25×). Callers of the
+    floor-gated ``knowledge.util.dna_system_block`` features read the
+    ``cache_1h`` flag from the producer's usage dict.
 
     This is also the choke point for the spend guard (Issue 290) and the
     ``llm_cost_usd_total`` counter (Issue 291) — every billed LLM call flows
@@ -201,6 +209,7 @@ async def record_llm_usage(
         cost_per_mtok_out,
         cache_read_tokens=usage.get("cache_read", 0),
         cache_creation_tokens=usage.get("cache_creation", 0),
+        cache_write_multiplier=cache_write_multiplier,
     )
     try:
         # Issue 291: Prometheus/OTel cost counter — same USD as the ledger write.

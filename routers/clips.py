@@ -1293,6 +1293,8 @@ async def get_clip_title_suggestions(
         usage,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
     logger.info(
         "clip_title_suggestions done creator=%s clip=%s titles=%d",
@@ -1391,6 +1393,8 @@ async def get_clip_caption_hooks(
         usage,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
     logger.info(
         "clip_caption_hooks done creator=%s clip=%s options=%d",
@@ -1501,6 +1505,8 @@ async def get_clip_explanation(
         usage,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
     logger.info(
         "clip_explain done creator=%s clip=%s principle=%s",
