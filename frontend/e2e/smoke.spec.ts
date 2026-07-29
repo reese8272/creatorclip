@@ -25,16 +25,20 @@ const AUTHED_PAGES = [
   { name: 'video-detail', path: 'video/v1' },
   { name: 'recap', path: 'video/v1/recap' }, // Issue 353b: guarded against the summaries[0] white-screen
   { name: 'profile', path: 'profile' },
+  { name: 'settings', path: 'settings' },
+  { name: 'editor-short', path: 'editor?video_id=v1&clip_id=c1' }, // clip refine mode
+  { name: 'editor-long', path: 'editor?video_id=v1' }, // long-form source mode
   { name: 'chat', path: 'chat' },
   { name: 'onboarding', path: 'onboarding' },
   { name: 'walkthrough', path: 'walkthrough' },
   { name: 'pricing', path: 'pricing' }, // public, but renders fine when authed
 ]
 
-// Console errors we treat as noise: unmocked media/image loads (clip render_uri
-// is null in fixtures; YouTube thumbnails hit the network). These are network
-// resource failures, not app bugs — the signal we care about is pageerror
-// (uncaught JS) and real console.error from React.
+// Console errors we treat as noise: unmocked media/image loads (c1's fixture
+// render_uri points at /clips/c1/download, which the mock answers with JSON, so
+// <video>/WebAudio loads fail; YouTube thumbnails hit the network). These are
+// network resource failures, not app bugs — the signal we care about is
+// pageerror (uncaught JS) and real console.error from React.
 const BENIGN = [
   /Failed to load resource/i,
   /net::ERR_/i,
@@ -105,11 +109,12 @@ test.describe('logged out', () => {
 // (or a Linux container), then commit the generated __snapshots__ files.
 // Local WSL2/macOS runs will produce false positives due to font-rendering diffs.
 //
-// Baseline update workflow:
-//   1. Push a CI run with `UPDATE_SNAPSHOTS=true` (or manually trigger with
-//      `--update-snapshots` in the visual CI job).
-//   2. Download the artifact containing the new __snapshots__ PNGs.
-//   3. Commit them in a dedicated "chore: update visual baselines" PR.
+// Baseline update workflow (ci.yml `visual` job):
+//   1. `gh workflow run ci.yml --ref <branch> -f update_snapshots=true` — the
+//      visual job re-runs with --update-snapshots and uploads
+//      frontend/e2e/__snapshots__/ as the `visual-baselines-<sha>` artifact.
+//   2. `gh run download <run-id> -n visual-baselines-<sha> -D frontend/e2e/`
+//   3. Commit the PNGs in a dedicated "chore(e2e): update visual baselines" PR.
 //
 // Dynamic regions to mask: BALANCE fixture has minutes_balance/trial_days_remaining.
 // Pricing route is static (no user data), login is fully static, dashboard

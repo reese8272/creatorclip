@@ -12,6 +12,8 @@ import { test as base, expect, type Route } from '@playwright/test'
 import type {
   Analytics,
   Balance,
+  BrandKit,
+  ClipTranscript,
   CurrentUser,
   DataGate,
   DnaResponse,
@@ -109,7 +111,10 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       reasoning:
         'Starts at the question setup before the reveal, holding the curiosity gap open until the payoff.',
       render_status: 'done',
-      render_uri: null,
+      // Non-null so the review walk exercises PublishPanel's publications query
+      // (enabled: Boolean(clip.render_uri)) and the Editor renders its player.
+      // The path returns JSON, not media — <video> load noise is BENIGN-filtered.
+      render_uri: '/clips/c1/download',
       cleaned_render_uri: null,
       applied_title: null,
       applied_description: null,
@@ -373,6 +378,37 @@ const PUBLICATIONS: PublicationListOut = {
   truncated: false,
 }
 
+// Brand kit (Issue 186) — shaped to BrandKitOut (routers/creators.py). Without
+// this fixture the catch-all `{}` left every field undefined, causing the
+// controlled-to-uncontrolled React warning on Settings (OFF_COURSE_BUGS
+// 2026-06-24). aspect/background stay null so <select> values remain within
+// their option sets.
+const BRAND_KIT: BrandKit = {
+  subtitle: 'bold_pop',
+  background: null,
+  captions_enabled: true,
+  zoom_on_peak: false,
+  denoise: false,
+  aspect: null,
+}
+
+// Word-level transcript for the short-form Editor (GET /clips/{id}/transcript)
+// so the transcript/timeline surface renders instead of the empty state.
+const TRANSCRIPT: ClipTranscript = {
+  clip_id: 'c1',
+  clip_duration_s: 35,
+  words: [
+    { word: 'So', start_s: 0.2, end_s: 0.4, index: 0 },
+    { word: 'this', start_s: 0.5, end_s: 0.7, index: 1 },
+    { word: 'switch', start_s: 0.8, end_s: 1.2, index: 2 },
+    { word: 'actually', start_s: 1.3, end_s: 1.8, index: 3 },
+    { word: 'clicks', start_s: 1.9, end_s: 2.3, index: 4 },
+    { word: 'on', start_s: 2.4, end_s: 2.5, index: 5 },
+    { word: 'the', start_s: 2.6, end_s: 2.7, index: 6 },
+    { word: 'downstroke', start_s: 2.8, end_s: 3.5, index: 7 },
+  ],
+}
+
 // Static GET endpoints → fixture body.
 const GET_TABLE: Record<string, unknown> = {
   '/billing/balance': BALANCE,
@@ -386,6 +422,7 @@ const GET_TABLE: Record<string, unknown> = {
   '/creators/me/data-gate': DATA_GATE,
   '/creators/niches': NICHES,
   '/creators/me/api-keys': API_KEYS,
+  '/creators/me/brand-kit': BRAND_KIT,
 }
 
 function json(route: Route, body: unknown, status = 200): Promise<void> {
@@ -408,6 +445,21 @@ async function dispatch(route: Route, seed: Seed): Promise<void> {
   if (method === 'GET' && /^\/videos\/[^/]+\/summaries$/.test(pathname))
     return json(route, SUMMARIES)
   if (pathname === '/creators/me/insights/analytics') return json(route, ANALYTICS)
+
+  // Brand-kit style suggestion (Issue 187): 204 = "no suggestion yet". Must be
+  // explicit — the catch-all `{}` is truthy and would render an empty banner
+  // (BrandKitSection treats any 200 body as a suggestion).
+  if (pathname === '/creators/me/brand-kit/suggestion')
+    return route.fulfill({ status: 204 })
+
+  // Word-level clip transcript for the short-form Editor (Issue 307).
+  if (method === 'GET' && /^\/clips\/[^/]+\/transcript$/.test(pathname))
+    return json(route, TRANSCRIPT)
+
+  // Trim-cut re-render (Wave-1 trim-rerender lane): TaskQueued-shaped 202
+  // mirroring routers/review.py trim_render.
+  if (method === 'POST' && /^\/clips\/[^/]+\/trim-render$/.test(pathname))
+    return json(route, { task_id: 't-trim', status: 'queued', stream_url: null }, 202)
 
   // Scheduled publishes (Issue 196): list, schedule (201 → new scheduled row),
   // confirm/cancel (mutated row; cancel repurposes status=failed + error).

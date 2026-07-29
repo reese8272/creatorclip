@@ -10,7 +10,19 @@ function mockFetch() {
     const url = String(input)
     if (url.endsWith('/auth/me')) return json({ channel_title: 'Test', analysis_mode: 'auto' })
     if (url.endsWith('/billing/balance')) return json({ minutes_balance: 10, low_balance: false })
-    if (url.includes('/brand-kit')) return json({ caption_style: 'bold_pop', captions_enabled: true })
+    // 204 = no style suggestion (BrandKitSection treats any 200 body as one).
+    if (url.includes('/brand-kit/suggestion'))
+      return { status: 204, ok: true, json: async () => null }
+    // BrandKitOut shape (routers/creators.py) — see src/types.ts BrandKit.
+    if (url.includes('/brand-kit'))
+      return json({
+        subtitle: 'bold_pop',
+        background: null,
+        captions_enabled: true,
+        zoom_on_peak: false,
+        denoise: false,
+        aspect: null,
+      })
     if (url.includes('/api-keys')) return json({ keys: [] })
     if (url.endsWith('/creators/niches')) return json({ options: [] })
     if (url.endsWith('/creators/me/identity')) return json({ identity: null, conflict: null })
