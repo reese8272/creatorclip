@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { safeUrl } from '@/lib/safeUrl'
 import { cn } from '@/lib/utils'
 
 // The visual height of the waveform canvas in px (CSS pixels).
@@ -141,6 +142,9 @@ export function Timeline({
     setDragEnd(null)
   }
 
+  // Server-influenced image URL: allowlist http(s)/relative before binding to src.
+  const waveformSrc = safeUrl(waveformImageUrl)
+
   // Compute selection overlay geometry (% of container width).
   const selectionStyle =
     dragStart !== null && dragEnd !== null && duration > 0
@@ -166,9 +170,9 @@ export function Timeline({
       aria-valuenow={currentTime}
     >
       {/* Waveform layer — image path takes priority over canvas path. */}
-      {waveformImageUrl ? (
+      {waveformSrc ? (
         <img
-          src={waveformImageUrl}
+          src={waveformSrc}
           alt="Clip waveform"
           draggable={false}
           className="absolute inset-x-0 top-0 h-[80px] w-full object-fill opacity-70"
