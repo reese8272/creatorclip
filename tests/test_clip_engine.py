@@ -544,6 +544,25 @@ def test_extract_candidates_invariants_hold_after_snap():
     assert c["end_s"] - c["setup_start_s"] >= MIN_CLIP_S
 
 
+def test_extract_candidates_end_clamped_to_duration():
+    """Regression for the end_s clamp: transcript word `end` values can exceed the
+    container duration (encoder/transcriber rounding), and a forward snap latching
+    onto such a word must be clamped back to duration_s — render.py rejects any
+    end_s > source duration.
+
+    Geometry: peak at 90.0, duration 111.0 → setup=75.0 (silence end), pre-snap
+    end_s=110.0. The terminal-punct word ending at 112.5 sits inside the forward
+    snap window [110.0, 113.0], so end_s snaps to 112.5 > duration_s and must be
+    clamped to exactly 111.0.
+    """
+    tl = _make_timeline([90.0], duration_s=111.0)
+    words = _words(("over.", 111.8, 112.5))
+    candidates = extract_candidates(tl, max_candidates=1, words=words)
+    assert len(candidates) == 1
+    assert candidates[0]["end_s"] == pytest.approx(111.0)
+    assert candidates[0]["end_s"] <= tl["duration_s"]
+
+
 # ── Issue 103: IoU-based NMS deduplication ───────────────────────────────────
 
 
