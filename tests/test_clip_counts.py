@@ -111,6 +111,21 @@ def test_clip_counts_cross_creator_isolation_note():
 
 def test_clip_counts_requires_auth(client):
     """GET /videos/clips/counts returns 401/403 when unauthenticated."""
-    # No dependency overrides — the real auth gate runs.
-    resp = client.get("/videos/clips/counts")
+
+    # The real auth gate runs (no get_current_creator override), but the DB is
+    # hermetically faked: no cookie → 401 before any query; a leaked cookie
+    # (the historical order-dependent failure, OCB 2026-06-24) now finds no
+    # Creator row → 401 "Creator not found" instead of a real-engine checkout.
+    async def _no_creator_session():
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        yield session
+
+    app.dependency_overrides[get_session] = _no_creator_session
+    try:
+        resp = client.get("/videos/clips/counts")
+    finally:
+        app.dependency_overrides.clear()
     assert resp.status_code in (401, 403)

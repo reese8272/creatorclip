@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from auth import get_current_creator
 from db import get_session
 from main import app
-from models import Clip, ClipFeedback, FeedbackAction, RenderStatus
+from models import Clip, RenderStatus
+from tests._helpers import owned_lookup_result
 
 
 def _mock_creator() -> MagicMock:
@@ -30,10 +31,14 @@ def _mock_clip(creator_id: uuid.UUID) -> MagicMock:
 def _fake_session(clip: MagicMock):
     async def _session():
         session = AsyncMock()
-        session.get = AsyncMock(return_value=clip)
-        feedback_obj = MagicMock(spec=ClipFeedback)
-        feedback_obj.id = uuid.uuid4()
-        feedback_obj.action = FeedbackAction.upvote
+        # get_owned ownership select + the Issue-235 EXISTS check both go
+        # through execute(); owned_lookup_result returns sync MagicMock
+        # results (a bare AsyncMock's .scalar() yields a never-awaited
+        # coroutine → RuntimeWarning, and vacuously passes the ownership
+        # predicate).
+        session.execute = AsyncMock(
+            side_effect=lambda stmt, *a, **kw: owned_lookup_result(stmt, clip)
+        )
 
         async def _refresh(obj):
             pass
