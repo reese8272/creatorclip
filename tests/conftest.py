@@ -109,6 +109,43 @@ def pytest_configure(config: pytest.Config) -> None:
             ) from exc
 
 
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Disarm leftover async-Redis singletons so interpreter exit stays quiet.
+
+    Task/router code lazily binds module-level async Redis clients to whichever
+    event loop is current (asyncio.run loops in worker tests, TestClient portal
+    loops in API tests). By session end every such loop is closed, so these
+    connections can never be aclose()d gracefully — redis-py's
+    AbstractConnection.__del__ then raises RuntimeError('Event loop is closed')
+    at GC, spraying tracebacks after the pytest summary. Clearing _writer/_reader
+    makes __del__ a no-op; the raw sockets are still closed by the transport's
+    own __del__ / process exit. Mid-run leaks are NOT masked — they still
+    surface as PytestUnraisableExceptionWarning during the run."""
+    import main as main_module
+    import routers.thumbnails as thumbnails
+    import worker.progress as worker_progress
+    import worker.tasks as worker_tasks
+    import youtube._redis as youtube_redis
+
+    clients = (
+        worker_tasks._WORKER_REDIS,  # noqa: SLF001
+        thumbnails._aio_redis,  # noqa: SLF001
+        youtube_redis._REDIS_CLIENT,  # noqa: SLF001
+        worker_progress._AIO,  # noqa: SLF001
+        main_module._health_redis,  # noqa: SLF001
+    )
+    for client in clients:
+        if client is None:
+            continue
+        pool = client.connection_pool
+        conns = list(getattr(pool, "_available_connections", ())) + list(
+            getattr(pool, "_in_use_connections", ())
+        )
+        for conn in conns:
+            conn._writer = None  # noqa: SLF001
+            conn._reader = None  # noqa: SLF001
+
+
 @pytest.fixture(scope="session")
 def client() -> TestClient:
     with TestClient(app) as c:

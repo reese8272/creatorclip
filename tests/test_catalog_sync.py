@@ -320,6 +320,9 @@ def test_upload_video_resolves_short_from_probe(monkeypatch):
             # This test isn't about billing — just the kind-resolution shape.
             patch("routers.videos.check_balance_for_minutes", new=AsyncMock()),
             patch("routers.videos.start_pipeline"),
+            # Real aset_owner would bind progress._AIO to this TestClient's
+            # ephemeral request loop → 'Event loop is closed' GC noise.
+            patch("worker.progress.aset_owner", new=AsyncMock()),
         ):
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.post(

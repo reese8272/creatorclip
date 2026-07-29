@@ -16,12 +16,32 @@ boundaries + terminate with the expected `done` or `error` event type.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from tests._helpers import override_current_creator, stub_get_owned
+
+
+@pytest.fixture(autouse=True)
+async def _close_worker_redis():
+    """Close worker.tasks._WORKER_REDIS on the loop that created it.
+
+    The render-task tests here execute the real Issue-359 render-start marker
+    path (_amark_render_started → _worker_redis()), lazily binding the module
+    singleton to this test's function-scoped loop. Left open, a later test on
+    a fresh loop reuses connections bound to this dead loop and GC prints
+    'Event loop is closed' AbstractConnection.__del__ noise at exit."""
+    yield
+    from worker import tasks as worker_tasks
+
+    client = worker_tasks._WORKER_REDIS
+    if client is not None:
+        worker_tasks._WORKER_REDIS = None
+        with contextlib.suppress(Exception):
+            await client.aclose()
 
 
 def _emit_labels(mock_emit: AsyncMock) -> list[str]:
