@@ -34,8 +34,14 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
 }
 
+// The fetch-shaped signature is load-bearing: without it, vi.fn types
+// mock.calls as [] and `tsc -b` (npm run build) rejects the call inspection.
 function patchFetch() {
-  return vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }))
+  return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+  }))
 }
 
 afterEach(() => vi.unstubAllGlobals())
@@ -52,12 +58,10 @@ describe('AppliedTitleField', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
-      const patch = fetchMock.mock.calls.find(
-        ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
-      )
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
       expect(patch).toBeTruthy()
       expect(String(patch![0])).toBe('/clips/c1')
-      expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({
+      expect(JSON.parse(String(patch![1]?.body))).toEqual({
         applied_title: 'My better title',
       })
     })
@@ -81,11 +85,9 @@ describe('AppliedTitleField', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
-      const patch = fetchMock.mock.calls.find(
-        ([, init]) => (init as RequestInit | undefined)?.method === 'PATCH',
-      )
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
       expect(patch).toBeTruthy()
-      expect(JSON.parse(String((patch![1] as RequestInit).body))).toEqual({ applied_title: null })
+      expect(JSON.parse(String(patch![1]?.body))).toEqual({ applied_title: null })
     })
   })
 })
