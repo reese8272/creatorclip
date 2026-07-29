@@ -60,6 +60,23 @@ describe('ClipPlayer render states', () => {
     expect(video).toHaveAttribute('preload', 'auto')
   })
 
+  it('scales the filmstrip to the setup-origin duration, not end_s - start_s', () => {
+    // Setup clips (the normal case) have setup_start_s < start_s. The backend
+    // validates and cuts trims against end_s - (setup_start_s ?? start_s), so
+    // the filmstrip's timebase must match or every drag submits compressed
+    // seconds and the last start_s - setup_start_s seconds are unreachable.
+    renderPlayer({ ...BASE, setup_start_s: 120, start_s: 125, end_s: 160 })
+    // 160 - 120 = 40s — never 160 - 125 = 35s.
+    expect(screen.getByRole('slider', { name: 'Trim start' })).toHaveAttribute(
+      'aria-valuemax',
+      '40',
+    )
+    expect(screen.getByRole('slider', { name: 'Trim end' })).toHaveAttribute('aria-valuemax', '40')
+    // Ruler max and the duration readout agree with the filmstrip scale.
+    expect(screen.getByText('0:40')).toBeInTheDocument()
+    expect(screen.getByText(/40\.0s$/)).toBeInTheDocument()
+  })
+
   it('shows a "Rendering…" status while a render is in flight (no manual button)', () => {
     renderPlayer({ ...BASE, render_status: 'running', render_uri: null })
     expect(screen.getByText(/Rendering your clip/)).toBeInTheDocument()
