@@ -67,7 +67,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('CleanedPreviewConfirm', () => {
   it('polls until the cleaned URI lands, then offers confirm which POSTs /clean/confirm', async () => {
-    const state = { cleanedUri: 's3://bucket/c1-cleaned.mp4' }
+    const state: { cleanedUri: string | null } = { cleanedUri: 's3://bucket/c1-cleaned.mp4' }
     const fetchMock = makeFetch(state)
     vi.stubGlobal('fetch', fetchMock)
     const onConfirmed = vi.fn()
@@ -88,7 +88,7 @@ describe('CleanedPreviewConfirm', () => {
   })
 
   it('does not serve the previous URI to a remounted poll after confirm (stale-latch regression)', async () => {
-    const state = { cleanedUri: 's3://bucket/c1-cleaned.mp4' }
+    const state: { cleanedUri: string | null } = { cleanedUri: 's3://bucket/c1-cleaned.mp4' }
     const fetchMock = makeFetch(state)
     vi.stubGlobal('fetch', fetchMock)
     const qc = new QueryClient({
