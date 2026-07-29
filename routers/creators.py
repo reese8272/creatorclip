@@ -6,10 +6,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
+from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from dna import identity as identity_module
 from dna.onboarding import resolve_setup_step
+from flags import require_flag
 from limiter import creator_key, limiter
 from models import AnalysisMode, Clip, Creator, CreatorIdentity, CreatorStyle
 from routers._enqueue import enqueue_stream_task
@@ -720,7 +722,13 @@ async def upsert_identity(
     return _identity_to_dict(row)
 
 
-@router.post("/me/identity/chat", response_model=IdentityChatOut)
+@router.post(
+    "/me/identity/chat",
+    response_model=IdentityChatOut,
+    # Kill switch (Issue 284) + creator spend budget (Issue 290): this is a
+    # billed LLM route — stack the same gates as every sibling LLM route.
+    dependencies=[Depends(require_flag("llm_generation")), Depends(require_budget)],
+)
 @limiter.limit("40/hour", key_func=creator_key)
 async def identity_chat(
     request: Request,

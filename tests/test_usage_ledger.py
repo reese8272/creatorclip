@@ -12,8 +12,39 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from billing.ledger import _estimate_cost_usd, record_llm_usage
+from billing.ledger import _estimate_cost_usd, model_rates, record_llm_usage
 from config import settings
+
+# ── Unit: price-book resolution per model family ───────────────────────────────
+
+
+def test_model_rates_resolve_per_model_family() -> None:
+    """Billing rates + tier label derive from the model id, with a safe
+    (never-under-billing) Opus fallback for unknown families (2026-07-29
+    assess: intake billed hardcoded Sonnet rates while its model is
+    configurable — the shared helper is the fix for every such caller)."""
+    assert model_rates("claude-haiku-4-5") == (
+        settings.COST_PER_MTOK_IN_HAIKU,
+        settings.COST_PER_MTOK_OUT_HAIKU,
+        "haiku-tier",
+    )
+    assert model_rates("claude-sonnet-4-6") == (
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+        "sonnet-tier",
+    )
+    assert model_rates("claude-opus-4-8") == (
+        settings.COST_PER_MTOK_IN_OPUS,
+        settings.COST_PER_MTOK_OUT_OPUS,
+        "opus-tier",
+    )
+    # Unknown family: falls back to the highest configured rate + "other" label.
+    assert model_rates("claude-mystery-9") == (
+        settings.COST_PER_MTOK_IN_OPUS,
+        settings.COST_PER_MTOK_OUT_OPUS,
+        "other",
+    )
+
 
 # ── Unit: cost estimation math ─────────────────────────────────────────────────
 

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_creator
 from billing.ledger import check_positive_balance
 from billing.spend_guard import require_budget
+from clip_engine.edits import MIN_KEEP_SEGMENT_S
 from db import get_session
 from flags import require_flag
 from limiter import RENDER_DAILY_LIMIT, creator_key, limiter
@@ -61,6 +62,17 @@ def _validate_trim_pair(s: float | None, e: float | None) -> None:
             raise ValueError(f"{label} must be >= 0")
     if s is not None and e is not None and s >= e:
         raise ValueError("trim_start_s must be less than trim_end_s")
+
+
+def _clip_duration_s(clip: Clip) -> float:
+    """Duration of the rendered clip in CLIP-RELATIVE seconds.
+
+    Origin is ``setup_start_s`` when set, else ``start_s`` — the timebase
+    shared by /transcript, /cuts, /feedback and /trim-render. Both trim
+    routes derive their bounds from this one helper so they cannot drift.
+    """
+    origin = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+    return clip.end_s - origin
 
 
 class FeedbackRequest(BaseModel):
@@ -153,11 +165,14 @@ async def submit_feedback(
     # the FeedbackRequest model validator).
     if body.trim_start_s is not None or body.trim_end_s is not None:
         s, e = body.trim_start_s, body.trim_end_s
-        origin = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-        clip_duration_s = clip.end_s - origin
-        if s is not None and s > clip_duration_s:
+        # Right-edge tolerance of one frame (MIN_KEEP_SEGMENT_S) matches
+        # /trim-render and validate_user_cuts: drag-to-end UI rounding puts
+        # the trim a few ms past the computed duration — Save must accept
+        # exactly what the re-render endpoint accepts.
+        max_trim_s = _clip_duration_s(clip) + MIN_KEEP_SEGMENT_S
+        if s is not None and s > max_trim_s:
             raise HTTPException(status_code=422, detail="trim_start_s is past the clip end")
-        if e is not None and e > clip_duration_s:
+        if e is not None and e > max_trim_s:
             raise HTTPException(status_code=422, detail="trim_end_s is past the clip end")
 
     # Issue 235 — check idempotency BEFORE the commit so the new row is not
@@ -241,7 +256,7 @@ async def trim_render(
     lands in ``Clip.cleaned_render_uri``; the client confirms via the
     existing ``POST /clips/{clip_id}/clean/confirm`` swap.
     """
-    from clip_engine.edits import MIN_KEEP_SEGMENT_S, CutValidationError, validate_user_cuts
+    from clip_engine.edits import CutValidationError, validate_user_cuts
 
     await check_positive_balance(creator.id, session)
 
@@ -259,8 +274,7 @@ async def trim_render(
             },
         )
 
-    clip_origin_s = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
-    clip_duration_s = clip.end_s - clip_origin_s
+    clip_duration_s = _clip_duration_s(clip)
     # Right-edge tolerance of one frame matches validate_user_cuts' clamp.
     if body.trim_end_s > clip_duration_s + MIN_KEEP_SEGMENT_S:
         raise HTTPException(
