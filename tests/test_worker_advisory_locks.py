@@ -117,7 +117,5 @@ async def test_skip_strips_per_creator_suffix_from_metric_label() -> None:
     with patch("worker.tasks.log_event") as log_event:
         await _try_advisory_lock(session, f"retrain:{cid}")
 
-    log_event.assert_called_once_with(
-        "beat_lock_skip", task="retrain", lock_key=f"retrain:{cid}"
-    )
+    log_event.assert_called_once_with("beat_lock_skip", task="retrain", lock_key=f"retrain:{cid}")
     assert BEAT_LOCK_SKIPS_TOTAL.labels(task="retrain")._value.get() == before + 1
