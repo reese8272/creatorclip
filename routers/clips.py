@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +65,10 @@ class ClipOut(BaseModel):
     render_uri: str | None
     # Issue 134 — populated after POST /clean lands; cleared on confirm.
     cleaned_render_uri: str | None = None
+    # Creator-approved publish metadata (migration 0047) — set/cleared via
+    # PATCH /clips/{id}; null = publish falls back to video.title / "#Shorts".
+    applied_title: str | None = None
+    applied_description: str | None = None
 
 
 class PersonalizationStatus(BaseModel):
@@ -160,6 +164,50 @@ class RenderStyleIn(BaseModel):
     aspect: Literal["9:16", "1:1", "16:9"] | None = None  # export preset (Issue 182)
 
 
+class ClipMetadataPatch(BaseModel):
+    """Partial update of publish metadata for PATCH /clips/{clip_id}.
+
+    Tri-state per field (FastAPI body-updates idiom, read back via
+    ``model_dump(exclude_unset=True)``): key absent = leave untouched; key
+    present as null = clear (publish falls back to video.title / "#Shorts");
+    key present as string = set. Stripped-empty normalizes to None so a falsy
+    "" can never silently trigger the publish fallback.
+
+    Limits are the official YouTube ``videos.insert`` bounds
+    (developers.google.com/youtube/v3/docs/videos): title ≤100 CHARACTERS,
+    description ≤5000 UTF-8 BYTES, neither may contain ``<`` or ``>``.
+    Violations 422 at the boundary — nothing is silently truncated.
+    """
+
+    applied_title: str | None = Field(default=None, max_length=100)
+    applied_description: str | None = None
+
+    @field_validator("applied_title", mode="before")
+    @classmethod
+    def _clean_title(cls, v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        if "<" in v or ">" in v:
+            raise ValueError("title may not contain '<' or '>' (YouTube metadata rule)")
+        return v
+
+    @field_validator("applied_description", mode="before")
+    @classmethod
+    def _clean_description(cls, v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return None
+        if "<" in v or ">" in v:
+            raise ValueError("description may not contain '<' or '>' (YouTube metadata rule)")
+        if len(v.encode("utf-8")) > 5000:
+            raise ValueError("description exceeds 5000 UTF-8 bytes (YouTube limit)")
+        return v
+
+
 def _clip_response(clip: Clip) -> dict:
     sj = clip.signals_jsonb or {}
     return {
@@ -176,6 +224,8 @@ def _clip_response(clip: Clip) -> dict:
         "render_status": clip.render_status.value,
         "render_uri": clip.render_uri,
         "cleaned_render_uri": clip.cleaned_render_uri,
+        "applied_title": clip.applied_title,
+        "applied_description": clip.applied_description,
     }
 
 
@@ -454,6 +504,28 @@ async def render_clip(
     await check_positive_balance(creator.id, session)
 
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+
+    # Pre-check the source BEFORE enqueuing (OFF_COURSE 2026-07-20 / Issue 362):
+    # past the retention purge the worker can only fail permanently, so the user
+    # got a generic "Render failed" with no explanation. Mirrors the recap
+    # endpoint's expired-source 409. The worker keeps its own guard for the
+    # enqueue-to-run race.
+    video = await session.get(Video, clip.video_id)
+    if not video or not video.source_uri:
+        # Structured {code, message} detail (same shape as pending_clean_or_edit)
+        # so the SPA can branch on code == "source_expired" and render the
+        # re-upload CTA instead of a generic error toast.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_expired",
+                "message": (
+                    f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                    "retention) — re-upload the video to render this clip."
+                ),
+            },
+        )
+
     if clip.render_status == RenderStatus.running:
         from worker.tasks import ais_render_stale
 
@@ -1098,6 +1170,28 @@ async def get_clip(
     return _clip_response(clip)
 
 
+@clips_router.patch("/{clip_id}", response_model=ClipOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def update_clip_metadata(
+    request: Request,
+    clip_id: uuid.UUID,
+    body: ClipMetadataPatch,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Set or clear the metadata applied at publish time (title picker, W1).
+
+    Tri-state per ``ClipMetadataPatch``: omitted field untouched, explicit
+    null clears, string sets. Pure DB write — no LLM/render kill switch or
+    budget dependency; 60/minute matches the notifications PATCH tier.
+    """
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+    for field_name, value in body.model_dump(exclude_unset=True).items():
+        setattr(clip, field_name, value)
+    await session.commit()
+    return _clip_response(clip)
+
+
 @clips_router.get("/{clip_id}/download", response_model=None)
 @limiter.limit("60/minute", key_func=creator_key)
 async def download_clip(
@@ -1584,11 +1678,17 @@ async def create_summary(
     if video.ingest_status != IngestStatus.done:
         raise HTTPException(status_code=400, detail="Video is not fully ingested yet")
     if not video.source_uri:
+        # Same structured source_expired contract as the render 409 above; the
+        # retention window comes from settings (was a hardcoded "72-hour").
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Source media expired (72-hour retention) — re-upload the video to create a recap."
-            ),
+            detail={
+                "code": "source_expired",
+                "message": (
+                    f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                    "retention) — re-upload the video to create a recap."
+                ),
+            },
         )
 
     # Idempotency: a summary whose render is still in flight is THE recap for

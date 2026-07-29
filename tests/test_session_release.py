@@ -65,6 +65,8 @@ def _clip_stub(video_id: uuid.UUID) -> MagicMock:
     c.render_status = RenderStatus.pending
     c.render_uri = None
     c.cleaned_render_uri = None
+    c.applied_title = None
+    c.applied_description = None
     return c
 
 

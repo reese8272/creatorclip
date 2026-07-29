@@ -86,6 +86,8 @@ def _mock_clip(creator_id, video_id):
     c.render_status = RenderStatus.done
     c.render_uri = "r2://clip.mp4"
     c.cleaned_render_uri = None
+    c.applied_title = None
+    c.applied_description = None
     return c
 
 

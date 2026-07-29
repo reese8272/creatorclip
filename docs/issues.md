@@ -312,6 +312,25 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   - **harness** — `run_layer0.py` deletes `_coverage.xml` before `gate_module_coverage` runs, so the
     Issue-269 per-module floors gate has NEVER executed → reorder.
 
+### Issue 362: render UX — expired-source pre-check on `POST /clips/{id}/render` (promoted OFF_COURSE 2026-07-20)
+
+- **Status:** DONE (2026-07-20) — endpoint pre-checks `video.source_uri` after ownership resolution and
+  409s with "Source media expired (N-hour retention) — re-upload the video to render this clip" (hours
+  interpolated from `SOURCE_MEDIA_RETENTION_HOURS`) BEFORE any state reset or enqueue; regression test
+  asserts 409 + no task enqueued. · **Wave:** W1 · **Lane:** L16 UI Core / Review surface · **Size:** S ·
+  **Verify:** local · **Sev:** SEV2
+- Source: prod diagnosis 2026-07-20 (ISSUE-2026-07-20-02 in ~/.claude/ISSUES_LOG.md). The retention
+  sweep (`purge_stale_source_media`, 72h from `ingest_done_at`) nulls `videos.source_uri`; a render
+  click afterward enqueued a task that could only fail permanently
+  (`ValueError: Source video not available`), so the owner saw a generic "Render failed" and suspected
+  the pipeline/uploads. The recap endpoint already had this exact pre-check; the clip render endpoint
+  did not. Worker keeps its own guard for the enqueue-to-run race.
+- **Residual (not built, SPA):** clip cards/Review surface could show a distinct "source expired —
+  re-upload to render" state from the 409 detail instead of a generic mutation error; fold into the
+  next frontend error-state pass (Issue 361 tail).
+- **Tests:** `tests/test_render_style.py::test_render_endpoint_409_when_source_expired` (409 + detail +
+  `delay` not called); existing render tests untouched-green.
+
 ---
 
 ## How to use this file (deploy agents in batches)

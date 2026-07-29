@@ -6,6 +6,7 @@ import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Chip } from '@/components/Chip'
 import { ChipPersonalizing } from '@/components/chip/ChipStates'
 import { ClipPlayer } from '@/components/review/ClipPlayer'
+import { PublishPanel } from '@/components/review/PublishPanel'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
@@ -54,7 +55,10 @@ function ReviewClipView({
   onAdvance: () => void
 }) {
   const navigate = useNavigate()
-  const clipDur = clip.end_s - clip.start_s
+  // Duration of the RENDERED mp4 — the render origin is setup_start_s when
+  // set (the engine starts the clip at the setup), so end_s - start_s would
+  // overstate the filmstrip/trim range for setup clips.
+  const clipDur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
   const [trim, setTrim] = useState({ start: 0, end: clipDur })
 
   return (
@@ -84,6 +88,8 @@ function ReviewClipView({
         </CollapsibleTool>
 
         <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
+
+        <PublishPanel clip={clip} />
 
         <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm shadow-inset">
           <div className="mb-1.5 flex items-center gap-2.5">

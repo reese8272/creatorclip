@@ -229,10 +229,10 @@ def test_trim_nonfinite_rejected_at_model_level():
 
 
 def test_trim_outside_clip_window_rejected():
-    """Trim values outside [clip.start_s, clip.end_s] → 422.
+    """Trim values past the clip duration → 422 (clip-relative timebase).
 
-    clip.start_s = 10.0, clip.end_s = 70.0.  trim_start = 5.0 is before
-    clip start; trim_end = 80.0 is past clip end — both invalid.
+    clip duration = end_s - (setup_start_s ?? start_s) = 70 - 10 = 60s.
+    trim_end = 80.0 is past the rendered clip's end — invalid.
     """
     creator = _make_creator()
     clip = _make_clip(creator.id)  # start_s=10.0, end_s=70.0
@@ -246,14 +246,33 @@ def test_trim_outside_clip_window_rejected():
 
 
 def test_trim_within_clip_window_accepted():
-    """Trim values within [clip.start_s, clip.end_s] → 201 (happy path)."""
+    """Trim values within the clip duration → 201 (happy path)."""
     creator = _make_creator()
-    clip = _make_clip(creator.id)  # start_s=10.0, end_s=70.0
+    clip = _make_clip(creator.id)  # duration = 70 - 10 = 60s
     client = _build_client(creator, clip)
 
     resp = client.post(
         f"/clips/{clip.id}/feedback",
         json={"action": "trim", "trim_start_s": 15.0, "trim_end_s": 60.0},
+    )
+    assert resp.status_code == 201
+
+
+def test_trim_clip_relative_values_accepted_for_late_starting_clip():
+    """Clip-relative trim near 0 is valid even when the clip starts late in the video.
+
+    Regression (ready-pass W1): the Issue-339 check compared the frontend's
+    CLIP-RELATIVE values against video-absolute start_s/end_s, so a trim of
+    2→20s on a clip spanning 10→70s in the source 422'd with "trim_start_s is
+    before the clip start" — i.e. Save trim was broken for nearly every clip.
+    """
+    creator = _make_creator()
+    clip = _make_clip(creator.id)  # source window 10→70s; duration 60s
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": 2.0, "trim_end_s": 20.0},
     )
     assert resp.status_code == 201
 

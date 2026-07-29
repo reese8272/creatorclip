@@ -187,13 +187,26 @@ export function Recap() {
                 ? 'Create a new recap'
                 : 'Create recap'}
         </Button>
-        {create.isError && (
-          <p className="text-xs text-danger">
-            {create.error instanceof ApiError
-              ? create.error.message
-              : 'Could not request the recap — try again.'}
-          </p>
-        )}
+        {create.isError &&
+          (create.error instanceof ApiError && create.error.code === 'source_expired' ? (
+            // Retention purge: a retry can never succeed — friendly card with a
+            // re-upload CTA instead of a dead-end error line (ClipPlayer idiom).
+            <div className="w-fit rounded-md border border-default bg-surface p-3 text-xs">
+              <p className="mb-2 text-muted">{create.error.message}</p>
+              <Link
+                to="/dashboard"
+                className="text-accent-text underline-offset-2 hover:underline"
+              >
+                Upload again →
+              </Link>
+            </div>
+          ) : (
+            <p className="text-xs text-danger">
+              {create.error instanceof ApiError
+                ? create.error.message
+                : 'Could not request the recap — try again.'}
+            </p>
+          ))}
         <TaskStepper steps={stream.steps} status={stream.status} elapsedMs={elapsedMs} />
         {stream.status === 'error' &&
           stream.error &&

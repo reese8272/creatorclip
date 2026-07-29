@@ -269,6 +269,10 @@ export interface ReviewClip {
   render_status: string
   render_uri: string | null
   cleaned_render_uri: string | null
+  // Creator-approved publish metadata (Wave-1 metadata lane, PATCH /clips/{id}).
+  // NULL = fall back to video.title / "#Shorts" at publish time.
+  applied_title: string | null
+  applied_description: string | null
 }
 
 // Issue 216 — honest personalization-status surface.
@@ -498,4 +502,43 @@ export interface ClipExplanationResponse {
   explanation: string
   cited_principle: string
   disclaimer: string
+}
+
+// ── Scheduled publishes (Issue 196, routers/publications.py) ─────────────────
+
+// One recurring weekly audience-activity window (upload_intel best_upload_windows).
+// day_of_week is 0=Sunday … 6=Saturday — same convention as JS Date.getDay().
+export interface SuggestedWindow {
+  day_of_week: number
+  day_name: string
+  hour: number
+  activity_index: number
+  label: string
+}
+
+// One ClipPublication row (PublicationOut). A cancelled publication is
+// status=failed with error "Cancelled by creator" (history preserved).
+export interface PublicationOut {
+  id: string
+  clip_id: string
+  creator_id: string
+  task_id: string | null
+  youtube_video_id: string | null
+  status: string
+  error: string | null
+  scheduled_at: string | null
+  platform: string
+  confirmed_at: string | null
+  created_at: string
+  updated_at: string
+  privacy_note: string
+}
+
+// GET /clips/{clip_id}/publications envelope. `truncated` flips true at the
+// 50-row cap; privacy_note must be surfaced verbatim (uploads land private).
+export interface PublicationListOut {
+  publications: PublicationOut[]
+  suggested_windows: SuggestedWindow[]
+  privacy_note: string
+  truncated: boolean
 }
