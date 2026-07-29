@@ -16,9 +16,16 @@ Usage in Jinja2 templates::
 The dict keys match the ``event_type`` argument passed to ``send_notification``.
 Templates may override these defaults with dynamic context variables (e.g.
 ``video_title``, ``clip_count``) — this module provides the static fallbacks.
+
+Links are absolute: bodies that reference a page bind ``settings.APP_BASE_URL``
+at import time (same precedent as the ``app_url`` Jinja global in
+``notify/mailer.py``), so copy is safe to render in email or any other
+host-less context.
 """
 
 from __future__ import annotations
+
+from config import settings
 
 # ── Canonical copy strings ────────────────────────────────────────────────────
 # Keys must be stable identifiers that match the event_type strings used in
@@ -58,13 +65,16 @@ COPY: dict[str, dict[str, str]] = {
     "trial_ending": {
         "subject": "Your free trial is ending soon",
         "body": (
-            "Your free trial is ending soon. Top up your minutes at /pricing to keep "
-            "processing videos and reviewing clips."
+            f"Your free trial is ending soon. Top up your minutes at "
+            f"{settings.APP_BASE_URL}/pricing to keep processing videos and reviewing clips."
         ),
     },
     "balance_low": {
         "subject": "Your minutes balance is running low",
-        "body": ("You have a few minutes left. Add more at /pricing to keep processing videos."),
+        "body": (
+            f"You have a few minutes left. Add more at {settings.APP_BASE_URL}/pricing "
+            f"to keep processing videos."
+        ),
     },
     "catalog_sync_done": {
         "subject": "Your video catalog has been updated",
