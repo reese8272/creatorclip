@@ -1,97 +1,117 @@
-# chat — assessed 2026-07-20 (post-fix)
+# chat — assessed 2026-07-29 (ready-pass delta)
 
-Slice: `chat/intake.py`, `chat/prompt.py`, `chat/runner.py`, `chat/tools.py`, `chat/__init__.py`,
-plus the `chat_respond` entry in `worker/tasks.py` (session/RLS posture only).
-Re-assessment after the two fix waves merged since this morning (`git diff ca3305c..e92b93a`).
-Diff scrutiny: only `chat/runner.py` changed (+31/-3, commit 9bd8105 "chat billing by
-configured model", Issue 361 llm-sdk batch). Every prior finding re-verified against HEAD;
-Opus price constants re-verified against the /claude-api skill model reference (read
-2026-07-20).
+Slice: `chat/intake.py`, `chat/prompt.py`, `chat/runner.py`, `chat/tools.py`,
+`chat/__init__.py`, plus the `chat_respond` entry in `worker/tasks.py` (session/RLS
+posture only). Delta re-assessment on `w3/ready-pass-closeout` (deployed prod content)
+after the 2026-07-29 user-approved money-path ready-pass. Diff scrutiny vs the
+2026-07-20-clean baseline (`git diff e92b93a..HEAD -- chat/`): `intake.py` (+18, commit
+452a700 — intake turns now billed) and `runner.py` (+39/−10, commit 57f03a3 —
+session-factory posture). Money-path rigor: billing 1:1-ness, spend-guard integration,
+and RLS of every factory-opened session re-traced by reading.
 
-## Resolved since this morning's assessment
+## 2026-07-29 ready-pass delta
 
-- **[was SEV2] billing rate/label hardcoded to Sonnet — FIXED.** `chat/runner.py:58-79`
-  adds `_chat_model_rates() -> tuple[float, float, str]` resolving `(rate_in, rate_out,
-  tier_label)` from `settings.ANTHROPIC_MODEL_CHAT` by family substring
-  (haiku → sonnet → opus); the billing block now uses `rate_in`/`rate_out` in
-  `_estimate_cost_usd` (runner.py:204-212) and `tier_label` in `record_llm_cost`
-  (runner.py:227) instead of the hardcoded Sonnet constants.
-  - **Never-under-bills invariant VERIFIED.** Unknown model families fall back to the Opus
-    rates with label `"other"` plus a logged warning (runner.py:76-79). Opus IS the highest
-    tier in the config price book — in: 5.0 > 3.0 (Sonnet) > 1.0 (Haiku); out: 25.0 > 15.0 >
-    5.0 — so a misconfigured `ANTHROPIC_MODEL_CHAT` can only over-bill against the spend
-    guard, never under-bill. Family-match ordering is safe: no real Anthropic model id
-    contains two family names.
-  - **Price constants VERIFIED against the /claude-api skill** (models table, cached
-    2026-05-26, read 2026-07-20): Opus 4.8 (`claude-opus-4-8`) is $5.00/MTok in,
-    $25.00/MTok out — matches `COST_PER_MTOK_IN_OPUS = 5.0` / `COST_PER_MTOK_OUT_OPUS =
-    25.0` (config.py:142-143). Sonnet 4.6 $3/$15 and Haiku 4.5 $1/$5 also still match the
-    existing constants. Both new constants are documented in `.env.example:32-33` (rubric 8
-    satisfied).
-  - **Tier-label consistency with `billing.ledger._model_tier` VERIFIED** — see billing.md;
-    the label vocabulary (`haiku-tier`/`sonnet-tier`/`opus-tier`/`other`) matches, and
-    `_model_tier` gained the corresponding opus branch in the same wave.
-  - **Tests:** `tests/test_chat.py:227-259` pins all three family mappings AND the
-    unknown-family → Opus-rates/`"other"` fallback.
+**1. `run_chat_turn` now takes a tenant-session FACTORY (runner.py:84-104) — verified
+correct.**
+- No DB session is held across any streamed LLM round-trip: the phase-1 read session in
+  `_chat_respond_async` (worker/tasks.py:5089-5123) closes before the loop; each tool
+  execution opens a short-lived session (`async with session_factory() as tool_session`,
+  runner.py:188-191); the usage-ledger write opens its own and commits explicitly
+  (runner.py:230-239).
+- **RLS correctness:** the factory is `functools.partial(db.tenant_session, cid)`
+  (worker/tasks.py:5131); `db.tenant_session` is an `@asynccontextmanager` that stamps
+  `session.info["creator_id"]` BEFORE the first statement, so the `after_begin` listener
+  emits the `app.creator_id` GUC on every transaction of every factory-opened session —
+  tool queries and the `usage` upsert (table RLS-covered by migrations 0010/0045) are both
+  policy-gated. Structurally impossible to open an unstamped session through this path.
+- **No missed caller:** repo grep finds exactly one production caller
+  (worker/tasks.py:5130), updated; all `tests/test_chat.py` call sites pass a factory.
+- **Double-billing:** `chat_respond` stays `max_retries=0`, so the now-inside-the-turn
+  ledger commit runs at most once per user message. Side effect verified: the 7-20
+  carry-forward cleanup (empty-reply early return at worker/tasks.py:5134 rolling back the
+  usage row while Redis spend counters kept it) is **RESOLVED** — the ledger session
+  commits inside `run_chat_turn` before the worker's early return, so ledger and spend
+  guard now agree on empty-reply turns.
 
-## Tenant-isolation verdict (unchanged, re-confirmed)
-
-No isolation-relevant line changed in the diff. The 2026-07-20-morning verdict stands:
-creator id enters as the authenticated session owner, all 8 tool executors filter on the
-injected `creator_id`, and FORCE'd RLS (migrations 0010/0026/0040/0044 via
-`db.tenant_session`) backstops the app-layer filters, pinned by
-`tests/test_rls_isolation_integration.py`.
+**2. `run_intake_turn` now writes the cost ledger (intake.py:289-301) — previously
+entirely unbilled and invisible to the Issue-290 spend guard.** The write goes through
+`record_llm_usage` (the choke point feeding ledger + spend counters + cost metric), sums
+both attempts of the validation-correction loop, includes both cache tiers, and correctly
+leaves `cache_write_multiplier` at the 1.25× default — the intake system block carries a
+plain 5-min ephemeral marker (intake.py:178), not ttl:"1h" (same for Pro chat,
+prompt.py:64, so runner's default-multiplier cost math is also correct). The runaway-guard
+early return (intake.py:167-171) bails before any LLM call, so nothing unbilled escapes.
+Pinned by `tests/test_identity_chat.py:132-162` and the repo-wide AST sweep in
+`tests/test_usage_coverage.py` (which found this leak and now fails CI on the next one).
+Two real gaps remain in HOW it bills — the findings below.
 
 ## Findings
 
-- [cleanup] worker/tasks.py:4983-4985 + chat/runner.py:201-228 (carry-forward) — on the
-  empty-reply path (`if not final_text: return`) the worker returns before
-  `session.commit()`, rolling back the `increment_usage` ledger row written inside
-  `run_chat_turn` — but `record_spend` (Redis) and `record_llm_cost` (Prometheus) already
-  fired, so ledger and spend guard diverge for that turn (tokens spent, ledger not
-  charged). Rare and in the creator's favor | fix: commit the usage write before the early
-  return (or move the empty-reply check ahead of the billing block).
-- [cleanup] chat/runner.py:163 (carry-forward) — `warn_if_truncated` fires here AND inside
-  `stream_message` (worker/anthropic_stream.py:184) for the same round → truncated reply
-  logs the WARNING twice | fix: branch on `stop_reason == "max_tokens"` directly in runner
-  for the flag; let the stream helper own the log line.
+- [SEV2] routers/creators.py:723-744 (cross-module fix; the intake feature is
+  chat-owned) — `POST /creators/me/identity/chat` is now a BILLED LLM route but is the
+  only one NOT stacked with `Depends(require_flag("llm_generation"))` +
+  `Depends(require_budget)` (every other LLM route has both — clips/titles/thumbnails/
+  chat/improvement/insights/analysis; grep verified). Intake now *records* spend into the
+  guard but ignores its enforcement: a creator in cool-down or over the daily cap — or the
+  globally tripped kill switch — can keep spending via intake turns. Blast radius bounded
+  by the 40/hour limiter and small Sonnet turns, but the global breaker exists precisely
+  to hard-stop all LLM spend | fix: add both dependencies to the `identity_chat` route
+  decorator; regression test asserting 429/blocked when the flag is off or
+  `creator_block_status` blocks.
+- [SEV2] chat/intake.py:299-300 — intake bills at hardcoded
+  `COST_PER_MTOK_IN_SONNET`/`OUT_SONNET` while the model is configurable
+  (`settings.ANTHROPIC_MODEL_INTAKE`, config.py:120) — the exact defect class fixed for
+  Pro chat in 9bd8105 (`_chat_model_rates`, runner.py:60-81). An operator pointing intake
+  at an opus-family model silently under-bills ~40% against the spend guard. Default is
+  sonnet, so dormant today | fix: extract `_chat_model_rates` into a shared
+  `model_rates(model: str)` helper (natural home: billing/ledger.py beside `_model_tier`)
+  and call it with `ANTHROPIC_MODEL_INTAKE`; keeps the never-under-bill Opus fallback.
+- [cleanup] chat/runner.py:217-249 — the ledger write, `record_llm_cost`, and
+  `record_spend` share ONE try block, ledger first: a DB failure on the ledger session
+  skips the spend-guard counters for the turn. `record_llm_usage` (ledger.py:214-233)
+  deliberately separates these so DB loss can't blind the caps | fix: mirror that — run
+  metric + `record_spend` in their own try before/independent of the ledger session.
+- [cleanup] chat/runner.py:139-156 — an LLM error mid-turn propagates past the billing
+  block, so rounds already completed in that turn are never billed or spend-counted
+  (pre-existing posture, in the creator's favor, errored turns only) | fix: move the
+  billing block into a `finally` (bill whatever `total` accumulated).
+- [cleanup] chat/runner.py:172 (carry-forward) — `warn_if_truncated` fires here AND inside
+  `stream_message` for the same round → duplicate WARNING | fix: branch on
+  `stop_reason == "max_tokens"` in runner; let the stream helper own the log line.
 - [cleanup] chat/tools.py:45 (TOOLS) & chat/intake.py:60 (PROPOSE_PROFILE_TOOL)
-  (carry-forward) — schemas use `additionalProperties: false` but not `"strict": true`;
-  strict tool use is supported on Sonnet 4.6 and is cheap insurance on the
-  injection-facing `propose_profile` and `clip_id` inputs | fix: add `"strict": true` to
-  both custom tool definitions (keep validators as defense-in-depth).
-- [cleanup] chat/runner.py:109 (carry-forward) — `client =
-  _ANTHROPIC.with_options(timeout=120.0)` re-wraps the singleton already built with
-  `httpx.Timeout(120.0, connect=10.0)` (runner.py:46-50); the flat float loses the
-  granular 10s connect timeout | fix: drop `with_options` and pass `_ANTHROPIC` directly.
+  (carry-forward) — `additionalProperties: false` but no `"strict": true`; cheap insurance
+  on the injection-facing inputs | fix: add `"strict": true` to both tool definitions.
+- [cleanup] chat/runner.py:118 (carry-forward) — `_ANTHROPIC.with_options(timeout=120.0)`
+  re-wraps the singleton and flattens the granular `connect=10.0` timeout
+  (runner.py:48-52) | fix: pass `_ANTHROPIC` directly.
 
-## Verified-correct (no action) — unchanged from the morning pass
+## Tenant-isolation verdict (re-confirmed under the new factory posture)
 
-Prompt caching (one ephemeral breakpoint on last stable system block, tools→system order);
-AsyncAnthropic module singletons awaited on the loop; `is_error: true` semantics +
-`execute_tool` never raises into the loop; runaway guards (`CHAT_MAX_TOOL_ITERATIONS`
-forced-text final round, `_MAX_PAUSE_ROUNDS = 5`, `MAX_INTAKE_TURNS = 12`,
-`CHAT_MAX_TOKENS`); truncation surfaced honestly via `usage["truncated"]`; honesty
-constraint + `UNTRUSTED_CONTENT_POLICY` in both system prompts; bounded reads with
-server-side clamps; error paths log exception types only (the new `_chat_model_rates`
-warning logs only the model id — no PII/token); token usage logged after every call.
+Strengthened, not weakened: creator id still enters as the authenticated session owner,
+all 8 tool executors filter on the injected `creator_id`, and every session the loop now
+opens is RLS-stamped by construction (`tenant_session` requires the id as an argument).
+FORCE'd RLS backstop (migrations 0010/0026/0040/0044/0045) unchanged, pinned by
+`tests/test_rls_isolation_integration.py`.
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — singletons; DB session owned/closed by `db.tenant_session` in the worker |
-| 2 Concurrency & scale | ok — fully async SDK path, sequential tool exec, bounded fetches |
-| 3 Security & compliance | ok — isolation + RLS backstop unchanged and re-confirmed; no new logging surface |
+| 1 Resource lifecycle | ok — improved: no pooled connection held across LLM round-trips; factory sessions short-lived, ledger commit explicit |
+| 2 Concurrency & scale | ok — connection-pool hold time across multi-round turns eliminated (the point of the W2 change); bounded loops unchanged |
+| 3 Security & compliance | 1 SEV2 — newly-billed intake route ungated by spend-guard flag/budget deps (routers/creators.py); isolation itself intact |
 | 4 Clip-quality | n/a — reads clips/scores, does not compute them |
-| 5 Anthropic SDK | prior SEV2 (cost-rate coupling) FIXED + tested; 3 cleanups remain (double warn, strict, with_options); caching/pause_turn/is_error verified correct |
-| 6 Cleanliness & typing | ok — `_chat_model_rates` fully typed; 1 cleanup counted above (with_options) |
-| 7 Error handling / API | n/a — not a router |
-| 8 Config & paths | ok — new OPUS price constants in config.py AND `.env.example:32-33` with source citation |
+| 5 Anthropic SDK | ok — caching/pause_turn/is_error posture unchanged; 1 SEV2 (intake rate/model coupling) + 3 carry-forward cleanups |
+| 6 Cleanliness & typing | ok — factory signature fully typed (`Callable[[], AbstractAsyncContextManager[AsyncSession]]`) |
+| 7 Error handling / API | n/a — not a router; billing block best-effort, never breaks the turn |
+| 8 Config & paths | ok — no new config introduced by the delta |
 
 ## Module verdict
 
-clean — the one open SEV2 (chat billed at hardcoded Sonnet rates regardless of the
-configured model) is verifiably fixed with a tested, never-under-bills Opus fallback and
-price-book constants confirmed against the /claude-api reference ($5/$25 per MTok);
-only four small carry-forward cleanups remain.
+NEEDS-WORK — the session-factory refactor is verifiably correct (no session across LLM
+calls, every factory session RLS-stamped, sole caller updated, empty-reply ledger/spend
+divergence resolved) and intake is finally billed through the spend-guard choke point;
+but the newly-billed intake path shipped with two SEV2 gaps: the route lacks the
+`require_flag`+`require_budget` gates every other LLM route stacks, and it bills at
+hardcoded Sonnet rates despite a configurable `ANTHROPIC_MODEL_INTAKE` — both small,
+contained fixes.

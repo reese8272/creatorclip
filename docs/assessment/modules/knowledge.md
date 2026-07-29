@@ -1,11 +1,49 @@
-# knowledge — assessed 2026-07-20 (post-fix)
+# knowledge — assessed 2026-07-29 (ready-pass delta)
 
 Slice: `knowledge/{chapters,clip_captions,clip_explain,clip_titles,hooks,thumbnails,titles,util}.py`, `knowledge/__init__.py` (empty).
-Prior run: 2026-07-20 (morning). Diff scrutinized: `git diff ca3305c..e92b93a -- knowledge/ worker/anthropic_stream.py`
-(chapters/hooks/thumbnails/titles changed — Issue 361 llm-tail: shared `stream_until_final`
-pause_turn helper + chapters untrusted-content posture).
+Prior run: 2026-07-20 (post-fix, clean). Delta scrutinized: `git diff e92b93a..HEAD -- knowledge/`
+(single commit 452a700, w2/billing-audit: `has_1h_cache_marker` in util.py; `analyze_thumbnail_patterns`
+now returns `(patterns, usage)`; five features flag `cache_1h` in their usage dicts) plus the
+billing consumers (`billing/ledger.py`, `routers/thumbnails.py`, `routers/clips.py`,
+`worker/tasks.py` title/thumbnail regions, `chat/tools.py`).
 
-Load-bearing claims verified by reading, not assuming:
+## Delta 2026-07-29 — w2/billing-audit changes, verified by reading
+
+- **Signature change `analyze_thumbnail_patterns -> tuple[dict, dict]`: no missed caller.**
+  Repo-wide grep finds exactly two production call sites, both destructure the tuple:
+  `routers/thumbnails.py:235` (inside `_compute_and_bill`, billed via `record_llm_usage`
+  under the single-flight lock — only the firing caller pays; cache hits return at
+  routers/thumbnails.py:180-182 before compute) and `worker/tasks.py:4646`
+  (`patterns, _patterns_usage = …`, billed at worker/tasks.py:4652-4658). Tests/scripts updated;
+  `chat/tools.py` does not call it. Zero-usage early return (empty ids) cannot write $0 ledger
+  rows: the router 400s on empty `youtube_ids` (routers/thumbnails.py:223) and the worker guards
+  `if patterns is None and youtube_ids:` (worker/tasks.py:4644).
+- **Marker detection is exactly in sync with what was sent.** `dna_system_block` (util.py:58-61)
+  attaches `{"type": "ephemeral", "ttl": "1h"}` when the measured Block1+Block2 prefix clears the
+  1024-token floor; `has_1h_cache_marker` (util.py:64-78) checks `cache_control.ttl == "1h"` on
+  the SAME `system` list object passed to the API call in all five features — titles.py:251→268,
+  thumbnails.py:351→368, clip_titles.py:268→284, clip_captions.py:216→232,
+  clip_explain.py:270→286. No re-measuring, no drift. Tested both ways in
+  tests/test_knowledge_util.py:178-187. (Note: the helper scans only system blocks — correct
+  today because no tool/message block carries a marker in any builder.)
+- **Usage-dict keys consistent with billing extraction.** Producers emit
+  `input_tokens/output_tokens/cache_read/cache_creation` (+ `cache_1h` bool);
+  `record_llm_usage` (billing/ledger.py:203-212) reads exactly those four via `.get`, and
+  `record_llm_metric` (observability.py:273-277) reads the same four in its dict branch — the
+  extra bool key is inert in both. All five flagged-producer billing sites consume the flag as
+  `cache_write_multiplier=2.0 if usage.get("cache_1h") else None`: routers/clips.py:1297/1397/1509
+  and worker/tasks.py:4474/4698. The two `analyze_thumbnail_patterns` billing sites correctly
+  omit the multiplier — that request sends no cache markers at all (no system prompt, no
+  cache_control in content; thumbnails.py:137-174), so `cache_creation` is always 0 there.
+  Multiplier math verified in billing/ledger.py:146-153 (None → 1.25× default, 2.0 for 1h).
+- **Prompt-caching efficiency unchanged.** `dna_system_block` gating and block order untouched;
+  `cache_1h` is written into the usage dict only after the response — zero bytes changed in any
+  request. The `analyze_thumbnail_patterns` request is byte-identical to the pre-delta call.
+- Tests green locally: 79 passed (tests/test_knowledge_util.py, tests/test_thumbnails.py incl.
+  cache_1h True→2.0 / False→None billing assertions, tests/test_titles.py).
+
+Load-bearing claims verified by reading, not assuming (2026-07-20 run; line refs may have
+shifted by a few lines after 452a700 — re-verified still true 2026-07-29):
 - `worker/anthropic_stream.py:201-255` `stream_until_final`: sums all four usage keys across
   EVERY round (`usage[k] += round_usage.get(k, 0)` per round — billing-correct, no
   final-round-only figure); `warn_if_truncated` fires per round inside `stream_message`
@@ -43,6 +81,18 @@ Load-bearing claims verified by reading, not assuming:
 
 ## Findings
 
+- [SEV2 / cross-module — fix belongs in chat/tools.py, not this slice] chat/tools.py:500
+  `_suggest_clip_titles` calls this module's `generate_clip_title_suggestions` and discards
+  `_usage` (`result, _usage = await …`) — the nested Sonnet call is never billed and is invisible
+  to the Issue-290 spend guard. chat/runner.py:215-240 bills only the chat turn's OWN usage via
+  `increment_usage`; the tool's inner API call's usage never reaches it. Same class as the
+  intake gap fixed in this very commit (452a700, OFF_COURSE_BUGS 2026-07-29 row) but this call
+  site was missed by the w2 billing audit; no DECISIONS/OFF_COURSE descope found. Bounded by
+  chat rate limits (dollars small; spend-guard blindness is the real exposure). | fix: inside
+  `_suggest_clip_titles`, after the call, `await record_llm_usage(creator_id, _usage,
+  settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET,
+  cache_write_multiplier=2.0 if _usage.get("cache_1h") else None)` + a regression test mirroring
+  tests/test_identity_chat.py::test_intake_turn_writes_billing_ledger_with_cache_tokens.
 - [cleanup] (carry-forward) 7 separate module-level `AsyncAnthropic` clients —
   chapters.py:28, clip_captions.py:39, clip_explain.py:42, clip_titles.py:37, hooks.py:32,
   thumbnails.py:38, titles.py:43. | fix: one shared `AsyncAnthropic` in `knowledge/_client.py`;
@@ -63,11 +113,13 @@ Load-bearing claims verified by reading, not assuming:
   `final_text_from(msg, context: str) -> str` next to `stream_until_final` (or an
   `extract_text=True` mode) so the helper family owns the extraction as `stream_and_emit`
   already does.
-- [cleanup] NEW — thumbnails.py:312-313 docstring still says usage is "the token-count dict from
-  ``stream_and_emit``"; titles/hooks docstrings were updated to the sums-across-rounds wording
-  but thumbnails' was not. | fix: mirror the titles.py:228-231 wording.
-- [cleanup] (carry-forward) Bare unparameterized `-> tuple:` on titles.py:118 `_build_request`
-  and thumbnails.py:199 `_build_concepts_request` (clip builders use
+- [cleanup] (carry-forward, now doubly stale) thumbnails.py:329-330 docstring still says usage
+  is "the token-count dict from ``stream_and_emit``" AND directs callers to
+  ``billing.ledger.increment_usage`` — the actual billing path is ``record_llm_usage`` (which
+  the cache_1h contract depends on). | fix: mirror the titles.py wording + name
+  ``record_llm_usage``.
+- [cleanup] (carry-forward) Bare unparameterized `-> tuple:` on titles.py:119 `_build_request`
+  and thumbnails.py:216 `_build_concepts_request` (clip builders use
   `-> tuple[list[dict], list[dict]]`). | fix: `-> tuple[list[dict], list[dict], list[dict]]`.
 - [cleanup / needs-runtime-confirmation] (carry-forward) `ANTHROPIC_WEB_SEARCH_TOOL` still pins
   `web_search_20260209` (config.py:132) with `allowed_callers=["direct"]` forced at
@@ -94,17 +146,19 @@ Notes (not findings):
 | Category | Status |
 |---|---|
 | 1 Resource lifecycle | 1 cleanup (7 duplicate AsyncAnthropic clients, carried); async clients bound to the worker's singleton loop (verified prior run, unchanged); no DB/temp-media here |
-| 2 Concurrency & scale | ok — the pause_turn SEV2 is FIXED via shared `stream_until_final` (bounded at max_rounds+1 calls, tested); builders async end-to-end; inputs bounded (images `[:10]`, transcript char caps) |
-| 3 Security & compliance | ok — the chapters SEV2 is FIXED (policy prepended + transcript wrap_untrusted); all 7 builders now wrap every untrusted surface in the user turn; verbose full-prompt logging double-gated off in prod; no tokens/PII/SQL; honesty disclaimers Python-appended in every builder |
+| 2 Concurrency & scale | ok — pause_turn loop bounded (max_rounds+1 calls, tested); builders async end-to-end; inputs bounded (images `[:10]`, transcript char caps); patterns compute still single-flight-locked with billing inside the compute path |
+| 3 Security & compliance | 1 SEV2 (cross-module: chat/tools.py:500 discards the clip-titles usage dict → unbilled Sonnet call, spend-guard blind spot); within the slice ok — all 7 builders wrap every untrusted surface in the user turn; verbose full-prompt logging double-gated off in prod; no tokens/PII/SQL; honesty disclaimers Python-appended in every builder |
 | 4 Clip-quality | n/a (generation module) — clip_explain still constrains `cited_principle` to the canonical enum |
-| 5 Anthropic SDK | ok — floor-gated 1h cache marker on the 5 Sonnet builders, correctly none on the Haiku pair; usage summed across pause_turn rounds and logged + metered after every call; `warn_if_truncated` per round; structured outputs only on non-web-search paths (citations incompatibility) |
-| 6 Cleanliness & typing | 8 cleanup (6 carried + 2 new minor: triplicated text-extraction epilogue, stale thumbnails docstring); no TODO/print/pdb |
+| 5 Anthropic SDK | ok — floor-gated 1h cache marker on the 5 Sonnet builders, correctly none on the Haiku pair; NEW: `cache_1h` flag derived from the exact `system` blocks sent (no drift possible) so 1h writes bill 2× at every consumer; requests byte-identical to pre-delta (caching efficiency unchanged); usage summed across pause_turn rounds and logged + metered after every call |
+| 6 Cleanliness & typing | 8 cleanup (all carried; thumbnails docstring now doubly stale — names `increment_usage` instead of the `record_llm_usage` path the cache_1h contract depends on); no TODO/print/pdb |
 | 7 Error handling / API | n/a (not a router; typed SDK errors propagated to callers as documented) |
 | 8 Config & paths | ok — models + web-search tool version config-driven and in .env.example; no filesystem paths; thumbnail URLs absolute https |
 
 ## Module verdict
-clean — both morning SEV2s are verifiably fixed exactly as prescribed: titles/hooks/thumbnails
-now share the tested `stream_until_final` pause_turn loop (usage summed across rounds, per-round
-truncation warning, round-cap log all intact through the consolidation), and chapters carries the
-untrusted-content policy plus a wrap_untrusted transcript. Only DRY/typing cleanups remain
-(7 clients, duplicated usage/log/extraction blocks, two bare tuple annotations).
+clean (slice) with 1 cross-module SEV2 escalated — the w2/billing-audit delta is correct end to
+end: both `analyze_thumbnail_patterns` callers handle the new tuple, the `cache_1h` flag is read
+off the exact system blocks sent (marker ↔ multiplier cannot drift), usage keys match
+billing/ledger extraction at all five consumer sites, and no request bytes changed (caching
+efficiency intact). The one real defect found is in another slice: chat/tools.py:500 discards
+the clip-titles usage dict, leaving that nested Sonnet call unbilled and spend-guard-invisible —
+the same class of gap 452a700 fixed for intake. Route to the chat-module owner / issues triage.

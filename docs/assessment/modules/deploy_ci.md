@@ -1,4 +1,73 @@
-# deploy_ci — assessed 2026-07-20 (post-fix)
+# deploy_ci — assessed 2026-07-20 (post-fix); delta re-assessed 2026-07-29
+
+## Delta 2026-07-29 (ready-pass, branch w3/ready-pass-closeout)
+
+Only in-slice change since e92b93a: `ci.yml` (+30/-8; commit 1c45904 lineage, merged in
+a50b332). Two changes: (a) `workflow_dispatch` gained a boolean `update_snapshots` input —
+the `visual` job appends `--update-snapshots` and uploads `frontend/e2e/__snapshots__/` as a
+7-day `visual-baselines-<sha>` artifact; (b) the visual job's `continue-on-error: true` was
+removed — it now GATES, with 6 baselines committed under
+`frontend/e2e/__snapshots__/smoke.spec.ts/` (generated on ubuntu-latest, run 30482627526).
+Nothing else in the slice moved (`git diff e92b93a..HEAD` on scripts/, Dockerfile, compose,
+render.yaml, deploy/, .env.example is empty), so all five prior cleanups carry forward.
+
+**Dispatch-input security posture — sound.**
+- `workflow_dispatch` requires repo write access; fork contributors cannot trigger it. The
+  workflow keeps top-level `permissions: contents: read` (ci.yml:53-54), so the visual job's
+  token cannot push — regenerated baselines only reach the repo via a human-downloaded
+  artifact committed in a reviewed PR. There is no silent artifact→commit path.
+- Expression semantics verified: with `type: boolean`, `inputs.update_snapshots` is a real
+  boolean on dispatch; on `push`/`pull_request` the `inputs` context is empty, `null == true`
+  is false, and the run-line suffix collapses to `''` — the gate is untouched on PR runs. The
+  upload step's `if: ${{ inputs.update_snapshots == true }}` is implicitly success()-gated,
+  so a failed update run uploads nothing (acceptable).
+- Residual gate-integrity note (inherent to committed baselines, not the dispatch flow): any
+  PR can regenerate `__snapshots__` PNGs alongside a CSS regression and self-satisfy the
+  gate, since the comparison runs against the PR's own checked-out baselines. Compensating
+  control is PR review of the binary diff (GitHub renders PNG rich-diffs); acceptable for a
+  single-maintainer repo. Likewise a dispatch run with `update_snapshots=true` trivially
+  greens its own visual job (it writes instead of compares), but dispatch runs are not
+  PR-required checks — no merge-gate bypass.
+
+**Flake risk now that the job gates — LOW, verified by reading the routes.** All three
+@visual routes render exclusively deterministic fixture data: Dashboard shows no relative
+timestamps, no `toLocale*` dates, and no network thumbnails (grepped
+frontend/src/pages/Dashboard.tsx + components — the only `Date.now()` in src is
+PublishPanel validation); fonts are self-hosted Fontsource variable packages
+(frontend/src/main.tsx:8-10) so no network font fetch; `animations: 'disabled'` + 600 ms
+settle + CI `retries: 1` + `maxDiffPixelRatio: 0.01` (~13k px tolerance on desktop) absorb
+one-off jitter; baselines were generated on the same ubuntu-latest image the gate runs on.
+Operational cost to know about: a lockfile bump of playwright (Chromium) or the `^5.3.0`
+Fontsource packages can shift glyph anti-aliasing and invalidate all 6 baselines at once —
+the regen flow documented in the job header covers it.
+
+### Delta findings
+
+- [cleanup] frontend/e2e/smoke.spec.ts:162-184 + frontend/e2e/__snapshots__/smoke.spec.ts/
+  — the OFF_COURSE 2026-07-29 misnamed shot shipped INTO the gating baselines: baselines
+  were generated without the planned rename/mask fix, so `empty-dashboard-{desktop,mobile}.png`
+  actually depict a POPULATED 3-video dashboard, the 4 mask locators
+  (smoke.spec.ts:172-177) match nothing (no-op), and the empty state the test claims to
+  guard is unguarded. No flake risk (fixture-deterministic), but the "fix when baselines are
+  first generated" window in OFF_COURSE_BUGS.md:90 was missed and a later rename now costs a
+  full dispatch→artifact→PR regen cycle. | fix: rename the test/snapshot to
+  `populated-dashboard`, drop the dead masks (or add a real empty-state seed and a second
+  shot), regen via the dispatch flow in the same PR; update the OFF_COURSE row.
+- [cleanup] ci.yml:596-601 (visual job) — the `actions/cache` step for
+  `~/.cache/ms-playwright` is placed AFTER the `npx playwright install` step, so the restore
+  happens post-download and the cache never accelerates anything; every gating run
+  re-downloads Chromium (~2 min). Pre-existing ordering, but it now sits on a gating job. |
+  fix: move the cache step above the install step.
+
+**Delta verdict: clean (unchanged)** — the dispatch input is correctly scoped (write-access
+trigger, read-only token, human-reviewed commit path), the PR-run expression is a verified
+no-op, and the newly gating visual job's inputs are deterministic; two new cleanups
+(misnamed populated-dashboard baseline + dead masks; useless browser-cache ordering) join
+the five carried forward.
+
+---
+
+# Assessment of record — 2026-07-20 (post-fix)
 
 Slice: `.github/workflows/` (9 workflows), `docker-compose{,.prod,.staging}.yml`, `Dockerfile`,
 `render.yaml`, `deploy/charts/creatorclip/`, `scripts/` (operational), `.env.example`.

@@ -1,4 +1,4 @@
-# _root_infra — assessed 2026-07-20 (post-fix)
+# _root_infra — assessed 2026-07-20 (post-fix); delta re-assessed 2026-07-29
 
 Slice: `main.py`, `config.py`, `db.py`, `auth.py`, `crypto.py`, `limiter.py`,
 `models.py`, `api_key.py`, `event_log.py`, `observability.py`, `redact.py`,
@@ -121,21 +121,86 @@ lru_cache — spot-re-verified unchanged at HEAD.)
 - Unit lanes green locally: `tests/test_api_key.py` + `tests/test_crypto.py`
   — 36 passed.
 
+## Delta re-assessment — 2026-07-29 (ready-pass, branch w3/ready-pass-closeout)
+
+Delta reviewed: `git diff e92b93a..HEAD` restricted to the slice — only
+`main.py`, `models.py`, `shared_resources.py`, and new migration 0047 changed.
+`config.py`, `db.py`, `auth.py`, `crypto.py`, `limiter.py`, and `.env.example`
+are byte-identical to the previously assessed state (no new config to check —
+rubric 8 unchanged). **No new findings.**
+
+- **main.py:92-122 lifespan health-Redis ownership — correct under both
+  nested TestClients and the prod single lifespan.** The lifespan now owns the
+  client it creates: acquire before `yield` (`from_url` is lazy, cannot raise
+  a connection error there), stack-save `prev_health_redis`, and in `finally`
+  restore the module global BEFORE awaiting `health_redis.aclose()`. Nesting
+  is LIFO by `with`-semantics, so nested TestClients restore correctly: inner
+  lifespan closes ITS client on ITS portal loop (connections are created
+  lazily on that same loop, so the close is same-loop — no cross-loop
+  "Event loop is closed" GC noise) and the outer client is restored intact.
+  Prod single-lifespan: prev is None; restore-before-close means an in-flight
+  `/health` probe during shutdown sees `_health_redis is None` and degrades
+  (503 path via `_check_redis` → False, main.py:490-491) rather than pinging
+  a closing client. `aclose` is wrapped so shutdown never raises;
+  `shared_resources.close_all()` still runs after, unchanged in order. The
+  registry's replace-and-never-clear semantics (which leaked earlier
+  lifespans' instances) no longer apply — the "health_redis" registry entry
+  is gone, and shared_resources.py's docstring now states the rule
+  (import-time singletons only). Regression tests verify both properties:
+  tests/test_shared_resources.py:89 (no registry entry) and :94-110
+  (stack-restore of the previous client). 15/15 unit tests green
+  (test_health.py + test_shared_resources.py).
+- **Migration 0047 (`alembic/versions/0047_clip_applied_metadata.py`) —
+  expand-only, lock-cheap, linear, downgrade-symmetric.** Two nullable
+  `ADD COLUMN` (Text, no default) = catalog-only in PG16: no rewrite, no
+  scan; each ALTER takes a microsecond ACCESS EXCLUSIVE bounded by env.py's
+  `lock_timeout=5s` guard (present on both the online `connect_args` path,
+  env.py:61, and the offline `--sql` path, env.py:35-36), so it is safe on
+  the populated clips table even under concurrent traffic — worst case is a
+  5s-timeout retry, never a stuck queue behind the lock. Linearity verified:
+  0047 is the ONLY revision with `down_revision = "0046"` and nothing revises
+  0047 — single head. Downgrade drops the two columns in reverse order
+  (metadata-only `attisdropped` in PG); data loss on downgrade is inherent
+  and acceptable for an expand-only column pair whose NULL state is the
+  documented fallback. Old images ignore the columns during rolling restart —
+  no contract phase needed, as the docstring states per docs/MIGRATIONS.md
+  Template A.
+- **models.py:670-676 — ORM/migration parity exact.** `applied_title` /
+  `applied_description` are `Mapped[str | None]` on `sa.Text`,
+  `nullable=True`, no server_default — matches 0047 precisely, so
+  autogenerate stays quiet and fresh `create_all` schemas match prod. Length
+  enforcement (title ≤100, description limits) correctly lives at the API
+  boundary (routers/clips.py PATCH validators — other module's slice), so
+  the worker never truncates an applied value.
+- **tests/conftest.py:112-142 `pytest_sessionfinish` hook — test-infra, note
+  only.** Disarms leftover async-Redis singletons' `_writer`/`_reader` so
+  `AbstractConnection.__del__` is a no-op at interpreter exit; docstring is
+  explicit that mid-run leaks still surface as
+  PytestUnraisableExceptionWarning, so it masks only the unavoidable
+  end-of-session GC noise, not real leaks. No production code affected.
+
+Carry-forwards re-verified still present at HEAD: SEV2 limiter.py sync Redis
+hop (accepted beta residual, mitigation pins intact at limiter.py:33-75);
+cleanup config.py:520 inline `import logging`; cleanup main.py:419 inline
+`from auth import creator_id_from_cookie`.
+
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — pools/registries unchanged and previously verified |
-| 2 Concurrency & scale | 1 SEV2 (slowapi sync Redis hop, accepted beta residual); 0046 backstops verified online-safe |
-| 3 Security & compliance | ok — SEV1 api_key GUC and SEV2 Fernet boot validation both FIXED with tests; RLS posture whole again on the API-key surface |
+| 1 Resource lifecycle | ok — lifespan now owns the health-Redis client per-lifespan (acquire/restore/aclose verified + regression-tested); pools/registries otherwise unchanged |
+| 2 Concurrency & scale | 1 SEV2 (slowapi sync Redis hop, accepted beta residual); 0046 backstops and 0047 expand-only ADD COLUMN verified online-safe |
+| 3 Security & compliance | ok — SEV1 api_key GUC and SEV2 Fernet boot validation both FIXED with tests; RLS posture whole again on the API-key surface; no new secrets/PII in the delta |
 | 4 Clip-quality | n/a (not a clip module) |
 | 5 Anthropic SDK | n/a (no LLM calls in slice; Opus rates are config only) |
 | 6 Cleanliness & typing | 2 cleanup (both carry-forward inline imports) |
-| 7 Error handling / API | ok (401/402/403/503 codes correct; validator errors are boot-time, not client-facing) |
-| 8 Config & paths | ok — Opus rates in .env.example; Fernet fail-fast now enforced per CLAUDE.md mandate |
+| 7 Error handling / API | ok (401/402/403/503 codes correct; shutdown-window /health degrades cleanly) |
+| 8 Config & paths | ok — no config/env additions in the delta; .env.example unchanged and current |
 
 ## Module verdict
-clean — both open defects from the morning report (SEV1 API-key RLS GUC,
-SEV2 Fernet boot validation) are fixed at HEAD with regression tests and
-DECISIONS entries; migration 0046 and the rest of the wave diff introduce no
-new findings; what remains is the documented, accepted slowapi beta residual
-and two trivial inline-import cleanups.
+clean — the 2026-07-29 ready-pass delta (per-lifespan health-Redis ownership,
+Clip applied_title/applied_description, migration 0047) introduces no new
+findings: the lifespan pattern is correct under nested TestClients and prod
+single-lifespan with regression tests, 0047 is expand-only/lock-cheap/linear
+with a symmetric downgrade, and ORM parity is exact; what remains is the
+documented, accepted slowapi beta residual and two trivial inline-import
+cleanups.
