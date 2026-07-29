@@ -5521,8 +5521,8 @@ def _build_inapp_notification(
         "welcome": (
             "Welcome to AutoClip.",
             (
-                "AutoClip predicts fit with your style and audience — it does not promise virality. "
-                "Every recommendation is an estimate grounded in your own data."
+                "AutoClip predicts fit with your style and audience — it does not promise virality."
+                " Every recommendation is an estimate grounded in your own data."
             ),
             "/app/dashboard",
         ),
