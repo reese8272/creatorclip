@@ -385,5 +385,8 @@ def test_render_endpoint_409_when_source_expired(client):
             app.dependency_overrides.clear()
 
     assert resp.status_code == 409
-    assert "re-upload" in resp.json()["detail"]
+    # Structured detail so the SPA can branch on the code (W1 metadata lane).
+    detail = resp.json()["detail"]
+    assert detail["code"] == "source_expired"
+    assert "re-upload" in detail["message"]
     mock_task.delay.assert_not_called()

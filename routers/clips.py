@@ -512,12 +512,18 @@ async def render_clip(
     # enqueue-to-run race.
     video = await session.get(Video, clip.video_id)
     if not video or not video.source_uri:
+        # Structured {code, message} detail (same shape as pending_clean_or_edit)
+        # so the SPA can branch on code == "source_expired" and render the
+        # re-upload CTA instead of a generic error toast.
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
-                "retention) — re-upload the video to render this clip."
-            ),
+            detail={
+                "code": "source_expired",
+                "message": (
+                    f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                    "retention) — re-upload the video to render this clip."
+                ),
+            },
         )
 
     if clip.render_status == RenderStatus.running:
@@ -1672,11 +1678,17 @@ async def create_summary(
     if video.ingest_status != IngestStatus.done:
         raise HTTPException(status_code=400, detail="Video is not fully ingested yet")
     if not video.source_uri:
+        # Same structured source_expired contract as the render 409 above; the
+        # retention window comes from settings (was a hardcoded "72-hour").
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Source media expired (72-hour retention) — re-upload the video to create a recap."
-            ),
+            detail={
+                "code": "source_expired",
+                "message": (
+                    f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                    "retention) — re-upload the video to create a recap."
+                ),
+            },
         )
 
     # Idempotency: a summary whose render is still in flight is THE recap for
