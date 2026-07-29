@@ -27,6 +27,7 @@ from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
     dna_system_block,
     extract_json_block,
+    has_1h_cache_marker,
     wrap_untrusted,
 )
 from knowledge.util import extract_transcript_text as _extract_transcript_text
@@ -109,18 +110,27 @@ def _empty_patterns() -> dict:
 async def analyze_thumbnail_patterns(
     youtube_video_ids: list[str],
     channel_title: str,
-) -> dict:
+) -> tuple[dict, dict]:
     """Analyze top-performing thumbnails using Claude multimodal vision.
 
     Passes thumbnail image URLs directly to Claude — no download required,
     no CV pipeline needed. Awaited directly on the caller's event loop.
 
-    Returns a dict with keys: face_present, dominant_emotions,
-    text_overlay_style, typical_colors, composition_pattern,
-    channel_thumbnail_signature.
+    Returns ``(patterns, usage)``. ``patterns`` has keys: face_present,
+    dominant_emotions, text_overlay_style, typical_colors, composition_pattern,
+    channel_thumbnail_signature. ``usage`` has keys input_tokens, output_tokens,
+    cache_read, cache_creation — callers MUST pass it to
+    ``billing.ledger.record_llm_usage`` at every compute path (this multimodal
+    call was entirely unbilled before w2/billing-audit); Redis-cache hits make
+    no LLM call and bill nothing.
     """
     if not youtube_video_ids:
-        return _empty_patterns()
+        return _empty_patterns(), {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read": 0,
+            "cache_creation": 0,
+        }
 
     urls = [_thumbnail_url(vid) for vid in youtube_video_ids[:10]]
 
@@ -175,14 +185,21 @@ async def analyze_thumbnail_patterns(
     record_llm_metric(settings.ANTHROPIC_MODEL_THUMBNAILS, response.usage)
     warn_if_truncated(settings.ANTHROPIC_MODEL_THUMBNAILS, getattr(response, "stop_reason", None))
 
+    usage = {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+    }
     raw = next((b.text for b in response.content if b.type == "text"), "")
     try:
         # extract_json_block strips a markdown fence / preamble (Issue 342) so a
         # fenced vision response is parsed instead of silently returning empty.
-        return json.loads(extract_json_block(raw))
+        return json.loads(extract_json_block(raw)), usage
     except (json.JSONDecodeError, ValueError):
+        # The vision call still ran (and cost money) — return the real usage.
         logger.warning("thumbnail_patterns: could not parse Claude response; returning empty")
-        return _empty_patterns()
+        return _empty_patterns(), usage
 
 
 def _extract_transcript_hook(segments_jsonb: dict | None, max_chars: int = 500) -> str:
@@ -346,6 +363,9 @@ async def generate_thumbnail_concepts(
     if not text_blocks:
         raise RuntimeError("Claude returned no text in thumbnail concept generation")
     final_text = text_blocks[-1].text
+    # 1h-TTL cache writes bill 2× — flag so the billing call site passes
+    # cache_write_multiplier=2.0 only when the marker actually attached.
+    usage["cache_1h"] = has_1h_cache_marker(system)
     logger.info(
         "thumbnail_concepts tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],

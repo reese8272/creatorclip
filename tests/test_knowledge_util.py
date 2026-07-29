@@ -164,3 +164,24 @@ class TestDnaSystemBlock:
         block = dna_system_block(static, dna_text)
         assert "cache_control" not in block
         assert block["text"] == f"CREATOR DNA PROFILE:\n{dna_text}"
+
+
+class TestHas1hCacheMarker:
+    """w2/billing-audit — the flag driving the 2× cache-write multiplier.
+
+    1-hour cache WRITES bill 2× base input (5-min writes 1.25×). Builders flag
+    ``cache_1h`` in their usage dict from this helper so billing call sites pass
+    ``cache_write_multiplier=2.0`` ONLY when the marker actually attached.
+    """
+
+    def test_true_when_floor_gated_marker_attached(self) -> None:
+        from knowledge.util import dna_system_block, has_1h_cache_marker
+
+        system = [{"type": "text", "text": "static"}, dna_system_block("", "d" * 5000)]
+        assert has_1h_cache_marker(system) is True
+
+    def test_false_when_below_floor_no_marker(self) -> None:
+        from knowledge.util import dna_system_block, has_1h_cache_marker
+
+        system = [{"type": "text", "text": "static"}, dna_system_block("", "short brief")]
+        assert has_1h_cache_marker(system) is False

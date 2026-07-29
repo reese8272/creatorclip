@@ -32,6 +32,7 @@ from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
     dna_system_block,
     extract_json_block,
+    has_1h_cache_marker,
     wrap_untrusted,
 )
 from knowledge.util import extract_transcript_text as _extract_transcript_text
@@ -262,6 +263,9 @@ async def generate_title_suggestions(
     if not text_blocks:
         raise RuntimeError("Claude returned no text in title suggestion generation")
     final_text = text_blocks[-1].text
+    # 1h-TTL cache writes bill 2× — flag so the billing call site passes
+    # cache_write_multiplier=2.0 only when the marker actually attached.
+    usage["cache_1h"] = has_1h_cache_marker(system)
     logger.info(
         "title_suggestions tokens: in=%d cached_read=%d cached_write=%d out=%d",
         usage["input_tokens"],

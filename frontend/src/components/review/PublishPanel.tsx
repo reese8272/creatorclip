@@ -66,7 +66,7 @@ function PublicationRow({ clip, pub }: { clip: ReviewClip; pub: PublicationOut }
         )}
         {pub.status === 'done' && pub.youtube_video_id && (
           <a
-            href={`https://youtu.be/${pub.youtube_video_id}`}
+            href={`https://youtu.be/${encodeURIComponent(pub.youtube_video_id)}`}
             target="_blank"
             rel="noreferrer"
             className="text-accent-text underline-offset-2 hover:underline"

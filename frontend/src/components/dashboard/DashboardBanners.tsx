@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
+import { safeUrl } from '@/lib/safeUrl'
 import type { Balance, SetupStep } from '@/types'
 
 // DNA setup CTA — shown until onboarding reaches `complete`. `link_first_video`
@@ -29,7 +30,7 @@ export function DnaCta({ setup }: { setup: SetupStep | null | undefined }) {
           <Button>Set up →</Button>
         </Link>
       ) : (
-        <a href={setup.next_action_url ?? '/app/onboarding'}>
+        <a href={safeUrl(setup.next_action_url) ?? '/app/onboarding'}>
           <Button>Set up →</Button>
         </a>
       )}

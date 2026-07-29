@@ -1,6 +1,5 @@
 """Video performance analysis endpoints (Issues 121, 130, 131)."""
 
-import asyncio
 import logging
 import re
 import uuid as _uuid_mod
@@ -18,6 +17,7 @@ from db import get_session
 from flags import require_flag
 from limiter import LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, RetentionCurve, Transcript, Video, VideoMetrics
+from routers._enqueue import enqueue_stream_task
 
 # Router-level kill switch (Issue 284): every route here queues LLM analysis
 # work, so the llm_generation flag gates the whole router with one dependency.
@@ -123,29 +123,17 @@ async def start_video_analysis(
             )
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import generate_video_analysis as generate_video_analysis_task
 
-    task = await asyncio.to_thread(
-        generate_video_analysis_task.delay,
+    task, stream_url = await enqueue_stream_task(
+        generate_video_analysis_task,
         str(creator.id),
         youtube_video_id,
         body.query,
         video_id_str,
+        creator_id=str(creator.id),
+        log_label="video_analysis",
     )
-
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "video_analysis aset_owner failed task=%s err=%s",
-            task.id,
-            exc,
-        )
-        stream_url = None
 
     logger.info(
         "Video analysis queued creator=%s video=%s has_metrics=%s task=%s",
@@ -224,19 +212,15 @@ async def start_hook_analysis(
             status_code=200,
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import analyze_hook as analyze_hook_task
 
-    task = await asyncio.to_thread(analyze_hook_task.delay, str(creator.id), str(video.id))
-
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning("hook_analysis aset_owner failed task=%s err=%s", task.id, exc)
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        analyze_hook_task,
+        str(creator.id),
+        str(video.id),
+        creator_id=str(creator.id),
+        log_label="hook_analysis",
+    )
 
     logger.info(
         "Hook analysis queued creator=%s video=%s task=%s",
@@ -300,19 +284,15 @@ async def start_chapter_generation(
             detail="Video has not been transcribed yet — wait for ingestion to complete.",
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import generate_chapters as generate_chapters_task
 
-    task = await asyncio.to_thread(generate_chapters_task.delay, str(creator.id), str(video.id))
-
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning("generate_chapters aset_owner failed task=%s err=%s", task.id, exc)
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        generate_chapters_task,
+        str(creator.id),
+        str(video.id),
+        creator_id=str(creator.id),
+        log_label="generate_chapters",
+    )
 
     logger.info(
         "Chapter generation queued creator=%s video=%s task=%s",

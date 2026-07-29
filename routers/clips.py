@@ -39,6 +39,7 @@ from models import (
     VideoOrigin,
 )
 from observability import record_llm_tokens
+from routers._enqueue import enqueue_stream_task, stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, TaskQueuedOut, build_envelope_state
 from worker.storage import presigned_download_url, upload_file
@@ -581,9 +582,6 @@ async def render_clip(
         clip.render_uri = None
     await session.commit()
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import render_clip as render_task
 
     # Audit fix (scale-checklist B): `.delay()` is sync Redis I/O; offload from
@@ -607,19 +605,7 @@ async def render_clip(
     # Issue 92: use clip_id (not task.id) as the SSE stream key — the worker
     # task emits to task:{clip_id}:events for the same deterministic-lookup
     # reason as the upload chain (the frontend already has clip_id in URL).
-    # Wave-5 Fix 1: same fail-open posture as the other aset_owner sites —
-    # a Redis blip returns stream_url=None instead of 500-ing the request.
-    # The render task is already enqueued and will run.
-    stream_url: str | None = f"/tasks/{clip_id}/events"
-    try:
-        await progress.aset_owner(str(clip_id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "render aset_owner failed (Redis down?) clip_id=%s err=%s",
-            clip_id,
-            exc,
-        )
-        stream_url = None
+    stream_url = await stamp_stream_owner(str(clip_id), str(creator.id), log_label="render")
 
     return {
         "task_id": task.id,
@@ -778,22 +764,15 @@ async def clean_clip(
             },
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import clean_clip as clean_task
 
-    task = await asyncio.to_thread(clean_task.delay, str(clip_id))
-    stream_url: str | None = f"/tasks/{clip_id}/events"
-    try:
-        await progress.aset_owner(str(clip_id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "clean aset_owner failed (Redis down?) clip_id=%s err=%s",
-            clip_id,
-            exc,
-        )
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        clean_task,
+        str(clip_id),
+        creator_id=str(creator.id),
+        stream_key=str(clip_id),
+        log_label="clean",
+    )
 
     return {
         "task_id": task.id,
@@ -975,23 +954,17 @@ async def submit_cuts(
             status_code=422, detail={"code": exc.code, "message": str(exc)}
         ) from exc
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import edit_clip as edit_task
 
     payload = [[s.start_s, s.end_s] for s in body.segments]
-    task = await asyncio.to_thread(edit_task.delay, str(clip_id), payload)
-    stream_url: str | None = f"/tasks/{clip_id}/events"
-    try:
-        await progress.aset_owner(str(clip_id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "edit aset_owner failed (Redis down?) clip_id=%s err=%s",
-            clip_id,
-            exc,
-        )
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        edit_task,
+        str(clip_id),
+        payload,
+        creator_id=str(creator.id),
+        stream_key=str(clip_id),
+        log_label="edit",
+    )
 
     return {
         "task_id": task.id,
@@ -1116,22 +1089,10 @@ async def ingest_clip(
     await session.commit()
     await session.refresh(video)
 
-    # SSE ownership stamp — same fail-open pattern as /videos/upload.
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import start_pipeline
 
-    stream_url: str | None = f"/tasks/{video.id}/events"
-    try:
-        await progress.aset_owner(str(video.id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "ingest aset_owner failed (Redis down?) video_id=%s err=%s",
-            video.id,
-            exc,
-        )
-        stream_url = None
+    # SSE ownership stamp BEFORE start_pipeline — same ordering as /videos/upload.
+    stream_url = await stamp_stream_owner(str(video.id), str(creator.id), log_label="ingest")
 
     # Audit fix (scale-checklist B): start_pipeline calls apply_async() inline —
     # sync Redis I/O on the request loop. Offload.
@@ -1332,6 +1293,8 @@ async def get_clip_title_suggestions(
         usage,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
     logger.info(
         "clip_title_suggestions done creator=%s clip=%s titles=%d",
@@ -1430,6 +1393,8 @@ async def get_clip_caption_hooks(
         usage,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
     logger.info(
         "clip_caption_hooks done creator=%s clip=%s options=%d",
@@ -1540,6 +1505,8 @@ async def get_clip_explanation(
         usage,
         settings.COST_PER_MTOK_IN_SONNET,
         settings.COST_PER_MTOK_OUT_SONNET,
+        # ttl:"1h" cache writes bill 2× base input (5-min default is 1.25×).
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
     )
     logger.info(
         "clip_explain done creator=%s clip=%s principle=%s",
@@ -1785,9 +1752,6 @@ async def create_summary(
         }
     await session.refresh(summary)
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import render_summary as render_summary_task
 
     # `.delay()` is sync Redis I/O; offload from the request loop (scale-checklist B).
@@ -1806,18 +1770,7 @@ async def create_summary(
             status_code=503, detail="Could not queue the recap render — please try again."
         ) from exc
     # summary_id is the SSE stream key (the worker emits to task:{summary_id}:events).
-    # Fail-open posture (Wave-5 Fix 1): a Redis blip returns stream_url=None
-    # instead of 500-ing — the render is already enqueued and will run.
-    stream_url: str | None = f"/tasks/{summary.id}/events"
-    try:
-        await progress.aset_owner(str(summary.id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "recap aset_owner failed (Redis down?) summary_id=%s err=%s",
-            summary.id,
-            exc,
-        )
-        stream_url = None
+    stream_url = await stamp_stream_owner(str(summary.id), str(creator.id), log_label="recap")
 
     return {
         "summary_id": str(summary.id),

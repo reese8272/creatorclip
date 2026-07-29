@@ -484,6 +484,16 @@ clip_publications                     -- YouTube publish attempts + scheduled pu
 > edit_clip → cleaned_render_uri + confirm swap), structured
 > `{"code": "source_expired"}` 409s on render/recap, and the Review-surface publish UI
 > (PublishPanel/SchedulePublishDialog over the Issue-196 publications API).
+>
+> **Ready-pass W2 additions (2026-07-29):** `routers/_enqueue.py` (shared
+> enqueue+SSE-ownership helper behind all 19 enqueue endpoints; sibling of `_owned.py`);
+> `frontend/src/lib/safeUrl.ts` (http(s)/relative allowlist for server-influenced
+> href/src); SPA fonts self-hosted via `@fontsource-variable/*` (no external font CDN);
+> cleaned-preview players use `GET /clips/{id}/download?variant=cleaned` (never raw
+> `cleaned_render_uri`); worker advisory locks acquire via `_try_advisory_lock` with
+> guarded invalidate-on-failure release + `beat_lock_skips_total` counter;
+> `chat/runner.run_chat_turn` takes a tenant-session FACTORY (no session held across
+> LLM calls); health-Redis client is per-lifespan-owned (not registry-held).
 
 ```
 creator links/uploads a video

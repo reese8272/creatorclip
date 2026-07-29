@@ -15,11 +15,15 @@ tests/test_issue_88_filter_parity.py / tests/test_youtube_edges.py.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import event_log
 from auth import get_current_creator
 from db import get_session
 from main import app
@@ -82,13 +86,16 @@ async def test_check_data_gate_remaining_clamped_above_threshold():
 # ── data_gate_evaluated event from the endpoint ───────────────────────────────
 
 
-def test_data_gate_endpoint_emits_evaluation_event(client):
+def test_data_gate_endpoint_emits_evaluation_event(client, monkeypatch):
     """GET /creators/me/data-gate fires data_gate_evaluated with ready + both
-    counts via the event_log DB sink (fire-and-forget: ensure_future calls
-    record_event(...) synchronously to build the coroutine, so call args are
-    captured even if the scheduled task hasn't completed)."""
+    counts via the event_log DB sink (fire-and-forget: record_event_nowait
+    calls record_event(...) synchronously to build the coroutine, so call args
+    are captured even if the scheduled task hasn't completed). The sink flag
+    must be on — record_event_nowait early-returns when it is disabled."""
     creator = MagicMock()
     creator.id = uuid.uuid4()
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+    monkeypatch.setattr(event_log, "_pending_tasks", set())
 
     async def _override_session():
         yield _fake_session(8, 3)
@@ -122,3 +129,44 @@ def test_data_gate_endpoint_emits_evaluation_event(client):
     kwargs = gate_calls[0].kwargs
     assert kwargs["creator_id"] == creator.id
     assert kwargs["extra"] == {"ready": False, "long_form_videos": 8, "shorts": 3}
+
+
+def test_data_gate_event_task_strongly_referenced(client, monkeypatch):
+    """Regression (ready-pass W2): the funnel event is scheduled through
+    record_event_nowait, which holds a strong reference to the task in
+    event_log._pending_tasks until it completes. The old
+    asyncio.ensure_future(record_event(...)) call kept no reference — the loop
+    holds only weak refs (asyncio docs), so the task could be garbage-collected
+    mid-execution and the event silently lost."""
+    creator = MagicMock()
+    creator.id = uuid.uuid4()
+    monkeypatch.setattr(event_log.settings, "EVENT_LOG_DB_ENABLED", True)
+    monkeypatch.setattr(event_log, "_pending_tasks", set())
+
+    async def _override_session():
+        yield _fake_session(8, 3)
+
+    ran = threading.Event()
+    seen: dict[str, Any] = {}
+
+    async def _probe_record_event(**kwargs: Any) -> None:
+        if kwargs.get("event") != "data_gate_evaluated":
+            return  # the request-logging middleware's http_request event
+        seen["strongly_referenced"] = asyncio.current_task() in event_log._pending_tasks
+        seen["creator_id"] = kwargs.get("creator_id")
+        ran.set()
+
+    monkeypatch.setattr(event_log, "record_event", _probe_record_event)
+
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _override_session
+    try:
+        resp = client.get("/creators/me/data-gate")
+    finally:
+        app.dependency_overrides = original
+
+    assert resp.status_code == 200
+    assert ran.wait(timeout=2.0), "data_gate_evaluated task never executed"
+    assert seen["strongly_referenced"] is True
+    assert seen["creator_id"] == creator.id

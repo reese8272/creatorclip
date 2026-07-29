@@ -17,6 +17,7 @@ from config import settings
 from db import get_session
 from limiter import creator_key, limiter
 from models import Creator, IngestStatus, OnboardingState, Video, VideoKind, VideoOrigin
+from routers._enqueue import stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 from worker.storage import upload_file
@@ -479,25 +480,10 @@ async def upload_video(
     # video_id as the stream key keeps the client lookup deterministic across
     # the chain without piping the Celery chain id through every stage.
     #
-    # Wave-4 Fix 1: same fail-open posture as Wave-3 Fix B (improvement brief)
-    # and Wave-3 Fix D (OAuth callback). A Redis blip on aset_owner returns
-    # stream_url=None instead of 500-ing — the Video row is already committed,
-    # start_pipeline() runs next so the actual ingest still happens. The user
+    # Wave-4 Fix 1: on a Redis blip the Video row is already committed and
+    # start_pipeline() runs next, so the actual ingest still happens. The user
     # loses live progress; they don't lose the upload.
-    import redis as _redis_pkg
-
-    from worker import progress
-
-    stream_url: str | None = f"/tasks/{video.id}/events"
-    try:
-        await progress.aset_owner(str(video.id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "upload aset_owner failed (Redis down?) video_id=%s err=%s",
-            video.id,
-            exc,
-        )
-        stream_url = None
+    stream_url = await stamp_stream_owner(str(video.id), str(creator.id), log_label="upload")
 
     # Audit fix (scale-checklist B): start_pipeline runs apply_async() inline.
     await asyncio.to_thread(start_pipeline, str(video.id))
@@ -570,21 +556,9 @@ async def queue_video_for_analysis(
     # progress to task:{video.id}:events; the SSE endpoint (GET
     # /tasks/{id}/events) refuses any stream whose owner key is unset, so
     # without this the dashboard's live stage-progress bar silently 404s on
-    # the "Queue for analysis" CTA. Fail-open on a Redis blip: the Video row
-    # is already committed and start_pipeline still runs, so the creator loses
-    # live progress (the row still refreshes via polling) but not the analysis.
-    import redis as _redis_pkg
-
-    from worker import progress
-
-    try:
-        await progress.aset_owner(str(video.id), str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "queue aset_owner failed (Redis down?) video_id=%s err=%s",
-            video.id,
-            exc,
-        )
+    # the "Queue for analysis" CTA. The stream URL is discarded — this
+    # response carries no stream_url; the row still refreshes via polling.
+    await stamp_stream_owner(str(video.id), str(creator.id), log_label="queue")
 
     await asyncio.to_thread(start_pipeline, str(video.id))
     return {"video_id": str(video.id), "status": video.ingest_status.value, "queued": True}

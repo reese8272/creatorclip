@@ -19,7 +19,9 @@ Trigger points covered:
 
 import contextlib
 import uuid
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +31,22 @@ import pytest
 
 def _make_creator_uuid() -> uuid.UUID:
     return uuid.uuid4()
+
+
+def _run_async_close_and_raise(
+    exc: BaseException,
+) -> Callable[[Coroutine[Any, Any, Any]], NoReturn]:
+    """Side effect for a patched ``worker.tasks.run_async``: dispose of the
+    coroutine argument without running it (avoids the never-awaited
+    RuntimeWarning — ``patch`` substitutes an AsyncMock for async targets, so
+    the real coroutine created at the call site is otherwise never consumed),
+    then raise ``exc`` as the real runner would."""
+
+    def _side_effect(coro: Coroutine[Any, Any, Any]) -> NoReturn:
+        coro.close()
+        raise exc
+
+    return _side_effect
 
 
 # ── Trigger 1: clips_ready ────────────────────────────────────────────────────
@@ -284,11 +302,7 @@ class TestReauthRequiredTrigger:
 
         auth_err = YouTubeAuthError("authError", 401)
         with (
-            patch(
-                "worker.tasks._sync_channel_catalog_async",
-                side_effect=auth_err,
-            ),
-            patch("worker.tasks.run_async", side_effect=auth_err),
+            patch("worker.tasks.run_async", side_effect=_run_async_close_and_raise(auth_err)),
             patch("worker.tasks.send_notification") as mock_send_notif,
             patch("worker.tasks.log_event"),
         ):
@@ -313,7 +327,7 @@ class TestReauthRequiredTrigger:
         with (
             patch(
                 "worker.tasks.run_async",
-                side_effect=RuntimeError("transient"),
+                side_effect=_run_async_close_and_raise(RuntimeError("transient")),
             ),
             patch("worker.tasks.send_notification") as mock_send_notif,
             patch("worker.tasks.log_event"),
@@ -545,6 +559,23 @@ class TestBalanceLowTrigger:
 
         assert result == 0
         mock_send_notif.delay.assert_not_called()
+
+
+# ── Copy: pricing links are absolute ─────────────────────────────────────────
+
+
+class TestCopyPricingLinksAbsolute:
+    """The canonical copy bodies must carry absolute pricing URLs (APP_BASE_URL),
+    never a host-less '/pricing' that dangles outside the app (e.g. in email)."""
+
+    def test_pricing_links_bind_app_base_url(self) -> None:
+        from config import settings
+        from notify.copy import COPY
+
+        for event_type in ("trial_ending", "balance_low"):
+            body = COPY[event_type]["body"]
+            assert f"{settings.APP_BASE_URL}/pricing" in body, event_type
+            assert " /pricing" not in body, f"{event_type}: host-less /pricing"
 
 
 # ── Copy: no virality promises ────────────────────────────────────────────────

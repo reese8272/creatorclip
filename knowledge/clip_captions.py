@@ -29,6 +29,7 @@ from knowledge.util import (
     UNTRUSTED_CONTENT_POLICY,
     dna_system_block,
     extract_json_block,
+    has_1h_cache_marker,
     wrap_untrusted,
 )
 from observability import record_llm_metric, warn_if_truncated
@@ -226,6 +227,9 @@ async def generate_clip_caption_hooks(
         "output_tokens": response.usage.output_tokens,
         "cache_read": getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         "cache_creation": getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        # 1h-TTL cache writes bill 2× — the billing call site passes
+        # cache_write_multiplier=2.0 only when the marker actually attached.
+        "cache_1h": has_1h_cache_marker(system),
     }
     logger.info(
         "clip_caption_hooks tokens: in=%d cached_read=%d cached_write=%d out=%d",

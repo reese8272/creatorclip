@@ -213,10 +213,16 @@ def _transcript_context(setup_s: float, end_s: float, segments: list | None) -> 
     after_end = end_s + _CONTEXT_AFTER_S
 
     def _gather(start_min: float, end_max: float, cap: int) -> str:
+        # Midpoint assignment (not full containment): a segment straddling a
+        # section boundary lands in exactly one section instead of vanishing
+        # from both — full containment dropped the clip's opening sentence
+        # from the LLM context whenever a segment straddled setup_s. The
+        # half-open [start_min, end_max) keeps the three sections a strict
+        # partition of the context range.
         parts = [
             seg.get("text", "").strip()
             for seg in segments
-            if seg.get("start", 0.0) >= start_min and seg.get("end", 0.0) <= end_max
+            if start_min <= (seg.get("start", 0.0) + seg.get("end", 0.0)) / 2.0 < end_max
         ]
         return " ".join(parts)[:cap]
 

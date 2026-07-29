@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -400,6 +401,213 @@ def test_thumbnail_patterns_returns_cached_result() -> None:
     assert data["channel_thumbnail_signature"] == "Cached signature."
 
 
+# ── GET thumbnail-patterns — billing (w2/billing-audit) ───────────────────────
+
+
+def _patterns_compute_session(creator, youtube_ids: list[str]) -> object:
+    """Session mock for the GET patterns compute path: confirmed DNA + resolvable ids."""
+    dna = _make_dna(creator.id, [str(uuid.uuid4())])
+
+    async def _gen():
+        sess = AsyncMock()
+        sess.scalar.return_value = dna
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = youtube_ids
+        sess.execute = AsyncMock(return_value=exec_result)
+        yield sess
+
+    return _gen
+
+
+def test_thumbnail_patterns_compute_path_bills_ledger_once() -> None:
+    """The billed multimodal vision call must write the ledger exactly once,
+    with the usage the producer returned, at Sonnet rates (w2/billing-audit:
+    this call was previously entirely unbilled)."""
+    from config import settings
+
+    creator = _make_creator()
+    vision_usage = {
+        "input_tokens": 16000,
+        "output_tokens": 400,
+        "cache_read": 0,
+        "cache_creation": 0,
+    }
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _patterns_compute_session(creator, ["yt1", "yt2"])
+
+    ledger = AsyncMock()
+    with (
+        patch("routers.thumbnails._get_redis") as mock_redis,
+        patch(
+            "knowledge.thumbnails.analyze_thumbnail_patterns",
+            AsyncMock(return_value=(_empty_patterns(), vision_usage)),
+        ) as analyze,
+        patch("routers.thumbnails.record_llm_usage", ledger),
+    ):
+        mock_redis.return_value.get = AsyncMock(return_value=None)  # cache miss
+        mock_redis.return_value.set = AsyncMock(return_value=True)  # lock acquired
+        mock_redis.return_value.setex = AsyncMock()
+        mock_redis.return_value.eval = AsyncMock()
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/creators/me/thumbnail-patterns")
+
+    app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert resp.json()["cached"] is False
+    analyze.assert_awaited_once()
+    ledger.assert_awaited_once()
+    args = ledger.await_args
+    assert args.args[0] == creator.id
+    assert args.args[1] == vision_usage
+    assert args.args[2] == settings.COST_PER_MTOK_IN_SONNET
+    assert args.args[3] == settings.COST_PER_MTOK_OUT_SONNET
+
+
+def test_thumbnail_patterns_cache_hit_bills_zero() -> None:
+    """A Redis-cache hit makes no vision call and must write nothing to the ledger."""
+    creator = _make_creator()
+
+    async def _gen():
+        sess = AsyncMock()
+        yield sess
+
+    app.dependency_overrides[get_current_creator] = override_current_creator(creator)
+    app.dependency_overrides[get_session] = _gen
+
+    ledger = AsyncMock()
+    with (
+        patch("routers.thumbnails._get_redis") as mock_redis,
+        patch("knowledge.thumbnails.analyze_thumbnail_patterns", AsyncMock()) as analyze,
+        patch("routers.thumbnails.record_llm_usage", ledger),
+    ):
+        mock_redis.return_value.get = AsyncMock(return_value=json.dumps(_empty_patterns()))
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/creators/me/thumbnail-patterns")
+
+    app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert resp.json()["cached"] is True
+    analyze.assert_not_awaited()
+    ledger.assert_not_awaited()
+
+
+# ── worker compute path — billing (w2/billing-audit) ─────────────────────────
+
+
+def _worker_concepts_session(creator, video) -> AsyncMock:
+    """Tenant-session mock for _generate_thumbnail_concepts_async."""
+    sess = AsyncMock()
+    sess.get.side_effect = [creator, video]
+    sess.scalar.return_value = None  # no transcript row
+    exec_result = MagicMock()
+    exec_result.scalars.return_value.all.return_value = ["yt1"]
+    sess.execute = AsyncMock(return_value=exec_result)
+    return sess
+
+
+def _worker_concepts_patches(sess, redis, analyze, concepts, ledger, dna_profile):
+    """The boundary mocks shared by the two worker-path billing tests."""
+
+    @contextlib.asynccontextmanager
+    async def _tenant_session(_cid):
+        yield sess
+
+    return (
+        patch("worker.tasks._spend_guard_blocked", AsyncMock(return_value=False)),
+        patch("worker.progress.aemit", AsyncMock()),
+        patch("db.tenant_session", _tenant_session),
+        patch("dna.profile.get_active", AsyncMock(return_value=dna_profile)),
+        patch("dna.identity.get_current", AsyncMock(return_value=None)),
+        patch("worker.tasks._worker_redis", return_value=redis),
+        patch("knowledge.thumbnails.analyze_thumbnail_patterns", analyze),
+        patch("knowledge.thumbnails.generate_thumbnail_concepts", concepts),
+        patch("billing.ledger.record_llm_usage", ledger),
+    )
+
+
+def _worker_dna_profile() -> MagicMock:
+    dna_profile = MagicMock()
+    dna_profile.brief_text = "High-energy tech channel."
+    dna_profile.top_video_ids_jsonb = [str(uuid.uuid4())]
+    return dna_profile
+
+
+@pytest.mark.asyncio
+async def test_worker_compute_path_bills_patterns_and_threads_1h_multiplier() -> None:
+    """The worker compute path must bill the vision call exactly once with the
+    patterns usage (w2/billing-audit: previously entirely unbilled), then bill
+    the concepts call passing cache_write_multiplier=2.0 ONLY because the
+    producer flagged cache_1h (the ttl:"1h" marker attached)."""
+    from config import settings
+    from worker.tasks import _generate_thumbnail_concepts_async
+
+    creator = _make_creator()
+    video = _make_video(creator.id)
+    vision_usage = {"input_tokens": 16000, "output_tokens": 400, "cache_read": 0}
+    concepts_usage = {"input_tokens": 900, "output_tokens": 300, "cache_1h": True}
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)  # patterns cache miss → compute
+    redis.setex = AsyncMock()
+    analyze = AsyncMock(return_value=(_empty_patterns(), vision_usage))
+    concepts = AsyncMock(return_value=("[]", concepts_usage))
+    ledger = AsyncMock()
+
+    sess = _worker_concepts_session(creator, video)
+    with contextlib.ExitStack() as stack:
+        for p in _worker_concepts_patches(
+            sess, redis, analyze, concepts, ledger, _worker_dna_profile()
+        ):
+            stack.enter_context(p)
+        await _generate_thumbnail_concepts_async("job-1", str(creator.id), str(video.id))
+
+    analyze.assert_awaited_once()
+    assert ledger.await_count == 2
+    vision_call, concepts_call = ledger.await_args_list
+    assert vision_call.args == (
+        creator.id,
+        vision_usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+    assert vision_call.kwargs == {}  # 5-min default multiplier for the vision call
+    assert concepts_call.kwargs == {"cache_write_multiplier": 2.0}
+    redis.setex.assert_awaited_once()  # computed patterns re-cached for 24h
+
+
+@pytest.mark.asyncio
+async def test_worker_patterns_cache_hit_bills_zero_for_vision() -> None:
+    """A Redis patterns-cache hit in the worker path makes no vision call and
+    bills nothing for it — only the concepts call is billed, with NO 2× write
+    multiplier when the 1h marker did not attach (cache_1h False)."""
+    from worker.tasks import _generate_thumbnail_concepts_async
+
+    creator = _make_creator()
+    video = _make_video(creator.id)
+    concepts_usage = {"input_tokens": 900, "output_tokens": 300, "cache_1h": False}
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=json.dumps(_empty_patterns()))  # cache hit
+    redis.setex = AsyncMock()
+    analyze = AsyncMock()
+    concepts = AsyncMock(return_value=("[]", concepts_usage))
+    ledger = AsyncMock()
+
+    sess = _worker_concepts_session(creator, video)
+    with contextlib.ExitStack() as stack:
+        for p in _worker_concepts_patches(
+            sess, redis, analyze, concepts, ledger, _worker_dna_profile()
+        ):
+            stack.enter_context(p)
+        await _generate_thumbnail_concepts_async("job-2", str(creator.id), str(video.id))
+
+    analyze.assert_not_awaited()
+    ledger.assert_awaited_once()
+    assert ledger.await_args.args[1] == concepts_usage
+    assert ledger.await_args.kwargs == {"cache_write_multiplier": None}
+
+
 # ── knowledge/thumbnails.py — Claude call coverage ────────────────────────────
 
 
@@ -412,12 +620,21 @@ class TestAnalyzeThumbnailPatterns:
         resp.content = [block]
         resp.usage.input_tokens = 100
         resp.usage.output_tokens = 50
+        resp.usage.cache_read_input_tokens = 0
+        resp.usage.cache_creation_input_tokens = 0
         return resp
 
-    async def test_empty_ids_returns_empty_patterns(self):
-        result = await analyze_thumbnail_patterns([], "Test Channel")
+    async def test_empty_ids_returns_empty_patterns_and_zero_usage(self):
+        result, usage = await analyze_thumbnail_patterns([], "Test Channel")
         assert result["face_present"] == "unknown"
         assert result["dominant_emotions"] == []
+        # No LLM call was made — usage must bill zero.
+        assert usage == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read": 0,
+            "cache_creation": 0,
+        }
 
     async def test_calls_claude_with_image_urls(self):
         expected = {
@@ -432,7 +649,9 @@ class TestAnalyzeThumbnailPatterns:
 
         with patch("knowledge.thumbnails._ANTHROPIC") as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_resp)
-            result = await analyze_thumbnail_patterns(["dQw4w9WgXcQ", "abc123"], "My Channel")
+            result, usage = await analyze_thumbnail_patterns(
+                ["dQw4w9WgXcQ", "abc123"], "My Channel"
+            )
 
         call_args = mock_client.messages.create.call_args
         messages = call_args.kwargs["messages"]
@@ -442,15 +661,21 @@ class TestAnalyzeThumbnailPatterns:
         assert content[0]["type"] == "image"
         assert content[0]["source"]["url"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
         assert result["face_present"] == "always"
+        # Usage must be surfaced so callers can bill the vision call
+        # (w2/billing-audit: previously unbilled entirely).
+        assert usage["input_tokens"] == 100
+        assert usage["output_tokens"] == 50
 
-    async def test_bad_json_returns_empty_patterns(self):
+    async def test_bad_json_returns_empty_patterns_with_real_usage(self):
         mock_resp = self._mock_response("not valid json at all")
 
         with patch("knowledge.thumbnails._ANTHROPIC") as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_resp)
-            result = await analyze_thumbnail_patterns(["vid1"], "Test")
+            result, usage = await analyze_thumbnail_patterns(["vid1"], "Test")
 
         assert result["face_present"] == "unknown"
+        # The vision call still ran (and cost money) — real usage returned.
+        assert usage["input_tokens"] == 100
 
     async def test_caps_at_10_thumbnails(self):
         mock_resp = self._mock_response(

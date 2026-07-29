@@ -83,12 +83,28 @@ def test_lifespan_shutdown_calls_close_all():
     async def sentinel():
         closed.append("sentinel")
 
-    saved_health_redis = main_module._health_redis
-    try:
-        with TestClient(main_module.app):
-            # Startup registered the per-lifespan health Redis client.
-            assert any(name == "health_redis" for name, _ in shared_resources._REGISTRY)
-            shared_resources.register_aclose("test_sentinel", sentinel)
-        assert closed == ["sentinel"]
-    finally:
-        main_module._health_redis = saved_health_redis
+    with TestClient(main_module.app):
+        # The health Redis client is lifespan-owned, NOT registry-managed —
+        # registry replacement leaked earlier lifespans' clients to GC.
+        assert not any(name == "health_redis" for name, _ in shared_resources._REGISTRY)
+        shared_resources.register_aclose("test_sentinel", sentinel)
+    assert closed == ["sentinel"]
+
+
+def test_lifespan_owns_health_redis_close_and_restores_previous(monkeypatch):
+    """Each lifespan acloses the health Redis client it created (on its own
+    loop) and stack-restores the module global, so nested TestClient lifespans
+    never leak a replaced client to GC ('Event loop is closed' at exit)."""
+    import unittest.mock as mock
+
+    import main as main_module
+
+    fake_client = mock.MagicMock()
+    fake_client.aclose = mock.AsyncMock()
+    monkeypatch.setattr(main_module.aioredis, "from_url", lambda *a, **kw: fake_client)
+
+    prev = main_module._health_redis
+    with TestClient(main_module.app):
+        assert main_module._health_redis is fake_client
+    fake_client.aclose.assert_awaited_once()
+    assert main_module._health_redis is prev

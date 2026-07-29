@@ -1,17 +1,17 @@
 """Process-wide async-resource close registry (Issue 109b).
 
 Long-lived async clients (shared httpx client, Redis pools, engine pools)
-register their close coroutine here — at module init for import-time
-singletons, or lazily when the instance is created (e.g. the /health Redis
-client built in the FastAPI lifespan). App shutdown then calls
+register their close coroutine here at module init. App shutdown then calls
 ``close_all()`` once instead of the lifespan reaching into module privates.
+This registry is for IMPORT-TIME singletons only; lifespan-scoped resources
+(e.g. the /health Redis client) are acquired before ``yield`` and released
+after it inside the lifespan itself, because re-registration's
+replace-and-never-clear semantics would leak earlier lifespans' instances.
 
 Semantics:
 - ``close_all()`` closes in REVERSE registration order (last-created first).
 - Each close is error-isolated: one failing resource never blocks the rest,
-  and shutdown itself never raises. This also makes the known
-  ``_health_redis`` "Event loop is closed" teardown flake unable to fail a
-  test run — a cross-loop close is caught and logged instead of propagating.
+  and shutdown itself never raises.
 - Re-registering a name replaces the previous callable and moves it to the
   end of the order (the newest instance is the one that must close first).
 - The registry is NOT cleared by ``close_all()``: import-time registrations

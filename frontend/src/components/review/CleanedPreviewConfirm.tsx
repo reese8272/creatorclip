@@ -35,11 +35,14 @@ export function CleanedPreviewConfirm({
     }
   }
 
+  // cleanedUri is purely the readiness signal — the raw storage URI is opaque
+  // (s3://bucket/key in prod R2, not fetchable by a browser). Playback goes
+  // through the authed download endpoint, which presigns/streams per env.
   if (!cleanedUri) return null
   return (
     <div>
       <video
-        src={cleanedUri}
+        src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
         controls
         className="mt-2 w-full rounded-sm border border-default"
       />

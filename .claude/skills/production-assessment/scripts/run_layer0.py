@@ -250,11 +250,18 @@ def gate_freshness() -> dict:
 # Keys must match the package/module path segment as it appears in the coverage.xml
 # <package name="..."> or <class filename="..."> attributes produced by pytest-cov.
 MODULE_COVERAGE_FLOORS: dict[str, float] = {
+    # clip_engine/preference report rate=None under the multi-root --cov
+    # invocation (coverage.py relativizes filenames per source root, so the
+    # package/class match misses) — floors stay 0.0 until the measurement is
+    # made deterministic (OFF_COURSE 2026-07-29). clip_engine is independently
+    # gated by the eval harness on every change.
     "clip_engine": 0.0,
     "preference": 0.0,
-    "crypto": 0.0,  # crypto.py
-    "limiter": 0.0,  # limiter.py
-    "auth": 0.0,  # auth.py
+    # Ratcheted 2026-07-29 (ready-pass W2) from measured rates with ~1pt margin:
+    # crypto 100.0, limiter 100.0, auth 93.3 (docs/assessment/_machine.json).
+    "crypto": 99.0,  # crypto.py
+    "limiter": 99.0,  # limiter.py
+    "auth": 91.0,  # auth.py
 }
 
 

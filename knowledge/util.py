@@ -61,6 +61,23 @@ def dna_system_block(static_text: str, dna_text: str) -> dict:
     return block
 
 
+def has_1h_cache_marker(system_blocks: list[dict]) -> bool:
+    """True iff any system block carries the floor-gated ttl:"1h" cache marker.
+
+    1-hour cache WRITES bill at 2× the base input rate (5-min writes at 1.25×),
+    so builders that assemble their system prompt with ``dna_system_block`` use
+    this to flag ``cache_1h`` in their returned usage dict; billing call sites
+    then pass ``cache_write_multiplier=2.0`` to ``record_llm_usage``. Checking
+    the built blocks (rather than re-measuring the floor) keeps the flag exactly
+    in sync with what was actually sent to the API.
+    """
+    return any(
+        (block.get("cache_control") or {}).get("ttl") == "1h"
+        for block in system_blocks
+        if isinstance(block, dict)
+    )
+
+
 def extract_json_block(raw: str) -> str:
     """Return the JSON substring from a model response that may wrap it.
 

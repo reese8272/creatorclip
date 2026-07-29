@@ -14,13 +14,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
-from billing.ledger import check_positive_balance
+from billing.ledger import check_positive_balance, record_llm_usage
 from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
 from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, CreatorDna, DnaStatus, Transcript, Video
+from routers._enqueue import enqueue_stream_task
 
 router = APIRouter(prefix="/creators", tags=["thumbnails"])
 logger = logging.getLogger(__name__)
@@ -226,11 +227,25 @@ async def get_thumbnail_patterns(
         )
 
     channel_title = creator.channel_title or "Unknown Channel"
+
+    async def _compute_and_bill() -> dict:
+        # Billing lives INSIDE the compute path (w2/billing-audit): only the
+        # caller whose request actually fires the multimodal vision call pays;
+        # Redis-cache hits above and single-flight waiters bill nothing.
+        patterns, usage = await analyze_thumbnail_patterns(youtube_ids, channel_title)
+        await record_llm_usage(
+            creator.id,
+            usage,
+            settings.COST_PER_MTOK_IN_SONNET,
+            settings.COST_PER_MTOK_OUT_SONNET,
+        )
+        return patterns
+
     return await _compute_patterns_single_flight(
         redis,
         lock_id=creator.id,
         cache_key=cache_key,
-        compute=lambda: analyze_thumbnail_patterns(youtube_ids, channel_title),  # coroutine
+        compute=_compute_and_bill,
         cache_ttl=PATTERNS_CACHE_TTL,
     )
 
@@ -284,25 +299,15 @@ async def start_thumbnail_concepts(
             detail="Video has not been transcribed yet — wait for ingestion to complete.",
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import generate_thumbnail_concepts as generate_thumbnail_concepts_task
 
-    task = await asyncio.to_thread(
-        generate_thumbnail_concepts_task.delay, str(creator.id), str(video.id)
+    task, stream_url = await enqueue_stream_task(
+        generate_thumbnail_concepts_task,
+        str(creator.id),
+        str(video.id),
+        creator_id=str(creator.id),
+        log_label="thumbnail_concepts",
     )
-
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "thumbnail_concepts aset_owner failed task=%s err=%s",
-            task.id,
-            exc,
-        )
-        stream_url = None
 
     logger.info(
         "Thumbnail concepts queued creator=%s video=%s task=%s",

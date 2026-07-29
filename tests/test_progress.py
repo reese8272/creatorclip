@@ -20,15 +20,26 @@ from worker import progress
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_clients() -> None:
-    """Force fresh client singletons per test — keeps state from bleeding."""
+def _reset_sync_client() -> None:
+    """Force a fresh sync client singleton per test — keeps state from bleeding."""
     progress._SYNC = None  # noqa: SLF001
+    yield
+    progress._SYNC = None  # noqa: SLF001
+
+
+@pytest.fixture(autouse=True)
+async def _close_aio_client() -> None:
+    """Fresh async client per test, acloseD on the test's own loop afterwards.
+
+    Nulling ``_AIO`` without closing (the old reset) leaked every connected
+    client to GC once its function-scoped loop died — the 'Event loop is
+    closed' AbstractConnection.__del__ noise at interpreter exit."""
     progress._AIO = None  # noqa: SLF001
     progress._AIO_LOOP = None  # noqa: SLF001
     yield
-    progress._SYNC = None  # noqa: SLF001
-    progress._AIO = None  # noqa: SLF001
-    progress._AIO_LOOP = None  # noqa: SLF001
+    # aclose() closes on the current (= creating) loop and resets the globals;
+    # on a loop mismatch it degrades to the old drop-the-reference behavior.
+    await progress.aclose()
 
 
 @pytest.fixture
