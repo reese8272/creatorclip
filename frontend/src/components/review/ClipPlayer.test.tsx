@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClipPlayer } from './ClipPlayer'
@@ -19,19 +20,23 @@ const BASE: ReviewClip = {
   render_status: 'done',
   render_uri: 'http://x/c1.mp4',
   cleaned_render_uri: null,
+  applied_title: null,
+  applied_description: null,
 }
 
 function renderPlayer(clip: ReviewClip) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <ClipPlayer
-        clip={clip}
-        trimStart={0}
-        trimEnd={20}
-        onTrimChange={() => {}}
-        onNext={() => {}}
-      />
+      <MemoryRouter>
+        <ClipPlayer
+          clip={clip}
+          trimStart={0}
+          trimEnd={20}
+          onTrimChange={() => {}}
+          onNext={() => {}}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -107,5 +112,52 @@ describe('ClipPlayer render states', () => {
       expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
     })
     expect(screen.getByText(/Render failed/)).toBeInTheDocument()
+  })
+
+  it('shows the source-expired card (not a spinner) on the structured 409', async () => {
+    // 409 {code: source_expired}: the retention purge removed the source, so a
+    // retry can never succeed — a dedicated card with a re-upload CTA replaces
+    // the invalidate-and-poll path.
+    const fetchMock = vi.fn(async () => ({
+      status: 409,
+      ok: false,
+      json: async () => ({
+        detail: {
+          code: 'source_expired',
+          message:
+            'Source media expired (72-hour retention) — re-upload the video to render this clip.',
+        },
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPlayer({ ...BASE, render_status: 'pending', render_uri: null })
+
+    await userEvent.click(screen.getByText(/Render this clip/))
+
+    expect(await screen.findByText('Source media expired')).toBeInTheDocument()
+    const cta = screen.getByRole('link', { name: /Upload again/ })
+    expect(cta).toHaveAttribute('href', '/dashboard')
+    expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
+    // Never the raw object rendering that bit the old ApiError.
+    expect(document.body.textContent).not.toContain('[object Object]')
+  })
+
+  it('still treats a plain-string 409 as render-already-running (regression)', async () => {
+    const fetchMock = vi.fn(async () => ({
+      status: 409,
+      ok: false,
+      json: async () => ({ detail: 'Render already in progress' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPlayer({ ...BASE, render_status: 'pending', render_uri: null })
+
+    await userEvent.click(screen.getByText(/Render this clip/))
+
+    // Invalidate-and-poll path: no error text and no source-expired card.
+    await waitFor(() => {
+      expect(screen.queryByText(/Rendering your clip/)).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Render already in progress/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Source media expired')).not.toBeInTheDocument()
   })
 })

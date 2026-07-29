@@ -1,6 +1,12 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import {
+  DESCRIPTION_MAX_BYTES,
+  TITLE_MAX_CHARS,
+  useApplyClipMetadata,
+  utf8ByteLength,
+} from '@/hooks/useApplyClipMetadata'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
 import type {
@@ -31,14 +37,57 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+// ── ApplyButton — apply a suggestion as the clip's publish metadata ───────────
+
+function ApplyButton({
+  applied,
+  pending,
+  onApply,
+}: {
+  applied: boolean
+  pending: boolean
+  onApply: () => void
+}) {
+  if (applied) return <span className="ml-1 shrink-0 px-1.5 py-0.5 text-xs text-success">✓ Applied</span>
+  return (
+    <button
+      onClick={onApply}
+      disabled={pending}
+      className="ml-1 shrink-0 rounded px-1.5 py-0.5 text-xs text-accent-text hover:underline disabled:opacity-50"
+    >
+      {pending ? 'Applying…' : 'Apply'}
+    </button>
+  )
+}
+
 // ── TitleSuggestionsCard (Issue 322) ──────────────────────────────────────────
 
-function TitleSuggestionsCard({ clipId }: { clipId: string }) {
+function TitleSuggestionsCard({ clip }: { clip: ReviewClip }) {
   const [open, setOpen] = useState(false)
+  const [applyError, setApplyError] = useState('')
   const mutation = useMutation({
     mutationFn: () =>
-      api<TitleSuggestionsResponse>(`/clips/${clipId}/title-suggestions`, { method: 'POST' }),
+      api<TitleSuggestionsResponse>(`/clips/${clip.id}/title-suggestions`, { method: 'POST' }),
   })
+  const apply = useApplyClipMetadata(clip)
+
+  function applyTitle(title: string) {
+    if (title.length > TITLE_MAX_CHARS) {
+      setApplyError(`Titles are capped at ${TITLE_MAX_CHARS} characters on YouTube.`)
+      return
+    }
+    setApplyError('')
+    apply.mutate({ applied_title: title })
+  }
+
+  function applyHook(rewrite: string) {
+    if (utf8ByteLength(rewrite) > DESCRIPTION_MAX_BYTES) {
+      setApplyError(`Descriptions are capped at ${DESCRIPTION_MAX_BYTES} bytes on YouTube.`)
+      return
+    }
+    setApplyError('')
+    apply.mutate({ applied_description: rewrite })
+  }
 
   if (!open) {
     return (
@@ -68,6 +117,11 @@ function TitleSuggestionsCard({ clipId }: { clipId: string }) {
                   {t.ctr_signal === 'up' ? '↑' : t.ctr_signal === 'down' ? '↓' : '–'}
                 </span>
                 <span className="flex-1 text-fg">{t.title}</span>
+                <ApplyButton
+                  applied={clip.applied_title === t.title}
+                  pending={apply.isPending}
+                  onApply={() => applyTitle(t.title)}
+                />
                 <CopyButton text={t.title} />
               </li>
             ))}
@@ -79,12 +133,19 @@ function TitleSuggestionsCard({ clipId }: { clipId: string }) {
                 {mutation.data.hook_rewrites.map((h, i) => (
                   <li key={i} className="flex items-start gap-1">
                     <span className="flex-1 text-fg">{h.rewrite}</span>
+                    <ApplyButton
+                      applied={clip.applied_description === h.rewrite}
+                      pending={apply.isPending}
+                      onApply={() => applyHook(h.rewrite)}
+                    />
                     <CopyButton text={h.rewrite} />
                   </li>
                 ))}
               </ul>
             </>
           )}
+          {applyError && <p className="mt-2 text-danger">{applyError}</p>}
+          {apply.isError && <p className="mt-2 text-danger">Could not apply — try again.</p>}
         </>
       )}
     </div>
@@ -93,12 +154,23 @@ function TitleSuggestionsCard({ clipId }: { clipId: string }) {
 
 // ── CaptionHooksCard (Issue 323) ──────────────────────────────────────────────
 
-function CaptionHooksCard({ clipId }: { clipId: string }) {
+function CaptionHooksCard({ clip }: { clip: ReviewClip }) {
   const [open, setOpen] = useState(false)
+  const [applyError, setApplyError] = useState('')
   const mutation = useMutation({
     mutationFn: () =>
-      api<CaptionHooksResponse>(`/clips/${clipId}/caption-hooks`, { method: 'POST' }),
+      api<CaptionHooksResponse>(`/clips/${clip.id}/caption-hooks`, { method: 'POST' }),
   })
+  const apply = useApplyClipMetadata(clip)
+
+  function applyCaption(text: string) {
+    if (utf8ByteLength(text) > DESCRIPTION_MAX_BYTES) {
+      setApplyError(`Descriptions are capped at ${DESCRIPTION_MAX_BYTES} bytes on YouTube.`)
+      return
+    }
+    setApplyError('')
+    apply.mutate({ applied_description: text })
+  }
 
   if (!open) {
     return (
@@ -125,10 +197,17 @@ function CaptionHooksCard({ clipId }: { clipId: string }) {
             {mutation.data.options.map((o, i) => (
               <li key={i} className="flex items-start gap-1">
                 <span className="flex-1 font-semibold text-fg">{o.text}</span>
+                <ApplyButton
+                  applied={clip.applied_description === o.text}
+                  pending={apply.isPending}
+                  onApply={() => applyCaption(o.text)}
+                />
                 <CopyButton text={o.text} />
               </li>
             ))}
           </ul>
+          {applyError && <p className="mt-2 text-danger">{applyError}</p>}
+          {apply.isError && <p className="mt-2 text-danger">Could not apply — try again.</p>}
         </>
       )}
     </div>
@@ -211,8 +290,8 @@ export function WhyThisClip({ clip }: { clip: ReviewClip }) {
 
       {/* Issues 322/323 — on-demand title + caption suggestions */}
       <div className="mt-3 border-t border-default pt-3">
-        <TitleSuggestionsCard clipId={clip.id} />
-        <CaptionHooksCard clipId={clip.id} />
+        <TitleSuggestionsCard clip={clip} />
+        <CaptionHooksCard clip={clip} />
       </div>
     </div>
   )

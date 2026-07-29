@@ -9,7 +9,7 @@
  *  - Issue 323: "Suggest caption / overlay text" trigger renders.
  *  - No virality language in the rendered static copy.
  */
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -30,6 +30,8 @@ const CLIP: ReviewClip = {
   render_status: 'done',
   render_uri: null,
   cleaned_render_uri: null,
+  applied_title: null,
+  applied_description: null,
 }
 
 function wrapper({ children }: { children: React.ReactNode }) {
@@ -93,5 +95,84 @@ describe('WhyThisClip', () => {
     expect(await screen.findByText(/hook lands in the first 3 seconds/i)).toBeInTheDocument()
     // Principle citation.
     expect(await screen.findByText('Hook in the first 3 seconds')).toBeInTheDocument()
+  })
+})
+
+// ── Wave-1 apply-titles: suggestions become the clip's publish metadata ───────
+
+describe('Apply suggestions', () => {
+  const SUGGESTIONS = {
+    titles: [{ title: 'The 3-Second Hook', rationale: 'r', ctr_signal: 'up' }],
+    hook_rewrites: [],
+    disclaimer: 'Estimates grounded in your channel data.',
+  }
+  const CAPTIONS = {
+    options: [{ text: 'Watch the hook land', rationale: 'r' }],
+    disclaimer: 'Estimates grounded in your channel data.',
+  }
+
+  function suggestionFetch() {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body })
+      if (init?.method === 'POST' && url.endsWith('/title-suggestions')) return json(SUGGESTIONS)
+      if (init?.method === 'POST' && url.endsWith('/caption-hooks')) return json(CAPTIONS)
+      if (init?.method === 'PATCH') return json({})
+      return json({})
+    })
+  }
+
+  it('Apply on a title PATCHes applied_title and invalidates the review-clips cache', async () => {
+    const fetchMock = suggestionFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+    const user = userEvent.setup()
+    render(
+      <QueryClientProvider client={qc}>
+        <WhyThisClip clip={CLIP} />
+      </QueryClientProvider>,
+    )
+
+    await user.click(screen.getByText(/Suggest titles \/ rewrite hook/i))
+    await user.click(await screen.findByRole('button', { name: 'Apply' }))
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
+      expect(patch).toBeTruthy()
+      expect(String(patch![0])).toBe(`/clips/${CLIP.id}`)
+      expect(JSON.parse(String(patch![1]!.body))).toEqual({ applied_title: 'The 3-Second Hook' })
+    })
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['review-clips', CLIP.video_id] }),
+    )
+  })
+
+  it('marks the row ✓ Applied when it matches clip.applied_title', async () => {
+    vi.stubGlobal('fetch', suggestionFetch())
+    const user = userEvent.setup()
+    render(<WhyThisClip clip={{ ...CLIP, applied_title: 'The 3-Second Hook' }} />, { wrapper })
+
+    await user.click(screen.getByText(/Suggest titles \/ rewrite hook/i))
+    expect(await screen.findByText('✓ Applied')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull()
+  })
+
+  it('Apply on a caption option PATCHes applied_description', async () => {
+    const fetchMock = suggestionFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<WhyThisClip clip={CLIP} />, { wrapper })
+
+    await user.click(screen.getByText(/Suggest caption \/ overlay text/i))
+    await user.click(await screen.findByRole('button', { name: 'Apply' }))
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
+      expect(patch).toBeTruthy()
+      expect(JSON.parse(String(patch![1]!.body))).toEqual({
+        applied_description: 'Watch the hook land',
+      })
+    })
   })
 })

@@ -275,6 +275,34 @@ describe('Recap', () => {
     expect(await screen.findByText(/Not enough scored material yet/i)).toBeInTheDocument()
   })
 
+  it('renders the friendly source-expired card with an upload CTA on the structured 409', async () => {
+    // Frozen Wave-1 contract: detail={code: 'source_expired', message: …}. The
+    // old ApiError discarded the object and the page showed "[object Object]".
+    vi.stubGlobal(
+      'fetch',
+      mockFetch([], {
+        status: 409,
+        body: {
+          detail: {
+            code: 'source_expired',
+            message:
+              'Source media expired (72-hour retention) — re-upload the video to create a recap.',
+          },
+        },
+      }),
+    )
+    renderRecap()
+    await userEvent.click(await screen.findByRole('button', { name: 'Create recap' }))
+
+    expect(await screen.findByText(/Source media expired/)).toBeInTheDocument()
+    // Router basename is /app, so the CTA resolves under it.
+    expect(screen.getByRole('link', { name: /Upload again/ })).toHaveAttribute(
+      'href',
+      '/app/dashboard',
+    )
+    expect(document.body.textContent).not.toContain('[object Object]')
+  })
+
   it('contains no virality language (honesty constraint)', async () => {
     vi.stubGlobal('fetch', mockFetch([makeSummary()]))
     const { baseElement } = renderRecap()

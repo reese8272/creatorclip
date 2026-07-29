@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { FitBadge } from '@/components/ui/fit-badge'
@@ -30,6 +31,7 @@ export function ClipPlayer({
   const queryClient = useQueryClient()
   const [renderError, setRenderError] = useState('')
   const [requesting, setRequesting] = useState(false)
+  const [sourceExpired, setSourceExpired] = useState(false)
 
   // Auto-render (auto-render) normally renders clips in the background right after
   // generation, so this manual trigger is a fallback/retry affordance. Charges no
@@ -45,8 +47,13 @@ export function ClipPlayer({
       await api(`/clips/${clip.id}/render`, { method: 'POST' })
       await queryClient.invalidateQueries({ queryKey: ['review-clips'] })
     } catch (e) {
-      // 409 = a render is already in progress; treat as success (the poll picks it up).
-      if (e instanceof ApiError && e.status === 409) {
+      if (e instanceof ApiError && e.code === 'source_expired') {
+        // Retention purge: this render can never succeed until the creator
+        // re-uploads the source — show the dedicated card, not a retry spinner.
+        setSourceExpired(true)
+      } else if (e instanceof ApiError && e.status === 409) {
+        // Any other 409 = a render is already in progress; treat as success
+        // (the poll picks it up).
         await queryClient.invalidateQueries({ queryKey: ['review-clips'] })
       } else {
         setRenderError(e instanceof ApiError ? e.message : 'Render failed — try again.')
@@ -81,7 +88,21 @@ export function ClipPlayer({
         />
       ) : (
         <div className="flex aspect-[9/16] w-full max-w-[340px] flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black px-6 text-center text-sm text-subtle">
-          {rendering ? (
+          {sourceExpired ? (
+            <>
+              <span className="text-danger">Source media expired</span>
+              <span className="text-xs">
+                The original upload passed its retention window — re-upload the video to render
+                this clip.
+              </span>
+              <Link
+                to="/dashboard"
+                className="rounded-sm border border-strong bg-bg px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
+              >
+                Upload again
+              </Link>
+            </>
+          ) : rendering ? (
             <>
               <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-strong border-t-accent" />
               <span>Rendering your clip… (~30s)</span>

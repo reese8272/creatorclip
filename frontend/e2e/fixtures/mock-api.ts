@@ -18,6 +18,7 @@ import type {
   IdentityResponse,
   ImprovementBrief,
   InsightsResponse,
+  PublicationListOut,
   ReviewClipListResponse,
   SavedInsightsResponse,
   UploadIntel,
@@ -110,6 +111,8 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       render_status: 'done',
       render_uri: null,
       cleaned_render_uri: null,
+      applied_title: null,
+      applied_description: null,
     },
     {
       id: 'c2',
@@ -125,6 +128,8 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       render_status: 'done',
       render_uri: null,
       cleaned_render_uri: null,
+      applied_title: null,
+      applied_description: null,
     },
     {
       id: 'c3',
@@ -140,6 +145,8 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       render_status: 'pending',
       render_uri: null,
       cleaned_render_uri: null,
+      applied_title: null,
+      applied_description: null,
     },
   ],
 }
@@ -317,6 +324,55 @@ const SUMMARIES = {
   ],
 }
 
+// Scheduled publishes for the review page's PublishPanel (Issue 196). One
+// scheduled row (shows the two-step Confirm affordance) + one done row with a
+// youtube_video_id (shows the youtu.be link). privacy_note mirrors the backend
+// verbatim (uploads land private — honesty constraint).
+const PUBLICATIONS_PRIVACY_NOTE =
+  'Pre-audit: clips are uploaded as private. Open YouTube Studio to publish publicly when ready.'
+
+const PUBLICATIONS: PublicationListOut = {
+  publications: [
+    {
+      id: 'p1',
+      clip_id: 'c1',
+      creator_id: 'cr1',
+      task_id: null,
+      youtube_video_id: null,
+      status: 'scheduled',
+      error: null,
+      scheduled_at: '2027-01-09T18:00:00+00:00',
+      platform: 'youtube',
+      confirmed_at: null,
+      created_at: '2026-07-01T08:00:00Z',
+      updated_at: '2026-07-01T08:00:00Z',
+      privacy_note: PUBLICATIONS_PRIVACY_NOTE,
+    },
+    {
+      id: 'p2',
+      clip_id: 'c1',
+      creator_id: 'cr1',
+      task_id: 'task-2',
+      youtube_video_id: 'yt12345abcd',
+      status: 'done',
+      error: null,
+      scheduled_at: '2026-06-20T18:00:00+00:00',
+      platform: 'youtube',
+      confirmed_at: '2026-06-19T10:00:00Z',
+      created_at: '2026-06-18T08:00:00Z',
+      updated_at: '2026-06-20T18:05:00Z',
+      privacy_note: PUBLICATIONS_PRIVACY_NOTE,
+    },
+  ],
+  suggested_windows: [
+    { day_of_week: 6, day_name: 'Saturday', hour: 10, activity_index: 0.91, label: 'Saturday 10:00 AM' },
+    { day_of_week: 3, day_name: 'Wednesday', hour: 18, activity_index: 0.78, label: 'Wednesday 6:00 PM' },
+    { day_of_week: 0, day_name: 'Sunday', hour: 16, activity_index: 0.66, label: 'Sunday 4:00 PM' },
+  ],
+  privacy_note: PUBLICATIONS_PRIVACY_NOTE,
+  truncated: false,
+}
+
 // Static GET endpoints → fixture body.
 const GET_TABLE: Record<string, unknown> = {
   '/billing/balance': BALANCE,
@@ -352,6 +408,29 @@ async function dispatch(route: Route, seed: Seed): Promise<void> {
   if (method === 'GET' && /^\/videos\/[^/]+\/summaries$/.test(pathname))
     return json(route, SUMMARIES)
   if (pathname === '/creators/me/insights/analytics') return json(route, ANALYTICS)
+
+  // Scheduled publishes (Issue 196): list, schedule (201 → new scheduled row),
+  // confirm/cancel (mutated row; cancel repurposes status=failed + error).
+  if (/^\/clips\/[^/]+\/publications$/.test(pathname)) {
+    if (method === 'POST')
+      return json(route, { ...PUBLICATIONS.publications[0], id: 'p-new' }, 201)
+    return json(route, PUBLICATIONS)
+  }
+  if (
+    method === 'POST' &&
+    /^\/clips\/[^/]+\/publications\/[^/]+\/(confirm|cancel)$/.test(pathname)
+  ) {
+    const cancelled = pathname.endsWith('/cancel')
+    return json(route, {
+      ...PUBLICATIONS.publications[0],
+      status: cancelled ? 'failed' : 'confirmed',
+      error: cancelled ? 'Cancelled by creator' : null,
+    })
+  }
+
+  // Applied publish metadata (Wave-1 metadata lane): PATCH /clips/{id}.
+  if (method === 'PATCH' && /^\/clips\/[^/]+$/.test(pathname))
+    return json(route, REVIEW_CLIPS.clips[0])
 
   // Static GETs.
   if (method === 'GET' && pathname in GET_TABLE) return json(route, GET_TABLE[pathname])

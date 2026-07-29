@@ -7,11 +7,40 @@
 
 const LOGIN_URL = '/app/login'
 
+// FastAPI's HTTPException detail is either a plain string or the structured
+// {code, message} shape (e.g. 409 source_expired / pending_clean_or_edit).
+// The raw detail is kept so callers can branch on `.code`; `.message` stays a
+// human-readable string either way (previously an object detail rendered as
+// "[object Object]").
+function deriveMessage(status: number, detail: unknown): string {
+  if (typeof detail === 'string' && detail) return detail
+  if (detail && typeof detail === 'object') {
+    const message = (detail as { message?: unknown }).message
+    if (typeof message === 'string' && message) return message
+  }
+  return `Request failed (${status})`
+}
+
+function deriveCode(detail: unknown): string | null {
+  if (detail && typeof detail === 'object') {
+    const code = (detail as { code?: unknown }).code
+    if (typeof code === 'string') return code
+  }
+  return null
+}
+
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
-    super(message)
+  /** Raw parsed `detail` from the error body — string, object, or undefined. */
+  detail: unknown
+  /** Machine-readable code when detail is the structured {code, message} shape. */
+  code: string | null
+
+  constructor(status: number, detail: unknown) {
+    super(deriveMessage(status, detail))
     this.status = status
+    this.detail = detail
+    this.code = deriveCode(detail)
     this.name = 'ApiError'
   }
 }
@@ -46,11 +75,11 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   }
 
   if (!resp.ok) {
-    const detail = await resp
+    const detail: unknown = await resp
       .json()
-      .then((d: { detail?: string }) => d.detail)
+      .then((d: { detail?: unknown }) => d.detail)
       .catch(() => undefined)
-    throw new ApiError(resp.status, detail || `Request failed (${resp.status})`)
+    throw new ApiError(resp.status, detail)
   }
 
   if (resp.status === 204) return undefined as T

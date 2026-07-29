@@ -53,6 +53,8 @@ function makeClip(over: Partial<ReviewClip> = {}): ReviewClip {
     render_status: 'pending',
     render_uri: null,
     cleaned_render_uri: null,
+    applied_title: null,
+    applied_description: null,
     ...over,
   }
 }
