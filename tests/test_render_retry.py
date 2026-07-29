@@ -104,6 +104,40 @@ def test_render_clip_soft_timeout_is_terminal(render_harness):
     assert RenderStatus.failed in statuses, "clip must be marked failed on soft-timeout"
 
 
+async def test_render_clip_async_source_expired_emits_actionable_message(monkeypatch):
+    """W1 ready-pass: a source purged in the enqueue-to-run race window must emit
+    the ACTIONABLE SSE message (re-upload), not the generic "Render failed." —
+    SourceExpiredError stays a ValueError so the no-retry classification holds."""
+    from unittest.mock import AsyncMock
+
+    import worker.progress
+    from worker import tasks
+
+    fake_emit = AsyncMock()
+    monkeypatch.setattr(worker.progress, "aemit", fake_emit)
+
+    async def _creator(clip_id):
+        return "creator-1"
+
+    async def _load(clip_id, creator_id):
+        raise tasks.SourceExpiredError(f"Source video not available for clip {clip_id}")
+
+    monkeypatch.setattr(tasks, "_creator_id_for_clip", _creator)
+    monkeypatch.setattr(tasks, "_load_clip_render_plan", _load)
+
+    with pytest.raises(tasks.SourceExpiredError):
+        await tasks._render_clip_async("clip-1")
+
+    assert issubclass(tasks.SourceExpiredError, ValueError)
+    error_calls = [c for c in fake_emit.call_args_list if c.args[1] == "error"]
+    assert len(error_calls) == 1
+    assert (
+        error_calls[0].kwargs["message"]
+        == "Source media expired — re-upload the video to render this clip."
+    )
+    assert error_calls[0].kwargs["exc_type"] == "SourceExpiredError"
+
+
 def test_base_exception_not_caught_by_render_clip(render_harness, monkeypatch):
     """KeyboardInterrupt / SystemExit are BaseExceptions, not Exceptions — they must
     propagate out of render_clip without being swallowed by either the permanent or

@@ -1579,6 +1579,17 @@ async def _signals_async(video_id: str, creator_id: str | None = None) -> None:
         raise
 
 
+class SourceExpiredError(ValueError):
+    """The clip/summary source media was purged by the retention window.
+
+    A ``ValueError`` subclass so the permanent/no-retry classification in
+    ``render_clip``/``render_summary`` is untouched. The async render helpers
+    special-case it to emit an ACTIONABLE SSE message instead of the generic
+    "Render failed." — covering the enqueue-to-run race where the source is
+    purged after the endpoint's 409 pre-check but before the worker runs.
+    """
+
+
 async def _set_clip_render_status(clip_id: str, status: RenderStatus) -> None:
     # AdminSessionLocal: failure-path status write — runs from except blocks where
     # the tenant may be unresolvable (that lookup may be the thing that failed).
@@ -1651,7 +1662,7 @@ async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPl
             )
         video = await session.get(Video, clip.video_id)
         if not video or not video.source_uri:
-            raise ValueError(f"Source video not available for clip {clip_id}")
+            raise SourceExpiredError(f"Source video not available for clip {clip_id}")
         # Snapshot the timing fields into locals — session closes at the end of
         # this with-block, after which `clip.start_s` would emit an implicit
         # SELECT to refresh the expired attribute (Issue 38 Wave 1).
@@ -1780,6 +1791,17 @@ async def _render_clip_async(
             await aemit(clip_id, "step", label="download_source", stage="render")
             async with alocal_path(plan.source_uri) as downloaded:
                 await _encode_and_upload_clip(clip_id, downloaded, plan, creator_id)
+    except SourceExpiredError as exc:
+        # Actionable — the source was purged in the enqueue-to-run race window;
+        # the generic message would hide the only fix the creator can take.
+        await aemit(
+            clip_id,
+            "error",
+            stage="render",
+            message="Source media expired — re-upload the video to render this clip.",
+            exc_type=type(exc).__name__,
+        )
+        raise
     except Exception as exc:
         # Don't promise a retry here — whether render_clip retries depends on the
         # error class (permanent ValueError/FileNotFoundError are terminal). Keep
@@ -5493,7 +5515,7 @@ async def _load_summary_render_plan(summary_id: str, creator_id: str) -> _Summar
         if not video or not video.source_uri:
             # The 72h retention purge nulls source_uri after the render window
             # (purge_stale_source_media). Actionable + creator-safe: no URI/path.
-            raise ValueError(
+            raise SourceExpiredError(
                 f"Source video for summary {summary_id} is no longer available "
                 "(retention window elapsed) — re-upload the video and regenerate the recap"
             )
@@ -5555,6 +5577,17 @@ async def _render_summary_async(summary_id: str, creator_id: str | None = None) 
                 await session.commit()
         logger.info("Summary %s rendered → %s", summary_id, render_uri)
         await aemit(summary_id, "done", stage="render", message="Recap ready.")
+    except SourceExpiredError as exc:
+        # Actionable — the source was purged in the enqueue-to-run race window;
+        # the generic message would hide the only fix the creator can take.
+        await aemit(
+            summary_id,
+            "error",
+            stage="render",
+            message="Source media expired — re-upload the video and regenerate the recap.",
+            exc_type=type(exc).__name__,
+        )
+        raise
     except Exception as exc:
         # Neutral message — whether render_summary retries depends on the error
         # class; the summary's render_status is the source of truth the UI polls.
