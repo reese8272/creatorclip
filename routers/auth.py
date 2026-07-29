@@ -18,6 +18,7 @@ from dna.onboarding import resolve_setup_step
 from flags import flag_enabled
 from limiter import creator_key, limiter
 from models import Creator, YoutubeToken, append_audit
+from routers._enqueue import stamp_stream_owner
 from routers._schemas import SetupStepOut
 from youtube.oauth import (
     build_authorization_url,
@@ -296,25 +297,14 @@ async def callback(
     # playlistItems + per-video duration fan-out can take >10s on large
     # channels — far longer than the OAuth redirect budget. (Issue 87)
     if is_new:
-        import redis as _redis_pkg
-
-        from worker import progress
         from worker.tasks import sync_channel_catalog
 
         task = await asyncio.to_thread(sync_channel_catalog.delay, str(creator.id))
         # Wave-3 Fix D: stamp ownership so the catalog-sync SSE stream
         # (added in Issue 92) is reachable when Issue 100's onboarding
-        # tutorial wires the post-OAuth UI. Same fail-open posture as the
-        # other Issue-92 routers — a Redis blip during onboarding logs
-        # and continues; the catalog sync itself still runs.
-        try:
-            await progress.aset_owner(task.id, str(creator.id))
-        except _redis_pkg.RedisError as exc:
-            logger.warning(
-                "auth callback aset_owner failed (Redis down?) task=%s err=%s",
-                task.id,
-                exc,
-            )
+        # tutorial wires the post-OAuth UI. The stream URL is discarded —
+        # the response is a 302 redirect, not a queued-task body.
+        await stamp_stream_owner(task.id, str(creator.id), log_label="auth callback")
 
         # Issue 246 — welcome lifecycle email. Fires only inside the is_new
         # branch (post-commit), so it triggers on first email set, never on a

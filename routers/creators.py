@@ -13,6 +13,7 @@ from dna import identity as identity_module
 from dna.onboarding import resolve_setup_step
 from limiter import creator_key, limiter
 from models import AnalysisMode, Clip, Creator, CreatorIdentity, CreatorStyle
+from routers._enqueue import enqueue_stream_task
 from routers._schemas import SetupStepOut, TaskQueuedOut
 from youtube.analytics import check_data_gate
 from youtube.categories import NICHE_OPTIONS
@@ -483,28 +484,15 @@ async def sync_catalog(request: Request, creator: Creator = Depends(get_current_
     the resulting Video rows. Rate-limited tightly (5/min) because every
     invocation costs YouTube quota. (Issue 87)
     """
-    import redis as _redis_pkg
-
     from observability import log_event
-    from worker import progress
     from worker.tasks import sync_channel_catalog
 
-    task = await asyncio.to_thread(sync_channel_catalog.delay, str(creator.id))
-    # Wave-5 Fix 1: stamp ownership for SSE auth. Same fail-open posture as
-    # Wave-3 Fix B (improvement brief), Wave-3 Fix D (OAuth callback), and
-    # Wave-4 Fix 1 (upload). A Redis blip returns stream_url=None — the
-    # Celery task still runs; the user just loses live progress (and can
-    # poll the resource state instead).
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "sync_catalog aset_owner failed (Redis down?) task=%s err=%s",
-            task.id,
-            exc,
-        )
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        sync_channel_catalog,
+        str(creator.id),
+        creator_id=str(creator.id),
+        log_label="sync_catalog",
+    )
 
     log_event(
         "catalog_sync_requested",
@@ -538,24 +526,15 @@ async def build_dna(request: Request, creator: Creator = Depends(get_current_cre
     owns the task before opening the event stream — prevents cross-creator
     stream attachment via guessed/leaked task ids.
     """
-    import redis as _redis_pkg
-
     from observability import log_event
-    from worker import progress
     from worker.tasks import build_dna as build_dna_task
 
-    task = await asyncio.to_thread(build_dna_task.delay, str(creator.id))
-    # Wave-5 Fix 1: same fail-open posture as the other aset_owner sites.
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "build_dna aset_owner failed (Redis down?) task=%s err=%s",
-            task.id,
-            exc,
-        )
-        stream_url = None
+    task, stream_url = await enqueue_stream_task(
+        build_dna_task,
+        str(creator.id),
+        creator_id=str(creator.id),
+        log_label="build_dna",
+    )
 
     log_event(
         "dna_build_requested",

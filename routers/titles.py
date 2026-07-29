@@ -1,6 +1,5 @@
 """Title suggestion endpoint (Issue 128)."""
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -15,6 +14,7 @@ from db import get_session
 from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, Transcript, Video
+from routers._enqueue import enqueue_stream_task
 
 router = APIRouter(prefix="/creators", tags=["titles"])
 logger = logging.getLogger(__name__)
@@ -78,25 +78,15 @@ async def start_title_suggestions(
             detail="Video has not been transcribed yet — wait for ingestion to complete.",
         )
 
-    import redis as _redis_pkg
-
-    from worker import progress
     from worker.tasks import generate_title_suggestions as generate_title_suggestions_task
 
-    task = await asyncio.to_thread(
-        generate_title_suggestions_task.delay, str(creator.id), str(video.id)
+    task, stream_url = await enqueue_stream_task(
+        generate_title_suggestions_task,
+        str(creator.id),
+        str(video.id),
+        creator_id=str(creator.id),
+        log_label="title_suggestions",
     )
-
-    stream_url: str | None = f"/tasks/{task.id}/events"
-    try:
-        await progress.aset_owner(task.id, str(creator.id))
-    except _redis_pkg.RedisError as exc:
-        logger.warning(
-            "title_suggestions aset_owner failed task=%s err=%s",
-            task.id,
-            exc,
-        )
-        stream_url = None
 
     logger.info(
         "Title suggestions queued creator=%s video=%s task=%s",
