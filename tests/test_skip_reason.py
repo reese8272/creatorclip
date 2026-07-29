@@ -298,6 +298,8 @@ def test_list_clips_with_clips_has_no_skip_reason(client):
     clip.render_status = RenderStatus.pending
     clip.render_uri = None
     clip.cleaned_render_uri = None
+    clip.applied_title = None
+    clip.applied_description = None
 
     _set_overrides(creator, video, [clip])
 
