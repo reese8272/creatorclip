@@ -162,6 +162,27 @@ async def test_intake_turn_writes_billing_ledger_with_cache_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_intake_bills_at_configured_model_rates(monkeypatch):
+    """The ledger write must follow ANTHROPIC_MODEL_INTAKE, not hardcoded Sonnet
+    rates (2026-07-29 assess: an operator pointing intake at an opus-family
+    model silently under-billed ~40% against the spend guard)."""
+    from config import settings
+
+    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_INTAKE", "claude-opus-4-8")
+    _patch_create(monkeypatch, return_value=_msg([_text("What's your channel about?")]))
+
+    ledger = AsyncMock()
+    monkeypatch.setattr("billing.ledger.record_llm_usage", ledger)
+
+    await intake.run_intake_turn(uuid.uuid4(), [{"role": "user", "content": "hi"}])
+
+    ledger.assert_awaited_once()
+    args = ledger.await_args
+    assert args.args[2] == settings.COST_PER_MTOK_IN_OPUS
+    assert args.args[3] == settings.COST_PER_MTOK_OUT_OPUS
+
+
+@pytest.mark.asyncio
 async def test_runaway_guard_bails_before_calling_the_model(monkeypatch):
     create = _patch_create(monkeypatch, return_value=_msg([_text("...")]))
     long_history = [{"role": "user", "content": "x"}] * (intake.MAX_INTAKE_TURNS * 2 + 1)

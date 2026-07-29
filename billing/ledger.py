@@ -169,6 +169,29 @@ def _model_tier(cost_per_mtok_in: float) -> str:
     return "other"
 
 
+def model_rates(model: str) -> tuple[float, float, str]:
+    """Resolve ``(input_rate, output_rate, tier_label)`` for a model id.
+
+    Rates are USD per MTok from the config price book; the label matches the
+    tier vocabulary of ``_model_tier``. Feature models are configurable
+    (``ANTHROPIC_MODEL_*`` in config.py), so billing must follow the
+    configured model — hardcoded per-feature rates silently mis-bill any
+    other family. Unknown model families fall back to the Opus rates (the
+    highest in the price book) with the "other" label, so a misconfigured
+    model never under-bills against the spend guard.
+    """
+    if "haiku" in model:
+        return settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU, "haiku-tier"
+    if "sonnet" in model:
+        return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "sonnet-tier"
+    if "opus" in model:
+        return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "opus-tier"
+    logger.warning(
+        "billing: no price-book rates for model %s — falling back to Opus rates", model
+    )
+    return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "other"
+
+
 async def record_llm_usage(
     creator_id: uuid.UUID,
     usage: dict,

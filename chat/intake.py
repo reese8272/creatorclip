@@ -282,12 +282,14 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
         cache_creation_tokens=total_cache_creation,
     )
     # Billing-ledger write (w2/billing-audit): before this, intake turns were
-    # entirely unbilled and invisible to the Issue-290 spend guard. Sonnet rates;
-    # the intake cache marker is plain 5-min ephemeral, so the default 1.25×
-    # write multiplier is correct. record_llm_usage opens its own short-lived
-    # admin session (established request-path pattern — routers/clips.py).
-    from billing.ledger import record_llm_usage
+    # entirely unbilled and invisible to the Issue-290 spend guard. Rates follow
+    # the configured ANTHROPIC_MODEL_INTAKE (never-under-bill fallback in
+    # model_rates); the intake cache marker is plain 5-min ephemeral, so the
+    # default 1.25× write multiplier is correct. record_llm_usage opens its own
+    # short-lived admin session (established request-path pattern — routers/clips.py).
+    from billing.ledger import model_rates, record_llm_usage
 
+    rate_in, rate_out, _tier = model_rates(settings.ANTHROPIC_MODEL_INTAKE)
     await record_llm_usage(
         creator_id,
         {
@@ -296,8 +298,8 @@ async def run_intake_turn(creator_id: uuid.UUID, history: list[dict[str, Any]]) 
             "cache_read": total_cache_read,
             "cache_creation": total_cache_creation,
         },
-        settings.COST_PER_MTOK_IN_SONNET,
-        settings.COST_PER_MTOK_OUT_SONNET,
+        rate_in,
+        rate_out,
     )
     logger.info(
         "intake turn creator=%s in=%d out=%d proposal=%s",

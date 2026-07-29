@@ -57,30 +57,6 @@ def _text_of(message: Any) -> str:
     return "\n".join(t for t in blocks if t).strip()
 
 
-def _chat_model_rates() -> tuple[float, float, str]:
-    """Resolve (input_rate, output_rate, tier_label) from ``ANTHROPIC_MODEL_CHAT``.
-
-    Rates are USD per MTok from the config price book; the label matches the
-    tier vocabulary of ``billing.ledger._model_tier``. Chat's model is
-    configurable (config.py), so billing must follow the configured model —
-    the previous hardcoded Sonnet rates silently mis-billed any other model.
-    Unknown model families fall back to the Opus rates (the highest in the
-    price book) with the "other" label, so a misconfigured model never
-    under-bills against the spend guard.
-    """
-    model = settings.ANTHROPIC_MODEL_CHAT
-    if "haiku" in model:
-        return settings.COST_PER_MTOK_IN_HAIKU, settings.COST_PER_MTOK_OUT_HAIKU, "haiku-tier"
-    if "sonnet" in model:
-        return settings.COST_PER_MTOK_IN_SONNET, settings.COST_PER_MTOK_OUT_SONNET, "sonnet-tier"
-    if "opus" in model:
-        return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "opus-tier"
-    logger.warning(
-        "chat billing: no price-book rates for model %s — falling back to Opus rates", model
-    )
-    return settings.COST_PER_MTOK_IN_OPUS, settings.COST_PER_MTOK_OUT_OPUS, "other"
-
-
 async def run_chat_turn(
     task_id: str,
     creator_id: uuid.UUID,
@@ -212,10 +188,11 @@ async def run_chat_turn(
 
     from datetime import UTC, datetime
 
-    from billing.ledger import _estimate_cost_usd, increment_usage
+    from billing.ledger import _estimate_cost_usd, increment_usage, model_rates
 
     try:
-        rate_in, rate_out, tier_label = _chat_model_rates()
+        # Chat's model is configurable — billing must follow it (Issue 361).
+        rate_in, rate_out, tier_label = model_rates(settings.ANTHROPIC_MODEL_CHAT)
         cost = _estimate_cost_usd(
             total["input_tokens"],
             total["output_tokens"],

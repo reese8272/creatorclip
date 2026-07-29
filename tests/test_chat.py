@@ -260,42 +260,8 @@ async def test_runner_flags_max_tokens_truncation(_patch_runner):
     assert usage["truncated"] == 1
 
 
-def test_chat_model_rates_follow_configured_model(monkeypatch):
-    """Billing rates + tier label derive from ANTHROPIC_MODEL_CHAT, with a safe
-    (never-under-billing) fallback for unknown model families."""
-    from chat import runner
-    from config import settings
-
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-haiku-4-5")
-    assert runner._chat_model_rates() == (
-        settings.COST_PER_MTOK_IN_HAIKU,
-        settings.COST_PER_MTOK_OUT_HAIKU,
-        "haiku-tier",
-    )
-
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-sonnet-4-6")
-    assert runner._chat_model_rates() == (
-        settings.COST_PER_MTOK_IN_SONNET,
-        settings.COST_PER_MTOK_OUT_SONNET,
-        "sonnet-tier",
-    )
-
-    # Opus family: bills at the Opus price-book rates, not the fallback (Issue 361).
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-opus-4-8")
-    assert runner._chat_model_rates() == (
-        settings.COST_PER_MTOK_IN_OPUS,
-        settings.COST_PER_MTOK_OUT_OPUS,
-        "opus-tier",
-    )
-
-    # Unknown family: falls back to the highest configured rate + "other" label.
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-mystery-9")
-    rate_in, rate_out, label = runner._chat_model_rates()
-    assert (rate_in, rate_out) == (
-        settings.COST_PER_MTOK_IN_OPUS,
-        settings.COST_PER_MTOK_OUT_OPUS,
-    )
-    assert label == "other"
+# Per-family rate resolution now lives in billing.ledger.model_rates (shared
+# with intake and the clip-titles chat tool) — pinned in tests/test_usage_ledger.py.
 
 
 async def test_runner_bills_at_configured_model_rates(_patch_runner):
