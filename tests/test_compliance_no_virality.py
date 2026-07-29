@@ -76,31 +76,37 @@ def test_no_virality_in_openapi_response_bodies() -> None:
     Hit every no-parameter GET route and assert no response body contains a
     forbidden virality-promise phrase.
     """
-    client = TestClient(app, raise_server_exceptions=False)
     schema = app.openapi()
 
     violations: list[str] = []
-    for path, path_item in schema.get("paths", {}).items():
-        get_op = path_item.get("get")
-        if get_op is None:
-            continue
+    # Context-managed on purpose: a bare TestClient runs EVERY request on its
+    # own ephemeral event loop, and this crawler hits /health — the ping would
+    # add a dead-loop connection to the session-lifespan health-Redis pool and
+    # poison later /health probes ("Event loop is closed" flake, OCB row 68).
+    # With the lifespan running, all requests share one loop and the health
+    # client used is this lifespan's own, closed cleanly on exit.
+    with TestClient(app, raise_server_exceptions=False) as client:
+        for path, path_item in schema.get("paths", {}).items():
+            get_op = path_item.get("get")
+            if get_op is None:
+                continue
 
-        # Skip routes that require path or body parameters — can't call them
-        # without seeding data, and they're not static text surfaces.
-        parameters = get_op.get("parameters", [])
-        has_path_param = any(p.get("in") == "path" for p in parameters)
-        if has_path_param:
-            continue
+            # Skip routes that require path or body parameters — can't call them
+            # without seeding data, and they're not static text surfaces.
+            parameters = get_op.get("parameters", [])
+            has_path_param = any(p.get("in") == "path" for p in parameters)
+            if has_path_param:
+                continue
 
-        resp = client.get(path)
-        body = resp.text or ""
-        cleaned = _scrub(body)
-        match = FORBIDDEN.search(cleaned)
-        if match:
-            start = max(0, match.start() - 40)
-            end = min(len(cleaned), match.end() + 40)
-            context = cleaned[start:end].replace("\n", " ")
-            violations.append(f"Route GET {path}: found {match.group()!r} — ...{context}...")
+            resp = client.get(path)
+            body = resp.text or ""
+            cleaned = _scrub(body)
+            match = FORBIDDEN.search(cleaned)
+            if match:
+                start = max(0, match.start() - 40)
+                end = min(len(cleaned), match.end() + 40)
+                context = cleaned[start:end].replace("\n", " ")
+                violations.append(f"Route GET {path}: found {match.group()!r} — ...{context}...")
 
     assert not violations, "Virality phrases in API response bodies:\n" + "\n".join(violations)
 

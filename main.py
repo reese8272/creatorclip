@@ -99,17 +99,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         socket_timeout=2.0,
         socket_connect_timeout=2.0,
     )
+    # Per-lifespan ownership (acquire before yield, release after yield — the
+    # FastAPI lifespan pattern): each lifespan closes the client IT created, on
+    # its own event loop, and stack-restores the module global so nested
+    # TestClient lifespans don't leak earlier clients to GC ("Event loop is
+    # closed" noise from AbstractConnection.__del__ at interpreter exit).
+    prev_health_redis = _health_redis
     _health_redis = health_redis
-    # Registered last → closed first by close_all(). Re-registration replaces
-    # the previous lifespan's bound method on repeated startups (TestClient).
-    shared_resources.register_aclose("health_redis", health_redis.aclose)
-    yield
-    # Close every registered long-lived client — youtube HTTP client (Issue 72),
-    # worker progress Redis (Issue 86), the health-check Redis above, and the
-    # event-log sink pool (Issue 151) — in reverse registration order,
-    # error-isolated per resource (Issue 109b).
-    await shared_resources.close_all()
-    logger.info("CreatorClip shutdown")
+    try:
+        yield
+    finally:
+        _health_redis = prev_health_redis
+        try:
+            await health_redis.aclose()
+        except Exception as exc:  # noqa: BLE001 — shutdown must never raise
+            logger.warning("health_redis aclose failed: %s", exc)
+        # Close every registered long-lived client — youtube HTTP client
+        # (Issue 72), worker progress Redis (Issue 86), and the event-log sink
+        # pool (Issue 151) — in reverse registration order, error-isolated per
+        # resource (Issue 109b).
+        await shared_resources.close_all()
+        logger.info("CreatorClip shutdown")
 
 
 app = FastAPI(
