@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import httpx
@@ -84,7 +86,7 @@ async def run_chat_turn(
     creator_id: uuid.UUID,
     channel_title: str | None,
     history: list[dict[str, Any]],
-    session: AsyncSession,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
 ) -> tuple[str, dict[str, int]]:
     """Run one assistant turn, streaming tokens to ``task:{task_id}:events``.
 
@@ -93,6 +95,13 @@ async def run_chat_turn(
     round-trip in the turn; ``usage["truncated"]`` is 1 when the final answer was
     cut off at ``max_tokens`` (surfaced honestly rather than passed off as a
     complete reply).
+
+    ``session_factory`` (Issue 82b posture, ready-pass W2): the agentic loop
+    holds NO DB session across the streamed LLM round-trips — a short-lived
+    tenant session is opened per tool execution and for the usage-ledger write
+    (precedent: ``ledger_session_factory`` in ``clip_engine.scoring``). Pass
+    ``functools.partial(db.tenant_session, creator_id)`` so each session is
+    RLS-stamped per transaction.
     """
     system = build_system(channel_title)
     messages = list(history)
@@ -174,7 +183,12 @@ async def run_chat_turn(
             if getattr(block, "type", None) != "tool_use":
                 continue
             await aemit(task_id, "step", label=f"tool:{block.name}", stage="chat")
-            result_str, failed = await execute_tool(block.name, block.input, creator_id, session)
+            # Short-lived tenant session per tool call — checked out only for
+            # the tool's queries, never across an LLM round-trip.
+            async with session_factory() as tool_session:
+                result_str, failed = await execute_tool(
+                    block.name, block.input, creator_id, tool_session
+                )
             # is_error: true gives Claude a documented semantic signal to recover
             # gracefully rather than treating the error JSON as successful data.
             # (Anthropic tool-use handle-tool-calls docs, fetched 2026-06-23; Issue 222)
@@ -210,14 +224,19 @@ async def run_chat_turn(
             cache_read_tokens=total.get("cache_read", 0),
             cache_creation_tokens=total.get("cache_creation", 0),
         )
-        await increment_usage(
-            session,
-            creator_id,
-            datetime.now(UTC).strftime("%Y-%m"),
-            total["input_tokens"],
-            total["output_tokens"],
-            cost,
-        )
+        # Fresh short-lived session for the ledger write; committed here because
+        # increment_usage leaves the commit to its caller and this session no
+        # longer outlives the turn (mirrors clip_engine.scoring's ledger write).
+        async with session_factory() as ledger_session:
+            await increment_usage(
+                ledger_session,
+                creator_id,
+                datetime.now(UTC).strftime("%Y-%m"),
+                total["input_tokens"],
+                total["output_tokens"],
+                cost,
+            )
+            await ledger_session.commit()
         # Issues 290+291: chat bills via increment_usage (not record_llm_usage),
         # so it feeds the spend-guard counters + cost metric itself — otherwise
         # chat spend would be invisible to the caps.

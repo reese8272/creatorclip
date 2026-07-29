@@ -3948,6 +3948,11 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     The brief itself streams via the ``task_id`` kwarg on
     ``generate_improvement_brief`` (Issue 92 added this mirroring the DNA
     brief's Issue-86 pattern).
+
+    Issue 82b split (ready-pass W2): the read phase closes its tenant session
+    BEFORE the ~120 s Claude + web_search call, so no pooled connection is held
+    across it; the ready/failed writes each re-acquire a fresh tenant session
+    (RLS GUC re-stamped per transaction by ``tenant_session``).
     """
     from sqlalchemy import select
 
@@ -3957,10 +3962,37 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
     from models import ImprovementBrief, ImprovementBriefStatus
     from worker.progress import aemit
 
-    try:
-        await aemit(job_id, "step", label="improvement_brief_start", stage="improvement_brief")
+    cid = uuid.UUID(creator_id)
 
-        cid = uuid.UUID(creator_id)
+    async def _mark_failed(error: str) -> None:
+        """Mark the brief row failed on a FRESH tenant session (best-effort).
+
+        Post-split the read session is closed (or poisoned) by the time a
+        failure lands, so this re-acquires one. Never raises: the caller must
+        re-raise the ORIGINAL exception for Celery retry even if this write
+        fails — in that case the row stays pre-ready until the retry lands.
+        """
+        try:
+            async with db.tenant_session(cid) as fail_session:
+                fail_row = (
+                    await fail_session.execute(
+                        select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
+                    )
+                ).scalar_one_or_none()
+                if fail_row is not None:
+                    fail_row.status = ImprovementBriefStatus.failed
+                    fail_row.error = error
+                    fail_row.completed_at = datetime.now(UTC)
+                    await fail_session.commit()
+        except Exception:
+            logger.exception(
+                "generate_improvement_brief: failed-mark write failed for %s", creator_id
+            )
+
+    await aemit(job_id, "step", label="improvement_brief_start", stage="improvement_brief")
+
+    try:
+        # ── Read phase ────────────────────────────────────────────────────────
         async with db.tenant_session(cid) as session:
             # tenant_session stamps creator_id so the RLS `after_begin` listener
             # sets `app.creator_id` before any query. Without it the brief query
@@ -4026,94 +4058,105 @@ async def _generate_improvement_brief_async(job_id: str, creator_id: str) -> Non
                 await aemit(job_id, "error", stage="improvement_brief", message=str(exc))
                 return
 
-            try:
-                await aemit(
-                    job_id,
-                    "step",
-                    label="load_analytics",
-                    stage="improvement_brief",
-                )
-                metrics_result = await session.execute(
-                    select(VideoMetrics)
-                    .join(Video, VideoMetrics.video_id == Video.id)
-                    .where(Video.creator_id == creator.id)
-                    .order_by(VideoMetrics.fetched_at.desc())
-                    .limit(50)
-                )
-                all_metrics = list(metrics_result.scalars())
-                views_list = [m.views for m in all_metrics if m.views]
-                eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
-                dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
-
-                def _avg(lst: Sequence[float]) -> float | None:
-                    return sum(lst) / len(lst) if lst else None
-
-                analytics = {
-                    "channel_title": creator.channel_title,
-                    "videos_in_db": len(all_metrics),
-                    "avg_views": _avg(views_list),
-                    "avg_engagement_rate": _avg(eng_list),
-                    "avg_view_duration_s": _avg(dur_list),
-                }
-
-                dna_profile = await get_active(session, creator.id)
-                dna_brief = dna_profile.brief_text if dna_profile else None
-
-                await aemit(
-                    job_id,
-                    "step",
-                    label="call_claude",
-                    stage="improvement_brief",
-                )
-                # task_id propagates into improvement.brief.stream_and_emit,
-                # which forwards cache/token deltas on the same Redis stream.
-                brief_text, _improv_usage = await build_brief(
-                    channel_title=creator.channel_title or "Unknown Channel",
-                    analytics=analytics,
-                    dna_brief=dna_brief,
-                    task_id=job_id,
-                )
-            except Exception as exc:
-                row.status = ImprovementBriefStatus.failed
-                row.error = "Brief generation failed — try again."
-                row.completed_at = datetime.now(UTC)
-                await session.commit()
-                logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
-                await aemit(
-                    job_id,
-                    "error",
-                    stage="improvement_brief",
-                    message="Brief generation failed; retrying.",
-                    exc_type=type(exc).__name__,
-                )
-                raise
-
-            from billing.ledger import record_llm_usage
-
-            await record_llm_usage(
-                cid,
-                _improv_usage,
-                settings.COST_PER_MTOK_IN_SONNET,
-                settings.COST_PER_MTOK_OUT_SONNET,
-            )
-
-            row.status = ImprovementBriefStatus.ready
-            row.brief_text = brief_text
-            row.error = None
-            row.completed_at = datetime.now(UTC)
-            await session.commit()
-            logger.info("Improvement brief ready for creator %s", creator_id)
             await aemit(
                 job_id,
-                "done",
+                "step",
+                label="load_analytics",
                 stage="improvement_brief",
-                message="Brief ready.",
             )
-    except Exception:
-        # The inner try/except above already emitted the error + persisted the
-        # row.failed state. This outer guard exists so a Redis emit failure
-        # at line entry does not silently swallow the original exception.
+            metrics_result = await session.execute(
+                select(VideoMetrics)
+                .join(Video, VideoMetrics.video_id == Video.id)
+                .where(Video.creator_id == creator.id)
+                .order_by(VideoMetrics.fetched_at.desc())
+                .limit(50)
+            )
+            all_metrics = list(metrics_result.scalars())
+            views_list = [m.views for m in all_metrics if m.views]
+            eng_list = [m.engagement_rate for m in all_metrics if m.engagement_rate]
+            dur_list = [m.avg_view_duration_s for m in all_metrics if m.avg_view_duration_s]
+
+            def _avg(lst: Sequence[float]) -> float | None:
+                return sum(lst) / len(lst) if lst else None
+
+            analytics = {
+                "channel_title": creator.channel_title,
+                "videos_in_db": len(all_metrics),
+                "avg_views": _avg(views_list),
+                "avg_engagement_rate": _avg(eng_list),
+                "avg_view_duration_s": _avg(dur_list),
+            }
+
+            dna_profile = await get_active(session, creator.id)
+            dna_brief = dna_profile.brief_text if dna_profile else None
+            channel_title = creator.channel_title or "Unknown Channel"
+
+        # ── LLM phase — read session CLOSED, no pooled connection held ───────
+        await aemit(
+            job_id,
+            "step",
+            label="call_claude",
+            stage="improvement_brief",
+        )
+        # task_id propagates into improvement.brief.stream_and_emit,
+        # which forwards cache/token deltas on the same Redis stream.
+        brief_text, _improv_usage = await build_brief(
+            channel_title=channel_title,
+            analytics=analytics,
+            dna_brief=dna_brief,
+            task_id=job_id,
+        )
+    except Exception as exc:
+        # Any read-phase or LLM failure: mark the row failed on a fresh
+        # session (safe — the read session may be closed or poisoned), emit,
+        # and re-raise so the Celery retry still fires.
+        await _mark_failed("Brief generation failed — try again.")
+        logger.error("generate_improvement_brief failed for %s: %s", creator_id, exc)
+        await aemit(
+            job_id,
+            "error",
+            stage="improvement_brief",
+            message="Brief generation failed; retrying.",
+            exc_type=type(exc).__name__,
+        )
         raise
+
+    from billing.ledger import record_llm_usage
+
+    # Self-sessioned (admin) ledger write — runs with no tenant session open.
+    await record_llm_usage(
+        cid,
+        _improv_usage,
+        settings.COST_PER_MTOK_IN_SONNET,
+        settings.COST_PER_MTOK_OUT_SONNET,
+    )
+
+    # ── Write phase — fresh tenant session; re-fetch rather than merge the
+    # detached phase-1 row (shipped Issue 82b pattern, tests/test_session_release.py).
+    async with db.tenant_session(cid) as session:
+        row = (
+            await session.execute(
+                select(ImprovementBrief).where(ImprovementBrief.creator_id == cid)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            # Row deleted mid-LLM (e.g. account erasure) — nothing to store.
+            logger.warning(
+                "generate_improvement_brief: row vanished for %s; dropping result", creator_id
+            )
+            return
+        row.status = ImprovementBriefStatus.ready
+        row.brief_text = brief_text
+        row.error = None
+        row.completed_at = datetime.now(UTC)
+        await session.commit()
+    logger.info("Improvement brief ready for creator %s", creator_id)
+    await aemit(
+        job_id,
+        "done",
+        stage="improvement_brief",
+        message="Brief ready.",
+    )
 
 
 # ── Video analysis (Issue 121) ────────────────────────────────────────────────
@@ -4273,19 +4316,25 @@ async def _generate_video_analysis_async(
             dna_profile = await get_active(session, cid)
             dna_brief = dna_profile.brief_text if dna_profile else None
 
-            await aemit(job_id, "step", label="analyzing", stage="video_analysis")
+        # Issue 82b posture (mirrors the titles task below): the tenant session
+        # is CLOSED before the streaming Claude call, so no pooled connection is
+        # held across the 30–120 s round-trip. Detached attribute reads stay
+        # safe post-close — expire_on_commit=False (db.py). No write phase is
+        # needed: the analysis is ephemeral and record_llm_usage opens its own
+        # short-lived admin session.
+        await aemit(job_id, "step", label="analyzing", stage="video_analysis")
 
-            _analysis_result, _analysis_usage = await build_analysis(
-                channel_title=creator.channel_title or "Unknown Channel",
-                youtube_video_id=youtube_video_id,
-                video_title=video_title,
-                query=query,
-                video_metrics=video_metrics,
-                retention_summary=retention_summary,
-                channel_avg=channel_avg,
-                dna_brief=dna_brief,
-                task_id=job_id,
-            )
+        _analysis_result, _analysis_usage = await build_analysis(
+            channel_title=creator.channel_title or "Unknown Channel",
+            youtube_video_id=youtube_video_id,
+            video_title=video_title,
+            query=query,
+            video_metrics=video_metrics,
+            retention_summary=retention_summary,
+            channel_avg=channel_avg,
+            dna_brief=dna_brief,
+            task_id=job_id,
+        )
 
         from billing.ledger import record_llm_usage
 
@@ -5056,12 +5105,27 @@ async def _chat_respond_async(job_id: str, creator_id: str, conversation_id: str
 
             history = [{"role": m.role.value, "content": m.content} for m in rows]
 
-            final_text, usage = await run_chat_turn(job_id, cid, channel_title, history, session)
+        # Issue 82b split (ready-pass W2): the read session is CLOSED before the
+        # multi-round agentic turn, so no pooled connection is held across the
+        # LLM round-trips. Tools + the usage-ledger write open short-lived
+        # tenant sessions via the factory (precedent: _generate_clips_async's
+        # ledger_session_factory at the score_and_rank call).
+        final_text, usage = await run_chat_turn(
+            job_id, cid, channel_title, history, partial(db.tenant_session, cid)
+        )
 
-            if not final_text:
-                await aemit(job_id, "error", stage="chat", message="No reply generated.")
+        if not final_text:
+            await aemit(job_id, "error", stage="chat", message="No reply generated.")
+            return
+
+        # Write phase — fresh tenant session; re-fetch the conversation rather
+        # than reusing the detached phase-1 instance.
+        async with db.tenant_session(cid) as session:
+            conv = await session.get(ChatConversation, conv_uuid)
+            if conv is None:
+                # Conversation deleted mid-turn (e.g. account erasure).
+                await aemit(job_id, "error", stage="chat", message="Conversation not found.")
                 return
-
             session.add(
                 ChatMessage(
                     conversation_id=conv_uuid,
