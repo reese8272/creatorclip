@@ -55,7 +55,10 @@ function ReviewClipView({
   onAdvance: () => void
 }) {
   const navigate = useNavigate()
-  const clipDur = clip.end_s - clip.start_s
+  // Duration of the RENDERED mp4 — the render origin is setup_start_s when
+  // set (the engine starts the clip at the setup), so end_s - start_s would
+  // overstate the filmstrip/trim range for setup clips.
+  const clipDur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
   const [trim, setTrim] = useState({ start: 0, end: clipDur })
 
   return (

@@ -143,15 +143,20 @@ async def submit_feedback(
     """Record a feedback action for a clip."""
     clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
 
-    # Issue 339: validate trim values against the clip's actual window.
-    # clip.start_s and clip.end_s are video-absolute timestamps.
+    # Issue 339 (timebase corrected, ready-pass W1): trim values are
+    # CLIP-RELATIVE seconds over the rendered mp4 — origin is
+    # ``setup_start_s`` when set, else ``start_s``, the same timebase as
+    # /transcript, /cuts and /trim-render. The original check compared them
+    # against video-absolute start_s/end_s, 422-ing almost any clip that
+    # starts later in the source video (negatives/inversion are rejected by
+    # the FeedbackRequest model validator).
     if body.trim_start_s is not None or body.trim_end_s is not None:
         s, e = body.trim_start_s, body.trim_end_s
-        clip_start = clip.start_s
-        clip_end = clip.end_s
-        if s is not None and s < clip_start:
-            raise HTTPException(status_code=422, detail="trim_start_s is before the clip start")
-        if e is not None and e > clip_end:
+        origin = clip.setup_start_s if clip.setup_start_s is not None else clip.start_s
+        clip_duration_s = clip.end_s - origin
+        if s is not None and s > clip_duration_s:
+            raise HTTPException(status_code=422, detail="trim_start_s is past the clip end")
+        if e is not None and e > clip_duration_s:
             raise HTTPException(status_code=422, detail="trim_end_s is past the clip end")
 
     # Issue 235 — check idempotency BEFORE the commit so the new row is not
