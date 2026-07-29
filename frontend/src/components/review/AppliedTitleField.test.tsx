@@ -35,7 +35,11 @@ function wrapper({ children }: { children: React.ReactNode }) {
 }
 
 function patchFetch() {
-  return vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }))
+  return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+  }))
 }
 
 afterEach(() => vi.unstubAllGlobals())
