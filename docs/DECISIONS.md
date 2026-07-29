@@ -10629,7 +10629,6 @@ auditable. The newest active row is kept — the same row `create_summary`'s ide
 probe (`ORDER BY created_at DESC LIMIT 1`) would return. Clips dedupe DOES delete (keep
 earliest-created per `(video_id, rank)`): duplicates there are whole re-inserted sets and
 any feedback/outcomes attach to the earlier canonical rows. **Date:** 2026-07-20
-=======
 **Issues 356-361 batch llm-sdk — inline pause_turn loops + chat rate fallback (2026-07-20).**
 (1) titles.py/hooks.py got the pause_turn continuation as INLINE 5-round loops mirroring
 thumbnails.py/improvement-brief verbatim, not the assessment-suggested shared
@@ -10669,7 +10668,6 @@ the same session) needs a schema migration — out of this batch's scope. Shippe
 fix: transport errors inside the offset probe are retried with backoff against the SAME session URI
 and, when exhausted, surface as a terminal `YouTubeUploadError` (never a blind task retry that
 opens a new session). Session persistence remains the follow-up. **Date:** 2026-07-20
-=======
 **361 (frontend batch) — query-error retry cards inlined per page, NOT the assessment's shared
 `<QueryErrorState>` extraction.** The 2026-07-20 frontend assessment suggested extracting the
 Recap.tsx retry card into a shared component reused by Dashboard/Review/VideoClipsMap/Editor. The
