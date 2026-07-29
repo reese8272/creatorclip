@@ -10,6 +10,7 @@ const BASE_CLIP = {
   id: 'c1', video_id: 'v1', setup_start_s: 2, start_s: 0, end_s: 20, peak_s: 10,
   score: 0.91, rank: 1, principle: 'Curiosity gap', reasoning: 'Strong hook in 3s.',
   render_status: 'done', render_uri: 'http://x/c1.mp4', cleaned_render_uri: null,
+  applied_title: null, applied_description: null,
 }
 
 function mockFetch(personalization?: PersonalizationStatus | null) {

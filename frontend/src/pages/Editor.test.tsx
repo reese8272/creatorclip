@@ -23,6 +23,8 @@ const BASE_CLIP = {
   render_status: 'done',
   render_uri: 'http://cdn/c1.mp4',
   cleaned_render_uri: null,
+  applied_title: null,
+  applied_description: null,
 }
 
 const TRANSCRIPT = {

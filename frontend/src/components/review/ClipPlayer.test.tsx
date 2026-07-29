@@ -20,6 +20,8 @@ const BASE: ReviewClip = {
   render_status: 'done',
   render_uri: 'http://x/c1.mp4',
   cleaned_render_uri: null,
+  applied_title: null,
+  applied_description: null,
 }
 
 function renderPlayer(clip: ReviewClip) {

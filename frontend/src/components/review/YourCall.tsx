@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { AppliedTitleField } from '@/components/review/AppliedTitleField'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { FeedbackAction, FeedbackPayload, ReviewClip } from '@/types'
@@ -118,6 +119,9 @@ export function YourCall({
           </span>
         )}
       </div>
+
+      {/* The title/description this clip will publish with (metadata-lane PATCH). */}
+      <AppliedTitleField clip={clip} />
 
       {panel && (
         <div className="mt-3.5 animate-slide-up border-t border-default pt-3.5">

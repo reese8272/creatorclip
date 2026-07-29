@@ -110,6 +110,8 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       render_status: 'done',
       render_uri: null,
       cleaned_render_uri: null,
+      applied_title: null,
+      applied_description: null,
     },
     {
       id: 'c2',
@@ -125,6 +127,8 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       render_status: 'done',
       render_uri: null,
       cleaned_render_uri: null,
+      applied_title: null,
+      applied_description: null,
     },
     {
       id: 'c3',
@@ -140,6 +144,8 @@ const REVIEW_CLIPS: ReviewClipListResponse = {
       render_status: 'pending',
       render_uri: null,
       cleaned_render_uri: null,
+      applied_title: null,
+      applied_description: null,
     },
   ],
 }
