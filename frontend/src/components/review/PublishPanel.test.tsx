@@ -143,6 +143,18 @@ describe('PublishPanel', () => {
     })
   })
 
+  it('opens as a labelled ARIA dialog and closes on Escape', async () => {
+    vi.stubGlobal('fetch', pubsFetch(makeList([])))
+    renderPanel()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Schedule publish' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Schedule publish' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('rejects a past typed datetime with a specific message and no POST', async () => {
     const fetchMock = pubsFetch(makeList([]))
     vi.stubGlobal('fetch', fetchMock)
