@@ -561,6 +561,23 @@ class TestBalanceLowTrigger:
         mock_send_notif.delay.assert_not_called()
 
 
+# ── Copy: pricing links are absolute ─────────────────────────────────────────
+
+
+class TestCopyPricingLinksAbsolute:
+    """The canonical copy bodies must carry absolute pricing URLs (APP_BASE_URL),
+    never a host-less '/pricing' that dangles outside the app (e.g. in email)."""
+
+    def test_pricing_links_bind_app_base_url(self) -> None:
+        from config import settings
+        from notify.copy import COPY
+
+        for event_type in ("trial_ending", "balance_low"):
+            body = COPY[event_type]["body"]
+            assert f"{settings.APP_BASE_URL}/pricing" in body, event_type
+            assert " /pricing" not in body, f"{event_type}: host-less /pricing"
+
+
 # ── Copy: no virality promises ────────────────────────────────────────────────
 
 

@@ -618,10 +618,12 @@ export function Editor() {
               </Button>
             </div>
 
+            {/* cleanedUri is the readiness signal only; playback goes through
+                the authed download endpoint (the raw URI is s3:// in prod R2). */}
             {cleanedUri && (
               <div className="mt-3">
                 <video
-                  src={cleanedUri}
+                  src={`/clips/${clip.id}/download?variant=cleaned&disposition=inline`}
                   controls
                   className="w-full rounded-sm border border-default"
                 />
