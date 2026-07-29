@@ -342,6 +342,34 @@ async def test_generate_clips_async_seeds_brand_kit_and_caps_top_n(mocker):
 
 
 @pytest.mark.asyncio
+async def test_generate_clips_async_auto_render_enqueue_failure_logged(mocker):
+    """A broker publish failure on the auto-render batch enqueue stays best-effort
+    (no raise — clip generation succeeded and the terminal done already fired),
+    but it must NOT claim success: auto_render_enqueued is suppressed and
+    auto_render_enqueue_failed is emitted so an operator can see the strand."""
+    from config import settings
+    from worker import tasks
+
+    mocker.patch.object(settings, "AUTO_RENDER_CLIPS", True)
+    clips = [MagicMock(id=uuid.uuid4(), rank=1, style_preset=None)]
+    video_id, fake_emit = _generate_clips_scaffold(mocker, clips=clips)
+    events: list[str] = []
+    mocker.patch("worker.tasks.log_event", side_effect=lambda event, **kw: events.append(event))
+    mocker.patch("worker.tasks.send_notification.delay")
+    mocker.patch(
+        "worker.tasks.render_video_clips.delay",
+        side_effect=RuntimeError("broker down"),
+    )
+
+    await tasks._generate_clips_async(video_id, str(uuid.uuid4()))  # must not raise
+
+    assert "auto_render_enqueue_failed" in events
+    assert "auto_render_enqueued" not in events
+    # The terminal done fired before the enqueue — the SSE stream is unaffected.
+    assert _emit_labels(fake_emit)[-1] == "done"
+
+
+@pytest.mark.asyncio
 async def test_generate_clips_async_emits_done_on_idempotent_short_circuit(mocker):
     """When clips are already rendered (Issue 46 idempotency guard), the
     function short-circuits — it still must emit a terminal `done` so the

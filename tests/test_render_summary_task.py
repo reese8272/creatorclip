@@ -90,8 +90,10 @@ async def test_redelivery_of_rendered_summary_noops(mocker):
 
 
 async def test_missing_source_raises_actionable_valueerror(mocker):
-    """source_uri purged by the 72h retention window → permanent ValueError with
-    an actionable message; the error event fires."""
+    """source_uri purged by the 72h retention window → permanent SourceExpiredError
+    (a ValueError, so the no-retry classification holds) and the SSE error event
+    carries the ACTIONABLE re-upload message, not the generic "Recap render failed."
+    — the enqueue-to-run race window the endpoint's 409 pre-check cannot cover."""
     from worker import tasks
 
     summary_id = str(uuid.uuid4())
@@ -106,10 +108,16 @@ async def test_missing_source_raises_actionable_valueerror(mocker):
     fake_emit = AsyncMock()
     mocker.patch("worker.progress.aemit", fake_emit)
 
-    with pytest.raises(ValueError, match="retention window.*re-upload"):
+    with pytest.raises(tasks.SourceExpiredError, match="retention window.*re-upload"):
         await tasks._render_summary_async(summary_id, str(uuid.uuid4()))
 
-    assert "error" in _emit_labels(fake_emit)
+    error_calls = [c for c in fake_emit.call_args_list if c.args[1] == "error"]
+    assert len(error_calls) == 1
+    assert (
+        error_calls[0].kwargs["message"]
+        == "Source media expired — re-upload the video and regenerate the recap."
+    )
+    assert error_calls[0].kwargs["exc_type"] == "SourceExpiredError"
 
 
 async def test_happy_path_emits_steps_and_marks_done(mocker, tmp_path):
