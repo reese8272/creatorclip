@@ -1,26 +1,15 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/lib/api'
 import { fitTier } from '@/lib/fit'
+import { fmtClock, parseClock } from '@/lib/timecode'
 import type { FitTier } from '@/components/ui/fit-badge'
 import { Chip } from '@/components/Chip'
 import { Button } from '@/components/ui/button'
 import { ChaptersPanel } from '@/components/analysis/ChaptersPanel'
-import type { Chapter, ReviewClip } from '@/types'
-
-// H:MM:SS (or M:SS) for source-relative timecodes, which can run to hours.
-function fmtClock(s: number): string {
-  const sec = Math.max(0, Math.floor(s))
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const ss = (sec % 60).toString().padStart(2, '0')
-  return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${ss}` : `${m}:${ss}`
-}
-
-// Parse a "H:MM:SS" / "M:SS" / "S" timestamp into seconds; NaN-safe → 0.
-function parseClock(ts: string): number {
-  const parts = ts.split(':').map((p) => parseInt(p, 10))
-  if (parts.some(Number.isNaN)) return 0
-  return parts.reduce((acc, n) => acc * 60 + n, 0)
-}
+import { FullTranscriptPanel } from '@/components/editor/FullTranscriptPanel'
+import type { Chapter, ReviewClip, Video, VideoTranscript } from '@/types'
 
 const TIER_LABEL: Record<FitTier, string> = {
   strong: 'Strong',
@@ -126,36 +115,89 @@ function MasterTimeline({
   )
 }
 
-// Issue 307 — Long-form source mode. Functional: candidate-segment master
-// timeline + ranked suggested clips (both from the clips list, which carries
-// source-relative timecodes) + chapters (existing generate stream). Honest
-// placeholders for the full-source player + searchable transcript, which have no
-// backend endpoint yet (scope: scaffold honestly — see docs/DECISIONS.md).
+// Issue 307 — Long-form source mode; Issue 372 made it real: full-source
+// player (streamed via /videos/{id}/stream) + searchable segment transcript
+// replace the earlier honest placeholders, alongside the candidate-segment
+// master timeline, ranked suggested clips, and chapters.
 export function LongFormEditor({
   clips,
   videoId,
+  video,
   onOpenClip,
 }: {
   clips: ReviewClip[]
   videoId: string
+  /** The videos-list row (shared ['videos'] cache) — carries duration_s and
+   *  clippable (source presence) for proactive retention honesty. */
+  video?: Video
   onOpenClip: (clipId: string) => void
 }) {
-  const sourceDuration = clips.reduce((max, c) => Math.max(max, c.end_s), 0)
   const ranked = [...clips].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
   // Chapters are generated on demand in the right-rail panel; once present they
   // also annotate the master timeline (see ChaptersPanel onChapters).
   const [chapters, setChapters] = useState<Chapter[]>([])
 
+  const transcriptQuery = useQuery({
+    queryKey: ['video-transcript', videoId],
+    queryFn: () => api<VideoTranscript>(`/videos/${videoId}/transcript`),
+  })
+
+  // Source playhead — drives the transcript's active segment; transcript
+  // clicks seek back. Same sync idiom as the short-form editor, at segment
+  // granularity.
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [streamError, setStreamError] = useState(false)
+
+  function seek(t: number) {
+    if (videoRef.current) {
+      videoRef.current.currentTime = t
+      setCurrentTime(t)
+    }
+  }
+
+  // Retention honesty: clippable === false means the source was purged (or
+  // never stored) — show the re-upload card proactively instead of a dead
+  // player. A stream error (e.g. purge raced the page) lands the same way.
+  const sourceAvailable = (video ? video.clippable : true) && !streamError
+
+  // Real source duration (Issue 372): videos-list row → transcript span →
+  // furthest clip end as the last-resort fallback so the timeline never
+  // renders degenerate.
+  const sourceDuration =
+    video?.duration_s ??
+    transcriptQuery.data?.duration_s ??
+    clips.reduce((max, c) => Math.max(max, c.end_s), 0)
+
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="flex flex-col gap-4">
-        {/* Source player — honest placeholder (no full-source media endpoint yet) */}
-        <div className="flex aspect-video w-full items-center justify-center rounded-xl border border-default bg-black/60 text-center text-sm text-subtle">
-          <span className="px-6">
-            Full-source preview isn’t available here yet — open a suggested clip below to refine it as
-            a short.
-          </span>
-        </div>
+        {sourceAvailable ? (
+          <video
+            ref={videoRef}
+            src={`/videos/${videoId}/stream`}
+            controls
+            playsInline
+            preload="metadata"
+            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+            onError={() => setStreamError(true)}
+            className="aspect-video w-full rounded-xl border border-default bg-black"
+          />
+        ) : (
+          <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle">
+            <span className="text-danger">Source media expired</span>
+            <span className="text-xs">
+              The original upload passed its retention window — re-upload the video to edit the
+              full source. Rendered clips below stay playable.
+            </span>
+            <Link
+              to="/dashboard"
+              className="rounded-sm border border-strong bg-bg px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
+            >
+              Upload again
+            </Link>
+          </div>
+        )}
 
         {/* Chip scan callout */}
         <div className="flex items-center gap-3 rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface px-3.5 py-2.5">
@@ -211,17 +253,14 @@ export function LongFormEditor({
           )}
         </div>
 
-        {/* Full transcript — honest placeholder (no source-transcript endpoint yet) */}
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
-          <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
-            <Chip pose="papers" size={24} />
-            <span className="text-h3 font-semibold text-fg">Full transcript</span>
-          </div>
-          <p className="px-4 py-4 text-small leading-relaxed text-subtle">
-            Searchable full-source transcript and “create clip from selection” are coming. For now,
-            open a suggested clip to edit its transcript word-by-word in the short-form editor.
-          </p>
-        </div>
+        <FullTranscriptPanel
+          transcript={transcriptQuery.data}
+          isPending={transcriptQuery.isPending}
+          isError={transcriptQuery.isError}
+          onRetry={() => void transcriptQuery.refetch()}
+          currentTime={currentTime}
+          onSeek={seek}
+        />
       </div>
 
       {/* Right rail: chapters (functional) + export (UI only) */}

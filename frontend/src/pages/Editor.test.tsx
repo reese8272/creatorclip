@@ -54,6 +54,18 @@ const BASE_VIDEO = {
   clippable: true,
 }
 
+// Full-source transcript (Issue 372) — segment-granular.
+const VIDEO_TRANSCRIPT = {
+  video_id: 'v1',
+  duration_s: 300,
+  source: 'deepgram',
+  state: 'populated',
+  segments: [
+    { text: 'Intro hello world', start_s: 0, end_s: 4, index: 0 },
+    { text: 'Deep dive begins here', start_s: 4, end_s: 9, index: 1 },
+  ],
+}
+
 function mockFetch() {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
   return vi.fn(async (input: RequestInfo | URL) => {
@@ -61,6 +73,7 @@ function mockFetch() {
     if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
     if (url.endsWith('/videos/clips/counts'))
       return json({ counts: [{ video_id: 'v1', total: 1, rendered: 1 }] })
+    if (url.endsWith('/videos/v1/transcript')) return json(VIDEO_TRANSCRIPT)
     if (url.includes('/videos/v1/clips')) return json({ clips: [BASE_CLIP], personalization: null })
     if (url.includes('/clips/c1/transcript')) return json(TRANSCRIPT)
     if (url.includes('/clips/c1/download')) return new Response(new ArrayBuffer(0), { status: 200 })
@@ -147,12 +160,55 @@ describe('Editor', () => {
 
   it('switches to long-form source mode and lists suggested clips (Issue 307)', async () => {
     vi.stubGlobal('fetch', mockFetch())
-    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    const { container } = renderEditor('/app/editor?video_id=v1&clip_id=c1')
     await screen.findByText(/Clip #1/i)
     await userEvent.click(screen.getByRole('tab', { name: /Long-form source/i }))
     expect(screen.getByText('Suggested clips')).toBeInTheDocument()
-    // Honest placeholder for the un-backed full-source surfaces (scaffold scope).
-    expect(screen.getByText(/Full-source preview isn’t available/i)).toBeInTheDocument()
+    // Issue 372: the placeholder became a real source player streaming from the
+    // authed source endpoint.
+    const video = container.querySelector('video[src="/videos/v1/stream"]')
+    expect(video).not.toBeNull()
+  })
+
+  // ── Issue 372: full-source player + searchable transcript ──
+  it('long-form shows the source-expired card (no player) when the source is purged', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/videos'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({ videos: [{ ...BASE_VIDEO, clippable: false }], state: 'populated' }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Suggested clips')
+    expect(await screen.findByText(/Source media expired/)).toBeInTheDocument()
+    expect(container.querySelector('video[src="/videos/v1/stream"]')).toBeNull()
+  })
+
+  it('long-form renders the searchable transcript; filter narrows segments; click seeks', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const { container } = renderEditor('/app/editor?video_id=v1')
+    expect(await screen.findByText('Intro hello world')).toBeInTheDocument()
+    expect(screen.getByText('Deep dive begins here')).toBeInTheDocument()
+
+    await userEvent.type(screen.getByRole('searchbox', { name: /Search the transcript/i }), 'deep')
+    expect(screen.queryByText('Intro hello world')).toBeNull()
+    expect(screen.getByText('Deep dive begins here')).toBeInTheDocument()
+
+    const player = container.querySelector('video[src="/videos/v1/stream"]') as HTMLVideoElement
+    await userEvent.click(screen.getByText('Deep dive begins here'))
+    expect(player.currentTime).toBe(4)
+  })
+
+  it('long-form master timeline uses the real source duration, not furthest clip end', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Suggested clips')
+    // BASE_VIDEO.duration_s = 300 → footer right edge reads 5:00 (clip ends at 20s).
+    expect(await screen.findByText('5:00')).toBeInTheDocument()
   })
 
   it('opens /editor?video_id (no clip) directly in long-form mode (Issue 307)', async () => {

@@ -22,6 +22,7 @@ import type {
   ReviewClip,
   ReviewClipListResponse,
   TranscriptWord,
+  VideoListResponse,
 } from '@/types'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -135,6 +136,15 @@ export function Editor() {
   const clip: ReviewClip | undefined = clipId
     ? clips.find((c) => c.id === clipId)
     : clips[0]
+
+  // Videos-list row for long-form mode (Issue 372): real source duration +
+  // clippable (source presence). Shared ['videos'] cache with Dashboard/landing.
+  const videosQuery = useQuery({
+    queryKey: ['videos'],
+    queryFn: () => api<VideoListResponse>('/videos'),
+    enabled: !!videoId,
+  })
+  const videoRow = (videosQuery.data?.videos ?? []).find((v) => v.id === videoId)
 
   // ── Transcript ───────────────────────────────────────────────────────────
 
@@ -424,7 +434,12 @@ export function Editor() {
         </div>
 
         {editorMode === 'long' ? (
-          <LongFormEditor clips={clips} videoId={videoId} onOpenClip={openClipInShortEditor} />
+          <LongFormEditor
+            clips={clips}
+            videoId={videoId}
+            video={videoRow}
+            onOpenClip={openClipInShortEditor}
+          />
         ) : !clip ? (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
             <Chip pose="confused" size={64} />

@@ -4,8 +4,10 @@ import re
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -16,11 +18,11 @@ from billing.ledger import check_balance_for_minutes, check_positive_balance, vi
 from config import settings
 from db import get_session
 from limiter import creator_key, limiter
-from models import Creator, IngestStatus, OnboardingState, Video, VideoKind, VideoOrigin
+from models import Creator, IngestStatus, OnboardingState, Transcript, Video, VideoKind, VideoOrigin
 from routers._enqueue import stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
-from worker.storage import upload_file
+from worker.storage import presigned_download_url, upload_file
 from worker.tasks import start_pipeline
 from youtube.data_api import classify_video_kind, get_videos_metadata
 from youtube.ingest import probe_duration_s
@@ -580,3 +582,125 @@ async def get_video_status(
         "source_uri": video.source_uri,
         "captions_available": video.captions_available,
     }
+
+
+# ── Issue 372: full-source editing backbone ──────────────────────────────────
+
+
+@router.get("/{video_id}/stream", response_model=None)
+@limiter.limit("60/minute", key_func=creator_key)
+async def stream_video(
+    request: Request,
+    video_id: uuid.UUID,
+    disposition: Literal["inline", "attachment"] = "inline",
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> RedirectResponse | FileResponse:
+    """Serve the SOURCE video for the long-form editor (Issue 372).
+
+    ``inline`` (default) backs the in-app ``<video>``. Prod (R2): 302-redirects
+    to a short-lived presigned GET — object storage serves Range requests, so
+    seeking works. Dev (local disk): FileResponse, which answers Range with
+    206 natively. A purged source (retention window elapsed) returns the
+    structured 409 ``source_expired`` detail so the SPA renders the re-upload
+    CTA instead of a dead player.
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if not video.source_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_expired",
+                "message": (
+                    f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                    "retention) — re-upload the video to edit the full source."
+                ),
+            },
+        )
+
+    # Keep the original container suffix so media type inference is honest
+    # (uploads may be .mov/.mkv/.webm, not just .mp4).
+    suffix = Path(video.source_uri).suffix or ".mp4"
+    filename = f"source-{video_id}{suffix}"
+
+    presigned = presigned_download_url(video.source_uri, filename=filename, disposition=disposition)
+    if presigned is not None:
+        return RedirectResponse(url=presigned, status_code=302)
+    path = Path(video.source_uri)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Source file not found")
+    return FileResponse(path, filename=filename, content_disposition_type=disposition)
+
+
+class TranscriptSegmentOut(BaseModel):
+    text: str
+    start_s: float
+    end_s: float
+    index: int
+
+
+class VideoTranscriptOut(BaseModel):
+    video_id: str
+    duration_s: float | None
+    source: str | None
+    segments: list[TranscriptSegmentOut]
+    state: EmptyState
+    message: str | None = None
+
+
+@router.get("/{video_id}/transcript", response_model=VideoTranscriptOut)
+@limiter.limit("120/minute", key_func=creator_key)
+async def video_transcript(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> VideoTranscriptOut:
+    """Full video-level transcript for the long-form editor (Issue 372).
+
+    Segment-granular — no nested word arrays (a two-hour video's word payload
+    is megabytes, and search + click-to-seek only need segment bounds; a
+    ``include_words`` param can be added later if word snapping is wanted).
+    Times are video-relative seconds, as stored. A video that hasn't been
+    transcribed yet returns 200 with an ``empty_initial`` envelope, not 404 —
+    404 stays reserved for a missing/foreign video. 120/minute (vs the
+    clip-transcript's 60/hour): pure DB read, refetched on video switches.
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    transcript = await session.get(Transcript, video_id)
+
+    segments: list[TranscriptSegmentOut] = []
+    raw = (transcript.segments_jsonb or {}).get("segments", []) if transcript else []
+    for i, seg in enumerate(raw):
+        try:
+            segments.append(
+                TranscriptSegmentOut(
+                    text=str(seg.get("text", "")),
+                    start_s=float(seg["start"]),
+                    end_s=float(seg["end"]),
+                    index=i,
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            # A malformed segment must not take down the whole panel.
+            continue
+
+    duration_s = video.duration_s if video.duration_s is not None else (
+        segments[-1].end_s if segments else None
+    )
+    if not segments:
+        return VideoTranscriptOut(
+            video_id=str(video_id),
+            duration_s=duration_s,
+            source=transcript.source if transcript else None,
+            segments=[],
+            state="empty_initial",
+            message="This video hasn't been transcribed yet — transcripts are generated during analysis.",
+        )
+    return VideoTranscriptOut(
+        video_id=str(video_id),
+        duration_s=duration_s,
+        source=transcript.source if transcript else None,
+        segments=segments,
+        state="populated",
+    )

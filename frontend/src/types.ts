@@ -74,6 +74,24 @@ export interface CatalogListResponse {
   offset: number
 }
 
+// GET /videos/{id}/transcript — full-source transcript (Issue 372). Segment-
+// granular (no word arrays); times are video-relative seconds.
+export interface VideoTranscriptSegment {
+  text: string
+  start_s: number
+  end_s: number
+  index: number
+}
+
+export interface VideoTranscript {
+  video_id: string
+  duration_s: number | null
+  source: string | null
+  segments: VideoTranscriptSegment[]
+  state: 'empty_initial' | 'empty_filtered' | 'populated'
+  message?: string | null
+}
+
 // Subset of ClipOut the dashboard reads to count rendered clips per video.
 export interface ClipListItem {
   id: string
