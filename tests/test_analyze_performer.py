@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
@@ -72,7 +73,11 @@ def _fake_session(
         obj.created_at = datetime.now(UTC)
 
     async def _gen():
-        session = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add() is synchronous;
+        # a bare AsyncMock() makes .add an AsyncMock too, so the router's
+        # (correctly un-awaited) session.add(insight) call leaves a coroutine
+        # never awaited. spec lets unittest.mock detect real async methods.
+        session = AsyncMock(spec=AsyncSession)
         session.execute = AsyncMock(
             side_effect=[
                 owned_result(video),  # get_owned ownership select (Issue 109e)

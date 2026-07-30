@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def test_improvement_briefs_has_unique_creator_id_constraint():
@@ -87,7 +88,10 @@ def test_improvement_post_handles_concurrent_insert_race(client, mocker):
     #   add() + flush() → IntegrityError (DB rejects the duplicate insert)
     #   rollback() → no-op
     #   scalar() call 3 → post-rollback re-query: winning_row
-    mock_session = AsyncMock()
+    # spec=AsyncSession (Issue 366): AsyncSession.add() is synchronous; a bare
+    # AsyncMock() makes .add an AsyncMock too, so the router's (correctly
+    # un-awaited) session.add(row) call leaves a coroutine never awaited.
+    mock_session = AsyncMock(spec=AsyncSession)
     mock_session.scalar.side_effect = [
         _uuid.uuid4(),  # has_metrics — any non-None means metrics exist
         None,  # re-query without lock — both racers find nothing
