@@ -23,9 +23,11 @@ fixes**). The close-out /assess found 1 SEV1 + 7 SEV2s — **all fixed same day*
    authorization (prod deploy).
 2. **#26** — Google console (~5 min): confirm the 4 scopes match `youtube/oauth.py:46-51`; add each
    friend's Gmail under Audience → Test users. NOT skippable: unverified apps hard-block non-test-users.
-3. **#282 uptime monitor** — now beta-critical: prod was down **~31h silently** (Jul 28 11:59 UTC
-   clean poweroff → Jul 29 power-cycle; check DO emails for the cause). Better Stack free tier +
-   `/health` monitor + status page (~30 min operator work).
+3. **#282 uptime monitor** — now beta-critical: prod was down **~31h with zero alerts** (Jul 28
+   11:59 UTC — owner-intentional: droplet disabled, re-enabled Jul 29; the monitoring gap is the
+   lesson, not the shutdown). Better Stack free tier + `/health` monitor + status page (~30 min).
+   Note: once friends are invited, the droplet must STAY UP — pause monitors for any intentional
+   downtime instead of powering off silently.
 4. **#28** — friend beta smoke + 48h window → invite. Also live-smoke the new surfaces: publish
    flow, trim re-render, source-expired card (owner's expired clip `b4c87d6f` is a natural canary),
    cleaned-preview playback (the s3:// fix).
