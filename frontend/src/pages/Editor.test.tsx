@@ -85,7 +85,7 @@ const VIDEO_TRANSCRIPT = {
 
 function mockFetch() {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
     if (url.endsWith('/videos/clips/counts'))
@@ -251,10 +251,10 @@ describe('Editor', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Create clip' }))
 
     const createCall = fetchMock.mock.calls.find(
-      ([u, init]) => String(u).endsWith('/videos/v1/clips') && (init as RequestInit)?.method === 'POST',
+      ([u, init]) => String(u).endsWith('/videos/v1/clips') && init?.method === 'POST',
     )
     expect(createCall).toBeTruthy()
-    const posted = JSON.parse(String((createCall![1] as RequestInit).body))
+    const posted = JSON.parse(String(createCall![1]?.body))
     expect(posted.start_s).toBeCloseTo(30, 0)
     expect(posted.end_s).toBeCloseTo(120, 0)
   })

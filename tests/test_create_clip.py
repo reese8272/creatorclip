@@ -19,8 +19,9 @@ def _creator() -> MagicMock:
     return c
 
 
-def _video(creator_id, *, ingest_status=IngestStatus.done, source_uri="s3://b/src.mp4",
-           duration_s=300.0) -> MagicMock:
+def _video(
+    creator_id, *, ingest_status=IngestStatus.done, source_uri="s3://b/src.mp4", duration_s=300.0
+) -> MagicMock:
     video = MagicMock(spec=Video)
     video.id = uuid.uuid4()
     video.creator_id = creator_id

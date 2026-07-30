@@ -176,9 +176,7 @@ async def get_active(session: AsyncSession, creator_id: uuid.UUID) -> CreatorDna
     return confirmed or (rows[0] if rows else None)
 
 
-async def get_style_notes(
-    session: AsyncSession, creator_id: uuid.UUID
-) -> CreatorStyleNotes | None:
+async def get_style_notes(session: AsyncSession, creator_id: uuid.UUID) -> CreatorStyleNotes | None:
     """Return the creator's distilled style notes (Issue 371), if any.
 
     Single-row indexed lookup — cheap to run next to ``get_active`` wherever

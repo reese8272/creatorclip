@@ -73,9 +73,7 @@ def build_corpus(clip_rows: list[dict], video_rows: list[dict]) -> str:
     return corpus[:_MAX_CORPUS_CHARS]
 
 
-async def distill_style_notes(
-    clip_rows: list[dict], video_rows: list[dict]
-) -> tuple[str, dict]:
+async def distill_style_notes(clip_rows: list[dict], video_rows: list[dict]) -> tuple[str, dict]:
     """Run the distillation call. Returns ``(notes_text, usage)``.
 
     ``usage`` is the record_llm_usage-shaped dict (input_tokens, output_tokens,

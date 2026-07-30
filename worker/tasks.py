@@ -1254,9 +1254,9 @@ async def _distill_style_prefs_async(creator_id: str) -> None:
             ).scalar_one_or_none()
             watermark = existing.last_input_at if existing is not None else None
 
-            substantive_clip = (
-                ClipFeedback.feedback_tags.isnot(None) | ClipFeedback.feedback_note.isnot(None)
-            )
+            substantive_clip = ClipFeedback.feedback_tags.isnot(
+                None
+            ) | ClipFeedback.feedback_note.isnot(None)
             clip_q = (
                 select(ClipFeedback)
                 .where(ClipFeedback.creator_id == cid, substantive_clip)
@@ -1292,7 +1292,9 @@ async def _distill_style_prefs_async(creator_id: str) -> None:
                     "valence": (
                         "keep"
                         if fb.action.value in ("upvote", "trim", "format")
-                        else "drop" if fb.action.value == "downvote" else "neutral"
+                        else "drop"
+                        if fb.action.value == "downvote"
+                        else "neutral"
                     ),
                     "tags": fb.feedback_tags,
                     "note": fb.feedback_note,

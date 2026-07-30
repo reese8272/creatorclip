@@ -21,7 +21,9 @@ from dna.brief import _build_request
 from preference.style_distill import build_corpus
 
 
-def _mock_response(text: str = '[{"index": 0, "score": 80, "principle": "Pattern interrupt", "reasoning": "x"}]'):
+def _mock_response(
+    text: str = '[{"index": 0, "score": 80, "principle": "Pattern interrupt", "reasoning": "x"}]',
+):
     usage = SimpleNamespace(
         input_tokens=100,
         output_tokens=50,

@@ -685,8 +685,10 @@ async def video_transcript(
             # A malformed segment must not take down the whole panel.
             continue
 
-    duration_s = video.duration_s if video.duration_s is not None else (
-        segments[-1].end_s if segments else None
+    duration_s = (
+        video.duration_s
+        if video.duration_s is not None
+        else (segments[-1].end_s if segments else None)
     )
     if not segments:
         return VideoTranscriptOut(
