@@ -40,10 +40,27 @@ const TRANSCRIPT = {
   ],
 }
 
+// Row for the standalone picker landing (no-param /editor).
+const BASE_VIDEO = {
+  id: 'v1',
+  youtube_video_id: 'yt1',
+  title: 'My stream VOD',
+  kind: 'video',
+  ingest_status: 'done',
+  failure_reason: null,
+  duration_s: 300,
+  created_at: '2026-07-01T00:00:00Z',
+  origin: 'upload',
+  clippable: true,
+}
+
 function mockFetch() {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
+    if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
+    if (url.endsWith('/videos/clips/counts'))
+      return json({ counts: [{ video_id: 'v1', total: 1, rendered: 1 }] })
     if (url.includes('/videos/v1/clips')) return json({ clips: [BASE_CLIP], personalization: null })
     if (url.includes('/clips/c1/transcript')) return json(TRANSCRIPT)
     if (url.includes('/clips/c1/download')) return new Response(new ArrayBuffer(0), { status: 200 })
@@ -67,11 +84,14 @@ function renderEditor(entry: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Editor', () => {
-  it('shows the empty state when no clip_id is present (Issue 304 — Editor is a nav destination)', () => {
+  it('shows the standalone picker when no video_id is present, and a row click opens long-form mode', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderEditor('/app/editor')
-    expect(screen.getByText(/Pick a clip to edit/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Go to Review/i })).toBeInTheDocument()
+    expect(await screen.findByText(/Pick a video to edit/i)).toBeInTheDocument()
+    // The old dead end (bounce to Review) is gone — Editor is a standalone tool.
+    expect(screen.queryByRole('button', { name: /Go to Review/i })).toBeNull()
+    await userEvent.click(await screen.findByRole('button', { name: 'Open in editor' }))
+    expect(await screen.findByText('Suggested clips')).toBeInTheDocument()
   })
 
   it('renders the editor with clip meta and honesty disclaimer', async () => {

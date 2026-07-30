@@ -11,6 +11,7 @@ import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 
@@ -159,7 +160,18 @@ export function Review() {
     )
   }
 
-  if (!videoId) return message('No video selected — go to Dashboard to pick a video.')
+  // Standalone landing: no video selected → inline picker + upload-in-place
+  // instead of a dead-end pointer at the Dashboard.
+  if (!videoId)
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <VideoPickerLanding tool="review" />
+      </>
+    )
   if (isPending) return message('Loading clip…')
   // A failed load must NOT fall through to "No clips yet" — a creator whose
   // clips exist would be told to regenerate them (Recap retry idiom).

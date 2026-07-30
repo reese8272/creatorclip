@@ -14,6 +14,7 @@ import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { Chip } from '@/components/Chip'
 import { LongFormEditor } from '@/components/editor/LongFormEditor'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { useCleanedUriPoll } from '@/hooks/useCleanedUriPoll'
 import type {
   ClipTranscript,
@@ -333,9 +334,9 @@ export function Editor() {
     )
   }
 
-  // Editor is a top-nav destination (Issue 304): a bare /editor with no video at
-  // all lands on a friendly empty state instead of a bare line of text. With a
-  // video but no clip, we open long-form source mode (Issue 307).
+  // Editor is a top-nav destination (Issue 304): a bare /editor with no video
+  // lands on the standalone picker + upload-in-place landing. With a video but
+  // no clip, we open long-form source mode (Issue 307).
   if (!videoId) {
     return (
       <>
@@ -343,15 +344,7 @@ export function Editor() {
           AutoClip predicts fit with your style and audience — it does not promise virality. All
           scores are estimates grounded in your own channel data.
         </DisclaimerBand>
-        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center gap-4 px-4 py-16 text-center">
-          <Chip pose="confused" size={72} />
-          <h1 className="font-display text-h2 text-fg">Pick a clip to edit</h1>
-          <p className="max-w-md text-body text-muted">
-            Open a clip from the Review page, then choose “Open in the editor” to refine its
-            captions, cuts, and pacing.
-          </p>
-          <Button onClick={() => navigate('/review')}>Go to Review</Button>
-        </main>
+        <VideoPickerLanding tool="editor" />
       </>
     )
   }

@@ -227,13 +227,14 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── index.css           # Tailwind v4 @theme — Issue 85 design system (warmer OKLCH; docs/UI.md)
 │       ├── types.ts            # API response shapes
 │       ├── test/setup.ts       # Vitest + RTL setup (jest-dom matchers, cleanup)
-│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts
+│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts · videosPoll.ts (shared ['videos'] refetch interval, Issue 369)
 │       ├── hooks/              # useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f)
 │       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · Nav.tsx (+test; Editor+Settings links, Issue 304) · Footer.tsx · DisclaimerBand.tsx · Chip.tsx (+test — decorative mascot, Issue 304)
 │       ├── components/chip/    # poses.ts (CHIP_POSES registry + ChipPose) · ChipStates.tsx (8 loading/thinking animations — Issue 304); sprites in public/chip/
 │       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal
 │       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
-│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (inline file upload, Issue 317; replaced LinkVideoForm) · VideoTable (Video·Status·Clips·Actions) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
+│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (inline file upload, Issue 317; onUploaded callback, Issue 369) · VideoTable (Video·Status·Clips·Actions) · videoStatus.ts (shared STATUS_VARIANT/SOURCE_NEEDED_HELP) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
+│       ├── components/landing/  # Standalone /review + /editor landings (Issue 369): VideoPickerLanding (+test — picker + explicit generate CTA) · InlineUploadFlow (+test — upload→SSE progress→generate in place)
 │       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
 │       ├── components/insights/ # InsightsPanel · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e)
 │       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)

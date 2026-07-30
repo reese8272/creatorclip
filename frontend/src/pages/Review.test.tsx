@@ -13,10 +13,20 @@ const BASE_CLIP = {
   applied_title: null, applied_description: null,
 }
 
+// Row for the standalone picker landing (no-param /review).
+const BASE_VIDEO = {
+  id: 'v1', youtube_video_id: 'yt1', title: 'My stream VOD', kind: 'video',
+  ingest_status: 'done', failure_reason: null, duration_s: 300,
+  created_at: '2026-07-01T00:00:00Z', origin: 'upload', clippable: true,
+}
+
 function mockFetch(personalization?: PersonalizationStatus | null) {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
+    if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
+    if (url.endsWith('/videos/clips/counts'))
+      return json({ counts: [{ video_id: 'v1', total: 1, rendered: 1 }] })
     if (url.endsWith('/videos/v1/clips'))
       return json({
         clips: [BASE_CLIP],
@@ -52,10 +62,16 @@ function renderReview(entry: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Review', () => {
-  it('prompts to pick a video when no video_id is present', () => {
+  it('shows the standalone picker when no video_id is present, and a row click opens the clip view', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderReview('/app/review')
-    expect(screen.getByText(/No video selected/)).toBeInTheDocument()
+    expect(await screen.findByText(/Pick a video to review/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Upload a video/i })).toBeInTheDocument()
+    // The old dead end is gone — Review is a standalone tool now.
+    expect(screen.queryByText(/No video selected/)).toBeNull()
+    // Round trip: picking the row sets ?video_id= and the live page takes over.
+    await userEvent.click(await screen.findByRole('button', { name: 'Review clips' }))
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
   })
 
   it('loads the clip: player meta, why-this-clip reasoning, honesty disclaimer, and Refine button', async () => {

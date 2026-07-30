@@ -33,7 +33,14 @@ function extractYouTubeId(input: string): string {
 // it blank uploads standalone footage (e.g. an OBS recording or unpublished
 // cut). The in-app channel picker (ChannelBrowser, Issue 310) is the no-paste
 // alternative: "Browse my channel" promotes a synced video into this same flow.
-export function UploadVideoForm({ open }: { open: boolean }) {
+export function UploadVideoForm({
+  open,
+  onUploaded,
+}: {
+  open: boolean
+  /** Called with the new video id on success — lets the standalone landings track the upload in place. */
+  onUploaded?: (videoId: string) => void
+}) {
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
   const [association, setAssociation] = useState('')
@@ -76,6 +83,7 @@ export function UploadVideoForm({ open }: { open: boolean }) {
         setAssociation('')
         if (fileRef.current) fileRef.current.value = ''
         queryClient.invalidateQueries({ queryKey: ['videos'] })
+        if (data.video_id) onUploaded?.(data.video_id)
       } else {
         setStatus(data.detail || `Upload failed (${xhr.status}).`)
       }

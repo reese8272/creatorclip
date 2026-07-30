@@ -4,6 +4,20 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-30 — Issue 369 DONE: standalone Review/Editor landings (picker + upload-in-place); Lane L23 opened
+
+Owner direction: Review and Editor must work as standalone tools, not steps in a Dashboard funnel.
+Shipped Phase 1 (Issue 369, `feat/standalone-review-editor`): `/review` and `/editor` with no
+`video_id` now render a shared **VideoPickerLanding** (honest per-row states; row click sets
+`?video_id=` in place) plus **InlineUploadFlow** — upload → live StageStepper progress → explicit
+minutes-consuming "Generate clips" click → straight into the tool. The old dead ends ("go to
+Dashboard" / "Go to Review") are gone. New `components/landing/*`, `dashboard/videoStatus.ts`,
+`lib/videosPoll.ts`; `UploadVideoForm` gained an `onUploaded` callback (Dashboard unchanged).
+Frontend suite 295 passed / 48 files; tsc + eslint at baseline. **Lane L23_STANDALONE_TOOLS** filed
+in `docs/issues.md`: #370 video-level style review, #371 consume feedback tags/notes in
+personalization, #372 source streaming + full transcript (owner's top editor priority), #373
+create-clip-from-selection + export; advanced effects explicitly deprioritized. `[DEC]` 2026-07-30.
+
 ## 2026-07-29 — "100% ready" pass: core-loop UX shipped (Deploys 1+2), 31h silent prod outage found+recovered, Layer 0 fully green
 
 **The big finding first:** prod had been **fully down for ~31 hours** (clean systemd poweroff
