@@ -86,6 +86,23 @@ def _worker_redis() -> aredis.Redis:
     return _WORKER_REDIS
 
 
+async def worker_redis_aclose() -> None:
+    """Close the worker's async Redis singleton and reset it for a clean re-create.
+
+    Wired into ``worker_process_shutdown`` (worker/celery_app.py) so the
+    Celery worker process doesn't leak the connection at process exit
+    (Issue 367). Mirrors the ``youtube._http.aclose()`` shutdown pattern
+    already used there.
+    """
+    global _WORKER_REDIS
+    if _WORKER_REDIS is not None:
+        try:
+            await _WORKER_REDIS.aclose()
+        except Exception as exc:  # noqa: BLE001 — shutdown must never raise
+            logger.warning("worker_redis aclose failed: %s", exc)
+    _WORKER_REDIS = None
+
+
 # ── Stale-render recovery (Issue 359) ────────────────────────────────────────
 # A worker SIGKILL (OOM, deploy teardown) after the `running` commit skips
 # every `failed` write, leaving the clip/summary row `running` forever — the

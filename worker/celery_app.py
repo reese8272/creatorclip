@@ -142,10 +142,17 @@ def _shutdown_worker_loop(**_: Any) -> None:
         return
     try:
         if not _LOOP.is_closed():
+            from worker import tasks as worker_tasks
             from youtube import _http
+            from youtube import _redis as youtube_redis
 
             _LOOP.run_until_complete(db.dispose_engine())
             _LOOP.run_until_complete(_http.aclose())  # close shared HTTP client (Issue 72)
+            # Close the worker-owned async Redis singletons (Issue 367): the
+            # thumbnail/render-marker cache and the shared youtube._redis
+            # client used by youtube.quota inside worker tasks.
+            _LOOP.run_until_complete(worker_tasks.worker_redis_aclose())
+            _LOOP.run_until_complete(youtube_redis.aclose())
     finally:
         if not _LOOP.is_closed():
             _LOOP.close()
