@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -25,6 +25,23 @@ const BASE_CLIP = {
   cleaned_render_uri: null,
   applied_title: null,
   applied_description: null,
+  origin: 'engine',
+  aspect: '9:16',
+}
+
+// Creator-made selection (Issue 373) — never engine-scored.
+const CREATOR_CLIP = {
+  ...BASE_CLIP,
+  id: 'c9',
+  rank: null,
+  score: null,
+  peak_s: null,
+  setup_start_s: null,
+  start_s: 30,
+  end_s: 75,
+  principle: '',
+  reasoning: '',
+  origin: 'creator',
 }
 
 const TRANSCRIPT = {
@@ -209,6 +226,89 @@ describe('Editor', () => {
     await screen.findByText('Suggested clips')
     // BASE_VIDEO.duration_s = 300 → footer right edge reads 5:00 (clip ends at 20s).
     expect(await screen.findByText('5:00')).toBeInTheDocument()
+  })
+
+  // ── Issue 373: create-clip-from-selection + provenance + export ──
+  it('dragging the master timeline proposes a clip and Create posts the range', async () => {
+    const fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Suggested clips')
+
+    // jsdom rects are zero-sized — pin the bar geometry so x→time works.
+    const bar = screen.getByTestId('master-timeline-bar')
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0, width: 100, top: 0, height: 96, right: 100, bottom: 96, x: 0, y: 0,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    // Drag 10% → 40% of a 300s source = 30s → 120s.
+    fireEvent.mouseDown(bar, { clientX: 10, button: 0 })
+    fireEvent.mouseMove(bar, { clientX: 40 })
+    fireEvent.mouseUp(bar, { clientX: 40 })
+
+    expect(await screen.findByText(/0:30 → 2:00/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Create clip' }))
+
+    const createCall = fetchMock.mock.calls.find(
+      ([u, init]) => String(u).endsWith('/videos/v1/clips') && (init as RequestInit)?.method === 'POST',
+    )
+    expect(createCall).toBeTruthy()
+    const posted = JSON.parse(String((createCall![1] as RequestInit).body))
+    expect(posted.start_s).toBeCloseTo(30, 0)
+    expect(posted.end_s).toBeCloseTo(120, 0)
+  })
+
+  it('transcript "Clip this" pre-fills the create card with the segment bounds', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Deep dive begins here')
+    await userEvent.click(screen.getAllByRole('button', { name: 'Clip this' })[1])
+    // Second segment: 4s → 9s.
+    expect(await screen.findByText(/0:04 → 0:09/)).toBeInTheDocument()
+  })
+
+  it('creator clips render in "Your clips" with honest provenance, engine clips stay Suggested', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/videos/v1/clips'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({ clips: [BASE_CLIP, CREATOR_CLIP], personalization: null }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1')
+    expect(await screen.findByText('Your clips')).toBeInTheDocument()
+    expect(screen.getByText(/not engine-scored/)).toBeInTheDocument()
+    expect(screen.getByText('Suggested clips')).toBeInTheDocument()
+    // No fake fit tier on the creator clip row (appears in list + export rows).
+    expect(screen.getAllByText('Your selection').length).toBeGreaterThan(0)
+  })
+
+  it('export panel lists rendered clips with real download links and the honest source-edit line', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/videos/v1/clips'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({ clips: [BASE_CLIP, CREATOR_CLIP], personalization: null }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Your clips')
+    const links = screen.getAllByRole('link', { name: 'Download' })
+    expect(links).toHaveLength(2)
+    expect(links[0]).toHaveAttribute(
+      'href',
+      expect.stringContaining('/download?disposition=attachment'),
+    )
+    expect(screen.getByText(/Full source-edit export isn’t available/)).toBeInTheDocument()
+    // No stub button anymore.
+    expect(screen.queryByRole('button', { name: /Export source edit/ })).toBeNull()
   })
 
   it('opens /editor?video_id (no clip) directly in long-form mode (Issue 307)', async () => {

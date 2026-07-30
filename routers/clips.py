@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from preference.model import PreferenceScorer
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, func, select
@@ -25,6 +25,7 @@ from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, RENDER_DAILY_LIMIT, creator_key, limiter
 from models import (
     Clip,
+    ClipFormat,
     ClipImpression,
     Creator,
     CreatorStyle,
@@ -70,6 +71,12 @@ class ClipOut(BaseModel):
     # PATCH /clips/{id}; null = publish falls back to video.title / "#Shorts".
     applied_title: str | None = None
     applied_description: str | None = None
+    # Issue 373 — provenance: "creator" for a manually-selected source range
+    # (never engine-scored; the UI shows honest "Your selection" framing
+    # instead of a fit tier), "engine" otherwise.
+    origin: str = "engine"
+    # Issue 373 — the export panel surfaces the render's aspect preset.
+    aspect: str = "9:16"
 
 
 class PersonalizationStatus(BaseModel):
@@ -227,6 +234,8 @@ def _clip_response(clip: Clip) -> dict:
         "cleaned_render_uri": clip.cleaned_render_uri,
         "applied_title": clip.applied_title,
         "applied_description": clip.applied_description,
+        "origin": sj.get("origin", "engine"),
+        "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
     }
 
 
@@ -343,6 +352,152 @@ async def generate_clips(
         return {"clips": [_clip_response(c) for c in clips]}
 
 
+class CreateClipIn(BaseModel):
+    """Creator-selected source range for a manual clip (Issue 373).
+
+    ``allow_inf_nan=False`` rejects NaN/±inf at the schema layer; range and
+    duration bounds are validated in the handler against the real source.
+    """
+
+    start_s: float = Field(ge=0.0, allow_inf_nan=False)
+    end_s: float = Field(gt=0.0, allow_inf_nan=False)
+
+
+# Creator-clip duration bounds (Issue 373, DECISIONS 2026-07-30): the 2s floor
+# guards mis-drags, the 600s ceiling keeps a single render bounded (worker
+# timeout scales with duration). Deliberately far looser than the engine's
+# 30s-min candidate window — creator freedom over engine geometry.
+_CREATOR_CLIP_MIN_S = 2.0
+_CREATOR_CLIP_MAX_S = 600.0
+# Permissive right edge (same posture as validate_user_cuts): a drag that ends
+# a frame past the probed duration is clamped, not rejected.
+_RIGHT_EDGE_EPSILON_S = 0.5
+
+
+@router.post(
+    "/{video_id}/clips",
+    status_code=201,
+    response_model=ClipOut,
+    # This IS a render intake: creating a selection auto-enqueues its render
+    # (rendering charges no extra minutes — paid at ingest), so it carries the
+    # render kill switch + spend breaker like POST /clips/{id}/render.
+    dependencies=[Depends(require_flag("render_intake")), Depends(require_budget)],
+)
+@limiter.limit("20/hour", key_func=creator_key)
+@limiter.limit(RENDER_DAILY_LIMIT, key_func=creator_key)
+async def create_clip(
+    request: Request,
+    response: Response,
+    video_id: uuid.UUID,
+    body: CreateClipIn,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Create a clip from a creator-selected source range (Issue 373).
+
+    The row is structurally identical to an engine clip but carries
+    ``signals_jsonb.origin == "creator"`` and NULL score/rank/peak — it was
+    never engine-scored, and the UI presents it as "Your selection" instead of
+    a fit tier. An identical existing selection is returned with 200 instead
+    of duplicated (double-click / popover re-submit guard).
+    """
+    await check_positive_balance(creator.id, session)
+
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if video.ingest_status != IngestStatus.done:
+        raise HTTPException(status_code=400, detail="Video is not fully ingested yet")
+    if not video.source_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "source_expired",
+                "message": (
+                    f"Source media expired ({settings.SOURCE_MEDIA_RETENTION_HOURS}-hour "
+                    "retention) — re-upload the video to create clips from it."
+                ),
+            },
+        )
+
+    start_s, end_s = body.start_s, body.end_s
+    if end_s <= start_s:
+        raise HTTPException(status_code=422, detail="end_s must be greater than start_s")
+    if video.duration_s is not None:
+        if end_s > video.duration_s + _RIGHT_EDGE_EPSILON_S:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Selection ends past the source duration ({video.duration_s:.1f}s)",
+            )
+        end_s = min(end_s, video.duration_s)
+    duration = end_s - start_s
+    if duration < _CREATOR_CLIP_MIN_S:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Selection too short — clips need at least {_CREATOR_CLIP_MIN_S:.0f}s",
+        )
+    if duration > _CREATOR_CLIP_MAX_S:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Selection too long — the cap is {_CREATOR_CLIP_MAX_S:.0f}s per clip",
+        )
+
+    # Soft idempotency: the same creator re-submitting the same range gets the
+    # existing clip back (200), not a duplicate row.
+    existing_result = await session.execute(
+        select(Clip).where(
+            Clip.video_id == video_id,
+            Clip.creator_id == creator.id,
+            Clip.start_s == start_s,
+            Clip.end_s == end_s,
+            Clip.signals_jsonb["origin"].as_string() == "creator",
+        )
+    )
+    existing = existing_result.scalars().first()
+    if existing is not None:
+        response.status_code = 200
+        return _clip_response(existing)
+
+    # Seed the style from the creator's brand kit so the auto-render matches
+    # their defaults, exactly like the engine's auto-render path.
+    kit_result = await session.execute(
+        select(CreatorStyle).where(CreatorStyle.creator_id == creator.id)
+    )
+    kit_row = kit_result.scalar_one_or_none()
+    kit_style: dict = (kit_row.style or {}) if kit_row is not None else {}
+
+    clip = Clip(
+        video_id=video_id,
+        creator_id=creator.id,
+        setup_start_s=None,
+        start_s=start_s,
+        end_s=end_s,
+        peak_s=None,
+        score=None,
+        dna_match=None,
+        signals_jsonb={"origin": "creator", "principle": "", "reasoning": ""},
+        format=ClipFormat.short,
+        render_status=RenderStatus.pending,
+        rank=None,
+        style_preset=kit_style or None,
+    )
+    session.add(clip)
+    await session.commit()
+    await session.refresh(clip)
+
+    # Best-effort auto-render: creator intent is explicit and rendering charges
+    # no extra minutes (paid at ingest). A broker failure still returns the
+    # 201 — the row exists as `pending` and the player's manual "Render this
+    # clip" button is the recovery path (no prior artifact to restore, unlike
+    # POST /clips/{id}/render).
+    from worker.tasks import render_clip as render_task
+
+    try:
+        await asyncio.to_thread(render_task.delay, str(clip.id))
+    except Exception as exc:  # noqa: BLE001 — enqueue is best-effort by design
+        logger.error("create-clip render enqueue failed for clip %s: %s", clip.id, exc)
+
+    return _clip_response(clip)
+
+
 def _build_personalization_status(scorer: "PreferenceScorer | None") -> PersonalizationStatus:
     """Compute PersonalizationStatus from a loaded scorer (or None).
 
@@ -407,7 +562,11 @@ async def list_clips(
     # and when, so later counterfactual/IPS evaluation is possible (it cannot be
     # reconstructed retroactively). Best-effort — a logging failure must never break
     # the listing. Per-creator isolation holds (creator_id stamped; RLS-gated table).
-    if clips:
+    # Creator-made selections (Issue 373) are excluded: they were never ranked
+    # recommendations, and logging their NULL rank as 0 would poison the top slot
+    # in the IPS/counterfactual data.
+    ranked_clips = [c for c in clips if (c.signals_jsonb or {}).get("origin") != "creator"]
+    if ranked_clips:
         from datetime import UTC, datetime
 
         shown_at = datetime.now(UTC)
@@ -420,7 +579,7 @@ async def list_clips(
                         rank=c.rank if c.rank is not None else 0,
                         shown_at=shown_at,
                     )
-                    for c in clips
+                    for c in ranked_clips
                 ]
             )
             await session.commit()

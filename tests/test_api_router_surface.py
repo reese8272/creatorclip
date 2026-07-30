@@ -292,6 +292,7 @@ def test_list_clips_truncated_true_when_at_limit(client):
         cl.cleaned_render_uri = None
         cl.applied_title = None
         cl.applied_description = None
+        cl.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
         return cl
 
     # 101 clips → router fetches 101 (limit+1), sets truncated=True, returns 100

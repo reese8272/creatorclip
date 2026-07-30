@@ -291,6 +291,11 @@ export interface ReviewClip {
   // NULL = fall back to video.title / "#Shorts" at publish time.
   applied_title: string | null
   applied_description: string | null
+  // Issue 373 — provenance: 'creator' = manually-selected source range (never
+  // engine-scored; UI shows "Your selection" instead of a fit tier).
+  origin: 'engine' | 'creator'
+  // Issue 373 — render aspect preset, surfaced by the export panel.
+  aspect: string
 }
 
 // Issue 216 — honest personalization-status surface.

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, ApiError } from '@/lib/api'
 import { fitTier } from '@/lib/fit'
 import { fmtClock, parseClock } from '@/lib/timecode'
 import type { FitTier } from '@/components/ui/fit-badge'
@@ -27,21 +27,54 @@ const TIER_TEXT: Record<FitTier, string> = {
   exploratory: 'var(--color-muted)',
 }
 
+// A drag shorter than this reads as a click (segment open / stray tap), not a
+// selection (Issue 373 — same threshold idea as the short editor's MIN_CUT_S).
+const MIN_SELECT_S = 1.0
+
+export interface SourceSelection {
+  start_s: number
+  end_s: number
+}
+
 // Master timeline: candidate clips drawn over a waveform placeholder, positioned
-// by their source-relative start/end and coloured by fit tier. Source duration is
-// derived from the furthest clip end (no source-media endpoint — scaffold scope).
+// by their source-relative start/end and coloured by fit tier. Issue 373 adds
+// drag-to-select: dragging a range on the bar proposes a creator-made clip via
+// onSelect (clicks on segments still open them — the 1s threshold disambiguates).
 function MasterTimeline({
   clips,
   chapters,
   sourceDuration,
   onOpenClip,
+  onSelect,
 }: {
   clips: ReviewClip[]
   chapters: Chapter[]
   sourceDuration: number
   onOpenClip: (clipId: string) => void
+  onSelect: (sel: SourceSelection) => void
 }) {
   const dur = sourceDuration > 0 ? sourceDuration : 1
+  const barRef = useRef<HTMLDivElement>(null)
+  const [dragStart, setDragStart] = useState<number | null>(null)
+  const [dragEnd, setDragEnd] = useState<number | null>(null)
+
+  function xToTime(clientX: number): number {
+    const el = barRef.current
+    if (!el) return 0
+    const rect = el.getBoundingClientRect()
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    return frac * dur
+  }
+
+  function finishDrag(clientX: number) {
+    if (dragStart === null) return
+    const t = xToTime(clientX)
+    const lo = Math.min(dragStart, t)
+    const hi = Math.max(dragStart, t)
+    if (hi - lo >= MIN_SELECT_S) onSelect({ start_s: lo, end_s: hi })
+    setDragStart(null)
+    setDragEnd(null)
+  }
   // Chapter ticks: drawn from real generated chapters (right-rail panel). Only
   // those that fall within the derived source span are positioned.
   const ticks = chapters
@@ -65,7 +98,27 @@ function MasterTimeline({
         </div>
       )}
       <div className="relative overflow-hidden rounded-md border border-default bg-surface shadow-inset">
-        <div className="relative h-24">
+        <div
+          ref={barRef}
+          data-testid="master-timeline-bar"
+          className="relative h-24 cursor-crosshair select-none"
+          onMouseDown={(e) => {
+            if (e.button !== 0) return
+            setDragStart(xToTime(e.clientX))
+            setDragEnd(null)
+          }}
+          onMouseMove={(e) => {
+            if (dragStart !== null) setDragEnd(xToTime(e.clientX))
+          }}
+          onMouseUp={(e) => finishDrag(e.clientX)}
+          onMouseLeave={(e) => {
+            if (dragStart !== null && dragEnd !== null) finishDrag(e.clientX)
+            else {
+              setDragStart(null)
+              setDragEnd(null)
+            }
+          }}
+        >
           {/* chapter tick lines */}
           {ticks.map((t, i) => (
             <div
@@ -84,22 +137,51 @@ function MasterTimeline({
               />
             ))}
           </div>
-          {/* candidate segments */}
+          {/* candidate + creator segments */}
           {clips.map((c) => {
             const tier = fitTier(c.score)
+            const isCreator = c.origin === 'creator'
             const left = `${Math.max(0, Math.min(100, (c.start_s / dur) * 100))}%`
             const width = `${Math.max(1.5, ((c.end_s - c.start_s) / dur) * 100)}%`
             return (
               <button
                 key={c.id}
                 onClick={() => onOpenClip(c.id)}
-                title={`Open clip at ${fmtClock(c.start_s)} in the clip editor`}
-                aria-label={`Open ${TIER_LABEL[tier]}-fit clip at ${fmtClock(c.start_s)}`}
+                title={
+                  isCreator
+                    ? `Open your selection at ${fmtClock(c.start_s)} in the clip editor`
+                    : `Open clip at ${fmtClock(c.start_s)} in the clip editor`
+                }
+                aria-label={
+                  isCreator
+                    ? `Open your selection at ${fmtClock(c.start_s)}`
+                    : `Open ${TIER_LABEL[tier]}-fit clip at ${fmtClock(c.start_s)}`
+                }
                 className="absolute bottom-0 top-0 cursor-pointer rounded-[3px] border"
-                style={{ left, width, ...TIER_SEGMENT[tier] }}
+                style={
+                  isCreator
+                    ? {
+                        left,
+                        width,
+                        background: 'oklch(22% 0.04 285 / 0.5)',
+                        borderColor: 'var(--color-accent)',
+                        borderStyle: 'dashed',
+                      }
+                    : { left, width, ...TIER_SEGMENT[tier] }
+                }
               />
             )
           })}
+          {/* live drag-selection overlay */}
+          {dragStart !== null && dragEnd !== null && (
+            <div
+              className="pointer-events-none absolute bottom-0 top-0 rounded-[3px] border border-accent bg-accent-soft/40"
+              style={{
+                left: `${(Math.min(dragStart, dragEnd) / dur) * 100}%`,
+                width: `${(Math.abs(dragEnd - dragStart) / dur) * 100}%`,
+              }}
+            />
+          )}
         </div>
         <div className="flex justify-between border-t border-default px-2 py-[5px] font-mono text-[10px] text-muted">
           <span>0:00</span>
@@ -108,9 +190,60 @@ function MasterTimeline({
         </div>
       </div>
       <p className="mt-[5px] text-label text-subtle">
-        Green = strong fit · Amber = moderate · Gray = exploratory. Click a segment to open it in the
-        clip editor.
+        Green = strong fit · Amber = moderate · Gray = exploratory · Dashed = your selection. Click a
+        segment to open it, or drag an empty stretch to create your own clip.
       </p>
+    </div>
+  )
+}
+
+// Confirmation card for a proposed creator clip (Issue 373): shows the range,
+// posts it, and advances into the clips list on success. Server-authored
+// errors (bounds, 402/429/503, source_expired) render verbatim.
+function CreateClipCard({
+  selection,
+  videoId,
+  onClose,
+}: {
+  selection: SourceSelection
+  videoId: string
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+  const create = useMutation({
+    mutationFn: () =>
+      api<ReviewClip>(`/videos/${videoId}/clips`, {
+        method: 'POST',
+        body: { start_s: selection.start_s, end_s: selection.end_s },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['review-clips', videoId] })
+      onClose()
+    },
+  })
+  const duration = selection.end_s - selection.start_s
+  const errorMessage = create.isError
+    ? create.error instanceof ApiError
+      ? create.error.message
+      : 'Request failed — please retry.'
+    : null
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface px-3.5 py-2.5">
+      <span className="font-mono text-small text-fg">
+        {fmtClock(selection.start_s)} → {fmtClock(selection.end_s)}
+        <span className="text-subtle"> · {duration.toFixed(1)}s</span>
+      </span>
+      <Button size="sm" disabled={create.isPending} onClick={() => create.mutate()}>
+        {create.isPending ? 'Creating…' : 'Create clip'}
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>
+        Cancel
+      </Button>
+      <span className="text-label text-subtle">
+        Renders automatically with your style defaults — no extra minutes.
+      </span>
+      {errorMessage && <span className="w-full text-xs text-danger">{errorMessage}</span>}
     </div>
   )
 }
@@ -132,10 +265,19 @@ export function LongFormEditor({
   video?: Video
   onOpenClip: (clipId: string) => void
 }) {
-  const ranked = [...clips].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
+  // Issue 373: engine candidates keep the ranked "Suggested" list; creator-made
+  // selections get their own honest group (never a fake fit tier).
+  const engineClips = [...clips]
+    .filter((c) => c.origin !== 'creator')
+    .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
+  const creatorClips = clips.filter((c) => c.origin === 'creator')
+  const ranked = [...creatorClips, ...engineClips]
   // Chapters are generated on demand in the right-rail panel; once present they
   // also annotate the master timeline (see ChaptersPanel onChapters).
   const [chapters, setChapters] = useState<Chapter[]>([])
+  // Proposed creator clip (Issue 373) — fed by timeline drag OR the transcript
+  // panel's "Clip this"; confirmed via CreateClipCard.
+  const [pendingSelection, setPendingSelection] = useState<SourceSelection | null>(null)
 
   const transcriptQuery = useQuery({
     queryKey: ['video-transcript', videoId],
@@ -214,7 +356,43 @@ export function LongFormEditor({
           chapters={chapters}
           sourceDuration={sourceDuration}
           onOpenClip={onOpenClip}
+          onSelect={setPendingSelection}
         />
+
+        {pendingSelection && (
+          <CreateClipCard
+            selection={pendingSelection}
+            videoId={videoId}
+            onClose={() => setPendingSelection(null)}
+          />
+        )}
+
+        {/* Your clips (Issue 373) — creator-made selections, honest provenance */}
+        {creatorClips.length > 0 && (
+          <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+            <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
+              <Chip pose="laptop" size={24} />
+              <span className="text-h3 font-semibold text-fg">Your clips</span>
+            </div>
+            {creatorClips.map((c) => (
+              <div
+                key={c.id}
+                className="grid grid-cols-[auto_1fr_auto] items-center gap-3.5 border-b border-default px-4 py-3.5 last:border-b-0"
+              >
+                <span className="font-mono text-label text-subtle">{fmtClock(c.start_s)}</span>
+                <div>
+                  <div className="text-small text-fg">Your selection</div>
+                  <div className="text-label text-subtle">
+                    {(c.end_s - c.start_s).toFixed(0)}s · not engine-scored
+                  </div>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => onOpenClip(c.id)}>
+                  Open →
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Suggested clips */}
         <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
@@ -222,12 +400,12 @@ export function LongFormEditor({
             <Chip pose="idea" size={24} />
             <span className="text-h3 font-semibold text-fg">Suggested clips</span>
           </div>
-          {ranked.length === 0 ? (
+          {engineClips.length === 0 ? (
             <p className="px-4 py-4 text-small text-subtle">
               No clip candidates yet — generate clips for this source from the Dashboard.
             </p>
           ) : (
-            ranked.map((c) => {
+            engineClips.map((c) => {
               const tier = fitTier(c.score)
               return (
                 <div
@@ -260,6 +438,7 @@ export function LongFormEditor({
           onRetry={() => void transcriptQuery.refetch()}
           currentTime={currentTime}
           onSeek={seek}
+          onClipSegment={(seg) => setPendingSelection({ start_s: seg.start_s, end_s: seg.end_s })}
         />
       </div>
 
@@ -267,24 +446,42 @@ export function LongFormEditor({
       <div className="flex flex-col gap-4">
         <ChaptersPanel videoId={videoId} onChapters={setChapters} />
 
+        {/* Export (Issue 373): real per-clip artifacts — every rendered clip
+            (engine + your selections) downloads through the existing authed
+            endpoint. A single-file source-edit export does not exist in the
+            render pipeline; we say so instead of faking it (DECISIONS 2026-07-30). */}
         <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
           <div className="border-b border-default px-4 py-3.5 text-h3 font-semibold text-fg">Export</div>
-          <div className="flex flex-col gap-3 px-4 py-3.5">
-            <div className="flex items-center justify-between gap-2.5">
-              <span className="text-small text-muted">Format</span>
-              <span className="rounded-sm border border-strong bg-bg px-2.5 py-1.5 text-xs text-subtle">
-                MP4
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2.5">
-              <span className="text-small text-muted">Quality</span>
-              <span className="rounded-sm border border-strong bg-bg px-2.5 py-1.5 text-xs text-subtle">
-                1080p
-              </span>
-            </div>
-            <Button variant="secondary" size="sm" disabled title="Full-source export is coming">
-              Export source edit (coming soon)
-            </Button>
+          <div className="flex flex-col gap-2.5 px-4 py-3.5">
+            {ranked.filter((c) => c.render_status === 'done').length === 0 ? (
+              <p className="text-small text-subtle">
+                Nothing rendered yet — rendered clips show up here for download.
+              </p>
+            ) : (
+              ranked
+                .filter((c) => c.render_status === 'done')
+                .map((c) => (
+                  <div key={c.id} className="flex items-center justify-between gap-2.5">
+                    <div className="min-w-0">
+                      <div className="truncate text-small text-fg">
+                        {c.origin === 'creator' ? 'Your selection' : `Clip #${c.rank ?? '—'}`}
+                      </div>
+                      <div className="font-mono text-label text-subtle">
+                        {(c.end_s - c.start_s).toFixed(0)}s · {c.aspect} · MP4
+                      </div>
+                    </div>
+                    <a
+                      href={`/clips/${c.id}/download?disposition=attachment`}
+                      className="shrink-0 rounded-sm border border-strong bg-bg px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-fg"
+                    >
+                      Download
+                    </a>
+                  </div>
+                ))
+            )}
+            <p className="border-t border-default pt-2.5 text-label text-subtle">
+              Full source-edit export isn’t available — export individual rendered clips.
+            </p>
           </div>
         </div>
       </div>
