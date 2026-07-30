@@ -310,9 +310,17 @@ def test_soft_time_limit_exceeded_does_not_retry() -> None:
 
     video_id = str(uuid.uuid4())
 
-    # Simulate _transcribe_async raising SoftTimeLimitExceeded.
+    # Simulate _transcribe_async raising SoftTimeLimitExceeded. The wrapper
+    # calls run_async(_creator_id_for_video(video_id)) first — that coroutine
+    # is constructed eagerly before the mocked run_async ever sees it, so the
+    # side_effect must close it before raising, or it's flagged as an
+    # unawaited coroutine at GC time (Issue 366).
+    def _raise_after_closing(coro):
+        coro.close()
+        raise SoftTimeLimitExceeded()
+
     with (
-        patch("worker.tasks.run_async", side_effect=SoftTimeLimitExceeded()),
+        patch("worker.tasks.run_async", side_effect=_raise_after_closing),
         patch("worker.tasks._set_status", new_callable=AsyncMock),
     ):
         # We call the underlying function directly to avoid Celery's task harness;

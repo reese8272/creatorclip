@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from db import get_session
@@ -299,7 +300,12 @@ def test_list_clips_truncated_true_when_at_limit(client):
     clips_101 = [_make_clip_obj() for _ in range(101)]
 
     async def _session():
-        s = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add_all() is sync; a
+        # bare AsyncMock() would make it AsyncMock too, so the impression-log
+        # session.add_all() call (never awaited by production code,
+        # correctly, since 101 clips means ranked_clips is non-empty) leaves
+        # an unawaited coroutine.
+        s = AsyncMock(spec=AsyncSession)
 
         async def _get(model, pk, **kwargs):
             if model is Video:
