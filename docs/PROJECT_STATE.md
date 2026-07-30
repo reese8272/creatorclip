@@ -7,7 +7,8 @@ Updated after every issue closes.
 ## 2026-07-29 — "100% ready" pass: core-loop UX shipped (Deploys 1+2), 31h silent prod outage found+recovered, Layer 0 fully green
 
 **The big finding first:** prod had been **fully down for ~31 hours** (clean systemd poweroff
-Jul 28 11:59 UTC — DO-side/console action, not a crash) with **zero alerts** — `health-check.yml`'s
+Jul 28 11:59 UTC — later confirmed OWNER-INTENTIONAL: droplet disabled, re-enabled Jul 29; not a
+crash or DO event) with **zero alerts** — `health-check.yml`'s
 schedule silently died 2026-06-17 and #282 was never stood up. Found by manual curl during the
 #24/#25 gate pass; owner power-cycled the droplet; everything auto-recovered. #282 elevated to
 beta-critical with the outage as evidence.
