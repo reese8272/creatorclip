@@ -318,6 +318,21 @@ export function Editor() {
     }
   }
 
+  // Issue 364: discard must clear cleaned_render_uri server-side, or the next
+  // clean/edit 409s with pending_clean_or_edit until a version the creator
+  // explicitly rejected is confirmed instead.
+  async function discardFinal() {
+    if (!clip) return
+    try {
+      await api(`/clips/${clip.id}/clean/discard`, { method: 'POST' })
+      setApplying(false)
+      setStatus('Keeping original render.')
+      queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
+    } catch {
+      setStatus('Discard failed — try again.')
+    }
+  }
+
   // ── Cut computation helpers ──────────────────────────────────────────────
 
   const cutIndices = new Set<number>()
@@ -642,7 +657,7 @@ export function Editor() {
                   <Button size="sm" onClick={confirmFinal}>
                     Use edited version
                   </Button>
-                  <Button variant="secondary" size="sm" onClick={() => setApplying(false)}>
+                  <Button variant="secondary" size="sm" onClick={discardFinal}>
                     Keep original
                   </Button>
                 </div>
