@@ -120,7 +120,19 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     at GC, spraying tracebacks after the pytest summary. Clearing _writer/_reader
     makes __del__ a no-op; the raw sockets are still closed by the transport's
     own __del__ / process exit. Mid-run leaks are NOT masked — they still
-    surface as PytestUnraisableExceptionWarning during the run."""
+    surface as PytestUnraisableExceptionWarning during the run.
+
+    Issue 367 gave each of these singletons a real production close path
+    (``youtube._redis.aclose()``, ``routers.thumbnails._aclose_redis()``,
+    ``worker.tasks.worker_redis_aclose()``, wired into the FastAPI lifespan /
+    Celery ``worker_process_shutdown`` respectively) plus fixtures in the test
+    files that exercise those paths directly. This reach-in is still needed
+    as a session-wide safety net, though: most of the ~2000 other tests in the
+    suite call task/router code without going through either shutdown path
+    (a bare ``asyncio.run()`` or a per-test TestClient loop), so a singleton
+    can still end up bound to a loop that's dead by session end. Confirmed by
+    removing this function outright and re-running the full suite — the
+    ``Event loop is closed`` traceback reappeared at exit (2026-07-30)."""
     import main as main_module
     import routers.thumbnails as thumbnails
     import worker.progress as worker_progress

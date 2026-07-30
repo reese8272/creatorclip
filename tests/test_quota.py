@@ -255,6 +255,57 @@ def test_quota_redis_singleton():
         redis_module._REDIS_CLIENT = original
 
 
+# ── Issue 367: async-Redis singleton lifecycle ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_redis_aclose_closes_and_resets_singleton():
+    """aclose() closes the underlying client and nulls the module global so a
+    later get_redis_client() call recreates it instead of reusing a closed one."""
+    import youtube._redis as redis_module
+
+    original = redis_module._REDIS_CLIENT
+    mock_client = AsyncMock()
+    redis_module._REDIS_CLIENT = mock_client
+    try:
+        await redis_module.aclose()
+        mock_client.aclose.assert_awaited_once()
+        assert redis_module._REDIS_CLIENT is None
+    finally:
+        redis_module._REDIS_CLIENT = original
+
+
+@pytest.mark.asyncio
+async def test_redis_get_client_after_aclose_returns_fresh_client():
+    """A get_redis_client() call after aclose() must build a brand-new client,
+    never hand back the closed instance."""
+    import youtube._redis as redis_module
+
+    original = redis_module._REDIS_CLIENT
+    mock_client = AsyncMock()
+    redis_module._REDIS_CLIENT = mock_client
+    try:
+        await redis_module.aclose()
+        new_client = redis_module.get_redis_client()
+        assert new_client is not mock_client
+    finally:
+        redis_module._REDIS_CLIENT = original
+
+
+@pytest.mark.asyncio
+async def test_redis_aclose_when_never_initialised_is_noop():
+    """Calling aclose() before get_redis_client() was ever invoked must not raise."""
+    import youtube._redis as redis_module
+
+    original = redis_module._REDIS_CLIENT
+    redis_module._REDIS_CLIENT = None
+    try:
+        await redis_module.aclose()  # must not raise
+        assert redis_module._REDIS_CLIENT is None
+    finally:
+        redis_module._REDIS_CLIENT = original
+
+
 # ── Issue 55: consume raises (does not silent-allow) when Redis is unreachable ─
 
 
