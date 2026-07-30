@@ -1,8 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-30 (Lane L23 — standalone Review & Editor tools — COMPLETE)
-**Branch at close:** `feat/standalone-review-editor` @ `6c69bba` + close-out docs commit — **5+ commits ahead of `origin/main`, not pushed, no PR yet**
-**Prod:** healthy at `a50b332` (Deploys 1+2, 2026-07-29); prod DB head **0047** — this branch adds migrations **0048 + 0049** (not applied anywhere yet)
+**Last updated:** 2026-07-30 (Lane L23 MERGED + DEPLOYED — PR #65 → main `4d7f29c`)
+**Branch at close:** `main` @ `4d7f29c` (feature branch deleted); all 12 CI checks green
+**Prod:** healthy — deploy run 30561428784 succeeded; `/health` all ok; **prod DB head 0049** (migrations 0048+0049 applied); new endpoints live (401 auth-gated, SPA 200)
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -19,24 +19,20 @@ ruff/mypy/tsc/eslint clean; Layer 0 green except a NEW pytest dev-dep advisory (
 
 ### → NEXT ACTIONS
 
-1. **Push + PR to main**: `git push -u origin feat/standalone-review-editor` → `gh pr create`
-   (base main). Merge to main = Docker publish → staging gate → prod deploy — **owner authorizes**.
-   The GATING Playwright visual job may need baseline regen (long-form editor layout changed):
-   `gh workflow run ci.yml -f update_snapshots=true` → commit artifact (never from WSL2).
-2. **On deploy**: `alembic upgrade head` applies **0048 (video_feedback) + 0049
-   (creator_style_notes)** — new-table + RLS, metadata-cheap. Run the integration lane
-   (`pytest -m integration`, incl. new `test_video_feedback_integration.py`) on a box with
-   docker-compose Postgres.
-3. **Live smoke of the new surfaces**: long-form editor plays source + transcript → drag-create a
-   clip → renders → "Your clips" + Export; `/app/review?video_id=X&mode=style` records a style
-   note; after ≥3 tagged/noted feedbacks `distill_style_prefs` writes `creator_style_notes` and the
-   Profile DNA card shows "What Chip has learned from your reviews". Distillation LLM call:
+1. **Friend-beta path (the current goal)**: **#26** Google Console — owner adds the buddy's Gmail
+   under Audience → Test users (unverified apps hard-block everyone else) and confirms the 4
+   scopes match `youtube/oauth.py:46-51`. Then **#28** friend smoke; **#282** uptime monitor is
+   still open and beta-critical (droplet must stay up once friends are invited).
+2. **Live smoke of the new L23 surfaces on prod** (needs a real upload): long-form editor plays
+   source + transcript → drag-create a clip → renders → "Your clips" + Export;
+   `/app/review?video_id=X&mode=style` records a style note; after ≥3 tagged/noted feedbacks
+   `distill_style_prefs` writes `creator_style_notes` and the Profile DNA card shows "What Chip
+   has learned from your reviews". Distillation call check:
    `RUN_LLM_LIVE=1 .venv/bin/pytest -m llm_live tests/test_style_distill.py`.
-4. **Beta path (unchanged, still open)**: #26 Google-console test users · #282 uptime monitor
-   (beta-critical) · #28 friend smoke — see the 2026-07-29 PROJECT_STATE entry.
-5. **Small chore queued** (OFF_COURSE 2026-07-30): pytest 8.3.3 advisory PYSEC-2026-1845
+3. **Small chore queued** (OFF_COURSE 2026-07-30): pytest 8.3.3 advisory PYSEC-2026-1845
    (fix 9.0.3, dev-only) — standalone bump + plugin-compat check; until then Layer-0 pip_audit
-   reads 1 vuln vs the 0 baseline.
+   reads 1 vuln vs the 0 baseline. Note: CI ALSO runs `ruff format --check` — run it locally
+   before pushing (the local Layer-0 script doesn't).
 
 ## WHAT WORKS NOW (don't re-investigate)
 
@@ -66,8 +62,8 @@ ruff/mypy/tsc/eslint clean; Layer 0 green except a NEW pytest dev-dep advisory (
 
 ## CONSTRAINTS & GOTCHAS
 
-- **This box has no Docker/Postgres** — integration lane + alembic upgrades were NOT run here
-  (unit lane mocks DB by design). Run where compose exists.
+- **This box has no Docker/Postgres** — unit lane mocks DB by design; the integration lane ran
+  green in CI (real Postgres) and prod migrated to 0049 via the deploy pipeline.
 - **Do not merge style notes into `brief_text` at scoring time** — invalidates the 1h prompt cache
   on every re-distillation (test-pinned; the whole point of the third-block design).
 - **`/videos/{id}/stream` serves the SOURCE** — subject to the 72h retention purge; the UI shows an
