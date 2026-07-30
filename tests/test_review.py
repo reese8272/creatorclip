@@ -277,6 +277,44 @@ def test_trim_clip_relative_values_accepted_for_late_starting_clip():
     assert resp.status_code == 201
 
 
+def test_trim_drag_to_end_rounding_accepted():
+    """trim_end_s a few ms past the duration → 201 (one-frame tolerance).
+
+    Regression (2026-07-29 assess): Save trim 422'd at exactly clip_duration_s
+    while its sibling /trim-render allowed MIN_KEEP_SEGMENT_S past it — the UI
+    drag-to-end float rounding lands a few ms over, so Save must accept what
+    the re-render endpoint accepts.
+    """
+    creator = _make_creator()
+    clip = _make_clip(creator.id)  # duration = 70 - 10 = 60s
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={"action": "trim", "trim_start_s": 15.0, "trim_end_s": 60.02},
+    )
+    assert resp.status_code == 201
+
+
+def test_trim_end_past_tolerance_rejected():
+    """trim_end_s beyond duration + MIN_KEEP_SEGMENT_S → 422."""
+    from clip_engine.edits import MIN_KEEP_SEGMENT_S
+
+    creator = _make_creator()
+    clip = _make_clip(creator.id)  # duration = 60s
+    client = _build_client(creator, clip)
+
+    resp = client.post(
+        f"/clips/{clip.id}/feedback",
+        json={
+            "action": "trim",
+            "trim_start_s": 15.0,
+            "trim_end_s": 60.0 + MIN_KEEP_SEGMENT_S + 0.01,
+        },
+    )
+    assert resp.status_code == 422
+
+
 def test_feedback_note_over_max_length_rejected():
     """feedback_note > 2000 chars → 422 (Pydantic max_length constraint)."""
     creator = _make_creator()

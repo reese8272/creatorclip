@@ -1,4 +1,49 @@
-# notify — assessed 2026-07-20 (post-fix)
+# notify — assessed 2026-07-20 (post-fix); delta re-assessed 2026-07-29
+
+## Delta 2026-07-29 (ready-pass, branch w3/ready-pass-closeout)
+
+Only in-slice change since e92b93a: `notify/copy.py` (16-line diff, landed in W1/W2 merge
+a50b332 lineage) — the `trial_ending` and `balance_low` bodies became f-strings that bind
+`settings.APP_BASE_URL` at import time (`from config import settings`, copy.py:28;
+`{settings.APP_BASE_URL}/pricing` at copy.py:68-69, 75).
+
+- **"Only imported by tests" claim — VERIFIED TRUE.** Repo-wide grep: the only importers of
+  `notify.copy` are tests/test_mailer.py:611, tests/test_compliance_no_virality.py:224,
+  tests/test_notifications_triggers.py:573,599, tests/test_lifecycle_email.py:265.
+  `notify/__init__.py` exports nothing, `notify/mailer.py` and `worker/tasks.py` never import
+  it. The change is inert in production.
+- **Import-time binding hazard — none in practice.** `config.settings` is a module-level
+  pydantic-settings singleton instantiated on first import; `notify/mailer.py:51` already
+  binds `settings.APP_BASE_URL` into the Jinja `app_url` global at import time (the cited
+  precedent is real). Settings are frozen at process start, so import-time == call-time in
+  prod. Test-env leakage is bounded: the unit lane renders
+  `http://localhost:8000/pricing` (APP_BASE_URL default, config.py:573), and no test asserts
+  exact body text — the COPY-importing tests scan for virality phrases
+  (test_compliance_no_virality.py, test_lifecycle_email.py:265-271) or check template-file
+  existence (test_mailer.py:611-625), so no brittleness. One latent note: if COPY is ever
+  wired into a production render path, a test that monkeypatches `settings.APP_BASE_URL`
+  after import would see the stale bound value — same caveat mailer.py's `app_url` global
+  already carries.
+- **No production gap behind the fix**: the real trial_ending/balance_low email links were
+  already absolute via `{{ app_url }}/pricing` in the Jinja templates
+  (notify/templates/trial_ending.{txt,html}:7/16, balance_low.{txt,html}:7/15); the in-app
+  `_COPY` fallback bodies (worker/tasks.py:5510-5519) carry no URL at all and use a relative
+  `link_url` of `/app/dashboard`, which is correct in-app. So the wave's effort landed
+  entirely in dead code — the first carry-forward cleanup below gets sharper, not resolved:
+  copy.py's docstring still falsely claims Jinja templates do `from notify.copy import COPY`
+  (copy.py:10-14 — templates cannot execute Python imports), and the NEW paragraph
+  (copy.py:20-23) claims render-safety for a render path that does not exist.
+- No other in-slice change (`git diff e92b93a..HEAD -- notify/` touches only copy.py);
+  mailer, dedupe, templates, and the worker caller are byte-identical to the 2026-07-20 run.
+
+**Delta verdict: clean (unchanged)** — the only change is a correct-but-inert edit to dead
+test-only code; all four 2026-07-20 cleanups stand, with the copy.py one now reading: delete
+copy.py and repoint the four test files at the templates, or actually wire it in as the
+single copy source — polishing it while dead just deepens the triplication.
+
+---
+
+# Assessment of record — 2026-07-20 (post-fix)
 
 **Post-fix status:** clean, unchanged in-slice — `git diff ca3305c..e92b93a -- notify/` is
 empty; the only wave touch was `tests/test_mailer.py` (Issue 358 dummy-Fernet-key fixture

@@ -1,77 +1,86 @@
-# billing — assessed 2026-07-20 (post-fix)
+# billing — assessed 2026-07-29 (ready-pass delta)
 
 Slice: `billing/ledger.py`, `billing/packs.py`, `billing/refund.py`,
 `billing/spend_guard.py`, `billing/stripe_client.py`, `billing/__init__.py` (empty).
-Re-assessment after the two fix waves merged since this morning
-(`git diff ca3305c..e92b93a`). Diff scrutiny: `spend_guard.py` (+17/-8, commit 2279720
-spend-latch fix) and `ledger.py` (+2, opus tier branch, commit 9bd8105). Every prior
-finding re-verified against HEAD.
+Delta re-assessment on `w3/ready-pass-closeout` (deployed prod content) after the
+2026-07-29 user-approved money-path ready-pass. Diff scrutiny vs the 2026-07-20-clean
+baseline (`git diff e92b93a..HEAD -- billing/`): only `ledger.py` changed (+9, commit
+452a700 w2/billing-audit). Money-path rigor applied: idempotency under retries, spend-guard
+choke-point integrity, and the 1h-TTL multiplier math all re-traced by reading.
 
-## Resolved since this morning's assessment
+## 2026-07-29 ready-pass delta
 
-- **[was SEV2] global trip-latch set before the kill-switch flip — FIXED.**
-  `billing/spend_guard.py:337-355`: the `_flip_llm_flag` + `_emit_spend_event` pair is now
-  wrapped in `try/except`; on any exception the latch is deleted (`await
-  r.delete(_TRIP_LATCH_KEY)`) before re-raising, so the next `record_spend` call
-  re-attempts the flip instead of the breach going unenforced for the full
-  `SPEND_COOLDOWN_TTL_S` (3600s) window. Ordering verified correct:
-  - The `raise` propagates to `record_spend`'s catch-all, which fails open without
-    surfacing to the caller — the documented posture, and exactly what the regression test
-    asserts (no raise, latch released, retry re-acquires and flips:
-    `tests/test_spend_guard.py:179-191`
-    `test_failed_flag_flip_releases_latch_so_next_call_retries`).
-  - Releasing the latch on `_emit_spend_event` failure (after a successful flip) can cause
-    a second flip attempt on the next call — harmless because `set_flag` is an idempotent
-    upsert, and the code comment says so.
-  - Residual edge (accepted, not a finding): if `r.delete` itself fails, Redis is down —
-    in which case the spend counters themselves fail open, so the stale latch is moot.
+**What changed:** `record_llm_usage` gained a keyword-only
+`cache_write_multiplier: float | None = None` (ledger.py:177-178) threaded verbatim into
+`_estimate_cost_usd` (ledger.py:212). `None` falls through to
+`settings.COST_CACHE_WRITE_MULTIPLIER` (1.25×, the 5-min-TTL default); callers pass `2.0`
+for ttl:"1h" cache writes.
 
-## New in the diff — verified correct
+**Verified correct (by reading, not assuming):**
 
-- `billing/ledger.py:167-168` — `_model_tier` gained the `opus-tier` branch for
-  `COST_PER_MTOK_IN_OPUS`. **Consistency with `chat/runner._chat_model_rates`
-  verified:** same tier vocabulary (`haiku-tier`/`sonnet-tier`/`opus-tier`/`other`), and
-  no rate collision — the three input rates compared are distinct (3.0 / 1.0 / 5.0; the
-  Opus input rate 5.0 equals only the Haiku *output* rate, which `_model_tier` never
-  compares). Opus list price ($5 in / $25 out per MTok, `claude-opus-4-8`) confirmed
-  against the /claude-api skill model reference (read 2026-07-20); constants documented in
-  `.env.example:32-33`.
+- **Backward compatibility / missed callers.** The new param is keyword-only with a `None`
+  default — every pre-existing positional caller is unaffected. Repo grep confirms the
+  callers that DO thread it gate on real evidence: `routers/clips.py:1297,1397,1509` and
+  `worker/tasks.py:4474,4698` pass `2.0 if usage.get("cache_1h") else None`, where
+  `cache_1h` is produced by `knowledge.util.has_1h_cache_marker(system)` — computed from
+  the ACTUAL system blocks sent (marker attached only when the floor-gated
+  `dna_system_block` prefix cleared the 1024-token cache floor), so the 2.0 premium is
+  charged exactly when a 1h write was requested, never when the marker was omitted.
+  `clip_engine/scoring.py:389` gates on the equivalent `prefix_clears_floor`. Pinned by
+  `tests/test_usage_ledger.py:154-171`, `tests/test_thumbnails.py:575,608`,
+  `tests/test_knowledge_util.py`, `tests/test_scoring.py:397-446`.
+- **Math direction is safe.** `_estimate_cost_usd` prices ALL `cache_creation_tokens` at
+  the single multiplier; a hypothetical request mixing a 1h and a 5-min marker would bill
+  the 5-min share at 2.0× — over-estimates against the spend guard, never under-bills.
+- **Double-billing / idempotency.** `record_llm_usage` remains 1:1 with actual LLM spend:
+  request-path callers bill once per completed inference; the worker helpers bill after
+  the call inside the task body; `chat_respond` is `max_retries=0` so no Celery re-bill.
+  `increment_usage` is intentionally additive (upsert accumulator), and the money-credit /
+  deduction idempotency (UNIQUE `stripe_session_id` / `video_id` + SAVEPOINT) is untouched
+  by this diff.
+- **Choke-point integrity.** Spend guard (`record_spend`) and the cost metric still run in
+  their own try before the ledger write, so a DB failure cannot blind the Issue-290 caps;
+  the new multiplier flows into the SAME `cost` all three rails see (ledger.py:205-224).
+- **New billed callers** (`chat/intake.py` run_intake_turn, `routers/thumbnails.py`
+  patterns path) enter through this unchanged choke point, and the repo-wide AST sweep in
+  `tests/test_usage_coverage.py` (`_ANTHROPIC_CALL_SITES` + discovery visitor) now fails
+  CI on any future Anthropic call site without mapped billing evidence — a strong
+  structural guard for the unbilled-LLM leak class.
 
-## Findings (all carry-forward cleanups)
+## Findings (all carry-forward cleanups; no new defects in the delta)
 
 - [cleanup] billing/ledger.py:50-54 — `send_notification.delay(...)` inside the
-  `after_commit` listener is sync Redis/broker I/O executed on the event-loop thread
-  during `await session.commit()`. Bounded today because `deduct_for_video` is only called
-  from the worker's dedicated loop, not the FastAPI request loop | fix (consistency /
-  future router callers): offload via
-  `asyncio.get_running_loop().run_in_executor(None, lambda: send_notification.delay(...))`
-  and hoist the import out of the per-pair loop.
+  `after_commit` listener is sync broker I/O on the event-loop thread during
+  `await session.commit()`. Bounded today (worker-loop-only caller) | fix: offload via
+  `asyncio.get_running_loop().run_in_executor(None, lambda: send_notification.delay(...))`.
 - [cleanup] .env.example — `COST_CACHE_WRITE_MULTIPLIER` (consumed at
-  billing/ledger.py:147) is still absent, though sibling `COST_CACHE_READ_MULTIPLIER` is
-  documented. Safe default exists (config.py = 1.25) so not fail-fast-critical | fix: add
-  `COST_CACHE_WRITE_MULTIPLIER=1.25  # cache-write multiplier (1.25× base input rate,
-  5-min TTL; scoring passes 2.0 for 1h TTL)`.
+  billing/ledger.py:147) is still undocumented, though sibling
+  `COST_CACHE_READ_MULTIPLIER` is (.env.example:35). Slightly more load-bearing now that
+  five features thread the 1h override against this default | fix: add
+  `COST_CACHE_WRITE_MULTIPLIER=1.25  # 5-min-TTL cache-write multiplier; 1h-TTL callers
+  pass 2.0 explicitly`.
 - [cleanup] billing/ledger.py:174 — `record_llm_usage(usage: dict, ...)` still takes a
   bare unparameterized `dict` on the cost-accounting path; keys are fixed | fix:
-  `dict[str, int]` or a small `TypedDict`.
+  `dict[str, int]` or a small `TypedDict` (now also carrying the `cache_1h` bool flag).
 
 ## Rubric coverage
 
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — sessions via context manager; `_STRIPE`/Redis singletons; deduct/grant/refund idempotent (UNIQUE backstops + SAVEPOINT); balance-low notify transactional-outbox-correct |
-| 2 Concurrency & scale | prior SEV2 (latch-before-flip stall window) FIXED + tested; 1 cleanup (`.delay` in listener, worker-loop-only today); Stripe retries active; spend counters one atomic Lua + mget |
-| 3 Security & compliance | ok — tenant-scoped idempotency key; webhook signature verify; every query creator-/video-scoped; Redis spend keys embed creator_id; no secret/PII in logs; no virality promise |
+| 1 Resource lifecycle | ok — unchanged; sessions via context manager, singletons, UNIQUE+SAVEPOINT idempotency intact |
+| 2 Concurrency & scale | ok — 1 carry-forward cleanup (`.delay` in listener); spend counters still one atomic Lua + mget; latch-release fix (7-20) unregressed |
+| 3 Security & compliance | ok — no new logging surface in the diff; tenant-scoped keys/queries unchanged; no virality promise |
 | 4 Clip-quality | n/a (not a clip module) |
-| 5 Anthropic SDK | n/a — module prices token-usage dicts, makes no LLM call; new opus tier priced per the /claude-api price book |
-| 6 Cleanliness & typing | 2 cleanups (bare `usage: dict`; listener `.delay`). Otherwise typed, no TODO/print/dead code |
-| 7 Error handling / API | n/a (routers own the surface); fail-open posture on Redis errors documented and warn-once |
-| 8 Config & paths | 1 cleanup (`.env.example` COST_CACHE_WRITE_MULTIPLIER gap); new OPUS constants ARE in `.env.example` |
+| 5 Anthropic SDK | n/a — module prices usage dicts; 1h-write 2.0× premium matches the Anthropic pricing model already cited in config.py:152 |
+| 6 Cleanliness & typing | 2 carry-forward cleanups (bare `usage: dict`; listener `.delay`); new param typed and documented |
+| 7 Error handling / API | n/a (routers own the surface); best-effort/fail-open posture unchanged and documented |
+| 8 Config & paths | 1 carry-forward cleanup (`.env.example` COST_CACHE_WRITE_MULTIPLIER gap) |
 
 ## Module verdict
 
-clean — the morning's SEV2 (trip-latch set before a possibly-failing kill-switch flip,
-silencing the breaker for the 1h TTL) is verifiably fixed with the exact
-release-on-failure ordering recommended, plus a regression test; the new opus tier branch
-is rate-consistent with chat's mapping. Three low-risk carry-forward cleanups remain. No
-BLOCKER, no cross-tenant leak.
+clean — the delta is a minimal, backward-compatible keyword-only multiplier correctly
+threaded into the cost math; the 2.0-only-when-attached contract is verified end-to-end
+(producer flag computed from the actual sent blocks, five call sites gate on it, tests pin
+both directions), no double-billing path exists (additive usage upsert is 1:1 with real
+spend; money mutations keep their UNIQUE idempotency keys), and the spend-guard choke
+point sees the identical USD. Three low-risk carry-forward cleanups remain.

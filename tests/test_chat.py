@@ -260,42 +260,8 @@ async def test_runner_flags_max_tokens_truncation(_patch_runner):
     assert usage["truncated"] == 1
 
 
-def test_chat_model_rates_follow_configured_model(monkeypatch):
-    """Billing rates + tier label derive from ANTHROPIC_MODEL_CHAT, with a safe
-    (never-under-billing) fallback for unknown model families."""
-    from chat import runner
-    from config import settings
-
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-haiku-4-5")
-    assert runner._chat_model_rates() == (
-        settings.COST_PER_MTOK_IN_HAIKU,
-        settings.COST_PER_MTOK_OUT_HAIKU,
-        "haiku-tier",
-    )
-
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-sonnet-4-6")
-    assert runner._chat_model_rates() == (
-        settings.COST_PER_MTOK_IN_SONNET,
-        settings.COST_PER_MTOK_OUT_SONNET,
-        "sonnet-tier",
-    )
-
-    # Opus family: bills at the Opus price-book rates, not the fallback (Issue 361).
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-opus-4-8")
-    assert runner._chat_model_rates() == (
-        settings.COST_PER_MTOK_IN_OPUS,
-        settings.COST_PER_MTOK_OUT_OPUS,
-        "opus-tier",
-    )
-
-    # Unknown family: falls back to the highest configured rate + "other" label.
-    monkeypatch.setattr(settings, "ANTHROPIC_MODEL_CHAT", "claude-mystery-9")
-    rate_in, rate_out, label = runner._chat_model_rates()
-    assert (rate_in, rate_out) == (
-        settings.COST_PER_MTOK_IN_OPUS,
-        settings.COST_PER_MTOK_OUT_OPUS,
-    )
-    assert label == "other"
+# Per-family rate resolution now lives in billing.ledger.model_rates (shared
+# with intake and the clip-titles chat tool) — pinned in tests/test_usage_ledger.py.
 
 
 async def test_runner_bills_at_configured_model_rates(_patch_runner):
@@ -524,6 +490,53 @@ def test_suggest_clip_titles_schema() -> None:
     assert "clip_id" in tool["input_schema"].get("required", [])
     props = tool["input_schema"]["properties"]
     assert props["clip_id"]["type"] == "string"
+
+
+async def test_suggest_clip_titles_tool_bills_usage(monkeypatch) -> None:
+    """The tool's nested clip-titles LLM call must write the usage ledger
+    (2026-07-29 assess: usage was discarded — unbilled and invisible to the
+    Issue-290 spend guard). Mirrors the routers/clips.py caller: configured
+    clip-titles model rates + 2x multiplier on 1h cache writes."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from chat.tools import _suggest_clip_titles
+    from config import settings
+
+    creator_id = uuid.uuid4()
+    clip = MagicMock()
+    clip.id = uuid.uuid4()
+    clip.video_id = uuid.uuid4()
+
+    session = AsyncMock()
+    session.scalar = AsyncMock(side_effect=[clip, None])  # clip lookup, then transcript
+    session.get = AsyncMock(return_value=None)  # creator row -> default channel title
+
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 40,
+        "cache_read": 700,
+        "cache_creation": 900,
+        "cache_1h": True,
+    }
+    monkeypatch.setattr(
+        "knowledge.clip_titles.generate_clip_title_suggestions",
+        AsyncMock(return_value=({"titles": ["T1"]}, usage)),
+    )
+    monkeypatch.setattr("dna.profile.get_active", AsyncMock(return_value=None))
+    ledger = AsyncMock()
+    monkeypatch.setattr("billing.ledger.record_llm_usage", ledger)
+
+    out = await _suggest_clip_titles(creator_id, session, {"clip_id": str(clip.id)})
+
+    assert out["available"] is True
+    ledger.assert_awaited_once()
+    args = ledger.await_args
+    assert args.args[0] == creator_id
+    assert args.args[1] is usage
+    # Default ANTHROPIC_MODEL_CLIP_TITLES is sonnet-family.
+    assert args.args[2] == settings.COST_PER_MTOK_IN_SONNET
+    assert args.args[3] == settings.COST_PER_MTOK_OUT_SONNET
+    assert args.kwargs["cache_write_multiplier"] == 2.0
 
 
 def test_all_tools_no_creator_id_and_match_executors() -> None:

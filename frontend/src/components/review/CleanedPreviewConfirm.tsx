@@ -29,6 +29,11 @@ export function CleanedPreviewConfirm({
     try {
       await api(`/clips/${clip.id}/clean/confirm`, { method: 'POST' })
       onConfirmed()
+      // Drop the poll cache outright: confirm nulls cleaned_render_uri
+      // server-side, and within the global 30s staleTime a cached entry whose
+      // old URI is still set would make the next trim/clean's poll render the
+      // previous version instantly and never poll for the new render.
+      queryClient.removeQueries({ queryKey: ['clips-clean-poll', clip.video_id] })
       queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
     } catch {
       onError('Swap failed — try again.')

@@ -497,7 +497,7 @@ async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp
     dna_brief = dna.brief_text if dna else None
 
     try:
-        result, _usage = await generate_clip_title_suggestions(
+        result, usage = await generate_clip_title_suggestions(
             channel_title,
             dna_brief,
             clip_transcript,
@@ -505,6 +505,22 @@ async def _suggest_clip_titles(creator_id: uuid.UUID, session: AsyncSession, inp
     except Exception as exc:  # noqa: BLE001 — surface as tool error, not propagate
         logger.warning("suggest_clip_titles tool failed clip=%s err=%s", clip_uuid, exc)
         return {"available": False, "message": "Title generation failed; try again later."}
+
+    # Bill the nested LLM call (2026-07-29 assess: usage was discarded here, so
+    # the tool path was unbilled and invisible to the Issue-290 spend guard).
+    # Mirrors the routers/clips.py caller; rates follow the configured
+    # ANTHROPIC_MODEL_CLIP_TITLES and 1h cache writes bill 2x base input.
+    from billing.ledger import model_rates, record_llm_usage
+    from config import settings
+
+    rate_in, rate_out, _tier = model_rates(settings.ANTHROPIC_MODEL_CLIP_TITLES)
+    await record_llm_usage(
+        creator_id,
+        usage,
+        rate_in,
+        rate_out,
+        cache_write_multiplier=2.0 if usage.get("cache_1h") else None,
+    )
 
     return {"available": True, "clip_id": str(clip.id), **result}
 

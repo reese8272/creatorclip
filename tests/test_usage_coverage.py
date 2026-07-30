@@ -164,8 +164,14 @@ _ANTHROPIC_CALL_SITES: dict[tuple[str, str], list[tuple[str, str, str]]] = {
         ("worker/tasks.py", "_generate_thumbnail_concepts_async", "_patterns_usage,"),
         ("routers/thumbnails.py", "get_thumbnail_patterns", "record_llm_usage"),
     ],
+    # Two callers, each billing its own path (the chat-tool caller discarded
+    # usage until the 2026-07-29 assess fix).  Note: the sweep discovers LLM
+    # call sites (messages.create/stream + transport helpers), not callers of
+    # usage-returning producers — a NEW caller of a producer must be added
+    # here manually with its billing evidence.
     ("knowledge/clip_titles.py", "generate_clip_title_suggestions"): [
         ("routers/clips.py", "get_clip_title_suggestions", "record_llm_usage"),
+        ("chat/tools.py", "_suggest_clip_titles", "record_llm_usage"),
     ],
     ("knowledge/clip_captions.py", "generate_clip_caption_hooks"): [
         ("routers/clips.py", "get_clip_caption_hooks", "record_llm_usage"),

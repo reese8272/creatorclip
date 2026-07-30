@@ -246,6 +246,49 @@ def test_render_gate_passes_when_enabled(client) -> None:
     assert resp.status_code == 404
 
 
+# ── Gate: llm_generation + spend guard on identity intake (2026-07-29 assess) ──
+
+_INTAKE_BODY = {"history": [{"role": "user", "content": "hi"}]}
+
+
+def test_identity_chat_gate_blocks_when_llm_disabled(client: TestClient) -> None:
+    """Intake is a billed LLM route — the kill switch must stop its spend too."""
+    _seed_cache("llm_generation", False)
+    app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
+
+    resp = client.post("/creators/me/identity/chat", json=_INTAKE_BODY)
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "llm_generation_disabled"
+
+
+def test_identity_chat_blocked_by_spend_cooldown_returns_429(client: TestClient) -> None:
+    _seed_cache("llm_generation", True)
+    app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
+
+    with patch(
+        "billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(True, 1800))
+    ):
+        resp = client.post("/creators/me/identity/chat", json=_INTAKE_BODY)
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "1800"
+
+
+def test_identity_chat_gates_pass_when_enabled_and_under_cap(client: TestClient) -> None:
+    _seed_cache("llm_generation", True)
+    app.dependency_overrides[get_current_creator] = override_current_creator(_make_creator())
+
+    with (
+        patch("billing.spend_guard.creator_block_status", new=AsyncMock(return_value=(False, 0))),
+        patch(
+            "chat.intake.run_intake_turn",
+            new=AsyncMock(return_value={"reply": "What's your channel about?", "proposal": None}),
+        ),
+    ):
+        resp = client.post("/creators/me/identity/chat", json=_INTAKE_BODY)
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "What's your channel about?"
+
+
 # ── Gate: signup (OAuth callback) ──────────────────────────────────────────────
 
 

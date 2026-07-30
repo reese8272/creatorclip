@@ -1,53 +1,66 @@
-# clip_engine — assessed 2026-07-20 (post-fix)
+# clip_engine — assessed 2026-07-29 (delta re-assessment, w3/ready-pass-closeout)
 
 Slice: candidates.py, captions.py, edits.py, filler.py, ranking.py, reframe.py,
 render.py, scoring.py, summary_select.py, window.py, __init__.py.
 
-Method note: re-verified every finding from this morning's 2026-07-20 assessment
-against HEAD (`git diff ca3305c..HEAD -- clip_engine/` touched ONLY ranking.py —
-the Issue 361 race backstop). The persist_ranked_clips fix was traced end to
-end: migration 0046, the models.py constraint, both call sites, the loser path,
-and the DEFERRABLE interaction with rerank_with_preference's rank permutation.
+Method note (2026-07-29 delta): `git log 1ed2473..HEAD -- clip_engine/` touches
+ONLY candidates.py (f68fd39, peak-detection DRY) and scoring.py (f6839bd,
+midpoint context rule); tests added in 99bfb29 (end_s clamp) + f6839bd
+(straddler regression). Each delta was verified against the pre-change source
+line by line; all other 2026-07-20 findings were re-checked at their current
+locations (unchanged). `pytest tests/test_clip_engine.py tests/test_scoring.py`
+= 83 passed on this branch.
 
-## Resolved since this morning (2026-07-20 AM)
+## Delta 2026-07-29 — resolved since 2026-07-20
 
-- **[was SEV2] persist_ranked_clips check-then-insert with no DB backstop** —
-  FIXED (commit cd872ca, Issue 361). Verified in full:
-  - Migration `alembic/versions/0046_race_unique_backstops.py` builds
-    `uq_clips_video_rank UNIQUE (video_id, rank)` CONCURRENTLY (autocommit
-    block, online-safe), with a dedupe-first DELETE keeping the
-    earliest-created row per (video_id, rank) so the build cannot fail on
-    pre-existing race debris; then promotes it catalog-only via
-    `ADD CONSTRAINT ... UNIQUE USING INDEX ... DEFERRABLE INITIALLY DEFERRED`.
-    Mirrored in models.py:618-633 so metadata matches the DB.
-  - **DEFERRABLE trace (the load-bearing question):** DEFERRED is required
-    because `rerank_with_preference` (ranking.py:100-105) permutes rank values
-    across the just-inserted set via per-row UPDATEs — an IMMEDIATE check would
-    raise on the transient swap during flush. Deferred, the check runs at each
-    COMMIT. Commit 1 (ranking.py:238) checks the freshly inserted set — this is
-    where the race loser fails. Commit 2 (ranking.py:255, after rerank) checks
-    a strict bijection of the winner's own rows (sort + reassign 1..N over the
-    same list), which cannot conflict; no third party can insert between the
-    two commits because `load_existing_clips` now sees the committed rows. The
-    only production writer of `Clip.rank` is this module (verified by grep:
-    ranking.py:105 and the insert at :232); NULL ranks are distinct and never
-    conflict. **No path exists on which the deferred check misfires.**
-  - **Loser path:** commit 1 raises `IntegrityError` → `await
-    session.rollback()` → `return await load_existing_clips(...)`
-    (ranking.py:237-248). The loser never touches its rolled-back ORM objects
-    (no refresh/rerank — the MissingGreenlet trap is avoided), and the
-    post-rollback re-select opens a fresh transaction that sees the winner's
-    committed rows, so it correctly returns the winner's set (non-empty by
-    construction: the constraint only fires because the winner committed).
-    `session.info["creator_id"]` survives rollback (it is session state, not
-    transaction state), so the RLS GUC re-arms for the re-select.
-  - **Tests:** unit loser-path test `tests/test_ranking_persist_race.py`
-    (asserts rollback + winner set returned + no refresh of rolled-back rows)
-    AND a real-Postgres concurrent test
-    `tests/test_generate_clips_idempotency_integration.py::test_concurrent_persist_inserts_exactly_one_clip_set`
-    (two sessions `asyncio.gather`-race the same video; asserts exactly one
-    set survives and both callers converge on the same clip ids). This is
-    exactly the shape the morning finding specified.
+- **[was cleanup] candidates.py peak-detection duplication — FIXED (f68fd39),
+  behavior-preservation verified.** `_detect_peaks(timeline)` (candidates.py:175-194)
+  now owns `build_signal_array → resolution_s → min_distance_samples →
+  find_peaks(distance, prominence=_PEAK_PROMINENCE)`; both callers keep their
+  exact prior semantics:
+  - `derive_skip_reason` (:216): old code returned NO_SIGNAL before ever calling
+    find_peaks when the signal was empty; the helper mirrors this by returning
+    `(times, signal, np.array([], dtype=int), {})` without invoking find_peaks,
+    and the caller's `len(signal)==0` check fires first. For non-empty signals
+    the distance/prominence math is character-identical (`_PEAK_PROMINENCE=0.5`
+    == the old literal). Skip-reason priority order and all four reason strings
+    unchanged — identical signals produce identical skip reasons.
+  - `extract_candidates` (:261): the two early returns were merged into
+    `len(signal)==0 or len(peak_indices)==0` — equivalent, and `times`/
+    `properties` are only consumed after that guard. `properties["prominences"]`
+    is always present when prominence is passed, so the `.get` fallback is as
+    dead/alive as before.
+- **[was cleanup] scoring.py `_transcript_context._gather` straddling-segment
+  gap — FIXED (f6839bd), boundary correctness verified.** Selection switched
+  from full containment to midpoint with half-open `[start_min, end_max)`
+  bounds (scoring.py:215-227). The three sections `[before_start, setup_s)`,
+  `[setup_s, end_s)`, `[end_s, after_end)` now form a strict partition:
+  - a segment whose midpoint lands EXACTLY on setup_s or end_s is assigned to
+    exactly one section (the right-hand one, start-inclusive) — no double count,
+    no drop; the regression test asserts `count("straddles setup") == 1`;
+  - empty sections still collapse to `""` and are omitted from the joined
+    output (`if before:` guards unchanged); `setup_s=0` degenerates the BEFORE
+    range to `[0,0)` which correctly matches nothing;
+  - at the OUTER edges a straddler whose midpoint falls inside the context
+    window is now included where full containment excluded it — the intended
+    direction (more context, never less). Known tradeoff, acceptable: a
+    pathologically coarse segment (much longer than a section) contributes all
+    its text to the single section holding its midpoint; typical ASR segments
+    are seconds long vs the 30–90 s sections, and this is exactly the fix shape
+    the 2026-07-20 assessment specified. captions.py keeps its own (correct)
+    overlap semantics for timing; the two serve different purposes.
+- **[was cleanup] end_s-clamp regression test — LANDED (99bfb29).**
+  `test_extract_candidates_end_clamped_to_duration`: forward snap latches a
+  terminal-punct word ending at 112.5 > duration 111.0 and asserts the clamp
+  back to exactly 111.0 (commit verified the raw snap reaches 112.5 pre-clamp,
+  so the test fails without the fix). Covers the clamp branch; the defensive
+  drop branch is unreachable by construction, per 80/20 left untested.
+- **Eval-harness integrity re-confirmed:** `SCENARIO_FLOOR = 15`
+  (tests/test_clip_engine.py:201) with 16 scenario yamls on disk +
+  ranking fixture; the setup-before-peak invariant is enforced three ways —
+  `test_setup_always_before_peak` (:180), the per-scenario
+  `all_setup_before_peak` gate (:333), and the post-snap invariant test (:537).
+  All green in this run.
 
 ## Findings
 
@@ -55,11 +68,11 @@ and the DEFERRABLE interaction with rerank_with_preference's rank permutation.
   needs-runtime-confirmation) the sendcmd line format
   `"<t> [enter] crop x <v>;"` (single instantaneous timestamp + `[enter]`
   flag, build_sendcmd_script) remains unverified on a real ffmpeg build; the
-  whole path is still behind `ACTIVE_SPEAKER_REFRAME_ENABLED=False`. Unchanged
-  since the morning assessment | fix: run one gated render on real media in the
+  whole path is still behind `ACTIVE_SPEAKER_REFRAME_ENABLED=False`. No diff
+  to reframe.py this pass | fix: run one gated render on real media in the
   render image and pin the produced crop-x sequence before the flag ever flips.
 
-- [cleanup] clip_engine/ranking.py:239 — (new, from the fix) the
+- [cleanup] clip_engine/ranking.py:239 — (carry-forward) the
   `except IntegrityError` catch is unqualified: an FK violation at commit-time
   flush (e.g. the video cascade-deleted by account erasure mid-generation)
   would be misread as "lost the concurrent-generation race", log the misleading
@@ -67,52 +80,38 @@ and the DEFERRABLE interaction with rerank_with_preference's rank permutation.
   fix: inspect `exc.orig` for `uq_clips_video_rank` and re-raise (or log a
   distinct message) when it is any other constraint.
 
-- [cleanup] clip_engine/candidates.py:193-207 — (carry-forward)
-  `derive_skip_reason` still re-derives the exact `find_peaks(signal,
-  distance=max(1, int(MIN_CLIP_S/resolution_s)), prominence=0.5)` setup that
-  `extract_candidates` owns (DRY) | fix: extract `_detect_peaks(timeline)` and
-  call from both.
-
 - [cleanup] clip_engine/reframe.py:50-51 — (carry-forward) dead
-  `if TYPE_CHECKING: pass` block | fix: delete. Also `frame_width` is still an
-  unused parameter of `_detect_faces_mediapipe` | fix: drop it (update the call
-  site).
+  `if TYPE_CHECKING: pass` block | fix: delete. Also `frame_width` remains an
+  unused parameter of `_detect_faces_mediapipe` (signature + docstring only,
+  re-verified) | fix: drop it (update the call site).
 
-- [cleanup] clip_engine/render.py:499-502 — (carry-forward) the burned-in
-  `subtitles={ass_path}:fontsdir={_FONTS_DIR}` filter arg is still built by
-  f-string with no libass escaping of `:` `,` `'` `\` in the path (low risk:
-  worker-created /tmp paths, list argv, no shell) | fix: quoted form via a
-  shared `_escape_ffmpeg_filter_path()` helper (also for the `sendcmd=f=` arg).
-
-- [cleanup] clip_engine/scoring.py:215-221 — (carry-forward)
-  `_transcript_context._gather` selects segments by full containment, so a
-  segment straddling `setup_s` is dropped from BOTH [BEFORE] and [CLIP] —
-  the clip's opening sentence can vanish from the LLM context.
-  captions.py:206-210 already uses correct overlap semantics | fix: switch
-  `_gather` to overlap selection, assigning a straddler by segment midpoint.
-
-- [cleanup] tests/test_clip_engine.py — (carry-forward) the end_s-clamp fix
-  (candidates.py:350-360) still has no regression test / eval scenario (no
-  scenario with a peak in the final 30s and word `end` values past
-  `duration_s`; the 2026-07-20 diff added no clip_engine tests beyond the race
-  pair) | fix: add a unit test where forward-snap words extend past
-  `duration_s` and assert `end_s <= duration_s` or the candidate is dropped.
+- [cleanup] clip_engine/render.py:465,502 — (carry-forward, **DEFERRED by
+  decision** — OFF_COURSE_BUGS.md 2026-07-29 row: SEV4-theoretical,
+  multi-level ffmpeg escaping semantics, not unit-test-guardable, worker-created
+  /tmp paths, list argv, no shell) the `subtitles={ass_path}:fontsdir=` and
+  `sendcmd=f={sendcmd_path}` filter args are f-strings with no libass/filter
+  escaping. Stays deferred; revisit only if user-influenced paths ever reach
+  these filters.
 
 ## Rubric coverage
 | Category | Status |
 |---|---|
-| 1 Resource lifecycle | ok — the double-insert race now has a DB backstop (uq_clips_video_rank, DEFERRABLE, migration 0046) with IntegrityError→rollback→return-winner; "safe to run twice concurrently" verified by a real-Postgres gather-race test. Temp artifacts unlinked in `finally`; MediaPipe detector closed in `finally`; `_ANTHROPIC` module-level singleton; ledger session via context manager |
-| 2 Concurrency & scale | ok — no DB session held across the 30–120 s LLM call on either call path; CPU work offloaded via `asyncio.to_thread`; DEFERRED constraint check adds no lock beyond the commit-time uniqueness probe; render fns sync (Celery); recap render bounded by a duration-derived timeout |
-| 3 Security & compliance | ok — creator_id predicate structural on the clips guard (backs RLS; loser re-select re-arms the GUC via surviving session.info); no token/PII in logger calls; parameterized ORM only; no virality language; transcript context via `wrap_untrusted` |
-| 4 Clip-quality | 1 cleanup (straddling-segment context gap, carry-forward) — setup anchored by backward look from peak (#2); Clean Context Boundary snapping + duration clamp (#12); every score path cites a valid named principle; DNA-first with explicit signal-only fallback; loser-path return preserves the winner's ranking untouched (never a half-blended set) |
-| 5 Anthropic SDK | ok — two-block cached system with 1024-token floor guard; tokens + cache tiers logged; `max_tokens=1200`; truncation warned; fenced-JSON extraction |
-| 6 Cleanliness & typing | 6 cleanups (5 carried forward + 1 new broad-catch nit) — no TODO/print/debug; signatures typed |
+| 1 Resource lifecycle | ok — unchanged this delta; the uq_clips_video_rank DEFERRABLE backstop + loser-path trace from 2026-07-20 stands (no diff to ranking.py); temp artifacts unlinked in `finally`; `_ANTHROPIC` singleton; ledger session via context manager |
+| 2 Concurrency & scale | ok — delta is pure-CPU list comprehension / find_peaks refactor, no new async or DB surface; no session held across the LLM call; CPU offloaded via `asyncio.to_thread` |
+| 3 Security & compliance | ok — no new logger lines, no token/PII surface in the delta; transcript context still routed through `wrap_untrusted` (the midpoint change alters WHICH segments feed it, not how they are wrapped); no virality language |
+| 4 Clip-quality | ok — the straddling-segment context gap is FIXED (strict-partition midpoint rule); setup anchored by backward look from peak (#2); Clean Context Boundary snapping + duration clamp (#12) now regression-tested; every score path cites a named principle; eval floor 15/16 scenarios + setup-before-peak invariant green |
+| 5 Anthropic SDK | ok — untouched this delta; two-block cached system with 1024-token floor guard; tokens + cache tiers logged; `max_tokens=1200` |
+| 6 Cleanliness & typing | 3 cleanups (2 carry-forward + 1 deferred-by-decision); the candidates.py DRY item is resolved; `_detect_peaks` fully typed; no TODO/print/debug in the delta |
 | 7 Error handling / API | n/a (no router/HTTP surface in this slice) |
-| 8 Config & paths | ok — no config changes in this diff; all paths absolute worker-provided `Path`s |
+| 8 Config & paths | ok — no config changes; `_PEAK_PROMINENCE` is a module constant, not config (correct: it is policy, not deployment-tunable) |
 
 ## Module verdict
-NEEDS-WORK — no blocker; the morning's live SEV2 (clip idempotency race) is
-FIXED correctly (constraint + deferred-check trace clean on every path, loser
-returns the winner's set, unit + real-PG concurrent tests added); what remains
-is the gated reframe-sendcmd SEV2 (runtime confirmation before the flag flips)
-plus six cleanups, one new (unqualified IntegrityError catch in the fix).
+NEEDS-WORK — no blocker and nothing live-reachable is defective: all three
+ready-pass deltas verified correct (peak-detection dedup is exactly
+behavior-preserving; the midpoint rule is a strict half-open partition with
+edge segments assigned exactly once and empty sections handled; the end_s-clamp
+regression test genuinely exercises the clamp). What keeps the verdict at
+NEEDS-WORK is the one gated SEV2 — the reframe sendcmd format must be
+runtime-confirmed before `ACTIVE_SPEAKER_REFRAME_ENABLED` ever flips — plus two
+small cleanups and one explicitly deferred escaping item (OFF_COURSE
+2026-07-29).

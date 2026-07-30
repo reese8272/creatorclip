@@ -16,6 +16,11 @@ export function useCleanedUriPoll(
     queryKey: ['clips-clean-poll', videoId],
     queryFn: () => api<ReviewClipListResponse>(`/videos/${videoId}/clips`),
     enabled,
+    // Always refetch on (re-)enable: under the global 30s staleTime a repeat
+    // trim/clean within 30s would mount against cached data whose previous
+    // cleaned_render_uri is still set, so refetchInterval would return false
+    // and the poll would never observe the new render.
+    staleTime: 0,
     refetchInterval: (q) => {
       const clip = q.state.data?.clips.find((c) => c.id === clipId)
       return clip?.cleaned_render_uri ? false : 3000

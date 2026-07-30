@@ -325,11 +325,68 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   (`ValueError: Source video not available`), so the owner saw a generic "Render failed" and suspected
   the pipeline/uploads. The recap endpoint already had this exact pre-check; the clip render endpoint
   did not. Worker keeps its own guard for the enqueue-to-run race.
-- **Residual (not built, SPA):** clip cards/Review surface could show a distinct "source expired —
-  re-upload to render" state from the 409 detail instead of a generic mutation error; fold into the
-  next frontend error-state pass (Issue 361 tail).
+- **Residual:** ✅ CLOSED 2026-07-29 (ready-pass W1, PR #61) — the 409 detail is now structured
+  (`{"code": "source_expired", ...}`, also on the recap endpoint), `ApiError` exposes `.code`, and
+  ClipPlayer/Recap render a dedicated "source expired — re-upload to render" card (the old blanket
+  409-as-success path in ClipPlayer would have swallowed the bare-string 409 entirely).
 - **Tests:** `tests/test_render_style.py::test_render_endpoint_409_when_source_expired` (409 + detail +
   `delay` not called); existing render tests untouched-green.
+
+---
+
+## Ready-pass 2026-07-29 — shipped scope + newly filed issues (363–368)
+
+> The 2026-07-29 "100% ready" pass (PRs **#61**/**#62**, both deployed through the staging gate)
+> closed the core-loop product gaps: **publish/schedule UI** (Issue 196 frontend), **applied
+> titles/descriptions end-to-end** (migration 0047 + PATCH + publish consumes), **trim → real
+> re-render**, **source-expired UX** (362 residual), the Save-trim timebase bug, **Issue 272**
+> (visual job gating), zero test-suite event-loop noise, worker/session/advisory-lock hardening,
+> self-hosted fonts, the enqueue DRY helper, and the **approved billing fixes** (2 unbilled LLM
+> sites + 1h cache-write 2×, with a repo-wide unbilled-LLM CI guard). Full narrative:
+> `docs/PIPELINE.md`, DECISIONS 2026-07-29, OFF_COURSE 2026-07-29 rows. New issues from the pass:
+
+### Issue 363: Caption TEXT editing (edit the words burned into the render)
+- **Status:** OPEN (deliberately descoped from the ready pass by owner decision 2026-07-29) ·
+  **Wave:** W2 · **Lane:** L16 UI Core / Editor · **Size:** L · **Verify:** render-env · **Sev:** feature
+- Creators can style captions (preset/background/zoom) but cannot edit the words ffmpeg burns in.
+  Needs a caption-data store on the clip (not just `style_preset`), a text-editing surface (likely
+  the transcript editor), and re-render plumbing. Largest remaining editor gap.
+
+### Issue 364: Server-side discard for `cleaned_render_uri` (close the pending_clean_or_edit dead-end)
+- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W1 · **Lane:** L16 Review surface ·
+  **Size:** S · **Sev:** SEV3
+- "Keep original" is client-side only; a discarded clean/trim leaves `cleaned_render_uri` set so the
+  next clean/trim-render 409s until confirmed. Add a discard endpoint (clear the column + purge the
+  artifact) and wire the UI's existing discard affordance to it.
+
+### Issue 365: Vendor fonts on the static legal pages (`static/_design-tokens.css` Google Fonts @import)
+- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W1 · **Lane:** Compliance polish ·
+  **Size:** S · **Sev:** SEV3
+- The SPA is self-hosted (ready-pass W2) but tos/privacy/accessibility still @import Google Fonts —
+  the LG München GDPR IP-leak pattern on exactly the pages an EU visitor reads pre-signup. No bundler
+  for /static: vendor woff2 under `static/fonts/` + rewrite the import.
+
+### Issue 366: Test-hygiene sweep — ~20 files with unawaited-coroutine warnings + filterwarnings ratchet
+- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W2 · **Lane:** QA · **Size:** M · **Sev:** SEV3
+- Fix the ~20 remaining unawaited-coroutine RuntimeWarning emitters (incl. routers/improvement.py:123,
+  routers/clips.py:1764 mock patterns), then ratchet `filterwarnings = error::RuntimeWarning` in
+  pytest.ini so the class can't regrow. Blocked-by: nothing; the w2/test-flakes lane established the
+  fix patterns.
+
+### Issue 367: Async-Redis module-singleton hygiene (`_WORKER_REDIS`, `_aio_redis`, `_REDIS_CLIENT`)
+- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W2 · **Lane:** Backend hygiene ·
+  **Size:** S · **Sev:** SEV3
+- Three lazy async-Redis singletons have no close path/loop guard — safe in prod (one loop/process),
+  leak loop-bound connections in tests (currently disarmed via conftest `pytest_sessionfinish`).
+  Give them `register_aclose` or the loop-guard pattern.
+
+### Issue 368: Deterministic per-module coverage measurement in `run_layer0.py`
+- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W2 · **Lane:** QA & Release Eng ·
+  **Size:** S · **Sev:** SEV4
+- `clip_engine`/`preference` read rate=None under the multi-root `--cov` invocation (coverage.py
+  relativizes filenames per source root), so their floors are unenforceable (stuck at 0.0). Make the
+  module gate's measurement deterministic (single-root cov pass or filename-set matching), then
+  ratchet both floors.
 
 ---
 
@@ -2706,7 +2763,12 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #236  
 
-> 🧪 **RESEARCH-DERIVED — proposed, veto-able.** Surfaced by the 2026-06-22 production-gap research as required for a safe 10k launch but absent from the original backlog. Remove if out of scope.
+> ⚠️ **NO LONGER VETO-ABLE — gap proven in production 2026-07-29.** The prod VM received a clean
+> poweroff on **Jul 28 11:59 UTC** and the site served Cloudflare 530/1033 for **~31 hours with no
+> alert of any kind** — `health-check.yml`'s schedule had silently stopped on 2026-06-17 and this
+> monitor didn't exist. The outage was only discovered by a manual curl during gate verification.
+> Treat as beta-critical operator work: Better Stack account + `/health` keyword monitor + status
+> page + footer link (~30 min).
 
 **Problem.** A status page is a standard launch deliverable for a paid SaaS: it deflects support load during incidents and is expected by creators paying for minute packs. Nothing in the backlog provides creator-facing incident communication; Issue 144 only gives internal Cloudflare alerting.
 
@@ -5018,7 +5080,13 @@ Eval CI gate, Playwright CI, test-isolation, flake quarantine, patch-coverage, m
 
 ### Issue 272: Visual-regression baselines on stable routes
 
-**Status** `DONE` (W1 — built + integrated on `wave1-integration` 2026-06-23; deploy pending) · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
+**Status** `DONE — FULLY CLOSED 2026-07-29 (ready-pass W2, PR #62)`: baselines generated on
+ubuntu-latest via the new `ci.yml` `update_snapshots` workflow_dispatch input (run 30482627526),
+committed under `frontend/e2e/__snapshots__/smoke.spec.ts/` (6 PNGs: login/pricing/empty-dashboard
+× desktop/mobile), and the `visual` job's `continue-on-error` removed — **gating**, verified green
+as gating in run 30483159718. Regeneration procedure documented in the job comment. Known polish
+item: the "empty-dashboard" shot actually renders a populated dashboard and its masks match nothing
+(OFF_COURSE 2026-07-29). · **Wave** W1 · **Lane** QA & Release Engineering · **Size** `M` · **Verify** `external`  
 **Src** `15 / 180h` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/15_qa_eval_release_engineering.md`  
 **Blocked by** #266 · **Coordinate (hot files)** `.github/workflows/ci.yml`, `frontend/playwright.config.ts`  
 

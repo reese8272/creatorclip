@@ -1,6 +1,6 @@
 # CreatorClip — Source of Truth
 
-**Last updated**: 2026-05-25
+**Last updated**: 2026-07-29 (ready-pass W3 — see docs/PIPELINE.md for the stage-by-stage flow map)
 **Conflicts with PRD.md**: this file wins — log divergence in `docs/DECISIONS.md`.
 
 This describes how CreatorClip **is built**. Update on every architectural change.

@@ -23,7 +23,11 @@ export function ClipPlayer({
   onTrimChange: (start: number, end: number) => void
   onNext: () => void
 }) {
-  const clipDur = clip.end_s - clip.start_s
+  // Clip-relative timebase: the setup origin (dd92fcd), matching what the
+  // backend validates and cuts against (end_s - (setup_start_s ?? start_s)).
+  // Using end_s - start_s here mis-scaled the filmstrip's x↔time mapping so
+  // every handle drag submitted systematically compressed seconds.
+  const clipDur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
   // Issue 182: clips stream through the authed download endpoint (presigned R2 in
   // prod, file stream in dev). `inline` backs the <video>.
   const mediaSrc = `/clips/${clip.id}/download?disposition=inline`
@@ -73,7 +77,10 @@ export function ClipPlayer({
     <div className="flex animate-fade-in flex-col items-center gap-4">
       {clip.render_uri ? (
         <video
-          key={clip.id}
+          // Keyed on the artifact, not just the clip: a confirmed trim/clean
+          // swap changes render_uri but not the download src, so without a key
+          // change the element would keep playing the old media until reload.
+          key={`${clip.id}:${clip.render_uri}`}
           src={mediaSrc}
           controls
           playsInline
@@ -134,7 +141,7 @@ export function ClipPlayer({
 
       <div className="flex flex-col items-center gap-2">
         <div className="text-center font-mono text-xs text-muted">
-          Clip #{clip.rank ?? '—'} · {(clip.end_s - (clip.setup_start_s ?? clip.start_s)).toFixed(1)}s
+          Clip #{clip.rank ?? '—'} · {clipDur.toFixed(1)}s
         </div>
         {/* Headline fit signal is the honest tier, not a raw number (docs/UI.md). */}
         <FitBadge tier={fitTier(clip.score)} />

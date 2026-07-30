@@ -452,7 +452,10 @@ export function Editor() {
             {clip.render_uri ? (
               <video
                 ref={videoRef}
-                key={clip.id}
+                // Keyed on the artifact, not just the clip: a confirmed clean
+                // swap changes render_uri but not the download src, so without
+                // a key change the element would keep playing the old media.
+                key={`${clip.id}:${clip.render_uri}`}
                 src={mediaSrc}
                 controls
                 playsInline
