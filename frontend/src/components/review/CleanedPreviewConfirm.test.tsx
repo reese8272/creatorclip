@@ -41,6 +41,10 @@ function makeFetch(state: { cleanedUri: string | null }) {
     const url = String(input)
     if (init?.method === 'POST' && url.endsWith('/clips/c1/clean/confirm'))
       return { status: 200, ok: true, json: async () => ({}) }
+    if (init?.method === 'POST' && url.endsWith('/clips/c1/clean/discard')) {
+      state.cleanedUri = null
+      return { status: 200, ok: true, json: async () => ({ clip_id: 'c1', status: 'discarded' }) }
+    }
     if (url.endsWith('/videos/v1/clips'))
       return {
         status: 200,
@@ -51,14 +55,14 @@ function makeFetch(state: { cleanedUri: string | null }) {
   })
 }
 
-function renderConfirm(qc: QueryClient, onConfirmed = () => {}) {
+function renderConfirm(qc: QueryClient, onConfirmed = () => {}, onDiscarded = () => {}) {
   return render(
     <QueryClientProvider client={qc}>
       <CleanedPreviewConfirm
         clip={CLIP}
         enabled
         onConfirmed={onConfirmed}
-        onDiscarded={() => {}}
+        onDiscarded={onDiscarded}
         onError={() => {}}
       />
     </QueryClientProvider>,
@@ -121,5 +125,27 @@ describe('CleanedPreviewConfirm', () => {
       expect(getsAfter).toBeGreaterThan(getsBefore)
     })
     expect(screen.queryByRole('button', { name: 'Use cleaned version' })).not.toBeInTheDocument()
+  })
+
+  it('"Keep original" POSTs /clean/discard and clears the pending preview (Issue 364)', async () => {
+    const state: { cleanedUri: string | null } = { cleanedUri: 's3://bucket/c1-cleaned.mp4' }
+    const fetchMock = makeFetch(state)
+    vi.stubGlobal('fetch', fetchMock)
+    const onDiscarded = vi.fn()
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    })
+
+    renderConfirm(qc, () => {}, onDiscarded)
+    await userEvent.click(await screen.findByRole('button', { name: 'Keep original' }))
+
+    await waitFor(() => expect(onDiscarded).toHaveBeenCalled())
+    expect(
+      fetchMock.mock.calls.some(
+        ([u, init]) => String(u).endsWith('/clips/c1/clean/discard') && init?.method === 'POST',
+      ),
+    ).toBe(true)
+    // Mirrors the confirm-path stale-latch fix: the poll cache is dropped too.
+    expect(qc.getQueryData(['clips-clean-poll', 'v1'])).toBeUndefined()
   })
 })

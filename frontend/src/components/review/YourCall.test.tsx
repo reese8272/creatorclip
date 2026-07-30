@@ -64,6 +64,8 @@ function trimRenderFetch(
     if (url.endsWith('/videos/v1/clips'))
       return json({ clips: [{ ...CLIP, cleaned_render_uri: '/media/c1-trimmed.mp4' }] })
     if (init?.method === 'POST' && url.endsWith('/clips/c1/clean/confirm')) return json({})
+    if (init?.method === 'POST' && url.endsWith('/clips/c1/clean/discard'))
+      return json({ clip_id: 'c1', status: 'discarded' })
     return json({})
   })
 }
@@ -108,6 +110,28 @@ describe('YourCall — apply trim & re-render', () => {
       ).toBe(true)
     })
     expect(await screen.findByText(/Trimmed version is now the main render/)).toBeInTheDocument()
+  })
+
+  it('"Keep original" POSTs /clean/discard so a follow-up trim/clean does not 409 (Issue 364)', async () => {
+    const fetchMock = trimRenderFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    renderYourCall()
+
+    await userEvent.click(screen.getByRole('button', { name: /Apply trim & re-render/ }))
+
+    const keepBtn = await screen.findByRole('button', { name: 'Keep original' })
+    await userEvent.click(keepBtn)
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([u, init]) =>
+            String(u).endsWith('/clips/c1/clean/discard') && init?.method === 'POST',
+        ),
+      ).toBe(true)
+    })
+    expect(await screen.findByText(/Keeping original render/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Use cleaned version' })).not.toBeInTheDocument()
   })
 
   it('surfaces the 409 pending_clean_or_edit message and the pending preview', async () => {

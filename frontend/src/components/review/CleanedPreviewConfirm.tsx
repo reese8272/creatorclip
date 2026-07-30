@@ -6,9 +6,10 @@ import type { ReviewClip } from '@/types'
 
 // The review-then-confirm affordance shared by the clean pass (Editor) and the
 // trim re-render (Review): poll until the pending cleaned_render_uri lands,
-// preview it, then either swap it in via POST /clips/{id}/clean/confirm or keep
-// the original (client-side discard — no server call, matching the clean-pass
-// flow). Extracted from CleanPassPanel behavior-identically.
+// preview it, then either swap it in via POST /clips/{id}/clean/confirm or
+// discard it via POST /clips/{id}/clean/discard (Issue 364 — a client-side-only
+// discard left cleaned_render_uri set server-side, 409-ing the next clean/edit).
+// Extracted from CleanPassPanel behavior-identically.
 export function CleanedPreviewConfirm({
   clip,
   enabled,
@@ -40,6 +41,19 @@ export function CleanedPreviewConfirm({
     }
   }
 
+  async function discard() {
+    try {
+      await api(`/clips/${clip.id}/clean/discard`, { method: 'POST' })
+      onDiscarded()
+      // Same cache-drop rationale as confirm(): discard also nulls
+      // cleaned_render_uri server-side.
+      queryClient.removeQueries({ queryKey: ['clips-clean-poll', clip.video_id] })
+      queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
+    } catch {
+      onError('Discard failed — try again.')
+    }
+  }
+
   // cleanedUri is purely the readiness signal — the raw storage URI is opaque
   // (s3://bucket/key in prod R2, not fetchable by a browser). Playback goes
   // through the authed download endpoint, which presigns/streams per env.
@@ -55,7 +69,7 @@ export function CleanedPreviewConfirm({
         <Button size="sm" onClick={confirm}>
           Use cleaned version
         </Button>
-        <Button variant="secondary" size="sm" onClick={onDiscarded}>
+        <Button variant="secondary" size="sm" onClick={discard}>
           Keep original
         </Button>
       </div>
