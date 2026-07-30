@@ -4,7 +4,9 @@ Covers: GET /, static file serving, GET /videos (list endpoint).
 """
 
 import datetime
+import re
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -105,6 +107,46 @@ def test_privacy_page_has_limited_use_disclosure(client):
     assert "information received from Google APIs" in text
     # The affirmative no-advertising commitment must be present.
     assert "advertis" in text.lower()
+
+
+# ── Issue 365: fonts must be self-hosted (GDPR — LG München 3 O 17493/20) ────
+# tos.html / privacy.html / accessibility.html are exactly what an EU visitor
+# reads before signing up; a remote Google Fonts @import leaks their IP to
+# Google on every page load. These are regression tests, not just a one-time
+# fix — they pin the vendored-fonts state so it can't quietly reappear.
+
+_STATIC_DIR = Path(__file__).parent.parent / "static"
+
+
+def test_static_assets_do_not_reference_remote_font_hosts():
+    """No static/*.css or static/*.html may load fonts from Google's CDN.
+    Issue 365 vendored Inter + JetBrains Mono as committed woff2 files under
+    static/fonts/ specifically so this can never regress."""
+    offenders = []
+    for pattern in ("*.css", "*.html"):
+        for path in _STATIC_DIR.rglob(pattern):
+            text = path.read_text(encoding="utf-8")
+            if "fonts.googleapis" in text or "fonts.gstatic" in text:
+                offenders.append(str(path.relative_to(_STATIC_DIR)))
+    assert not offenders, (
+        f"Remote Google Fonts reference found in: {offenders}. "
+        "Fonts must be self-hosted under static/fonts/ (Issue 365, GDPR)."
+    )
+
+
+def test_design_tokens_font_face_srcs_resolve_to_committed_files():
+    """Every @font-face src: url(...) in _design-tokens.css must point at a
+    file that actually exists on disk under static/fonts/ — catches a
+    typo'd filename or a vendored font that was never committed."""
+    css = (_STATIC_DIR / "_design-tokens.css").read_text(encoding="utf-8")
+    urls = re.findall(r"url\('([^']+\.woff2?)'\)", css)
+    assert urls, "Expected at least one local @font-face src in _design-tokens.css"
+    fonts_dir = (_STATIC_DIR / "fonts").resolve()
+    for url in urls:
+        assert not url.startswith(("http://", "https://")), f"@font-face src must be local: {url}"
+        resolved = (_STATIC_DIR / url).resolve()
+        assert resolved.is_file(), f"@font-face src does not exist on disk: {url}"
+        assert resolved.is_relative_to(fonts_dir), f"@font-face src escapes static/fonts/: {url}"
 
 
 # ── GET /videos list endpoint ─────────────────────────────────────────────────
@@ -367,18 +409,22 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "_design-tokens.css").read_text()
 
-    # Google Fonts import for Inter + JetBrains Mono with font-display: swap
-    # so the system fallback renders instantly while the variable fonts load.
-    assert "fonts.googleapis.com" in src, (
-        "_design-tokens.css must @import Inter + JetBrains Mono from "
-        "Google Fonts (the picked typography pairing for Issue 99)."
+    # Issue 365 (GDPR — LG München 3 O 17493/20): Inter + JetBrains Mono are
+    # self-hosted from static/fonts/ via @font-face, not a Google Fonts
+    # @import (that leaked visitor IPs to Google on every page load).
+    # font-display: swap is still required so the system fallback renders
+    # instantly while the fonts load (FOIT avoidance).
+    assert "fonts.googleapis.com" not in src and "fonts.gstatic.com" not in src, (
+        "_design-tokens.css must NOT load fonts from Google's CDN — "
+        "Issue 365 vendored Inter + JetBrains Mono under static/fonts/."
     )
-    assert "family=Inter" in src and "family=JetBrains+Mono" in src, (
-        "_design-tokens.css must load BOTH Inter (sans) and JetBrains Mono "
-        "(data register) — the two halves of the Linear/mono composition."
+    assert "font-family: 'Inter'" in src and "font-family: 'JetBrains Mono'" in src, (
+        "_design-tokens.css must declare @font-face rules for BOTH Inter (sans) "
+        "and JetBrains Mono (data register) — the two halves of the Linear/mono "
+        "composition (picked typography pairing for Issue 99)."
     )
-    assert "display=swap" in src, (
-        "Google Fonts URL must include display=swap so the system "
+    assert "font-display: swap" in src, (
+        "@font-face rules must include font-display: swap so the system "
         "fallback renders instantly; otherwise we get FOIT (flash of "
         "invisible text) and the page looks broken for ~200ms."
     )

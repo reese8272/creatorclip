@@ -17,7 +17,49 @@
  *     timestamps, video table durations, DNA stat cards.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* Self-hosted fonts (Issue 365 — GDPR remedy for LG München 3 O 17493/20:
+ * remote Google Fonts transmits the visitor's IP to Google; these three
+ * pages (tos/privacy/accessibility) are exactly what an EU visitor reads
+ * before signing up. Matches the SPA fix (docs/DECISIONS.md 2026-07-29)
+ * but as plain committed woff2 assets — /static has no bundler, so no
+ * Fontsource npm dependency here.
+ *
+ * Both files are TRUE variable fonts (confirmed via fontTools fvar table
+ * introspection), so one file per family covers every weight this project
+ * uses instead of four/three static files:
+ *   - Inter: wght axis 100–900 (needs 400/500/600/700)
+ *   - JetBrains Mono: wght axis 400–800 (needs 400/500/600)
+ * Latin subset only (v1 is English-only — docs/issues.md v1 scope #3),
+ * sourced from Google Fonts' own "latin" unicode-range block, which is
+ * the same physical file Google's css2 API serves for every requested
+ * static weight of these families. font-display: swap per MDN (small
+ * block period + infinite swap period — avoids invisible text) and the
+ * font-weight range on @font-face is required for browsers to select the
+ * right instance from a variable font gvar table with no explicit
+ * font-variation-settings. OFL-1.1 license text committed alongside
+ * (static/fonts/OFL-*.txt) per the redistribution requirement. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('fonts/inter-latin-wght-variable.woff2') format('woff2-variations'),
+       url('fonts/inter-latin-wght-variable.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('fonts/jetbrains-mono-latin-wght-variable.woff2') format('woff2-variations'),
+       url('fonts/jetbrains-mono-latin-wght-variable.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
 
 :root {
   /* ── Surfaces (lightness ladder, no shadows) ───────────────────── */
