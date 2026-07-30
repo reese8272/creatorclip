@@ -6375,6 +6375,529 @@ decide in CHECK against the CLIPPING_PRINCIPLES rules).
 
 ---
 
+## Lane L24 — Positioning & Moat Surfacing  —  `L24_MOAT_POSITIONING`
+
+> Filed 2026-07-30 from an owner-requested product/market review ("how does this app look, is it worth
+> the hype, how do we make it genuinely desirable"). Source: read of `docs/PRD.md`,
+> `docs/COMPETITIVE_RESEARCH.md`, `docs/GO_LIVE.md`, the SPA route map, `clip_engine/`, `preference/`,
+> `billing/packs.py`, and the four product screenshots at repo root — plus **live web research on
+> 2026-07-30** (five searches; sources cited inline per issue). Every claim below was verified against
+> the code or a dated external source, not from memory.
+
+### The finding in one line
+
+**The engineering is strong and the moat is real, but the product sells the commodity layer — and three
+things that happened in the last ~6 weeks are about to make that layer worthless.**
+
+### What is genuinely strong (do not regress these)
+
+- **A closed outcome loop no competitor can build.** `worker/tasks.py::poll_clip_outcomes` reads real
+  YouTube stats at 48h/7d and sets `ClipOutcome.performed_well = views >= channel_median`
+  (`worker/tasks.py:1055`), which becomes a **3× training weight** (`preference/decay.py:8,57`).
+  Issue #197 (DONE 2026-06-23) wired publish → `ClipOutcome` creation, so the loop has input.
+  **Nobody else has per-creator Analytics OAuth, so nobody else can copy this.** It is the single most
+  valuable asset in the repo — and it is invisible in the UI.
+- **Falsifiable ranking quality.** `preference/efficacy.py` (504 lines) runs NDCG@k with *chronological*
+  holdout splits, graded relevance, MRR/MAP/Kendall-tau, and paired-bootstrap 95% CIs. Almost no one in
+  this category can answer "is our ranking actually good?" at all.
+- **Table stakes are built, not stubbed:** word-level ASS captions in 4 styles (`clip_engine/captions.py`),
+  9:16 active-speaker reframe (`reframe.py`, 570 lines), filler removal, trim→re-render, publish + schedule.
+- **The honesty posture is an asset, not overhead** — `tests/test_compliance_no_virality.py`, the 30-day
+  staleness purge, RLS tenant isolation. See the market findings below for why this became a moat in July.
+
+### Market findings (live research, 2026-07-30)
+
+1. **YouTube is about to give the core feature away.** Video Clips already ships in Studio; YouTube is
+   rolling **Clips into Shorts** and launching **auto-suggestions for the most "clippable" moments**
+   later in 2026. Free, native, zero friction. "We find your best moments" trends to zero commercial
+   value. _(src: tubefilter.com/2026/04/17/youtube-clipping-tool-viewer-clips-shorts/)_
+2. **YouTube's 16 July 2026 "inauthentic content" policy is an extinction event for generic clippers —
+   and a tailwind for us.** The old "repetitious content" policy was renamed and clarified to cover
+   **mass-produced or templated content with little variation, easily replicable at scale**, with a
+   three-strike ladder (warning → 90-day suspension → permanent YPP removal). Clips/compilations stay
+   monetizable **only with "significant original value."** A tool that stamps 20 identically-templated
+   Shorts out of one podcast is now a *monetization liability*. AutoClip is the only architecture
+   positioned to argue the opposite. _(src: tubefilter.com/2026/07/13/youtube-inauthentic-content-monetization-policy-update/ ;
+   techcrunch.com/2026/07/20/youtube-clarifies-policies-around-ai-slop-and-upsetting-videos/ ;
+   vidiq.com/blog/post/youtube-reused-content-policy-guide/)_
+3. **The category leader publicly concedes our north star is the unsolved problem.** OpusClip's own 2026
+   strategy post: as mechanical clip selection and captioning improved, "the real bottleneck shifted to
+   planning — the decision of what deserves cutting," and "**measurement is where repurposing setups
+   break down**." _(src: opus.pro/blog/short-form-video-strategy-2026)_
+4. **Style-learning is still unclaimed.** A fresh sweep of the 2026 comparison field (Opus, Vizard,
+   Ssemble, Klap, Choppity, quso) surfaces **brand kits and templates only** — no tool learns an
+   individual creator's patterns. The `docs/COMPETITIVE_RESEARCH.md:104` thesis still holds 6 weeks on.
+   _(src: ssemble.com/blog/vizard-vs-opus-clip-vs-ssemble ; choppity.com/blog/best-opus-clip-alternatives/)_
+5. **Opus's complaint profile is unchanged and still attackable:** mid-sentence cuts, 20–40% of clips
+   needing edits or discarding, weak in-app editor, 3-day storage, billing/cancellation friction.
+   _(src: choppity.com/blog/best-opus-clip-alternatives/)_
+
+### What is holding the product back (verified in-repo)
+
+- **The funnel starts with a wall.** `main.py:200` `/` → 302 `/app/dashboard` → login → *"Sign in to
+  continue"* + a Google button (`frontend/src/pages/Login.tsx:64`). There is **no marketing page and no
+  demo** — `static/` holds only `tos/privacy/accessibility`, and `components/landing/` is the *in-app*
+  picker, not a public page. Every competitor's hero is paste-a-URL → clips → *then* signup. We require
+  OAuth → catalog refresh → mandatory identity form → DNA build → confirm, and `MIN_VIDEOS_FOR_DNA=10`
+  (`config.py:375`) before the differentiator even activates.
+- **The moat is invisible.** `performed_well` appears in no creator-facing surface. `Insights.tsx` shows
+  channel stats and a brief; it never says *"here is what happened to the clips you posted."*
+- **Scope has outrun validation.** **99 issues done / 614 open**, 24 routers, plus chat, thumbnails,
+  titles, chapters, recap, and a full editor — against **1 user on the 100-user OAuth cap**
+  (`publication testing.png`). The editor is a fight against CapCut that `docs/COMPETITIVE_RESEARCH.md:134`
+  itself flags as field-wide-weak territory; nothing in that cluster deepens the channel-knowledge loop,
+  which CLAUDE.md says is the test every feature must pass.
+- **Pricing contradicts the stated wedge.** We target long-form/stream creators, then meter per *input*
+  minute — the model `docs/COMPETITIVE_RESEARCH.md:38` identifies as punishing exactly them. Opus gives
+  **60 free min/month recurring**; we give **60 minutes once** (`config.py:588 FREE_TRIAL_MINUTES=60`).
+  Reconciled and locked in #209, but the *evidence* has changed — see #380.
+- **Design reads "internal tool," not premium consumer.** Dark + violet + JetBrains Mono is
+  well-executed Linear cosplay. There is no visualized-AI-reasoning moment — the exact thing
+  `docs/COMPETITIVE_RESEARCH.md:46` identifies as the source of Opus's perceived magic.
+
+### Lane thesis
+
+Stop leading with *"an AI clipper that also knows your channel."* Lead with **"the system that tells you
+what to cut, proves what worked, and keeps you monetizable"** — that happens to cut it for you. The
+pipeline and the outcome loop are already built; the **surfacing, the funnel, and the story** are missing.
+
+**Lane issues (wave order):** #382, #383, #374 · #375, #376 · #377, #378, #379, #380 · #381
+**Waves:** W0 (decide + reconcile + surface the moat), W1 (defend + fill the funnel), W2 (sharpen), W3 (extend)
+**Suggested agent:** `general-purpose` (#374, #375, #376, #377, #379, #381) · owner decision (#380, #382) · `industry-standards-researcher` (#383)
+
+---
+
+### Issue 374: "Proof of Lift" — surface the published-clip outcome loop
+
+**Status** `OPEN` · **Wave** W0 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
+**Blocked by** nothing — **ready now** (#197 already creates the rows) · **Coordinate (hot files)** `routers/insights.py`, `frontend/src/pages/Insights.tsx`
+
+**Problem.** The single uncopyable thing we own is invisible. `ClipOutcome.performed_well` is written by
+`poll_clip_outcomes` (`worker/tasks.py:1055`) at the 48h/7d checkpoints and consumed only by
+`preference/train.py:78` as a training weight. **No creator-facing surface reads it.** Meanwhile OpusClip
+publicly names measurement as the field's broken half (market finding 3). We are one read-model away from
+owning the only falsifiable, honest claim in the category — and it costs no new data collection.
+
+**Approach sketch (Phase-1 CHECK required).** A read-only aggregate over
+`ClipOutcome` ⋈ `ClipPublication` ⋈ `Clip`, creator-scoped, exposed as `GET /creators/me/lift` and
+rendered as a first-class Insights panel (candidate for its own route). Content:
+(a) **the count** — "N clips published via AutoClip · M beat your channel median";
+(b) **the contrast** — what the winners share vs the underperformers, reusing the DNA feature vocabulary
+already on `Clip` (`signals_jsonb`, principle, `setup_start_s`/`peak_s` geometry, duration bucket);
+(c) **feed-forward** — mark candidates in Review that match the winning pattern.
+Honesty rules are load-bearing: it reports *what happened*, never a prediction; small-N must say so
+explicitly (no lift claim below a stated minimum); `views >= channel_median` is a coarse proxy and the
+copy must say which metric and which checkpoint. Consider a monthly "Clip Report" email via the existing
+`notify/` lifecycle rails as the retention + shareable-artifact play (coordinate with #246 consent posture).
+
+**Files to touch**
+- `routers/insights.py` — new creator-scoped lift aggregate endpoint (Pydantic out-model, per-creator filter + RLS)
+- `frontend/src/pages/Insights.tsx` (+ `components/insights/`) — Proof-of-Lift panel; honest empty/small-N states
+- `models.py` — no schema change expected; confirm `ClipOutcome` ⋈ `ClipPublication` join is indexed for the aggregate
+- `tests/test_insights.py`, `tests/test_outcomes.py` — aggregate correctness, isolation, small-N suppression
+- `docs/CLIPPING_PRINCIPLES.md` — if the winner/loser contrast cites a principle, register it
+
+**Acceptance criteria**
+- [ ] A creator with published clips sees how many beat their channel median, at which checkpoint, on which metric
+- [ ] The winner/underperformer contrast is derived from stored clip features — never generic advice
+- [ ] Small-N is stated honestly; no lift claim is made below the documented minimum
+- [ ] Zero virality language; structural compliance test extended to the new copy
+- [ ] Per-creator isolation on every query (app-layer filter + RLS); no PII in logs
+- [ ] Aggregate is read-only and adds no LLM cost (or, if narrated, bills via `record_llm_usage` + spend guard)
+
+**`[DEC]` DECISIONS.md** — the lift metric definition (median-views proxy vs a retention/engagement-rate
+measure), the checkpoint reported, and the minimum N before any comparative claim is shown.
+
+**Risks** — (1) `performed_well` is a coarse binary; over-claiming from it would breach the honesty
+constraint far more visibly than a bad clip score. (2) Beta creators will have near-zero published clips
+for weeks — the empty state IS the feature at launch and must be designed first, not last.
+(3) Median-vs-views ignores Shorts-vs-long-form mix; confirm the median is computed over comparable content.
+
+---
+
+### Issue 375: Originality guard — inauthentic-content risk detection (the July-2026 policy play)
+
+**Status** `OPEN` · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
+**Blocked by** nothing — **ready now** · **Coordinate (hot files)** `dna/embeddings.py`, `routers/insights.py`
+
+**Problem.** On **16 July 2026** YouTube renamed "repetitious content" to **"inauthentic content"** and
+clarified that mass-produced/templated content with little variation — content "easily replicable at
+scale" — is non-monetizable, enforced on a three-strike ladder up to permanent YPP removal. Clips remain
+monetizable only with "significant original value." **This is now the biggest live risk to every creator
+using a template-based clipper, and no tool in the category warns them.** We already store clip embeddings
+in pgvector (`dna/embeddings.py`) and structural clip features, so we can measure sameness directly.
+
+**Approach sketch (Phase-1 CHECK required — read the current policy text first, it is 2 weeks old).**
+A per-creator **sameness check** over their recent Shorts/clips: pgvector cosine similarity across recent
+clip embeddings plus structural repetition signals we already compute (hook shape, duration bucket, source
+region, caption style, opening beat). Surface as an honest advisory: *"Your last 6 Shorts share the same
+hook shape and open on the payoff — YouTube's inauthentic-content policy targets templated output. These
+three would benefit from a different angle."* Two placements: passive (Insights panel) and active (a flag
+on a candidate in Review when it would be the Nth near-identical clip). Also inverts naturally into a
+**positive** signal — diversity as a scored dimension the ranker can reward.
+
+**Files to touch**
+- `dna/embeddings.py` / new `knowledge/originality.py` — pairwise similarity + structural-repetition scoring over recent clips
+- `routers/insights.py` — advisory endpoint; `frontend/src/components/insights/` — the panel
+- `frontend/src/components/review/WhyThisClip*` — inline "similar to N recent clips" flag
+- `docs/CLIPPING_PRINCIPLES.md` — register the diversity/originality principle if scoring consumes it
+- `docs/COMPLIANCE.md` — record that we surface a policy-risk advisory (and that it is advisory, not a compliance guarantee)
+- `tests/` — similarity math, threshold behaviour, isolation, and an honesty test on the advisory copy
+
+**Acceptance criteria**
+- [ ] Near-duplicate / templated output across a creator's recent clips is detected and surfaced plainly
+- [ ] Copy is advisory and accurate — we never claim to certify monetization eligibility or speak for YouTube
+- [ ] The policy is cited with its date so the claim is auditable when YouTube revises it
+- [ ] Threshold is tunable and documented; no false-alarm spam on creators with a legitimately consistent format
+- [ ] Per-creator isolation; no cross-creator embedding comparison ever
+- [ ] Works with zero LLM spend, or bills + spend-guards if a narrative layer is added
+
+**`[DEC]` DECISIONS.md** — similarity threshold + which structural features count as "templated"; the
+advisory-not-guarantee stance and its exact wording (this is a *legal-adjacent* claim about a third
+party's policy — it needs the same care as the no-virality constraint).
+
+**Risks** — (1) Speaking about YouTube's enforcement is a claim about someone else's policy — over-stating
+it is worse than not shipping it. (2) A creator with a deliberately consistent format (the exact person
+our DNA feature serves) must not be nagged — tune against the "consistent ≠ templated" distinction in
+CHECK. (3) The policy is 2 weeks old and will be revised; the citation must be dated and re-checked.
+
+---
+
+### Issue 376: Public marketing landing + no-auth demo — kill the OAuth wall
+
+**Status** `OPEN` · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `staging`
+**Blocked by** nothing technical; needs the #382 scope call first · **Coordinate (hot files)** `main.py`, `frontend/src/App.tsx`
+**Promotes** "no-auth demo mode" out of the Phase-3 parking lot (needs fresh approval + a DECISIONS entry per the parking-lot rule)
+
+**Problem.** `main.py:200` redirects `/` straight to the app, which bounces an anonymous visitor to
+*"Sign in to continue."* **There is no page that explains what AutoClip is to someone who has not signed
+in.** We are about to invite the first friends (#26/#28) and start Google verification (#29) with no
+public surface — and Google's own OAuth verification review expects a legible home page and a demo video.
+Meanwhile the entire category's growth loop is paste-a-link → instant clips → *then* signup, plus a
+watermarked free tier that turns every posted Short into an ad.
+
+**Approach sketch (Phase-1 CHECK required).** Two separable halves, and W1 may ship only the first:
+(a) **a real public landing page** at `/` — what it is, the honesty constraint, the DNA/outcome-loop
+story, pricing, ToS/privacy footer (already required by #29);
+(b) **a no-auth demo** — paste a public YouTube URL, run the *existing* cold-start path
+(`clip_engine/scoring.py::_signal_score`, no DNA — the honest small-catalog path already shipped in #203),
+return ~3 watermarked clips, then: *"connect your channel and these get scored against your actual
+audience."* The demo is also the cheapest possible demonstration of the differentiator, because the
+un-personalized result is visibly the *before* picture.
+Abuse/cost/ToS posture is the hard part and must be settled in CHECK: `YTDLP_ENABLED=False`
+(`config.py:421`) is off by default and own-content-only per `youtube/ingest.py:89`, so **a demo over an
+arbitrary third-party URL is not currently ToS-clean** — the likely answer is a small set of
+pre-processed house demo videos (the Opus "try a sample: Vlog/Podcast/Sports" pattern) rather than
+arbitrary URLs. Rate-limit, cache, and cap hard whatever ships.
+
+**Files to touch**
+- `main.py:200` — serve a public landing instead of the blanket redirect for anonymous visitors
+- `frontend/src/App.tsx` + new `pages/Landing.tsx` (+ `components/landing/`) — public route, no auth guard
+- `clip_engine/render.py` — demo/free-tier watermark path (if the watermark loop is approved)
+- `limiter.py` — anonymous-surface rate limits (IP-keyed; the existing limiter is creator-keyed)
+- `tests/test_static.py` / `tests/test_compliance_no_virality.py` — the landing is a new public surface and must be pinned
+- `docs/DECISIONS.md`, `docs/COMPLIANCE.md` — demo-source ToS posture; any anonymous data handling
+
+**Acceptance criteria**
+- [ ] An anonymous visitor reaching `/` gets a page explaining the product, with ToS/privacy linked (unblocks the #29 review expectation)
+- [ ] If the demo ships: it produces real clips from a ToS-clean source with no signup, rate-limited and cost-capped
+- [ ] The demo visibly frames itself as the *un-personalized* baseline — it sells the connect step honestly
+- [ ] No virality language anywhere on the public surface; structural test extended
+- [ ] No anonymous PII stored beyond what the limiter needs; documented in `COMPLIANCE.md`
+- [ ] Demo compute cannot be abused into unbounded LLM/render spend (hard caps + spend-guard aware)
+
+**`[DEC]` DECISIONS.md** — promotion of "no-auth demo mode" out of the parking lot; the demo source
+(house samples vs arbitrary URL) and its ToS justification; whether a watermarked free tier is
+introduced as a growth loop, and what that does to #209's pack economics.
+
+**Risks** — (1) An arbitrary-URL demo is a **ToS breach vector** — `yt-dlp` is own-content-only by policy;
+do not let the funnel goal erode that gate. (2) An anonymous compute surface is the classic cost-blowout
+hole — it must be inside the #290 spend guard. (3) Scope creep into a full marketing site; the AC is one
+honest page, not a campaign.
+
+---
+
+### Issue 377: Shortlist mode — return the decision, not the pile
+
+**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `M` · **Verify** `local` + eval
+**Blocked by** nothing · **Coordinate (hot files)** `clip_engine/ranking.py`, `frontend/src/pages/Review.tsx`
+
+**Problem.** We compete on the axis that is being commoditized (how many clips we find) while OpusClip's
+own strategy post says the bottleneck moved to *"the decision of what deserves cutting"* (market finding
+3) and YouTube is about to ship free auto-suggestions (finding 1). A ranked pile of N candidates is the
+old product. A system that knows the channel should be able to say: **these three, and here is the case
+for each.** It is also cheaper per video and directly reduces the templated-output risk in #375.
+
+**Approach sketch (Phase-1 CHECK required).** A presentation-and-ranking change, not a new engine: keep
+generating candidates, but default the Review surface to a **short list with a case** — the existing
+`WhyThisClip` payload (score, cited principle, reasoning, setup→peak→end geometry) promoted from an
+expander to the primary content, with the rest available behind "show all candidates." Consider whether
+the shortlist size is fixed, DNA-derived, or confidence-derived. This is also the natural home for the
+"visualize the AI's reasoning" magic moment that `docs/COMPETITIVE_RESEARCH.md:46` identifies as the
+source of Opus's perceived quality — except ours is honest and cites a registered principle.
+
+**Files to touch**
+- `clip_engine/ranking.py` — shortlist selection/confidence cut (must not perturb the eval harness geometry)
+- `frontend/src/pages/Review.tsx` + `components/review/` — shortlist-first presentation; "show all" disclosure
+- `tests/eval/scenarios/` — confirm `SCENARIO_FLOOR` and the setup-start assertions are unaffected
+- `docs/CLIPPING_PRINCIPLES.md` — if a selection-confidence principle is cited, register it
+
+**Acceptance criteria**
+- [ ] Review defaults to a short, argued list; the full candidate set stays reachable in one click
+- [ ] Every shortlisted clip shows its cited principle and reasoning as primary content, not a disclosure
+- [ ] Clip-quality eval harness stays green (geometry untouched); no regression in `SCENARIO_FLOOR`
+- [ ] Ranking change is measurable through `preference/efficacy.py` — NDCG does not regress
+- [ ] Honest confidence framing below the personalization threshold (existing #203 copy rules apply)
+
+**`[DEC]` DECISIONS.md** — shortlist size policy (fixed vs confidence-derived) and whether generation
+volume drops with it (a real LLM-cost saving that should be quantified).
+
+**Risks** — (1) Fewer visible clips reads as "worse value" against per-minute pricing unless the framing
+is right — coordinate with #380. (2) Hiding candidates could mask engine misses; the "show all" escape
+hatch is load-bearing, not optional. (3) Do not let this become an engine rewrite; the geometry is
+eval-gated and known good.
+
+---
+
+### Issue 378: Publish the ranking-quality numbers as a trust surface
+
+**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local`
+**Blocked by** #376 (needs a public page to put them on) · **Coordinate (hot files)** `preference/efficacy.py`
+
+**Problem.** `preference/efficacy.py` computes NDCG@k on chronological holdouts with paired-bootstrap CIs
+against a random floor and a generic-signal baseline. **This is a marketing asset sitting in a module.**
+The field's virality scores are described as "decorative" and unreliable *by competitors' own users*
+(`docs/COMPETITIVE_RESEARCH.md:37`). "We measure our ranking quality against a held-out baseline and
+publish the number" is the strongest possible counter-position for a product whose whole brand is honesty.
+
+**Approach sketch (Phase-1 CHECK required).** Decide what is publishable and how often it refreshes:
+the pooled micro-average across consenting creators, the methodology, and the honest caveats (small N,
+per-creator variance, what NDCG does and does not mean). Aggregate-only, never per-creator, never
+identifiable. Likely a section on the #376 landing plus a methodology page.
+
+**Files to touch**
+- `preference/efficacy.py` — a publishable aggregate export (no per-creator data leaves the boundary)
+- `frontend/src/pages/Landing.tsx` (from #376) + a methodology page
+- `docs/COMPLIANCE.md` — confirm aggregate publication is inside the consent + YouTube-ToS posture
+- `tests/` — the export cannot emit per-creator identifiers; k-anonymity floor enforced
+
+**Acceptance criteria**
+- [ ] A published number exists with its methodology and caveats stated in plain language
+- [ ] The export is aggregate-only with a documented minimum-creator floor; no creator is identifiable
+- [ ] Publication is compatible with the YouTube ToS posture on derived analytics (verify in CHECK)
+- [ ] The claim degrades honestly when N is small — no number is shown rather than a flattering one
+
+**`[DEC]` DECISIONS.md** — whether aggregate ranking-quality metrics derived from YouTube Analytics
+may be published at all under the ToS, and the k-anonymity floor.
+
+**Risks** — (1) **ToS risk is the gating question** — aggregates derived from YouTube Analytics may be
+constrained; this must be answered in CHECK before any UI work. (2) A published metric that later
+regresses is a public commitment — decide the refresh cadence and the "we stopped publishing" story up front.
+
+---
+
+### Issue 379: Channel Fingerprint — make the DNA an artifact creators want to show
+
+**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `M` · **Verify** `local`
+**Blocked by** nothing · **Coordinate (hot files)** `frontend/src/pages/Insights.tsx`, `frontend/src/pages/Profile.tsx`
+
+**Problem.** "Your DNA at a glance" is three numbers in a card (`insights 1.png`: optimal clip 38s, best
+region mid-roll, upload gap 52.0h). The DNA is the product's whole story and it currently reads like a
+config summary. Creators share things about themselves; nobody shares a config summary. A shareable
+**channel fingerprint** is simultaneously the clearest expression of the differentiator, a growth loop
+that costs nothing per unit, and the "visualize the AI's reasoning" moment the design research asks for.
+
+**Approach sketch (Phase-1 CHECK required).** A designed, self-contained visual summary of the creator's
+DNA — hook patterns, retention shape, clip-length sweet spot, best source region, what they have moved
+past — rendered as a shareable card/image. Ties naturally to #374 ("and here is what actually happened
+to the clips built from it"). **Load-bearing constraint:** a shareable artifact leaves our boundary, so
+the ToS/privacy review of exactly which analytics-derived values may appear on it is a CHECK gate, not
+a detail. Default private; sharing is an explicit creator action.
+
+**Files to touch**
+- `frontend/src/components/profile/` + `insights/` — the fingerprint component; export/share affordance
+- `routers/insights.py` or `creators.py` — a shaped fingerprint payload (whatever the ToS review permits)
+- `docs/COMPLIANCE.md` — data classes appearing on an exportable artifact
+- `tests/` — no virality language; no restricted metric on a shareable surface; isolation
+
+**Acceptance criteria**
+- [ ] The DNA renders as a designed, legible artifact rather than a stat list
+- [ ] Sharing is opt-in and explicit; nothing leaves the boundary by default
+- [ ] Only ToS-permissible values appear on an exportable surface (verified in CHECK, recorded in COMPLIANCE)
+- [ ] Honesty constraint present on the artifact itself (it travels without our UI around it)
+
+**`[DEC]` DECISIONS.md** — which analytics-derived values may appear on a creator-shareable artifact
+under the YouTube ToS, and the default-private stance.
+
+**Risks** — (1) An artifact that leaves the product carries our honesty claim with it — it must be
+self-contained and unambiguous. (2) Aggregated-demographics and analytics values have disclosure rules
+(`docs/COMPLIANCE.md`); do not let a design goal outrun them.
+
+---
+
+### Issue 380: `[DEC]` Re-evaluate pricing psychology against the new market evidence
+
+**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + copy)
+**Blocked by** nothing · **Supersedes-candidate for** the #209 / #125 / #152 pricing posture
+**Coordinate (hot files)** `billing/packs.py`, `frontend/src/pages/Pricing.tsx`
+
+**Problem.** #209 (DONE) formally locked **per-input-minute** with a taper plus a Stream pack, and
+explicitly ruled out reintroducing a subscription — a defensible call on the evidence available in June.
+**Three things have changed since**, which is the bar CLAUDE.md sets for revisiting a locked decision:
+(1) our free tier is **60 minutes once** (`config.py:588`) against Opus's **60 min/month recurring**, so
+we are strictly worse at the top of a funnel we have not built yet (#376);
+(2) metering makes creators ration usage on exactly the long content we want them feeding us — and
+**every minute not processed is a training label the preference model never gets**, so the metering
+model is in direct tension with the moat's data flywheel;
+(3) if #377 lands, we return *fewer* clips per input minute, which makes per-input-minute framing worse
+at the same price.
+This issue is the **decision**, not a rewrite: the `MinuteDeduction UNIQUE(video_id)` ledger (#125) stays
+whatever we choose — a subscription with included minutes can sit *on top of* the existing ledger without
+redesigning it, which is the option #209 did not evaluate.
+
+**Approach sketch.** Owner decision informed by: current live competitor pricing (re-verify — the
+`docs/COMPETITIVE_RESEARCH.md` snapshot is ~2026-06 and its own caveat says verify before citing), the
+§2 margin floor from finding 06, and beta conversion data once #376 exists. Options to score:
+(a) status quo; (b) recurring free minutes instead of a one-shot trial; (c) a base subscription with
+included minutes + overage packs on the existing ledger; (d) status quo + a watermarked free tier (#376).
+
+**Files to touch**
+- `docs/DECISIONS.md` — the decision and its evidence (mandatory: any pricing change needs an entry)
+- `billing/packs.py` + `frontend/src/pages/Pricing.tsx` — only if the decision changes the lineup (note the known DRY drift: the pack list is duplicated frontend-side, flagged in #209)
+- `config.py` — `FREE_TRIAL_MINUTES` semantics if the trial becomes recurring
+- `docs/COMPETITIVE_RESEARCH.md` — update the reconciliation note at :115 to reflect the new call
+
+**Acceptance criteria**
+- [ ] Competitor pricing re-verified live (not from the June snapshot) before the decision is made
+- [ ] Decision recorded in DECISIONS with the evidence and an explicit note on what changed since #209
+- [ ] Margin floor from finding 06 re-checked against whatever is chosen
+- [ ] If the lineup changes: backend and frontend pack lists stay in sync (or the duplication is finally killed)
+- [ ] No-virality disclaimer preserved in all pricing copy
+
+**`[DEC]` DECISIONS.md** — required by definition; this issue **is** the decision.
+
+**Risks** — (1) Reopening a locked decision without new evidence is churn — the three changes above are
+the justification and must be stated. (2) Recurring free minutes has a real COGS floor (transcription +
+LLM + render); price it against finding 06 before committing. (3) Do not touch the deduction ledger;
+its idempotency is load-bearing and proven.
+
+---
+
+### Issue 381: Chat-density signal via **live** capture — a ToS-clean path around #132
+
+**Status** `OPEN` · **Wave** W3 · **Lane** L24 · **Size** `L` · **Verify** `external` + `local`
+**Blocked by** nothing at the API level (see below) · **Relates to** #132 (BLOCKED), #150 (OBS capture), #95 (API keys)
+**Coordinate (hot files)** `ingestion/signals.py`, `clip_engine/candidates.py`
+
+**Problem.** `docs/COMPETITIVE_RESEARCH.md:100` names **chat-spike detection** as a core stream-native
+signal that podcast-first clippers lack, and #132 wants it. #132 is correctly **BLOCKED**: the YouTube
+Data API has no chat-*replay* endpoint for VODs, and scrapers (pytchat, chat-downloader) breach ToS
+§IV.A. **But that block is specific to replay.** `liveChatMessages.list` *does* serve **live** broadcasts
+— and a creator polling **their own** live chat during **their own** stream, under their own OAuth, is
+ordinary sanctioned API use. The density timeline can be captured live, persisted, and then applied to
+the VOD afterwards. This is a different issue from #132, not a workaround of it.
+
+**Approach sketch (Phase-1 CHECK required — verify the live endpoint, its quota cost, and the ToS
+posture before any code).** A capture path that runs during the broadcast (Beat task or the #95/#150
+companion-app rails), polls `liveChatMessages.list` for the creator's own active broadcast, computes
+per-minute message/emoji/exclamation density, and persists it keyed to the eventual VOD id. From there
+the existing #132 plan applies unchanged: normalize to [0,1], merge in `ingestion/signals.py`, weight in
+`clip_engine/candidates.py`, register the "Audience Reaction Spike" principle. **Quota is the likely
+killer** — polling a busy chat for hours could be prohibitive; that math is a CHECK deliverable and may
+sink the issue, which is an acceptable outcome.
+
+**Files to touch**
+- `youtube/chat.py` _(does not exist)_ — live-broadcast chat polling + density computation; graceful no-op when not live
+- `worker/tasks.py` / Beat — the capture lifecycle (start on broadcast, stop on end, bounded)
+- `ingestion/signals.py`, `clip_engine/candidates.py` — merge + weight (per the #132 plan)
+- `models.py` + migration — density timeline storage keyed to the video
+- `docs/CLIPPING_PRINCIPLES.md` — "Audience Reaction Spike"
+- `docs/COMPLIANCE.md` + `docs/DECISIONS.md` — chat messages are third-party UGC: retention, minimization (store **density only**, never message text or author identity), and the ToS justification
+
+**Acceptance criteria**
+- [ ] CHECK confirms `liveChatMessages.list` on the creator's own broadcast is ToS-clean, with the quota cost quantified — or the issue is closed with that finding recorded
+- [ ] **No third-party scraper is used, ever** (§IV.A) — inherits #132's hard constraint
+- [ ] Only aggregate density is persisted; no message text, no author ids, no PII
+- [ ] Density normalized [0,1] per video, merged into the timeline, weighted as a named principle
+- [ ] Graceful and silent when a creator never streams live (the common case)
+- [ ] Per-creator isolation; quota guarded and coordinated with #260
+
+**`[DEC]` DECISIONS.md** — whether live-capture is ToS-clean where replay is not (the load-bearing
+question), the quota verdict, and the data-minimization stance on third-party chat UGC.
+
+**Risks** — (1) **Quota may make this economically impossible** — establish that first, before any code.
+(2) Only helps creators who livestream; it is a wedge feature, not a general one. (3) Chat is
+third-party user content with its own privacy weight — density-only storage is non-negotiable.
+(4) Do not let this reopen #132's scraper temptation under a new number.
+
+---
+
+### Issue 382: `[DEC]` Scope freeze — deprioritize the breadth cluster, fund the moat
+
+**Status** `OPEN` · **Wave** W0 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + tracker edits)
+**Blocked by** nothing — **owner decision, gates the rest of this lane**
+
+**Problem.** **99 issues done, 614 open**, with 1 user on the OAuth cap. The open backlog funds a full
+editor (L23 advanced effects), an agentic chat assistant (#324, #325), thumbnail concepts (#323), and
+title generation (#322) — none of which deepen the channel-knowledge loop that CLAUDE.md makes the test
+every feature must pass, and several of which compete directly with tools that have 50× the engineers
+(CapCut, Submagic). Meanwhile the one uncopyable asset in the repo (#374) is unbuilt and the funnel that
+would put a creator in front of it (#376) does not exist. This is the highest-leverage decision available
+and it costs nothing to make.
+
+**Approach.** An explicit, recorded prioritization call — not deletion. Candidates to park behind L24:
+L23 advanced effects (already deprioritized in that lane's preamble — extend and formalize), #322/#323
+(per-clip titles + thumbnail concepts), #324/#325 (agentic chat expansion), and the remaining editor
+polish. Candidates to fund: #374, #375, #376. Record the reasoning so the parking is auditable and
+reversible, per the parking-lot rule.
+
+**Acceptance criteria**
+- [ ] An explicit funded/parked split is recorded in DECISIONS with the north-star test applied to each item
+- [ ] Parked issues are marked in `docs/issues.md` (status line), not deleted — reversible with fresh approval
+- [ ] `docs/PROJECT_STATE.md` reflects the new active track
+- [ ] The decision states what evidence would *un*-park each item
+
+**`[DEC]` DECISIONS.md** — required; this issue is the decision.
+
+**Risks** — (1) Parking shipped-but-unpolished features can leave visible rough edges — check each parked
+item is at an honest stopping point, not mid-build. (2) The owner may disagree on specific items; the
+value is in making the call explicit either way.
+
+---
+
+### Issue 383: Refresh `docs/COMPETITIVE_RESEARCH.md` — the snapshot is stale in load-bearing ways
+
+**Status** `OPEN` · **Wave** W0 · **Lane** L24 · **Size** `S` · **Verify** `local`
+**Blocked by** nothing — **ready now** · **Suggested agent** `industry-standards-researcher`
+
+**Problem.** `docs/COMPETITIVE_RESEARCH.md` is a **~2026-06 snapshot** whose own header says to verify
+before citing. Three of its load-bearing inputs have since changed: YouTube's **16 July 2026**
+inauthentic-content policy did not exist when it was written; YouTube's **Studio auto-suggestions +
+Clips-into-Shorts** roadmap is not mentioned at all (it materially changes the "table stakes are
+commoditized" section — they are about to be *free and native*); and the pricing table is explicitly
+flagged as point-in-time while #380 now needs live numbers to decide against. The doc currently drives
+strategy from stale ground.
+
+**Approach.** A targeted refresh, not a rewrite: (a) add a dated section on the inauthentic-content
+policy and what it means for the category; (b) add YouTube-native clipping as a first-class competitor
+tier (it is now the most important one); (c) re-verify the pricing table live for #380; (d) revisit the
+`:104` style-learning thesis with current evidence (the 2026-07-30 sweep says it still holds — record
+that as a dated confirmation rather than an assumption); (e) keep the #209 reconciliation note accurate
+against whatever #380 decides.
+
+**Acceptance criteria**
+- [ ] Every refreshed claim carries a source and a date; superseded claims are struck, not silently edited
+- [ ] YouTube-native clipping is added as a competitor tier with the roadmap timing cited
+- [ ] The inauthentic-content policy is captured with its date and its category implications
+- [ ] Pricing re-verified live and dated (feeds #380)
+- [ ] The style-learning thesis is re-confirmed or revised with 2026-07-30+ evidence
+
+**Risks** — (1) Competitor-authored "alternatives" pages dominate these SERPs and are inherently biased —
+corroborate, per the doc's own caveat. (2) Do not let a refresh balloon into a second full report; the
+value is in the four deltas.
+
+---
+
 *Generated 2026-06-22 from `docs/research/findings/` + source-verified extraction of every open issue
 + a six-dimension production-gap research pass. Prior priority-tier backlog archived at
 `docs/archive/issues_pre_roadmap_2026-06-22.md`; finished work at `docs/archive/issues_snapshot_2026-06-22.md`.*

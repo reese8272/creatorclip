@@ -4,6 +4,21 @@
 > Pricing/feature claims are a point-in-time capture — **verify live before citing publicly.**
 > Kept as living strategic reference; feeds the Issue 147 UI/UX cohesion work._
 
+> ⚠️ **STALE IN LOAD-BEARING WAYS as of 2026-07-30 — refresh tracked as Issue 383.** Three inputs
+> changed after this snapshot was written and are NOT reflected below:
+> **(1)** YouTube is rolling **Video Clips into Shorts + auto-suggestions for the most "clippable"
+> moments** later in 2026 — the "table stakes are commoditized" section understates this: those
+> features are about to be *free and native*, and YouTube-native clipping is now a missing
+> first-class competitor tier. **(2)** YouTube's **16 July 2026** "inauthentic content" policy
+> (renamed from "repetitious content") makes mass-produced/templated output non-monetizable on a
+> three-strike ladder — an extinction-level risk for template-based clippers and the single biggest
+> strategic shift since this doc was written. **(3)** The pricing table needs live re-verification
+> before it is used to decide Issue 380.
+> Re-confirmed still true on 2026-07-30: the **style-learning thesis at line 104** — a fresh sweep of
+> the 2026 field (Ssemble, Choppity, Vizard, quso) surfaces brand kits and templates only, no tool
+> that learns an individual creator. Full findings + evidence in `docs/issues.md` Lane **L24** and
+> the 2026-07-30 `docs/DECISIONS.md` entry.
+
 ## TL;DR
 
 - **The market is large, fast-growing, and crowded at the “general repurposing” layer (Opus Clip, Vizard, Klap, Captions, Submagic all do the same talking-head-to-shorts job), but it is genuinely underserved in YouTube/stream-native highlight detection with a style-learning angle — which is exactly autoclip.studio’s wedge.** Opus Clip is the category leader (~$20M ARR, 10M+ users, $215M valuation, 172M+ clips and 57B+ views generated) on the back of one feature — the Virality Score — and aggressive product-led + affiliate growth.

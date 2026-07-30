@@ -4,6 +4,40 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-30 (latest) — Lane L24 FILED: positioning & moat surfacing (Issues 374–383)
+
+Owner-requested product/market review (no code written). Read `docs/PRD.md`, `COMPETITIVE_RESEARCH.md`,
+`GO_LIVE.md`, the SPA route map, `clip_engine/`, `preference/`, `billing/packs.py`, and the four product
+screenshots; ran five live web searches (2026-07-30). **Finding:** the engineering is strong and the moat
+is real, but the product sells the commodity layer — and three recent shifts make that layer worthless:
+YouTube shipping **native clip auto-suggestions + Clips-into-Shorts** later in 2026; YouTube's **16 July
+2026 "inauthentic content" policy** (templated/mass-produced output demonetized, three-strike ladder);
+and OpusClip publicly conceding the bottleneck moved to *"the decision of what deserves cutting"* with
+*"measurement is where repurposing setups break down."* Style-learning remains unclaimed field-wide
+(dated re-confirmation of the `COMPETITIVE_RESEARCH.md:104` thesis).
+
+**The asset we already own and never surface:** `poll_clip_outcomes` → `ClipOutcome.performed_well`
+(`worker/tasks.py:1055`) → 3× training weight (`preference/decay.py:8`), fed by #197's publish-time row
+creation. It requires per-creator Analytics OAuth, so no competitor can copy it — and it appears in **no
+creator-facing surface**. `preference/efficacy.py` (NDCG + chronological holdout + paired-bootstrap CIs)
+is a second unused trust asset.
+
+**Verified gaps:** no public marketing page or demo (`main.py:200` sends anonymous visitors straight to
+a login wall); DNA gated behind `MIN_VIDEOS_FOR_DNA=10`; free tier is 60 minutes *once*
+(`config.py:588`) vs Opus's 60/month recurring; 99 issues done / **614 open** / 1 user on the OAuth cap.
+
+**Filed as Lane L24_MOAT_POSITIONING** in `docs/issues.md`: **#374** Proof of Lift (surface the outcome
+loop — W0, highest leverage), **#375** originality guard vs the July inauthentic-content policy,
+**#376** public landing + no-auth demo (promotes "no-auth demo mode" out of the Phase-3 parking lot),
+**#377** shortlist mode, **#378** publish the ranking-quality numbers, **#379** shareable Channel
+Fingerprint, **#380** `[DEC]` pricing re-evaluation (re-opens #209 on three named new facts; ledger
+untouched), **#381** chat density via **live** capture (distinct from the still-BLOCKED #132 — no
+scrapers; gated on a quota verdict), **#382** `[DEC]` scope freeze, **#383** refresh the stale
+competitive doc. Positioning decision + all sources in `docs/DECISIONS.md` (2026-07-30);
+`COMPETITIVE_RESEARCH.md` header marked stale pending #383.
+
+---
+
 ## 2026-07-30 (later) — Lane L23 COMPLETE: Issues 370–373 all DONE (batch /issue-workflow run)
 
 All four remaining standalone-tools issues built, tested, and committed on
