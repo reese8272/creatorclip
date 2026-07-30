@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Chip } from '@/components/Chip'
 import { Brief } from './Brief'
-import type { DnaProfile, DnaResponse, Identity, NicheOption } from '@/types'
+import type { DnaProfile, DnaResponse, Identity, NicheOption, StyleNotes } from '@/types'
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -54,6 +54,7 @@ export function DnaCard({
   niches: NicheOption[]
 }) {
   const [profile, setProfile] = useState<DnaProfile | null>(null)
+  const [styleNotes, setStyleNotes] = useState<StyleNotes | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [showBrief, setShowBrief] = useState(false)
@@ -63,6 +64,7 @@ export function DnaCard({
 
   const applyDna = (data: DnaResponse) => {
     setProfile(data.profile)
+    setStyleNotes(data.style_notes ?? null)
     setMessage(data.profile ? null : data.message || 'No DNA yet.')
     setLoading(false)
   }
@@ -183,6 +185,31 @@ export function DnaCard({
             ) : (
               <p className="text-sm text-muted">(no brief text)</p>
             )}
+
+            {/* Issue 371 — what the system distilled from the creator's review
+                feedback; rendered VERBATIM (it is exactly what scoring injects). */}
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-2xs uppercase tracking-[0.06em] text-subtle">
+                <Chip pose="meditate" size={18} />
+                What Chip has learned from your reviews
+              </div>
+              {styleNotes ? (
+                <>
+                  <p className="rounded-md border border-default bg-bg px-3 py-2.5 text-sm leading-relaxed text-fg">
+                    {styleNotes.text}
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-subtle">
+                    based on {styleNotes.source_count} review notes · updated{' '}
+                    {fmtDate(styleNotes.updated_at)}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted">
+                  Nothing learned yet — when you keep/drop clips or review a video’s style, explain
+                  your call and it lands here (and in your ranking).
+                </p>
+              )}
+            </div>
 
             {stats(profile).length > 0 && (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

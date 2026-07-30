@@ -6,6 +6,7 @@ a free-text note. This is the video-level counterpart of the per-clip
 ``POST /clips/{clip_id}/feedback``; rows feed the style distiller (Issue 371).
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -118,6 +119,12 @@ async def submit_video_feedback(
         video_id=str(video_id),
         sentiment=body.sentiment.value,
     )
+
+    # Issue 371: every video-level review has substance (tags-or-note required
+    # above) — feed the style distiller. Self-debouncing + LLM-gated task.
+    from worker.tasks import distill_style_prefs
+
+    await asyncio.to_thread(distill_style_prefs.delay, str(creator.id))
 
     return _feedback_response(row)
 

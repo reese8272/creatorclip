@@ -308,10 +308,14 @@ async def generate_clips(
     transcript = await session.get(Transcript, video_id)
     transcript_segments = transcript.segments_jsonb.get("segments", []) if transcript else []
 
-    from dna.profile import get_active
+    from dna.profile import get_active, get_style_notes
 
     dna_profile = await get_active(session, creator.id)
     dna_brief = dna_profile.brief_text if dna_profile else None
+    # Issue 371: distilled review-feedback preferences ride into scoring as a
+    # separate system block (fetched here, before the session closes below).
+    style_row = await get_style_notes(session, creator.id)
+    style_notes = style_row.notes_text if style_row else None
 
     import db
     from clip_engine.ranking import load_existing_clips, persist_ranked_clips, score_and_rank
@@ -338,6 +342,7 @@ async def generate_clips(
         transcript_segments=transcript_segments,
         max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
         ledger_session_factory=db.AsyncSessionLocal,
+        style_notes=style_notes,
     )
     if not ranked:
         return {"clips": []}

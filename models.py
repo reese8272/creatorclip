@@ -758,6 +758,38 @@ class VideoFeedback(Base):
     )
 
 
+class CreatorStyleNotes(Base):
+    """Distilled style preferences learned from review feedback (Issue 371).
+
+    Single row per creator (like ``creator_style``) holding the LLM-distilled
+    "STYLE PREFERENCES" text produced from clip-level feedback tags/notes and
+    video-level style reviews. Injected into clip scoring as a third system
+    block AFTER the cached DNA block, and into DNA-brief rebuilds via the user
+    turn. ``last_input_at`` is the distillation watermark (newest feedback row
+    consumed); the debounce in ``distill_style_prefs`` counts rows after it.
+    """
+
+    __tablename__ = "creator_style_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    notes_text: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # How many feedback rows (clip + video) fed the current distillation —
+    # surfaced honestly to the creator ("based on N notes").
+    source_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    last_input_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
 class ClipOutcome(Base):
     __tablename__ = "clip_outcomes"
 

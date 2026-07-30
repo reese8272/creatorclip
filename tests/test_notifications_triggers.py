@@ -102,6 +102,7 @@ class TestClipsReadyTrigger:
                 return_value=mock_clips,
             ),
             patch("dna.profile.get_active", new_callable=AsyncMock, return_value=None),
+            patch("dna.profile.get_style_notes", new_callable=AsyncMock, return_value=None),
             patch("worker.tasks.send_notification") as mock_send_notif,
             patch("worker.tasks.render_clip.delay"),  # auto-render — don't hit the broker
         ):

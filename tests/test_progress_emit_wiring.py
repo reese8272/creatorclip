@@ -218,6 +218,7 @@ async def test_generate_clips_async_emits_terminal_done_on_success(mocker):
     mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
 
     mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
+    mocker.patch("dna.profile.get_style_notes", AsyncMock(return_value=None))
     fake_clips = []
     for i in range(3):
         c = MagicMock()
@@ -302,6 +303,7 @@ def _generate_clips_scaffold(mocker, *, clips, brand_kit_style=None):
     # Issue 231: migrated per-creator paths open db.tenant_session → AsyncSessionLocal.
     mocker.patch("db.AsyncSessionLocal", MagicMock(return_value=fake_session_cm))
     mocker.patch("dna.profile.get_active", AsyncMock(return_value=None))
+    mocker.patch("dna.profile.get_style_notes", AsyncMock(return_value=None))
     # Issue 82b split: session-free scoring + reacquired-session persistence.
     mocker.patch("clip_engine.ranking.load_existing_clips", AsyncMock(return_value=[]))
     mocker.patch(

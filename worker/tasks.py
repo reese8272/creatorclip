@@ -39,6 +39,7 @@ from models import (
     ClipPublication,
     Creator,
     CreatorDna,
+    CreatorStyleNotes,
     DataExport,
     DataExportStatus,
     IngestStatus,
@@ -54,6 +55,7 @@ from models import (
     Summary,
     Transcript,
     Video,
+    VideoFeedback,
     VideoKind,
     VideoMetrics,
 )
@@ -1129,6 +1131,22 @@ def retrain_preference(self: Task, creator_id: str) -> str:
     return creator_id
 
 
+@celery.task(bind=True, max_retries=2, soft_time_limit=120)
+def distill_style_prefs(self: Task, creator_id: str) -> str:
+    """Distill review feedback tags/notes into the style-preferences block (Issue 371).
+
+    Separate from ``retrain_preference`` deliberately: the retrain debounce
+    early-returns on tag-only clip feedback and never sees video-level reviews,
+    and this task needs LLM kill-switch + spend-guard gating the numeric fit
+    doesn't. Idempotent + self-debouncing (watermark on creator_style_notes).
+    """
+    try:
+        run_async(_distill_style_prefs_async(creator_id))
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+    return creator_id
+
+
 # ── Async implementations ─────────────────────────────────────────────────────
 
 
@@ -1195,6 +1213,142 @@ async def _retrain_preference_async(creator_id: str) -> None:
                     await _emit_preference_metrics(session, cid)
         finally:
             await _rollback_then_unlock(session, lock_key)
+
+
+async def _distill_style_prefs_async(creator_id: str) -> None:
+    """Distill accumulated feedback tags/notes into creator_style_notes (Issue 371).
+
+    Debounce: distill only when ≥ STYLE_DISTILL_MIN_NEW new tagged/noted rows
+    (clip feedback with tags/note + video feedback) arrived after the stored
+    watermark. Inputs are capped newest-first; the LLM call is Haiku-tier and
+    billed via record_llm_usage. Task-side guards (no route deps here): the
+    llm_generation kill switch and the per-creator spend breaker.
+    """
+    from sqlalchemy import select
+
+    from billing.ledger import record_llm_usage
+    from billing.spend_guard import creator_block_status
+    from config import settings
+    from preference.style_distill import distill_style_notes
+
+    cid = uuid.UUID(creator_id)
+
+    if not await flag_enabled("llm_generation"):
+        logger.info("distill_style_prefs: llm_generation flag off — skip (creator %s)", cid)
+        return
+    blocked, _retry_after = await creator_block_status(cid)
+    if blocked:
+        logger.info("distill_style_prefs: spend guard active — skip (creator %s)", cid)
+        return
+
+    async with db.tenant_session(cid) as session:
+        lock_key = f"distill:{cid}"
+        if not await _try_advisory_lock(session, lock_key):
+            logger.info("advisory lock held — skipping distill_style_prefs for %s", cid)
+            return
+        try:
+            existing = (
+                await session.execute(
+                    select(CreatorStyleNotes).where(CreatorStyleNotes.creator_id == cid)
+                )
+            ).scalar_one_or_none()
+            watermark = existing.last_input_at if existing is not None else None
+
+            substantive_clip = (
+                ClipFeedback.feedback_tags.isnot(None) | ClipFeedback.feedback_note.isnot(None)
+            )
+            clip_q = (
+                select(ClipFeedback)
+                .where(ClipFeedback.creator_id == cid, substantive_clip)
+                .order_by(ClipFeedback.created_at.desc())
+                .limit(settings.STYLE_DISTILL_MAX_ROWS)
+            )
+            video_q = (
+                select(VideoFeedback)
+                .where(VideoFeedback.creator_id == cid)
+                .order_by(VideoFeedback.created_at.desc())
+                .limit(settings.STYLE_DISTILL_MAX_ROWS // 2)
+            )
+            clip_fb = list((await session.execute(clip_q)).scalars())
+            video_fb = list((await session.execute(video_q)).scalars())
+            if not clip_fb and not video_fb:
+                return
+
+            all_created = [r.created_at for r in clip_fb] + [r.created_at for r in video_fb]
+            new_count = sum(1 for t in all_created if watermark is None or t > watermark)
+            if new_count < settings.STYLE_DISTILL_MIN_NEW:
+                logger.info(
+                    "distill_style_prefs: %d new rows (< %d) for %s — debounced",
+                    new_count,
+                    settings.STYLE_DISTILL_MIN_NEW,
+                    cid,
+                )
+                return
+
+            # Valence mapping: upvote/trim/format = keep; downvote = drop; skip
+            # carries no style signal but may still hold tags — keep it neutral.
+            clip_rows = [
+                {
+                    "valence": (
+                        "keep"
+                        if fb.action.value in ("upvote", "trim", "format")
+                        else "drop" if fb.action.value == "downvote" else "neutral"
+                    ),
+                    "tags": fb.feedback_tags,
+                    "note": fb.feedback_note,
+                }
+                for fb in clip_fb
+            ]
+            video_rows = [
+                {"valence": fb.sentiment.value, "tags": fb.feedback_tags, "note": fb.feedback_note}
+                for fb in video_fb
+            ]
+            newest_input_at = max(all_created)
+            source_count = len(clip_fb) + len(video_fb)
+
+        finally:
+            await _rollback_then_unlock(session, lock_key)
+
+    # LLM round-trip with NO DB session held (Issue 82b posture).
+    notes_text, usage = await distill_style_notes(clip_rows, video_rows)
+    if not notes_text:
+        logger.warning("distill_style_prefs: empty distillation for %s — not persisted", cid)
+        return
+
+    await record_llm_usage(
+        cid,
+        usage,
+        settings.COST_PER_MTOK_IN_HAIKU,
+        settings.COST_PER_MTOK_OUT_HAIKU,
+    )
+
+    async with db.tenant_session(cid) as session:
+        existing = (
+            await session.execute(
+                select(CreatorStyleNotes).where(CreatorStyleNotes.creator_id == cid)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                CreatorStyleNotes(
+                    creator_id=cid,
+                    notes_text=notes_text,
+                    source_count=source_count,
+                    last_input_at=newest_input_at,
+                )
+            )
+        else:
+            existing.notes_text = notes_text
+            existing.source_count = source_count
+            existing.last_input_at = newest_input_at
+            existing.updated_at = datetime.now(UTC)
+        await session.commit()
+    logger.info(
+        "distill_style_prefs: updated style notes for %s (%d source rows, %d chars)",
+        cid,
+        source_count,
+        len(notes_text),
+    )
 
 
 async def _emit_preference_metrics(session: Any, creator_id: uuid.UUID) -> None:
@@ -2294,11 +2448,17 @@ async def _build_dna_async(creator_id: str, job_id: str | None = None) -> None:
             # `thinking`) events as the LLM call progresses. Passing task_id=None
             # keeps the legacy .create() path for unit-test callers that mock
             # this function and any internal invocation without a job_id.
+            # Issue 371: rebuilt briefs bake in the distilled style preferences.
+            from dna.profile import get_style_notes as _get_style_notes
+
+            _style_row = await _get_style_notes(session, creator_uuid)
+
             brief_text, _brief_usage = await generate_brief(
                 patterns,
                 channel_title,
                 stated_identity,
                 job_id if progress_enabled else None,
+                style_notes=_style_row.notes_text if _style_row else None,
             )
 
             from billing.ledger import record_llm_usage
@@ -2794,6 +2954,13 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
             dna_profile = await get_active(session, video.creator_id)
             dna_brief = dna_profile.brief_text if dna_profile else None
 
+            # Issue 371: distilled review-feedback preferences ride into scoring
+            # as a separate system block (fetched before this session closes).
+            from dna.profile import get_style_notes
+
+            style_row = await get_style_notes(session, video.creator_id)
+            style_notes = style_row.notes_text if style_row else None
+
             # Idempotency guard (Issue 61): existing clips mean a redelivered task
             # must not re-score (LLM cost) or re-insert (would cascade-delete
             # feedback/outcomes). Captured here; scoring runs after this session
@@ -2815,6 +2982,7 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
                 transcript_segments=transcript_segments,
                 max_candidates=settings.CLIPS_PER_VIDEO_DEFAULT,
                 ledger_session_factory=partial(db.tenant_session, creator_id),
+                style_notes=style_notes,
             )
 
         async with db.tenant_session(creator_id) as session:

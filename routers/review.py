@@ -229,6 +229,13 @@ async def submit_feedback(
 
     await asyncio.to_thread(retrain_preference.delay, str(creator.id))
 
+    # Issue 371: tags/notes carry the "why" — feed the style distiller. Only
+    # enqueued when substance exists; the task itself debounces + LLM-gates.
+    if body.feedback_tags or body.feedback_note:
+        from worker.tasks import distill_style_prefs
+
+        await asyncio.to_thread(distill_style_prefs.delay, str(creator.id))
+
     return {"id": str(feedback.id), "action": feedback.action.value}
 
 

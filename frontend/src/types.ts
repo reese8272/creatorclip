@@ -395,9 +395,18 @@ export interface DnaProfile {
   optimal_upload_gap_h: number | null
 }
 
+// Issue 371 — distilled review-feedback style preferences, shown verbatim
+// (this text is exactly what the scoring engine injects).
+export interface StyleNotes {
+  text: string
+  source_count: number
+  updated_at: string
+}
+
 export interface DnaResponse {
   profile: DnaProfile | null
   message?: string
+  style_notes?: StyleNotes | null
 }
 
 export interface NicheOption {

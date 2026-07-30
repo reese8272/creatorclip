@@ -37,6 +37,7 @@ _LLM_ASYNC_HELPERS = [
     "_generate_thumbnail_concepts_async",
     "_analyze_hook_async",
     "_generate_chapters_async",
+    "_distill_style_prefs_async",
 ]
 
 
@@ -138,6 +139,10 @@ _ANTHROPIC_CALL_SITES: dict[tuple[str, str], list[tuple[str, str, str]]] = {
     # Producers billed by their consumers.
     ("dna/brief.py", "generate_brief"): [
         ("worker/tasks.py", "_build_dna_async", "record_llm_usage"),
+    ],
+    # Issue 371 — style-preference distillation, billed in the worker task.
+    ("preference/style_distill.py", "distill_style_notes"): [
+        ("worker/tasks.py", "_distill_style_prefs_async", "record_llm_usage"),
     ],
     ("improvement/brief.py", "generate_improvement_brief"): [
         ("worker/tasks.py", "_generate_improvement_brief_async", "record_llm_usage"),
