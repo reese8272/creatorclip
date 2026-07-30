@@ -4,7 +4,37 @@ Updated after every issue closes.
 
 ---
 
-## 2026-07-30 (latest) — Lane L24 FILED: positioning & moat surfacing (Issues 374–383)
+## 2026-07-30 (latest) — W0 of the all-waves run: **#382 + #383 DONE** — three L24 claims retracted
+
+First wave of an owner-approved multi-wave run to close every code-closeable issue (scope: Buckets A+B,
+per-wave batched approval, parallel agent waves). W0 was deliberately docs-first because #382 gated the
+lane and #383's research underpins #375/#376/#378/#380.
+
+**#383 — competitive refresh against PRIMARY sources.** Added two new competitor tiers: **platform-native
+(YouTube itself)** and **agent-native (Reap ships an MCP server for Claude/ChatGPT/Codex)**. Captured
+Studio Video Clips' real limits — **16:9 only, cannot generate Shorts**, AI suggestions **podcast-playlist
++ English + 10 countries**, Shorts integration **announced not shipped**. Re-verified the pricing table live.
+
+**Three L24 claims failed verification and are retracted** (all three were headed for creator-facing copy):
+1. **No "three-strike ladder" exists.** Neither YouTube's policy page nor TechCrunch describes one.
+2. **The rename was 15 July 2025**, not 16 July 2026 (that was a *clarification* into three categories) —
+   so the policy is ~13 months old and the "newest shift" urgency framing is wrong.
+3. **The two OpusClip quotes are in neither cited post.** Retracted with checkable substitutes supplied.
+   Attributing invented quotes to a named competitor on a *trust* surface (#378) was the sharpest risk here.
+
+**#382 — scope freeze decided: park only #363, fund all of L24.** Its premise was stale — #322/#323/#324/#325
+shipped 2026-06-26 and L23 advanced effects were already parked, leaving Caption TEXT editing as the only
+live candidate (un-park criteria recorded). **The "99 done / 614 open" figure was a miscount**: 614 counted
+acceptance-criteria checkboxes across done *and* open issues. Real: **205 issue headings, 155 done/closed/parked,
+50 genuinely open** — 25 external/operator-gated, 5 DESCOPED-BETA (incl. #261), 6 code-complete pending
+external verification, and **14 buildable** (which is the run's remaining scope). The backlog was never sprawling into breadth; it is already moat + hygiene.
+
+**Baseline at W0:** backend 2377 passed / 64 skipped, frontend 309 passed / 49 files. Branch
+`wave/l24-and-hygiene` (off `main`, nothing deployed). Next: W1 — #364/#365/#366/#367/#368 in parallel.
+
+---
+
+## 2026-07-30 — Lane L24 FILED: positioning & moat surfacing (Issues 374–383)
 
 Owner-requested product/market review (no code written). Read `docs/PRD.md`, `COMPETITIVE_RESEARCH.md`,
 `GO_LIVE.md`, the SPA route map, `clip_engine/`, `preference/`, `billing/packs.py`, and the four product
@@ -24,7 +54,9 @@ is a second unused trust asset.
 
 **Verified gaps:** no public marketing page or demo (`main.py:200` sends anonymous visitors straight to
 a login wall); DNA gated behind `MIN_VIDEOS_FOR_DNA=10`; free tier is 60 minutes *once*
-(`config.py:588`) vs Opus's 60/month recurring; 99 issues done / **614 open** / 1 user on the OAuth cap.
+(`config.py:588`) vs Opus's 60/month recurring; ~~99 issues done / **614 open**~~ (⚠️ **corrected
+2026-07-30 by #382: 155 done/closed/parked, 50 open** — 614 counted acceptance-criteria checkboxes,
+not issues) / 1 user on the OAuth cap.
 
 **Filed as Lane L24_MOAT_POSITIONING** in `docs/issues.md`: **#374** Proof of Lift (surface the outcome
 loop — W0, highest leverage), **#375** originality guard vs the July inauthentic-content policy,

@@ -346,8 +346,15 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
 > `docs/PIPELINE.md`, DECISIONS 2026-07-29, OFF_COURSE 2026-07-29 rows. New issues from the pass:
 
 ### Issue 363: Caption TEXT editing (edit the words burned into the render)
-- **Status:** OPEN (deliberately descoped from the ready pass by owner decision 2026-07-29) ·
-  **Wave:** W2 · **Lane:** L16 UI Core / Editor · **Size:** L · **Verify:** render-env · **Sev:** feature
+- **Status:** **PARKED 2026-07-30 (Issue 382 scope freeze — reversible)** · **Wave:** W2 ·
+  **Lane:** L16 UI Core / Editor · **Size:** L · **Verify:** render-env · **Sev:** feature
+- **Why parked:** the only live item in the breadth cluster (#322–#325 and L23 advanced effects were
+  already shipped or already parked), it is the largest remaining editor build, and it competes with
+  CapCut — territory `docs/COMPETITIVE_RESEARCH.md` flags as field-wide-weak and which does not deepen
+  the channel-knowledge loop. Already descoped once by owner decision 2026-07-29.
+- **Un-park when EITHER:** (a) a beta creator asks for caption-text correction unprompted, or (b) the
+  #374 outcome data shows caption wording correlating with `performed_well`. Reversible with fresh
+  approval per the parking-lot rule — not deleted.
 - Creators can style captions (preset/background/zoom) but cannot edit the words ffmpeg burns in.
   Needs a caption-data store on the clip (not just `style_preset`), a text-editing surface (likely
   the transcript editor), and re-render plumbing. Largest remaining editor gap.
@@ -6407,10 +6414,23 @@ things that happened in the last ~6 weeks are about to make that layer worthless
 
 ### Market findings (live research, 2026-07-30)
 
+> ⚠️ **CORRECTED 2026-07-30 by Issue 383 — read this before citing any finding below.** Findings 1, 2
+> and 3 were written from secondary coverage; primary-source re-fetch refuted specific claims in each.
+> Corrections are inline below and in full at `docs/COMPETITIVE_RESEARCH.md` §
+> "2026-07-30 refresh — corrections" + the 2026-07-30 (later) `docs/DECISIONS.md` entry. **Do not
+> repeat the "three-strike ladder" or the two OpusClip quotes anywhere — neither is supported.**
+
 1. **YouTube is about to give the core feature away.** Video Clips already ships in Studio; YouTube is
    rolling **Clips into Shorts** and launching **auto-suggestions for the most "clippable" moments**
    later in 2026. Free, native, zero friction. "We find your best moments" trends to zero commercial
    value. _(src: tubefilter.com/2026/04/17/youtube-clipping-tool-viewer-clips-shorts/)_
+   - ⚠️ **CORRECTED — real but much narrower today.** Studio's Video Clips is **16:9 only and cannot
+     generate Shorts**; AI suggestions are **podcast-playlists only, English only, 10 countries**
+     (support.google.com/youtube/answer/15824265, fetched 2026-07-30). Shorts integration +
+     auto-suggestions are **announced, not shipped** ("Later this year…"). Also, this finding
+     conflated two *opposite* changes: the **viewer-facing** Clips feature is being **discontinued**
+     (replaced by mobile timestamp sharing) — a removal, not the expansion. Honest framing: the
+     clip-finding layer is commoditizing **on a known trajectory**, not "already free and native."
 2. **YouTube's 16 July 2026 "inauthentic content" policy is an extinction event for generic clippers —
    and a tailwind for us.** The old "repetitious content" policy was renamed and clarified to cover
    **mass-produced or templated content with little variation, easily replicable at scale**, with a
@@ -6420,10 +6440,28 @@ things that happened in the last ~6 weeks are about to make that layer worthless
    positioned to argue the opposite. _(src: tubefilter.com/2026/07/13/youtube-inauthentic-content-monetization-policy-update/ ;
    techcrunch.com/2026/07/20/youtube-clarifies-policies-around-ai-slop-and-upsetting-videos/ ;
    vidiq.com/blog/post/youtube-reused-content-policy-guide/)_
+   - ⚠️ **CORRECTED — no three-strike ladder exists, and the date is wrong.** Neither YouTube's own
+     policy page nor TechCrunch describes a warning → 90-day → permanent ladder; YouTube describes a
+     range from limiting ad earnings to suspending/terminating monetization. The **rename happened
+     15 July 2025**; the 16 July 2026 event was a *clarification* into three categories. The policy is
+     ~13 months old, so the "biggest shift since this doc was written" urgency framing is wrong.
+     Favourable substance survives: templated mass-production is explicitly non-monetizable, and clips
+     stay monetizable with commentary/critical review/added narrative. **#375 must state consequences
+     qualitatively and link YouTube's page — never restate a mechanism we invented.**
 3. **The category leader publicly concedes our north star is the unsolved problem.** OpusClip's own 2026
    strategy post: as mechanical clip selection and captioning improved, "the real bottleneck shifted to
    planning — the decision of what deserves cutting," and "**measurement is where repurposing setups
    break down**." _(src: opus.pro/blog/short-form-video-strategy-2026)_
+   - ⛔ **RETRACTED — these quotes are not in the cited source.** Fetched 2026-07-30: neither sentence
+     appears in that post, nor in the adjacent `creator-economy-2026-…-attention-war` post. Opus's
+     actual wording runs the other way (measurement framed as routine iteration; the named bottleneck
+     is "the gap between content creation and content distribution"). **Never publish these quotes** —
+     attributing invented statements to a named competitor is legal + reputational exposure, and #378
+     is by definition a trust surface. **Checkable substitutes that make the same point:** the category
+     "underexplains how to measure incremental performance after repurposing and how to decide which
+     source assets deserve another pass" (superx.so/blog/content-repurposing-tools), and competitor
+     reviews list **"no cross-platform analytics"** among Opus's concrete limits (playcut.ai,
+     choppity.com). The *finding* survives; the *attribution* does not.
 4. **Style-learning is still unclaimed.** A fresh sweep of the 2026 comparison field (Opus, Vizard,
    Ssemble, Klap, Choppity, quso) surfaces **brand kits and templates only** — no tool learns an
    individual creator's patterns. The `docs/COMPETITIVE_RESEARCH.md:104` thesis still holds 6 weeks on.
@@ -6442,7 +6480,10 @@ things that happened in the last ~6 weeks are about to make that layer worthless
   (`config.py:375`) before the differentiator even activates.
 - **The moat is invisible.** `performed_well` appears in no creator-facing surface. `Insights.tsx` shows
   channel stats and a brief; it never says *"here is what happened to the clips you posted."*
-- **Scope has outrun validation.** **99 issues done / 614 open**, 24 routers, plus chat, thumbnails,
+- **Scope has outrun validation.** ~~**99 issues done / 614 open**~~ → ⚠️ **CORRECTED 2026-07-30 (#382):
+  155 done/closed/parked, 50 genuinely open** — 614 counted acceptance-criteria checkboxes across done
+  *and* open issues alike, not issues. The scope-outrun claim is materially weaker than stated; 24 routers,
+  plus chat, thumbnails,
   titles, chapters, recap, and a full editor — against **1 user on the 100-user OAuth cap**
   (`publication testing.png`). The editor is a fight against CapCut that `docs/COMPETITIVE_RESEARCH.md:134`
   itself flags as field-wide-weak territory; nothing in that cluster deepens the channel-knowledge loop,
@@ -6516,6 +6557,15 @@ for weeks — the empty state IS the feature at launch and must be designed firs
 ---
 
 ### Issue 375: Originality guard — inauthentic-content risk detection (the July-2026 policy play)
+
+> ⛔ **BLOCKING PRE-CONDITION (Issue 383, 2026-07-30).** This issue's framing rests on claims that
+> failed primary-source verification. Before ANY UI work: (a) there is **no three-strike ladder** —
+> state consequences qualitatively ("may become ineligible for monetization") and link
+> support.google.com/youtube/answer/1311392 rather than restating a mechanism; (b) the policy was
+> renamed **15 July 2025** and merely *clarified* 16 July 2026 — drop all "new policy" urgency framing;
+> (c) the three clarified categories are generic/template-based, unsatisfying/off-putting, and AI
+> personas on sensitive topics. Over-stating a third party's enforcement policy is a worse honesty
+> breach than any bad clip score. See `COMPETITIVE_RESEARCH.md` § 2026-07-30 refresh — corrections.
 
 **Status** `OPEN` · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `dna/embeddings.py`, `routers/insights.py`
@@ -6661,6 +6711,13 @@ eval-gated and known good.
 
 ### Issue 378: Publish the ranking-quality numbers as a trust surface
 
+> ⛔ **BLOCKING PRE-CONDITION (Issue 383, 2026-07-30).** The two OpusClip quotes in the L24 preamble
+> are **retracted — they are in neither cited post**. Never publish them; attributing invented
+> statements to a named competitor is legal + reputational exposure on a surface whose entire premise
+> is trust. Checkable substitutes: superx.so/blog/content-repurposing-tools on the category
+> "underexplain[ing] how to measure incremental performance after repurposing", and "no cross-platform
+> analytics" as a named Opus limitation (playcut.ai, choppity.com). Re-fetch any quote before shipping.
+
 **Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local`
 **Blocked by** #376 (needs a public page to put them on) · **Coordinate (hot files)** `preference/efficacy.py`
 
@@ -6736,6 +6793,14 @@ self-contained and unambiguous. (2) Aggregated-demographics and analytics values
 ---
 
 ### Issue 380: `[DEC]` Re-evaluate pricing psychology against the new market evidence
+
+> ⚠️ **NARROWED by Issue 383 (2026-07-30) — two of the three premises are unsupported.** Live pricing
+> re-verification shows AutoClip's per-minute **rate beats OpusClip at every tier** (9.0 ¢/min Starter
+> vs ~10.0 ¢/min; 4.0 ¢/min Stream ≈ 2.5× cheaper), and per-input-minute is **confirmed
+> category-standard** (Opus, Vizard, Klap). The "pricing punishes the long-form creators we target"
+> claim does not hold — the Issue-209 taper is the mitigation and it works. **The one verified gap:**
+> 60 free minutes **once** (`config.py:588`) vs 60/month **recurring** at both Opus and Vizard. Scope
+> this issue to **free-trial structure only**; no `MinuteDeduction` ledger change is implicated.
 
 **Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + copy)
 **Blocked by** nothing · **Supersedes-candidate for** the #209 / #125 / #152 pricing posture
@@ -6834,10 +6899,15 @@ third-party user content with its own privacy weight — density-only storage is
 
 ### Issue 382: `[DEC]` Scope freeze — deprioritize the breadth cluster, fund the moat
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + tracker edits)
-**Blocked by** nothing — **owner decision, gates the rest of this lane**
+**Status** `DONE (2026-07-30)` — **decision made: park only #363, fund all of L24.** Premise was stale:
+every other item this issue proposed parking had already shipped (#322/#323/#324/#325 DONE 2026-06-26;
+L23 advanced effects never filed and already parked at `docs/issues.md:6278`). Backlog reconciled —
+the "614 open" figure was an acceptance-criteria checkbox miscount; real count is **50 open**. Un-park
+criteria for #363 recorded on that issue. Full rationale in the 2026-07-30 (later) `docs/DECISIONS.md`
+entry. · **Wave** W0 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + tracker edits)
+**Blocked by** nothing — **owner decision, gates the rest of this lane** → **RESOLVED, lane unblocked**
 
-**Problem.** **99 issues done, 614 open**, with 1 user on the OAuth cap. The open backlog funds a full
+**Problem.** ~~**99 issues done, 614 open**~~ (⚠️ miscount — see Status), with 1 user on the OAuth cap. The open backlog funds a full
 editor (L23 advanced effects), an agentic chat assistant (#324, #325), thumbnail concepts (#323), and
 title generation (#322) — none of which deepen the channel-knowledge loop that CLAUDE.md makes the test
 every feature must pass, and several of which compete directly with tools that have 50× the engineers
@@ -6852,10 +6922,10 @@ polish. Candidates to fund: #374, #375, #376. Record the reasoning so the parkin
 reversible, per the parking-lot rule.
 
 **Acceptance criteria**
-- [ ] An explicit funded/parked split is recorded in DECISIONS with the north-star test applied to each item
-- [ ] Parked issues are marked in `docs/issues.md` (status line), not deleted — reversible with fresh approval
-- [ ] `docs/PROJECT_STATE.md` reflects the new active track
-- [ ] The decision states what evidence would *un*-park each item
+- [x] An explicit funded/parked split is recorded in DECISIONS with the north-star test applied to each item
+- [x] Parked issues are marked in `docs/issues.md` (status line), not deleted — reversible with fresh approval
+- [x] `docs/PROJECT_STATE.md` reflects the new active track
+- [x] The decision states what evidence would *un*-park each item
 
 **`[DEC]` DECISIONS.md** — required; this issue is the decision.
 
@@ -6867,7 +6937,15 @@ value is in making the call explicit either way.
 
 ### Issue 383: Refresh `docs/COMPETITIVE_RESEARCH.md` — the snapshot is stale in load-bearing ways
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L24 · **Size** `S` · **Verify** `local`
+**Status** `DONE (2026-07-30)` — refreshed against **primary sources** (Google support pages, vendor
+pricing pages, the Opus posts themselves), not secondary coverage. Added the platform-native (YouTube)
+and agent-native (Reap/MCP) competitor tiers; captured Studio Video Clips' real limits (16:9-only,
+no Shorts, podcast-playlist + English + 10 countries, Shorts integration announced-not-shipped);
+re-verified pricing live. **Found and retracted three unsupported L24 claims** — the "three-strike
+ladder" (no primary source describes one), the policy date (renamed 15 Jul **2025**; 16 Jul 2026 was a
+clarification), and two OpusClip quotes that appear in neither cited post. Corrections in
+`COMPETITIVE_RESEARCH.md` § "2026-07-30 refresh — corrections", mirrored in DECISIONS + inline in the
+L24 preamble. · **Wave** W0 · **Lane** L24 · **Size** `S` · **Verify** `local`
 **Blocked by** nothing — **ready now** · **Suggested agent** `industry-standards-researcher`
 
 **Problem.** `docs/COMPETITIVE_RESEARCH.md` is a **~2026-06 snapshot** whose own header says to verify
@@ -6886,11 +6964,11 @@ that as a dated confirmation rather than an assumption); (e) keep the #209 recon
 against whatever #380 decides.
 
 **Acceptance criteria**
-- [ ] Every refreshed claim carries a source and a date; superseded claims are struck, not silently edited
-- [ ] YouTube-native clipping is added as a competitor tier with the roadmap timing cited
-- [ ] The inauthentic-content policy is captured with its date and its category implications
-- [ ] Pricing re-verified live and dated (feeds #380)
-- [ ] The style-learning thesis is re-confirmed or revised with 2026-07-30+ evidence
+- [x] Every refreshed claim carries a source and a date; superseded claims are struck, not silently edited
+- [x] YouTube-native clipping is added as a competitor tier with the roadmap timing cited
+- [x] The inauthentic-content policy is captured with its date and its category implications
+- [x] Pricing re-verified live and dated (feeds #380)
+- [x] The style-learning thesis is re-confirmed or revised with 2026-07-30+ evidence
 
 **Risks** — (1) Competitor-authored "alternatives" pages dominate these SERPs and are inherently biased —
 corroborate, per the doc's own caveat. (2) Do not let a refresh balloon into a second full report; the
