@@ -4,6 +4,34 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-30 (later) — Lane L23 COMPLETE: Issues 370–373 all DONE (batch /issue-workflow run)
+
+All four remaining standalone-tools issues built, tested, and committed on
+`feat/standalone-review-editor` (one commit per issue), in order 372 → 373 → 370 → 371:
+
+- **#372** — full-source editing backbone: `GET /videos/{id}/stream` (presigned R2 302 / dev
+  FileResponse with native Range 206) + `GET /videos/{id}/transcript` (segment-granular, honest
+  empty envelope). LongFormEditor got a real source player (proactive retention-expired card) and
+  a searchable click-to-seek transcript panel; master timeline uses the real duration.
+- **#373** — creator-made clips: drag-select (or transcript "Clip this") → `POST /videos/{id}/clips`
+  (2–600s bounds, soft dedupe, brand-kit seed, best-effort auto-render) → "Your clips" group with
+  honest "not engine-scored" provenance everywhere. Export panel now lists real rendered artifacts
+  with download links; the source-edit stub was removed (owner-approved scope). Load-bearing fix:
+  creator clips excluded from ClipImpression logging (rank-NULL would poison IPS data at rank 0).
+- **#370** — video-level style review: `video_feedback` (migration 0048, RLS) +
+  `POST/GET /videos/{id}/feedback` (requires tags-or-note) + StyleReview surface
+  (`/review?mode=style`), reachable from the picker, the 0-clip state, and the clip view.
+- **#371** — the "why" now teaches the system: Haiku distillation of feedback tags/notes →
+  `creator_style_notes` (migration 0049), gated (flag/spend/lock/debounce) + billed (usage-coverage
+  registries extended). Injected CACHE-SAFELY as a third system block after the cached DNA block in
+  scoring (byte-identical DNA-block CI pin) and into DNA-brief rebuilds via user-turn
+  `wrap_untrusted`. Surfaced verbatim on the Profile DNA card.
+
+Suites at close: backend 2377 passed / frontend 309 passed; ruff+mypy+tsc+eslint at baseline.
+Full design-call log in `docs/DECISIONS.md` (2026-07-30 L23 entry); COMPLIANCE data classes added.
+
+---
+
 ## 2026-07-30 — Issue 369 DONE: standalone Review/Editor landings (picker + upload-in-place); Lane L23 opened
 
 Owner direction: Review and Editor must work as standalone tools, not steps in a Dashboard funnel.

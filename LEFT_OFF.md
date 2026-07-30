@@ -1,8 +1,8 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-29 (end of the "100% ready" pass)
-**Branch at close:** `w3/ready-pass-closeout` — PR #63 to main pending (**merge = Deploy 3**, carries the 8 assess-fixes + all W3 docs)
-**Prod:** healthy at `a50b332` (= Deploys **1+2**, both through the staging gate 2026-07-29); DB head **0047**
+**Last updated:** 2026-07-30 (Lane L23 — standalone Review & Editor tools — COMPLETE)
+**Branch at close:** `feat/standalone-review-editor` @ `6c69bba` + close-out docs commit — **5+ commits ahead of `origin/main`, not pushed, no PR yet**
+**Prod:** healthy at `a50b332` (Deploys 1+2, 2026-07-29); prod DB head **0047** — this branch adds migrations **0048 + 0049** (not applied anywhere yet)
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -10,69 +10,80 @@
 
 ## CURRENT FOCUS
 
-**The 2026-07-29 ready-pass is complete** — verdict **YES-for-beta** re-confirmed
-(`docs/assessment/REPORT.md`, snapshot `history/2026-07-29-REPORT.md`). Two build waves shipped and
-deployed same-day: **W1** (PR #61 = publish/schedule UI, applied titles→YouTube, trim→real
-re-render, source-expired UX) and **W2** (PR #62 = flake elimination to literal zero noise, worker
-hardening, self-hosted fonts, enqueue DRY, Issue-272 visual job now GATING, **approved billing
-fixes**). The close-out /assess found 1 SEV1 + 7 SEV2s — **all fixed same day** (on the pending PR).
+**Lane L23 (Issues 369–373) is fully built and committed** on `feat/standalone-review-editor`:
+Review and Editor are now standalone tools — direct access + upload-in-place (369), full-source
+player + searchable transcript (372), creator-made clips via drag-select + honest per-clip export
+(373), video-level style reviews (370), and style-preference distillation feeding scoring + DNA
+briefs (371). One commit per issue. Suites at close: **backend 2377 / frontend 309**;
+ruff/mypy/tsc/eslint clean; Layer 0 green except a NEW pytest dev-dep advisory (see gotchas).
 
 ### → NEXT ACTIONS
 
-1. **Merge PR #63** (`w3/ready-pass-closeout`) once CI is green — Deploy 3. Needs owner merge
-   authorization (prod deploy).
-2. **#26** — Google console (~5 min): confirm the 4 scopes match `youtube/oauth.py:46-51`; add each
-   friend's Gmail under Audience → Test users. NOT skippable: unverified apps hard-block non-test-users.
-3. **#282 uptime monitor** — now beta-critical: prod was down **~31h with zero alerts** (Jul 28
-   11:59 UTC — owner-intentional: droplet disabled, re-enabled Jul 29; the monitoring gap is the
-   lesson, not the shutdown). Better Stack free tier + `/health` monitor + status page (~30 min).
-   Note: once friends are invited, the droplet must STAY UP — pause monitors for any intentional
-   downtime instead of powering off silently.
-4. **#28** — friend beta smoke + 48h window → invite. Also live-smoke the new surfaces: publish
-   flow, trim re-render, source-expired card (owner's expired clip `b4c87d6f` is a natural canary),
-   cleaned-preview playback (the s3:// fix).
+1. **Push + PR to main**: `git push -u origin feat/standalone-review-editor` → `gh pr create`
+   (base main). Merge to main = Docker publish → staging gate → prod deploy — **owner authorizes**.
+   The GATING Playwright visual job may need baseline regen (long-form editor layout changed):
+   `gh workflow run ci.yml -f update_snapshots=true` → commit artifact (never from WSL2).
+2. **On deploy**: `alembic upgrade head` applies **0048 (video_feedback) + 0049
+   (creator_style_notes)** — new-table + RLS, metadata-cheap. Run the integration lane
+   (`pytest -m integration`, incl. new `test_video_feedback_integration.py`) on a box with
+   docker-compose Postgres.
+3. **Live smoke of the new surfaces**: long-form editor plays source + transcript → drag-create a
+   clip → renders → "Your clips" + Export; `/app/review?video_id=X&mode=style` records a style
+   note; after ≥3 tagged/noted feedbacks `distill_style_prefs` writes `creator_style_notes` and the
+   Profile DNA card shows "What Chip has learned from your reviews". Distillation LLM call:
+   `RUN_LLM_LIVE=1 .venv/bin/pytest -m llm_live tests/test_style_distill.py`.
+4. **Beta path (unchanged, still open)**: #26 Google-console test users · #282 uptime monitor
+   (beta-critical) · #28 friend smoke — see the 2026-07-29 PROJECT_STATE entry.
+5. **Small chore queued** (OFF_COURSE 2026-07-30): pytest 8.3.3 advisory PYSEC-2026-1845
+   (fix 9.0.3, dev-only) — standalone bump + plugin-compat check; until then Layer-0 pip_audit
+   reads 1 vuln vs the 0 baseline.
 
 ## WHAT WORKS NOW (don't re-investigate)
 
-- **Core loop is feature-complete**: upload→clips→review→apply-titles→trim/clean re-render→
-  schedule→private publish→outcomes→retrain. Canonical map: **`docs/PIPELINE.md`** (NEW).
-- **Gates #24/#25 GREEN with live evidence** (doctor 30/30, env locked, /docs 404, no key leaks,
-  deploy proven twice). GO_LIVE Stage A: 15 GREEN · 6 CODE-GREEN · 11 OPEN.
-- **Layer 0 fully green locally** (first time): ruff/mypy 0, coverage 83.51, pip-audit 0 (was venv
-  drift — venv upgraded), module floors ratcheted (crypto/limiter 99, auth 91), visual job gating.
-- **Billing now covers every LLM call site** (intake, thumbnail-patterns, chat tools were unbilled;
-  1h cache-writes at the true 2×) — enforced by a repo-wide AST guard in `tests/test_usage_coverage.py`.
-- Suites at close: backend **2338/0**, frontend **285/0**; zero event-loop noise (the poisoner was
-  the compliance crawler's bare TestClient — root-caused, fixed, regression-locked).
+- **Per-issue commits**: `4064e59` (369) → `6452168` (372) → `aad357f` (373) → `60badbe` (370) →
+  `6c69bba` (371); each closed with full suites green.
+- **Cache-safe style injection is CI-pinned** (`tests/test_style_distill.py`): the cached DNA block
+  is byte-identical with/without style notes — third-system-block design; never concatenate notes
+  into `brief_text` (DECISIONS 2026-07-30).
+- **Creator clips excluded from ClipImpression logging** (IPS integrity) — `tests/test_create_clip.py`.
+- **Billing sweep extended**: usage-coverage AST registries cover `preference/style_distill.py` /
+  `_distill_style_prefs_async` — CI fails on any future unbilled path.
+- Clip mocks now need `style_preset` (new `ClipOut.aspect` derivation) and worker tests stubbing
+  `dna.profile.get_active` must also stub `get_style_notes` — all existing files already updated.
+- Core loop + gates from the 2026-07-29 ready-pass unchanged (see that PROJECT_STATE entry).
 
 ## KEY COORDINATES & FACTS
 
 | Thing | Value |
 |---|---|
 | Prod | `autoclip.studio` — droplet 147.182.136.107 (`ssh creatorclip-vm`), `/opt/autoclip`, compose prod file |
-| DB head | `0047_clip_applied_metadata` |
-| Verdict + register | `docs/assessment/REPORT.md` (+ `history/2026-07-29-REPORT.md`) |
-| Session log | `docs/PROJECT_STATE.md` (2026-07-29 entry at top) |
-| Tracker | `docs/issues.md` — new Issues **363–368** filed; 362 residual + 272 closed; #282 elevated |
-| Open register | 4 carried SEV2s (worker redelivery double-spend; routers ×3) + gated/accepted residuals — REPORT.md table |
-| Wave harness gotcha | memory `worktree-wave-gotcha`: agent worktrees can vanish mid-build — commit early to lane branches |
+| Prod DB head | `0047` (branch adds `0048_video_feedback`, `0049_creator_style_notes`) |
+| New endpoints | `GET /videos/{id}/stream` · `GET /videos/{id}/transcript` · `POST /videos/{id}/clips` · `POST+GET /videos/{id}/feedback` · `GET /creators/me/dna` + `style_notes` |
+| New modules | `preference/style_distill.py` · `routers/video_review.py` · `frontend/src/components/{landing/*, review/StyleReview.tsx, editor/FullTranscriptPanel.tsx}` |
+| New config keys | `ANTHROPIC_MODEL_STYLE_DISTILL` · `STYLE_DISTILL_MIN_NEW` · `STYLE_DISTILL_MAX_ROWS` · `STYLE_NOTES_MAX_CHARS` (documented in `.env.example`) |
+| New Celery task | `distill_style_prefs` (flag/spend/lock/debounce-gated; Haiku-billed) |
+| Tracker | `docs/issues.md` Lane `L23_STANDALONE_TOOLS` — 369–373 DONE, ACs checked (371's eval AC honestly annotated) |
 
 ## CONSTRAINTS & GOTCHAS
 
-- **Any merge to main = Docker publish → staging gate → prod deploy.** Merges need owner authorization.
-- Local toolchain: `.venv/bin/*` only (`python -m pip`, not bare pip — venv has no pip shim on PATH).
-- Visual baselines regenerate ONLY via `gh workflow run ci.yml -f update_snapshots=true` →
-  download artifact → commit (never from WSL2 — font rendering).
-- `gh pr edit` dies on a GraphQL projectCards bug — use `gh api repos/.../pulls/N -X PATCH` instead.
-- Piped exit codes lie: check `.pytest_cache/v/cache/lastfailed` or `set -o pipefail`.
+- **This box has no Docker/Postgres** — integration lane + alembic upgrades were NOT run here
+  (unit lane mocks DB by design). Run where compose exists.
+- **Do not merge style notes into `brief_text` at scoring time** — invalidates the 1h prompt cache
+  on every re-distillation (test-pinned; the whole point of the third-block design).
+- **`/videos/{id}/stream` serves the SOURCE** — subject to the 72h retention purge; the UI shows an
+  honest expired card. Don't "fix" a dead player by silently extending retention (COMPLIANCE).
+- Any merge to main = prod deploy pipeline; owner authorizes.
+- Local toolchain: `.venv/bin/*` only; visual baselines only via the CI dispatch flow;
+  `gh pr edit` GraphQL bug → use `gh api repos/.../pulls/N -X PATCH`.
 
 ## POINTERS
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/PIPELINE.md` | **NEW** — canonical upload→publish flow map (files/functions/error codes) |
-| `docs/GO_LIVE.md` | Stage-A scorecard (updated 2026-07-29 with gate evidence) |
-| `docs/assessment/REPORT.md` | Verdict + ranked register |
-| `docs/DECISIONS.md` | 2026-07-29 W1+W2 sections (~18 entries) |
-| `docs/OFF_COURSE_BUGS.md` | 2026-07-29 rows: outage, fixes, follow-ups |
+| `docs/SOT.md` | Stack/schema/structure (updated: 0048/0049, new modules/endpoints/components) |
+| `docs/PROJECT_STATE.md` | 2026-07-30 entries (369, then L23-complete) — top of file |
+| `docs/issues.md` | Lane L23 statuses + AC annotations |
+| `docs/DECISIONS.md` | 2026-07-30 L23 entry — every design call + CHECK doc links |
+| `docs/COMPLIANCE.md` | New data classes: video_feedback, creator_style_notes |
+| `docs/OFF_COURSE_BUGS.md` | 2026-07-30 pytest-advisory chore |
 | Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |
