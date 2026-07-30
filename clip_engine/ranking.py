@@ -136,6 +136,7 @@ async def score_and_rank(
     transcript_segments: list | None = None,
     max_candidates: int = 8,
     ledger_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None = None,
+    style_notes: str | None = None,
 ) -> list[dict]:
     """Extract candidates → score (per-candidate LLM call) → rank. Session-free.
 
@@ -166,6 +167,7 @@ async def score_and_rank(
         transcript_segments,
         creator_id=creator_id,
         ledger_session_factory=ledger_session_factory,
+        style_notes=style_notes,
     )
     return rank_candidates(scored)
 

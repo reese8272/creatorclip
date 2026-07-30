@@ -74,6 +74,46 @@ export interface CatalogListResponse {
   offset: number
 }
 
+// Video-level style review (Issue 370) — POST/GET /videos/{id}/feedback.
+export type VideoSentiment = 'like' | 'dislike'
+
+export interface VideoFeedbackPayload {
+  sentiment: VideoSentiment
+  feedback_tags?: string[]
+  feedback_note?: string | null
+}
+
+export interface VideoFeedbackItem {
+  id: string
+  video_id: string
+  sentiment: VideoSentiment
+  feedback_tags: string[] | null
+  feedback_note: string | null
+  created_at: string
+}
+
+export interface VideoFeedbackListResponse {
+  items: VideoFeedbackItem[]
+}
+
+// GET /videos/{id}/transcript — full-source transcript (Issue 372). Segment-
+// granular (no word arrays); times are video-relative seconds.
+export interface VideoTranscriptSegment {
+  text: string
+  start_s: number
+  end_s: number
+  index: number
+}
+
+export interface VideoTranscript {
+  video_id: string
+  duration_s: number | null
+  source: string | null
+  segments: VideoTranscriptSegment[]
+  state: 'empty_initial' | 'empty_filtered' | 'populated'
+  message?: string | null
+}
+
 // Subset of ClipOut the dashboard reads to count rendered clips per video.
 export interface ClipListItem {
   id: string
@@ -273,6 +313,11 @@ export interface ReviewClip {
   // NULL = fall back to video.title / "#Shorts" at publish time.
   applied_title: string | null
   applied_description: string | null
+  // Issue 373 — provenance: 'creator' = manually-selected source range (never
+  // engine-scored; UI shows "Your selection" instead of a fit tier).
+  origin: 'engine' | 'creator'
+  // Issue 373 — render aspect preset, surfaced by the export panel.
+  aspect: string
 }
 
 // Issue 216 — honest personalization-status surface.
@@ -350,9 +395,18 @@ export interface DnaProfile {
   optimal_upload_gap_h: number | null
 }
 
+// Issue 371 — distilled review-feedback style preferences, shown verbatim
+// (this text is exactly what the scoring engine injects).
+export interface StyleNotes {
+  text: string
+  source_count: number
+  updated_at: string
+}
+
 export interface DnaResponse {
   profile: DnaProfile | null
   message?: string
+  style_notes?: StyleNotes | null
 }
 
 export interface NicheOption {

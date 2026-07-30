@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     ANTHROPIC_MODEL_CLIP_TITLES: str = "claude-sonnet-4-6"
     ANTHROPIC_MODEL_CLIP_CAPTIONS: str = "claude-sonnet-4-6"
     ANTHROPIC_MODEL_CLIP_EXPLAIN: str = "claude-sonnet-4-6"
+    # Issue 371 — style-preference distillation (≤10K chars in → ≤150 words out):
+    # squarely the cheap classify tier, same as hooks/chapters/performer.
+    # Source: /claude-api model reference (claude-haiku-4-5, $1/$5 per MTok, 2026-07-30).
+    ANTHROPIC_MODEL_STYLE_DISTILL: str = "claude-haiku-4-5"
     # web_search_20260209 is the GA version with dynamic filtering: Claude
     # writes code to pre-filter search results before they reach the context
     # window, reducing tokens read and improving accuracy. Same tool API
@@ -390,6 +394,16 @@ class Settings(BaseSettings):
     # documented in the USPTO 10860981 patent art and NNG default-effect
     # literature.  Lower = noisier; higher = too conservative for small channels.
     STYLE_LEARN_THRESHOLD: int = 5
+
+    # ── Style-preference distillation (Issue 371) ─────────────────────────────
+    # Debounce: distill only when at least this many NEW tagged/noted feedback
+    # rows (clip + video combined) arrived since the last distillation. Keeps
+    # the Haiku call rare and batched instead of per-click.
+    STYLE_DISTILL_MIN_NEW: int = 3
+    # Newest-first caps on the feedback rows fed into one distillation prompt.
+    STYLE_DISTILL_MAX_ROWS: int = 100
+    # Hard cap on the stored distilled text (and the scoring system block).
+    STYLE_NOTES_MAX_CHARS: int = 1200
 
     PERSONALIZATION_THRESHOLD_LABELS: int = 20
     # Recency-decay half-life (days) for preference-model sample weights. Was a

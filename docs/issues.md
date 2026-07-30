@@ -6269,6 +6269,112 @@ dry-run, LLM gating, capability-separability DAG).
 
 ---
 
+## Lane L23 — Standalone Review & Editor Tools  —  `L23_STANDALONE_TOOLS`
+
+Owner direction (2026-07-30): **Review and Editor must each work as tools in their own right** — open
+them directly, upload into them, and use them without the Dashboard funnel. Review grows into a real
+review tool (explain *why* a style works or doesn't, at the video level, feeding personalization);
+Editor grows toward grade-A editing, **full-source editing first** (owner-prioritized over effects).
+Phase 1 (direct access + upload-in-place) shipped 2026-07-30 (Issue 369). Advanced effects
+(music/ducking, transitions, speed ramping, b-roll), faster client-side preview, and wiring
+backend-only features into the Editor UI (title suggestions, server waveforms) are **explicitly
+deprioritized** — parked here, not scheduled.
+
+**Lane issues (wave order):** #369 · #370, #371 · #372, #373 · **Waves:** W0 (done), W1 (Review), W2 (Editor)
+
+### Issue 369: Standalone landings — picker + upload-in-place on /review and /editor
+
+**Status** `DONE` (2026-07-30, feat/standalone-review-editor) · **Wave** W0 · **Lane** L23 · **Size** `M` · **Verify** `local`
+**Shipped:** `frontend/src/components/landing/VideoPickerLanding.tsx` (shared picker: honest per-row
+states mirroring VideoTable's ActionCell; row click sets `?video_id=` on the current route; inline
+explicit `GenerateClipsButton` that consumes the generate response body and advances in place, with
+402/429/503 messages surfaced verbatim) + `landing/InlineUploadFlow.tsx` (upload → SSE StageStepper
+progress → explicit generate → straight into the tool; single stream per the 3-slot SSE cap — picker
+rows ride the 5s poll) + `UploadVideoForm` `onUploaded` callback + guard swaps in
+`Review.tsx`/`Editor.tsx`; shared constants extracted to `dashboard/videoStatus.ts`, poll helper to
+`lib/videosPoll.ts`. Tests: `VideoPickerLanding.test.tsx`, `InlineUploadFlow.test.tsx`, updated
+`Review.test.tsx`/`Editor.test.tsx`. `[DEC]` recorded 2026-07-30 (supersedes the Issue-304
+bounce-to-Review empty state).
+
+### Issue 370: Video-level style review — record why a style works, on any upload
+
+**Status** `DONE` (2026-07-30, feat/standalone-review-editor) · **Wave** W1 · **Lane** L23 · **Size** `L` · **Verify** `local` + `integration`
+**Shipped:** migration 0048 `video_feedback` (RLS; new 2-value `video_sentiment_enum`) + `routers/video_review.py` POST/GET (tags ≤10×64 + note ≤2000; requires tags-or-note) + `StyleReview.tsx` (stream player w/ retention-honest fallback, like/dislike taxonomy, past-notes list) + Review `?mode=style` + 0-clip CTA + picker link. Distill enqueue wired (371). Tests: `test_video_feedback.py` (11) + RLS integration file + StyleReview/Review vitest.
+
+**Problem.** Review is clip-only: `ClipFeedback` (models.py) FKs to a clip, so a creator cannot watch an
+upload and record "this pacing/style works for my channel / doesn't" unless the pipeline produced clips.
+The standalone review tool needs style commentary at the **video** level.
+
+**Approach sketch (Phase-1 CHECK required).** New `video_feedback` table (creator-scoped, RLS) with
+structured style tags + free-text note (mirror the Issue-118/339 clip taxonomy), a
+`POST /videos/{id}/feedback` endpoint, and a Review-page surface to watch the upload and record the take.
+Needs a source-playback answer for un-clipped videos (coordinate with Issue 372's streaming endpoint —
+or honestly scope W1 to videos with rendered clips).
+
+**Acceptance criteria**
+- [x] Video-level feedback persisted with per-creator isolation + tags/note parity with clip feedback
+- [x] Review page offers the style-review surface without requiring generated clips
+- [x] No virality language; honesty tests extended
+
+### Issue 371: Consume the "why" — feed feedback tags/notes into personalization
+
+**Status** `DONE` (2026-07-30, feat/standalone-review-editor) · **Wave** W1 · **Lane** L23 · **Size** `L` · **Verify** `local` + `llm_live`
+**Shipped:** `preference/style_distill.py` (Haiku via new `ANTHROPIC_MODEL_STYLE_DISTILL`) + `distill_style_prefs` task (lock/debounce/flag/spend-guard; billed via `record_llm_usage`; usage-coverage registries extended) + migration 0049 `creator_style_notes` + cache-safe third-system-block injection into scoring (byte-identical DNA-block CI pin) + user-turn `wrap_untrusted` injection into DNA-brief rebuilds + verbatim surfacing on the DNA card. Tests: `test_style_distill.py` (8 + llm_live smoke).
+
+**Problem.** `feedback_tags` and `feedback_note` are captured (Issues 118/339) but **discarded by
+training** — preference/train.py consumes only numeric clip signals, so "explain why" currently teaches
+the system nothing. The north-star channel-knowledge loop needs the why, not just the thumb.
+
+**Approach sketch (Phase-1 CHECK required — research preference-distillation standards).** Likely
+LLM-distillation of accumulated tags/notes (clip + video level, Issue 370) into the DNA/style brief that
+scoring already reads (`dna_system_block`), rather than new numeric features; recency-decayed like the
+reranker. Prompt-cache + billing via `record_llm_usage`; spend-guard aware.
+
+**Acceptance criteria**
+- [x] Tags/notes measurably influence ranking or brief content — delivered as CI mechanism pins (mock-SDK: style block reaches the scorer; brief user-turn injection) + an `llm_live` smoke; the OFFLINE eval fixture cannot prove LLM influence (it sorts pre-scored dicts), so a live-lane ranking assertion was chosen over a fake offline one (test_style_distill.py docstring)
+- [x] Honest surfacing: creators can see what the system learned from their words
+- [x] Token cost bounded + billed; recency decay applied
+
+### Issue 372: Full-source editing backbone — source streaming + full transcript endpoints
+
+**Status** `DONE` (2026-07-30, feat/standalone-review-editor) · **Wave** W2 · **Lane** L23 · **Size** `L` · **Verify** `local`
+**Shipped:** `GET /videos/{id}/stream` (302 presigned R2 / dev FileResponse w/ native Range 206 — starlette.io verified; structured 409 source_expired) + `GET /videos/{id}/transcript` (segment-granular, honest empty envelope) + LongFormEditor real source player w/ proactive retention card + searchable `FullTranscriptPanel` (seek + playhead highlight) + real timeline duration. Tests: `test_video_stream.py` + `test_video_transcript.py` (7) + 4 Editor vitest.
+
+**Problem.** LongFormEditor's player and full transcript are honest placeholders — there is **no
+endpoint** to stream a video's source media or fetch its full (video-level) transcript, so "edit in
+their own free right" is impossible beyond generated clips.
+
+**Approach sketch (Phase-1 CHECK required).** `GET /videos/{id}/stream` (presigned R2 / dev file
+stream, range-request support for scrubbing) + `GET /videos/{id}/transcript` (segments already persisted
+in `Transcript.segments_jsonb`). Surface the `SOURCE_MEDIA_RETENTION_HOURS` purge honestly in the UI
+(source editing has a lifetime window). Per-creator isolation on both endpoints.
+
+**Acceptance criteria**
+- [x] Long-form mode plays the real source with a scrubbable timeline (placeholders removed)
+- [x] Full searchable transcript rendered from the video-level segments
+- [x] Purged-source state is honest (no dead player; clear re-upload affordance)
+
+### Issue 373: Create-clip-from-selection + working long-form export
+
+**Status** `DONE` (2026-07-30, feat/standalone-review-editor) · **Wave** W2 · **Lane** L23 · **Size** `L` · **Verify** `local` (+ manual render smoke pending on a box with ffmpeg)
+**Shipped:** `POST /videos/{id}/clips` (bounds 2–600s, soft dedupe→200, brand-kit style seed, best-effort auto-render; `signals_jsonb.origin=creator`) + `ClipOut.origin`/`aspect` + ClipImpression exclusion for creator clips (IPS integrity) + MasterTimeline drag-select + CreateClipCard + transcript "Clip this" + "Your clips" group + honest provenance in ClipPlayer/WhyThisClip + Export panel rewrite (real per-clip downloads; source-edit stub removed — owner-approved scope, DECISIONS 2026-07-30). Tests: `test_create_clip.py` (14) + 5 Editor vitest.
+
+**Problem.** The master timeline can only open engine-suggested candidates; a creator cannot mark an
+arbitrary source range as a clip, and the long-form Export section is a disabled stub.
+
+**Approach sketch (Phase-1 CHECK required).** Selection on the master timeline → create a Clip row from
+the chosen source window (reusing the render pipeline: reframe/captions/aspect presets) → normal
+review/edit/export path. Wire the Export section to the real download endpoints. Creator-made clips need
+honest provenance ("your selection", not an engine principle citation — or a creator-choice principle;
+decide in CHECK against the CLIPPING_PRINCIPLES rules).
+
+**Acceptance criteria**
+- [x] Drag-select a source range → rendered clip appears in Review/Editor like engine clips
+- [x] Export section downloads real artifacts (aspect presets honored)
+- [x] Clip-quality eval harness unaffected (engine scoring untouched); scoring provenance stays honest
+
+---
+
 *Generated 2026-06-22 from `docs/research/findings/` + source-verified extraction of every open issue
 + a six-dimension production-gap research pass. Prior priority-tier backlog archived at
 `docs/archive/issues_pre_roadmap_2026-06-22.md`; finished work at `docs/archive/issues_snapshot_2026-06-22.md`.*

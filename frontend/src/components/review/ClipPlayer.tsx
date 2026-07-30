@@ -141,10 +141,19 @@ export function ClipPlayer({
 
       <div className="flex flex-col items-center gap-2">
         <div className="text-center font-mono text-xs text-muted">
-          Clip #{clip.rank ?? '—'} · {clipDur.toFixed(1)}s
+          {clip.origin === 'creator' ? 'Your selection' : `Clip #${clip.rank ?? '—'}`} ·{' '}
+          {clipDur.toFixed(1)}s
         </div>
-        {/* Headline fit signal is the honest tier, not a raw number (docs/UI.md). */}
-        <FitBadge tier={fitTier(clip.score)} />
+        {/* Headline fit signal is the honest tier, not a raw number (docs/UI.md).
+            A creator-made selection was never engine-scored (Issue 373) — no
+            fit tier, a neutral provenance chip instead. */}
+        {clip.origin === 'creator' ? (
+          <span className="rounded-xs bg-accent-soft px-2 py-0.5 font-ui text-label font-medium uppercase tracking-[0.08em] text-accent-text">
+            Not engine-scored
+          </span>
+        ) : (
+          <FitBadge tier={fitTier(clip.score)} />
+        )}
       </div>
 
       <TrimFilmstrip

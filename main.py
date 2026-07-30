@@ -56,6 +56,7 @@ from routers import tasks as tasks_router
 from routers import thumbnails as thumbnails_router
 from routers import titles as titles_router
 from routers import upload_intel as upload_intel_router
+from routers import video_review as video_review_router
 from routers import videos as videos_router
 
 configure_logging(
@@ -163,6 +164,7 @@ app.include_router(clips_module.clips_router)
 app.include_router(clips_module.summaries_router)
 app.include_router(publications_router.router)
 app.include_router(review_router.router)
+app.include_router(video_review_router.router)
 app.include_router(upload_intel_router.router)
 app.include_router(improvement_router.router)
 app.include_router(export_router.router)

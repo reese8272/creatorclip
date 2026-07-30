@@ -55,6 +55,8 @@ function makeClip(over: Partial<ReviewClip> = {}): ReviewClip {
     cleaned_render_uri: null,
     applied_title: null,
     applied_description: null,
+    origin: 'engine',
+    aspect: '9:16',
     ...over,
   }
 }

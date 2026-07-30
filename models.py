@@ -147,6 +147,14 @@ class FeedbackAction(enum.Enum):
     format = "format"
 
 
+class VideoSentiment(enum.Enum):
+    """Video-level style-review valence (Issue 370). A deliberate 2-value enum —
+    skip/trim/format are clip mechanics that make no sense at video level."""
+
+    like = "like"
+    dislike = "dislike"
+
+
 class InsightType(enum.Enum):
     performer_analysis = "performer_analysis"
     trend = "trend"
@@ -717,6 +725,69 @@ class ClipFeedback(Base):
     )
 
     clip: Mapped["Clip"] = relationship("Clip", back_populates="feedback")
+
+
+class VideoFeedback(Base):
+    """Video-level style review (Issue 370, migration 0048).
+
+    What the creator likes/dislikes about a whole video's STYLE — tags mirror
+    the ClipFeedback taxonomy shape (valence → tags → note) so the style
+    distiller (Issue 371) consumes uniform triples from both tables. At least
+    one of tags/note is required at the endpoint (bare valence carries no
+    style signal).
+    """
+
+    __tablename__ = "video_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("videos.id", ondelete="CASCADE"), nullable=False
+    )
+    sentiment: Mapped[VideoSentiment] = mapped_column(
+        sa.Enum(VideoSentiment, name="video_sentiment_enum"), nullable=False
+    )
+    feedback_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    feedback_note: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class CreatorStyleNotes(Base):
+    """Distilled style preferences learned from review feedback (Issue 371).
+
+    Single row per creator (like ``creator_style``) holding the LLM-distilled
+    "STYLE PREFERENCES" text produced from clip-level feedback tags/notes and
+    video-level style reviews. Injected into clip scoring as a third system
+    block AFTER the cached DNA block, and into DNA-brief rebuilds via the user
+    turn. ``last_input_at`` is the distillation watermark (newest feedback row
+    consumed); the debounce in ``distill_style_prefs`` counts rows after it.
+    """
+
+    __tablename__ = "creator_style_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid,
+        sa.ForeignKey("creators.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    notes_text: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # How many feedback rows (clip + video) fed the current distillation —
+    # surfaced honestly to the creator ("based on N notes").
+    source_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    last_input_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
 
 
 class ClipOutcome(Base):

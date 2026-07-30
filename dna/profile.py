@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Creator, CreatorDna, DnaStatus, OnboardingState
+from models import Creator, CreatorDna, CreatorStyleNotes, DnaStatus, OnboardingState
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +174,18 @@ async def get_active(session: AsyncSession, creator_id: uuid.UUID) -> CreatorDna
     rows = list(result.scalars())
     confirmed = next((r for r in rows if r.status == DnaStatus.confirmed), None)
     return confirmed or (rows[0] if rows else None)
+
+
+async def get_style_notes(session: AsyncSession, creator_id: uuid.UUID) -> CreatorStyleNotes | None:
+    """Return the creator's distilled style notes (Issue 371), if any.
+
+    Single-row indexed lookup — cheap to run next to ``get_active`` wherever
+    the DNA brief is fetched for scoring or a brief rebuild.
+    """
+    result = await session.execute(
+        select(CreatorStyleNotes).where(CreatorStyleNotes.creator_id == creator_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_version(

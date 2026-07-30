@@ -13,19 +13,8 @@ import { EmptyHero } from '@/components/dashboard/EmptyHero'
 import { VideoTable, type ClipInfo } from '@/components/dashboard/VideoTable'
 import { DnaCta, TrialBanner, LowBalanceWarning } from '@/components/dashboard/DashboardBanners'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { videosRefetchInterval } from '@/lib/videosPoll'
 import type { ClipCountsResponse, DnaProfile, DnaResponse, VideoListResponse } from '@/types'
-
-// Poll while any clip-trackable video is mid-pipeline; stop once everything has
-// settled. TanStack Query owns the lifecycle (replaces the hand-rolled backoff
-// timer in static/index.html). Non-clippable linked rows (Issue 139) have no
-// running pipeline, so they never keep the poll alive.
-const POLL_MS = 5000
-function videosRefetchInterval(data: VideoListResponse | undefined): number | false {
-  const inFlight = (data?.videos ?? []).some(
-    (v) => v.clippable && (v.ingest_status === 'pending' || v.ingest_status === 'running'),
-  )
-  return inFlight ? POLL_MS : false
-}
 
 // Sidebar: clips waiting in the review queue (Issue 305).
 function ReviewQueueCard({ count }: { count: number }) {

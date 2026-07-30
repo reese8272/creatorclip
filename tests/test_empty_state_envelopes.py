@@ -88,6 +88,7 @@ def _mock_clip(creator_id, video_id):
     c.cleaned_render_uri = None
     c.applied_title = None
     c.applied_description = None
+    c.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
     return c
 
 

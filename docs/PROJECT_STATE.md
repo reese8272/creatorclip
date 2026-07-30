@@ -4,6 +4,48 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-30 (later) — Lane L23 COMPLETE: Issues 370–373 all DONE (batch /issue-workflow run)
+
+All four remaining standalone-tools issues built, tested, and committed on
+`feat/standalone-review-editor` (one commit per issue), in order 372 → 373 → 370 → 371:
+
+- **#372** — full-source editing backbone: `GET /videos/{id}/stream` (presigned R2 302 / dev
+  FileResponse with native Range 206) + `GET /videos/{id}/transcript` (segment-granular, honest
+  empty envelope). LongFormEditor got a real source player (proactive retention-expired card) and
+  a searchable click-to-seek transcript panel; master timeline uses the real duration.
+- **#373** — creator-made clips: drag-select (or transcript "Clip this") → `POST /videos/{id}/clips`
+  (2–600s bounds, soft dedupe, brand-kit seed, best-effort auto-render) → "Your clips" group with
+  honest "not engine-scored" provenance everywhere. Export panel now lists real rendered artifacts
+  with download links; the source-edit stub was removed (owner-approved scope). Load-bearing fix:
+  creator clips excluded from ClipImpression logging (rank-NULL would poison IPS data at rank 0).
+- **#370** — video-level style review: `video_feedback` (migration 0048, RLS) +
+  `POST/GET /videos/{id}/feedback` (requires tags-or-note) + StyleReview surface
+  (`/review?mode=style`), reachable from the picker, the 0-clip state, and the clip view.
+- **#371** — the "why" now teaches the system: Haiku distillation of feedback tags/notes →
+  `creator_style_notes` (migration 0049), gated (flag/spend/lock/debounce) + billed (usage-coverage
+  registries extended). Injected CACHE-SAFELY as a third system block after the cached DNA block in
+  scoring (byte-identical DNA-block CI pin) and into DNA-brief rebuilds via user-turn
+  `wrap_untrusted`. Surfaced verbatim on the Profile DNA card.
+
+Suites at close: backend 2377 passed / frontend 309 passed; ruff+mypy+tsc+eslint at baseline.
+Full design-call log in `docs/DECISIONS.md` (2026-07-30 L23 entry); COMPLIANCE data classes added.
+
+---
+
+## 2026-07-30 — Issue 369 DONE: standalone Review/Editor landings (picker + upload-in-place); Lane L23 opened
+
+Owner direction: Review and Editor must work as standalone tools, not steps in a Dashboard funnel.
+Shipped Phase 1 (Issue 369, `feat/standalone-review-editor`): `/review` and `/editor` with no
+`video_id` now render a shared **VideoPickerLanding** (honest per-row states; row click sets
+`?video_id=` in place) plus **InlineUploadFlow** — upload → live StageStepper progress → explicit
+minutes-consuming "Generate clips" click → straight into the tool. The old dead ends ("go to
+Dashboard" / "Go to Review") are gone. New `components/landing/*`, `dashboard/videoStatus.ts`,
+`lib/videosPoll.ts`; `UploadVideoForm` gained an `onUploaded` callback (Dashboard unchanged).
+Frontend suite 295 passed / 48 files; tsc + eslint at baseline. **Lane L23_STANDALONE_TOOLS** filed
+in `docs/issues.md`: #370 video-level style review, #371 consume feedback tags/notes in
+personalization, #372 source streaming + full transcript (owner's top editor priority), #373
+create-clip-from-selection + export; advanced effects explicitly deprioritized. `[DEC]` 2026-07-30.
+
 ## 2026-07-29 — "100% ready" pass: core-loop UX shipped (Deploys 1+2), 31h silent prod outage found+recovered, Layer 0 fully green
 
 **The big finding first:** prod had been **fully down for ~31 hours** (clean systemd poweroff

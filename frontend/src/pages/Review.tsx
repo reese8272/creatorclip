@@ -11,6 +11,8 @@ import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { StyleReview } from '@/components/review/StyleReview'
+import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 
@@ -113,8 +115,11 @@ function ReviewClipView({
 // two-column layout: player + filmstrip trim on the left; Why-this-clip, the
 // "Your call" triage card, and the editor entry point on the right.
 export function Review() {
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const videoId = params.get('video_id')
+  // Issue 370: ?mode=style opens the video-level style review instead of the
+  // clip queue — the standalone "explain why this style works" surface.
+  const styleMode = params.get('mode') === 'style'
   const navigate = useNavigate()
   const [index, setIndex] = useState(0)
 
@@ -159,7 +164,36 @@ export function Review() {
     )
   }
 
-  if (!videoId) return message('No video selected — go to Dashboard to pick a video.')
+  // Standalone landing: no video selected → inline picker + upload-in-place
+  // instead of a dead-end pointer at the Dashboard.
+  if (!videoId)
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <VideoPickerLanding tool="review" />
+      </>
+    )
+  if (styleMode)
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <div className="mx-auto w-full max-w-5xl px-4 pt-4">
+          <button
+            onClick={() => setParams({ video_id: videoId })}
+            className="text-xs text-muted hover:text-fg"
+          >
+            ← Back to clip review
+          </button>
+        </div>
+        <StyleReview videoId={videoId} />
+      </>
+    )
   if (isPending) return message('Loading clip…')
   // A failed load must NOT fall through to "No clips yet" — a creator whose
   // clips exist would be told to regenerate them (Recap retry idiom).
@@ -179,7 +213,25 @@ export function Review() {
       </>
     )
   if (reviewed) return message('All clips reviewed! Great work. Taking you back to the dashboard…')
-  if (!clip) return message('No clips yet — generate them from the Dashboard.')
+  if (!clip)
+    return (
+      <>
+        <DisclaimerBand>
+          AutoClip predicts fit with your style and audience — it does not promise virality. All
+          scores are estimates grounded in your own channel data.
+        </DisclaimerBand>
+        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-3 px-4 py-10 text-center">
+          <p className="text-sm text-muted">No clips yet — generate them from the Dashboard.</p>
+          {/* Issue 370: a 0-clip video is still reviewable as a whole. */}
+          <Button
+            variant="secondary"
+            onClick={() => setParams({ video_id: videoId, mode: 'style' })}
+          >
+            Review the style instead →
+          </Button>
+        </main>
+      </>
+    )
 
   const personalization = data?.personalization ?? null
 
@@ -190,6 +242,16 @@ export function Review() {
         are estimates grounded in your own channel data.
       </DisclaimerBand>
       {personalization && <PersonalizationBand status={personalization} />}
+
+      {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
+      <div className="mx-auto flex w-full max-w-5xl justify-end px-4 pt-3">
+        <button
+          onClick={() => setParams({ video_id: videoId, mode: 'style' })}
+          className="text-xs text-muted hover:text-accent-text"
+        >
+          Review this video’s overall style →
+        </button>
+      </div>
 
       <ReviewClipView
         key={clip.id}

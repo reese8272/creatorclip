@@ -300,6 +300,7 @@ def test_list_clips_with_clips_has_no_skip_reason(client):
     clip.cleaned_render_uri = None
     clip.applied_title = None
     clip.applied_description = None
+    clip.style_preset = None  # Issue 373: _clip_response derives `aspect` from it
 
     _set_overrides(creator, video, [clip])
 

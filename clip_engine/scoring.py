@@ -254,6 +254,7 @@ async def score_candidates(
     transcript_segments: list | None = None,
     creator_id: uuid.UUID | None = None,
     ledger_session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] | None = None,
+    style_notes: str | None = None,
 ) -> list[dict]:
     """
     Score and annotate candidates in-place. Returns the enriched list.
@@ -264,6 +265,11 @@ async def score_candidates(
     ``ledger_session_factory`` (Issue 82b): the usage-ledger write opens its own
     short-lived session AFTER the LLM round-trip, so callers never hold a pooled
     DB connection across the 30–120 s Claude call.
+
+    ``style_notes`` (Issue 371): distilled review-feedback preferences, appended
+    as a third system block AFTER the cached DNA block — never concatenated into
+    ``dna_brief`` (that would invalidate the 1h prompt cache on every
+    re-distillation). Ignored on the cold-start path (no DNA brief → no LLM call).
     """
     if not candidates:
         return []
@@ -325,23 +331,40 @@ async def score_candidates(
     if prefix_clears_floor:
         dna_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
 
+    # Issue 371 — distilled style preferences ride as a THIRD system block
+    # AFTER the cached DNA block. Prompt caching is a byte-prefix match
+    # (platform.claude.com prompt-caching docs, re-verified 2026-07-30):
+    # content after the last cache_control breakpoint is free to change, so a
+    # re-distillation never invalidates the 1h DNA cache, never perturbs the
+    # floor gate above (computed over static+dna only), and never desyncs the
+    # 2× cache-write billing coupling below. Do NOT concatenate style notes
+    # into dna_brief upstream.
+    system_blocks: list[dict] = [{"type": "text", "text": static_text}, dna_block]
+    if style_notes:
+        system_blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    "CREATOR STYLE PREFERENCES (distilled from this creator's own "
+                    f"review feedback — apply alongside the DNA profile):\n{style_notes}"
+                ),
+            }
+        )
+
     from verbose import vlog_llm_request, vlog_llm_response
 
     vlog_llm_request(
         "clip_scoring",
         model=settings.ANTHROPIC_MODEL_SCORING,
         max_tokens=1200,
-        system=[{"type": "text", "text": static_text}, dna_block],
+        system=system_blocks,
         messages=[{"role": "user", "content": user_text}],
     )
     try:
         response = await _ANTHROPIC.messages.create(
             model=settings.ANTHROPIC_MODEL_SCORING,
             max_tokens=1200,
-            system=[
-                {"type": "text", "text": static_text},
-                dna_block,  # type: ignore[list-item]  # dict[str, Any] → TextBlockParam at runtime
-            ],
+            system=system_blocks,  # type: ignore[arg-type]  # dict[str, Any] → TextBlockParam at runtime
             messages=[{"role": "user", "content": user_text}],
         )
     except (RateLimitError, APIStatusError, APIConnectionError) as exc:

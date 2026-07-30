@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -25,6 +25,23 @@ const BASE_CLIP = {
   cleaned_render_uri: null,
   applied_title: null,
   applied_description: null,
+  origin: 'engine',
+  aspect: '9:16',
+}
+
+// Creator-made selection (Issue 373) — never engine-scored.
+const CREATOR_CLIP = {
+  ...BASE_CLIP,
+  id: 'c9',
+  rank: null,
+  score: null,
+  peak_s: null,
+  setup_start_s: null,
+  start_s: 30,
+  end_s: 75,
+  principle: '',
+  reasoning: '',
+  origin: 'creator',
 }
 
 const TRANSCRIPT = {
@@ -40,10 +57,40 @@ const TRANSCRIPT = {
   ],
 }
 
+// Row for the standalone picker landing (no-param /editor).
+const BASE_VIDEO = {
+  id: 'v1',
+  youtube_video_id: 'yt1',
+  title: 'My stream VOD',
+  kind: 'video',
+  ingest_status: 'done',
+  failure_reason: null,
+  duration_s: 300,
+  created_at: '2026-07-01T00:00:00Z',
+  origin: 'upload',
+  clippable: true,
+}
+
+// Full-source transcript (Issue 372) — segment-granular.
+const VIDEO_TRANSCRIPT = {
+  video_id: 'v1',
+  duration_s: 300,
+  source: 'deepgram',
+  state: 'populated',
+  segments: [
+    { text: 'Intro hello world', start_s: 0, end_s: 4, index: 0 },
+    { text: 'Deep dive begins here', start_s: 4, end_s: 9, index: 1 },
+  ],
+}
+
 function mockFetch() {
   const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input)
+    if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
+    if (url.endsWith('/videos/clips/counts'))
+      return json({ counts: [{ video_id: 'v1', total: 1, rendered: 1 }] })
+    if (url.endsWith('/videos/v1/transcript')) return json(VIDEO_TRANSCRIPT)
     if (url.includes('/videos/v1/clips')) return json({ clips: [BASE_CLIP], personalization: null })
     if (url.includes('/clips/c1/transcript')) return json(TRANSCRIPT)
     if (url.includes('/clips/c1/download')) return new Response(new ArrayBuffer(0), { status: 200 })
@@ -67,11 +114,14 @@ function renderEditor(entry: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Editor', () => {
-  it('shows the empty state when no clip_id is present (Issue 304 — Editor is a nav destination)', () => {
+  it('shows the standalone picker when no video_id is present, and a row click opens long-form mode', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderEditor('/app/editor')
-    expect(screen.getByText(/Pick a clip to edit/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Go to Review/i })).toBeInTheDocument()
+    expect(await screen.findByText(/Pick a video to edit/i)).toBeInTheDocument()
+    // The old dead end (bounce to Review) is gone — Editor is a standalone tool.
+    expect(screen.queryByRole('button', { name: /Go to Review/i })).toBeNull()
+    await userEvent.click(await screen.findByRole('button', { name: 'Open in editor' }))
+    expect(await screen.findByText('Suggested clips')).toBeInTheDocument()
   })
 
   it('renders the editor with clip meta and honesty disclaimer', async () => {
@@ -127,12 +177,138 @@ describe('Editor', () => {
 
   it('switches to long-form source mode and lists suggested clips (Issue 307)', async () => {
     vi.stubGlobal('fetch', mockFetch())
-    renderEditor('/app/editor?video_id=v1&clip_id=c1')
+    const { container } = renderEditor('/app/editor?video_id=v1&clip_id=c1')
     await screen.findByText(/Clip #1/i)
     await userEvent.click(screen.getByRole('tab', { name: /Long-form source/i }))
     expect(screen.getByText('Suggested clips')).toBeInTheDocument()
-    // Honest placeholder for the un-backed full-source surfaces (scaffold scope).
-    expect(screen.getByText(/Full-source preview isn’t available/i)).toBeInTheDocument()
+    // Issue 372: the placeholder became a real source player streaming from the
+    // authed source endpoint.
+    const video = container.querySelector('video[src="/videos/v1/stream"]')
+    expect(video).not.toBeNull()
+  })
+
+  // ── Issue 372: full-source player + searchable transcript ──
+  it('long-form shows the source-expired card (no player) when the source is purged', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/videos'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({ videos: [{ ...BASE_VIDEO, clippable: false }], state: 'populated' }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Suggested clips')
+    expect(await screen.findByText(/Source media expired/)).toBeInTheDocument()
+    expect(container.querySelector('video[src="/videos/v1/stream"]')).toBeNull()
+  })
+
+  it('long-form renders the searchable transcript; filter narrows segments; click seeks', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const { container } = renderEditor('/app/editor?video_id=v1')
+    expect(await screen.findByText('Intro hello world')).toBeInTheDocument()
+    expect(screen.getByText('Deep dive begins here')).toBeInTheDocument()
+
+    await userEvent.type(screen.getByRole('searchbox', { name: /Search the transcript/i }), 'deep')
+    expect(screen.queryByText('Intro hello world')).toBeNull()
+    expect(screen.getByText('Deep dive begins here')).toBeInTheDocument()
+
+    const player = container.querySelector('video[src="/videos/v1/stream"]') as HTMLVideoElement
+    await userEvent.click(screen.getByText('Deep dive begins here'))
+    expect(player.currentTime).toBe(4)
+  })
+
+  it('long-form master timeline uses the real source duration, not furthest clip end', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Suggested clips')
+    // BASE_VIDEO.duration_s = 300 → footer right edge reads 5:00 (clip ends at 20s).
+    expect(await screen.findByText('5:00')).toBeInTheDocument()
+  })
+
+  // ── Issue 373: create-clip-from-selection + provenance + export ──
+  it('dragging the master timeline proposes a clip and Create posts the range', async () => {
+    const fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Suggested clips')
+
+    // jsdom rects are zero-sized — pin the bar geometry so x→time works.
+    const bar = screen.getByTestId('master-timeline-bar')
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0, width: 100, top: 0, height: 96, right: 100, bottom: 96, x: 0, y: 0,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    // Drag 10% → 40% of a 300s source = 30s → 120s.
+    fireEvent.mouseDown(bar, { clientX: 10, button: 0 })
+    fireEvent.mouseMove(bar, { clientX: 40 })
+    fireEvent.mouseUp(bar, { clientX: 40 })
+
+    expect(await screen.findByText(/0:30 → 2:00/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Create clip' }))
+
+    const createCall = fetchMock.mock.calls.find(
+      ([u, init]) => String(u).endsWith('/videos/v1/clips') && init?.method === 'POST',
+    )
+    expect(createCall).toBeTruthy()
+    const posted = JSON.parse(String(createCall![1]?.body))
+    expect(posted.start_s).toBeCloseTo(30, 0)
+    expect(posted.end_s).toBeCloseTo(120, 0)
+  })
+
+  it('transcript "Clip this" pre-fills the create card with the segment bounds', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Deep dive begins here')
+    await userEvent.click(screen.getAllByRole('button', { name: 'Clip this' })[1])
+    // Second segment: 4s → 9s.
+    expect(await screen.findByText(/0:04 → 0:09/)).toBeInTheDocument()
+  })
+
+  it('creator clips render in "Your clips" with honest provenance, engine clips stay Suggested', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/videos/v1/clips'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({ clips: [BASE_CLIP, CREATOR_CLIP], personalization: null }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1')
+    expect(await screen.findByText('Your clips')).toBeInTheDocument()
+    expect(screen.getByText(/not engine-scored/)).toBeInTheDocument()
+    expect(screen.getByText('Suggested clips')).toBeInTheDocument()
+    // No fake fit tier on the creator clip row (appears in list + export rows).
+    expect(screen.getAllByText('Your selection').length).toBeGreaterThan(0)
+  })
+
+  it('export panel lists rendered clips with real download links and the honest source-edit line', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/videos/v1/clips'))
+        return {
+          status: 200, ok: true,
+          json: async () => ({ clips: [BASE_CLIP, CREATOR_CLIP], personalization: null }),
+        }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderEditor('/app/editor?video_id=v1')
+    await screen.findByText('Your clips')
+    const links = screen.getAllByRole('link', { name: 'Download' })
+    expect(links).toHaveLength(2)
+    expect(links[0]).toHaveAttribute(
+      'href',
+      expect.stringContaining('/download?disposition=attachment'),
+    )
+    expect(screen.getByText(/Full source-edit export isn’t available/)).toBeInTheDocument()
+    // No stub button anymore.
+    expect(screen.queryByRole('button', { name: /Export source edit/ })).toBeNull()
   })
 
   it('opens /editor?video_id (no clip) directly in long-form mode (Issue 307)', async () => {

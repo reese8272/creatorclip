@@ -29,6 +29,8 @@ const CLIP: ReviewClip = {
   cleaned_render_uri: null,
   applied_title: null,
   applied_description: null,
+  origin: 'engine' as const,
+  aspect: '9:16',
 }
 
 function wrapper({ children }: { children: React.ReactNode }) {

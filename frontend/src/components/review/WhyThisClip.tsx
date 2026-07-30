@@ -263,15 +263,28 @@ function ExplainClipCard({ clipId }: { clipId: string }) {
 // Issues 322/323/325 add on-demand suggestion cards (lazy — no request until clicked).
 export function WhyThisClip({ clip }: { clip: ReviewClip }) {
   const setupStart = clip.setup_start_s ?? clip.start_s
+  // Issue 373: a creator-made selection was never engine-scored — honest
+  // provenance framing instead of a principle citation + fit tier.
+  const isCreatorClip = clip.origin === 'creator'
   return (
     <div className="text-sm">
       <div className="mb-3 flex items-center justify-between gap-3 border-b border-default pb-2">
-        <span className="font-mono text-xs text-accent-text">[principle] {clip.principle || '—'}</span>
-        <FitBadge tier={fitTier(clip.score)} />
+        {isCreatorClip ? (
+          <span className="font-mono text-xs text-accent-text">Your selection</span>
+        ) : (
+          <>
+            <span className="font-mono text-xs text-accent-text">
+              [principle] {clip.principle || '—'}
+            </span>
+            <FitBadge tier={fitTier(clip.score)} />
+          </>
+        )}
       </div>
       <div className="leading-relaxed text-fg">
-        {clip.reasoning ||
-          'No reasoning recorded for this clip. The scoring engine still ranked it — the explanation is just not on file.'}
+        {isCreatorClip
+          ? 'Created by you from the source timeline — not engine-scored.'
+          : clip.reasoning ||
+            'No reasoning recorded for this clip. The scoring engine still ranked it — the explanation is just not on file.'}
       </div>
       <div className="mt-3 flex justify-between border-t border-default pt-3 font-mono text-xs text-subtle">
         <span>Score (fit estimate, not a guarantee)</span>

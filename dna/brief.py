@@ -62,11 +62,19 @@ hard-nos. Where stated identity AND inferred performance agree, lean into it
 with confidence. Where they disagree, surface the disagreement explicitly in
 the brief (e.g. "Your top-performing clips lean comedy even though you describe
 your focus as education — here's how to bridge that or split into two styles")
-rather than silently overriding the stated direction with engagement signals."""
+rather than silently overriding the stated direction with engagement signals.
+
+If a LEARNED STYLE PREFERENCES block appears below, it is distilled from the
+creator's own review feedback (keep/drop decisions and style notes). Weight it
+as observed review behaviour alongside the performance data — reflect
+recurring editing/pacing/tone preferences in the relevant brief sections."""
 
 
 def _build_request(
-    patterns: dict, channel_title: str, stated_identity: str | None
+    patterns: dict,
+    channel_title: str,
+    stated_identity: str | None,
+    style_notes: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Assemble the (system, messages) pair for both .create and .stream paths.
 
@@ -99,6 +107,11 @@ def _build_request(
     user_content = ""
     if stated_identity:
         user_content = wrap_untrusted("creator_stated_identity", stated_identity)
+    # Issue 371: distilled style notes are DERIVED from creator-authored review
+    # feedback — same untrusted posture as stated_identity (user turn, never
+    # the system role; Issue 224 precedent).
+    if style_notes:
+        user_content += wrap_untrusted("learned_style_preferences", style_notes)
     user_content += f"Generate the Creator Brief for '{channel_title}'."
 
     messages: list[dict] = [
@@ -115,6 +128,7 @@ async def generate_brief(
     channel_title: str,
     stated_identity: str | None = None,
     task_id: str | None = None,
+    style_notes: str | None = None,
 ) -> tuple[str, dict]:
     """
     Call Claude to synthesise a Creator Brief from computed patterns.
@@ -133,12 +147,16 @@ async def generate_brief(
             ``task:{task_id}:events`` via ``worker.anthropic_stream.stream_and_emit``.
             When None (default), uses the legacy non-streaming ``.create()`` path
             so existing unit-test mocks of this function keep working unchanged.
+        style_notes: Optional distilled style preferences (Issue 371) from the
+            creator's review feedback. Creator-derived → injected in the USER
+            turn via ``wrap_untrusted`` (never the system role), so rebuilt
+            briefs bake the learned preferences into ``brief_text``.
 
     Returns ``(brief_text, usage)`` — brief_text with the honesty disclaimer appended,
     usage is the token-count dict. Callers should pass usage to ``billing.ledger.record_llm_usage``.
     Raises RuntimeError if Claude returns no text block.
     """
-    system, messages = _build_request(patterns, channel_title, stated_identity)
+    system, messages = _build_request(patterns, channel_title, stated_identity, style_notes)
 
     if task_id is not None:
         # Streaming path (Issue 86) — forwards message_start.usage + text_delta

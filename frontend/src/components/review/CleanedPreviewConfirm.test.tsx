@@ -31,6 +31,8 @@ const CLIP: ReviewClip = {
   cleaned_render_uri: null,
   applied_title: null,
   applied_description: null,
+  origin: 'engine' as const,
+  aspect: '9:16',
 }
 
 // Mutable server truth: the GET poll serves whatever cleanedUri currently is.

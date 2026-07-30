@@ -85,9 +85,19 @@ class DnaProfileOut(BaseModel):
     created_at: str
 
 
+class StyleNotesOut(BaseModel):
+    """Distilled review-feedback style preferences (Issue 371) — surfaced
+    verbatim: this text is exactly what scoring injects."""
+
+    text: str
+    source_count: int
+    updated_at: str
+
+
 class DnaGetOut(BaseModel):
     profile: DnaProfileOut | None
     message: str | None = None
+    style_notes: StyleNotesOut | None = None
 
 
 class DnaConfirmOut(BaseModel):
@@ -562,13 +572,27 @@ async def get_dna(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Return the active DNA profile (confirmed preferred, falls back to latest draft)."""
-    from dna.profile import get_active
+    from dna.profile import get_active, get_style_notes
 
     profile = await get_active(session, creator.id)
+    # Issue 371: what the system learned from the creator's review feedback —
+    # shown verbatim (it is exactly the text injected into scoring). Present
+    # even without a DNA profile: style notes only need feedback to exist.
+    style_row = await get_style_notes(session, creator.id)
+    style_notes = (
+        {
+            "text": style_row.notes_text,
+            "source_count": style_row.source_count,
+            "updated_at": style_row.updated_at.isoformat(),
+        }
+        if style_row
+        else None
+    )
     if not profile:
         return {
             "profile": None,
             "message": "No Creator DNA yet — build it from the setup screen to unlock personalised scoring.",
+            "style_notes": style_notes,
         }
     return {
         "profile": {
@@ -580,7 +604,8 @@ async def get_dna(
             "best_source_region": profile.best_source_region,
             "optimal_upload_gap_h": profile.optimal_upload_gap_h,
             "created_at": profile.created_at.isoformat(),
-        }
+        },
+        "style_notes": style_notes,
     }
 
 

@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StageStepper } from '@/components/dashboard/StageStepper'
+import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/videoStatus'
 import { useStageStream } from '@/hooks/useStageStream'
 import type { AnalysisMode, IngestStatus, Video } from '@/types'
 
@@ -11,13 +12,6 @@ export interface ClipInfo {
   total: number
   rendered: number
   loading: boolean
-}
-
-const STATUS_VARIANT: Record<IngestStatus, 'muted' | 'warning' | 'success' | 'danger'> = {
-  pending: 'muted',
-  running: 'warning',
-  done: 'success',
-  failed: 'danger',
 }
 
 // Issue 100: self-explaining hover copy for the static status badge, mirroring the
@@ -29,11 +23,6 @@ const STATUS_HELP: Record<IngestStatus, string> = {
   done: 'Clips are scored — “Generate clips” / “Review” is your next move.',
   failed: 'Something broke; your minutes are automatically refunded.',
 }
-
-const SOURCE_NEEDED_HELP =
-  'We never download your video from YouTube (per their Terms of Service). To generate clips, ' +
-  'upload the original file — for example export it from Google Takeout — and it will process ' +
-  'automatically.'
 
 // SPA analysis route (85e ported). React Router prefixes the /app basename.
 function titlesUrl(v: Video): string {

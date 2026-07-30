@@ -140,7 +140,8 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │   ├── model.py                # Learned reranker (online update)
 │   ├── features.py             # Feature vector per clip
 │   ├── decay.py                # Exponential recency decay weighting
-│   └── train.py                # Update loop from feedback
+│   ├── train.py                # Update loop from feedback
+│   └── style_distill.py        # Issue 371 — Haiku distillation of feedback tags/notes → creator_style_notes
 │
 ├── knowledge/
 │   ├── rag.py                  # Evergreen RAG retrieval (pgvector)
@@ -227,18 +228,19 @@ This describes how CreatorClip **is built**. Update on every architectural chang
 │       ├── index.css           # Tailwind v4 @theme — Issue 85 design system (warmer OKLCH; docs/UI.md)
 │       ├── types.ts            # API response shapes
 │       ├── test/setup.ts       # Vitest + RTL setup (jest-dom matchers, cleanup)
-│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts
+│       ├── lib/                # api.ts (typed fetch) · queryClient.ts · brief.ts (+test) · taskStream.ts (SSE) · utils.ts · videosPoll.ts (shared ['videos'] refetch interval, Issue 369)
 │       ├── hooks/              # useAuth.ts (TanStack Query; 401→null) · useTaskStream.ts (SSE log hook +test) · useTaskResult.ts (token/step/done-payload SSE hook, Issue 85e) · useStreamAction.ts (POST→stream helper, 85e) · useCleanedUriPoll.ts (clean/edit ready-poll, 85f)
 │       ├── components/         # AuthGate.tsx (+test, protects routes) · AppChrome.tsx (Nav/Footer shell) · Nav.tsx (+test; Editor+Settings links, Issue 304) · Footer.tsx · DisclaimerBand.tsx · Chip.tsx (+test — decorative mascot, Issue 304)
 │       ├── components/chip/    # poses.ts (CHIP_POSES registry + ChipPose) · ChipStates.tsx (8 loading/thinking animations — Issue 304); sprites in public/chip/
 │       ├── components/ui/      # shadcn-style primitives: button / card / badge / modal
 │       ├── components/profile/ # DnaCard · Brief · IdentitySection · IntakeModeSection · ApiKeysSection
-│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (inline file upload, Issue 317; replaced LinkVideoForm) · VideoTable (Video·Status·Clips·Actions) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
+│       ├── components/dashboard/ # AnalyticsPanel (panel|sidebar variants) · UploadVideoForm (inline file upload, Issue 317; onUploaded callback, Issue 369) · VideoTable (Video·Status·Clips·Actions) · videoStatus.ts (shared STATUS_VARIANT/SOURCE_NEEDED_HELP) · EmptyHero · DashboardBanners · StageStepper (Issue 85c; videos-first reorg + SummaryCards removed, Issue 305)
+│       ├── components/landing/  # Standalone /review + /editor landings (Issue 369): VideoPickerLanding (+test — picker + explicit generate CTA) · InlineUploadFlow (+test — upload→SSE progress→generate in place)
 │       ├── components/onboarding/ # StepCard · StreamConsole · OnboardingIdentity (Issue 85d)
 │       ├── components/insights/ # InsightsPanel · ChannelSnapshot/DnaSnapshot · PerformerPanel · UploadWindows · ImprovementBrief · SavedInsights (Issue 85e)
 │       ├── components/analysis/ # AnalysisPanel (StatusChip/CopyButton) · AnalysisQuery · TitleOptimizer · HookAnalyzer · ChaptersPanel · ThumbnailConcepts (Issue 85e)
-│       ├── components/editor/   # Timeline (+test) — waveform + synced playhead + cut overlays (Issue 188) · LongFormEditor (master candidate timeline + suggested clips + chapters + export — Issue 307)
-│       ├── components/review/   # ClipPlayer (player+filmstrip, Issue 306) · TrimFilmstrip (+test) + trim.ts (dual-handle trim) · YourCall (triage card) · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (plain/ReactNode title) (Issue 85f/306)
+│       ├── components/editor/   # Timeline (+test) — waveform + synced playhead + cut overlays (Issue 188) · LongFormEditor (real source player + drag-to-select create-clip + Your-clips group + per-clip export — Issues 307/372/373) · FullTranscriptPanel (searchable segment transcript, seek + Clip-this — Issue 372)
+│       ├── components/review/   # ClipPlayer (player+filmstrip, Issue 306; creator-clip provenance 373) · StyleReview (+test — video-level style review, Issue 370) · TrimFilmstrip (+test) + trim.ts (dual-handle trim) · YourCall (triage card) · WhyThisClip · CaptionStylePanel · CleanPassPanel · TranscriptEditor · CollapsibleTool (plain/ReactNode title) (Issue 85f/306)
 │       └── pages/              # Dashboard (+test, 85c; videos-first reorg 305) · Onboarding (+test, 85d) · Insights (+test, 85e; chip-idea 309) · Analysis (+test, 85e; chip-magnify 309) · Review (+test, 85f; filmstrip trim + Your-call card + Chips, 306) · Editor (+test, 188; short|long mode toggle + long-form source, 307) · Profile (+test; read-only snapshot, 308) · Settings (+test; full build 308) · Chat (chip-wave/think/streaming, 309) · Pricing (+test) · Login · Walkthrough (+test)
 │
 ├── tests/
@@ -376,6 +378,17 @@ creator_style                        -- brand-kit render defaults (Issue 186, on
   id, creator_id (FK, CASCADE, UNIQUE uq_creator_style_creator_id),
   style JSONB (subtitle, background, captions_enabled, zoom_on_peak, denoise, aspect),
   updated_at
+  RLS: tenant_isolation on creator_id
+
+video_feedback                       -- video-level style reviews (Issue 370, migration 0048)
+  id, creator_id (FK, CASCADE), video_id (FK, CASCADE),
+  sentiment (video_sentiment_enum: like/dislike),
+  feedback_tags JSONB, feedback_note TEXT, created_at
+  RLS: tenant_isolation on creator_id
+
+creator_style_notes                  -- distilled style preferences (Issue 371, migration 0049, one row per creator)
+  id, creator_id (FK, CASCADE, UNIQUE), notes_text TEXT (<=1200 chars),
+  source_count, last_input_at (distillation watermark), updated_at
   RLS: tenant_isolation on creator_id
 
 dna_embeddings
