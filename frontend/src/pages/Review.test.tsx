@@ -27,6 +27,7 @@ function mockFetch(personalization?: PersonalizationStatus | null) {
     if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
     if (url.endsWith('/videos/clips/counts'))
       return json({ counts: [{ video_id: 'v1', total: 1, rendered: 1 }] })
+    if (url.endsWith('/videos/v1/feedback')) return json({ items: [] })
     if (url.endsWith('/videos/v1/clips'))
       return json({
         clips: [BASE_CLIP],
@@ -72,6 +73,39 @@ describe('Review', () => {
     // Round trip: picking the row sets ?video_id= and the live page takes over.
     await userEvent.click(await screen.findByRole('button', { name: 'Review clips' }))
     expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+  })
+
+  // ── Issue 370: video-level style review ──
+  it('?mode=style opens the style review surface', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1&mode=style')
+    expect(await screen.findByText('Your take on this style')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Works for me/ })).toBeInTheDocument()
+    // Honesty band still present in style mode.
+    expect(screen.getByText(/does not promise virality/i)).toBeInTheDocument()
+  })
+
+  it('a 0-clip video offers "Review the style instead" and the click lands on the style surface', async () => {
+    const base = mockFetch()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/videos/v1/clips'))
+        return { status: 200, ok: true, json: async () => ({ clips: [], personalization: null }) }
+      return base(input)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderReview('/app/review?video_id=v1')
+    expect(await screen.findByText(/No clips yet/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Review the style instead/ }))
+    expect(await screen.findByText('Your take on this style')).toBeInTheDocument()
+  })
+
+  it('the clip view links to the overall style review', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    renderReview('/app/review?video_id=v1')
+    await screen.findByText(/Clip #1/)
+    expect(
+      screen.getByRole('button', { name: /Review this video’s overall style/ }),
+    ).toBeInTheDocument()
   })
 
   it('loads the clip: player meta, why-this-clip reasoning, honesty disclaimer, and Refine button', async () => {

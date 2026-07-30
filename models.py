@@ -147,6 +147,14 @@ class FeedbackAction(enum.Enum):
     format = "format"
 
 
+class VideoSentiment(enum.Enum):
+    """Video-level style-review valence (Issue 370). A deliberate 2-value enum —
+    skip/trim/format are clip mechanics that make no sense at video level."""
+
+    like = "like"
+    dislike = "dislike"
+
+
 class InsightType(enum.Enum):
     performer_analysis = "performer_analysis"
     trend = "trend"
@@ -717,6 +725,37 @@ class ClipFeedback(Base):
     )
 
     clip: Mapped["Clip"] = relationship("Clip", back_populates="feedback")
+
+
+class VideoFeedback(Base):
+    """Video-level style review (Issue 370, migration 0048).
+
+    What the creator likes/dislikes about a whole video's STYLE — tags mirror
+    the ClipFeedback taxonomy shape (valence → tags → note) so the style
+    distiller (Issue 371) consumes uniform triples from both tables. At least
+    one of tags/note is required at the endpoint (bare valence carries no
+    style signal).
+    """
+
+    __tablename__ = "video_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid.uuid4)
+    creator_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("creators.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid, sa.ForeignKey("videos.id", ondelete="CASCADE"), nullable=False
+    )
+    sentiment: Mapped[VideoSentiment] = mapped_column(
+        sa.Enum(VideoSentiment, name="video_sentiment_enum"), nullable=False
+    )
+    feedback_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    feedback_note: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
 
 
 class ClipOutcome(Base):

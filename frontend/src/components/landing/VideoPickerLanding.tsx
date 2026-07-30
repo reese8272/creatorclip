@@ -108,12 +108,15 @@ function PickerRowAction({
   countsLoading,
   ctaLabel,
   onOpen,
+  onOpenStyle,
 }: {
   video: Video
   counts: { total: number; rendered: number } | undefined
   countsLoading: boolean
   ctaLabel: string
   onOpen: () => void
+  /** Review tool only (Issue 370): open the video-level style review. */
+  onOpenStyle?: () => void
 }) {
   const queryClient = useQueryClient()
   const [noClips, setNoClips] = useState(false)
@@ -156,11 +159,20 @@ function PickerRowAction({
   // done
   if (countsLoading || !counts) return <span className="text-sm text-subtle">…</span>
 
+  const styleLink = onOpenStyle && (
+    <button onClick={onOpenStyle} className="text-xs text-subtle hover:text-accent-text">
+      Review the style
+    </button>
+  )
+
   if (counts.total > 0) {
     return (
-      <Button size="sm" onClick={onOpen}>
-        {ctaLabel}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={onOpen}>
+          {ctaLabel}
+        </Button>
+        {styleLink}
+      </div>
     )
   }
 
@@ -168,7 +180,10 @@ function PickerRowAction({
     return (
       <span className="flex flex-col gap-1 text-xs text-muted">
         No strong moments matched your clipping principles.
-        <WhyNoClipsLink videoId={video.id} />
+        <span className="flex items-center gap-2">
+          <WhyNoClipsLink videoId={video.id} />
+          {styleLink}
+        </span>
       </span>
     )
   }
@@ -180,6 +195,7 @@ function PickerRowAction({
         onClips={(clips) => (clips.length > 0 ? onOpen() : setNoClips(true))}
       />
       <WhyNoClipsLink videoId={video.id} />
+      {styleLink}
     </div>
   )
 }
@@ -293,6 +309,11 @@ export function VideoPickerLanding({ tool }: { tool: 'review' | 'editor' }) {
                         countsLoading={videos.length > 0 && countsQuery.isPending}
                         ctaLabel={copy.cta}
                         onOpen={() => openVideo(v.id)}
+                        onOpenStyle={
+                          tool === 'review'
+                            ? () => setParams({ video_id: v.id, mode: 'style' })
+                            : undefined
+                        }
                       />
                     </td>
                   </tr>

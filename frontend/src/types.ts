@@ -74,6 +74,28 @@ export interface CatalogListResponse {
   offset: number
 }
 
+// Video-level style review (Issue 370) — POST/GET /videos/{id}/feedback.
+export type VideoSentiment = 'like' | 'dislike'
+
+export interface VideoFeedbackPayload {
+  sentiment: VideoSentiment
+  feedback_tags?: string[]
+  feedback_note?: string | null
+}
+
+export interface VideoFeedbackItem {
+  id: string
+  video_id: string
+  sentiment: VideoSentiment
+  feedback_tags: string[] | null
+  feedback_note: string | null
+  created_at: string
+}
+
+export interface VideoFeedbackListResponse {
+  items: VideoFeedbackItem[]
+}
+
 // GET /videos/{id}/transcript — full-source transcript (Issue 372). Segment-
 // granular (no word arrays); times are video-relative seconds.
 export interface VideoTranscriptSegment {
