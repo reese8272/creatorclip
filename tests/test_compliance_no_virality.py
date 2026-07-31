@@ -219,6 +219,20 @@ def test_no_virality_in_notification_templates() -> None:
     assert not violations, "Virality phrases in notification templates:\n" + "\n".join(violations)
 
 
+# ── Test 5: The public landing page (Issue 376a) ──────────────────────────────
+
+
+def test_no_virality_on_public_landing_page() -> None:
+    """
+    `GET /` (main.py:index) is `include_in_schema=False`, so it is invisible to
+    the OpenAPI-driven crawl in Test 1 above. It is now AutoClip's only public
+    homepage (Issue 376a) — scan it explicitly.
+    """
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.get("/")
+        _assert_clean(resp.text, "GET / (public landing page)")
+
+
 def test_no_virality_in_notification_copy_module() -> None:
     """Assert that every string in notify/copy.py COPY dict is honesty-constrained."""
     from notify.copy import COPY

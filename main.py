@@ -23,7 +23,7 @@ from starlette.responses import Response as _StarletteResponse
 
 import event_log
 import shared_resources
-from auth import check_not_cross_site
+from auth import check_not_cross_site, creator_id_from_cookie
 from config import settings
 from db import engine
 from limiter import limiter
@@ -185,19 +185,37 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 # assets via the StaticFiles mount; every other /app path returns the SPA shell
 # so React Router (basename=/app) owns client routing.
 #
-# Issue 85g soft cutover: once the bundle is built, `/` REDIRECTS to the SPA
-# (`/app/dashboard`) — the React app is now the primary surface. A fresh checkout
-# with no build still boots on the legacy index, so dev/CI without a frontend
-# build is unaffected (the same `_SPA_BUILT` gate used since adoption). The
-# legacy `static/*.html` pages remain served (now unlinked) as rollback
-# insurance; full retirement is a staging-verified follow-up.
+# Issue 85g soft cutover: once the bundle is built, an AUTHENTICATED `/` request
+# REDIRECTS to the SPA (`/app/dashboard`) — the React app is the signed-in
+# creator's primary surface. A fresh checkout with no build still boots on the
+# legacy index path, so dev/CI without a frontend build is unaffected (the same
+# `_SPA_BUILT` gate used since adoption). The legacy `static/*.html` pages
+# remain served (now unlinked) as rollback insurance; full retirement is a
+# staging-verified follow-up.
 _SPA_DIST = Path(__file__).parent / "frontend" / "dist"
 _SPA_INDEX = _SPA_DIST / "index.html"
 _SPA_BUILT = _SPA_INDEX.is_file()
 
+# Issue 376a: `/` is AutoClip's only public homepage. Google's OAuth
+# verification requirements (support.google.com/cloud/answer/13464321,
+# checked 2026-07-30) state the homepage must be hosted on a verified domain,
+# must accurately describe the app's functionality, and must link the privacy
+# policy that matches the OAuth consent screen. A hand-authored static page
+# (matching the retained tos/privacy/accessibility pattern) is server-rendered
+# real content — it works whether or not the SPA bundle is built, so both the
+# CI pytest lane (no Node build) and prod (SPA always built) serve identical,
+# crawlable copy rather than an empty SPA shell awaiting JS hydration.
+_LANDING_HTML = _STATIC / "landing.html"
+
 
 @app.get("/", include_in_schema=False)
-async def index() -> Response:
+async def index(request: Request) -> Response:
+    # Anonymous visitors get the public landing; authenticated visitors keep
+    # going straight into the app (no regression to the pre-376a signed-in
+    # flow). `creator_id_from_cookie` is a best-effort JWT decode with no DB
+    # lookup — safe to call unauthenticated, on the public homepage.
+    if creator_id_from_cookie(request) is None:
+        return FileResponse(_LANDING_HTML)
     if _SPA_BUILT:
         return RedirectResponse(url="/app/dashboard", status_code=302)
     # Legacy static/index.html has been retired (Issue 226: XSS surface removal).
@@ -290,13 +308,16 @@ class StaticCacheBustMiddleware(_BaseHTTPMiddleware):
 # CSP uses frame-ancestors 'none' for structural clickjacking defence (supersedes
 # X-Frame-Options for supporting browsers; both are set for defence-in-depth per
 # OWASP). HSTS is only emitted in production to avoid breaking non-TLS dev hosts.
-# style-src/font-src allow Google Fonts by default — the SPA stylesheet @imports
-# fonts.googleapis.com (CSS) which loads fonts.gstatic.com (woff2); without them
-# the browser blocks the fonts and prod falls back to system fonts. 'unsafe-inline'
-# covers the retained static pages' <style> blocks (tos/privacy/accessibility);
-# script-src stays governed by default-src 'self' — no inline scripts allowed.
+# style-src/font-src are 'self'-only — the SPA stylesheet self-hosts Inter +
+# JetBrains Mono as committed woff2 assets (Issue 365/2026-07-29 GDPR remedy for
+# LG München 3 O 17493/20: remote Google Fonts transmits the visitor's IP to
+# Google), so no remote font origin needs an allowance. 'unsafe-inline' on
+# style-src covers the retained static pages' <style> blocks
+# (tos/privacy/accessibility/landing); script-src stays governed by
+# default-src 'self' — no inline scripts allowed.
 # CSP_EXTRA_SOURCES appends additional allowed origins for further CDN/analytics.
-# (DECISIONS 2026-07-20 — fonts allowance baked into the default CSP.)
+# (OFF_COURSE_BUGS 2026-07-30 — dropped the dead Google Fonts allowance now that
+# both font fixes have landed; DECISIONS 2026-07-20 entry superseded.)
 #
 # Source: https://owasp.org/www-project-secure-headers/
 
@@ -306,8 +327,8 @@ _CSP_BASE = (
     "base-uri 'self'; "
     "object-src 'none'; "
     "frame-ancestors 'none'; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self'; "
     "upgrade-insecure-requests"
 )
 

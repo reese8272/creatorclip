@@ -4,7 +4,35 @@ Updated after every issue closes.
 
 ---
 
-## 2026-07-30 (latest) — W0 of the all-waves run: **#382 + #383 DONE** — three L24 claims retracted
+## 2026-07-30 (latest, W3) — Issue 376(a) DONE: public marketing landing; 376(b) DESCOPED
+
+`main.py:200` used to redirect `/` straight into the app, bouncing every anonymous visitor to
+"Sign in to continue" — there was no public page describing AutoClip at all, which blocked the
+Google OAuth verification homepage requirement (#29, friend-beta critical path). `main.py:index()`
+now serves a real, server-rendered `static/landing.html` to anonymous visitors (200, no SPA/JS
+dependency — works identically whether or not `frontend/dist` is built) while authenticated
+visitors are unaffected (still redirected into `/app/dashboard`). Content: what AutoClip is, the
+honesty constraint verbatim, the Proof-of-Lift (#374) outcome loop described accurately, real
+pricing from `billing/packs.py`, and a Terms/Privacy footer. A matching `frontend/src/pages/Landing.tsx`
+(`/app/landing`, no `AuthGate`) ships as the in-app equivalent.
+
+**376(b) (no-auth demo) DESCOPED** — the only ToS-clean demo source is pre-processed house sample
+videos (`YTDLP_ENABLED=False`, `youtube/ingest.py:89` own-content-only), which would showcase the
+commodity clip-cutting layer rather than the outcome loop that differentiates this product. Reversible;
+un-park criteria in `docs/DECISIONS.md` 2026-07-30 (W3).
+
+**Folded in:** the dead Google-Fonts CSP allowance (`main.py` `_CSP_BASE` — flagged in
+`OFF_COURSE_BUGS.md` 2026-07-30) was removed in the same `main.py` change; both fonts have been
+self-hosted since Issue 365 and the allowance was a no-longer-needed permission.
+
+Tests: backend 2417 passed / 64 skipped (up from 2410/64 baseline — net new landing/CSP/compliance
+tests, `frontend/dist` built to exercise the real SPA-built branch, not just monkeypatched); frontend
+324 passed (up from 318), `tsc -b` clean, `eslint` clean. Branch `w3/issue-376-landing` off
+`wave/l24-and-hygiene`.
+
+---
+
+## 2026-07-30 — W0 of the all-waves run: **#382 + #383 DONE** — three L24 claims retracted
 
 First wave of an owner-approved multi-wave run to close every code-closeable issue (scope: Buckets A+B,
 per-wave batched approval, parallel agent waves). W0 was deliberately docs-first because #382 gated the
