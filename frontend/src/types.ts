@@ -318,6 +318,11 @@ export interface ReviewClip {
   origin: 'engine' | 'creator'
   // Issue 373 — render aspect preset, surfaced by the export panel.
   aspect: string
+  // Issue 377 — presentation-only shortlist cut: true for the top
+  // SHORTLIST_SIZE engine-ranked clips. A creator-made selection (rank is
+  // null) is never shortlisted — it was never engine-scored, so there is no
+  // case to argue for it as a "top pick".
+  shortlisted: boolean
 }
 
 // Issue 216 — honest personalization-status surface.

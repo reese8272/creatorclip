@@ -32,6 +32,7 @@ const CLIP: ReviewClip = {
   applied_description: null,
   origin: 'engine' as const,
   aspect: '9:16',
+  shortlisted: true,
 }
 
 const PRIVACY_NOTE =

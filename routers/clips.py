@@ -19,6 +19,7 @@ from api_key import get_current_creator_via_api_key
 from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from billing.spend_guard import require_budget
+from clip_engine.ranking import is_shortlisted
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -77,6 +78,11 @@ class ClipOut(BaseModel):
     origin: str = "engine"
     # Issue 373 — the export panel surfaces the render's aspect preset.
     aspect: str = "9:16"
+    # Issue 377 — presentation-only shortlist cut: True for the top
+    # ``settings.SHORTLIST_SIZE`` engine-ranked clips (rank is None → always
+    # False; a creator-made selection was never engine-scored, Issue 373).
+    # Never affects score/rank/persistence — see clip_engine.ranking.is_shortlisted.
+    shortlisted: bool = False
 
 
 class PersonalizationStatus(BaseModel):
@@ -236,6 +242,7 @@ def _clip_response(clip: Clip) -> dict:
         "applied_description": clip.applied_description,
         "origin": sj.get("origin", "engine"),
         "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
+        "shortlisted": is_shortlisted(clip.rank),
     }
 
 

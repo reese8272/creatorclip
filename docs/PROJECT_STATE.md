@@ -4,7 +4,36 @@ Updated after every issue closes.
 
 ---
 
-## 2026-07-30 (latest, W3) — Issue 376(a) DONE: public marketing landing; 376(b) DESCOPED
+## 2026-07-30 (latest, W4) — Issue 377 DONE: shortlist mode — return the decision, not the pile
+
+Presentation-and-selection change only, no engine rewrite. `clip_engine/ranking.py::is_shortlisted(rank,
+size=None)` is a pure predicate reading the ALREADY-computed `rank` (top `SHORTLIST_SIZE=3`, fixed —
+`config.py`) — it never touches `score`/`rank`/candidate ordering, and never drops a candidate from the
+persisted or scored set. Wired onto `ClipOut.shortlisted` in `routers/clips.py::_clip_response`.
+`frontend/src/pages/Review.tsx` defaults the one-clip-at-a-time queue to the shortlisted clips, with a
+"show all N candidates" toggle (`data-testid="shortlist-banner"`) as the load-bearing escape hatch;
+falls back to the full set automatically when nothing is shortlisted (e.g. a creator-only-selection
+video, Issue 373). WhyThisClip needed no change — it was already default-open/primary content since the
+Issue 306 redesign.
+
+**Generation/scoring volume unchanged — explicitly NO LLM-cost saving made** (quantified: 0% reduction
+in scoring calls per video). The "show all candidates" guardrail requires every candidate to still be
+real, not a re-generated subset, so `extract_candidates`/`score_candidates` are untouched. Full decision
+rationale in `docs/DECISIONS.md` (2026-07-30, W4).
+
+**Verification:** `tests/test_shortlist.py` (10 new tests: boundary/ties/fewer-than-N/zero-candidates/
+creator-selection for `is_shortlisted`, an NDCG-invariance proof against `preference/efficacy.py`, router
+wiring). Eval harness: `tests/test_clip_engine.py -k eval_scenario` — 19 passed, `SCENARIO_FLOOR=15`
+byte-identical (no `clip_engine/candidates.py` touched). `tests/test_compliance_no_virality.py` green — no
+new copy trips the virality scan. Full backend suite on branch tip: **2446 passed, 70 skipped, 173
+deselected** (measured baseline on the same tip before this change: 2436 passed/70 skipped/173
+deselected — net +10, zero regressions). Frontend: `npx vitest run` **334 passed** (331 baseline + 3 new
+`Review.test.tsx` cases), `npx tsc -b` clean, `ruff format --check` + `ruff check` + `mypy` clean on
+touched files. Branch `w4/issue-377-shortlist` off `wave/l24-and-hygiene`.
+
+---
+
+## 2026-07-30 (W3) — Issue 376(a) DONE: public marketing landing; 376(b) DESCOPED
 
 `main.py:200` used to redirect `/` straight into the app, bouncing every anonymous visitor to
 "Sign in to continue" — there was no public page describing AutoClip at all, which blocked the

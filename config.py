@@ -355,6 +355,17 @@ class Settings(BaseSettings):
     MEDIAPIPE_FACE_MODEL_PATH: str = ""
 
     CLIPS_PER_VIDEO_DEFAULT: int = 8
+    # ── Shortlist mode (Issue 377) ──────────────────────────────────────────────
+    # How many of the ranked candidates the Review surface argues a case for by
+    # default (WhyThisClip promoted to primary content). PRESENTATION-ONLY: every
+    # candidate is still generated and scored (no LLM-cost reduction — the honest
+    # "show all candidates" disclosure needs the full scored set to stay real, not
+    # a subset dressed up as complete). Fixed, not confidence-derived: clip.score
+    # is a per-video LLM estimate with no cross-video calibration data to justify a
+    # score-threshold cutoff (DECISIONS 2026-07-30). 3 matches the product framing
+    # ("these three, and here is the case for each" — docs/issues.md #377) and is
+    # small enough to read as curated rather than a re-skinned pile.
+    SHORTLIST_SIZE: int = 3
     # Auto-render generated clips the moment clip generation finishes, so the
     # Review queue is watch-ready with zero manual steps (the upload already
     # consented to — and was charged — the minutes; render adds no extra spend).

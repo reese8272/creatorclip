@@ -34,6 +34,7 @@ const CLIP: ReviewClip = {
   applied_description: null,
   origin: 'engine' as const,
   aspect: '9:16',
+  shortlisted: true,
 }
 
 function wrapper({ children }: { children: React.ReactNode }) {
