@@ -33,7 +33,10 @@ describe('Analysis', () => {
   it('shows the query form + honesty disclaimer, and hides per-video panels without a video_id', () => {
     vi.stubGlobal('fetch', mockFetch())
     renderAnalysis('/app/analysis')
-    expect(screen.getByRole('heading', { name: 'Analyze a video' })).toBeInTheDocument()
+    // Issue 355: "one video" is the distinction from the channel-wide Assistant.
+    expect(screen.getByRole('heading', { name: 'Analyze one video' })).toBeInTheDocument()
+    // Arriving without ?video_id= hides the four generators, so say so.
+    expect(screen.getByText(/Open this page from a video row/i)).toBeInTheDocument()
     expect(screen.getByText(/does not promise virality/i)).toBeInTheDocument()
     expect(screen.queryByText('Title Optimizer')).not.toBeInTheDocument()
     expect(screen.queryByText('Hook Analyzer')).not.toBeInTheDocument()

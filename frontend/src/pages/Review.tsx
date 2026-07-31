@@ -11,8 +11,9 @@ import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { StyleReview } from '@/components/review/StyleReview'
-import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
+import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 
@@ -122,6 +123,11 @@ export function Review() {
   const styleMode = params.get('mode') === 'style'
   const navigate = useNavigate()
   const [index, setIndex] = useState(0)
+  // Issue 377 — shortlist mode: default the queue to the engine's argued top
+  // picks (WhyThisClip primary content is unchanged — it was already
+  // default-open); the full candidate set is one click away via "show all
+  // candidates" so an engine miss is never hidden, only de-prioritized.
+  const [showAllCandidates, setShowAllCandidates] = useState(false)
 
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ['review-clips', videoId],
@@ -139,9 +145,20 @@ export function Review() {
     },
   })
 
-  const clips = data?.clips ?? []
+  const allClips = data?.clips ?? []
+  const shortlistedClips = allClips.filter((c) => c.shortlisted)
+  // Fall back to the full set when nothing was shortlisted (e.g. a video with
+  // only a creator-made selection, which is never engine-scored/shortlisted —
+  // Issue 373) so the queue is never emptier than what actually exists.
+  const hasHiddenCandidates = shortlistedClips.length > 0 && shortlistedClips.length < allClips.length
+  const clips = showAllCandidates || shortlistedClips.length === 0 ? allClips : shortlistedClips
   const reviewed = clips.length > 0 && index >= clips.length
   const clip = clips[index]
+
+  function toggleShowAllCandidates() {
+    setShowAllCandidates((v) => !v)
+    setIndex(0)
+  }
 
   useEffect(() => {
     if (reviewed) {
@@ -220,8 +237,16 @@ export function Review() {
           AutoClip predicts fit with your style and audience — it does not promise virality. All
           scores are estimates grounded in your own channel data.
         </DisclaimerBand>
-        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-3 px-4 py-10 text-center">
-          <p className="text-sm text-muted">No clips yet — generate them from the Dashboard.</p>
+        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-3 px-4 py-10">
+          {/* Issue 355: this used to point at the Dashboard in prose with nothing
+              to click. Generating is the actual next step, so it happens here. */}
+          <EmptyStatePrompt
+            variant="card"
+            pose="confused"
+            title="No clips yet for this video."
+            detail="Generate them here — we’ll rank them against your channel’s DNA and argue the case for each."
+            action={<GenerateClipsButton videoId={videoId} onClips={() => void refetch()} />}
+          />
           {/* Issue 370: a 0-clip video is still reviewable as a whole. */}
           <Button
             variant="secondary"
@@ -252,6 +277,32 @@ export function Review() {
           Review this video’s overall style →
         </button>
       </div>
+
+      {/* Issue 377 — shortlist mode: default queue is the engine's argued top
+          picks; "show all candidates" is the load-bearing escape hatch so an
+          engine miss can never be silently hidden. */}
+      {shortlistedClips.length > 0 && (
+        <div
+          className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 pt-3 text-xs text-muted"
+          data-testid="shortlist-banner"
+        >
+          <span>
+            {showAllCandidates
+              ? `Showing all ${allClips.length} candidates`
+              : `Top ${shortlistedClips.length} picks — the case for each, ranked`}
+          </span>
+          {(hasHiddenCandidates || showAllCandidates) && (
+            <button
+              onClick={toggleShowAllCandidates}
+              className="text-accent-text hover:underline"
+            >
+              {showAllCandidates
+                ? `Show top picks only (${shortlistedClips.length})`
+                : `Show all ${allClips.length} candidates`}
+            </button>
+          )}
+        </div>
+      )}
 
       <ReviewClipView
         key={clip.id}

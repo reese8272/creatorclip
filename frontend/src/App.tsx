@@ -10,6 +10,7 @@ import { Profile } from '@/pages/Profile'
 import { Chat } from '@/pages/Chat'
 import { Pricing } from '@/pages/Pricing'
 import { Login } from '@/pages/Login'
+import { Landing } from '@/pages/Landing'
 import { Walkthrough } from '@/pages/Walkthrough'
 import { Onboarding } from '@/pages/Onboarding'
 import { VideoClipsMap } from '@/pages/VideoClipsMap'
@@ -56,10 +57,17 @@ function RootError() {
 
 // React Router v7 Data Mode. The SPA mounts under /app (Vite base + FastAPI
 // fallback); `basename` keeps client routes relative to that prefix. Four layout
-// contexts (Issue 85b): protected+chrome (the app), protected+bare (focused
-// first-run flows), public+chrome (pricing — anon sees prices), public+bare
-// (the pre-auth sign-in) — all nested under RootLayout. Add child routes here as
-// more pages port.
+// contexts (Issue 85b, extended 376a): protected+chrome (the app), protected+bare
+// (focused first-run flows), public+chrome (pricing — anon sees prices), public+bare
+// (the pre-auth sign-in, and the marketing landing) — all nested under RootLayout.
+// Add child routes here as more pages port.
+//
+// `landing` has NO AuthGate (Issue 376a — a public marketing page). FastAPI's
+// `/` (main.py:index) serves a server-rendered static/landing.html directly
+// rather than routing here, because that response must be real content without
+// JS execution (Google OAuth verification + the CI pytest lane, which never
+// builds the SPA bundle); this route is the in-app equivalent, reachable once
+// the SPA is running.
 const router = createBrowserRouter(
   [
     {
@@ -93,6 +101,7 @@ const router = createBrowserRouter(
           children: [{ path: 'pricing', element: <Pricing /> }],
         },
         { path: 'login', element: <Login /> },
+        { path: 'landing', element: <Landing /> },
         { path: '*', element: <Navigate to="/dashboard" replace /> },
       ],
     },

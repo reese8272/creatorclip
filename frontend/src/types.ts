@@ -213,6 +213,22 @@ export interface InsightsResponse {
   bottom_performers: Performer[]
 }
 
+// Issue 379 — Channel Fingerprint shareable artifact. POST-only, explicit
+// creator action; NEVER auto-fetched. Every field here is self-declared
+// (creator_identity) or distilled from the creator's own in-app feedback
+// (creator_style_notes) — never YouTube Analytics/Data API-derived. See
+// docs/COMPLIANCE.md "Channel Fingerprint — shareable artifact" for the
+// field-by-field provenance audit and routers/creators.py::FingerprintShareOut.
+export interface FingerprintShare {
+  niches: string[]
+  content_pillars: string[] | null
+  tone_tags: string[] | null
+  mission: string | null
+  style_summary: string | null
+  honesty_line: string
+  generated_at: string
+}
+
 export interface UploadWindow {
   day_name: string
   label: string
@@ -318,6 +334,11 @@ export interface ReviewClip {
   origin: 'engine' | 'creator'
   // Issue 373 — render aspect preset, surfaced by the export panel.
   aspect: string
+  // Issue 377 — presentation-only shortlist cut: true for the top
+  // SHORTLIST_SIZE engine-ranked clips. A creator-made selection (rank is
+  // null) is never shortlisted — it was never engine-scored, so there is no
+  // case to argue for it as a "top pick".
+  shortlisted: boolean
 }
 
 // Issue 216 — honest personalization-status surface.
@@ -595,4 +616,61 @@ export interface PublicationListOut {
   suggested_windows: SuggestedWindow[]
   privacy_note: string
   truncated: boolean
+}
+
+/** Proof of Lift — published-clip outcomes (Issue 374).
+ *
+ * `rate` is null until `min_judged_for_rate` clips have a verdict — a count is
+ * a fact, a rate is an inference. `deferred_count` is published-but-unjudgeable
+ * (fewer than 3 comparable Shorts for a baseline); those are NOT failures.
+ */
+export interface ProofOfLiftGroup {
+  avg_score: number | null
+  avg_dna_match: number | null
+  median_duration_s: number | null
+  median_setup_lead_s: number | null
+  top_principle: string | null
+}
+
+export interface ProofOfLiftContrast {
+  winners_n: number
+  underperformers_n: number
+  winners: ProofOfLiftGroup
+  underperformers: ProofOfLiftGroup
+}
+
+export interface ProofOfLift {
+  published_count: number
+  judged_count: number
+  beat_median_count: number
+  below_median_count: number
+  deferred_count: number
+  rate: number | null
+  rate_ci_low: number | null
+  rate_ci_high: number | null
+  min_judged_for_rate: number
+  contrast: ProofOfLiftContrast | null
+  metric: string
+  checkpoint: string
+}
+
+/** Originality guard — sameness advisory over the creator's OWN recent clips
+ * (Issue 375). Advisory only; never a certification of monetization
+ * eligibility and never a restatement of YouTube's enforcement mechanism
+ * beyond the dated `policy_url` citation.
+ *
+ * `checked === false` means the comparison could not run at all (fewer than
+ * two recent clips have a usable content embedding — e.g. no transcript
+ * coverage yet) — a distinct, honest state from "checked, nothing found".
+ */
+export interface OriginalityAdvisory {
+  checked: boolean
+  flagged: boolean
+  window: number
+  cluster_size: number
+  similar_clip_ids: string[]
+  common_structural_features: string[]
+  message: string | null
+  policy_url: string
+  policy_checked: string
 }

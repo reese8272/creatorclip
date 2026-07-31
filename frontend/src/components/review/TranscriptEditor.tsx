@@ -147,6 +147,20 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
     }
   }
 
+  // Issue 364: discard must clear cleaned_render_uri server-side, or the next
+  // clean/edit 409s with pending_clean_or_edit until a version the creator
+  // explicitly rejected is confirmed instead.
+  async function discardFinal() {
+    try {
+      await api(`/clips/${clip.id}/clean/discard`, { method: 'POST' })
+      setApplying(false)
+      setStatus('Keeping original render.')
+      queryClient.invalidateQueries({ queryKey: ['review-clips', clip.video_id] })
+    } catch {
+      setStatus('Discard failed — try again.')
+    }
+  }
+
   if (isPending) return <p className="text-sm text-subtle">Loading transcript…</p>
   if (isError) return <p className="text-sm text-danger">Failed to load transcript — try refreshing.</p>
 
@@ -237,7 +251,7 @@ export function TranscriptEditor({ clip }: { clip: ReviewClip }) {
             <Button size="sm" onClick={confirmFinal}>
               Use edited version
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => setApplying(false)}>
+            <Button variant="secondary" size="sm" onClick={discardFinal}>
               Keep original
             </Button>
           </div>

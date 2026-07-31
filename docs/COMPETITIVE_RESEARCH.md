@@ -1,8 +1,18 @@
 # The AI Video Auto-Clipping Market: A Competitive Intelligence Report for autoclip.studio
 
 > _Research snapshot (compiled ~2026-06; renamed from `other_apps_research.md` in Issue 146).
+> **Partially re-verified 2026-07-30 (Issue 383)** — the YouTube-native tier, the monetization-policy
+> claims, and the full pricing table were re-fetched from primary sources; the tier list, GTM, funding,
+> and UI/UX sections are still the ~2026-06 capture and are NOT re-verified.
 > Pricing/feature claims are a point-in-time capture — **verify live before citing publicly.**
 > Kept as living strategic reference; feeds the Issue 147 UI/UX cohesion work._
+
+> ✅ **REFRESHED 2026-07-30 (Issue 383) — primary sources re-fetched this session.** The three stale
+> areas below were re-verified against vendor and platform primary sources, not secondary coverage.
+> **Three claims that circulated in the Lane-L24 filing did not survive verification and are corrected
+> in [§ 2026-07-30 refresh — corrections](#2026-07-30-refresh--corrections-issue-383). Read that
+> section before citing this document in any creator-facing surface.** In particular, do not repeat
+> the "three-strike ladder" or the two OpusClip quotes — neither is supported by its cited source.
 
 ## TL;DR
 
@@ -18,6 +28,8 @@
 1. **All-in-one editors with a clipping feature bolted on:** Veed.io, Kapwing, Descript, Riverside (Magic Clips). Clipping is secondary to their core editor/recorder.
 1. **Stream/gaming-native clippers:** Eklipse, Powder, plus general tools positioning into Twitch (SendShort). This is the thinnest, most underserved segment.
 1. **Faceless/generative-first:** Crayo, Captions’ AI Creator/avatars, HeyGen. Different job (create from scratch vs. clip existing footage).
+1. **Platform-native (added 2026-07-30, Issue 383) — YouTube itself.** *Video Clips* in YouTube Studio, with AI **suggested clips**, is free, native, and zero-friction. This is now a first-class tier and the single most important structural threat in this document. **Its current limits are the whole story — see [§ YouTube-native clipping](#youtube-native-clipping-the-platform-as-competitor-2026-07-30).**
+1. **Agent-native (added 2026-07-30, Issue 383) — Reap.** Ships an **MCP server** so Claude/ChatGPT/Codex can clip, caption, translate, and schedule by natural-language instruction; the 2026 round-ups claim no other tool offers agent-native automation. A new axis of competition that did not exist at the original snapshot. _(src: [reap.video/blog/top-ai-clipping-tools-in-2026](https://reap.video/blog/top-ai-clipping-tools-in-2026))_
 
 ### Common themes — what *everyone* does (table stakes)
 
@@ -103,6 +115,42 @@ Mobile-first AI creative studio. Core: auto-captions (OpenAI Whisper), AI Edit (
 
 No clipping tool today truly *learns an individual creator’s style*. Adjacent precedent exists: Jasper/Typeface/Copy.ai “brand voice” features upload examples and learn tone; quso markets “learns your brand voice” for captions; Submagic offers creator-style caption presets (MrBeast, Hormozi) — but these are static templates, not learned. The opportunity for autoclip.studio: learn from a creator’s *own* back catalog — their pacing, preferred clip length, caption font/animation/placement, hook patterns, which moments *they* historically clipped, and (via connected analytics) which of *their* clips actually performed — then bias future auto-clips toward that learned style. This is a genuine, defensible moat versus the template-based field, and directly answers the “robotic/generic clip” complaint.
 
+### YouTube-native clipping: the platform as competitor (2026-07-30)
+
+**Verified against Google's own help page and the April 2026 announcement coverage this session.**
+The threat is real but **materially narrower today than the Lane-L24 filing implied**, and the gap
+between "what ships now" and "what was announced" is exactly where AutoClip's remaining window is.
+
+**What is live now** — *Video Clips* in YouTube Studio lets a creator cut a segment from a long upload
+and publish it as a **separate video**. AI **suggested clips** surface key highlights plus an
+AI-generated outline for transcript navigation. Hard limits, quoted from the help page:
+
+- **16:9 only.** The tool *"only creates 16:9 videos"* and **cannot currently generate Shorts.**
+- **Podcast playlists only** for the AI suggestions — the video must be classified into a podcast playlist.
+- **English only**, in **10 countries**: *"exclusive to English-language videos in a podcast playlist in
+  the US, Canada, Brazil, Mexico, the UK, Spain, Germany, France, India, and Korea."*
+
+_(src: [support.google.com/youtube/answer/15824265](https://support.google.com/youtube/answer/15824265?hl=en), fetched 2026-07-30)_
+
+**What was announced but has NOT shipped** — YouTube, quoted via Tubefilter: *"Later this year, we will
+be rolling out Video Clips to Shorts, and launching auto-suggestions to help you identify your most
+'clippable' moments."* No firm date beyond "later this year."
+_(src: [tubefilter.com/2026/04/17/…](https://www.tubefilter.com/2026/04/17/youtube-clipping-tool-viewer-clips-shorts/), fetched 2026-07-30)_
+
+**A separate change that is easy to conflate — and the L24 filing did conflate it.** The *viewer-facing*
+**Clips** feature (audience-generated 5–60s snippets) is being **discontinued**, replaced by
+timestamp-sharing on mobile. That is a *removal*, not the expansion. "YouTube is rolling Clips into
+Shorts" merges a deprecated viewer feature with a separate creator tool. Keep them distinct in any
+positioning copy.
+_(src: [9to5google.com/2026/04/17/…](https://9to5google.com/2026/04/17/youtube-clips-share-at-time-changes/); [ppc.land/youtube-kills-clips-and-bets-on-timestamp-sharing-in-2026](https://ppc.land/youtube-kills-clips-and-bets-on-timestamp-sharing-in-2026/))_
+
+**Strategic read.** The commoditization thesis holds directionally — free native clip-finding is coming
+and will crush "we find your best moments" as a paid value proposition. But **today** it does not touch
+a non-English creator, a non-podcast creator, a creator outside 10 countries, or **anyone who wants a
+vertical Short** — which is the entire short-form use case. The honest framing is *"the clip-finding
+layer is being commoditized on a known trajectory,"* not *"it is already free and native."* Overstating
+this weakens the argument when a creator checks and finds Studio can't make them a Short.
+
 ## Recommendations
 
 **Stage 1 — Nail the wedge (0–3 months):** Build the best **YouTube-livestream/VOD → highlights + shorts** experience, because it’s the most underserved segment.
@@ -126,6 +174,20 @@ No clipping tool today truly *learns an individual creator’s style*. Adjacent 
   > The subscriptions/watermarked-free-tier GTM remains valid advice independent of the billing
   > primitive; the $12–15/mo entry benchmark can be revisited for a future subscription tier
   > if the credit model shows conversion drop-off at the Starter level.
+  >
+  > **Addendum (Issue 380, 2026-07-31) — the free-trial question is now CLOSED: one-time 60 min /
+  > 7 days stands.** The apparent gap versus "Opus and Vizard give 60 min/month" is not a like-for-like
+  > comparison: their free grants are **watermarked with limited storage** (Opus Free = 60 min/mo,
+  > watermark, 3-day storage, no virality score — see the Pricing section above at the Opus Clip
+  > bullet), and per the growth-loop bullet in Marketing & GTM the watermark **is** the point. Ours
+  > is full-fidelity, un-watermarked, permanently stored output. Matching the *number* without the
+  > *restrictions* would give away 720 min/yr — **3.6× the entire Starter pack** (200 min / $18) —
+  > and let a one-upload-a-month creator subsist free forever. 2026 benchmarks also put opt-in
+  > time-boxed trials at 8.9–25.2% conversion against freemium's 2–8%, with the category shifting to
+  > trials (57%) over freemium (26%). The runner-up option is **(d) a watermarked recurring free
+  > tier** — the standard-conformant version — deferred because no AutoClip-branded watermark render
+  > path exists and a viral-watermark loop buys nothing while signups are capped at 100 invited
+  > users. Full reasoning, margin re-check, and the re-open trigger: `docs/DECISIONS.md` (Issue 380).
 
 **Stage 2 — Make it feel magical (2–5 months):**
 
@@ -148,6 +210,108 @@ No clipping tool today truly *learns an individual creator’s style*. Adjacent 
 - If clip-boundary quality + stream-native detection don’t beat Eklipse/Opus in blind creator tests, fix that before scaling marketing.
 - If per-output pricing erodes margins on multi-hour streams, introduce a stream-hour cap or a higher “creator pro” tier rather than reverting to per-minute credits.
 - If the style-learning feature doesn’t measurably lift creators’ clip performance within 2–3 months of data, reposition it as a personalization nicety rather than the headline.
+
+## 2026-07-30 refresh — corrections (Issue 383)
+
+Three claims from the 2026-07-30 Lane-L24 filing were re-checked against primary sources this session.
+**All three failed verification as stated.** The underlying strategic findings mostly survive; the
+*specific factual claims* do not, and those are the ones that would have reached creator-facing copy
+via #375 and #378. Corrected here; the same corrections are mirrored in `docs/DECISIONS.md`.
+
+### ❌ CORRECTION 1 — there is no "three-strike ladder" for inauthentic content
+
+**Claimed (L24 filing, `PROJECT_STATE.md`, `LEFT_OFF.md`):** the policy carries a *"three-strike ladder
+(warning → 90-day suspension → permanent YPP removal)."*
+
+**Verified:** **no such ladder is described by any primary source.** YouTube's own monetization-policy
+page describes enforcement as ranging from limiting ad earnings to suspending or terminating channel
+monetization — no numbered strikes, no 90-day step. TechCrunch's coverage of the clarification
+describes no strike system either. The specific mechanism appears to be an artifact of secondary
+coverage, not policy.
+_(src: [support.google.com/youtube/answer/1311392](https://support.google.com/youtube/answer/1311392?hl=en); [techcrunch.com/2026/07/20/…](https://techcrunch.com/2026/07/20/youtube-clarifies-policies-around-ai-slop-and-upsetting-videos/), both fetched 2026-07-30)_
+
+**Load-bearing for #375.** Shipping "three strikes and you lose monetization" as a risk-meter tooltip
+would be a false statement about a third party's enforcement policy, in a product whose central
+constraint is honesty. **#375 must describe consequences qualitatively** ("may become ineligible for
+monetization") and link the creator to YouTube's own page rather than restating a mechanism.
+
+### ❌ CORRECTION 2 — the policy rename was July 2025, not July 2026
+
+**Claimed:** *"YouTube's 16 July 2026 'inauthentic content' policy (renamed from 'repetitious content')."*
+
+**Verified:** the rename from "repetitious content" to "inauthentic content" happened **15 July 2025**.
+The **16 July 2026** event was a *clarification* that split the existing policy into three named
+categories: (1) generic/repetitive/template-based content, (2) unsatisfying or off-putting content,
+(3) AI personas advising on sensitive topics (finance, legal, healthcare, medical).
+
+The substance still favors AutoClip — templated mass-production is explicitly named non-monetizable,
+and YouTube's stated bar is *"Be your original creation… you need to change it significantly to make
+it your own."* Clips **are** monetizable with commentary, critical review, or added storyline; the
+disallowed example is *"clips of moments… edited together with little or no narrative."* But the
+policy is **13 months old, not 2 weeks old** — so "the single biggest strategic shift since this doc
+was written" overstates its novelty, and any "new policy" urgency framing in #375/#376 is wrong.
+
+### ❌ CORRECTION 3 — the two OpusClip quotes are not in the cited source
+
+**Claimed (market finding 3, cited to `opus.pro/blog/short-form-video-strategy-2026`):** that OpusClip
+conceded *"the real bottleneck shifted to planning — the decision of what deserves cutting"* and that
+*"measurement is where repurposing setups break down."*
+
+**Verified: neither sentence appears in that post.** I fetched it and the adjacent
+`creator-economy-2026-ai-video-repurposing-attention-war` post in case of a mis-citation; the quotes
+are in neither. The closest actual Opus wording runs the *opposite* direction — measurement is framed
+positively as routine iteration (*"Track performance metrics for each clip"*), and the named bottleneck
+is *"the gap between content creation and content distribution,"* i.e. distribution, not selection.
+
+⚠️ **Do not publish these quotes.** Attributing invented statements to a named competitor is a legal
+and reputational exposure, and #378's entire premise is a *trust* surface. (Caveat in fairness: pages
+can change, and I checked two candidates rather than every Opus post — but a quote we cannot re-fetch
+is a quote we cannot publish.)
+
+**The finding survives without the fabricated attribution.** Measurement genuinely *is* the category's
+underexplored gap, corroborated independently: industry coverage notes it *"underexplains how to
+measure incremental performance after repurposing and how to decide which source assets deserve
+another pass"*, and competitor reviews list **"no cross-platform analytics"** among Opus's concrete
+limitations. Cite those instead — they are checkable and make the same point about #374/#378.
+_(src: [superx.so/blog/content-repurposing-tools](https://superx.so/blog/content-repurposing-tools); [playcut.ai/blog/opus-clip-alternatives](https://playcut.ai/blog/opus-clip-alternatives/); [choppity.com/blog/best-opus-clip-alternatives](https://www.choppity.com/blog/best-opus-clip-alternatives/))_
+
+### ✅ CONFIRMED — style-learning is still unclaimed
+
+Re-swept the 2026 field rankings (Reap, OpusClip, Vizard, VEED, Riverside, Submagic, ClipSpeed,
+Choppity, quso). Differentiation is still competing on **editor quality, caption variety, reframing,
+language count, price, and now agent/MCP integration** — **no tool learns an individual creator's
+patterns from their own analytics.** The thesis in [§ The style-learning angle](#the-style-learning-angle-the-differentiator)
+holds, now 6+ weeks on. Independently, the "40% you'll discard" complaint against Opus persists.
+_(src: [vizard.ai/blog/9-best-ai-video-clipping-tools-2026](https://vizard.ai/blog/9-best-ai-video-clipping-tools-2026); [bigvu.tv/blog/opus-clip-tested-2026-where-ai-wins-40-percent-discard](https://bigvu.tv/blog/opus-clip-tested-2026-where-ai-wins-40-percent-discard/))_
+
+### 💲 PRICING RE-VERIFICATION (load-bearing for #380)
+
+Live-checked 2026-07-30. **The headline conclusion reverses the L24 filing's claim.**
+
+| | Free tier | Entry paid | Effective ¢/min |
+|---|---|---|---|
+| **OpusClip** | 60 min **per month**, watermark, exports expire **3 days** | Starter **$15/mo** (150 min) | **~10.0 ¢/min** |
+| **Vizard** | 60 min **per month** | Creator **$29/mo** monthly (~$14.50 annual-effective) | ~per-minute credits |
+| **Klap** | 1-video trial | **$14/mo annual** (~$29 billed monthly) | — |
+| **AutoClip** | 60 min **once** (`config.py:588`) | Starter **$18 one-time** (200 min) | **9.0 ¢/min** → **4.0 ¢/min** at Stream |
+
+_(src: [opus.pro/pricing](https://www.opus.pro/pricing); [eesel.ai/blog/opusclip-pricing](https://www.eesel.ai/blog/opusclip-pricing); [ssemble.com/blog/vizard-vs-opus-clip-vs-ssemble](https://www.ssemble.com/blog/vizard-vs-opus-clip-vs-ssemble); AutoClip figures from `billing/packs.py`)_
+
+**What this changes for #380 — the diagnosis was wrong in two of three parts:**
+
+1. **The per-minute *model* is not a liability — it is the category standard.** Opus, Vizard, and Klap
+   all meter per input minute. The Issue-209 reconciliation note already said this; it is re-confirmed.
+2. **The per-minute *rate* is not a liability either — AutoClip is cheaper at every tier.** 9.0 ¢/min
+   at Starter beats Opus's ~10.0 ¢/min, and the Stream pack's 4.0 ¢/min is **~2.5× cheaper** than Opus.
+   The claim that pricing "punishes exactly the long-form creators we target" is **not supported**:
+   the taper is precisely the mitigation, and it works.
+3. **The free tier IS a real, verified liability.** 60 minutes **once** vs 60 minutes **every month**
+   at both Opus and Vizard. A creator comparing free tiers sees a one-shot trial against a recurring
+   allowance. This is the single defensible pricing finding — and it is a *trial-design* question, not
+   a billing-primitive question, so it needs **no** `MinuteDeduction` ledger change.
+
+**Recommendation for #380:** narrow the issue from "re-evaluate pricing psychology" to "**re-evaluate
+the free-trial structure**." Opus's expiring 3-day free storage is also worth attacking directly.
 
 ## Caveats
 

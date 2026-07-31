@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import type { Analytics, AnalyticsPeriod } from '@/types'
 
 const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
@@ -73,7 +74,11 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
         ) : isError ? (
           <p className="text-small text-subtle">Could not load analytics.</p>
         ) : !data?.metrics_available ? (
-          <p className="text-small text-subtle">No analytics yet — connect your channel and sync.</p>
+          <EmptyStatePrompt
+            title="No analytics yet."
+            actionLabel="Sync your channel"
+            actionTo="/onboarding"
+          />
         ) : (
           <div className="flex flex-col">
             <MetricRow label="Views" value={fmtNum(data.total_views)} />
@@ -116,9 +121,12 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
       ) : isError ? (
         <p className="text-sm text-subtle">Could not load analytics.</p>
       ) : !data?.metrics_available ? (
-        <p className="text-sm text-subtle">
-          No analytics data yet — connect your channel and sync.
-        </p>
+        <EmptyStatePrompt
+          title="No analytics data yet."
+          detail="Sync your channel and we’ll read your own numbers back to you."
+          actionLabel="Sync your channel"
+          actionTo="/onboarding"
+        />
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
           <Cell label="Views" value={fmtNum(data.total_views)} />

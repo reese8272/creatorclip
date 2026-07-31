@@ -8,7 +8,7 @@
 //   5. Honesty disclaimer always present; no virality promises
 //   6. Existing tests: loading state, analyze-and-save, upload-intel error
 
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -217,5 +217,32 @@ describe('Insights — narrative rebuild (Issue 212)', () => {
     vi.stubGlobal('fetch', mockFetch({ uploadError: true }))
     renderInsights()
     expect(await screen.findByText('Could not load timing data.')).toBeInTheDocument()
+  })
+
+  // Issue 355: the three L24 panels are the product's headline claims but had no
+  // addressable URL — the landing page names "Proof of lift" with nowhere to go.
+  it('gives the L24 panels stable anchors the landing page can deep-link to', async () => {
+    vi.stubGlobal('fetch', mockFetch())
+    const { container } = renderInsights()
+    // The jump row renders immediately; the panels it targets mount only once
+    // their queries settle, which is exactly why the scroll needs an effect.
+    expect(screen.getByRole('link', { name: 'Proof of lift' })).toHaveAttribute(
+      'href',
+      '#proof-of-lift',
+    )
+    for (const id of ['proof-of-lift', 'originality-guard', 'channel-fingerprint']) {
+      await waitFor(() => expect(container.querySelector(`#${id}`)).not.toBeNull())
+    }
+  })
+
+  // A failed page-level query must offer a retry, not a bare sentence.
+  it('offers a retry when the page-level insights query fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ status: 500, ok: false, json: async () => ({}) })),
+    )
+    renderInsights()
+    expect(await screen.findByText('Could not load insights.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })

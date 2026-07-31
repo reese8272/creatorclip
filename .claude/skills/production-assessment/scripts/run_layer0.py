@@ -76,11 +76,65 @@ def _sources() -> list[str]:
     return [s for s in _CANDIDATE_SOURCES if (REPO_ROOT / s).exists()]
 
 
+# Tools that must run INSIDE the interpreter being assessed, not whichever
+# same-named binary happens to sit earlier on PATH. Discovered 2026-07-30: the
+# `pip-audit` on PATH was `~/.local/bin/pip-audit` (shebang `#!/usr/bin/python3`),
+# so the gate audited the USER'S SYSTEM PYTHON — 200 deps / 103 vulns — instead
+# of the project venv's 171 deps / 1 vuln. The gate had been reporting ~96-103
+# phantom vulnerabilities that have nothing to do with this codebase, and a
+# previous session mis-diagnosed the same symptom as "venv staleness".
+# `python -m <module>` binds every one of these to `sys.executable`.
+_PYTHON_MODULE_TOOLS: dict[str, str] = {
+    "pytest": "pytest",
+    "mypy": "mypy",
+    "bandit": "bandit",
+    "pip-audit": "pip_audit",
+    "ruff": "ruff",
+}
+
+
+def _tool_cmd(tool: str) -> list[str]:
+    """Argv prefix for a tool, preferring `sys.executable -m <module>`."""
+    module = _PYTHON_MODULE_TOOLS.get(tool)
+    if module is not None:
+        return [sys.executable, "-m", module]
+    return [tool]
+
+
 def _have(tool: str) -> bool:
+    """True if the tool is importable/runnable by the assessed interpreter.
+
+    Checked via the same argv the gate will actually use, so availability and
+    execution can never disagree about WHICH tool is meant.
+    """
+    module = _PYTHON_MODULE_TOOLS.get(tool)
+    if module is not None:
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return True
+        # Fall through: a tool may be a standalone binary in this environment.
     return shutil.which(tool) is not None
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a gate command, rewriting a bare tool name to the assessed interpreter."""
+    if cmd and cmd[0] in _PYTHON_MODULE_TOOLS:
+        module = _PYTHON_MODULE_TOOLS[cmd[0]]
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            cmd = _tool_cmd(cmd[0]) + cmd[1:]
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
 
@@ -117,16 +171,24 @@ def gate_mypy() -> dict:
 def gate_coverage() -> dict:
     if not _have("pytest"):
         return {"status": "skipped", "detail": "pytest not installed"}
-    cov_targets: list[str] = []
-    for s in _sources():
-        cov_targets += ["--cov", s.removesuffix(".py")]
+    # SINGLE source root (Issue 368). Passing one --cov per source package emitted
+    # one <source> root each, and coverage.py relativizes every file against the
+    # first matching root — so files under a root that is ITSELF a package (e.g.
+    # clip_engine/) flattened to bare filenames and landed in package ".", making
+    # _module_line_rate("clip_engine") return None and its floor unenforceable.
+    # Reproduced 2026-07-30: packages were {".", "preference", "youtube"} with
+    # clip_engine absent entirely. With a single "." root every file relativizes
+    # to pkg/file.py, so package names are stable and every floor is enforceable.
+    # tests/ and alembic/ are already excluded by [tool.coverage.run] omit in
+    # pyproject.toml, so "." does not widen the measured set to test code.
     xml_out = ASSESS_DIR / "_coverage.xml"
     proc = _run(
         [
             "pytest",
             "-q",
             "--no-header",
-            *cov_targets,
+            "--cov",
+            ".",
             "--cov-report",
             f"xml:{xml_out}",
         ]
@@ -250,18 +312,23 @@ def gate_freshness() -> dict:
 # Keys must match the package/module path segment as it appears in the coverage.xml
 # <package name="..."> or <class filename="..."> attributes produced by pytest-cov.
 MODULE_COVERAGE_FLOORS: dict[str, float] = {
-    # clip_engine/preference report rate=None under the multi-root --cov
-    # invocation (coverage.py relativizes filenames per source root, so the
-    # package/class match misses) — floors stay 0.0 until the measurement is
-    # made deterministic (OFF_COURSE 2026-07-29). clip_engine is independently
-    # gated by the eval harness on every change.
-    "clip_engine": 0.0,
-    "preference": 0.0,
-    # Ratcheted 2026-07-29 (ready-pass W2) from measured rates with ~1pt margin:
-    # crypto 100.0, limiter 100.0, auth 93.3 (docs/assessment/_machine.json).
+    # Ratcheted 2026-07-30 (Issue 368) off the now-deterministic single-root
+    # measurement, ~1.5pt margin. These two sat at 0.0 — i.e. unenforceable —
+    # because the multi-root --cov flattened their files into package "." and
+    # _module_line_rate returned None. They were never low-coverage; they were
+    # unmeasured. clip_engine is additionally gated by the eval harness.
+    "clip_engine": 91.0,  # measured 92.51
+    "preference": 88.0,  # measured 89.64
+    # crypto/limiter measured 100.0 (unchanged from the 2026-07-29 ratchet).
     "crypto": 99.0,  # crypto.py
     "limiter": 99.0,  # limiter.py
-    "auth": 91.0,  # auth.py
+    # NOTE (Issue 368): this key means ROOT auth.py (measured 100.0), NOT
+    # routers/auth.py (93.3). Both matched the old suffix fallback and the
+    # winner depended on XML ordering, so the 2026-07-29 "auth 93.3" reading
+    # was routers/auth.py. Exact-match now pins it to root auth.py; the floor
+    # is raised accordingly. Add "routers/auth.py" as its own entry if that
+    # module needs its own floor — it is not covered by this one.
+    "auth": 99.0,  # root auth.py, measured 100.0
 }
 
 
@@ -276,13 +343,26 @@ def _module_line_rate(xml_root: ET.Element, module_key: str) -> float | None:
         if pkg.get("name", "") == module_key or pkg.get("name", "").endswith(f".{module_key}"):
             rate = pkg.get("line-rate")
             return float(rate) * 100 if rate is not None else None
-    # Class/file match: <class filename="crypto.py" ...> or "auth.py"
+    # Class/file match for single-file modules: <class filename="crypto.py" ...>.
+    # EXACT match wins over a suffix match, and the suffix fallback is only used
+    # when it is UNAMBIGUOUS (Issue 368). Both rules are load-bearing: "auth"
+    # matches root `auth.py` (100.0) AND `routers/auth.py` (93.3), so the old
+    # first-match-wins loop returned whichever the XML happened to list first —
+    # the floor silently changed meaning between runs. The floors in
+    # MODULE_COVERAGE_FLOORS name TOP-LEVEL modules, so exact is the correct
+    # reading; an ambiguous suffix returns None (reported "unknown") rather than
+    # guessing, because a wrong rate here silently mis-gates a load-bearing module.
     target_file = f"{module_key}.py"
+    suffix_matches: list[str] = []
     for cls in xml_root.iter("class"):
         filename = cls.get("filename", "")
-        if filename == target_file or filename.endswith(f"/{target_file}"):
-            rate = cls.get("line-rate")
+        rate = cls.get("line-rate")
+        if filename == target_file:
             return float(rate) * 100 if rate is not None else None
+        if filename.endswith(f"/{target_file}") and rate is not None:
+            suffix_matches.append(rate)
+    if len(suffix_matches) == 1:
+        return float(suffix_matches[0]) * 100
     return None
 
 

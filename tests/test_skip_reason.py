@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from clip_engine.candidates import (
@@ -193,7 +194,13 @@ def _signals(video_id: uuid.UUID, timeline: dict) -> MagicMock:
 
 def _fake_session(video: MagicMock, clips: list, signals: MagicMock | None) -> Any:
     async def _session():
-        session = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add()/add_all() are sync
+        # methods; without a spec, AsyncMock() makes ALL attributes AsyncMock,
+        # so the GET /videos/{id}/clips impression-logging session.add_all()
+        # call (never awaited by production code, correctly) leaves an
+        # unawaited coroutine behind. spec makes unittest.mock detect which
+        # methods are actually coroutines.
+        session = AsyncMock(spec=AsyncSession)
 
         async def _get(model, pk, **kwargs):
             if model is Signals:
@@ -354,7 +361,13 @@ def test_list_clips_skip_reason_does_not_return_other_creators_video(client):
     video_a = _video(creator_a.id)
 
     async def _session():
-        session = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add()/add_all() are sync
+        # methods; without a spec, AsyncMock() makes ALL attributes AsyncMock,
+        # so the GET /videos/{id}/clips impression-logging session.add_all()
+        # call (never awaited by production code, correctly) leaves an
+        # unawaited coroutine behind. spec makes unittest.mock detect which
+        # methods are actually coroutines.
+        session = AsyncMock(spec=AsyncSession)
 
         # video_a belongs to creator_a but creator_b is the requester — the
         # ownership-scoped select's predicate filters it out (Issue 109e).

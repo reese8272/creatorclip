@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
+import { GenerateClipsButton } from '@/components/landing/VideoPickerLanding'
 import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { fitTier } from '@/lib/fit'
 import { FitBadge } from '@/components/ui/fit-badge'
@@ -70,46 +72,68 @@ function TimelineMarker({
   )
 }
 
+// Issue 355: all four branches used to be prose with nothing to click — the
+// densest cluster of dead ends in the app. Each now carries the next step that
+// is actually true for that branch: a catalog/link video needs a source file, a
+// skipped video is still style-reviewable, and an unclipped one can generate.
 function EmptyState({
+  videoId,
   origin,
   skipReasonLabel,
+  onClips,
 }: {
+  videoId: string
   origin: string
   skipReasonLabel: string | null | undefined
+  onClips: () => void
 }) {
-  if (origin === 'catalog') {
+  if (origin === 'catalog' || origin === 'link') {
     return (
-      <p className="py-8 text-center text-sm text-subtle">
-        This video is a catalog reference — not clippable.
-      </p>
-    )
-  }
-  if (origin === 'link') {
-    return (
-      <p
-        className="py-8 text-center text-sm text-subtle cursor-help border-b border-dotted border-default inline-block"
-        title={SOURCE_NEEDED_HELP}
-      >
-        Upload source file to clip
-      </p>
+      <EmptyStatePrompt
+        variant="card"
+        pose="confused"
+        className="my-8"
+        title={
+          origin === 'catalog'
+            ? 'This video is a catalog reference — not clippable.'
+            : 'Upload the source file to clip this video.'
+        }
+        detail={SOURCE_NEEDED_HELP}
+        actionLabel="Upload a source file"
+        actionTo="/dashboard"
+      />
     )
   }
   // origin === 'upload' or unknown
   if (skipReasonLabel) {
     return (
-      <div className="py-8 text-center max-w-md mx-auto">
-        <p className="text-sm font-medium text-fg mb-2">No clips were generated</p>
-        <p className="text-xs text-subtle leading-relaxed">{skipReasonLabel}</p>
-        <p className="mt-3 text-xs text-muted">
-          These estimates are grounded in your own data — not a guarantee of performance.
-        </p>
-      </div>
+      <EmptyStatePrompt
+        variant="card"
+        pose="confused"
+        className="my-8"
+        title="No clips were generated"
+        detail={
+          <>
+            {skipReasonLabel}
+            <span className="mt-3 block text-xs text-muted">
+              These estimates are grounded in your own data — not a guarantee of performance.
+            </span>
+          </>
+        }
+        actionLabel="Review this video’s style instead"
+        actionTo={`/review?video_id=${videoId}&mode=style`}
+      />
     )
   }
   return (
-    <p className="py-8 text-center text-sm text-subtle">
-      Generate clips to see your timeline.
-    </p>
+    <EmptyStatePrompt
+      variant="card"
+      pose="confused"
+      className="my-8"
+      title="Generate clips to see your timeline."
+      detail="We’ll rank them against your channel’s DNA and show where each one sits in the source video."
+      action={<GenerateClipsButton videoId={videoId} onClips={onClips} />}
+    />
   )
 }
 
@@ -165,7 +189,13 @@ export function VideoClipsMap() {
   if (!video) {
     return (
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
-        <p className="py-8 text-center text-sm text-subtle">Video not found.</p>
+        <EmptyStatePrompt
+          variant="card"
+          title="Video not found."
+          detail="It may have been deleted, or the link may be stale."
+          actionLabel="Back to your videos"
+          actionTo="/dashboard"
+        />
       </main>
     )
   }
@@ -181,11 +211,25 @@ export function VideoClipsMap() {
           {video.title ?? 'Untitled video'}
         </h1>
         <p className="text-xs text-subtle font-mono">{video.youtube_video_id}</p>
+        {/* Issue 355: /analysis left the nav, so the per-video tools are reached
+            from where a video is already in hand — here and the VideoTable row. */}
+        <Link
+          to={`/analysis?video_id=${video.id}&video_title=${encodeURIComponent(video.title ?? '')}`}
+          className="mt-2 inline-block text-xs text-accent-text hover:underline"
+        >
+          Analyze this video →
+        </Link>
       </div>
 
       {clips.length === 0 ? (
         <div className="flex justify-center">
-          <EmptyState origin={origin} skipReasonLabel={skipReasonLabel} />
+          {/* video.id, not the route param — identical value, but already narrowed. */}
+          <EmptyState
+            videoId={video.id}
+            origin={origin}
+            skipReasonLabel={skipReasonLabel}
+            onClips={() => void clipsQuery.refetch()}
+          />
         </div>
       ) : (
         <>

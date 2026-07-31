@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -17,7 +18,7 @@ from models import AnalysisMode, Clip, Creator, CreatorIdentity, CreatorStyle
 from routers._enqueue import enqueue_stream_task
 from routers._schemas import SetupStepOut, TaskQueuedOut
 from youtube.analytics import check_data_gate
-from youtube.categories import NICHE_OPTIONS
+from youtube.categories import NICHE_OPTIONS, labels_for
 
 logger = logging.getLogger(__name__)
 
@@ -787,3 +788,85 @@ async def get_identity_history(
     """Return identity versions for the current creator, newest first (max 20)."""
     rows = await identity_module.get_history(session, creator.id)
     return {"versions": [_identity_to_dict(r) for r in rows]}
+
+
+# ── Channel Fingerprint (Issue 379) ─────────────────────────────────────────────
+#
+# Two tiers, per the YouTube API Services Policies ToS review recorded in
+# docs/DECISIONS.md (2026-07-30):
+#   1. Private in-app view — the full DNA (identity + the analytics-derived
+#      CreatorDna stats) shown only to the authorizing creator. Permitted by
+#      III.E.3.b. That view is served by the existing GET /creators/me/dna,
+#      GET /creators/me/identity, and GET /creators/me/insights endpoints —
+#      no new data leaves the boundary there.
+#   2. Shareable artifact (THIS endpoint) — a creator-triggered export that
+#      leaves our boundary once downloaded/copied/posted. Because it leaves
+#      the boundary, it may contain ONLY fields that are NOT derived from
+#      YouTube Analytics/Data API responses (III.E.2, III.E.3.b): the
+#      creator's own self-declared identity (dna/identity.py) and our
+#      distillation of the creator's OWN in-app feedback (creator_style_notes,
+#      Issue 371). Every field is audited field-by-field in docs/COMPLIANCE.md
+#      under "Channel Fingerprint — shareable artifact".
+#
+# This is a POST, not a GET, and it is not surfaced from any other response
+# (GET /creators/me, GET /creators/me/insights, GET /creators/me/identity do
+# NOT include these fields) — the ONLY way to obtain this payload is the
+# creator explicitly triggering the "Create shareable fingerprint" action in
+# the UI. Nothing is persisted or made publicly reachable; the response is
+# handed to the calling creator's own authenticated session to copy/download,
+# same default-private posture as every other export in this app.
+
+# Verbatim honesty constraint (CLAUDE.md) — must travel WITH the artifact
+# since it leaves our UI. Matches the DisclaimerBand copy on Insights/Profile
+# so the phrasing is identical everywhere a creator sees it.
+FINGERPRINT_HONESTY_LINE = (
+    "AutoClip predicts fit with your style and audience — it does not promise virality."
+)
+
+
+class FingerprintShareOut(BaseModel):
+    """The shareable Channel Fingerprint (Issue 379).
+
+    Every field is self-declared by the creator or distilled by us from the
+    creator's OWN in-app feedback — never from a YouTube Analytics/Data API
+    response. See docs/COMPLIANCE.md for the field-by-field provenance audit.
+    """
+
+    niches: list[str]
+    content_pillars: list[str] | None
+    tone_tags: list[str] | None
+    mission: str | None
+    style_summary: str | None
+    honesty_line: str
+    generated_at: str
+
+
+@router.post("/me/fingerprint/share", response_model=FingerprintShareOut)
+@limiter.limit("20/hour", key_func=creator_key)
+async def share_fingerprint(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Assemble the shareable Channel Fingerprint on explicit creator request.
+
+    Per-creator scoped like every other query here (``creator.id`` from the
+    authenticated session). Reads ONLY ``creator_identity`` (self-declared)
+    and ``creator_style_notes`` (distilled from the creator's own feedback,
+    Issue 371) — deliberately does NOT touch ``CreatorDna`` (analytics-derived)
+    or any ``VideoMetrics``/``VideoAnalytics`` table.
+    """
+    from dna.profile import get_style_notes
+
+    identity = await identity_module.get_current(session, creator.id)
+    style_row = await get_style_notes(session, creator.id)
+
+    return {
+        "niches": labels_for(identity.niches) if identity and identity.niches else [],
+        "content_pillars": identity.content_pillars if identity else None,
+        "tone_tags": identity.tone_tags if identity else None,
+        "mission": identity.mission if identity else None,
+        "style_summary": style_row.notes_text if style_row else None,
+        "honesty_line": FINGERPRINT_HONESTY_LINE,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }

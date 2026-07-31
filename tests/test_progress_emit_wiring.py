@@ -33,15 +33,15 @@ async def _close_worker_redis():
     path (_amark_render_started → _worker_redis()), lazily binding the module
     singleton to this test's function-scoped loop. Left open, a later test on
     a fresh loop reuses connections bound to this dead loop and GC prints
-    'Event loop is closed' AbstractConnection.__del__ noise at exit."""
+    'Event loop is closed' AbstractConnection.__del__ noise at exit.
+
+    Delegates to the production close path (Issue 367) so the test fixture and
+    the real worker-shutdown signal stay in lockstep."""
     yield
     from worker import tasks as worker_tasks
 
-    client = worker_tasks._WORKER_REDIS
-    if client is not None:
-        worker_tasks._WORKER_REDIS = None
-        with contextlib.suppress(Exception):
-            await client.aclose()
+    with contextlib.suppress(Exception):
+        await worker_tasks.worker_redis_aclose()
 
 
 def _emit_labels(mock_emit: AsyncMock) -> list[str]:
@@ -1141,3 +1141,115 @@ async def test_improvement_brief_router_fails_open_on_redis_down(mocker):
         "When aset_owner fails, stream_url MUST be None so the client falls "
         "back to GET polling — pinning the fail-open contract."
     )
+
+
+# ── Issue 367: worker-side async-Redis singleton lifecycle ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_worker_redis_aclose_closes_and_resets_singleton():
+    """worker_redis_aclose() closes the underlying client and nulls the module
+    global so a later _worker_redis() call recreates it instead of reusing a
+    closed one."""
+    from worker import tasks as worker_tasks
+
+    original = worker_tasks._WORKER_REDIS
+    mock_client = AsyncMock()
+    worker_tasks._WORKER_REDIS = mock_client
+    try:
+        await worker_tasks.worker_redis_aclose()
+        mock_client.aclose.assert_awaited_once()
+        assert worker_tasks._WORKER_REDIS is None
+    finally:
+        worker_tasks._WORKER_REDIS = original
+
+
+@pytest.mark.asyncio
+async def test_worker_redis_getter_after_aclose_returns_fresh_client():
+    """A _worker_redis() call after worker_redis_aclose() must build a
+    brand-new client, never hand back the closed instance."""
+    from worker import tasks as worker_tasks
+
+    original = worker_tasks._WORKER_REDIS
+    mock_client = AsyncMock()
+    worker_tasks._WORKER_REDIS = mock_client
+    try:
+        await worker_tasks.worker_redis_aclose()
+        new_client = worker_tasks._worker_redis()
+        assert new_client is not mock_client
+    finally:
+        with contextlib.suppress(Exception):
+            await worker_tasks.worker_redis_aclose()
+        worker_tasks._WORKER_REDIS = original
+
+
+@pytest.mark.asyncio
+async def test_worker_redis_aclose_when_never_initialised_is_noop():
+    """Calling worker_redis_aclose() before _worker_redis() was ever invoked
+    must not raise."""
+    from worker import tasks as worker_tasks
+
+    original = worker_tasks._WORKER_REDIS
+    worker_tasks._WORKER_REDIS = None
+    try:
+        await worker_tasks.worker_redis_aclose()  # must not raise
+        assert worker_tasks._WORKER_REDIS is None
+    finally:
+        worker_tasks._WORKER_REDIS = original
+
+
+# ── Issue 367: routers/thumbnails.py async-Redis singleton lifecycle ───────
+# Placed here (not tests/test_thumbnails.py) because this task's file
+# ownership for Issue 367 is limited to conftest.py, test_quota.py, and this
+# file — see docs/issues.md Issue 367.
+
+
+@pytest.mark.asyncio
+async def test_thumbnails_redis_aclose_closes_and_resets_singleton():
+    """_aclose_redis() closes the underlying client and nulls the module
+    global so a later _get_redis() call recreates it instead of reusing a
+    closed one."""
+    import routers.thumbnails as thumbnails_module
+
+    original = thumbnails_module._aio_redis
+    mock_client = AsyncMock()
+    thumbnails_module._aio_redis = mock_client
+    try:
+        await thumbnails_module._aclose_redis()
+        mock_client.aclose.assert_awaited_once()
+        assert thumbnails_module._aio_redis is None
+    finally:
+        thumbnails_module._aio_redis = original
+
+
+@pytest.mark.asyncio
+async def test_thumbnails_redis_getter_after_aclose_returns_fresh_client():
+    """A _get_redis() call after _aclose_redis() must build a brand-new
+    client, never hand back the closed instance."""
+    import routers.thumbnails as thumbnails_module
+
+    original = thumbnails_module._aio_redis
+    mock_client = AsyncMock()
+    thumbnails_module._aio_redis = mock_client
+    try:
+        await thumbnails_module._aclose_redis()
+        new_client = thumbnails_module._get_redis()
+        assert new_client is not mock_client
+    finally:
+        with contextlib.suppress(Exception):
+            await thumbnails_module._aclose_redis()
+        thumbnails_module._aio_redis = original
+
+
+@pytest.mark.asyncio
+async def test_thumbnails_redis_aclose_when_never_initialised_is_noop():
+    """Calling _aclose_redis() before _get_redis() was ever invoked must not raise."""
+    import routers.thumbnails as thumbnails_module
+
+    original = thumbnails_module._aio_redis
+    thumbnails_module._aio_redis = None
+    try:
+        await thumbnails_module._aclose_redis()  # must not raise
+        assert thumbnails_module._aio_redis is None
+    finally:
+        thumbnails_module._aio_redis = original

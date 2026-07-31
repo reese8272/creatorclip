@@ -19,6 +19,7 @@ from api_key import get_current_creator_via_api_key
 from auth import get_current_creator
 from billing.ledger import check_balance_for_minutes, check_positive_balance, video_minutes
 from billing.spend_guard import require_budget
+from clip_engine.ranking import is_shortlisted
 from config import settings
 from db import get_session
 from flags import require_flag
@@ -77,6 +78,11 @@ class ClipOut(BaseModel):
     origin: str = "engine"
     # Issue 373 — the export panel surfaces the render's aspect preset.
     aspect: str = "9:16"
+    # Issue 377 — presentation-only shortlist cut: True for the top
+    # ``settings.SHORTLIST_SIZE`` engine-ranked clips (rank is None → always
+    # False; a creator-made selection was never engine-scored, Issue 373).
+    # Never affects score/rank/persistence — see clip_engine.ranking.is_shortlisted.
+    shortlisted: bool = False
 
 
 class PersonalizationStatus(BaseModel):
@@ -236,6 +242,7 @@ def _clip_response(clip: Clip) -> dict:
         "applied_description": clip.applied_description,
         "origin": sj.get("origin", "engine"),
         "aspect": (clip.style_preset or {}).get("aspect") or "9:16",
+        "shortlisted": is_shortlisted(clip.rank),
     }
 
 
@@ -814,6 +821,13 @@ class CleanConfirmOut(BaseModel):
     status: str  # "swapped" | "noop"
 
 
+class CleanDiscardOut(BaseModel):
+    """200 OK response for POST /clips/{id}/clean/discard (Issue 364)."""
+
+    clip_id: str
+    status: str  # "discarded" | "noop"
+
+
 def _clip_clean_cuts(
     clip: Clip, transcript: Transcript | None
 ) -> tuple[list[CleanPreviewCut], float, float]:
@@ -979,6 +993,42 @@ async def clean_confirm(
         "cleaned_render_uri": None,
         "status": "swapped",
     }
+
+
+@clips_router.post(
+    "/{clip_id}/clean/discard",
+    status_code=200,
+    response_model=CleanDiscardOut,
+)
+@limiter.limit("60/hour", key_func=creator_key)
+async def clean_discard(
+    request: Request,
+    clip_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Discard a pending cleaned/edited render, clearing ``cleaned_render_uri``
+    so a subsequent ``/clean`` or ``/cuts`` call no longer 409s with
+    ``pending_clean_or_edit`` (Issue 364). Idempotent: if there is nothing
+    pending, returns 200 with ``status="noop"``. The R2 artifact is purged
+    best-effort after the DB commit — a storage failure must not roll back
+    or fail the request (mirrors the erasure precedent in ``routers/auth.py``)."""
+    clip = await get_owned(session, Clip, clip_id, creator.id, detail="Clip not found")
+    if not clip.cleaned_render_uri:
+        return {"clip_id": str(clip_id), "status": "noop"}
+
+    stale_uri = clip.cleaned_render_uri
+    clip.cleaned_render_uri = None
+    await session.commit()
+
+    from worker.storage import adelete_file
+
+    try:
+        await adelete_file(stale_uri)
+    except Exception as exc:
+        logger.warning("Storage purge failed for discarded clean render %s: %s", stale_uri, exc)
+
+    return {"clip_id": str(clip_id), "status": "discarded"}
 
 
 # ── Issue 135: text-based transcript editor ─────────────────────────────

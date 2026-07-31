@@ -319,6 +319,7 @@ _FLOOR_EXEMPT_HANDLERS = frozenset(
         "list_clips",
         "clean_preview",
         "clean_confirm",
+        "clean_discard",
         "clip_transcript",
         "get_clip",
         "download_clip",

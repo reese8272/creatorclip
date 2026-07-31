@@ -4,8 +4,11 @@ import { useQuery } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/buttonVariants'
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import { AnalyticsPanel } from '@/components/dashboard/AnalyticsPanel'
 import { UploadVideoForm } from '@/components/dashboard/UploadVideoForm'
 import { ChannelBrowser } from '@/components/dashboard/ChannelBrowser'
@@ -17,15 +20,31 @@ import { videosRefetchInterval } from '@/lib/videosPoll'
 import type { ClipCountsResponse, DnaProfile, DnaResponse, VideoListResponse } from '@/types'
 
 // Sidebar: clips waiting in the review queue (Issue 305).
+//
+// Issue 355 finding 4 named this card's zero state by hand: a big "0" over
+// "clips ready to review" above a primary button into an empty queue. At zero
+// we now show the way to fill it instead of the count of what isn't there.
 function ReviewQueueCard({ count }: { count: number }) {
   return (
     <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm shadow-inset">
       <div className="text-label uppercase tracking-[0.08em] text-accent-text">Review queue</div>
-      <div className="mb-1 mt-2 font-mono text-2xl font-semibold text-fg">{count}</div>
-      <div className="mb-3.5 text-small text-muted">clips ready to review</div>
-      <Link to="/review">
-        <Button className="w-full">Open review →</Button>
-      </Link>
+      {count === 0 ? (
+        <EmptyStatePrompt
+          className="mt-2"
+          title="Nothing waiting yet."
+          detail="Generate clips from one of your videos and they’ll queue up here."
+          actionLabel="Pick a video"
+          actionTo="/review"
+        />
+      ) : (
+        <>
+          <div className="mb-1 mt-2 font-mono text-2xl font-semibold text-fg">{count}</div>
+          <div className="mb-3.5 text-small text-muted">clips ready to review</div>
+          <Link to="/review" className={cn(buttonVariants(), 'w-full')}>
+            Open review →
+          </Link>
+        </>
+      )}
     </div>
   )
 }
@@ -101,9 +120,12 @@ export function Dashboard() {
   }
 
   const isEmpty = !videosQuery.isPending && videos.length === 0
-  const emptyMessage =
-    videosQuery.data?.message ?? 'No videos yet — pick a path above to get started.'
   const channelName = user?.channel_title ?? user?.email ?? 'your channel'
+
+  // Mirrors DnaCta's own render condition — while that banner is up it owns the
+  // page's primary action, so Upload must not compete with it (Issue 355).
+  const setupIncomplete: boolean =
+    !!user?.setup && user.setup.step !== 'complete' && user.setup.step !== 'link_first_video'
 
   return (
     <>
@@ -120,20 +142,29 @@ export function Dashboard() {
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="font-display text-h1 text-fg">Your videos</h1>
+            {/* Issue 355: the clip count was stated three times on this screen.
+                The sidebar Review-queue card owns it; the header does not. */}
             <p className="mt-1 text-small text-muted">
-              {videos.length} videos · {clipsRendered} clips rendered · {channelName}
+              {videos.length} videos · {channelName}
             </p>
           </div>
-          <div className="flex gap-2.5">
-            <Button onClick={() => setUploadOpen((o) => !o)} aria-expanded={uploadOpen}>
+          {/* ONE primary action (Issue 355 finding 3). Which one it is depends on
+              where the creator actually is: until onboarding completes, DnaCta
+              above owns the primary and Upload steps back to secondary, so the
+              page never shows two equally-weighted "start here" buttons.
+              "Analyze a video" left the header entirely — it is a per-video tool,
+              reached from a video row (VideoTable "Titles") or the ask-surface row. */}
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <Button
+              variant={setupIncomplete ? 'secondary' : 'primary'}
+              onClick={() => setUploadOpen((o) => !o)}
+              aria-expanded={uploadOpen}
+            >
               + Upload a video
             </Button>
-            <Button variant="secondary" onClick={() => setBrowseOpen(true)}>
-              Browse my channel
+            <Button variant="ghost" size="sm" onClick={() => setBrowseOpen(true)}>
+              or browse videos already on your channel
             </Button>
-            <Link to="/analysis">
-              <Button variant="secondary">Analyze a video</Button>
-            </Link>
           </div>
         </div>
 
@@ -151,10 +182,10 @@ export function Dashboard() {
             onRetry={() => void videosQuery.refetch()}
           />
         ) : isEmpty ? (
-          <>
-            <EmptyHero onUploadClick={() => setUploadOpen(true)} />
-            <p className="py-2 text-center text-sm text-subtle">{emptyMessage}</p>
-          </>
+          // Issue 355: the trailing "pick a path above to get started" line is
+          // gone — EmptyHero already opens with "Let's get your first clip.",
+          // and after the demotion below there is one path, not several.
+          <EmptyHero onUploadClick={() => setUploadOpen(true)} />
         ) : (
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_296px]">
             {/* Main: videos table in a bordered card */}

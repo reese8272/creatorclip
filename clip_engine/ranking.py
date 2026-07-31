@@ -42,6 +42,30 @@ def rank_candidates(candidates: list[dict]) -> list[dict]:
     return ranked
 
 
+def is_shortlisted(rank: int | None, size: int | None = None) -> bool:
+    """Selection-only cut (Issue 377): True when ``rank`` falls within the top
+    ``size`` (default ``settings.SHORTLIST_SIZE``).
+
+    This is a PRESENTATION cut, not a scoring or ranking change — it never
+    touches ``score``/``rank`` and never drops a candidate from the persisted
+    set. It runs strictly AFTER ``rank_candidates`` has already produced a
+    total order, so ties are resolved exactly as they always were (the stable
+    sort in ``rank_candidates`` keeps the original candidate-extraction order
+    for equal scores) — the cut just reads the resulting rank.
+
+    ``rank is None`` (a creator-made selection, Issue 373 — never engine-scored)
+    is never shortlisted: there is no principle/reasoning/score to argue a case
+    with, so a "top pick" framing would be dishonest for it. It still shows up
+    under "show all candidates".
+    """
+    if rank is None:
+        return False
+    from config import settings
+
+    n = size if size is not None else settings.SHORTLIST_SIZE
+    return rank <= n
+
+
 async def rerank_with_preference(
     clips: list[Clip],
     session: AsyncSession,

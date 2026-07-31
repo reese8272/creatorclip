@@ -159,7 +159,7 @@ describe('VideoPickerLanding', () => {
   it('never renders virality promise language', async () => {
     vi.stubGlobal('fetch', mockFetch())
     const { container } = renderLanding()
-    await screen.findByText(/Pick a video to review/i)
+    await screen.findByRole("heading", { name: "Review clips" })
     const text = container.textContent ?? ''
     expect(text).not.toMatch(/\bpromises virality\b|\bguarantees performance\b|\bgo viral\b/i)
   })

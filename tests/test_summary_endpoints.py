@@ -15,6 +15,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import get_current_creator
 from config import settings
@@ -114,7 +115,15 @@ def _fake_session(
     Issue 361); the post-rollback re-select then serves ``reselect_summary``."""
 
     async def _session():
-        session = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add()/add_all() are
+        # synchronous (they just stage objects for flush) even though most of
+        # the session API is async. A bare AsyncMock() makes EVERY attribute
+        # — including .add — an AsyncMock, so session.add(summary) (which
+        # production code calls without awaiting, correctly) creates a
+        # coroutine that is never awaited. spec=AsyncSession makes unittest.mock
+        # auto-detect which methods are actually coroutines and only mock
+        # those as AsyncMock; .add/.add_all come back as plain MagicMock.
+        session = AsyncMock(spec=AsyncSession)
 
         async def _get(model, pk, **kwargs):
             if model is Signals:

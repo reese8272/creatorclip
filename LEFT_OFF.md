@@ -1,85 +1,132 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-30 (Lane L23 MERGED + DEPLOYED — PR #65 → main `4d7f29c`)
-**Branch at close:** `main` @ `4d7f29c` (feature branch deleted); all 12 CI checks green
-**Prod:** healthy — deploy run 30561428784 succeeded; `/health` all ok; **prod DB head 0049** (migrations 0048+0049 applied); new endpoints live (401 auth-gated, SPA 200)
+**Last updated:** 2026-07-31 (W5 close-out — **the code-closeable backlog is empty**)
+**Branch at close:** `wave/l24-and-hygiene` — **pushed**, PR **#67** open against `main`
+**Working tree:** clean · **Worktrees:** none (all 8 removed) · **Stale branches:** 21 deleted
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
 ---
 
-## CURRENT FOCUS
+## WHERE THIS LANDED
 
-**Lane L23 (Issues 369–373) is fully built and committed** on `feat/standalone-review-editor`:
-Review and Editor are now standalone tools — direct access + upload-in-place (369), full-source
-player + searchable transcript (372), creator-made clips via drag-select + honest per-clip export
-(373), video-level style reviews (370), and style-preference distillation feeding scoring + DNA
-briefs (371). One commit per issue. Suites at close: **backend 2377 / frontend 309**;
-ruff/mypy/tsc/eslint clean; Layer 0 green except a NEW pytest dev-dep advisory (see gotchas).
+**Every issue in `docs/issues.md` that code can close is now closed.** W5 finished the last two
+(#355, #380). What remains is external (Google review, operator clicks), DESCOPED-BETA (the K8s/scale
+lanes), or code-complete-pending-live-verification. There is no buildable work left in the tracker.
+
+**16 issues closed across W0–W5.** W0–W4 were a previous session; W5 is #355 + #380.
 
 ### → NEXT ACTIONS
 
-1. **Friend-beta path (the current goal)**: **#26** Google Console — owner adds the buddy's Gmail
-   under Audience → Test users (unverified apps hard-block everyone else) and confirms the 4
-   scopes match `youtube/oauth.py:46-51`. Then **#28** friend smoke; **#282** uptime monitor is
-   still open and beta-critical (droplet must stay up once friends are invited).
-2. **Live smoke of the new L23 surfaces on prod** (needs a real upload): long-form editor plays
-   source + transcript → drag-create a clip → renders → "Your clips" + Export;
-   `/app/review?video_id=X&mode=style` records a style note; after ≥3 tagged/noted feedbacks
-   `distill_style_prefs` writes `creator_style_notes` and the Profile DNA card shows "What Chip
-   has learned from your reviews". Distillation call check:
-   `RUN_LLM_LIVE=1 .venv/bin/pytest -m llm_live tests/test_style_distill.py`.
-3. **Small chore queued** (OFF_COURSE 2026-07-30): pytest 8.3.3 advisory PYSEC-2026-1845
-   (fix 9.0.3, dev-only) — standalone bump + plugin-compat check; until then Layer-0 pip_audit
-   reads 1 vuln vs the 0 baseline. Note: CI ALSO runs `ruff format --check` — run it locally
-   before pushing (the local Layer-0 script doesn't).
+1. **PR #67 → merge → prod.** Merging fires **Docker publish → Deploy to production**, which runs a
+   **staging-parity gate first** (Issue 298: migration + critical-journey smoke on the persistent
+   `ccstage` stack) before prod. **No migrations in this branch — prod DB head stays `0049`.**
+2. **Live smoke — two live surfaces change:**
+   - `GET /` serves `static/landing.html` to anonymous visitors; authenticated users still 302 to
+     `/app/dashboard`. Verify **both** paths (the branch point is a best-effort JWT cookie decode,
+     `main.py:211`).
+   - **CSP no longer allow-lists Google Fonts** — `style-src 'self' 'unsafe-inline'`, `font-src
+     'self'` (`main.py:330`). Confirm fonts render and the console shows no CSP violation.
+   - Spot-check: `POST /clips/{id}/clean/discard` · `GET /creators/me/insights/lift` ·
+     `GET /creators/me/insights/originality` · `POST /creators/me/fingerprint/share`.
+3. **Operator punch-list** (no code can close these — `docs/GO_LIVE.md` is canonical):
+   - **#29 Google OAuth verification** — unblocked since #376a shipped the homepage Google requires.
+   - **#26** add the friend's Gmail as an OAuth test user → then **#28** friend smoke.
+   - **#282** uptime monitor — still OPEN and beta-critical (a 31h silent outage on 2026-07-29 proved
+     the gap).
+   - **#255** off-box key escrow.
+   - **`MAILING_ADDRESS`** is unset and that is CORRECT — `config.py:752` makes `send_notification`
+     skip every lifecycle email while it is empty, because CAN-SPAM requires a real postal address on
+     commercial mail. **Do not "fix" this in code.** Whatever is set becomes public in every footer.
+
+---
 
 ## WHAT WORKS NOW (don't re-investigate)
 
-- **Per-issue commits**: `4064e59` (369) → `6452168` (372) → `aad357f` (373) → `60badbe` (370) →
-  `6c69bba` (371); each closed with full suites green.
-- **Cache-safe style injection is CI-pinned** (`tests/test_style_distill.py`): the cached DNA block
-  is byte-identical with/without style notes — third-system-block design; never concatenate notes
-  into `brief_text` (DECISIONS 2026-07-30).
-- **Creator clips excluded from ClipImpression logging** (IPS integrity) — `tests/test_create_clip.py`.
-- **Billing sweep extended**: usage-coverage AST registries cover `preference/style_distill.py` /
-  `_distill_style_prefs_async` — CI fails on any future unbilled path.
-- Clip mocks now need `style_preset` (new `ClipOut.aspect` derivation) and worker tests stubbing
-  `dna.profile.get_active` must also stub `get_style_notes` — all existing files already updated.
-- Core loop + gates from the 2026-07-29 ready-pass unchanged (see that PROJECT_STATE entry).
-
-## KEY COORDINATES & FACTS
-
-| Thing | Value |
+| Gate | Value |
 |---|---|
-| Prod | `autoclip.studio` — droplet 147.182.136.107 (`ssh creatorclip-vm`), `/opt/autoclip`, compose prod file |
-| Prod DB head | `0047` (branch adds `0048_video_feedback`, `0049_creator_style_notes`) |
-| New endpoints | `GET /videos/{id}/stream` · `GET /videos/{id}/transcript` · `POST /videos/{id}/clips` · `POST+GET /videos/{id}/feedback` · `GET /creators/me/dna` + `style_notes` |
-| New modules | `preference/style_distill.py` · `routers/video_review.py` · `frontend/src/components/{landing/*, review/StyleReview.tsx, editor/FullTranscriptPanel.tsx}` |
-| New config keys | `ANTHROPIC_MODEL_STYLE_DISTILL` · `STYLE_DISTILL_MIN_NEW` · `STYLE_DISTILL_MAX_ROWS` · `STYLE_NOTES_MAX_CHARS` (documented in `.env.example`) |
-| New Celery task | `distill_style_prefs` (flag/spend/lock/debounce-gated; Haiku-billed) |
-| Tracker | `docs/issues.md` Lane `L23_STANDALONE_TOOLS` — 369–373 DONE, ACs checked (371's eval AC honestly annotated) |
+| Backend pytest | **2480 passed, 64 skipped, 173 deselected** |
+| Frontend vitest | **354 passed** (55 files) — was 337 at W5 start |
+| ruff / ruff format / mypy | 0 / clean / 0 |
+| coverage | **83.51%** (baseline 83.00) |
+| module floors | clip_engine 92.54 · preference 90.45 · crypto/limiter/auth 100.0 |
+| bandit / pip-audit | 0 high, 0 medium / 0 |
+| tsc / eslint / vite build | clean / 0 errors / clean |
+| **Layer 0** | **ALL GREEN** |
+| **CI (PR #67)** | 12/12 after the baseline regen |
+
+### Verified findings — do NOT re-derive
+
+**#380 is decided and closed: the free trial stays one-time 60 min / 7 days.** The comparison that
+motivated the issue was never like-for-like — **Opus's and Vizard's "60 min/month" free tiers are
+watermarked with 3-day storage** (`docs/COMPETITIVE_RESEARCH.md:63`), where our 60 trial minutes are
+full-fidelity and permanently stored. Matching the number unrestricted = 720 min/yr, **3.6× the whole
+Starter pack**, and a one-upload-a-month creator never converts. 2026 benchmarks: opt-in time-boxed
+trials convert **8.9–25.2%** vs freemium **2–8%**; the category moved to trials (57%) over freemium
+(26%) on AI-cost grounds. **COGS is NOT the argument** — a recurring grant costs ~$0.35–0.45 per
+creator per month, under $45/mo at the full 100-user cap. The issue brief's risk (2) overstated this;
+do not re-cite it. Runner-up **option (d), a watermarked recurring tier**, is deferred with an
+explicit re-open trigger (signups open past the 100-user cap, or conversion drop-off at Starter).
+
+**Three L24 claims were fabricated or wrong and are retracted (#383).** No YouTube "three-strike
+ladder" exists; the policy rename was **15 July 2025**, not 2026 (so all urgency framing is wrong);
+and the two OpusClip quotes **do not exist** — never publish them.
+
+**The YouTube-native threat is real but narrower than the L24 filing implied.** Studio's Video Clips
+is **16:9 only and cannot generate Shorts**; AI suggestions are podcast-playlists/English/10
+countries; Shorts integration is announced, not shipped.
+
+**Publishing pooled cross-creator metrics is ToS-prohibited (#378).** Developer Policies III.E.2 +
+III.E.4.h; **creator consent cannot cure it** — it is a Google-to-us term. Does not constrain #374
+(a creator seeing their own data, III.E.3.b).
+
+---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **This box has no Docker/Postgres** — unit lane mocks DB by design; the integration lane ran
-  green in CI (real Postgres) and prod migrated to 0049 via the deploy pipeline.
-- **Do not merge style notes into `brief_text` at scoring time** — invalidates the 1h prompt cache
-  on every re-distillation (test-pinned; the whole point of the third-block design).
-- **`/videos/{id}/stream` serves the SOURCE** — subject to the 72h retention purge; the UI shows an
-  honest expired card. Don't "fix" a dead player by silently extending retention (COMPLIANCE).
-- Any merge to main = prod deploy pipeline; owner authorizes.
-- Local toolchain: `.venv/bin/*` only; visual baselines only via the CI dispatch flow;
-  `gh pr edit` GraphQL bug → use `gh api repos/.../pulls/N -X PATCH`.
+- **Visual baselines MUST be regenerated on the CI runner**, never locally — WSL2 font anti-aliasing
+  differs from ubuntu-latest. Path: `gh workflow run ci.yml --ref <branch> -f update_snapshots=true`,
+  then `gh run download <id> -n visual-baselines-<sha>`. Copy only the PNGs that actually changed and
+  verify the rest are byte-identical (W5 did: only the 2 `empty-dashboard` files moved).
+- **A failed visual-regression run uploads no diff artifact** — you cannot see what changed from the
+  run alone. Logged in `OFF_COURSE_BUGS.md`; workaround is the regen-and-compare above.
+- **The unit lane needs a live Redis** (the rate limiter has no in-memory fallback):
+  `redis-server --daemonize yes --save '' --appendonly no`.
+- **Integration tests cannot collect on this box** (a conftest guard aborts without Postgres) — they
+  are CI-verified only. They passed on PR #67.
+- **`ORIGINALITY_SIMILARITY_THRESHOLD=0.92` is UNVALIDATED** — no Voyage key/pgvector/clip corpus here,
+  so the real same-channel cosine distribution was never measured. A silent advisory currently means
+  "unmeasured", not "clean". Recipe in `docs/OFF_COURSE_BUGS.md`.
+- **Agent-reported test counts from worktrees are unreliable** — worktrees have no built
+  `frontend/dist`, so SPA-dependent tests skip. Every number above was measured in the main checkout.
+- **CI also runs `ruff format --check`**, which the local Layer-0 script does not.
+- **`docs/issues.md` #194/#195 have no `Status` line**, so automated status scans walk into a
+  neighbouring issue's block and miscount. Logged.
+
+---
+
+## OPEN, LOGGED, NOT FIXED (from W5)
+
+Three defects found outside #355's scope and deliberately left in `docs/OFF_COURSE_BUGS.md` rather
+than fixed inline:
+
+1. **Review-queue badge counts rendered clips, not shortlisted-unreviewed ones** — so it disagrees
+   with the queue post-#377. Needs a new field on `/videos/clips/counts` (a backend change #355 was
+   scoped to avoid). #355 fixed only the zero state.
+2. **`App.tsx`'s `*` route silently redirects typos to `/dashboard`** — no 404, no index route.
+3. **The visual-regression diff artifact never uploads** (above).
+
+---
 
 ## POINTERS
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/SOT.md` | Stack/schema/structure (updated: 0048/0049, new modules/endpoints/components) |
-| `docs/PROJECT_STATE.md` | 2026-07-30 entries (369, then L23-complete) — top of file |
-| `docs/issues.md` | Lane L23 statuses + AC annotations |
-| `docs/DECISIONS.md` | 2026-07-30 L23 entry — every design call + CHECK doc links |
-| `docs/COMPLIANCE.md` | New data classes: video_feedback, creator_style_notes |
-| `docs/OFF_COURSE_BUGS.md` | 2026-07-30 pytest-advisory chore |
+| `docs/issues.md` | Work queue — **no buildable issues remain** |
+| `docs/GO_LIVE.md` | Canonical launch scorecard — **#29 unblocked by #376a** |
+| `docs/PROJECT_STATE.md` | Progress log — top entry is W5 |
+| `docs/DECISIONS.md` | Top entries: #380 free trial, #355's two structural calls |
+| `docs/COMPETITIVE_RESEARCH.md` | **Read the corrections section before citing anything** |
+| `docs/OFF_COURSE_BUGS.md` | Logged-not-fixed defects |
+| `docs/COMPLIANCE.md` · `docs/SOT.md` | ToS/retention · stack, schema, structure |
 | Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |

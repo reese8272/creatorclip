@@ -12,6 +12,8 @@ import datetime
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from auth import get_current_creator
 from db import get_session
 from main import app
@@ -46,7 +48,11 @@ class _Scalars:
 
 def _scalars_session(rows):
     async def _session():
-        session = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add()/add_all() are
+        # sync methods; a bare AsyncMock() would make them AsyncMock too,
+        # leaving an unawaited coroutine when production code calls them
+        # without awaiting (correctly).
+        session = AsyncMock(spec=AsyncSession)
         result = MagicMock()
         result.scalars.return_value = _Scalars(rows)
         session.execute = AsyncMock(return_value=result)
@@ -189,7 +195,11 @@ def _clips_session(video, clips):
         return None
 
     async def _session():
-        session = AsyncMock()
+        # spec=AsyncSession (Issue 366): AsyncSession.add()/add_all() are
+        # sync methods; a bare AsyncMock() would make them AsyncMock too,
+        # leaving an unawaited coroutine when production code calls them
+        # without awaiting (correctly).
+        session = AsyncMock(spec=AsyncSession)
         session.get = AsyncMock(side_effect=_get)
 
         clips_result = MagicMock()

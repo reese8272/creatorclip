@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { AskSurfaceTabs } from '@/components/ask/AskSurfaceTabs'
 import { Chip } from '@/components/Chip'
 import { ChipThinking } from '@/components/chip/ChipStates'
 import { Button } from '@/components/ui/button'
@@ -190,6 +191,8 @@ export function Chat() {
       </DisclaimerBand>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6">
+        <AskSurfaceTabs current="assistant" />
+
         <div
           ref={scrollRef}
           className={cn(
@@ -202,7 +205,11 @@ export function Chat() {
           {empty && (
             <div className="flex flex-col items-center text-center text-sm text-muted">
               <Chip pose="wave" size={72} />
-              <h2 className="mb-2 mt-3 text-h2 text-fg">Ask about your channel</h2>
+              {/* "Ask about your channel" is the right prompt for an empty chat
+                  canvas, so the nav word arrives as a kicker rather than
+                  replacing it (Issue 355). */}
+              <p className="mt-3 text-label uppercase tracking-[0.08em] text-muted">Assistant</p>
+              <h2 className="mb-2 mt-1 text-h2 text-fg">Ask about your channel</h2>
               <p className="max-w-md">
                 I pull your own analytics to answer — best videos, upload timing, hooks, and what to
                 try next.

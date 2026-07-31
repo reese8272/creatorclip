@@ -22,6 +22,7 @@ from flags import require_flag
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import Creator, CreatorDna, DnaStatus, Transcript, Video
 from routers._enqueue import enqueue_stream_task
+from shared_resources import register_aclose
 
 router = APIRouter(prefix="/creators", tags=["thumbnails"])
 logger = logging.getLogger(__name__)
@@ -57,6 +58,26 @@ def _get_redis() -> aredis.Redis:
             socket_connect_timeout=2.0,
         )
     return _aio_redis
+
+
+async def _aclose_redis() -> None:
+    """Close the shared thumbnail-pattern-cache client and reset the singleton.
+
+    This client is only reached from the API process (this router), so
+    ``shared_resources.close_all()`` in the FastAPI lifespan is sufficient —
+    no worker-side close is needed (Issue 367).
+    """
+    global _aio_redis
+    if _aio_redis is not None:
+        try:
+            await _aio_redis.aclose()
+        except Exception as exc:  # noqa: BLE001 — shutdown must never raise
+            logger.warning("thumbnails redis aclose failed: %s", exc)
+    _aio_redis = None
+
+
+# App shutdown closes this via shared_resources.close_all() (Issue 109b).
+register_aclose("thumbnails_redis", _aclose_redis)
 
 
 async def _read_patterns_cache(redis: aredis.Redis, cache_key: str) -> dict | None:

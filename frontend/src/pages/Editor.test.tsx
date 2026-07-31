@@ -27,6 +27,7 @@ const BASE_CLIP = {
   applied_description: null,
   origin: 'engine',
   aspect: '9:16',
+  shortlisted: true,
 }
 
 // Creator-made selection (Issue 373) — never engine-scored.
@@ -34,6 +35,7 @@ const CREATOR_CLIP = {
   ...BASE_CLIP,
   id: 'c9',
   rank: null,
+  shortlisted: false,
   score: null,
   peak_s: null,
   setup_start_s: null,
@@ -117,7 +119,9 @@ describe('Editor', () => {
   it('shows the standalone picker when no video_id is present, and a row click opens long-form mode', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderEditor('/app/editor')
-    expect(await screen.findByText(/Pick a video to edit/i)).toBeInTheDocument()
+    // Issue 355 renamed the picker heading to "Editor" so it matches the nav —
+    // which the loaded editor also uses, so assert the picker's own sub-line.
+    expect(await screen.findByText(/Pick a processed video to work its clips/i)).toBeInTheDocument()
     // The old dead end (bounce to Review) is gone — Editor is a standalone tool.
     expect(screen.queryByRole('button', { name: /Go to Review/i })).toBeNull()
     await userEvent.click(await screen.findByRole('button', { name: 'Open in editor' }))

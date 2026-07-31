@@ -4,7 +4,9 @@ Covers: GET /, static file serving, GET /videos (list endpoint).
 """
 
 import datetime
+import re
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,17 +20,33 @@ from models import IngestStatus, OnboardingState, VideoKind, VideoOrigin
 
 
 @pytest.mark.skipif(_SPA_BUILT, reason="SPA bundle built — `/` redirects instead (see below)")
-def test_root_returns_404_without_spa_bundle(client):
-    # Issue 226: legacy static/index.html retired (XSS surface removal).
-    # Without the SPA build, `/` returns 404 instead of a legacy HTML page.
-    resp = client.get("/")
+def test_root_authenticated_returns_404_without_spa_bundle(client, creator_cookie):
+    # Issue 226: legacy static/index.html retired (XSS surface removal). Issue
+    # 376a: anonymous visitors now get the public landing regardless of SPA
+    # build state (see the Issue 376a section below) — this 404 branch only
+    # applies to an AUTHENTICATED visitor with no SPA to send them to (dev/CI
+    # without a Node build).
+    resp = client.get("/", cookies=creator_cookie)
     assert resp.status_code == 404
 
 
 @pytest.mark.skipif(not _SPA_BUILT, reason="no SPA bundle — `/` serves the legacy index")
-def test_root_redirects_to_spa_when_built(client):
-    # Issue 85g cutover: once the SPA is built, `/` is the React app's front door.
-    resp = client.get("/", follow_redirects=False)
+def test_root_authenticated_redirects_to_spa_when_built(client, creator_cookie):
+    # Issue 85g cutover: once the SPA is built, an authenticated `/` request is
+    # the React app's front door.
+    resp = client.get("/", cookies=creator_cookie, follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/app/dashboard"
+
+
+def test_root_authenticated_redirects_to_app_when_spa_built(client, creator_cookie, monkeypatch):
+    # Issue 376a regression guard: authenticated visitors must keep reaching
+    # the app — the new public landing must never intercept a signed-in
+    # creator. Deterministic via monkeypatch so it runs regardless of whether
+    # this environment actually built frontend/dist (the standard pytest lane
+    # never does — see .github/workflows/ci.yml).
+    monkeypatch.setattr("main._SPA_BUILT", True)
+    resp = client.get("/", cookies=creator_cookie, follow_redirects=False)
     assert resp.status_code == 302
     assert resp.headers["location"] == "/app/dashboard"
 
@@ -49,6 +67,62 @@ def test_spa_falls_back_to_shell_for_client_routes(client):
     resp = client.get("/app/dashboard")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
+
+
+# ── Issue 376a: public marketing landing page ─────────────────────────────────
+# `main.py:200` used to redirect `/` straight to the app, bouncing every
+# anonymous visitor to "Sign in to continue" — there was no public page
+# describing AutoClip at all. Google's OAuth verification requirements
+# (support.google.com/cloud/answer/13464321) require the homepage to
+# accurately describe the app's functionality and link the privacy policy.
+# static/landing.html is server-rendered real content — no SPA/JS dependency —
+# so it works identically whether or not frontend/dist has been built.
+
+
+def test_root_anonymous_returns_landing_not_a_redirect(client):
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "AutoClip" in resp.text
+    # The honesty constraint (CLAUDE.md) must appear verbatim on the homepage.
+    assert "does not promise virality" in resp.text
+    assert "estimate grounded in your own data" in resp.text
+
+
+def test_root_anonymous_returns_landing_regardless_of_spa_build_state(client, monkeypatch):
+    # The landing must not depend on frontend/dist existing — it's the only
+    # page guaranteed to render in the pytest lane (which never runs `npm run
+    # build`) and it must behave identically in prod (where the SPA is built).
+    monkeypatch.setattr("main._SPA_BUILT", True)
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 200
+    assert "AutoClip" in resp.text
+
+
+def test_root_landing_links_tos_and_privacy(client):
+    # Required by the Google OAuth verification review — the homepage must
+    # link the same privacy policy referenced on the OAuth consent screen.
+    resp = client.get("/")
+    assert "/static/tos.html" in resp.text
+    assert "/static/privacy.html" in resp.text
+
+
+def test_root_landing_describes_proof_of_lift_outcome_loop(client):
+    # The differentiator this page must describe accurately (not generic
+    # marketing copy) is the published-clip outcome loop shipped in Issue 374.
+    resp = client.get("/")
+    assert "proof of lift" in resp.text.lower()
+    assert "48-hour" in resp.text or "48h" in resp.text
+
+
+def test_root_landing_shows_real_pricing_from_packs_module(client):
+    # Pricing must match billing/packs.py — not an invented tier.
+    from billing.packs import PACKS
+
+    resp = client.get("/")
+    starter, creator = PACKS["starter"], PACKS["creator"]
+    assert f"${starter.price_usd:.2f}" in resp.text
+    assert f"${creator.price_usd:.2f}" in resp.text
 
 
 # ── Issue 226: retired legacy HTML pages must return 404 ─────────────────────
@@ -105,6 +179,46 @@ def test_privacy_page_has_limited_use_disclosure(client):
     assert "information received from Google APIs" in text
     # The affirmative no-advertising commitment must be present.
     assert "advertis" in text.lower()
+
+
+# ── Issue 365: fonts must be self-hosted (GDPR — LG München 3 O 17493/20) ────
+# tos.html / privacy.html / accessibility.html are exactly what an EU visitor
+# reads before signing up; a remote Google Fonts @import leaks their IP to
+# Google on every page load. These are regression tests, not just a one-time
+# fix — they pin the vendored-fonts state so it can't quietly reappear.
+
+_STATIC_DIR = Path(__file__).parent.parent / "static"
+
+
+def test_static_assets_do_not_reference_remote_font_hosts():
+    """No static/*.css or static/*.html may load fonts from Google's CDN.
+    Issue 365 vendored Inter + JetBrains Mono as committed woff2 files under
+    static/fonts/ specifically so this can never regress."""
+    offenders = []
+    for pattern in ("*.css", "*.html"):
+        for path in _STATIC_DIR.rglob(pattern):
+            text = path.read_text(encoding="utf-8")
+            if "fonts.googleapis" in text or "fonts.gstatic" in text:
+                offenders.append(str(path.relative_to(_STATIC_DIR)))
+    assert not offenders, (
+        f"Remote Google Fonts reference found in: {offenders}. "
+        "Fonts must be self-hosted under static/fonts/ (Issue 365, GDPR)."
+    )
+
+
+def test_design_tokens_font_face_srcs_resolve_to_committed_files():
+    """Every @font-face src: url(...) in _design-tokens.css must point at a
+    file that actually exists on disk under static/fonts/ — catches a
+    typo'd filename or a vendored font that was never committed."""
+    css = (_STATIC_DIR / "_design-tokens.css").read_text(encoding="utf-8")
+    urls = re.findall(r"url\('([^']+\.woff2?)'\)", css)
+    assert urls, "Expected at least one local @font-face src in _design-tokens.css"
+    fonts_dir = (_STATIC_DIR / "fonts").resolve()
+    for url in urls:
+        assert not url.startswith(("http://", "https://")), f"@font-face src must be local: {url}"
+        resolved = (_STATIC_DIR / url).resolve()
+        assert resolved.is_file(), f"@font-face src does not exist on disk: {url}"
+        assert resolved.is_relative_to(fonts_dir), f"@font-face src escapes static/fonts/: {url}"
 
 
 # ── GET /videos list endpoint ─────────────────────────────────────────────────
@@ -367,18 +481,22 @@ def test_design_tokens_file_exists_with_canonical_linear_palette():
 
     src = (pathlib.Path(__file__).parent.parent / "static" / "_design-tokens.css").read_text()
 
-    # Google Fonts import for Inter + JetBrains Mono with font-display: swap
-    # so the system fallback renders instantly while the variable fonts load.
-    assert "fonts.googleapis.com" in src, (
-        "_design-tokens.css must @import Inter + JetBrains Mono from "
-        "Google Fonts (the picked typography pairing for Issue 99)."
+    # Issue 365 (GDPR — LG München 3 O 17493/20): Inter + JetBrains Mono are
+    # self-hosted from static/fonts/ via @font-face, not a Google Fonts
+    # @import (that leaked visitor IPs to Google on every page load).
+    # font-display: swap is still required so the system fallback renders
+    # instantly while the fonts load (FOIT avoidance).
+    assert "fonts.googleapis.com" not in src and "fonts.gstatic.com" not in src, (
+        "_design-tokens.css must NOT load fonts from Google's CDN — "
+        "Issue 365 vendored Inter + JetBrains Mono under static/fonts/."
     )
-    assert "family=Inter" in src and "family=JetBrains+Mono" in src, (
-        "_design-tokens.css must load BOTH Inter (sans) and JetBrains Mono "
-        "(data register) — the two halves of the Linear/mono composition."
+    assert "font-family: 'Inter'" in src and "font-family: 'JetBrains Mono'" in src, (
+        "_design-tokens.css must declare @font-face rules for BOTH Inter (sans) "
+        "and JetBrains Mono (data register) — the two halves of the Linear/mono "
+        "composition (picked typography pairing for Issue 99)."
     )
-    assert "display=swap" in src, (
-        "Google Fonts URL must include display=swap so the system "
+    assert "font-display: swap" in src, (
+        "@font-face rules must include font-display: swap so the system "
         "fallback renders instantly; otherwise we get FOIT (flash of "
         "invisible text) and the page looks broken for ~200ms."
     )
@@ -1502,15 +1620,23 @@ def test_security_headers_present_on_every_response(client):
             f"{path}: CSP must include frame-ancestors 'none' — clickjacking defence."
         )
         assert "default-src" in csp, f"{path}: CSP must include default-src directive."
-        # 2026-07-20 assessment: the SPA @imports Google Fonts — without these
-        # directives the browser blocks the stylesheet/woff2 and prod silently
-        # falls back to system fonts (regression since Issue 229).
-        assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com" in csp, (
-            f"{path}: CSP style-src must allow the Google Fonts stylesheet + the "
-            "retained static pages' inline <style> blocks."
+        # OFF_COURSE_BUGS 2026-07-30: the SPA self-hosts Inter + JetBrains Mono
+        # (Issue 365, 2026-07-29) and the static legal pages followed suit —
+        # `grep -rn "fonts.googleapis\|fonts.gstatic" static/ frontend/src/` is
+        # zero. The Google Fonts CSP allowance is now a DEAD permission; a
+        # future accidental remote-font @import must be CSP-blocked, not
+        # silently allowed back in, so it must be ABSENT, not present.
+        assert "style-src 'self' 'unsafe-inline'" in csp, (
+            f"{path}: CSP style-src must allow the retained static pages' + "
+            "landing page's inline <style> blocks."
         )
-        assert "font-src 'self' https://fonts.gstatic.com" in csp, (
-            f"{path}: CSP font-src must allow fonts.gstatic.com (woff2 files)."
+        assert "fonts.googleapis.com" not in csp, (
+            f"{path}: CSP must NOT allow-list fonts.googleapis.com — fonts are "
+            "self-hosted (Issue 365); a remote allowance is a dead permission."
+        )
+        assert "fonts.gstatic.com" not in csp, (
+            f"{path}: CSP must NOT allow-list fonts.gstatic.com — fonts are "
+            "self-hosted (Issue 365); a remote allowance is a dead permission."
         )
         assert resp.headers.get("x-frame-options") == "DENY", (
             f"{path}: X-Frame-Options must be DENY (defence-in-depth for legacy browsers)."

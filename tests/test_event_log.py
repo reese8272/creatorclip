@@ -228,7 +228,13 @@ def test_purge_stale_event_logs_task_registered():
 def test_purge_stale_event_logs_task_calls_async_impl():
     from unittest.mock import patch
 
-    with patch("worker.tasks.run_async") as mock_run:
+    # Production calls run_async(_purge_stale_event_logs_async()) — the
+    # coroutine is constructed eagerly and handed to run_async. Mocking out
+    # run_async here (so the task doesn't do real async work) leaves that
+    # coroutine unconsumed unless the mock closes it, which otherwise
+    # surfaces as an unawaited-coroutine RuntimeWarning at GC time
+    # (Issue 366).
+    with patch("worker.tasks.run_async", side_effect=lambda coro: coro.close()) as mock_run:
         from worker.tasks import purge_stale_event_logs
 
         purge_stale_event_logs()

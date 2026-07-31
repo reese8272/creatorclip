@@ -1,3 +1,4 @@
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { UploadIntel } from '@/types'
 
@@ -19,9 +20,12 @@ export function UploadWindows({
   if (!intel || !intel.data_available || intel.best_windows.length === 0) {
     return (
       <Panel title="Best upload windows">
-        <p className="text-sm italic text-subtle">
-          Not enough audience activity data yet. Connect your channel and sync data first.
-        </p>
+        <EmptyStatePrompt
+          title="Not enough audience activity data yet."
+          detail="Sync your channel so we can read when your audience is actually watching."
+          actionLabel="Sync your channel"
+          actionTo="/onboarding"
+        />
       </Panel>
     )
   }

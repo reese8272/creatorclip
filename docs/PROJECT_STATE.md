@@ -4,6 +4,250 @@ Updated after every issue closes.
 
 ---
 
+## 2026-07-31 (latest, W5) — Issues 355 + 380 DONE: the last two buildable issues are closed
+
+**W5 was the whole remaining code-closeable backlog.** With these two, every issue in `docs/issues.md`
+that code can close is closed; what remains is external (Google OAuth review, operator clicks,
+uptime monitor) or DESCOPED-BETA (the K8s/scale lanes).
+
+**Issue 380 — `[DEC]`, no code change.** The free trial stays **one-time 60 minutes / 7 days**. #383
+had already retracted two of its three premises; the third fails too, on a fact the earlier passes
+missed: Opus's and Vizard's "60 min/month" free tiers are **watermarked with 3-day storage**, where
+our 60 trial minutes are full-fidelity and permanently stored — not the same unit. Matching the
+number unrestricted would give away 720 min/yr (**3.6× the Starter pack**) and let a
+one-upload-a-month creator subsist free forever. 2026 benchmarks put opt-in time-boxed trials at
+**8.9–25.2%** conversion vs freemium's **2–8%**, and the category has moved to trials (57%) over
+freemium (26%) on AI-cost grounds. **COGS is explicitly NOT the reason** — a recurring grant would
+cost ~$0.35–0.45/creator/month, under $45/mo at the full 100-user cap; the issue brief overstated
+that and the correction is recorded so nobody re-cites it. Runner-up **option (d), a watermarked
+recurring free tier**, is deferred with an explicit re-open trigger: no AutoClip-branded watermark
+render path exists, and a viral-watermark growth loop buys nothing while signups are capped at 100
+invited users. Full reasoning + margin re-check: `docs/DECISIONS.md` (Issue 380).
+
+**Issue 355 — first-run information architecture, all five findings.** Frontend only; **zero backend
+changes**. Nav labels are now the pages' own names (Dashboard→**Videos**, Profile→**Channel**), each
+with a one-line "what is this", and work/account items are split. The three overlapping "ask the AI"
+surfaces were **not merged** — they run different protocols — but the duplicated *entry point* was
+removed: `Analyze` left the nav (arriving there from the nav showed only a URL box, since its four
+generators are gated on `?video_id=`) and the new `components/ask/AskSurfaceTabs.tsx` explains all
+three in one row. The Dashboard now has **one** primary CTA, state-aware so it never competes with
+the onboarding banner. New `components/EmptyStatePrompt.tsx` types its action as a **required**
+discriminated union, so a prose-only dead end no longer type-checks — adopted at 13 sites that named
+a prerequisite without linking it, several for a control that did not exist anywhere in the app.
+Proof of lift / Originality / Fingerprint gained stable hash anchors (anchors, **not** routes — see
+DECISIONS) so the landing page's headline claim finally links somewhere. Brand consolidation is the
+one finding deferred, as the brief itself allows.
+
+Also fixed in passing: `InsightsNarrative` rendered a failed analytics fetch as "not enough data
+yet" — the exact inversion the Issue-361 sweep exists to prevent — now split into a retry and a
+genuine empty state; and a Dashboard test that asserted a review-queue link without ever checking
+the count, passing vacuously at zero and masking a settle race on the batched counts query.
+
+**Gates, all measured in the main checkout (not a worktree):** backend **2480 passed / 64 skipped /
+173 deselected** — byte-identical to the pre-change baseline, as expected for a zero-backend-change
+issue. Frontend **354 passed / 55 files** (was 337 at session start, **+17**), `tsc -b` clean,
+`npm run lint` 0 errors, `npm run build` clean, `ruff format --check` clean. **Layer 0 all green:**
+ruff 0 · mypy 0 · coverage **83.51** (baseline 83.00) · module floors clip_engine 92.54 /
+preference 90.45 / crypto·limiter·auth 100.0 · bandit 0/0 · pip_audit 0.
+
+Two out-of-scope defects found and logged in `docs/OFF_COURSE_BUGS.md` rather than fixed inline: the
+Review-queue badge counts rendered clips instead of shortlisted-unreviewed ones (needs a backend
+field), and `App.tsx`'s `*` route silently redirects typos to `/dashboard` instead of 404ing.
+
+---
+
+## 2026-07-30 (W4) — Issue 379 DONE: Channel Fingerprint (two-tier DNA artifact)
+
+Built on `w4/issue-379-fingerprint` off `wave/l24-and-hygiene`. "Your DNA at a glance" (the bare
+`optimal_clip_len_s` / `best_source_region` / `optimal_upload_gap_h` stat card) is replaced by a
+two-tier design driven by a literal YouTube API Services Policies reading (III.E.2 / III.E.3.b,
+fetched live this session — quoted in `docs/DECISIONS.md`):
+
+1. **Private in-app view** — `frontend/src/components/insights/ChannelFingerprint.tsx`, on the
+   Insights page in place of the old `DnaSnapshot` card. Still backed by the existing
+   analytics-derived DNA stats (permitted for the authorizing creator under III.E.3.b) — no new
+   endpoint, no new data class.
+2. **Shareable artifact** — new `POST /creators/me/fingerprint/share` (`routers/creators.py`).
+   Explicit-action-only (POST, never embedded in any GET response, nothing persisted). Returns
+   ONLY self-declared identity (`niches`, `content_pillars`, `tone_tags`, `mission` — from
+   `creator_identity`/`dna/identity.py`) + the Issue-371 feedback-distilled `style_summary`
+   (`creator_style_notes`, sourced from the creator's own in-app feedback, never YouTube
+   Analytics) + a static honesty line + `generated_at`. **Zero analytics-derived fields** — the
+   full field-by-field audit (including fields deliberately excluded despite being ToS-permissible:
+   `audience_summary`, `hard_nos`, `style_sample`, `channel_title`) is in `docs/COMPLIANCE.md`
+   "Channel Fingerprint — shareable artifact field-by-field audit".
+
+**Tests:** `tests/test_fingerprint.py` (9, backend) — load-bearing exact-allowlist assertion on
+`FingerprintShareOut`, auth-required, POST-not-GET, per-creator isolation, honesty line, and that
+shareable-only fields never leak into `GET /creators/me/identity`.
+`frontend/src/components/insights/ChannelFingerprint.test.tsx` (3) — private stats render with zero
+fetch; shareable card is fetched/rendered only after the explicit click, via POST.
+`tests/test_compliance_no_virality.py` extended coverage confirmed green (no new virality surface).
+
+Backend suite measured: **2445 passed, 70 skipped** (was reported 2442/64 at handoff — the skip-count
+delta traces to this worktree missing a built `frontend/dist` bundle, not to this change; net **+3
+passed** matches the fully-passing new test file). Frontend: **334 passed** (was 331, +3), `tsc -b`
+clean.
+## 2026-07-30 (latest, W4) — Issue 377 DONE: shortlist mode — return the decision, not the pile
+
+Presentation-and-selection change only, no engine rewrite. `clip_engine/ranking.py::is_shortlisted(rank,
+size=None)` is a pure predicate reading the ALREADY-computed `rank` (top `SHORTLIST_SIZE=3`, fixed —
+`config.py`) — it never touches `score`/`rank`/candidate ordering, and never drops a candidate from the
+persisted or scored set. Wired onto `ClipOut.shortlisted` in `routers/clips.py::_clip_response`.
+`frontend/src/pages/Review.tsx` defaults the one-clip-at-a-time queue to the shortlisted clips, with a
+"show all N candidates" toggle (`data-testid="shortlist-banner"`) as the load-bearing escape hatch;
+falls back to the full set automatically when nothing is shortlisted (e.g. a creator-only-selection
+video, Issue 373). WhyThisClip needed no change — it was already default-open/primary content since the
+Issue 306 redesign.
+
+**Generation/scoring volume unchanged — explicitly NO LLM-cost saving made** (quantified: 0% reduction
+in scoring calls per video). The "show all candidates" guardrail requires every candidate to still be
+real, not a re-generated subset, so `extract_candidates`/`score_candidates` are untouched. Full decision
+rationale in `docs/DECISIONS.md` (2026-07-30, W4).
+
+**Verification:** `tests/test_shortlist.py` (10 new tests: boundary/ties/fewer-than-N/zero-candidates/
+creator-selection for `is_shortlisted`, an NDCG-invariance proof against `preference/efficacy.py`, router
+wiring). Eval harness: `tests/test_clip_engine.py -k eval_scenario` — 19 passed, `SCENARIO_FLOOR=15`
+byte-identical (no `clip_engine/candidates.py` touched). `tests/test_compliance_no_virality.py` green — no
+new copy trips the virality scan. Full backend suite on branch tip: **2446 passed, 70 skipped, 173
+deselected** (measured baseline on the same tip before this change: 2436 passed/70 skipped/173
+deselected — net +10, zero regressions). Frontend: `npx vitest run` **334 passed** (331 baseline + 3 new
+`Review.test.tsx` cases), `npx tsc -b` clean, `ruff format --check` + `ruff check` + `mypy` clean on
+touched files. Branch `w4/issue-377-shortlist` off `wave/l24-and-hygiene`.
+
+---
+
+## 2026-07-30 (W3) — Issue 376(a) DONE: public marketing landing; 376(b) DESCOPED
+
+`main.py:200` used to redirect `/` straight into the app, bouncing every anonymous visitor to
+"Sign in to continue" — there was no public page describing AutoClip at all, which blocked the
+Google OAuth verification homepage requirement (#29, friend-beta critical path). `main.py:index()`
+now serves a real, server-rendered `static/landing.html` to anonymous visitors (200, no SPA/JS
+dependency — works identically whether or not `frontend/dist` is built) while authenticated
+visitors are unaffected (still redirected into `/app/dashboard`). Content: what AutoClip is, the
+honesty constraint verbatim, the Proof-of-Lift (#374) outcome loop described accurately, real
+pricing from `billing/packs.py`, and a Terms/Privacy footer. A matching `frontend/src/pages/Landing.tsx`
+(`/app/landing`, no `AuthGate`) ships as the in-app equivalent.
+
+**376(b) (no-auth demo) DESCOPED** — the only ToS-clean demo source is pre-processed house sample
+videos (`YTDLP_ENABLED=False`, `youtube/ingest.py:89` own-content-only), which would showcase the
+commodity clip-cutting layer rather than the outcome loop that differentiates this product. Reversible;
+un-park criteria in `docs/DECISIONS.md` 2026-07-30 (W3).
+
+**Folded in:** the dead Google-Fonts CSP allowance (`main.py` `_CSP_BASE` — flagged in
+`OFF_COURSE_BUGS.md` 2026-07-30) was removed in the same `main.py` change; both fonts have been
+self-hosted since Issue 365 and the allowance was a no-longer-needed permission.
+
+Tests: backend 2417 passed / 64 skipped (up from 2410/64 baseline — net new landing/CSP/compliance
+tests, `frontend/dist` built to exercise the real SPA-built branch, not just monkeypatched); frontend
+324 passed (up from 318), `tsc -b` clean, `eslint` clean. Branch `w3/issue-376-landing` off
+`wave/l24-and-hygiene`.
+## 2026-07-30 (latest) — **#375 DONE**: Originality guard / sameness advisory
+
+Built on `w3/issue-375-originality` (off `wave/l24-and-hygiene`). Per-creator sameness advisory over
+the creator's OWN recent clips — zero cross-creator comparison, zero LLM spend (Voyage embeddings only,
+same billing posture as existing `dna/embeddings.py` calls).
+
+**Built per the #383-corrected framing, not the original issue text**: no strike/ladder/timeline
+language anywhere in code, copy, or comments; no "new policy" urgency; cites
+`support.google.com/youtube/answer/1311392` dated 2026-07-30. Copy states "may affect monetization
+eligibility" and explicitly disclaims certifying eligibility or speaking for YouTube.
+
+**Design departure from the issue's literal approach sketch** — the gate is content (Voyage-embedding
+cosine similarity of each clip's own transcript excerpt), not structural fields (duration/setup-lead/
+source-region/style). Structural fields are corroborating detail on an already-flagged cluster only.
+Gating on structural sameness would flag a creator with a deliberately consistent format for being
+consistent — the exact creator the DNA feature serves — which directly violates the issue's own
+"consistent ≠ templated" acceptance criterion. See `docs/DECISIONS.md` (2026-07-30) for the full
+rationale and the (deliberately conservative, UNVALIDATED) threshold.
+
+**New:** `knowledge/originality.py` (pure clustering/copy logic), `dna/embeddings.py::embed_clip_excerpts`
+(reuses the existing Voyage singleton), `knowledge/util.py::extract_transcript_range`,
+`GET /creators/me/insights/originality`, `frontend/.../OriginalityGuard.tsx` wired into the Insights page.
+Config: `ORIGINALITY_SIMILARITY_THRESHOLD` (0.92), `ORIGINALITY_MIN_CLUSTER_SIZE` (4),
+`ORIGINALITY_RECENT_CLIPS_WINDOW` (12) — all in `.env.example`, all explicitly flagged unvalidated.
+
+**Tests:** `tests/test_originality.py` (15, pure logic incl. the "consistent creator" and honesty-copy
+cases), `tests/test_dna_embeddings.py` (4, mocked Voyage), `tests/test_knowledge_util.py` (+5, transcript
+range extraction), `tests/test_compliance_no_virality.py` (+1, scans the real generated advisory copy),
+`tests/test_originality_integration.py` (2, CI-only — no Postgres here). Frontend:
+`OriginalityGuard.test.tsx` (7). Backend suite: 2429 passed / 70 skipped (was 2410/64) — no regressions.
+Frontend: 325 passed (was 318); `tsc -b` clean.
+
+**Out of scope, logged not built:** the inline "similar to N recent clips" flag on the Review surface
+(`frontend/src/components/review/WhyThisClip*`) — the issue's own approach sketch marks this "if cheap"
+and it touches a surface not covered by this issue's CHECK research; a future issue should scope it
+properly. `docs/CLIPPING_PRINCIPLES.md` was NOT updated — clip scoring does not consume this signal in v1
+(the registry note only requires an entry "if scoring consumes it").
+
+---
+
+## 2026-07-30 — W0 of the all-waves run: **#382 + #383 DONE** — three L24 claims retracted
+
+First wave of an owner-approved multi-wave run to close every code-closeable issue (scope: Buckets A+B,
+per-wave batched approval, parallel agent waves). W0 was deliberately docs-first because #382 gated the
+lane and #383's research underpins #375/#376/#378/#380.
+
+**#383 — competitive refresh against PRIMARY sources.** Added two new competitor tiers: **platform-native
+(YouTube itself)** and **agent-native (Reap ships an MCP server for Claude/ChatGPT/Codex)**. Captured
+Studio Video Clips' real limits — **16:9 only, cannot generate Shorts**, AI suggestions **podcast-playlist
++ English + 10 countries**, Shorts integration **announced not shipped**. Re-verified the pricing table live.
+
+**Three L24 claims failed verification and are retracted** (all three were headed for creator-facing copy):
+1. **No "three-strike ladder" exists.** Neither YouTube's policy page nor TechCrunch describes one.
+2. **The rename was 15 July 2025**, not 16 July 2026 (that was a *clarification* into three categories) —
+   so the policy is ~13 months old and the "newest shift" urgency framing is wrong.
+3. **The two OpusClip quotes are in neither cited post.** Retracted with checkable substitutes supplied.
+   Attributing invented quotes to a named competitor on a *trust* surface (#378) was the sharpest risk here.
+
+**#382 — scope freeze decided: park only #363, fund all of L24.** Its premise was stale — #322/#323/#324/#325
+shipped 2026-06-26 and L23 advanced effects were already parked, leaving Caption TEXT editing as the only
+live candidate (un-park criteria recorded). **The "99 done / 614 open" figure was a miscount**: 614 counted
+acceptance-criteria checkboxes across done *and* open issues. Real: **205 issue headings, 155 done/closed/parked,
+50 genuinely open** — 25 external/operator-gated, 5 DESCOPED-BETA (incl. #261), 6 code-complete pending
+external verification, and **14 buildable** (which is the run's remaining scope). The backlog was never sprawling into breadth; it is already moat + hygiene.
+
+**Baseline at W0:** backend 2377 passed / 64 skipped, frontend 309 passed / 49 files. Branch
+`wave/l24-and-hygiene` (off `main`, nothing deployed). Next: W1 — #364/#365/#366/#367/#368 in parallel.
+
+---
+
+## 2026-07-30 — Lane L24 FILED: positioning & moat surfacing (Issues 374–383)
+
+Owner-requested product/market review (no code written). Read `docs/PRD.md`, `COMPETITIVE_RESEARCH.md`,
+`GO_LIVE.md`, the SPA route map, `clip_engine/`, `preference/`, `billing/packs.py`, and the four product
+screenshots; ran five live web searches (2026-07-30). **Finding:** the engineering is strong and the moat
+is real, but the product sells the commodity layer — and three recent shifts make that layer worthless:
+YouTube shipping **native clip auto-suggestions + Clips-into-Shorts** later in 2026; YouTube's **16 July
+2026 "inauthentic content" policy** (templated/mass-produced output demonetized, three-strike ladder);
+and OpusClip publicly conceding the bottleneck moved to *"the decision of what deserves cutting"* with
+*"measurement is where repurposing setups break down."* Style-learning remains unclaimed field-wide
+(dated re-confirmation of the `COMPETITIVE_RESEARCH.md:104` thesis).
+
+**The asset we already own and never surface:** `poll_clip_outcomes` → `ClipOutcome.performed_well`
+(`worker/tasks.py:1055`) → 3× training weight (`preference/decay.py:8`), fed by #197's publish-time row
+creation. It requires per-creator Analytics OAuth, so no competitor can copy it — and it appears in **no
+creator-facing surface**. `preference/efficacy.py` (NDCG + chronological holdout + paired-bootstrap CIs)
+is a second unused trust asset.
+
+**Verified gaps:** no public marketing page or demo (`main.py:200` sends anonymous visitors straight to
+a login wall); DNA gated behind `MIN_VIDEOS_FOR_DNA=10`; free tier is 60 minutes *once*
+(`config.py:588`) vs Opus's 60/month recurring; ~~99 issues done / **614 open**~~ (⚠️ **corrected
+2026-07-30 by #382: 155 done/closed/parked, 50 open** — 614 counted acceptance-criteria checkboxes,
+not issues) / 1 user on the OAuth cap.
+
+**Filed as Lane L24_MOAT_POSITIONING** in `docs/issues.md`: **#374** Proof of Lift (surface the outcome
+loop — W0, highest leverage), **#375** originality guard vs the July inauthentic-content policy,
+**#376** public landing + no-auth demo (promotes "no-auth demo mode" out of the Phase-3 parking lot),
+**#377** shortlist mode, **#378** publish the ranking-quality numbers, **#379** shareable Channel
+Fingerprint, **#380** `[DEC]` pricing re-evaluation (re-opens #209 on three named new facts; ledger
+untouched), **#381** chat density via **live** capture (distinct from the still-BLOCKED #132 — no
+scrapers; gated on a quota verdict), **#382** `[DEC]` scope freeze, **#383** refresh the stale
+competitive doc. Positioning decision + all sources in `docs/DECISIONS.md` (2026-07-30);
+`COMPETITIVE_RESEARCH.md` header marked stale pending #383.
+
+---
+
 ## 2026-07-30 (later) — Lane L23 COMPLETE: Issues 370–373 all DONE (batch /issue-workflow run)
 
 All four remaining standalone-tools issues built, tested, and committed on

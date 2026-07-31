@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -173,10 +173,42 @@ describe('Dashboard', () => {
     )
     renderDashboard()
     expect(await screen.findByText('Review queue')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open review →' })).toHaveAttribute(
+    // findBy, not getBy: the batched counts query settles after the videos
+    // query, so the populated card is not present on first paint. The old
+    // assertion passed vacuously because the card rendered the same button at
+    // any count — including zero, which Issue 355 changed.
+    expect(await screen.findByRole('link', { name: 'Open review →' })).toHaveAttribute(
       'href',
       '/app/review',
     )
+    // Scoped to the card — the video table also renders a "2 rendered" cell.
+    const card = screen.getByText('Review queue').parentElement as HTMLElement
+    expect(within(card).getByText('2')).toBeInTheDocument()
+  })
+
+  it('review-queue card offers a way to fill the queue instead of a "0" and a dead button', async () => {
+    // Issue 355 finding 4, named explicitly in the issue ("Review Queue 0").
+    vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })], {}))
+    renderDashboard()
+    expect(await screen.findByText('Review queue')).toBeInTheDocument()
+    expect(await screen.findByText('Nothing waiting yet.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Pick a video' })).toHaveAttribute(
+      'href',
+      '/app/review',
+    )
+    expect(screen.queryByRole('link', { name: 'Open review →' })).toBeNull()
+  })
+
+  it('header carries exactly one primary action, and Analyze is not one of them', async () => {
+    // Issue 355 finding 3: three co-equal header buttons meant no "start here".
+    vi.stubGlobal('fetch', mockFetch([baseVideo({ id: 'vd', ingest_status: 'done' })]))
+    renderDashboard()
+    const upload = await screen.findByRole('button', { name: '+ Upload a video' })
+    expect(upload.className).toMatch(/bg-accent/)
+    const browse = screen.getByRole('button', { name: /or browse videos already on your channel/i })
+    expect(browse.className).not.toMatch(/bg-accent/)
+    expect(screen.queryByRole('link', { name: 'Analyze a video' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Analyze a video' })).toBeNull()
   })
 
   it('shows a retry card — not the first-run empty hero — when the videos query fails', async () => {

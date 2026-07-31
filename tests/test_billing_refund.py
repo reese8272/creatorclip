@@ -13,6 +13,35 @@ import db
 from billing import refund as refund_mod
 from billing.refund import _refund_pack_id
 
+# ── run_async stand-ins ─────────────────────────────────────────────────────────
+#
+# Production `on_failure` calls `run_async(refund_for_video(video_uuid))` —
+# the coroutine is constructed eagerly and handed to run_async, which runs it
+# on the worker-process event loop. When a test mocks out run_async itself
+# (to keep on_failure from doing real async work), the already-constructed
+# coroutine object is simply dropped, and Python later warns "coroutine ...
+# was never awaited" at GC time (Issue 366). Closing the coroutine here is
+# the documented way to discard one deliberately without running it.
+
+
+def _closing_run_async(coro):
+    """Stand-in for `worker.tasks.run_async`: closes the coroutine instead of
+    running it, so on_failure's dispatch is observed (call_count) without the
+    "never awaited" warning."""
+    coro.close()
+
+
+def _closing_run_async_raising(exc: Exception):
+    """Like `_closing_run_async`, but raises after closing — for tests that
+    assert on_failure swallows a run_async failure."""
+
+    def _inner(coro):
+        coro.close()
+        raise exc
+
+    return _inner
+
+
 # ── pack_id construction ──────────────────────────────────────────────────────
 
 
@@ -40,7 +69,7 @@ def test_on_failure_dispatches_refund_with_uuid():
     task = _make_task_instance()
     video_id = str(uuid.uuid4())
 
-    with patch("worker.tasks.run_async") as mock_run:
+    with patch("worker.tasks.run_async", side_effect=_closing_run_async) as mock_run:
         task.on_failure(
             exc=RuntimeError("boom"),
             task_id="task-1",
@@ -85,7 +114,10 @@ def test_on_failure_swallows_refund_exception():
     """A crash in the refund path must NOT crash the failure-handling path —
     the task's original terminal failure must still stand."""
     task = _make_task_instance()
-    with patch("worker.tasks.run_async", side_effect=RuntimeError("refund crashed")):
+    with patch(
+        "worker.tasks.run_async",
+        side_effect=_closing_run_async_raising(RuntimeError("refund crashed")),
+    ):
         # Must not raise.
         task.on_failure(
             exc=RuntimeError("ingest failed"),
@@ -112,7 +144,7 @@ def test_generate_clips_on_failure_fires_exactly_once_per_delivery() -> None:
     from worker.tasks import generate_clips
 
     video_id = str(uuid.uuid4())
-    with patch("worker.tasks.run_async") as mock_run:
+    with patch("worker.tasks.run_async", side_effect=_closing_run_async) as mock_run:
         generate_clips.on_failure(
             exc=RuntimeError("LLM failed terminally"),
             task_id="gc-task-1",
@@ -136,7 +168,10 @@ def test_generate_clips_on_failure_refund_raising_is_swallowed() -> None:
 
     video_id = str(uuid.uuid4())
     # run_async raises on the first call (refund) but must not propagate.
-    with patch("worker.tasks.run_async", side_effect=RuntimeError("DB unavailable")):
+    with patch(
+        "worker.tasks.run_async",
+        side_effect=_closing_run_async_raising(RuntimeError("DB unavailable")),
+    ):
         # Must not raise — swallowed by the best-effort block.
         generate_clips.on_failure(
             exc=RuntimeError("LLM failed"),
