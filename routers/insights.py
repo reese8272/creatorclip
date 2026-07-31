@@ -32,17 +32,22 @@ from flags import require_flag
 from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import (
+    Clip,
+    ClipOutcome,
+    ClipPublication,
     Creator,
     CreatorDna,
     CreatorInsight,
     DnaStatus,
     IngestStatus,
     InsightType,
+    PublishStatus,
     Video,
     VideoKind,
     VideoMetrics,
 )
 from observability import record_llm_tokens
+from preference.lift import LiftClip, summarize_lift
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
 
@@ -85,6 +90,46 @@ class InsightsOut(BaseModel):
     dna: DnaStatsOut
     top_performers: list[PerformerOut]
     bottom_performers: list[PerformerOut]
+
+
+class LiftGroupOut(BaseModel):
+    """Averaged stored features for one outcome group (Issue 374)."""
+
+    avg_score: float | None
+    avg_dna_match: float | None
+    median_duration_s: float | None
+    median_setup_lead_s: float | None
+    top_principle: str | None
+
+
+class LiftContrastOut(BaseModel):
+    winners_n: int
+    underperformers_n: int
+    winners: LiftGroupOut
+    underperformers: LiftGroupOut
+
+
+class LiftOut(BaseModel):
+    """Proof of Lift — what actually happened to clips published via AutoClip.
+
+    Reports outcomes, never predictions. ``rate`` is ``None`` until
+    ``min_judged_for_rate`` clips have a verdict; ``deferred_count`` is clips
+    published but not yet judgeable (fewer than 3 comparable Shorts to form a
+    baseline — Issue 201), which are NOT failures.
+    """
+
+    published_count: int
+    judged_count: int
+    beat_median_count: int
+    below_median_count: int
+    deferred_count: int
+    rate: float | None
+    rate_ci_low: float | None
+    rate_ci_high: float | None
+    min_judged_for_rate: int
+    contrast: LiftContrastOut | None
+    metric: str
+    checkpoint: str
 
 
 class AnalyticsSummaryOut(BaseModel):
@@ -411,6 +456,76 @@ async def get_insights(
 
 
 _PERIOD_DAYS: dict[str, int | None] = {"7d": 7, "28d": 28, "90d": 90, "all": None}
+
+
+@router.get("/lift", response_model=LiftOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def get_proof_of_lift(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """What actually happened to the clips this creator published via AutoClip.
+
+    Read-only aggregate over ``Clip`` ⋈ ``ClipOutcome`` ⋈ ``ClipPublication``.
+    Adds no LLM cost and collects no new data — ``ClipOutcome`` rows already
+    exist (Issue 197 creates them at publish; ``poll_clip_outcomes`` fills them
+    at the 48h/7d checkpoints).
+
+    Isolation: ``ClipOutcome`` has NO ``creator_id`` column (it is PK'd on
+    ``clip_id``), so the creator filter is applied on ``Clip.creator_id`` and
+    reaches the outcome only through the join — matching the parent-subquery
+    RLS policy for this table. Never filter the outcome table directly.
+
+    Honesty: reports outcomes, never predictions; a rate is withheld below the
+    documented minimum; deferred verdicts are their own bucket, not failures.
+    """
+    stmt = (
+        select(
+            Clip.id,
+            Clip.score,
+            Clip.dna_match,
+            Clip.start_s,
+            Clip.end_s,
+            Clip.peak_s,
+            Clip.signals_jsonb,
+            ClipOutcome.performed_well,
+        )
+        .join(ClipOutcome, ClipOutcome.clip_id == Clip.id)
+        .join(ClipPublication, ClipPublication.clip_id == Clip.id)
+        .where(
+            Clip.creator_id == creator.id,
+            ClipPublication.creator_id == creator.id,
+            ClipPublication.status == PublishStatus.done,
+        )
+        .distinct()
+    )
+    rows = (await session.execute(stmt)).all()
+
+    clips = [
+        LiftClip(
+            clip_id=str(r.id),
+            performed_well=r.performed_well,
+            score=r.score,
+            dna_match=r.dna_match,
+            duration_s=(r.end_s - r.start_s)
+            if r.end_s is not None and r.start_s is not None
+            else None,
+            setup_lead_s=(r.peak_s - r.start_s)
+            if r.peak_s is not None and r.start_s is not None
+            else None,
+            principle=(r.signals_jsonb or {}).get("principle") or None,
+        )
+        for r in rows
+    ]
+
+    summary = summarize_lift(clips)
+    summary["metric"] = (
+        "Views at the checkpoint versus the median of your own comparable "
+        "published Shorts. A coarse proxy, not a quality judgement."
+    )
+    summary["checkpoint"] = "48h and 7d after publish, whichever readings exist"
+    return summary
 
 
 @router.get("/analytics", response_model=AnalyticsSummaryOut)

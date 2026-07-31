@@ -24,7 +24,13 @@ import { UploadWindows } from '@/components/insights/UploadWindows'
 import { ImprovementBrief } from '@/components/insights/ImprovementBrief'
 import { SavedInsights } from '@/components/insights/SavedInsights'
 import { InsightsFraming, WhatChanged } from '@/components/insights/InsightsNarrative'
-import type { InsightsResponse, SavedInsightsResponse, UploadIntel } from '@/types'
+import { ProofOfLift } from '@/components/insights/ProofOfLift'
+import type {
+  InsightsResponse,
+  ProofOfLift as ProofOfLiftData,
+  SavedInsightsResponse,
+  UploadIntel,
+} from '@/types'
 
 export function Insights() {
   const insightsQuery = useQuery({
@@ -38,6 +44,10 @@ export function Insights() {
   const savedQuery = useQuery({
     queryKey: ['saved-insights'],
     queryFn: () => api<SavedInsightsResponse>('/creators/me/insights/saved'),
+  })
+  const liftQuery = useQuery({
+    queryKey: ['proof-of-lift'],
+    queryFn: () => api<ProofOfLiftData>('/creators/me/insights/lift'),
   })
 
   const data = insightsQuery.data
@@ -69,6 +79,11 @@ export function Insights() {
           <>
             {/* Page-level framing: what this is showing + why it matters */}
             {data && <InsightsFraming data={data} />}
+
+            {/* What actually happened to what you published (Issue 374) —
+                the outcome loop, ahead of the channel snapshot because it is
+                the only falsifiable claim on this page. */}
+            <ProofOfLift lift={liftQuery.data} isError={liftQuery.isError} />
 
             {/* Q1: What's working / what's not */}
             {data && <ChannelSnapshot totals={data.totals} />}

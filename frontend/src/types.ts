@@ -596,3 +596,39 @@ export interface PublicationListOut {
   privacy_note: string
   truncated: boolean
 }
+
+/** Proof of Lift — published-clip outcomes (Issue 374).
+ *
+ * `rate` is null until `min_judged_for_rate` clips have a verdict — a count is
+ * a fact, a rate is an inference. `deferred_count` is published-but-unjudgeable
+ * (fewer than 3 comparable Shorts for a baseline); those are NOT failures.
+ */
+export interface ProofOfLiftGroup {
+  avg_score: number | null
+  avg_dna_match: number | null
+  median_duration_s: number | null
+  median_setup_lead_s: number | null
+  top_principle: string | null
+}
+
+export interface ProofOfLiftContrast {
+  winners_n: number
+  underperformers_n: number
+  winners: ProofOfLiftGroup
+  underperformers: ProofOfLiftGroup
+}
+
+export interface ProofOfLift {
+  published_count: number
+  judged_count: number
+  beat_median_count: number
+  below_median_count: number
+  deferred_count: number
+  rate: number | null
+  rate_ci_low: number | null
+  rate_ci_high: number | null
+  min_judged_for_rate: number
+  contrast: ProofOfLiftContrast | null
+  metric: string
+  checkpoint: string
+}
