@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 
 const STEPS = [
   {
@@ -44,13 +44,17 @@ export function EmptyHero({ onUploadClick }: { onUploadClick: () => void }) {
           </div>
         ))}
       </div>
-      <div className="flex flex-wrap gap-3">
+      {/* Issue 355 finding 3: three co-equal buttons gave a first-run creator no
+          "start here". Upload is the one primary; the other two are real but
+          secondary paths, so they read as a muted row of text actions. */}
+      <div className="flex flex-wrap items-center gap-3">
         <Button onClick={onUploadClick}>Upload a video →</Button>
-        <Link to="/profile">
-          <Button variant="secondary">Get your API key</Button>
+        <span className="text-small text-subtle">or</span>
+        <Link to="/profile" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+          Get your API key
         </Link>
-        <Link to="/walkthrough">
-          <Button variant="secondary">Open walkthrough</Button>
+        <Link to="/walkthrough" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+          Open walkthrough
         </Link>
       </div>
       <p className="mt-4 text-xs text-subtle">
