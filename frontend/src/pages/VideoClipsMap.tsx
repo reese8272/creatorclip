@@ -211,6 +211,14 @@ export function VideoClipsMap() {
           {video.title ?? 'Untitled video'}
         </h1>
         <p className="text-xs text-subtle font-mono">{video.youtube_video_id}</p>
+        {/* Issue 355: /analysis left the nav, so the per-video tools are reached
+            from where a video is already in hand — here and the VideoTable row. */}
+        <Link
+          to={`/analysis?video_id=${video.id}&video_title=${encodeURIComponent(video.title ?? '')}`}
+          className="mt-2 inline-block text-xs text-accent-text hover:underline"
+        >
+          Analyze this video →
+        </Link>
       </div>
 
       {clips.length === 0 ? (

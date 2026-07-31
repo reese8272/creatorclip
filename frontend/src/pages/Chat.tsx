@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { AskSurfaceTabs } from '@/components/ask/AskSurfaceTabs'
 import { Chip } from '@/components/Chip'
 import { ChipThinking } from '@/components/chip/ChipStates'
 import { Button } from '@/components/ui/button'
@@ -190,6 +191,8 @@ export function Chat() {
       </DisclaimerBand>
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6">
+        <AskSurfaceTabs current="assistant" />
+
         <div
           ref={scrollRef}
           className={cn(

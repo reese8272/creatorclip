@@ -18,6 +18,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { AskSurfaceTabs } from '@/components/ask/AskSurfaceTabs'
 import { Chip } from '@/components/Chip'
 import { ChannelSnapshot } from '@/components/insights/ChannelSnapshot'
 import { ChannelFingerprint } from '@/components/insights/ChannelFingerprint'
@@ -68,6 +69,8 @@ export function Insights() {
       </DisclaimerBand>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
+        <AskSurfaceTabs current="insights" />
+
         <div className="mb-6 flex items-center gap-3.5">
           <Chip pose="idea" size={48} />
           <div>

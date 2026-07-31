@@ -43,6 +43,10 @@ const LINKS: NavItem[] = [
     blurb: "Your channel read back to you — what's working and what changed",
     group: 'work',
   },
+  // No 'Analyze' entry (Issue 355 finding 2): reaching /analysis from the nav
+  // showed only a URL box + free-text question, because its four generators are
+  // gated on ?video_id= — a strictly worse Assistant. The route stays live and
+  // is reached from a video row or the AskSurfaceTabs row on these three pages.
   {
     label: 'Assistant',
     href: '/chat',
