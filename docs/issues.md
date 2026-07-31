@@ -360,35 +360,35 @@ only BLOCKER and the SEV1-#4 trigger in minutes.
   the transcript editor), and re-render plumbing. Largest remaining editor gap.
 
 ### Issue 364: Server-side discard for `cleaned_render_uri` (close the pending_clean_or_edit dead-end)
-- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W1 · **Lane:** L16 Review surface ·
+- **Status:** **DONE (2026-07-30, W1)** — `POST /clips/{id}/clean/discard` mirroring `clean_confirm`: idempotent (`noop` when nothing pending), clears the column in-transaction, then best-effort R2 purge via `adelete_file` AFTER commit (storage failure tolerated + logged, never rolls back). Wired `CleanedPreviewConfirm` (shared by `CleanPassPanel`+`YourCall`, so both fixed transitively) plus `TranscriptEditor`/`Editor` which inline their own flow. 5 backend + 2 frontend tests incl. the regression that a subsequent `/clean` no longer 409s. · **Wave:** W1 · **Lane:** L16 Review surface ·
   **Size:** S · **Sev:** SEV3
 - "Keep original" is client-side only; a discarded clean/trim leaves `cleaned_render_uri` set so the
   next clean/trim-render 409s until confirmed. Add a discard endpoint (clear the column + purge the
   artifact) and wire the UI's existing discard affordance to it.
 
 ### Issue 365: Vendor fonts on the static legal pages (`static/_design-tokens.css` Google Fonts @import)
-- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W1 · **Lane:** Compliance polish ·
+- **Status:** **DONE (2026-07-30, W1)** — two latin-subset VARIABLE woff2 (~80 KB total) committed under `static/fonts/` + OFL-1.1 license per family; `@import` replaced with local `@font-face` + `font-display: swap`. Owner decision: files downloaded directly, NO npm dependency. `grep fonts.googleapis|fonts.gstatic static/` = 0. 3 regression tests incl. one that fails if any `static/*` ever references a remote font host. Follow-on logged: the CSP still allow-lists the now-unused Google Fonts origins (`OFF_COURSE_BUGS.md`). · **Wave:** W1 · **Lane:** Compliance polish ·
   **Size:** S · **Sev:** SEV3
 - The SPA is self-hosted (ready-pass W2) but tos/privacy/accessibility still @import Google Fonts —
   the LG München GDPR IP-leak pattern on exactly the pages an EU visitor reads pre-signup. No bundler
   for /static: vendor woff2 under `static/fonts/` + rewrite the import.
 
 ### Issue 366: Test-hygiene sweep — ~20 files with unawaited-coroutine warnings + filterwarnings ratchet
-- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W2 · **Lane:** QA · **Size:** M · **Sev:** SEV3
+- **Status:** **DONE (2026-07-30, W1)** — scope was **10 sites / 8 files**, not the ~20 estimated. Two root causes: (a) bare `AsyncMock()` with no spec makes the genuinely-SYNC `AsyncSession.add/add_all` async, so production's correct un-awaited call conjures a dropped coroutine → `AsyncMock(spec=AsyncSession)`; (b) `patch("worker.tasks.run_async")` leaves the EAGERLY-built argument coroutine unconsumed → `side_effect` closing it. No production bug (checked). `filterwarnings = error::RuntimeWarning` ratcheted in `pytest.ini` AFTER the fixes, validated green under fixed order + 3 random seeds — order matters because one warning cross-attributed to `test_gpc` via GC timing. · **Wave:** W2 · **Lane:** QA · **Size:** M · **Sev:** SEV3
 - Fix the ~20 remaining unawaited-coroutine RuntimeWarning emitters (incl. routers/improvement.py:123,
   routers/clips.py:1764 mock patterns), then ratchet `filterwarnings = error::RuntimeWarning` in
   pytest.ini so the class can't regrow. Blocked-by: nothing; the w2/test-flakes lane established the
   fix patterns.
 
 ### Issue 367: Async-Redis module-singleton hygiene (`_WORKER_REDIS`, `_aio_redis`, `_REDIS_CLIENT`)
-- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W2 · **Lane:** Backend hygiene ·
+- **Status:** **DONE (2026-07-30, W1)** — all three given an `aclose()` that also resets the global so a later call recreates cleanly. `youtube._redis` + `routers.thumbnails` register with the existing `shared_resources.register_aclose` (API lifespan); `_WORKER_REDIS` + `youtube._redis` also closed explicitly from the existing `worker_process_shutdown` handler, since the worker never runs the FastAPI lifespan. 9 tests. **The `conftest.py` reach-in was deliberately KEPT** — removal was attempted and the `Event loop is closed` tracebacks returned: ~2000 tests reach these singletons via bare `asyncio.run()`/per-test TestClient loops that run neither shutdown path. Production lifecycle and test-harness noise are genuinely two problems; root cause now documented in the fixture docstring. · **Wave:** W2 · **Lane:** Backend hygiene ·
   **Size:** S · **Sev:** SEV3
 - Three lazy async-Redis singletons have no close path/loop guard — safe in prod (one loop/process),
   leak loop-bound connections in tests (currently disarmed via conftest `pytest_sessionfinish`).
   Give them `register_aclose` or the loop-guard pattern.
 
 ### Issue 368: Deterministic per-module coverage measurement in `run_layer0.py`
-- **Status:** OPEN (promoted OFF_COURSE 2026-07-29) · **Wave:** W2 · **Lane:** QA & Release Eng ·
+- **Status:** **DONE (2026-07-30, W1)** — single-root `--cov .` replaces the 6-root invocation (reproduced: `clip_engine` was absent from the XML entirely, so its floor enforced nothing). **Second defect found while ratcheting:** the suffix fallback matched `auth` to BOTH root `auth.py` (100.0) and `routers/auth.py` (93.3), winner decided by XML order — so the 2026-07-29 "auth 93.3" floor was actually routers/auth.py. Now exact-match-wins, unambiguous-suffix-only fallback, ambiguous → `None`. Floors ratcheted: clip_engine 0.0→**91.0** (92.51), preference 0.0→**88.0** (89.64), auth 91.0→**99.0** (100.0). Global baseline **75.20 → 77.00** (a tightening; measured 77.16–77.22, set below the low observation because the global rate jitters ~0.06 across test orderings while the gate tolerance is 0.01). 5 regression tests in `tests/test_layer0_module_coverage.py`. · **Wave:** W2 · **Lane:** QA & Release Eng ·
   **Size:** S · **Sev:** SEV4
 - `clip_engine`/`preference` read rate=None under the multi-root `--cov` invocation (coverage.py
   relativizes filenames per source root), so their floors are unenforceable (stuck at 0.0). Make the
