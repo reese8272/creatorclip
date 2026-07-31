@@ -6615,9 +6615,11 @@ CHECK. (3) The policy is 2 weeks old and will be revised; the citation must be d
 
 ### Issue 376: Public marketing landing + no-auth demo — kill the OAuth wall
 
-**Status** `OPEN` · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `staging`
-**Blocked by** nothing technical; needs the #382 scope call first · **Coordinate (hot files)** `main.py`, `frontend/src/App.tsx`
-**Promotes** "no-auth demo mode" out of the Phase-3 parking lot (needs fresh approval + a DECISIONS entry per the parking-lot rule)
+**Status** `376(a) DONE (2026-07-30, W3)` · **376(b) DESCOPED (2026-07-30) — see DECISIONS, reversible** · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `staging`
+**Blocked by** nothing technical; #382 scope call resolved (fund L24) · **Coordinate (hot files)** `main.py`, `frontend/src/App.tsx`
+**Promotes** "no-auth demo mode" out of the Phase-3 parking lot — proposal **declined**; ToS review found only a house-sample demo is clean (`YTDLP_ENABLED=False`, `youtube/ingest.py:89` own-content-only), and that would showcase the commodity clip-cutting layer rather than the Proof-of-Lift outcome loop this lane exists to surface. See `docs/DECISIONS.md` 2026-07-30 (W3).
+
+**376(a) shipped.** `main.py:index()` now serves `static/landing.html` (real, server-rendered content — no SPA/JS dependency) to anonymous visitors at `/`; authenticated visitors are unaffected (still redirected into the app). Content: what AutoClip is, the verbatim honesty constraint, the Proof-of-Lift (#374) differentiator described accurately, real pricing from `billing/packs.py`, and a Terms/Privacy footer — satisfying the Google OAuth verification homepage requirements this issue exists to unblock (#29). A matching `frontend/src/pages/Landing.tsx` (`/app/landing`, no `AuthGate`) ships as the in-app equivalent. Tests: `tests/test_static.py` (anonymous 200 + content, authenticated regression guard, ToS/privacy links, pricing figures), `tests/test_compliance_no_virality.py::test_no_virality_on_public_landing_page`, `frontend/src/pages/Landing.test.tsx`. Folded in: the dead Google-Fonts CSP allowance (`OFF_COURSE_BUGS.md` 2026-07-30 row) was removed from `_CSP_BASE` in the same `main.py` change.
 
 **Problem.** `main.py:200` redirects `/` straight to the app, which bounces an anonymous visitor to
 *"Sign in to continue."* **There is no page that explains what AutoClip is to someone who has not signed
@@ -6649,12 +6651,12 @@ arbitrary URLs. Rate-limit, cache, and cap hard whatever ships.
 - `docs/DECISIONS.md`, `docs/COMPLIANCE.md` — demo-source ToS posture; any anonymous data handling
 
 **Acceptance criteria**
-- [ ] An anonymous visitor reaching `/` gets a page explaining the product, with ToS/privacy linked (unblocks the #29 review expectation)
-- [ ] If the demo ships: it produces real clips from a ToS-clean source with no signup, rate-limited and cost-capped
-- [ ] The demo visibly frames itself as the *un-personalized* baseline — it sells the connect step honestly
-- [ ] No virality language anywhere on the public surface; structural test extended
-- [ ] No anonymous PII stored beyond what the limiter needs; documented in `COMPLIANCE.md`
-- [ ] Demo compute cannot be abused into unbounded LLM/render spend (hard caps + spend-guard aware)
+- [x] An anonymous visitor reaching `/` gets a page explaining the product, with ToS/privacy linked (unblocks the #29 review expectation) — `static/landing.html`, 2026-07-30
+- [ ] ~~If the demo ships: it produces real clips from a ToS-clean source with no signup, rate-limited and cost-capped~~ — N/A, 376(b) DESCOPED
+- [ ] ~~The demo visibly frames itself as the *un-personalized* baseline — it sells the connect step honestly~~ — N/A, 376(b) DESCOPED
+- [x] No virality language anywhere on the public surface; structural test extended — `tests/test_compliance_no_virality.py::test_no_virality_on_public_landing_page`
+- [ ] ~~No anonymous PII stored beyond what the limiter needs; documented in `COMPLIANCE.md`~~ — N/A, no demo/data-collection surface shipped
+- [ ] ~~Demo compute cannot be abused into unbounded LLM/render spend (hard caps + spend-guard aware)~~ — N/A, 376(b) DESCOPED
 
 **`[DEC]` DECISIONS.md** — promotion of "no-auth demo mode" out of the parking lot; the demo source
 (house samples vs arbitrary URL) and its ToS justification; whether a watermarked free tier is
