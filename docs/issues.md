@@ -160,7 +160,36 @@ gate regressions (351) clear + a fresh Locust run confirms axis A/B, the verdict
 
 ### Issue 355: UX — first-run information architecture: naming, primary-CTA, empty-state clarity
 
-- **Status:** OPEN · **Wave:** W3 · **Lane:** L16 UI Core / UX · **Size:** M · **Verify:** local · **Sev:** SEV2 (adoption)
+- **Status:** DONE (W5, 2026-07-31 — all five findings addressed; 4 fully, 1 partially by design) · **Wave:** W3 · **Lane:** L16 UI Core / UX · **Size:** M · **Verify:** local · **Sev:** SEV2 (adoption)
+- **Resolution** — see `docs/DECISIONS.md` (Issue 355) for the two structural calls.
+  1. ✅ **Nav vocabulary** — labels are now the pages' own names (Dashboard→**Videos**, Profile→**Channel**);
+     picker headings "Pick a video to review/edit" → **"Review clips"** / **"Editor"** with the instruction
+     moved to the sub-line; Chat and Profile gained kickers so the nav word appears on the page. Every entry
+     also carries a one-line "what is this" — tooltip on desktop, visible sub-line in the mobile panel. Work
+     and account items are split by a divider.
+  2. ✅ **Three ask surfaces** — *not merged* (different protocols; merging is a redesign). The duplicated
+     **entry point** was removed instead: `Analyze` left the nav (arriving there from the nav showed only a
+     URL box, since the four generators are gated on `?video_id=`), and `components/ask/AskSurfaceTabs.tsx`
+     now explains all three in one row on all three pages. `/analysis` stays live, reached from a video row.
+  3. ✅ **One primary CTA** — Upload is THE primary and is state-aware (while onboarding is incomplete the
+     `DnaCta` banner owns the primary and Upload steps back to secondary). Browse demoted to a ghost action,
+     "Analyze a video" removed from the header, `EmptyHero`'s three co-equal buttons reduced to one.
+  4. ✅ **Empty states** — new `components/EmptyStatePrompt.tsx` makes the action a **required** discriminated
+     union, so a prose-only dead end no longer type-checks. Adopted at 13 sites. The literal examples in this
+     brief are fixed: Review Queue "0" now offers the way to fill it, `VideoClipsMap`'s four dead-end branches
+     each carry a next step, and "0 clips rendered" is stated once instead of three times.
+  5. ⚠️ **Brand identity — DEFERRED, as this brief itself allows** ("not blocking"). A real fix spans the
+     landing page, SPA, lifecycle email, backend prompts and docs — a marketing decision, not an IA one.
+     Shipped only the cheap adjacency: signed in, the wordmark routes to `/dashboard` instead of leaving the
+     SPA for the marketing landing that the server bounces straight back. Revisit after Issue 28.
+- **Also fixed in passing** — `InsightsNarrative` rendered a failed analytics fetch as "not enough data yet"
+  (the exact inversion the Issue-361 sweep exists to prevent); split into a retry + a genuine empty state.
+  The `/insights` page-level error gained a Retry button. Proof of lift / Originality / Fingerprint gained
+  stable hash anchors (`#proof-of-lift` etc.) so the landing page's headline claim finally links somewhere —
+  anchors, **not** routes; see DECISIONS for why. "Saved analyses" → "Saved insights" everywhere.
+- **Out of scope, logged** — the Review-queue badge counts *rendered* clips, not shortlisted-unreviewed ones,
+  so it disagrees with the queue length post-#377 (needs a backend field); and `App.tsx`'s `*` route silently
+  redirects typos to `/dashboard` instead of 404ing. Both in `docs/OFF_COURSE_BUGS.md`.
 - Source: first-user walkthrough of the SPA (2026-07-03, mocked Playwright). The app is visually
   polished and the honesty framing is strong, but a new creator gets lost in the information
   architecture. Itemized findings (each independently fixable):

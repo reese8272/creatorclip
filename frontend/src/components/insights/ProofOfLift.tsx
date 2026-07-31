@@ -27,7 +27,7 @@ export function ProofOfLift({
 }) {
   if (isError) {
     return (
-      <Panel title="Proof of lift">
+      <Panel id="proof-of-lift" title="Proof of lift">
         <p className="text-sm text-danger">Could not load your published-clip outcomes.</p>
       </Panel>
     )
@@ -35,7 +35,7 @@ export function ProofOfLift({
 
   if (!lift) {
     return (
-      <Panel title="Proof of lift">
+      <Panel id="proof-of-lift" title="Proof of lift">
         <p className="text-sm text-muted">Loading your published-clip outcomes…</p>
       </Panel>
     )
@@ -44,7 +44,7 @@ export function ProofOfLift({
   // Empty state — designed first, because it ships as the default for weeks.
   if (lift.published_count === 0) {
     return (
-      <Panel title="Proof of lift">
+      <Panel id="proof-of-lift" title="Proof of lift">
         <EmptyStatePrompt
           title="Nothing published through AutoClip yet — so there is nothing to report."
           detail="Once you publish clips from here, this panel tracks how each one actually did against your own channel, and feeds that back into how clips are ranked for you."
@@ -58,7 +58,7 @@ export function ProofOfLift({
   const pct = (v: number) => `${Math.round(v * 100)}%`
 
   return (
-    <Panel title="Proof of lift">
+    <Panel id="proof-of-lift" title="Proof of lift">
       <p className="text-sm text-fg">
         <span className="font-mono font-semibold text-accent-text">{lift.published_count}</span>{' '}
         {lift.published_count === 1 ? 'clip' : 'clips'} published through AutoClip.{' '}

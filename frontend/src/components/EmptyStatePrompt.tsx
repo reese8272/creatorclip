@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Chip } from '@/components/Chip'
 import type { ChipPose } from '@/components/chip/poses'
-import { Button, buttonVariants } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/buttonVariants'
 import { cn } from '@/lib/utils'
 
 // One action form, and exactly one, is REQUIRED (Issue 355 finding 4). The

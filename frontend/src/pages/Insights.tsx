@@ -14,6 +14,8 @@
 //   VideoMap (/app/video/:id) = per-video clip timeline
 // The PerformerPanel rows deep-link to /app/video/:id but do NOT duplicate the timeline here.
 
+import { useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
@@ -36,6 +38,12 @@ import type {
   SavedInsightsResponse,
   UploadIntel,
 } from '@/types'
+
+const JUMP_LINKS: { href: string; label: string }[] = [
+  { href: '#proof-of-lift', label: 'Proof of lift' },
+  { href: '#originality-guard', label: 'Originality' },
+  { href: '#channel-fingerprint', label: 'Fingerprint' },
+]
 
 export function Insights() {
   const insightsQuery = useQuery({
@@ -61,6 +69,16 @@ export function Insights() {
 
   const data = insightsQuery.data
 
+  // Native hash scrolling doesn't work here: the panels mount after their
+  // queries settle, so the target element does not exist at navigation time
+  // (Issue 355). Re-run once the page-level query resolves.
+  const { hash } = useLocation()
+  const settled = !insightsQuery.isPending
+  useEffect(() => {
+    if (!hash || !settled) return
+    document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth' })
+  }, [hash, settled])
+
   return (
     <>
       <DisclaimerBand>
@@ -81,6 +99,18 @@ export function Insights() {
             </p>
           </div>
         </div>
+
+        {/* Issue 355: this page stacks five sections and the three that carry the
+            product's headline claims sit mid-scroll with no way to name them.
+            Jump links give them a handle without splitting them into routes —
+            their reading order here is the argument. */}
+        <nav aria-label="Jump to section" className="mb-6 flex flex-wrap gap-x-3 gap-y-1">
+          {JUMP_LINKS.map((j) => (
+            <a key={j.href} href={j.href} className="text-xs text-accent-text hover:underline">
+              {j.label}
+            </a>
+          ))}
+        </nav>
 
         {insightsQuery.isPending ? (
           <p className="text-sm text-muted">Loading your channel insights…</p>

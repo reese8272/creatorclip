@@ -28,7 +28,7 @@ export function OriginalityGuard({
 }) {
   if (isError) {
     return (
-      <Panel title="Originality guard">
+      <Panel id="originality-guard" title="Originality guard">
         <p className="text-sm text-danger">Could not load your originality advisory.</p>
       </Panel>
     )
@@ -36,7 +36,7 @@ export function OriginalityGuard({
 
   if (!advisory) {
     return (
-      <Panel title="Originality guard">
+      <Panel id="originality-guard" title="Originality guard">
         <p className="text-sm text-muted">Checking your recent clips…</p>
       </Panel>
     )
@@ -44,7 +44,7 @@ export function OriginalityGuard({
 
   if (!advisory.checked) {
     return (
-      <Panel title="Originality guard">
+      <Panel id="originality-guard" title="Originality guard">
         <EmptyStatePrompt
           title="Not enough recent clips to check yet."
           detail="This needs at least two clips with transcript coverage to compare."
@@ -57,7 +57,7 @@ export function OriginalityGuard({
 
   if (!advisory.flagged) {
     return (
-      <Panel title="Originality guard">
+      <Panel id="originality-guard" title="Originality guard">
         <p className="text-sm text-fg">
           Nothing flagged across your last{' '}
           <span className="font-mono font-semibold text-accent-text">{advisory.window}</span>{' '}
@@ -72,7 +72,7 @@ export function OriginalityGuard({
   }
 
   return (
-    <Panel title="Originality guard">
+    <Panel id="originality-guard" title="Originality guard">
       <p className="text-sm text-fg">
         <span className="font-mono font-semibold text-accent-text">{advisory.cluster_size}</span>{' '}
         of your last <span className="font-mono">{advisory.window}</span> clips are near-identical

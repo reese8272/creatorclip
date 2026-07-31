@@ -109,6 +109,14 @@ export function Landing() {
             with a confidence interval. Raw counts are shown before that threshold — never an
             invented trend.
           </p>
+          {/* Issue 355: this is the page's headline differentiator and it used
+              to point nowhere. The panel now has a stable anchor. */}
+          <a
+            href="/app/insights#proof-of-lift"
+            className="mt-3 inline-block text-sm text-accent-text hover:underline"
+          >
+            See yours →
+          </a>
         </section>
 
         <section className="mx-auto max-w-2xl border-t border-default px-6 py-8">

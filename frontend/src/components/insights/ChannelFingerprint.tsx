@@ -39,7 +39,7 @@ export function ChannelFingerprint({ dna }: { dna: DnaStats }) {
   // produce an empty card — a dead end wearing a full panel (Issue 355).
   if (dna.version == null) {
     return (
-      <Panel title="Your channel fingerprint" sub={version}>
+      <Panel id="channel-fingerprint" title="Your channel fingerprint" sub={version}>
         <EmptyStatePrompt
           title="Your fingerprint isn’t built yet."
           detail="Build your Creator DNA and this becomes the shareable summary of what your channel actually is."
@@ -70,7 +70,7 @@ export function ChannelFingerprint({ dna }: { dna: DnaStats }) {
   }
 
   return (
-    <Panel title="Your channel fingerprint" sub={version}>
+    <Panel id="channel-fingerprint" title="Your channel fingerprint" sub={version}>
       {/* Tier 1 — private. Analytics-derived; visible only to you. */}
       <div className={gridCls}>
         <Cell

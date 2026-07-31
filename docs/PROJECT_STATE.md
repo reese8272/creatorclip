@@ -4,7 +4,59 @@ Updated after every issue closes.
 
 ---
 
-## 2026-07-30 (latest, W4) — Issue 379 DONE: Channel Fingerprint (two-tier DNA artifact)
+## 2026-07-31 (latest, W5) — Issues 355 + 380 DONE: the last two buildable issues are closed
+
+**W5 was the whole remaining code-closeable backlog.** With these two, every issue in `docs/issues.md`
+that code can close is closed; what remains is external (Google OAuth review, operator clicks,
+uptime monitor) or DESCOPED-BETA (the K8s/scale lanes).
+
+**Issue 380 — `[DEC]`, no code change.** The free trial stays **one-time 60 minutes / 7 days**. #383
+had already retracted two of its three premises; the third fails too, on a fact the earlier passes
+missed: Opus's and Vizard's "60 min/month" free tiers are **watermarked with 3-day storage**, where
+our 60 trial minutes are full-fidelity and permanently stored — not the same unit. Matching the
+number unrestricted would give away 720 min/yr (**3.6× the Starter pack**) and let a
+one-upload-a-month creator subsist free forever. 2026 benchmarks put opt-in time-boxed trials at
+**8.9–25.2%** conversion vs freemium's **2–8%**, and the category has moved to trials (57%) over
+freemium (26%) on AI-cost grounds. **COGS is explicitly NOT the reason** — a recurring grant would
+cost ~$0.35–0.45/creator/month, under $45/mo at the full 100-user cap; the issue brief overstated
+that and the correction is recorded so nobody re-cites it. Runner-up **option (d), a watermarked
+recurring free tier**, is deferred with an explicit re-open trigger: no AutoClip-branded watermark
+render path exists, and a viral-watermark growth loop buys nothing while signups are capped at 100
+invited users. Full reasoning + margin re-check: `docs/DECISIONS.md` (Issue 380).
+
+**Issue 355 — first-run information architecture, all five findings.** Frontend only; **zero backend
+changes**. Nav labels are now the pages' own names (Dashboard→**Videos**, Profile→**Channel**), each
+with a one-line "what is this", and work/account items are split. The three overlapping "ask the AI"
+surfaces were **not merged** — they run different protocols — but the duplicated *entry point* was
+removed: `Analyze` left the nav (arriving there from the nav showed only a URL box, since its four
+generators are gated on `?video_id=`) and the new `components/ask/AskSurfaceTabs.tsx` explains all
+three in one row. The Dashboard now has **one** primary CTA, state-aware so it never competes with
+the onboarding banner. New `components/EmptyStatePrompt.tsx` types its action as a **required**
+discriminated union, so a prose-only dead end no longer type-checks — adopted at 13 sites that named
+a prerequisite without linking it, several for a control that did not exist anywhere in the app.
+Proof of lift / Originality / Fingerprint gained stable hash anchors (anchors, **not** routes — see
+DECISIONS) so the landing page's headline claim finally links somewhere. Brand consolidation is the
+one finding deferred, as the brief itself allows.
+
+Also fixed in passing: `InsightsNarrative` rendered a failed analytics fetch as "not enough data
+yet" — the exact inversion the Issue-361 sweep exists to prevent — now split into a retry and a
+genuine empty state; and a Dashboard test that asserted a review-queue link without ever checking
+the count, passing vacuously at zero and masking a settle race on the batched counts query.
+
+**Gates, all measured in the main checkout (not a worktree):** backend **2480 passed / 64 skipped /
+173 deselected** — byte-identical to the pre-change baseline, as expected for a zero-backend-change
+issue. Frontend **354 passed / 55 files** (was 337 at session start, **+17**), `tsc -b` clean,
+`npm run lint` 0 errors, `npm run build` clean, `ruff format --check` clean. **Layer 0 all green:**
+ruff 0 · mypy 0 · coverage **83.51** (baseline 83.00) · module floors clip_engine 92.54 /
+preference 90.45 / crypto·limiter·auth 100.0 · bandit 0/0 · pip_audit 0.
+
+Two out-of-scope defects found and logged in `docs/OFF_COURSE_BUGS.md` rather than fixed inline: the
+Review-queue badge counts rendered clips instead of shortlisted-unreviewed ones (needs a backend
+field), and `App.tsx`'s `*` route silently redirects typos to `/dashboard` instead of 404ing.
+
+---
+
+## 2026-07-30 (W4) — Issue 379 DONE: Channel Fingerprint (two-tier DNA artifact)
 
 Built on `w4/issue-379-fingerprint` off `wave/l24-and-hygiene`. "Your DNA at a glance" (the bare
 `optimal_clip_len_s` / `best_source_region` / `optimal_upload_gap_h` stat card) is replaced by a
