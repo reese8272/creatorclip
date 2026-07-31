@@ -238,3 +238,52 @@ def test_no_virality_in_notification_copy_module() -> None:
                 )
 
     assert not violations, "Virality phrases in notification copy module:\n" + "\n".join(violations)
+
+
+# ── Test 6: Originality guard advisory copy (Issue 375 / 383 corrections) ────
+#
+# Issue 383 (2026-07-30) verified that no primary source describes a
+# "three-strike ladder" for YouTube's inauthentic-content policy, and that the
+# policy is not new (renamed 15 July 2025; 16 July 2026 was a clarification,
+# not a launch). Restating either claim in the sameness advisory would be a
+# false statement about a third party's enforcement policy — a worse honesty
+# breach than any bad clip score. This scans the ACTUAL generated copy, not
+# just static source text, so it catches a regression in the message builder
+# itself, not only a stray phrase left in a docstring.
+
+_FORBIDDEN_MECHANICS = re.compile(
+    r"\b(strike|ladder|90.day|permanent(?:ly)?\s+remov|three.strike)\b", re.IGNORECASE
+)
+_FORBIDDEN_URGENCY = re.compile(r"\bnew policy\b", re.IGNORECASE)
+
+
+def test_originality_advisory_copy_has_no_strike_ladder_or_new_policy_language() -> None:
+    """Generate a real flagged advisory and scan its message text directly."""
+    from knowledge.originality import ClipFingerprint, build_advisory
+
+    cluster_vec = [1.0] * 8
+    fps = [
+        ClipFingerprint(
+            clip_id=f"clip-{i}",
+            duration_s=45.0,
+            setup_lead_s=5.0,
+            source_region="early",
+            style_key="white_large|blur|True",
+            principle="clip-the-setup",
+            embedding=cluster_vec,
+        )
+        for i in range(4)
+    ]
+    advisory = build_advisory(fps, similarity_threshold=0.9, min_cluster_size=4)
+
+    assert advisory.flagged is True
+    assert advisory.message is not None
+    cleaned = _scrub(advisory.message)
+
+    assert not _FORBIDDEN_MECHANICS.search(cleaned), advisory.message
+    assert not _FORBIDDEN_URGENCY.search(cleaned), advisory.message
+    match = FORBIDDEN.search(cleaned)
+    assert not match, f"found {match.group() if match else None!r} in: {advisory.message}"
+    # Must not speak for YouTube or certify eligibility (advisory-not-guarantee stance).
+    assert "may affect monetization eligibility" in advisory.message
+    assert "not a certification" in advisory.message

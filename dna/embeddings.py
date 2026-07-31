@@ -144,3 +144,63 @@ async def embed_brief(
     if commit:
         await session.commit()
     logger.info("Stored DNA brief embedding for creator %s", creator_id)
+
+
+async def embed_clip_excerpts(
+    session: AsyncSession,
+    creator_id: uuid.UUID,
+    clip_texts: dict[uuid.UUID, str],
+    *,
+    commit: bool = True,
+) -> dict[uuid.UUID, list[float]]:
+    """Embed clips' own spoken-content excerpts and store as 'clip' kind embeddings.
+
+    Used by the originality/sameness advisory (Issue 375) to compare a
+    creator's recent clips against EACH OTHER — never across creators, and
+    never as an input to clip scoring. ``clip_texts`` maps clip id -> the
+    transcript text spanning that clip's own ``[start_s, end_s]`` window
+    (see ``knowledge.util.extract_transcript_range``), so the embedding
+    reflects what was actually said, not the LLM's selection reasoning.
+
+    Silently returns ``{}`` if ``VOYAGE_API_KEY`` is not configured or no
+    clip has non-empty text — same posture as ``embed_patterns``/``embed_brief``.
+
+    Args:
+        session: Active async database session.
+        creator_id: UUID of the owning creator. Every stored row carries
+            this, so a later query MUST filter on it — there is no other
+            isolation boundary on this table.
+        clip_texts: Clip id -> excerpt text (already truncated by caller is
+            not required; this function truncates to the Voyage character cap).
+        commit: When True (default), commit after adding embedding rows.
+
+    Returns:
+        Newly embedded vectors keyed by clip id (does not include clips that
+        already had a stored embedding — callers should merge with those).
+    """
+    if not settings.VOYAGE_API_KEY:
+        logger.warning("VOYAGE_API_KEY not set — skipping clip embeddings (Issue 375)")
+        return {}
+
+    clip_ids = [cid for cid, text in clip_texts.items() if text.strip()]
+    if not clip_ids:
+        return {}
+    texts = [clip_texts[cid][:_VOYAGE_MAX_TEXT] for cid in clip_ids]
+
+    result = await _aembed(texts, model="voyage-3.5", input_type="document")
+
+    out: dict[uuid.UUID, list[float]] = {}
+    for cid, embedding in zip(clip_ids, result.embeddings, strict=True):
+        session.add(
+            DnaEmbedding(
+                creator_id=creator_id,
+                kind=DnaEmbeddingKind.clip,
+                embedding=embedding,
+                ref_jsonb={"clip_id": str(cid)},
+            )
+        )
+        out[cid] = embedding
+    if commit:
+        await session.commit()
+    logger.info("Stored %d clip embeddings for creator %s (Issue 375)", len(out), creator_id)
+    return out

@@ -345,3 +345,35 @@ fires. This is intentional:
 **Source:** https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
 
 **Logged:** Issue 232 (2026-06-23).
+
+---
+
+## Originality guard — policy-risk advisory, not a compliance guarantee (Issue 375)
+
+`GET /creators/me/insights/originality` surfaces a per-creator advisory when a meaningful cluster
+(`ORIGINALITY_MIN_CLUSTER_SIZE`, default 4) of a creator's own recent clips are near-identical in
+spoken content (Voyage-embedding cosine similarity — see `docs/DECISIONS.md` 2026-07-30 for why
+the gate is content, not stylistic fields). This surfaces AutoClip's read of YouTube's
+"inauthentic content" monetization policy — it is **advisory only**:
+
+- **Never a certification.** The response and its UI copy never state or imply that a creator's
+  clips ARE or ARE NOT eligible for monetization. The exact copy: *"This is an advisory based on
+  your own recent clips, not a certification of monetization eligibility or a statement from
+  YouTube."*
+- **Never restates YouTube's enforcement mechanism.** Per Issue 383's verification pass, no
+  primary source describes a strike count or a fixed suspension timeline for this policy; the
+  advisory says only that repetitive output *"may affect monetization eligibility"* and links the
+  dated primary source (`support.google.com/youtube/answer/1311392`, checked 2026-07-30) rather
+  than restating a mechanism.
+- **Per-creator only.** Every comparison is scoped to one creator's own clips — `DnaEmbedding` rows
+  written for this feature carry `creator_id` and are always filtered on it; there is no other
+  isolation boundary on that table, and cross-creator embedding comparison is never performed
+  (enforced by construction — the router never passes more than one creator's fingerprints into
+  `knowledge/originality.py::build_advisory`).
+- **The threshold is unvalidated.** `ORIGINALITY_SIMILARITY_THRESHOLD` was chosen conservatively
+  (fewer alarms) in the absence of a live Postgres/pgvector/Voyage environment to measure real
+  same-channel cosine distributions — see `docs/DECISIONS.md` for the full rationale. A false
+  negative here (a genuinely templated creator not flagged) is a product-quality gap, not a
+  compliance failure on our part, because we never claimed to certify anything.
+
+**Logged:** Issue 375 (2026-07-30).

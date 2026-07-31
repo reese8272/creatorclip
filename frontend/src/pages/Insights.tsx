@@ -25,8 +25,10 @@ import { ImprovementBrief } from '@/components/insights/ImprovementBrief'
 import { SavedInsights } from '@/components/insights/SavedInsights'
 import { InsightsFraming, WhatChanged } from '@/components/insights/InsightsNarrative'
 import { ProofOfLift } from '@/components/insights/ProofOfLift'
+import { OriginalityGuard } from '@/components/insights/OriginalityGuard'
 import type {
   InsightsResponse,
+  OriginalityAdvisory,
   ProofOfLift as ProofOfLiftData,
   SavedInsightsResponse,
   UploadIntel,
@@ -48,6 +50,10 @@ export function Insights() {
   const liftQuery = useQuery({
     queryKey: ['proof-of-lift'],
     queryFn: () => api<ProofOfLiftData>('/creators/me/insights/lift'),
+  })
+  const originalityQuery = useQuery({
+    queryKey: ['originality-guard'],
+    queryFn: () => api<OriginalityAdvisory>('/creators/me/insights/originality'),
   })
 
   const data = insightsQuery.data
@@ -84,6 +90,10 @@ export function Insights() {
                 the outcome loop, ahead of the channel snapshot because it is
                 the only falsifiable claim on this page. */}
             <ProofOfLift lift={liftQuery.data} isError={liftQuery.isError} />
+
+            {/* Sameness advisory over the creator's own recent clips (Issue 375) —
+                advisory only, never a certification of monetization eligibility. */}
+            <OriginalityGuard advisory={originalityQuery.data} isError={originalityQuery.isError} />
 
             {/* Q1: What's working / what's not */}
             {data && <ChannelSnapshot totals={data.totals} />}

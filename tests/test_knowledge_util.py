@@ -5,7 +5,7 @@ DB-free, import-only. Tests the wrap_untrusted helper added in Issue 224.
 
 import json
 
-from knowledge.util import extract_json_block, wrap_untrusted
+from knowledge.util import extract_json_block, extract_transcript_range, wrap_untrusted
 
 
 class TestExtractJsonBlock:
@@ -185,3 +185,41 @@ class TestHas1hCacheMarker:
 
         system = [{"type": "text", "text": "static"}, dna_system_block("", "short brief")]
         assert has_1h_cache_marker(system) is False
+
+
+class TestExtractTranscriptRange:
+    """Issue 375 — the originality guard embeds a clip's OWN spoken content
+    (not the LLM's selection reasoning), sliced from the video's transcript."""
+
+    _SEGMENTS = {
+        "segments": [
+            {"start": 0.0, "end": 5.0, "text": "Intro line."},
+            {"start": 5.0, "end": 12.0, "text": "The setup begins here."},
+            {"start": 12.0, "end": 20.0, "text": "And here is the payoff."},
+            {"start": 20.0, "end": 30.0, "text": "Unrelated later content."},
+        ]
+    }
+
+    def test_returns_only_segments_overlapping_the_window(self) -> None:
+        text = extract_transcript_range(self._SEGMENTS, 6.0, 19.0)
+        assert "setup begins" in text
+        assert "payoff" in text
+        assert "Intro line" not in text
+        assert "Unrelated later" not in text
+
+    def test_includes_a_segment_straddling_the_boundary(self) -> None:
+        """A segment starting just before the clip start but overlapping it
+        must not be dropped."""
+        text = extract_transcript_range(self._SEGMENTS, 8.0, 15.0)
+        assert "setup begins" in text  # segment [5,12] overlaps [8,15]
+
+    def test_empty_for_missing_transcript(self) -> None:
+        assert extract_transcript_range(None, 0.0, 10.0) == ""
+
+    def test_empty_when_no_segment_overlaps(self) -> None:
+        assert extract_transcript_range(self._SEGMENTS, 100.0, 110.0) == ""
+
+    def test_truncates_to_max_chars(self) -> None:
+        long_segments = {"segments": [{"start": 0.0, "end": 5.0, "text": "x" * 2000}]}
+        text = extract_transcript_range(long_segments, 0.0, 5.0, max_chars=50)
+        assert len(text) == 50

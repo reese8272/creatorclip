@@ -432,6 +432,40 @@ class Settings(BaseSettings):
     # version's stored metric, a warning-severity event is logged. Never blocks
     # the retrain — small NDCG deltas on few labels are noise, so alert only.
     PREFERENCE_NDCG_REGRESSION_THRESHOLD: float = 0.05
+
+    # ── Originality guard / sameness advisory (Issue 375) ──────────────────────
+    # Per-creator advisory over the creator's OWN recent clips — never a
+    # cross-creator comparison. Gates on Voyage-embedding cosine similarity of
+    # each clip's own spoken-content excerpt (NOT stylistic fields like duration
+    # or style_preset — a creator with a deliberately consistent format must not
+    # be flagged for being consistent). Structural fields are corroborating
+    # detail in the response only.
+    #
+    # UNVALIDATED — chosen conservatively (fewer alarms), NOT measured against
+    # real voyage-3.5 pairwise-cosine data. Commonly-cited near-duplicate cutoffs
+    # (~0.85) come from older/general-purpose embedding models; some newer models
+    # compress the useful range so far that ~0.45 is the equivalent cutoff for
+    # THOSE models — neither number is validated for Voyage voyage-3.5, and this
+    # environment has no live VOYAGE_API_KEY or real creator clip data to measure
+    # the actual same-channel pairwise distribution. 0.92 is set deliberately
+    # HIGH (conservative = fewer false alarms) as a starting point specifically
+    # because same-channel clips already share vocabulary/topic/speaker, which
+    # inflates baseline cosine similarity versus cross-channel pairs. MUST be
+    # recalibrated against real clip embeddings before this is trusted at scale
+    # (docs/DECISIONS.md, Issue 375).
+    ORIGINALITY_SIMILARITY_THRESHOLD: float = 0.92
+    # A single near-identical pair could be coincidence (same joke told twice,
+    # a callback). Require a cluster of at least this many mutually near-identical
+    # clips (connected via pairwise cosine >= the threshold above) before advising
+    # — same conservative-minimum spirit as STYLE_LEARN_THRESHOLD, not statistically
+    # derived. Recalibrate alongside the threshold above.
+    ORIGINALITY_MIN_CLUSTER_SIZE: int = 4
+    # How many of the creator's most-recently-generated clips are considered per
+    # check. Bounded to keep the pairwise comparison (O(n^2)) and the lazy
+    # embedding backfill (Voyage calls for any clip not yet embedded) cheap on
+    # every request.
+    ORIGINALITY_RECENT_CLIPS_WINDOW: int = 12
+
     LLM_TIMEOUT_SECONDS: int = 120
     # Constrained to the three deploy modes actually branched on. Every production
     # security boundary (prod-secret fail-fast, /docs disable, HSTS, R2-required,

@@ -4,7 +4,47 @@ Updated after every issue closes.
 
 ---
 
-## 2026-07-30 (latest) — W0 of the all-waves run: **#382 + #383 DONE** — three L24 claims retracted
+## 2026-07-30 (latest) — **#375 DONE**: Originality guard / sameness advisory
+
+Built on `w3/issue-375-originality` (off `wave/l24-and-hygiene`). Per-creator sameness advisory over
+the creator's OWN recent clips — zero cross-creator comparison, zero LLM spend (Voyage embeddings only,
+same billing posture as existing `dna/embeddings.py` calls).
+
+**Built per the #383-corrected framing, not the original issue text**: no strike/ladder/timeline
+language anywhere in code, copy, or comments; no "new policy" urgency; cites
+`support.google.com/youtube/answer/1311392` dated 2026-07-30. Copy states "may affect monetization
+eligibility" and explicitly disclaims certifying eligibility or speaking for YouTube.
+
+**Design departure from the issue's literal approach sketch** — the gate is content (Voyage-embedding
+cosine similarity of each clip's own transcript excerpt), not structural fields (duration/setup-lead/
+source-region/style). Structural fields are corroborating detail on an already-flagged cluster only.
+Gating on structural sameness would flag a creator with a deliberately consistent format for being
+consistent — the exact creator the DNA feature serves — which directly violates the issue's own
+"consistent ≠ templated" acceptance criterion. See `docs/DECISIONS.md` (2026-07-30) for the full
+rationale and the (deliberately conservative, UNVALIDATED) threshold.
+
+**New:** `knowledge/originality.py` (pure clustering/copy logic), `dna/embeddings.py::embed_clip_excerpts`
+(reuses the existing Voyage singleton), `knowledge/util.py::extract_transcript_range`,
+`GET /creators/me/insights/originality`, `frontend/.../OriginalityGuard.tsx` wired into the Insights page.
+Config: `ORIGINALITY_SIMILARITY_THRESHOLD` (0.92), `ORIGINALITY_MIN_CLUSTER_SIZE` (4),
+`ORIGINALITY_RECENT_CLIPS_WINDOW` (12) — all in `.env.example`, all explicitly flagged unvalidated.
+
+**Tests:** `tests/test_originality.py` (15, pure logic incl. the "consistent creator" and honesty-copy
+cases), `tests/test_dna_embeddings.py` (4, mocked Voyage), `tests/test_knowledge_util.py` (+5, transcript
+range extraction), `tests/test_compliance_no_virality.py` (+1, scans the real generated advisory copy),
+`tests/test_originality_integration.py` (2, CI-only — no Postgres here). Frontend:
+`OriginalityGuard.test.tsx` (7). Backend suite: 2429 passed / 70 skipped (was 2410/64) — no regressions.
+Frontend: 325 passed (was 318); `tsc -b` clean.
+
+**Out of scope, logged not built:** the inline "similar to N recent clips" flag on the Review surface
+(`frontend/src/components/review/WhyThisClip*`) — the issue's own approach sketch marks this "if cheap"
+and it touches a surface not covered by this issue's CHECK research; a future issue should scope it
+properly. `docs/CLIPPING_PRINCIPLES.md` was NOT updated — clip scoring does not consume this signal in v1
+(the registry note only requires an entry "if scoring consumes it").
+
+---
+
+## 2026-07-30 — W0 of the all-waves run: **#382 + #383 DONE** — three L24 claims retracted
 
 First wave of an owner-approved multi-wave run to close every code-closeable issue (scope: Buckets A+B,
 per-wave batched approval, parallel agent waves). W0 was deliberately docs-first because #382 gated the
