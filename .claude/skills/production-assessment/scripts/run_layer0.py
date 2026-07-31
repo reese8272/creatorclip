@@ -76,11 +76,65 @@ def _sources() -> list[str]:
     return [s for s in _CANDIDATE_SOURCES if (REPO_ROOT / s).exists()]
 
 
+# Tools that must run INSIDE the interpreter being assessed, not whichever
+# same-named binary happens to sit earlier on PATH. Discovered 2026-07-30: the
+# `pip-audit` on PATH was `~/.local/bin/pip-audit` (shebang `#!/usr/bin/python3`),
+# so the gate audited the USER'S SYSTEM PYTHON — 200 deps / 103 vulns — instead
+# of the project venv's 171 deps / 1 vuln. The gate had been reporting ~96-103
+# phantom vulnerabilities that have nothing to do with this codebase, and a
+# previous session mis-diagnosed the same symptom as "venv staleness".
+# `python -m <module>` binds every one of these to `sys.executable`.
+_PYTHON_MODULE_TOOLS: dict[str, str] = {
+    "pytest": "pytest",
+    "mypy": "mypy",
+    "bandit": "bandit",
+    "pip-audit": "pip_audit",
+    "ruff": "ruff",
+}
+
+
+def _tool_cmd(tool: str) -> list[str]:
+    """Argv prefix for a tool, preferring `sys.executable -m <module>`."""
+    module = _PYTHON_MODULE_TOOLS.get(tool)
+    if module is not None:
+        return [sys.executable, "-m", module]
+    return [tool]
+
+
 def _have(tool: str) -> bool:
+    """True if the tool is importable/runnable by the assessed interpreter.
+
+    Checked via the same argv the gate will actually use, so availability and
+    execution can never disagree about WHICH tool is meant.
+    """
+    module = _PYTHON_MODULE_TOOLS.get(tool)
+    if module is not None:
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return True
+        # Fall through: a tool may be a standalone binary in this environment.
     return shutil.which(tool) is not None
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a gate command, rewriting a bare tool name to the assessed interpreter."""
+    if cmd and cmd[0] in _PYTHON_MODULE_TOOLS:
+        module = _PYTHON_MODULE_TOOLS[cmd[0]]
+        probe = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            cmd = _tool_cmd(cmd[0]) + cmd[1:]
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
 

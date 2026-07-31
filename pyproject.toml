@@ -50,7 +50,23 @@ disallow_incomplete_defs = true
 
 [tool.coverage.run]
 branch = true
-omit = ["tests/*", "alembic/*", "*/__init__.py"]
+# scripts/* and .claude/* are omitted deliberately (Issue 368, 2026-07-30).
+# The Layer-0 coverage gate moved from a multi-root `--cov <pkg>` invocation to a
+# single `--cov .` root so coverage.py reports stable package names (the old form
+# flattened clip_engine/ into package "." and made its floor unenforceable). But
+# the single root also swept in operational tooling that was NEVER in the measured
+# set before — scripts/llm_harness.py, scripts/drills.py, scripts/live_smoke.py,
+# and run_layer0.py itself — which are run-by-hand utilities, not app code, and
+# are untested by design. Leaving them in silently moved the goalposts on the
+# global rate. Omitting them restores the ORIGINAL measured scope (the app
+# packages) while keeping the package-name determinism the single root buys.
+omit = [
+    "tests/*",
+    "alembic/*",
+    "*/__init__.py",
+    "scripts/*",
+    ".claude/*",
+]
 
 [tool.coverage.report]
 show_missing = true
