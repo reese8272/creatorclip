@@ -11,6 +11,7 @@ const BASE_CLIP = {
   score: 0.91, rank: 1, principle: 'Curiosity gap', reasoning: 'Strong hook in 3s.',
   render_status: 'done', render_uri: 'http://x/c1.mp4', cleaned_render_uri: null,
   applied_title: null, applied_description: null,
+  origin: 'engine', aspect: '9:16', shortlisted: true,
 }
 
 // Row for the standalone picker landing (no-param /review).
@@ -208,5 +209,108 @@ describe('PersonalizationBand', () => {
     expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
     expect(screen.queryByText(/Still learning/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Personalized to your feedback/i)).not.toBeInTheDocument()
+  })
+})
+
+// ── Issue 377: shortlist mode ──────────────────────────────────────────────
+
+function makeClip(rank: number, shortlisted: boolean) {
+  return {
+    ...BASE_CLIP,
+    id: `c${rank}`,
+    rank,
+    shortlisted,
+    principle: `Principle ${rank}`,
+    reasoning: `Reasoning for clip ${rank}.`,
+  }
+}
+
+// 4 candidates, top 3 shortlisted (matches SHORTLIST_SIZE=3) — the shape the
+// backend actually sends: every candidate scored, only the top N flagged.
+const FOUR_CLIPS = [
+  makeClip(1, true),
+  makeClip(2, true),
+  makeClip(3, true),
+  makeClip(4, false),
+]
+
+function mockFetchWithClips(clips: unknown[]) {
+  const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body })
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/videos')) return json({ videos: [BASE_VIDEO], state: 'populated' })
+    if (url.endsWith('/videos/clips/counts'))
+      return json({ counts: [{ video_id: 'v1', total: clips.length, rendered: clips.length }] })
+    if (url.endsWith('/videos/v1/feedback')) return json({ items: [] })
+    if (url.endsWith('/videos/v1/clips')) return json({ clips, personalization: null })
+    return json({})
+  })
+}
+
+describe('Review — shortlist mode (Issue 377)', () => {
+  it('defaults to the shortlisted clips and offers "show all candidates"', async () => {
+    vi.stubGlobal('fetch', mockFetchWithClips(FOUR_CLIPS))
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter basename="/app" initialEntries={['/app/review?video_id=v1']}>
+          <Routes>
+            <Route path="review" element={<Review />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    expect(screen.getByText('Top 3 picks — the case for each, ranked')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Show all 4 candidates/ })).toBeInTheDocument()
+
+    // Advance through the shortlist — the queue must be exactly the 3
+    // shortlisted clips, never surfacing #4 by default.
+    await userEvent.click(screen.getByRole('button', { name: /Next clip/ }))
+    expect(await screen.findByText(/Clip #2/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Next clip/ }))
+    expect(await screen.findByText(/Clip #3/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Next clip/ }))
+    // Reviewing all 3 shortlisted clips ends the queue (redirect message),
+    // never silently including the 4th, unshortlisted candidate.
+    expect(await screen.findByText(/All clips reviewed/)).toBeInTheDocument()
+  })
+
+  it('"show all candidates" reveals the full set including non-shortlisted clips', async () => {
+    vi.stubGlobal('fetch', mockFetchWithClips(FOUR_CLIPS))
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter basename="/app" initialEntries={['/app/review?video_id=v1']}>
+          <Routes>
+            <Route path="review" element={<Review />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText(/Clip #1/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Show all 4 candidates/ }))
+    expect(await screen.findByText('Showing all 4 candidates')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /Show top picks only \(3\)/ }),
+    ).toBeInTheDocument()
+    // Toggling resets to the first clip of the now-active (full) queue.
+    expect(screen.getByText(/Clip #1/)).toBeInTheDocument()
+  })
+
+  it('shows no shortlist banner when nothing is shortlisted (e.g. only a creator selection)', async () => {
+    const creatorOnly = [
+      { ...BASE_CLIP, id: 'c9', rank: null, score: null, origin: 'creator', shortlisted: false },
+    ]
+    vi.stubGlobal('fetch', mockFetchWithClips(creatorOnly))
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter basename="/app" initialEntries={['/app/review?video_id=v1']}>
+          <Routes>
+            <Route path="review" element={<Review />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getAllByText(/Your selection/).length).toBeGreaterThan(0))
+    expect(screen.queryByTestId('shortlist-banner')).not.toBeInTheDocument()
   })
 })

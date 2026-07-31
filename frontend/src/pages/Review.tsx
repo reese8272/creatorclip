@@ -122,6 +122,11 @@ export function Review() {
   const styleMode = params.get('mode') === 'style'
   const navigate = useNavigate()
   const [index, setIndex] = useState(0)
+  // Issue 377 — shortlist mode: default the queue to the engine's argued top
+  // picks (WhyThisClip primary content is unchanged — it was already
+  // default-open); the full candidate set is one click away via "show all
+  // candidates" so an engine miss is never hidden, only de-prioritized.
+  const [showAllCandidates, setShowAllCandidates] = useState(false)
 
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ['review-clips', videoId],
@@ -139,9 +144,20 @@ export function Review() {
     },
   })
 
-  const clips = data?.clips ?? []
+  const allClips = data?.clips ?? []
+  const shortlistedClips = allClips.filter((c) => c.shortlisted)
+  // Fall back to the full set when nothing was shortlisted (e.g. a video with
+  // only a creator-made selection, which is never engine-scored/shortlisted —
+  // Issue 373) so the queue is never emptier than what actually exists.
+  const hasHiddenCandidates = shortlistedClips.length > 0 && shortlistedClips.length < allClips.length
+  const clips = showAllCandidates || shortlistedClips.length === 0 ? allClips : shortlistedClips
   const reviewed = clips.length > 0 && index >= clips.length
   const clip = clips[index]
+
+  function toggleShowAllCandidates() {
+    setShowAllCandidates((v) => !v)
+    setIndex(0)
+  }
 
   useEffect(() => {
     if (reviewed) {
@@ -252,6 +268,32 @@ export function Review() {
           Review this video’s overall style →
         </button>
       </div>
+
+      {/* Issue 377 — shortlist mode: default queue is the engine's argued top
+          picks; "show all candidates" is the load-bearing escape hatch so an
+          engine miss can never be silently hidden. */}
+      {shortlistedClips.length > 0 && (
+        <div
+          className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 pt-3 text-xs text-muted"
+          data-testid="shortlist-banner"
+        >
+          <span>
+            {showAllCandidates
+              ? `Showing all ${allClips.length} candidates`
+              : `Top ${shortlistedClips.length} picks — the case for each, ranked`}
+          </span>
+          {(hasHiddenCandidates || showAllCandidates) && (
+            <button
+              onClick={toggleShowAllCandidates}
+              className="text-accent-text hover:underline"
+            >
+              {showAllCandidates
+                ? `Show top picks only (${shortlistedClips.length})`
+                : `Show all ${allClips.length} candidates`}
+            </button>
+          )}
+        </div>
+      )}
 
       <ReviewClipView
         key={clip.id}

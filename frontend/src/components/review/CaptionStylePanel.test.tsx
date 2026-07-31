@@ -55,6 +55,7 @@ function makeClip(): ReviewClip {
     applied_description: null,
   origin: 'engine' as const,
   aspect: '9:16',
+  shortlisted: true,
   }
 }
 

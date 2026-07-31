@@ -6689,7 +6689,7 @@ honest page, not a campaign.
 
 ### Issue 377: Shortlist mode — return the decision, not the pile
 
-**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `M` · **Verify** `local` + eval
+**Status** `DONE` (W4, branch `w4/issue-377-shortlist`) · **Wave** W2 · **Lane** L24 · **Size** `M` · **Verify** `local` + eval
 **Blocked by** nothing · **Coordinate (hot files)** `clip_engine/ranking.py`, `frontend/src/pages/Review.tsx`
 
 **Problem.** We compete on the axis that is being commoditized (how many clips we find) while OpusClip's
@@ -6713,14 +6713,21 @@ source of Opus's perceived quality — except ours is honest and cites a registe
 - `docs/CLIPPING_PRINCIPLES.md` — if a selection-confidence principle is cited, register it
 
 **Acceptance criteria**
-- [ ] Review defaults to a short, argued list; the full candidate set stays reachable in one click
-- [ ] Every shortlisted clip shows its cited principle and reasoning as primary content, not a disclosure
-- [ ] Clip-quality eval harness stays green (geometry untouched); no regression in `SCENARIO_FLOOR`
-- [ ] Ranking change is measurable through `preference/efficacy.py` — NDCG does not regress
-- [ ] Honest confidence framing below the personalization threshold (existing #203 copy rules apply)
+- [x] Review defaults to a short, argued list; the full candidate set stays reachable in one click
+      (`frontend/src/pages/Review.tsx` — "show all N candidates" banner)
+- [x] Every shortlisted clip shows its cited principle and reasoning as primary content, not a disclosure
+      (WhyThisClip was already default-open since Issue 306; unchanged)
+- [x] Clip-quality eval harness stays green (geometry untouched); no regression in `SCENARIO_FLOOR`
+      (`tests/test_clip_engine.py -k eval_scenario` — 19 passed, byte-identical)
+- [x] Ranking change is measurable through `preference/efficacy.py` — NDCG does not regress
+      (`tests/test_shortlist.py::test_shortlist_cut_never_changes_ndcg` — no ranking change at all)
+- [x] Honest confidence framing below the personalization threshold (existing #203 copy rules apply)
+      (shortlist is orthogonal to personalization; no new virality/confidence copy added)
 
 **`[DEC]` DECISIONS.md** — shortlist size policy (fixed vs confidence-derived) and whether generation
-volume drops with it (a real LLM-cost saving that should be quantified).
+volume drops with it (a real LLM-cost saving that should be quantified). **Recorded 2026-07-30 (W4):**
+fixed N=3 (`SHORTLIST_SIZE`, `config.py`); generation/scoring volume is UNCHANGED (0% LLM-call
+reduction) — see `docs/DECISIONS.md`.
 
 **Risks** — (1) Fewer visible clips reads as "worse value" against per-minute pricing unless the framing
 is right — coordinate with #380. (2) Hiding candidates could mask engine misses; the "show all" escape

@@ -27,6 +27,7 @@ const BASE_CLIP = {
   applied_description: null,
   origin: 'engine',
   aspect: '9:16',
+  shortlisted: true,
 }
 
 // Creator-made selection (Issue 373) — never engine-scored.
@@ -34,6 +35,7 @@ const CREATOR_CLIP = {
   ...BASE_CLIP,
   id: 'c9',
   rank: null,
+  shortlisted: false,
   score: null,
   peak_s: null,
   setup_start_s: null,
