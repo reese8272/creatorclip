@@ -18,7 +18,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
 import { Chip } from '@/components/Chip'
-import { ChannelSnapshot, DnaSnapshot } from '@/components/insights/ChannelSnapshot'
+import { ChannelSnapshot } from '@/components/insights/ChannelSnapshot'
+import { ChannelFingerprint } from '@/components/insights/ChannelFingerprint'
 import { PerformerPanel } from '@/components/insights/PerformerPanel'
 import { UploadWindows } from '@/components/insights/UploadWindows'
 import { ImprovementBrief } from '@/components/insights/ImprovementBrief'
@@ -97,7 +98,7 @@ export function Insights() {
 
             {/* Q1: What's working / what's not */}
             {data && <ChannelSnapshot totals={data.totals} />}
-            {data && <DnaSnapshot dna={data.dna} />}
+            {data && <ChannelFingerprint dna={data.dna} />}
             <PerformerPanel
               kind="top"
               title="Top performers"

@@ -10947,3 +10947,63 @@ fails CI on any unbilled `*.messages.create/stream` site. **Date:** 2026-07-29
 **Scope note — `docs/CLIPPING_PRINCIPLES.md` NOT updated.** The registry's own rule is to add an entry "when a new principle is applied" to clip *scoring*; this advisory sits outside the ranker in v1 (per the issue's own acceptance criterion: "zero LLM spend... or bills + spend-guards if a narrative layer is added" — no scoring integration was in scope). The issue's "positive signal — diversity as a scored dimension the ranker can reward" is explicitly a follow-up, not built here.
 
 **Out of scope, logged not built:** the inline "similar to N recent clips" flag on the Review surface (`frontend/src/components/review/WhyThisClip*`) — the approach sketch itself marks this "if cheap," and wiring a same-request originality check into candidate generation is materially more code than the advisory panel and touches files this issue's CHECK research didn't cover; scoping that properly is a follow-up, not a call to make unilaterally mid-build. **Date:** 2026-07-30
+
+---
+
+## Channel Fingerprint — two-tier DNA artifact; shareable tier excludes ALL analytics-derived fields (Issue 379)
+
+**What was decided.** "Your DNA at a glance" (the bare `optimal_clip_len_s` / `best_source_region` /
+`optimal_upload_gap_h` stat card, `insights 1.png`) is split into two strictly separate tiers:
+
+1. **Private in-app view** (`frontend/src/components/insights/ChannelFingerprint.tsx`, served by the
+   existing `GET /creators/me/insights`, `/creators/me/identity`, `/creators/me/dna` endpoints) — the
+   full DNA, analytics-derived stats included, shown only to the authorizing creator. No new endpoint;
+   no new data class; nothing here leaves the app.
+2. **Shareable artifact** (`POST /creators/me/fingerprint/share`, new endpoint) — an explicit-action-only
+   export that leaves our UI once copied/downloaded by the creator. Because it leaves the boundary, its
+   field set is restricted to data that is **not** derived from a YouTube Analytics/Data API response:
+   `niches`, `content_pillars`, `tone_tags`, `mission` (all self-declared, `creator_identity` table,
+   `dna/identity.py`), `style_summary` (LLM-distilled from the creator's own in-app feedback,
+   `creator_style_notes`, Issue 371), the honesty line (static), and `generated_at` (artifact metadata,
+   not creator data). The full field-by-field audit is in `docs/COMPLIANCE.md`.
+
+**Why (the trigger).** A literal reading of the YouTube API Services Policies, fetched live this session
+(2026-07-30):
+
+> **III.E.3.b** — "API Clients must not display or allow access to Authorized Data to anyone other than
+> the authorizing user or agents expressly approved by that user."
+>
+> **III.E.2** — "Do not aggregate API Data except that you may only aggregate API Data relating to
+> YouTube channels that are under the same content owner… Such aggregated API Data must only be viewable
+> by that content owner."
+
+A shareable artifact is, by definition, seen by people other than the authorizing creator — so anything
+sourced from YouTube Analytics/Data API (view counts, retention, engagement, upload-gap inference, the
+`CreatorDna.optimal_clip_len_s` / `best_source_region` / `optimal_upload_gap_h` trio) cannot appear on it.
+The private in-app view has no such restriction (III.E.3.b explicitly permits display to the authorizing
+user), so it keeps the full stat set — redesigned as a legible panel instead of a bare 3-cell grid, per the
+issue's "designed artifact, not a stat list" acceptance criterion.
+
+**Fields deliberately left OFF the shareable artifact despite being self-declared (not a ToS requirement,
+a judgment call):** `audience_summary`, `hard_nos`, `style_sample`. All three are creator-authored and
+therefore ToS-permissible to include, but they read as more personal/boundary-setting than "flex" material
+for a public card (`hard_nos` is literally a list of things the creator refuses to do — not something to
+publish without a separate, explicit opt-in per field) and `style_sample`/`audience_summary` are long-form
+free text not designed for a compact shareable surface. If a creator wants these on the artifact later,
+that is a new, narrower decision — not assumed here.
+
+**Default-private mechanism.** The endpoint is a **POST**, never a GET — nothing about it can be triggered
+by prefetch, a browser back/forward cache, or a passive page load. It is not embedded in any other
+response (`GET /creators/me`, `/creators/me/insights`, `/creators/me/identity` do not carry these fields).
+Nothing is persisted server-side; the response is handed to the calling creator's authenticated session to
+copy/export, and the frontend renders it only after the creator clicks "Create shareable fingerprint"
+(`ChannelFingerprint.tsx`) — no auto-render, no auto-fetch.
+
+**Source / evidence.** YouTube API Services Policies, `developers.google.com/youtube/terms/api-services-terms-of-service`
+sections III.E.2 and III.E.3.b (fetched 2026-07-30, quoted verbatim above); existing Issue-374/375 pattern
+of an honesty-line-bearing panel with an explicit provenance comment
+(`frontend/src/components/insights/ProofOfLift.tsx`, `OriginalityGuard.tsx`).
+
+**Verification.** `tests/test_fingerprint.py::test_pydantic_model_has_exactly_the_allowlisted_fields` and
+`::test_share_endpoint_returns_only_allowlisted_fields` assert the exact field set on the wire — any
+analytics-derived field added to `FingerprintShareOut` fails the test immediately. **Date:** 2026-07-30

@@ -377,3 +377,45 @@ the gate is content, not stylistic fields). This surfaces AutoClip's read of You
   compliance failure on our part, because we never claimed to certify anything.
 
 **Logged:** Issue 375 (2026-07-30).
+
+---
+
+## Channel Fingerprint — shareable artifact field-by-field audit (Issue 379)
+
+`POST /creators/me/fingerprint/share` is the only endpoint that returns a payload designed to leave the
+application boundary (creator copies/downloads/posts it). Per the YouTube API Services Policies
+III.E.2 / III.E.3.b review recorded in `docs/DECISIONS.md` (2026-07-30), a shareable artifact may contain
+**no field derived from YouTube Analytics/Data API responses**. Every field on the response model
+(`routers/creators.py::FingerprintShareOut`) is audited below; nothing outside this list is ever included
+(pinned by `tests/test_fingerprint.py::test_pydantic_model_has_exactly_the_allowlisted_fields`).
+
+| Field | Source | Why it is NOT API-derived |
+|---|---|---|
+| `niches` | `creator_identity.niches` (`dna/identity.py`), mapped to labels via `youtube.categories.labels_for` | The creator picks these from a fixed static list during onboarding (self-declared). The static label list (`NICHE_OPTIONS`) is a hardcoded constant in our own code, not a YouTube API response. |
+| `content_pillars` | `creator_identity.content_pillars` | Free-text list the creator types about themselves during identity setup — never fetched from YouTube. |
+| `tone_tags` | `creator_identity.tone_tags` | Same as above — self-declared. |
+| `mission` | `creator_identity.mission` | Self-declared free text, optional. |
+| `style_summary` | `creator_style_notes.notes_text` (Issue 371) | LLM-distilled from `ClipFeedback`/`VideoFeedback` — the creator's own approve/deny actions and review notes typed **inside our app**. Never touches YouTube Analytics, YouTube Data API, or any YouTube-sourced metric. |
+| `honesty_line` | Static string constant (`FINGERPRINT_HONESTY_LINE`) | Not creator data at all — the fixed CLAUDE.md honesty constraint, present so the artifact is self-contained once it leaves our UI. |
+| `generated_at` | `datetime.now(UTC)` at request time | Artifact metadata (a timestamp of export), not a data field about the creator or their channel. |
+
+**Fields considered and explicitly excluded:**
+
+| Field | Source | Why excluded |
+|---|---|---|
+| `optimal_clip_len_s`, `best_source_region`, `optimal_upload_gap_h` | `creator_dna` (`CreatorDna`), computed from `VideoMetrics`/YouTube Analytics | **API-derived — excluded per III.E.2/III.E.3.b.** Remains on the PRIVATE in-app view only (`GET /creators/me/insights`, `/creators/me/dna`), never on the shareable artifact. |
+| Any `VideoMetrics` field (views, engagement_rate, avg_view_duration_s, performance_score) | `VideoMetrics` / YouTube Analytics API | **API-derived — excluded.** Never touched by `share_fingerprint()`. |
+| `audience_summary` | `creator_identity.audience_summary` | Self-declared, so ToS-permissible, but deliberately left off — judgment call, not a compliance requirement. See `docs/DECISIONS.md` 2026-07-30. |
+| `hard_nos` | `creator_identity.hard_nos` | Self-declared, ToS-permissible, but a list of things the creator refuses to do reads as a personal boundary, not "flex" material for a public card — left off by design choice. |
+| `style_sample` | `creator_identity.style_sample` | Self-declared free-text writing sample; long-form and not designed for a compact public card — left off. |
+| `channel_title` / `channel_id` | `Creator.channel_title` (fetched via YouTube Data API `channels.list`) | **Treated as API-derived out of caution** even though channel names are publicly visible on YouTube — it was obtained through the Authorized API call, so it is excluded pending a narrower future decision if a creator explicitly wants their channel name on the card. |
+
+**Default-private / explicit-action gating:** the endpoint is a POST (never a GET), is not embedded in any
+other response, requires authentication (`get_current_creator`), and nothing is persisted or made publicly
+reachable — the payload is returned once, to the calling creator's own session, only when the creator
+clicks "Create shareable fingerprint" in `frontend/src/components/insights/ChannelFingerprint.tsx`.
+Per-creator isolation: both DB reads (`dna.identity.get_current`, `dna.profile.get_style_notes`) are scoped
+to `creator.id` from the authenticated session, matching the isolation pattern used everywhere else in the
+app.
+
+**Logged:** Issue 379 (2026-07-30).
