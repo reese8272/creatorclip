@@ -1,9 +1,10 @@
 # LEFT_OFF.md — CreatorClip Session Handoff
 
-**Last updated:** 2026-07-30 (later — product/market review session; **Lane L24 filed, no code written**)
-**Branch at close:** `main` @ `4ebb76b` — level with `origin/main` (0 ahead / 0 behind)
-**Working tree:** **4 modified docs, UNCOMMITTED** — `docs/issues.md`, `docs/DECISIONS.md`, `docs/PROJECT_STATE.md`, `docs/COMPETITIVE_RESEARCH.md`
-**Prod:** healthy — last deploy run `30561760945` succeeded 16:30 UTC; prod DB head **0049**; L23 surfaces live
+**Last updated:** 2026-07-30 (late — all-waves execution run: **W0–W4 complete, 14 issues closed**)
+**Branch at close:** `wave/l24-and-hygiene` @ `c58963c` — **26 commits ahead of `origin/main`, 0 behind**
+**Working tree:** **clean** (nothing uncommitted, nothing untracked)
+**Upstream:** **none — this branch has never been pushed.** Nothing from this session is on GitHub or in prod.
+**Prod:** untouched this session. Last deploy is still run `30561760945` (2026-07-30 16:30 UTC, main); prod DB head **0049**.
 
 > Source-of-truth docs live in `docs/`. This file orients and points to them — it is NOT a source of truth.
 
@@ -11,118 +12,176 @@
 
 ## CURRENT FOCUS
 
-Two tracks are open. **A is the operator/launch path (unchanged and still the critical path). B is new
-this session and is a decision, not a build.**
-
-**A — Friend beta (blocked on operator actions, not code).**
-**B — Lane L24 "Positioning & Moat Surfacing" (Issues 374–383) was just filed** from an owner-requested
-product/market review. Nothing is built; **#382 (scope-freeze decision) gates the other nine issues.**
+Executing **every code-closeable issue** in waves. Scope agreed at session start: *Buckets A+B* (everything
+code can close), **per-wave batched approval**, **parallel subagent waves**. W0–W4 are done and merged to
+`wave/l24-and-hygiene`. **W5 is the only build work left: Issues #355 and #380.**
 
 ### → NEXT ACTIONS
 
-1. **Commit this session's doc changes** (they are the entire deliverable — no code touched):
-   `git add docs/ LEFT_OFF.md && git commit` on a `docs/` branch → PR → merge.
-   ⚠️ Merging to `main` triggers the prod deploy pipeline; a docs-only merge is safe but still deploys.
-2. **Make the #382 call** (5 minutes, owner-only, unblocks the lane): which of the breadth cluster —
-   L23 advanced effects, #322/#323 (per-clip titles + thumbnail concepts), #324/#325 (agentic chat) —
-   gets parked so #374/#375/#376 can be funded. Record in `docs/DECISIONS.md`; mark parked statuses in
-   `docs/issues.md`. **Do not start #374 before this call.**
-3. **Friend-beta path (still the launch critical path):** **#26** — owner adds the buddy's Gmail in
-   Google Console → Audience → Test users, and confirms the 4 scopes match `youtube/oauth.py:46-51`.
-   Then **#28** friend smoke. **#282** uptime monitor remains OPEN and beta-critical (a 31h silent
-   outage on 2026-07-29 proved the gap).
-4. **Still queued from last session** — live smoke of the L23 surfaces on prod (needs a real upload),
-   and the pytest 8.3.3 → 9.0.3 dev-dep bump (PYSEC-2026-1845; until then Layer-0 `pip_audit` reads
-   1 vuln vs the 0 baseline).
+1. **Decide what happens to the 26 commits.** They are local-only. Nothing is on `origin`, nothing is deployed.
+   ```bash
+   git log --oneline origin/main..HEAD          # review all 26
+   git push -u origin wave/l24-and-hygiene       # then open a PR
+   ```
+   ⚠️ **Merging to `main` triggers the prod deploy pipeline.** Owner authorizes — do not merge unprompted.
+   This branch changes a live public surface (`/` now serves a landing page) and a live response header (CSP).
+
+2. **Finish W5 (the last 2 buildable issues).** Both were deliberately sequenced last:
+   - **#355 — first-run information architecture.** Nav vocabulary vs page names, three overlapping
+     "ask the AI" surfaces, no single primary CTA, dead-end empty states. It restructures navigation
+     **across everything W1–W4 added** (landing, Proof of Lift, Originality, Fingerprint, shortlist),
+     which is exactly why it is last — doing it earlier meant doing it twice.
+   - **#380 — `[DEC]` pricing re-evaluation.** **Already narrowed** by #383's live pricing check: two of its
+     three premises are unsupported (see WHAT WORKS NOW). Remaining question is **free-trial structure only**.
+     This is an owner decision; the evidence pack is assembled and sitting in `COMPETITIVE_RESEARCH.md`.
+
+3. **Clean up 8 stale agent worktrees** (they still hold the merged lane branches):
+   ```bash
+   git worktree list                 # 8 under .claude/worktrees/agent-*
+   git worktree prune                # after confirming every lane branch is merged
+   ```
+
+4. **Operator punch-list** (nothing here is code — see `docs/GO_LIVE.md`, which is canonical):
+   - **#29 Google OAuth verification is now unblocked** — #376a shipped the homepage Google's review requires.
+   - **#26** add the friend's Gmail as an OAuth test user → then **#28** friend smoke.
+   - **#282** uptime monitor — still OPEN and beta-critical (a 31h silent outage on 2026-07-29 proved the gap).
+   - **`MAILING_ADDRESS`** — unset, so **all lifecycle email is intentionally skipped** (see #246 below).
+
+---
 
 ## WHAT WORKS NOW (don't re-investigate)
 
-**L23 is shipped and deployed** — PR #65 → `main`, prod DB head 0049, all L23 endpoints live. The
-2026-07-29 ready-pass gates are unchanged. Backend 2377 / frontend 309 green at L23 close.
+**Test + gate state, all measured in the real checkout at `c58963c`:**
 
-**The L24 research is done and dated — do not re-run these searches.** Five live searches on
-2026-07-30, all cited inline in the lane preamble and the DECISIONS entry:
-- YouTube is rolling **Video Clips into Shorts + auto-suggestions for "clippable" moments** later in
-  2026 → the clip-finding layer becomes free and native.
-- YouTube's **16 July 2026 "inauthentic content"** policy (renamed from "repetitious content"):
-  templated/mass-produced output is non-monetizable, three-strike ladder → an extinction risk for
-  template-based clippers and the wedge behind #375.
-- **OpusClip's own 2026 strategy post** concedes the bottleneck moved to "the decision of what
-  deserves cutting" and that "measurement is where repurposing setups break down."
-- **Style-learning is still unclaimed** field-wide (brand kits/templates only) — dated re-confirmation
-  of the `COMPETITIVE_RESEARCH.md:104` thesis.
+| Gate | Value | Note |
+|---|---|---|
+| Backend pytest | **2480 passed, 64 skipped, 173 deselected** | was 2377/64 at session start → **+103 tests** |
+| Frontend vitest | **337 passed** (51 files) | was 309 → **+28 tests** |
+| ruff / mypy | **0 / 0** | |
+| coverage | **83.57%** (baseline 83.00) | app code only — see the Layer-0 fix below |
+| module floors | clip_engine 92.54 · preference 90.45 · crypto/limiter/auth 100.0 | **all 5 enforce now**; 2 of 5 previously enforced nothing |
+| bandit | 0 high / 0 medium | |
+| pip_audit | **0** | was reporting 96 phantom vulns — see below |
+| **Layer 0 overall** | **ALL GREEN** | first fully-green run of the session |
 
-**Four backlog reconciliations were already worked out — don't re-derive them:**
-- **#197 is DONE** — publish already creates `ClipOutcome` rows, so the outcome loop has input.
-  #374 is **surfacing-only**, needs no new data collection. That's why it's the cheapest high-leverage item.
-- **#132 (chat-spike) stays BLOCKED** — no replay endpoint; scrapers breach ToS §IV.A. **#381 is a
-  distinct path** (`liveChatMessages.list` on the creator's own *live* broadcast), gated on a quota
-  verdict that may legitimately sink it. Do not let #381 drift into a scraper.
-- **#209 locked per-input-minute pricing.** #380 re-opens it for **evaluation only**, on three named
-  new facts. The `MinuteDeduction` ledger stays untouched either way.
-- **"No-auth demo mode" is a Phase-3 parking-lot item** — #376 promotes it, and flags that
-  `YTDLP_ENABLED=False` is own-content-only, so an **arbitrary-URL demo is not ToS-clean** (house
-  sample videos are the likely answer).
+**14 issues closed this session** — `#382 #383` (W0) · `#364 #365 #366 #367 #368` (W1) · `#374` (W2) ·
+`#375 #376a #246` (W3) · `#377 #378 #379` (W4). Status lines in `docs/issues.md` are current.
 
-**The uncopyable asset, located and evidenced:** `poll_clip_outcomes` → `ClipOutcome.performed_well`
-(`worker/tasks.py:1055`) → 3× training weight (`preference/decay.py:8`). It needs per-creator Analytics
-OAuth, so no competitor can copy it — and it is surfaced to creators **nowhere**. That is Issue 374.
+### Verified findings — do NOT re-derive these
+
+**Three L24 claims were fabricated or wrong, and are retracted (#383).** They were headed into creator-facing
+copy via #375/#378:
+1. **There is NO "three-strike ladder"** for YouTube's inauthentic-content policy. No primary source describes
+   one; YouTube describes enforcement as ranging from limiting ad earnings to terminating monetization.
+2. **The policy rename was 15 July 2025**, not 16 July 2026 (that was a *clarification* into three categories).
+   It is ~13 months old — all "new policy"/urgency framing is wrong.
+3. **The two OpusClip quotes do not exist** in `opus.pro/blog/short-form-video-strategy-2026` nor the adjacent
+   post. **Never publish them.** Checkable substitutes are recorded in `COMPETITIVE_RESEARCH.md`.
+
+**The YouTube-native threat is real but far narrower than the L24 filing implied.** Studio's Video Clips is
+**16:9 only and cannot generate Shorts**; AI suggestions are **podcast-playlists, English, 10 countries**;
+Shorts integration is **announced, not shipped**. The filing also conflated two opposite changes — the
+*viewer-facing* Clips feature is being **discontinued**.
+
+**Publishing pooled cross-creator metrics is ToS-prohibited (#378).** Developer Policies **III.E.2** bars
+aggregating API Data across channels not under a common content owner *and* requires any permitted aggregate
+stay "viewable only by that content owner"; **III.E.4.h** bars derived metrics. **Creator consent cannot cure
+it** — it is a Google-to-us term. This does **not** constrain #374, which shows a creator their own data
+(expressly permitted by **III.E.3.b**). Same clause constrains #379's shareable artifact.
+
+**Pricing: two of #380's three premises are unsupported.** Live-checked 2026-07-30 — AutoClip's per-minute rate
+**beats OpusClip at every tier** (9.0 ¢/min Starter vs ~10.0; 4.0 ¢/min Stream ≈ 2.5× cheaper), and
+per-input-minute is **confirmed category-standard**. The one real gap: **60 free minutes once vs 60/month
+recurring** at both Opus and Vizard — a trial-design question needing **no** `MinuteDeduction` change.
+
+**The tracker overstated remaining work four times.** Verify before building:
+- **#382**'s entire premise was stale — everything it proposed parking (#322–#325, L23 effects) had already shipped.
+- **#366** claimed "~20 files"; the real scope was **10 sites / 8 files**.
+- **#246** was listed as an open `M` build; it is **fully built and tested** — blocked only on an operator value.
+- The **"99 done / 614 open"** figure was an acceptance-criteria **checkbox** miscount. Real: **205 headings,
+  167 closed, 38 open** — of which only **2 (#355, #380) are buildable**; the other 36 are external, DESCOPED-BETA,
+  or code-complete-pending-verification.
+
+### Two Layer-0 gates were measuring the wrong thing (both fixed)
+
+1. **`pip_audit` audited the wrong Python interpreter.** `_have()`/`_run()` resolved tools via `PATH`, where
+   `pip-audit` is `~/.local/bin/pip-audit` (shebang `#!/usr/bin/python3`) — so it audited the **system Python
+   (200 deps / 103 vulns)** instead of the venv (**171 deps / 1 vuln**, already in `PIP_AUDIT_IGNORES`).
+   **The 2026-07-29 "venv staleness" diagnosis of this same symptom was wrong and is retracted.**
+   Fixed: Python tools now run via `sys.executable -m <module>`. 96 → **0**.
+2. **The #368 single-root `--cov .` switch silently widened the coverage denominator**, sweeping in operational
+   tooling never previously measured (`llm_harness.py` 0%, `drills.py` 0%, `run_layer0.py` 22%). That — not
+   feature code — is why the gate failed at 76.39. Fixed by adding `scripts/*` and `.claude/*` to
+   `[tool.coverage.run] omit`. **True app coverage is 83.5%**, higher than any prior baseline.
+
+---
 
 ## THE ARC THAT LED HERE
 
-1. **2026-07-29** — "100% ready" pass: core-loop UX shipped over two deploys; a **31-hour silent prod
-   outage** was found and recovered; #24/#25 flipped GREEN with live evidence.
-2. **2026-07-30 (earlier)** — Lane **L23** built and merged (PR #65): Review and Editor became
-   standalone tools; style-preference distillation now feeds scoring + DNA briefs.
-3. **2026-07-30 (this session)** — owner asked for an honest product/market read: *"how does this look,
-   is it worth the hype, how do we make it genuinely desirable."* Reviewed the docs, the code, the four
-   product screenshots, and ran live market research. Finding: **the engineering is strong and the moat
-   is real, but the product sells the commodity layer — and that layer is about to be free.** Filed as
-   Lane **L24**, plus a positioning decision in DECISIONS.
+1. **2026-07-29** — "100% ready" pass; a **31-hour silent prod outage** found and recovered; #24/#25 flipped GREEN.
+2. **2026-07-30 (early)** — Lane **L23** built and merged (PR #65): Review and Editor became standalone tools.
+3. **2026-07-30 (mid)** — owner-requested product/market review filed Lane **L24** (Issues 374–383). Zero code.
+4. **2026-07-30 (this session)** — owner asked to run **all remaining issues in waves, end to end**. Scoped to
+   the code-closeable set, ran **W0–W4** (2 docs + 12 build issues), caught 3 fabricated market claims before
+   they shipped, found and fixed 2 broken production-readiness gates, and closed 14 issues.
+
+---
 
 ## KEY COORDINATES & FACTS
 
 | Thing | Value |
 |---|---|
+| Branch / HEAD | `wave/l24-and-hygiene` @ `c58963c` — **26 ahead of `origin/main`, unpushed** |
 | Prod | `autoclip.studio` — droplet `147.182.136.107` (`ssh creatorclip-vm`), `/opt/autoclip`, prod compose file |
-| Prod DB head | **0049** (0048 `video_feedback`, 0049 `creator_style_notes` applied via the deploy pipeline) |
-| Branch / HEAD | `main` @ `4ebb76b`, level with `origin/main` |
-| New lane | `docs/issues.md` → `## Lane L24 — Positioning & Moat Surfacing` (`L24_MOAT_POSITIONING`), **Issues 374–383** |
-| Lane wave order | #382, #383, #374 (W0) · #375, #376 (W1) · #377, #378, #379, #380 (W2) · #381 (W3) |
-| Gating issue | **#382** — owner scope-freeze decision; the lane is unfunded until it's made |
-| Highest-leverage build | **#374** Proof of Lift — read-model over `ClipOutcome ⋈ ClipPublication ⋈ Clip` |
-| Launch tracker | `docs/GO_LIVE.md` — Stage A: 15 GREEN · 6 CODE-GREEN · 11 OPEN; hard blockers **#26 → #28**, plus **#282** |
-| Beta cap | Google OAuth app is **In production, External, 1 / 100 user cap** |
-| Credentials | By name only: `TOKEN_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, `.env` on the VM — off-box escrow still OPEN (#255) |
+| Prod DB head | **0049** — **this branch adds no migrations** |
+| Last CI/deploy | run `30561760945`, success, 2026-07-30 16:30 UTC (pre-dates this session) |
+| Lane branches (merged, safe to prune) | `w1/issue-364-discard` `w1/issue-365-fonts` `w1/issue-366-test-hygiene` `w1/issue-367-redis-lifecycle` `w3/issue-375-originality` `w3/issue-376-landing` `w4/issue-377-shortlist` `w4/issue-379-fingerprint` |
+| Stale worktrees | 8 under `.claude/worktrees/agent-*` — `git worktree prune` |
+| New public surface | `GET /` → `static/landing.html` for anonymous visitors (authenticated flow unchanged) |
+| New endpoints | `POST /clips/{id}/clean/discard` · `GET /creators/me/insights/lift` · `GET /creators/me/insights/originality` · `POST /creators/me/fingerprint/share` |
+| New config keys | `ORIGINALITY_SIMILARITY_THRESHOLD` (0.92) · `ORIGINALITY_MIN_CLUSTER_SIZE` (4) · `ORIGINALITY_RECENT_CLIPS_WINDOW` (12) · `SHORTLIST_SIZE` (3) — all in `.env.example` |
+| Beta cap | Google OAuth app **In production, External, 1 / 100 user cap** |
+| Credentials | By name only: `TOKEN_ENCRYPTION_KEY`, `JWT_SECRET_KEY`, `MAILING_ADDRESS`, `.env` on the VM — off-box escrow still OPEN (#255) |
+| Launch tracker | `docs/GO_LIVE.md` — canonical; now carries the CAN-SPAM `MAILING_ADDRESS` gate |
+
+---
 
 ## CONSTRAINTS & GOTCHAS
 
-- **This session wrote zero code.** All four modified files are docs. Don't look for a feature branch.
-- **#382 gates L24.** Starting #374 before the scope call reintroduces exactly the breadth problem the
-  lane was filed to fix.
-- **#374's empty state IS the feature at launch** — beta creators will have ~zero published clips for
-  weeks. Design the empty/small-N state first, not last, or the panel ships dead.
-- **#375 and #378 make claims about a third party.** #375 speaks about YouTube's enforcement policy;
-  #378 publishes metrics derived from YouTube Analytics. Both need the ToS/legal question answered in
-  Phase-1 CHECK **before** any UI work — over-stating either is worse than not shipping it.
-- **`docs/COMPETITIVE_RESEARCH.md` is now marked STALE** in its header (refresh = #383). Don't cite its
-  pricing table or its "table stakes" section without re-verifying.
-- **This box has no Docker/Postgres** — the unit lane mocks the DB by design; integration runs in CI.
-- **Any merge to `main` = prod deploy.** Owner authorizes.
-- Local toolchain: `.venv/bin/*` only; visual baselines only via the CI dispatch flow;
-  `gh pr edit` GraphQL bug → use `gh api repos/.../pulls/N -X PATCH`. CI also runs
-  `ruff format --check` (the local Layer-0 script does not) — run it before pushing.
+- **Nothing from this session is pushed or deployed.** 26 local commits. Any merge to `main` = prod deploy.
+- **This branch changes two live surfaces**: `/` now serves a public landing page, and the **CSP no longer
+  allow-lists Google Fonts** (both font sources are self-hosted now). Worth a live smoke after deploy.
+- **`ORIGINALITY_SIMILARITY_THRESHOLD=0.92` is UNVALIDATED.** No Voyage key, no pgvector, no real clip corpus
+  here, so voyage-3.5's actual same-channel cosine distribution was never measured. It is deliberately high
+  (few alarms) — **a silent advisory currently means "unmeasured", not "clean"**. Recalibration recipe is in
+  `docs/OFF_COURSE_BUGS.md`.
+- **`MAILING_ADDRESS` is unset and that is correct.** `config.py:752` makes `send_notification` **skip every
+  lifecycle email** while it is empty — CAN-SPAM requires a valid physical postal address on commercial mail.
+  **Do not "fix" this in code.** Whatever address is set becomes public in every lifecycle footer.
+- **Agent-reported test counts from worktrees are unreliable.** Every agent this session over-reported skips by
+  ~6. **Root cause found:** agent worktrees have no built `frontend/dist`, so SPA-dependent tests skip. Always
+  re-run in the main checkout. Every number in this file was measured there.
+- **Integration tests cannot even *collect* on this box** — a conftest guard aborts without Postgres. New
+  integration tests (`test_lift_integration.py`, `test_originality_integration.py`) are **CI-verified only**;
+  their enum/field names were checked against `models.py` programmatically instead.
+- **This box has no Docker, Postgres, ffmpeg, or live API keys.** The unit lane mocks the DB by design.
+- Local toolchain: `.venv/bin/*` only. **CI also runs `ruff format --check`**, which the local Layer-0 script
+  does not — run it before pushing.
+- **`docs/issues.md` #194/#195 have no `Status` line of their own**, so automated status scans walk into a
+  neighbouring issue's block. Logged in `OFF_COURSE_BUGS.md`; the same gap hid #374's missing status this session.
+
+---
 
 ## POINTERS
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/issues.md` | Work queue — **Lane L24 (374–383) is at the end of the file**; L23 (369–373) DONE |
-| `docs/PROJECT_STATE.md` | Top entry = the L24 filing + findings; below it, L23 complete |
-| `docs/DECISIONS.md` | **2026-07-30 positioning entry** (last in file) — all sources + the four reconciliations |
-| `docs/GO_LIVE.md` | Canonical launch scorecard — Stage A/B gate status |
-| `docs/COMPETITIVE_RESEARCH.md` | Strategic reference — **header now flags what's stale** (#383) |
-| `docs/SOT.md` | Stack/schema/structure |
-| `docs/COMPLIANCE.md` | YouTube ToS, data classes, retention |
-| `docs/OFF_COURSE_BUGS.md` | 2026-07-30 pytest-advisory chore |
+| `docs/issues.md` | Work queue — **38 open, only #355 + #380 buildable** |
+| `docs/PROJECT_STATE.md` | Progress log — top entries are this session's waves |
+| `docs/DECISIONS.md` | **8 new entries today** — the #383 retractions, #382 scope freeze, #368 + Layer-0 gate fixes, #378 ToS block, #379 two-tier design, #246 CAN-SPAM, #376b descope |
+| `docs/GO_LIVE.md` | Canonical launch scorecard — **#29 now unblocked by #376a** |
+| `docs/COMPETITIVE_RESEARCH.md` | **Refreshed + corrections section** — read that section before citing anything |
+| `docs/COMPLIANCE.md` | YouTube ToS, data classes, retention; #379's field-provenance audit |
+| `docs/OFF_COURSE_BUGS.md` | 3 new rows today (originality threshold, CSP — now fixed, #194/#195 tracker gap) |
+| `docs/SOT.md` | Stack / schema / structure |
 | Memory dir | `/home/reese/.claude/projects/-home-reese-workspace-Youtube-Video-AI-Editor/memory/` |

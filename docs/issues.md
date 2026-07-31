@@ -6522,7 +6522,19 @@ pipeline and the outcome loop are already built; the **surfacing, the funnel, an
 
 ### Issue 374: "Proof of Lift" — surface the published-clip outcome loop
 
-**Status** `OPEN` · **Wave** W0 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
+**Status** `DONE (2026-07-30, W2)` — `preference/lift.py` (pure, DB-free aggregation so the honesty
+rules are unit-testable) + `GET /creators/me/insights/lift` (`LiftOut`, 60/min) + the `ProofOfLift`
+panel, placed ABOVE the channel snapshot as the only falsifiable claim on the page. Three honesty rules,
+each tested: (1) `performed_well` is **TRI-STATE** — `worker/tasks.py:2708` `_MIN_COMPARABLE_SHORTS=3`
+leaves it `None` when there is no baseline (Issue 201's honest "can't judge yet"), so deferred clips are
+their own bucket and are never counted as failures; (2) a COUNT is a fact, a RATE is an inference — no
+rate below `MIN_JUDGED_FOR_RATE=10`; (3) a shown rate carries a **Wilson** score interval, not a bare
+percentage (the Wald interval collapses to zero width at p=1 and would report 10/10 as "100%, certain").
+Isolation: `ClipOutcome` has **no `creator_id`** (PK'd on `clip_id`), so the filter is applied on
+`Clip.creator_id` and reaches the outcome only through the join — matching the parent-subquery RLS
+policy. Tests: 12 unit + 3 integration (CI-only; every enum/field verified against `models.py`
+programmatically since Postgres is unavailable locally) + 7 frontend incl. a no-virality assertion.
+· **Wave** W0 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
 **Blocked by** nothing — **ready now** (#197 already creates the rows) · **Coordinate (hot files)** `routers/insights.py`, `frontend/src/pages/Insights.tsx`
 
 **Problem.** The single uncopyable thing we own is invisible. `ClipOutcome.performed_well` is written by
