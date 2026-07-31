@@ -2799,12 +2799,19 @@ Redaction backstop, `log_event` coverage, SLOs/alerts, metrics, saturation, trac
 **Src** **research-derived** (gap-closure research, 2026-06-22) — see *Research addendum* at the top of this file  
 **Blocked by** #236  
 
-> ⚠️ **NO LONGER VETO-ABLE — gap proven in production 2026-07-29.** The prod VM received a clean
-> poweroff on **Jul 28 11:59 UTC** and the site served Cloudflare 530/1033 for **~31 hours with no
-> alert of any kind** — `health-check.yml`'s schedule had silently stopped on 2026-06-17 and this
-> monitor didn't exist. The outage was only discovered by a manual curl during gate verification.
-> Treat as beta-critical operator work: Better Stack account + `/health` keyword monitor + status
-> page + footer link (~30 min).
+> ⚠️ **RETRACTED 2026-07-31 — the "gap proven in production" claim was WRONG.** The Jul 28→29
+> ~31h downtime (Cloudflare 530/1033) was an **intentional owner poweroff to save cost while
+> nobody was using the app**, later re-enabled — not a silent failure. It is not evidence that
+> monitoring is beta-critical, and the previous "NO LONGER VETO-ABLE / beta-critical" framing
+> here and in `docs/GO_LIVE.md` is retracted. **What remains true:** `health-check.yml`'s
+> schedule silently stopped on 2026-06-17 and nobody noticed, so there is still no working
+> external liveness signal.
+>
+> **Owner call 2026-07-31: DEFERRED for the invite-only beta.** At owner + ~3 friends, the
+> humans using the app are the monitor — they will text him. Paging buys little. **Re-open
+> when** either (a) users are people who won't contact you directly, (b) you start charging
+> someone who isn't a friend, or (c) Stage B. Note also: an intentional poweroff would page
+> falsely, so any monitor added later needs a documented maintenance-mute step.
 
 **Problem.** A status page is a standard launch deliverable for a paid SaaS: it deflects support load during incidents and is expected by creators paying for minute packs. Nothing in the backlog provides creator-facing incident communication; Issue 144 only gives internal Cloudflare alerting.
 
