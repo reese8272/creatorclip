@@ -6738,8 +6738,19 @@ eval-gated and known good.
 > "underexplain[ing] how to measure incremental performance after repurposing", and "no cross-platform
 > analytics" as a named Opus limitation (playcut.ai, choppity.com). Re-fetch any quote before shipping.
 
-**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local`
-**Blocked by** #376 (needs a public page to put them on) · **Coordinate (hot files)** `preference/efficacy.py`
+**Status** `DONE — RE-SCOPED (2026-07-30, W4).` The original scope (publish pooled cross-creator NDCG)
+is **prohibited by the YouTube API Services Developer Policies** and was closed WON'T-DO: **III.E.2** bars
+aggregating API Data across channels not under a common content owner AND requires any permitted aggregate
+stay "viewable only by that content owner"; **III.E.4.h** bars creating derived metrics from API Data.
+Creator consent cannot cure it — it is a Google-to-us term. **Shipped instead:** a ToS-clean trust surface
+on the #376 landing publishing the adversarial clip-geometry pass rate (**16 scenarios, all passing**) from
+`tests/eval/scenarios/` — hand-authored synthetic fixtures with zero YouTube data — plus methodology, the
+explicit "what this does not mean" caveat, and the stated no-pooled-aggregate position with its ToS basis.
+Stronger than the original: a reader can clone the repo and verify it. Drift-guarded by
+`tests/test_eval_transparency.py` (count sync, named-scenario existence, disclaimer presence; both guards
+negative-control tested). Note this does NOT constrain #374, which shows a creator their own data (III.E.3.b).
+· **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local`
+**Blocked by** #376 (needs a public page to put them on) — **satisfied, #376a shipped 2026-07-30** · **Coordinate (hot files)** `preference/efficacy.py`
 
 **Problem.** `preference/efficacy.py` computes NDCG@k on chronological holdouts with paired-bootstrap CIs
 against a random floor and a generic-signal baseline. **This is a marketing asset sitting in a module.**

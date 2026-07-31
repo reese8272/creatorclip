@@ -183,6 +183,44 @@
 
     <div class="divider"></div>
 
+    <!-- Issue 378. The number below is pinned to the real scenario count by
+         tests/test_eval_transparency.py — if a scenario is added or removed and
+         this page is not updated, CI fails. Do not hand-edit the count. -->
+    <section class="content">
+      <h2>How we measure clip quality — and what the number means</h2>
+      <p>
+        Most tools in this category ship a single score claiming to predict how well a clip
+        will do. Their own users describe those scores as decorative. We don’t have one,
+        because we can’t honestly produce one. What we can do is show our work on the part
+        that is actually testable: whether the engine cuts the clip in the right place.
+      </p>
+      <p>
+        AutoClip’s clip engine runs against <strong>16 adversarial evaluation scenarios</strong>
+        on every change to the engine, and <strong>all 16 pass</strong>. Each scenario is a
+        hand-built timeline designed to break a naive “clip the loudest moment” approach —
+        for example <code>aftermath_louder_than_setup</code>, where every loud signal is stacked
+        <em>after</em> the payoff and the engine must still anchor the clip to the quiet setup
+        beforehand. Others cover false peaks, cold opens with no silence lead-in, interrupted
+        setups, dead air, overlapping peaks, and missing transcripts.
+      </p>
+      <p>
+        <strong>What this number does not mean.</strong> These are synthetic fixtures, not real
+        videos, and passing them does not predict how any clip will perform. It is evidence of
+        one specific thing: that the engine clips the setup rather than the aftermath, under
+        conditions built to make it fail. We publish it because it is checkable — the scenarios
+        live in the codebase as readable files, so the claim can be verified rather than trusted.
+      </p>
+      <p>
+        We deliberately do <em>not</em> publish aggregate ranking-quality statistics pooled across
+        creators. YouTube’s API Services Developer Policies restrict aggregating data across
+        channels that aren’t under a common content owner, and require that any permitted
+        aggregate stay visible only to that owner. Your channel’s numbers are yours; they are
+        shown to you inside the product and are never pooled into a public figure.
+      </p>
+    </section>
+
+    <div class="divider"></div>
+
     <section class="content">
       <h2>Pricing</h2>
       <p>No subscription, no expiry. Buy minutes once, use them whenever.</p>
