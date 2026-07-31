@@ -50,6 +50,7 @@ verification pass → **Stage A BETA** (#26, #28) → prod prereqs (#29, #261, #
 | Is the OAuth consent screen configured with beta test users? | Google Cloud Console: Testing status, scopes byte-identical to code, ≥2 test users | operator | OPEN | #26 |
 | Is the regulatory posture shipped (COPPA age gate, accessibility statement, GPC)? | None | build | GREEN | #300, #301, #302 |
 | Do restores honor prior erasures (backup-erasure stance)? | Confirm R2 lifecycle/Object-Lock numbers in the dashboard | operator | CODE-GREEN | #254; `scripts/reapply_erasures.py`; `docs/RUNBOOKS.md` DR steps |
+| Is lifecycle (commercial-leaning) email CAN-SPAM compliant? | **Set `MAILING_ADDRESS`** to a valid physical postal address — a street address, a USPS-registered PO box, or a registered CMRA mailbox. It is printed in every lifecycle email footer, so it becomes public. **Until it is set, all lifecycle email is intentionally SKIPPED** (`config.py:752`), which is the correct fail-safe, not a bug. Not required for the friend beta. | operator | OPEN (fail-safe active) | #246 code-complete (templates, `run_lifecycle_scan` beat task, shared 48h cap, `email_lifecycle` opt-out, RFC 8058 one-click, 13 tests). CAN-SPAM: opt-out honored ≤10 business days, mechanism live ≥30 days, valid physical postal address required on commercial mail |
 
 ### Reliability & DR
 

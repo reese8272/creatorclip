@@ -3082,7 +3082,19 @@ Resend mailer, notification data model + idempotent send, triggers, in-app cente
 
 ### Issue 246: Minimal lifecycle sequence (welcome / first-clip nudge / re-engagement)
 
-**Status** `OPEN` · **Wave** W3 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `staging`  
+**Status** `CODE-COMPLETE (reconciled 2026-07-30, W3) — blocked ONLY on an operator action, not code.`
+Verified shipped: all three templates (`notify/templates/{welcome,first_clip_nudge,re_engagement}.{html,txt}`)
+with `{{ mailing_address }}` + `{{ unsubscribe_url }}`; welcome fires at `routers/auth.py:320`; the daily
+`worker.tasks.run_lifecycle_scan` beat task exists (`worker/tasks.py:954`) and is scheduled
+(`worker/schedule.py:76`); the shared 48h frequency cap across all three types is at `worker/tasks.py:3360-3444`;
+`email_lifecycle` opt-out is on the model; RFC 8058 one-click unsubscribe is wired (`notify/mailer.py:171`);
+`tests/test_lifecycle_email.py` (13 passing) + `test_lifecycle_integration.py`.
+**The block:** `MAILING_ADDRESS` is `""` (`config.py:755`), and `config.py:752` correctly makes
+`send_notification` **SKIP every lifecycle email** while it is unset — CAN-SPAM requires a valid physical
+postal address on commercial mail, so the fail-safe is right and must not be "fixed" in code. Owner
+decision 2026-07-30: **leave disabled for the friend beta**; tracked as an operator gate in
+`docs/GO_LIVE.md` (Compliance & Privacy). Remaining after that: the `staging` beat-scan verification.
+· **Wave** W3 · **Lane** Notifications & Lifecycle · **Size** `M` · **Verify** `staging`  
 **Src** `11 / 176e` — full ACs + `file_path:line` evidence + draft DECISIONS in `docs/research/findings/11_notifications_lifecycle_comms.md`  
 **Blocked by** #244, #245 · **Coordinate (hot files)** `notify/copy.py`, `notify/templates/`, `worker/schedule.py`, `worker/tasks.py`, `youtube/oauth.py`  
 
