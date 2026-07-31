@@ -67,7 +67,7 @@ describe('Review', () => {
   it('shows the standalone picker when no video_id is present, and a row click opens the clip view', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderReview('/app/review')
-    expect(await screen.findByText(/Pick a video to review/i)).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "Review clips" })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Upload a video/i })).toBeInTheDocument()
     // The old dead end is gone — Review is a standalone tool now.
     expect(screen.queryByText(/No video selected/)).toBeNull()

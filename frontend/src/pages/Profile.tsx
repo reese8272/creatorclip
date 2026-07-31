@@ -75,6 +75,10 @@ export function Profile() {
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
+            {/* Issue 355: the nav says "Channel" and the h1 is the channel's own
+                name, so the nav word had no anchor on the page. The kicker gives
+                it one without displacing the creator's name from the heading. */}
+            <p className="text-label uppercase tracking-[0.08em] text-muted">Channel</p>
             <h1 className="font-display text-h1 text-fg">{channelName}</h1>
             <p className="mt-1 text-small text-muted">Channel profile snapshot</p>
           </div>

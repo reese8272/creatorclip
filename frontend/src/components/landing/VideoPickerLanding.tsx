@@ -29,15 +29,19 @@ import type {
 //  - Generate is consumed, not fire-and-forget: the response body carries the
 //    clips list, so on success we advance straight into the tool.
 
+// Issue 355: the headings were step titles ("Pick a video to review"), so the
+// nav promised "Review" and the page called itself something else. The page name
+// is now the h1 and the instruction moved down into the sub-line, where it still
+// tells a first-run creator exactly what to do.
 const TOOL_COPY = {
   review: {
-    heading: 'Pick a video to review',
-    sub: 'Choose a processed video to review its clips, or upload a new one and start here.',
+    heading: 'Review clips',
+    sub: 'Pick a processed video to review its clips, or upload a new one and start here.',
     cta: 'Review clips',
   },
   editor: {
-    heading: 'Pick a video to edit',
-    sub: 'Choose a processed video to work its clips, or upload a new one and start here.',
+    heading: 'Editor',
+    sub: 'Pick a processed video to work its clips, or upload a new one and start here.',
     cta: 'Open in editor',
   },
 } as const
