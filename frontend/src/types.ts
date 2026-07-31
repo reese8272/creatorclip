@@ -632,3 +632,24 @@ export interface ProofOfLift {
   metric: string
   checkpoint: string
 }
+
+/** Originality guard — sameness advisory over the creator's OWN recent clips
+ * (Issue 375). Advisory only; never a certification of monetization
+ * eligibility and never a restatement of YouTube's enforcement mechanism
+ * beyond the dated `policy_url` citation.
+ *
+ * `checked === false` means the comparison could not run at all (fewer than
+ * two recent clips have a usable content embedding — e.g. no transcript
+ * coverage yet) — a distinct, honest state from "checked, nothing found".
+ */
+export interface OriginalityAdvisory {
+  checked: boolean
+  flagged: boolean
+  window: number
+  cluster_size: number
+  similar_clip_ids: string[]
+  common_structural_features: string[]
+  message: string | null
+  policy_url: string
+  policy_checked: string
+}

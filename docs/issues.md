@@ -6579,8 +6579,12 @@ for weeks — the empty state IS the feature at launch and must be designed firs
 > personas on sensitive topics. Over-stating a third party's enforcement policy is a worse honesty
 > breach than any bad clip score. See `COMPETITIVE_RESEARCH.md` § 2026-07-30 refresh — corrections.
 
-**Status** `OPEN` · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
+**Status** `DONE` (2026-07-30, `w3/issue-375-originality`) · **Wave** W1 · **Lane** L24 · **Size** `L` · **Verify** `local` + `integration`
 **Blocked by** nothing — **ready now** · **Coordinate (hot files)** `dna/embeddings.py`, `routers/insights.py`
+
+**Built per the #383-corrected framing** (see the blockquote above) — the gate ended up being
+Voyage-embedding content similarity, not the structural fields listed in the approach sketch below;
+see `docs/DECISIONS.md` (2026-07-30) for why. Full build note in `docs/PROJECT_STATE.md`.
 
 **Problem.** On **16 July 2026** YouTube renamed "repetitious content" to **"inauthentic content"** and
 clarified that mass-produced/templated content with little variation — content "easily replicable at
@@ -6607,12 +6611,14 @@ on a candidate in Review when it would be the Nth near-identical clip). Also inv
 - `tests/` — similarity math, threshold behaviour, isolation, and an honesty test on the advisory copy
 
 **Acceptance criteria**
-- [ ] Near-duplicate / templated output across a creator's recent clips is detected and surfaced plainly
-- [ ] Copy is advisory and accurate — we never claim to certify monetization eligibility or speak for YouTube
-- [ ] The policy is cited with its date so the claim is auditable when YouTube revises it
-- [ ] Threshold is tunable and documented; no false-alarm spam on creators with a legitimately consistent format
-- [ ] Per-creator isolation; no cross-creator embedding comparison ever
-- [ ] Works with zero LLM spend, or bills + spend-guards if a narrative layer is added
+- [x] Near-duplicate / templated output across a creator's recent clips is detected and surfaced plainly
+- [x] Copy is advisory and accurate — we never claim to certify monetization eligibility or speak for YouTube
+- [x] The policy is cited with its date so the claim is auditable when YouTube revises it
+- [x] Threshold is tunable and documented; no false-alarm spam on creators with a legitimately consistent
+      format — the gate is content (embedding) similarity, not structural fields, specifically because
+      structural-only gating would flag a consistent creator (see `docs/DECISIONS.md`)
+- [x] Per-creator isolation; no cross-creator embedding comparison ever
+- [x] Works with zero LLM spend (Voyage embeddings only, same posture as existing `dna/embeddings.py` calls)
 
 **`[DEC]` DECISIONS.md** — similarity threshold + which structural features count as "templated"; the
 advisory-not-guarantee stance and its exact wording (this is a *legal-adjacent* claim about a third

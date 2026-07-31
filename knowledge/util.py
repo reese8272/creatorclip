@@ -187,3 +187,26 @@ def get_transcript_segments(segments_jsonb: dict | None) -> list[dict]:
     if not segments_jsonb:
         return []
     return segments_jsonb.get("segments", [])
+
+
+def extract_transcript_range(
+    segments_jsonb: dict | None, start_s: float, end_s: float, max_chars: int = 800
+) -> str:
+    """Extract plain text for transcript segments overlapping ``[start_s, end_s]``.
+
+    Used to embed a clip's actual spoken content (Issue 375 originality guard) —
+    any segment whose time range intersects the clip window counts, so a segment
+    straddling a clip boundary is not silently dropped.
+    """
+    if not segments_jsonb:
+        return ""
+    segs = segments_jsonb.get("segments", [])
+    parts = []
+    for seg in segs:
+        seg_start = float(seg.get("start", 0))
+        seg_end = float(seg.get("end", seg_start))
+        if seg_end >= start_s and seg_start <= end_s:
+            text = seg.get("text", "").strip()
+            if text:
+                parts.append(text)
+    return " ".join(parts)[:max_chars]

@@ -12,7 +12,7 @@ belonging to the requesting creator.
 import logging
 import statistics as _stats
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import anthropic as _anthropic
@@ -28,8 +28,11 @@ from billing.ledger import check_positive_balance
 from billing.spend_guard import require_budget
 from config import settings
 from db import get_session
+from dna.embeddings import embed_clip_excerpts
 from flags import require_flag
-from knowledge.util import UNTRUSTED_CONTENT_POLICY, wrap_untrusted
+from knowledge import originality
+from knowledge.originality import ClipFingerprint, build_advisory
+from knowledge.util import UNTRUSTED_CONTENT_POLICY, extract_transcript_range, wrap_untrusted
 from limiter import BRIEF_DAILY_LIMIT, LLM_DAILY_LIMIT, creator_key, limiter
 from models import (
     Clip,
@@ -38,10 +41,13 @@ from models import (
     Creator,
     CreatorDna,
     CreatorInsight,
+    DnaEmbedding,
+    DnaEmbeddingKind,
     DnaStatus,
     IngestStatus,
     InsightType,
     PublishStatus,
+    Transcript,
     Video,
     VideoKind,
     VideoMetrics,
@@ -130,6 +136,28 @@ class LiftOut(BaseModel):
     contrast: LiftContrastOut | None
     metric: str
     checkpoint: str
+
+
+class OriginalityOut(BaseModel):
+    """Sameness advisory over the creator's OWN recent clips (Issue 375).
+
+    Advisory only — never a certification of monetization eligibility and
+    never a restatement of YouTube's enforcement mechanism beyond the dated
+    citation in ``policy_url``. ``checked=False`` means the comparison could
+    not run at all (fewer than 2 recent clips have a usable content
+    embedding — e.g. Voyage not configured, or no transcript coverage yet);
+    that is a distinct, honest state from "checked and found nothing".
+    """
+
+    checked: bool
+    flagged: bool
+    window: int
+    cluster_size: int
+    similar_clip_ids: list[str]
+    common_structural_features: list[str]
+    message: str | None
+    policy_url: str
+    policy_checked: str
 
 
 class AnalyticsSummaryOut(BaseModel):
@@ -526,6 +554,133 @@ async def get_proof_of_lift(
     )
     summary["checkpoint"] = "48h and 7d after publish, whichever readings exist"
     return summary
+
+
+@router.get("/originality", response_model=OriginalityOut)
+@limiter.limit("60/minute", key_func=creator_key)
+async def get_originality_advisory(
+    request: Request,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Sameness advisory over THIS creator's own recent clips (Issue 375).
+
+    Compares a creator's last ``ORIGINALITY_RECENT_CLIPS_WINDOW`` clips against
+    each other ONLY — never across creators, never as an input to clip scoring.
+    Gates on Voyage-embedding cosine similarity of each clip's own spoken-
+    content excerpt (see ``knowledge/originality.py`` for why structural fields
+    like duration/style are corroborating detail, not the trigger — a creator
+    with a deliberately consistent format must not be nagged for it).
+
+    Any clip lacking a stored content embedding gets one lazily on this
+    request (cached to ``dna_embeddings`` so repeat calls are free); clips
+    with no transcript coverage over their window, or when Voyage is not
+    configured, are simply excluded from the comparison rather than treated
+    as "different" — see ``build_advisory``'s ``checked`` field.
+
+    Isolation: every query below filters on ``creator.id`` — the stored
+    content embeddings have no other tenant boundary.
+    """
+    window = settings.ORIGINALITY_RECENT_CLIPS_WINDOW
+
+    rows = (
+        await session.execute(
+            select(Clip, Video.duration_s)
+            .join(Video, Video.id == Clip.video_id)
+            .where(Clip.creator_id == creator.id)
+            .order_by(Clip.created_at.desc())
+            .limit(window)
+        )
+    ).all()
+
+    if len(rows) < 2:
+        return asdict(
+            originality.SamenessAdvisory(
+                checked=False,
+                flagged=False,
+                window=len(rows),
+                cluster_size=0,
+                similar_clip_ids=[],
+                common_structural_features=[],
+                message=None,
+                policy_url=originality.POLICY_URL,
+                policy_checked=originality.POLICY_CHECKED,
+            )
+        )
+
+    video_ids = {clip.video_id for clip, _ in rows}
+    transcripts = (
+        (await session.execute(select(Transcript).where(Transcript.video_id.in_(video_ids))))
+        .scalars()
+        .all()
+    )
+    segments_by_video = {t.video_id: t.segments_jsonb for t in transcripts}
+
+    fingerprint_fields: dict[uuid.UUID, dict] = {}
+    for clip, video_duration_s in rows:
+        duration_s = (
+            clip.end_s - clip.start_s
+            if clip.end_s is not None and clip.start_s is not None
+            else None
+        )
+        setup_lead_s = clip.peak_s - clip.start_s if clip.peak_s is not None else None
+        fingerprint_fields[clip.id] = {
+            "clip_id": str(clip.id),
+            "duration_s": duration_s,
+            "setup_lead_s": setup_lead_s,
+            "source_region": originality.bucket_source_region(clip.start_s, video_duration_s),
+            "style_key": originality.style_key(clip.style_preset),
+            "principle": (clip.signals_jsonb or {}).get("principle") or None,
+        }
+
+    # ── Load any content embeddings already stored for these clips ──────────
+    clip_ids = list(fingerprint_fields.keys())
+    existing_rows = (
+        await session.execute(
+            select(DnaEmbedding.ref_jsonb, DnaEmbedding.embedding).where(
+                DnaEmbedding.creator_id == creator.id,
+                DnaEmbedding.kind == DnaEmbeddingKind.clip,
+                DnaEmbedding.ref_jsonb["clip_id"].as_string().in_([str(c) for c in clip_ids]),
+            )
+        )
+    ).all()
+    embeddings_by_clip: dict[uuid.UUID, list[float]] = {}
+    for ref_jsonb, embedding in existing_rows:
+        raw_id = (ref_jsonb or {}).get("clip_id")
+        try:
+            clip_uuid = uuid.UUID(raw_id)
+        except (TypeError, ValueError):
+            continue
+        # pgvector returns a numpy ndarray from the DB; normalize to a plain
+        # list of Python floats so ClipFingerprint.embedding matches its type.
+        embeddings_by_clip[clip_uuid] = (
+            embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+        )
+
+    # ── Lazily embed any recent clip that doesn't have one yet ──────────────
+    missing_texts: dict[uuid.UUID, str] = {}
+    for clip, _video_duration_s in rows:
+        if clip.id in embeddings_by_clip:
+            continue
+        text = extract_transcript_range(
+            segments_by_video.get(clip.video_id), clip.start_s, clip.end_s
+        )
+        if text:
+            missing_texts[clip.id] = text
+    if missing_texts:
+        embeddings_by_clip.update(await embed_clip_excerpts(session, creator.id, missing_texts))
+
+    fingerprints = [
+        ClipFingerprint(embedding=embeddings_by_clip.get(cid), **fields)
+        for cid, fields in fingerprint_fields.items()
+    ]
+
+    advisory = build_advisory(
+        fingerprints,
+        similarity_threshold=settings.ORIGINALITY_SIMILARITY_THRESHOLD,
+        min_cluster_size=settings.ORIGINALITY_MIN_CLUSTER_SIZE,
+    )
+    return asdict(advisory)
 
 
 @router.get("/analytics", response_model=AnalyticsSummaryOut)
