@@ -17,6 +17,8 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { Analytics, InsightsResponse } from '@/types'
 
@@ -105,12 +107,32 @@ export function WhatChanged() {
     )
   }
 
-  if (q7.isError || q28.isError || !q7.data?.metrics_available) {
+  // A failed fetch is NOT an empty state (Issue 361 convention) — telling a
+  // creator whose analytics exist that they have none is the worse of the two
+  // errors. Issue 355 split these; they used to share one branch.
+  if (q7.isError || q28.isError) {
     return (
       <Panel title="What changed this week" sub="7-day vs your 28-day average">
-        <p className="text-sm italic text-subtle">
-          Not enough analytics data yet — sync your channel to unlock this view.
-        </p>
+        <QueryErrorState
+          title="Couldn’t load this week’s comparison."
+          onRetry={() => {
+            void q7.refetch()
+            void q28.refetch()
+          }}
+        />
+      </Panel>
+    )
+  }
+
+  if (!q7.data?.metrics_available) {
+    return (
+      <Panel title="What changed this week" sub="7-day vs your 28-day average">
+        <EmptyStatePrompt
+          title="Not enough analytics data yet."
+          detail="Sync your channel to unlock this view."
+          actionLabel="Sync your channel"
+          actionTo="/onboarding"
+        />
       </Panel>
     )
   }

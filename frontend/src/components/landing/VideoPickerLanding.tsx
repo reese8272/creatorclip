@@ -5,8 +5,8 @@ import { api, ApiError } from '@/lib/api'
 import { videosRefetchInterval } from '@/lib/videosPoll'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Chip } from '@/components/Chip'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/videoStatus'
 import { InlineUploadFlow } from '@/components/landing/InlineUploadFlow'
 import type {
@@ -255,12 +255,19 @@ export function VideoPickerLanding({ tool }: { tool: 'review' | 'editor' }) {
           onRetry={() => void videosQuery.refetch()}
         />
       ) : isEmpty ? (
-        <div className="flex flex-col items-center gap-3 py-10 text-center">
-          <Chip pose="confused" size={72} />
-          <p className="max-w-md text-body text-muted">
-            {videosQuery.data?.message ?? 'No videos yet — upload one above to get started.'}
-          </p>
-        </div>
+        // Issue 355: the old copy pointed "above" with nothing to click. The
+        // upload form IS already open in this branch (showUpload), so the honest
+        // move is to say so and offer the OTHER input path rather than a second
+        // button that does the same thing.
+        <EmptyStatePrompt
+          variant="card"
+          pose="confused"
+          className="my-6"
+          title={videosQuery.data?.message ?? 'No videos yet.'}
+          detail="The upload form is open above — drop in a source file and we’ll transcribe it. Already have videos on YouTube? Browse them from your dashboard."
+          actionLabel="Browse your channel"
+          actionTo="/dashboard"
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">

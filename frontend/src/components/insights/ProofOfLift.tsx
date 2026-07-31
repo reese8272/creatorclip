@@ -1,3 +1,4 @@
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { ProofOfLift as ProofOfLiftData } from '@/types'
 
@@ -44,13 +45,12 @@ export function ProofOfLift({
   if (lift.published_count === 0) {
     return (
       <Panel title="Proof of lift">
-        <p className="text-sm text-fg">
-          Nothing published through AutoClip yet — so there is nothing to report.
-        </p>
-        <p className="mt-2 text-sm text-muted">
-          Once you publish clips from here, this panel tracks how each one actually did against
-          your own channel, and feeds that back into how clips are ranked for you.
-        </p>
+        <EmptyStatePrompt
+          title="Nothing published through AutoClip yet — so there is nothing to report."
+          detail="Once you publish clips from here, this panel tracks how each one actually did against your own channel, and feeds that back into how clips are ranked for you."
+          actionLabel="Review clips to publish"
+          actionTo="/review"
+        />
       </Panel>
     )
   }

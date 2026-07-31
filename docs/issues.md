@@ -6862,8 +6862,27 @@ self-contained and unambiguous. (2) Aggregated-demographics and analytics values
 > 60 free minutes **once** (`config.py:588`) vs 60/month **recurring** at both Opus and Vizard. Scope
 > this issue to **free-trial structure only**; no `MinuteDeduction` ledger change is implicated.
 
-**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + copy)
+**Status** `DONE (W5, 2026-07-31) — decision made: KEEP the one-time 60 min / 7 day trial. No code change.`
+· **Wave** W2 · **Lane** L24 · **Size** `S` · **Verify** `local` (decision + copy)
 **Blocked by** nothing · **Supersedes-candidate for** the #209 / #125 / #152 pricing posture
+
+> ✅ **RESOLVED 2026-07-31 — see `docs/DECISIONS.md` (Issue 380).** The last surviving premise also
+> fails: the Opus/Vizard "60 min/month" is **watermarked with 3-day storage and no virality score**
+> (`docs/COMPETITIVE_RESEARCH.md:63`), where our 60 trial minutes are full-fidelity, un-watermarked
+> and permanently stored — not the same unit. Matching the number unrestricted would give away
+> 720 min/yr = **3.6× the Starter pack** and let a one-upload-a-month creator never convert. 2026
+> benchmarks: opt-in time-boxed trials convert **8.9–25.2%** vs freemium **2–8%**, and the category
+> has shifted to trials (57%) over freemium (26%) on AI-cost grounds ("Freemium Death Spiral").
+> **COGS is explicitly NOT the reason** — a recurring 60-min grant would cost only ~$0.35–0.45 per
+> creator per month (finding 06 §2.3: a 60-min upload is ~$0.32–0.44 all-in), under $45/mo at the
+> full 100-user cap; risk (2) in this brief overstated the cost floor and should not be re-cited.
+> Runner-up **option (d), a watermarked recurring free tier**, is deferred — not dismissed: no
+> AutoClip-branded watermark render path exists (the only watermark in the codebase is the
+> creator's own brand kit, `frontend/src/pages/Settings.tsx:203`) and a viral-watermark growth loop
+> buys nothing while signups are capped at 100 invited users. **Re-open trigger:** signups open
+> beyond the 100-user OAuth cap, or beta conversion data shows drop-off at the Starter boundary.
+> Also corrected here: premise (3) misdescribed #377 — the shortlist is a read-time display cut,
+> generation and scoring volume are unchanged (0% reduction in LLM scoring calls).
 **Coordinate (hot files)** `billing/packs.py`, `frontend/src/pages/Pricing.tsx`
 
 **Problem.** #209 (DONE) formally locked **per-input-minute** with a taper plus a Stream pack, and
@@ -6893,11 +6912,11 @@ included minutes + overage packs on the existing ledger; (d) status quo + a wate
 - `docs/COMPETITIVE_RESEARCH.md` — update the reconciliation note at :115 to reflect the new call
 
 **Acceptance criteria**
-- [ ] Competitor pricing re-verified live (not from the June snapshot) before the decision is made
-- [ ] Decision recorded in DECISIONS with the evidence and an explicit note on what changed since #209
-- [ ] Margin floor from finding 06 re-checked against whatever is chosen
-- [ ] If the lineup changes: backend and frontend pack lists stay in sync (or the duplication is finally killed)
-- [ ] No-virality disclaimer preserved in all pricing copy
+- [x] Competitor pricing re-verified live (not from the June snapshot) before the decision is made — done by #383 on 2026-07-30; free-tier *terms* (watermark / 3-day storage) re-read 2026-07-31, which is what actually decided it
+- [x] Decision recorded in DECISIONS with the evidence and an explicit note on what changed since #209 — all three "what changed" claims addressed individually; none survives, #209 stands
+- [x] Margin floor from finding 06 re-checked against whatever is chosen — unchanged (~71–89% gross margin across the §2.3 rows); status quo moves nothing
+- [x] If the lineup changes: backend and frontend pack lists stay in sync (or the duplication is finally killed) — N/A, lineup unchanged; the #209 DRY drift is untouched, not aggravated
+- [x] No-virality disclaimer preserved in all pricing copy — no pricing copy edited
 
 **`[DEC]` DECISIONS.md** — required by definition; this issue **is** the decision.
 

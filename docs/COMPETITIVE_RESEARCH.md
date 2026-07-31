@@ -174,6 +174,20 @@ this weakens the argument when a creator checks and finds Studio can't make them
   > The subscriptions/watermarked-free-tier GTM remains valid advice independent of the billing
   > primitive; the $12–15/mo entry benchmark can be revisited for a future subscription tier
   > if the credit model shows conversion drop-off at the Starter level.
+  >
+  > **Addendum (Issue 380, 2026-07-31) — the free-trial question is now CLOSED: one-time 60 min /
+  > 7 days stands.** The apparent gap versus "Opus and Vizard give 60 min/month" is not a like-for-like
+  > comparison: their free grants are **watermarked with limited storage** (Opus Free = 60 min/mo,
+  > watermark, 3-day storage, no virality score — see the Pricing section above at the Opus Clip
+  > bullet), and per the growth-loop bullet in Marketing & GTM the watermark **is** the point. Ours
+  > is full-fidelity, un-watermarked, permanently stored output. Matching the *number* without the
+  > *restrictions* would give away 720 min/yr — **3.6× the entire Starter pack** (200 min / $18) —
+  > and let a one-upload-a-month creator subsist free forever. 2026 benchmarks also put opt-in
+  > time-boxed trials at 8.9–25.2% conversion against freemium's 2–8%, with the category shifting to
+  > trials (57%) over freemium (26%). The runner-up option is **(d) a watermarked recurring free
+  > tier** — the standard-conformant version — deferred because no AutoClip-branded watermark render
+  > path exists and a viral-watermark loop buys nothing while signups are capped at 100 invited
+  > users. Full reasoning, margin re-check, and the re-open trigger: `docs/DECISIONS.md` (Issue 380).
 
 **Stage 2 — Make it feel magical (2–5 months):**
 

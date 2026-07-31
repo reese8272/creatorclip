@@ -11,8 +11,9 @@ import { WhyThisClip } from '@/components/review/WhyThisClip'
 import { YourCall } from '@/components/review/YourCall'
 import { CollapsibleTool } from '@/components/review/CollapsibleTool'
 import { QueryErrorState } from '@/components/QueryErrorState'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { StyleReview } from '@/components/review/StyleReview'
-import { VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
+import { GenerateClipsButton, VideoPickerLanding } from '@/components/landing/VideoPickerLanding'
 import { Button } from '@/components/ui/button'
 import type { PersonalizationStatus, ReviewClip, ReviewClipListResponse } from '@/types'
 
@@ -236,8 +237,16 @@ export function Review() {
           AutoClip predicts fit with your style and audience — it does not promise virality. All
           scores are estimates grounded in your own channel data.
         </DisclaimerBand>
-        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-3 px-4 py-10 text-center">
-          <p className="text-sm text-muted">No clips yet — generate them from the Dashboard.</p>
+        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-3 px-4 py-10">
+          {/* Issue 355: this used to point at the Dashboard in prose with nothing
+              to click. Generating is the actual next step, so it happens here. */}
+          <EmptyStatePrompt
+            variant="card"
+            pose="confused"
+            title="No clips yet for this video."
+            detail="Generate them here — we’ll rank them against your channel’s DNA and argue the case for each."
+            action={<GenerateClipsButton videoId={videoId} onClips={() => void refetch()} />}
+          />
           {/* Issue 370: a 0-clip video is still reviewable as a whole. */}
           <Button
             variant="secondary"

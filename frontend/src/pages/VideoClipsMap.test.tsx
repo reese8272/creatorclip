@@ -158,7 +158,7 @@ describe('VideoClipsMap', () => {
   it('shows link empty-state when origin=link and no clips', async () => {
     vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'link' }), []))
     renderMap()
-    expect(await screen.findByText(/Upload source file to clip/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Upload the source file to clip/i)).toBeInTheDocument()
   })
 
   it('shows catalog empty-state when origin=catalog and no clips', async () => {
@@ -167,6 +167,23 @@ describe('VideoClipsMap', () => {
     expect(
       await screen.findByText(/catalog reference — not clippable/i),
     ).toBeInTheDocument()
+  })
+
+  // Issue 355: every branch of this page's empty state used to dead-end with no
+  // control at all. These pin the next step per branch so that cannot regress.
+  it.each([
+    ['link', 'Upload a source file'],
+    ['catalog', 'Upload a source file'],
+  ])('offers a next step for origin=%s with no clips', async (origin, label) => {
+    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin }), []))
+    renderMap()
+    expect(await screen.findByRole('link', { name: new RegExp(label, 'i') })).toBeInTheDocument()
+  })
+
+  it('offers Generate clips when an uploaded video has none', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeVideo({ origin: 'upload' }), []))
+    renderMap()
+    expect(await screen.findByRole('button', { name: /Generate clips/i })).toBeInTheDocument()
   })
 
   it('renders "Review all clips in order" link pointing to /review?video_id=…', async () => {

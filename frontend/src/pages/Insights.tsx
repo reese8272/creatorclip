@@ -17,6 +17,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { QueryErrorState } from '@/components/QueryErrorState'
 import { Chip } from '@/components/Chip'
 import { ChannelSnapshot } from '@/components/insights/ChannelSnapshot'
 import { ChannelFingerprint } from '@/components/insights/ChannelFingerprint'
@@ -81,7 +82,10 @@ export function Insights() {
         {insightsQuery.isPending ? (
           <p className="text-sm text-muted">Loading your channel insights…</p>
         ) : insightsQuery.isError ? (
-          <p className="text-sm text-danger">Could not load insights — try again.</p>
+          <QueryErrorState
+            title="Could not load insights."
+            onRetry={() => void insightsQuery.refetch()}
+          />
         ) : (
           <>
             {/* Page-level framing: what this is showing + why it matters */}

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Panel, Cell, gridCls } from '@/components/insights/InsightsPanel'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Chip } from '@/components/Chip'
 import type { DnaStats, FingerprintShare } from '@/types'
 
@@ -33,6 +34,21 @@ export function ChannelFingerprint({ dna }: { dna: DnaStats }) {
   })
 
   const version = dna.version != null ? `v${dna.version} · ${dna.status}` : 'Not built yet'
+
+  // Without a built DNA every cell below reads "—" and the share action would
+  // produce an empty card — a dead end wearing a full panel (Issue 355).
+  if (dna.version == null) {
+    return (
+      <Panel title="Your channel fingerprint" sub={version}>
+        <EmptyStatePrompt
+          title="Your fingerprint isn’t built yet."
+          detail="Build your Creator DNA and this becomes the shareable summary of what your channel actually is."
+          actionLabel="Build your DNA"
+          actionTo="/onboarding"
+        />
+      </Panel>
+    )
+  }
 
   function copyCard() {
     if (!card) return

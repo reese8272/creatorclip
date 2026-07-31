@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { ProofOfLift } from './ProofOfLift'
 import type { ProofOfLift as ProofOfLiftData } from '@/types'
 
@@ -20,8 +21,17 @@ const base: ProofOfLiftData = {
 
 describe('ProofOfLift', () => {
   it('shows a useful empty state — the default at beta launch', () => {
-    render(<ProofOfLift lift={base} />)
+    // Issue 355: the empty state must offer a way forward, not just explain itself.
+    render(
+      <MemoryRouter>
+        <ProofOfLift lift={base} />
+      </MemoryRouter>,
+    )
     expect(screen.getByText(/Nothing published through AutoClip yet/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Review clips to publish/i })).toHaveAttribute(
+      'href',
+      '/review',
+    )
   })
 
   it('distinguishes a failed fetch from a genuine empty state', () => {

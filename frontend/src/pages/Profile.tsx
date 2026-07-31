@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { DnaCard } from '@/components/profile/DnaCard'
 import { AnalyticsPanel } from '@/components/dashboard/AnalyticsPanel'
 import { Button } from '@/components/ui/button'
@@ -88,21 +89,23 @@ export function Profile() {
             <DnaCard identity={identity} niches={niches} />
             <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
               <div className="flex items-center justify-between border-b border-default px-[18px] py-4">
-                <span className="text-body font-semibold text-fg">Saved analyses</span>
+                {/* Issue 355: "Saved insights" everywhere — Insights calls the
+                    same endpoint and query key ['saved-insights'] by that name. */}
+                <span className="text-body font-semibold text-fg">Saved insights</span>
                 <span className="text-label text-subtle">
                   {saved.length > 0 ? `${saved.length} saved` : ''}
                 </span>
               </div>
               {savedQuery.isError ? (
-                <p className="px-[18px] py-4 text-small text-danger">Could not load saved analyses.</p>
+                <p className="px-[18px] py-4 text-small text-danger">Could not load saved insights.</p>
               ) : saved.length === 0 ? (
-                <p className="px-[18px] py-4 text-small text-subtle">
-                  No saved analyses yet — bookmark a performer analysis or improvement brief on the{' '}
-                  <Link to="/insights" className="text-accent-text hover:underline">
-                    Insights
-                  </Link>{' '}
-                  page.
-                </p>
+                <EmptyStatePrompt
+                  className="px-[18px] py-4"
+                  title="No saved insights yet."
+                  detail="Bookmark a performer analysis or improvement brief and it lands here."
+                  actionLabel="Go to Insights"
+                  actionTo="/insights"
+                />
               ) : (
                 saved.map((s) => (
                   <div

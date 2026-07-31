@@ -1,3 +1,4 @@
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Panel } from '@/components/insights/InsightsPanel'
 import type { OriginalityAdvisory } from '@/types'
 
@@ -44,10 +45,12 @@ export function OriginalityGuard({
   if (!advisory.checked) {
     return (
       <Panel title="Originality guard">
-        <p className="text-sm text-muted">
-          Not enough recent clips to check yet — this needs at least two clips with transcript
-          coverage to compare.
-        </p>
+        <EmptyStatePrompt
+          title="Not enough recent clips to check yet."
+          detail="This needs at least two clips with transcript coverage to compare."
+          actionLabel="Generate more clips"
+          actionTo="/dashboard"
+        />
       </Panel>
     )
   }

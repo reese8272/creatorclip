@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { OriginalityGuard } from './OriginalityGuard'
 import type { OriginalityAdvisory } from '@/types'
 
@@ -27,8 +28,14 @@ describe('OriginalityGuard', () => {
   })
 
   it('reports "could not check yet" distinctly from "checked, nothing found"', () => {
-    render(<OriginalityGuard advisory={{ ...base, checked: false }} />)
+    render(
+      <MemoryRouter>
+        <OriginalityGuard advisory={{ ...base, checked: false }} />
+      </MemoryRouter>,
+    )
     expect(screen.getByText(/Not enough recent clips to check yet/i)).toBeInTheDocument()
+    // Issue 355: "not enough clips" must offer the way to get more.
+    expect(screen.getByRole('link', { name: /Generate more clips/i })).toBeInTheDocument()
   })
 
   it('shows a clean all-clear when checked and nothing is flagged', () => {

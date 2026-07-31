@@ -27,6 +27,12 @@ const buttonVariants = cva(
   },
 )
 
+// Exported so a router <Link> can wear the button skin without nesting a real
+// <button> inside an <a> (nested interactive elements confuse AT and swallow
+// keyboard activation). This is the shadcn-standard escape hatch; prefer it over
+// <Link><Button/></Link> in any NEW shared component.
+export { buttonVariants }
+
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}

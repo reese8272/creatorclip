@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
+import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import { Panel } from '@/components/insights/InsightsPanel'
 import { deriveWhyNarrative } from '@/components/insights/narrative'
 import type { Performer, PerformerInsight } from '@/types'
@@ -147,7 +148,12 @@ export function PerformerPanel({
   return (
     <Panel title={title} sub={sub} aside={aside}>
       {sorted.length === 0 ? (
-        <div className="text-sm italic text-subtle">Build your DNA to surface this list.</div>
+        <EmptyStatePrompt
+          title="Build your DNA to surface this list."
+          detail="Your Creator DNA is what this list is ranked against — without it there is nothing to compare your videos to."
+          actionLabel="Build your DNA"
+          actionTo="/onboarding"
+        />
       ) : (
         sorted.map((p) => <PerformerRow key={p.video_id} p={p} kind={kind} />)
       )}
