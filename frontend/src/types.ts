@@ -213,6 +213,22 @@ export interface InsightsResponse {
   bottom_performers: Performer[]
 }
 
+// Issue 379 — Channel Fingerprint shareable artifact. POST-only, explicit
+// creator action; NEVER auto-fetched. Every field here is self-declared
+// (creator_identity) or distilled from the creator's own in-app feedback
+// (creator_style_notes) — never YouTube Analytics/Data API-derived. See
+// docs/COMPLIANCE.md "Channel Fingerprint — shareable artifact" for the
+// field-by-field provenance audit and routers/creators.py::FingerprintShareOut.
+export interface FingerprintShare {
+  niches: string[]
+  content_pillars: string[] | null
+  tone_tags: string[] | null
+  mission: string | null
+  style_summary: string | null
+  honesty_line: string
+  generated_at: string
+}
+
 export interface UploadWindow {
   day_name: string
   label: string

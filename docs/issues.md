@@ -6786,7 +6786,17 @@ regresses is a public commitment — decide the refresh cadence and the "we stop
 
 ### Issue 379: Channel Fingerprint — make the DNA an artifact creators want to show
 
-**Status** `OPEN` · **Wave** W2 · **Lane** L24 · **Size** `M` · **Verify** `local`
+> ✅ **DONE (2026-07-30, branch `w4/issue-379-fingerprint`).** Two-tier build: (1) private in-app view —
+> `ChannelFingerprint.tsx` on Insights, replacing the bare 3-stat `DnaSnapshot` card, still backed by the
+> existing analytics-derived DNA endpoints (III.E.3.b permits display to the authorizing creator);
+> (2) shareable artifact — new `POST /creators/me/fingerprint/share`, explicit-action-only (POST, not
+> embedded in any GET response), returning ONLY self-declared identity (`niches`, `content_pillars`,
+> `tone_tags`, `mission`) + the Issue-371 feedback-distilled `style_summary` + the honesty line +
+> `generated_at`. Zero analytics-derived fields — see `docs/COMPLIANCE.md` "Channel Fingerprint" for the
+> full field audit and `docs/DECISIONS.md` for the ToS basis (III.E.2/III.E.3.b, quoted). Load-bearing
+> test: `tests/test_fingerprint.py::test_pydantic_model_has_exactly_the_allowlisted_fields`.
+
+**Status** `DONE` · **Wave** W2 · **Lane** L24 · **Size** `M` · **Verify** `local`
 **Blocked by** nothing · **Coordinate (hot files)** `frontend/src/pages/Insights.tsx`, `frontend/src/pages/Profile.tsx`
 
 **Problem.** "Your DNA at a glance" is three numbers in a card (`insights 1.png`: optimal clip 38s, best
@@ -6809,10 +6819,10 @@ a detail. Default private; sharing is an explicit creator action.
 - `tests/` — no virality language; no restricted metric on a shareable surface; isolation
 
 **Acceptance criteria**
-- [ ] The DNA renders as a designed, legible artifact rather than a stat list
-- [ ] Sharing is opt-in and explicit; nothing leaves the boundary by default
-- [ ] Only ToS-permissible values appear on an exportable surface (verified in CHECK, recorded in COMPLIANCE)
-- [ ] Honesty constraint present on the artifact itself (it travels without our UI around it)
+- [x] The DNA renders as a designed, legible artifact rather than a stat list
+- [x] Sharing is opt-in and explicit; nothing leaves the boundary by default
+- [x] Only ToS-permissible values appear on an exportable surface (verified in CHECK, recorded in COMPLIANCE)
+- [x] Honesty constraint present on the artifact itself (it travels without our UI around it)
 
 **`[DEC]` DECISIONS.md** — which analytics-derived values may appear on a creator-shareable artifact
 under the YouTube ToS, and the default-private stance.

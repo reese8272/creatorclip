@@ -4,7 +4,42 @@ Updated after every issue closes.
 
 ---
 
-## 2026-07-30 (latest, W3) — Issue 376(a) DONE: public marketing landing; 376(b) DESCOPED
+## 2026-07-30 (latest, W4) — Issue 379 DONE: Channel Fingerprint (two-tier DNA artifact)
+
+Built on `w4/issue-379-fingerprint` off `wave/l24-and-hygiene`. "Your DNA at a glance" (the bare
+`optimal_clip_len_s` / `best_source_region` / `optimal_upload_gap_h` stat card) is replaced by a
+two-tier design driven by a literal YouTube API Services Policies reading (III.E.2 / III.E.3.b,
+fetched live this session — quoted in `docs/DECISIONS.md`):
+
+1. **Private in-app view** — `frontend/src/components/insights/ChannelFingerprint.tsx`, on the
+   Insights page in place of the old `DnaSnapshot` card. Still backed by the existing
+   analytics-derived DNA stats (permitted for the authorizing creator under III.E.3.b) — no new
+   endpoint, no new data class.
+2. **Shareable artifact** — new `POST /creators/me/fingerprint/share` (`routers/creators.py`).
+   Explicit-action-only (POST, never embedded in any GET response, nothing persisted). Returns
+   ONLY self-declared identity (`niches`, `content_pillars`, `tone_tags`, `mission` — from
+   `creator_identity`/`dna/identity.py`) + the Issue-371 feedback-distilled `style_summary`
+   (`creator_style_notes`, sourced from the creator's own in-app feedback, never YouTube
+   Analytics) + a static honesty line + `generated_at`. **Zero analytics-derived fields** — the
+   full field-by-field audit (including fields deliberately excluded despite being ToS-permissible:
+   `audience_summary`, `hard_nos`, `style_sample`, `channel_title`) is in `docs/COMPLIANCE.md`
+   "Channel Fingerprint — shareable artifact field-by-field audit".
+
+**Tests:** `tests/test_fingerprint.py` (9, backend) — load-bearing exact-allowlist assertion on
+`FingerprintShareOut`, auth-required, POST-not-GET, per-creator isolation, honesty line, and that
+shareable-only fields never leak into `GET /creators/me/identity`.
+`frontend/src/components/insights/ChannelFingerprint.test.tsx` (3) — private stats render with zero
+fetch; shareable card is fetched/rendered only after the explicit click, via POST.
+`tests/test_compliance_no_virality.py` extended coverage confirmed green (no new virality surface).
+
+Backend suite measured: **2445 passed, 70 skipped** (was reported 2442/64 at handoff — the skip-count
+delta traces to this worktree missing a built `frontend/dist` bundle, not to this change; net **+3
+passed** matches the fully-passing new test file). Frontend: **334 passed** (was 331, +3), `tsc -b`
+clean.
+
+---
+
+## 2026-07-30 (W3) — Issue 376(a) DONE: public marketing landing; 376(b) DESCOPED
 
 `main.py:200` used to redirect `/` straight into the app, bouncing every anonymous visitor to
 "Sign in to continue" — there was no public page describing AutoClip at all, which blocked the
