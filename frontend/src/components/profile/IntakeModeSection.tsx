@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import type { AnalysisMode } from '@/types'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 
 const MODES: { value: AnalysisMode; label: string; help: string }[] = [
   { value: 'auto', label: 'Auto', help: 'New uploads from your channel ingest automatically (current default).' },
@@ -40,27 +41,32 @@ export function IntakeModeSection({ initialMode }: { initialMode: AnalysisMode }
         description="How AutoClip handles new videos. Transcription and clip generation cost minutes — these modes decide when that meter starts."
       />
       <CardBody className="flex flex-col gap-3">
-        {MODES.map((m) => (
-          <label
-            key={m.value}
-            className={cn(
-              'flex cursor-pointer gap-3 rounded-md border px-4 py-3 transition-colors',
-              mode === m.value ? 'border-accent bg-accent-soft' : 'border-default hover:border-strong',
-            )}
-          >
-            <input
-              type="radio"
-              name="analysis_mode"
-              checked={mode === m.value}
-              onChange={() => setMode(m.value)}
-              className="mt-1 accent-[color:var(--color-accent)]"
-            />
-            <span>
-              <span className="block text-sm font-medium text-fg">{m.label}</span>
-              <span className="block text-xs text-muted">{m.help}</span>
-            </span>
-          </label>
-        ))}
+        {/* RadioGroup owns roving tabindex + arrow-key navigation; each option
+            keeps its card styling, with the label a sibling carrying htmlFor so
+            clicking the card text still selects (Radix renders a button). */}
+        <RadioGroup
+          value={mode}
+          onValueChange={(v) => setMode(v as AnalysisMode)}
+          aria-label="Analysis mode"
+        >
+          {MODES.map((m) => (
+            <div
+              key={m.value}
+              className={cn(
+                'flex gap-3 rounded-md border px-4 py-3 transition-colors',
+                mode === m.value
+                  ? 'border-accent bg-accent-soft'
+                  : 'border-default hover:border-strong',
+              )}
+            >
+              <RadioGroupItem value={m.value} id={`analysis-mode-${m.value}`} className="mt-1" />
+              <label htmlFor={`analysis-mode-${m.value}`} className="cursor-pointer">
+                <span className="block text-sm font-medium text-fg">{m.label}</span>
+                <span className="block text-xs text-muted">{m.help}</span>
+              </label>
+            </div>
+          ))}
+        </RadioGroup>
         <div className="flex items-center gap-3">
           <Button onClick={save}>Save mode</Button>
           {status && (

@@ -3,10 +3,30 @@ import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { subscribeToTaskStream, type StreamSubscription } from '@/lib/taskStream'
 import { Button } from '@/components/ui/button'
+import { Select, type SelectOption } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import type { BrandKit, ReviewClip } from '@/types'
 
-const selectCls =
-  'rounded-sm border border-strong bg-bg px-2 py-1 text-xs text-fg focus:border-accent focus:outline-none'
+// Every option list here keeps '' as its default value ("None", "9:16",
+// "Default (black)") — the Select primitive maps that to Radix's reserved
+// sentinel internally, so these read exactly as the old <option value=""> did.
+const SUBTITLE_OPTIONS: SelectOption[] = [
+  { value: '', label: 'None — no captions' },
+  { value: 'bold_pop', label: 'Bold Pop — one word, scale-pops' },
+  { value: 'bold_pop_highlight', label: 'Bold Pop Highlight — keywords in yellow' },
+  { value: 'gradient_slide', label: 'Gradient Slide — indigo→white fade-in' },
+  { value: 'minimal', label: 'Minimal — plain phrase captions' },
+]
+const ASPECT_OPTIONS: SelectOption[] = [
+  { value: '', label: '9:16 — vertical Short (default)' },
+  { value: '1:1', label: '1:1 — square' },
+  { value: '16:9', label: '16:9 — horizontal' },
+]
+const BACKGROUND_OPTIONS: SelectOption[] = [
+  { value: '', label: 'Default (black)' },
+  { value: 'blur', label: 'Blur' },
+  { value: 'black', label: 'Black' },
+]
 
 // POST /clips/{id}/render response envelope (routers/clips.py RenderQueuedOut).
 interface RenderQueued {
@@ -107,56 +127,59 @@ export function CaptionStylePanel({ clip }: { clip: ReviewClip }) {
 
   return (
     <div className="flex flex-col gap-3 text-xs text-muted">
-      <label className="flex items-center justify-between gap-3">
-        Caption style
-        <select value={subtitle} onChange={(e) => setSubtitle(e.target.value)} className={selectCls}>
-          <option value="">None — no captions</option>
-          <option value="bold_pop">Bold Pop — one word, scale-pops</option>
-          <option value="bold_pop_highlight">Bold Pop Highlight — keywords in yellow</option>
-          <option value="gradient_slide">Gradient Slide — indigo→white fade-in</option>
-          <option value="minimal">Minimal — plain phrase captions</option>
-        </select>
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        Aspect ratio
-        <select value={aspect} onChange={(e) => setAspect(e.target.value)} className={selectCls}>
-          <option value="">9:16 — vertical Short (default)</option>
-          <option value="1:1">1:1 — square</option>
-          <option value="16:9">16:9 — horizontal</option>
-        </select>
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        Background fill
-        <select
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="caption-style">Caption style</label>
+        <Select
+          id="caption-style"
+          value={subtitle}
+          onValueChange={setSubtitle}
+          options={SUBTITLE_OPTIONS}
+          size="sm"
+          className="w-[62%]"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="caption-aspect">Aspect ratio</label>
+        <Select
+          id="caption-aspect"
+          value={aspect}
+          onValueChange={setAspect}
+          options={ASPECT_OPTIONS}
+          size="sm"
+          className="w-[62%]"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="caption-background">Background fill</label>
+        <Select
+          id="caption-background"
           value={background}
-          onChange={(e) => setBackground(e.target.value)}
-          className={selectCls}
-        >
-          <option value="">Default (black)</option>
-          <option value="blur">Blur</option>
-          <option value="black">Black</option>
-        </select>
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        Captions on
-        <input
-          type="checkbox"
+          onValueChange={setBackground}
+          options={BACKGROUND_OPTIONS}
+          size="sm"
+          className="w-[62%]"
+        />
+      </div>
+      {/* Switch, not Checkbox: each of these applies to the next render as soon
+          as it is toggled — nothing is submitted. The label is a SIBLING with
+          htmlFor, because Radix renders a button and a wrapping label with no
+          htmlFor would silently stop toggling on text click. */}
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="captions-enabled">Captions on</label>
+        <Switch
+          id="captions-enabled"
           checked={captionsEnabled}
-          onChange={(e) => setCaptionsEnabled(e.target.checked)}
+          onCheckedChange={setCaptionsEnabled}
         />
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        Punch-in at peak
-        <input
-          type="checkbox"
-          checked={zoomOnPeak}
-          onChange={(e) => setZoomOnPeak(e.target.checked)}
-        />
-      </label>
-      <label className="flex items-center justify-between gap-3">
-        Reduce background noise
-        <input type="checkbox" checked={denoise} onChange={(e) => setDenoise(e.target.checked)} />
-      </label>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="zoom-on-peak">Punch-in at peak</label>
+        <Switch id="zoom-on-peak" checked={zoomOnPeak} onCheckedChange={setZoomOnPeak} />
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="denoise">Reduce background noise</label>
+        <Switch id="denoise" checked={denoise} onCheckedChange={setDenoise} />
+      </div>
       <Button
         variant="secondary"
         size="sm"

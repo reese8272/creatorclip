@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { EmptyStatePrompt } from '@/components/EmptyStatePrompt'
 import type { Analytics, AnalyticsPeriod } from '@/types'
+import { Select } from '@/components/ui/select'
 import { ArrowRight } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
 
@@ -48,18 +49,14 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
   })
 
   const periodSelect = (
-    <select
+    <Select
       aria-label="Analytics period"
       value={period}
-      onChange={(e) => setPeriod(e.target.value as AnalyticsPeriod)}
-      className="rounded-sm border border-strong bg-bg px-2 py-1 text-xs text-muted"
-    >
-      {PERIODS.map((p) => (
-        <option key={p.value} value={p.value}>
-          {p.label}
-        </option>
-      ))}
-    </select>
+      onValueChange={(v) => setPeriod(v as AnalyticsPeriod)}
+      options={PERIODS}
+      size="sm"
+      className="w-auto"
+    />
   )
 
   // Sidebar variant (Issue 305 — Dashboard videos-first): recompacted as a
