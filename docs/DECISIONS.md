@@ -5,6 +5,109 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue tracker reset: `docs/issues.md` archived and rebuilt around Lane L25 (Editor & Craft)
+
+**What was decided.**
+`docs/issues.md` had grown to **7,096 lines / 212 issue briefs** and stopped functioning as a work
+queue — it was being read as a historical record instead of a schedule. It is archived **verbatim**
+at `docs/issues-archive-2026-08-03.md` (via `git mv`, so history follows the file) and replaced with
+a short, batch-ordered queue. Deviation from the instruction to *delete* the old file: it is
+archived rather than removed, because it is the only prose record of the reasoning behind 212 issue
+briefs and a deleted file is a materially worse lookup surface than a named archive.
+
+**Status audit run before the reset.** Issues **345–383 are DONE** with exactly three exceptions,
+verified against each brief's `**Status**` line (consistent with `docs/PROJECT_STATE.md`'s
+2026-07-31 W5 entry, "every issue that code can close is closed"): **#363** Caption TEXT editing
+(PARKED by the #382 scope freeze, reversible), **#376(b)** no-auth public demo (DESCOPED, reversible),
+**#381** chat-density live capture (OPEN). Only those three carry forward. An earlier read of this
+same file inferred ~34 open issues from heading text — that was wrong; the headings do not carry
+completion markers, the `**Status**` lines do. Recorded here so the mistake is not repeated: **audit
+`**Status**` lines, never headings.**
+
+**New active lane: L25 — Editor & Craft (Issues 384–405)**, in five batches:
+- **A (384–388, 400)** visual credibility — icon system, UI primitives, video-player primitive,
+  poster-frame thumbnails, de-debug the creator-facing surfaces, visual-hierarchy pass
+- **B (389–392)** app-shell layout, Timeline v2, server-side edit document + real undo/redo,
+  replace the fabricated waveform
+- **C (393–397, 401)** client-side cut preview, WYSIWYG captions, resumable direct-to-R2 upload,
+  manual overrides, source-edit export, assistant-driven editing
+- **D (398–399, 402)** library management, clip triage grid, library depth
+- **E (403–405)** breadth cluster — **filed, deliberately NOT funded** (see the scope call below)
+
+Each issue carries what/why/in-repo-evidence/industry-standard-with-links; 43 unique sources are
+indexed at the end of `docs/issues.md`.
+
+**Batch E scope call — B-roll, multi-track, transitions/speed/keyframes are filed but not funded.**
+Following archived Issue 382 ("deprioritize the breadth cluster, fund the moat"): each of these makes
+us more like a generic clipper, while Batches A–D make the channel-knowledge product usable. They are
+recorded as issues rather than omitted so the decision is findable, and each carries an explicit
+reversal trigger requiring a new `[DEC]` here before any work starts. **#403 (B-roll) is the most
+likely to reverse** — it is honestly table stakes in the category and we do not have it; the argument
+for deferring is that it is table stakes for a *generic clipper*, does not deepen the channel-knowledge
+loop, and is the most expensive item in the lane (stock licensing or generation spend, new render
+composition, materially higher per-render cost) against a ≤100-user beta. Reversal trigger: beta
+creators citing missing B-roll as a non-conversion reason, or #397 making contextual insertion cheap
+because the model already reasons about content. **#404** additionally requires #390 shipped first;
+**#405** requires #396's override-track infrastructure, or the keyframe track gets built twice.
+
+**Issue 363 un-parked and merged into #394.** #363 (caption TEXT editing) was PARKED 2026-07-30 by the
+#382 scope freeze. It is now folded into **#394 (WYSIWYG caption preview)** rather than carried
+separately: once captions render live over the player, the text is in place and editable, so shipping
+preview first and text-editing later would build the same surface twice. The un-park takes effect when
+#394 is picked up and must be re-recorded here at that point.
+
+**Sequencing dependency (hard chain).** #386 → #390 → #391 → #393. Timeline v2 needs a player the app
+controls; client-side preview needs the edit document to be authoritative server-side. Scheduling
+these out of order means rework.
+
+**Why.** A 2026-08-03 review of the editor and presentation layer against the current field found
+the engine beta-ready and differentiated, but the surface unfinished in ways that read as a
+prototype. Load-bearing findings, each with evidence in-repo:
+- **No icon library** in `frontend/package.json` (8 runtime deps) → emoji and geometric glyphs are
+  used as icons (`👍 Keep` / `👎 Drop`, `✂`, `⬇`, `↻`, `▮`, `▭`)
+- **`components/ui/` is 5 files** → 8 native `<select>`, 9 native `<input type=checkbox>`,
+  11 native `<video controls>`; the OS-blue checkbox is visible in `desktop-editor-short.png`
+- **The editor supports one operation** — delete a time range. No zoom, no draggable cut edges,
+  mouse-only events, **one-level undo** (`pages/Editor.tsx:218`), edits in `localStorage`
+  (`Editor.tsx:32`), every change a ~20–30s server render (`Editor.tsx:296`)
+- **`LongFormEditor.tsx:131-138` renders a fabricated waveform** (`20 + ((i*37)%60)%`) labelled
+  "Source timeline" — misleading, not merely unfinished
+- **`UPLOAD_MAX_MB = 500`** (`config.py:521`) with a single-shot, non-resumable XHR POST through the
+  app server (`routers/videos.py:336`) — conflicts directly with the ToS-mandated raw-upload path,
+  since real source footage routinely exceeds it. Logged as a beta blocker (Issue 395).
+- **The design system is built and unused (Issue 400).** `index.css:25-28` already defines the
+  four-level surface ladder (`bg` → `surface` → `elevated` → `raised`), with a comment correctly
+  reasoning that dark-mode elevation must come from surface contrast because black shadows are
+  invisible on near-black — which matches current dark-mode practice (a four-level minimum). But the
+  app uses `bg-surface` almost exclusively; `elevated` and `raised` are near-dead tokens, and the
+  semantic type scale at `index.css:91-115` is bypassed in favour of `text-[10px]`. So the reported
+  "blocky / hard on the eyes" symptom is **not a missing design system — it is a built system
+  standing on one rung**, which makes the fix substantially cheaper than a redesign.
+- **Long-form mode cannot produce an artifact (Issue 401).** `LongFormEditor.tsx:482` tells the
+  creator "Full source-edit export isn't available" — honest (a deliberate 2026-07-30 DECISIONS call,
+  `:449-452`) but it makes the long-form tab structurally a clip-discovery browser rather than an
+  editor. The render primitives largely exist (`render.py:664` multi-segment concat, `:815` summary
+  filtergraph); the gap is source-scale resourcing (`_run` defaults to a 120s timeout at `:71`).
+
+**Source / evidence.** Codebase read 2026-08-03 (files cited above); committed screenshots in
+`frontend/e2e/__screenshots__/` (`desktop-editor-short`, `desktop-editor-long`, `desktop-review`,
+`desktop-dashboard`). Field comparison: Descript V50 multitrack + text-based editing; Opus Clip
+ReframeAnything + AI/stock B-roll + timeline-draggable overlays; Submagic caption craft; Klap 4K.
+Upload standard: presigned S3 multipart with 5–10 MiB parallel parts and cross-session resume
+(Uppy `@uppy/aws-s3` docs; Supabase resumable-uploads guide) — R2 is S3-compatible.
+Component standard: Radix Primitives (WAI-ARIA authoring practices, unstyled, ListBox pattern for
+Select) — Radix's own stated position, that native web-platform controls are "inadequate… or cannot
+be customized sufficiently," is exactly the failure our screenshots show. Dark-UI standard: four-level
+surface elevation, borders/glows over drop shadows, luminance-over-weight hierarchy (Muzli dark-mode
+design-systems guide; Telerik/Material-3 tonal elevation). Timeline standard: J/K/L + I/O, zoom
+including zoom-to-fit, visible toggleable snapping (PremiumBeat, Frame.io FCPX, DaVinci 2026 shortcut
+reference, Kdenlive manual, EditMentor). Asset-management standard: single-box metadata search,
+multi-dimensional filtering, bulk operations, automated thumbnails, master→derivative relationships
+(Cloudinary, Filestage, DPM, MediaValet). **Full link list: `docs/issues.md` § Source index (43
+unique sources).**
+
+---
+
 ## 2026-07-01 — Rung-1/2 verification blockers: billing idempotency, pause_turn, and test hardening
 
 **What was decided.**

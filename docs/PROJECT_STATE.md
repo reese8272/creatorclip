@@ -4,6 +4,45 @@ Updated after every issue closes.
 
 ---
 
+## 2026-08-03 — Tracker reset: `docs/issues.md` rebuilt around **Lane L25 — Editor & Craft** (384–405)
+
+**No code shipped.** The old 7,096-line tracker is archived verbatim at
+`docs/issues-archive-2026-08-03.md`; `docs/issues.md` is now a 1,277-line queue of **22 issues**,
+each with what/why/in-repo-evidence/industry-standard-with-links and a 43-source index.
+A status audit confirmed the W5 claim below: **345–383 are DONE** except **#363** (PARKED, reversible
+— now merged into #394), **#376(b)** (DESCOPED, reversible), and **#381** (OPEN).
+
+**New active lane, filed from a 2026-08-03 review of the editor + presentation layer against the
+2026 field** (Descript V50, Opus Clip, Submagic, Klap, Veed, CapCut). The engine is beta-ready and
+differentiated; the surface is not. Five batches, priority-ordered:
+
+| Batch | Issues | Scope |
+|---|---|---|
+| **A** | 384–388, **400** | icon system · UI primitives · video-player primitive · thumbnails · de-debug surfaces · **visual-hierarchy pass** |
+| **B** | 389–392 | app shell · Timeline v2 · edit document + real undo/redo · replace the fabricated waveform |
+| **C** | 393–397, **401** | client-side cut preview · WYSIWYG captions · **resumable direct-to-R2 upload (#395 — BETA BLOCKER)** · manual overrides · **source-edit export** · assistant-driven editing |
+| **D** | 398–399, **402** | library management · clip triage grid · **library depth** |
+| **E** | **403–405** | B-roll · multi-track · transitions/speed/keyframes — **filed, NOT funded** |
+
+**Batch E is deliberately unfunded** per the archived-#382 precedent (fund the moat, not breadth);
+each carries a reversal trigger and requires a new `[DEC]` before any work. **#403 (B-roll) is the
+likeliest to reverse** — it is table stakes in the category and we lack it.
+
+**Hard sequencing chain: #386 → #390 → #391 → #393.** Timeline v2 needs an app-controlled player;
+client-side preview needs the edit document authoritative server-side. #404 requires #390 shipped;
+#405 requires #396's override-track infrastructure.
+
+Headline evidence: no icon library in `frontend/package.json`; `components/ui/` is 5 files, so 8
+native `<select>` / 9 native checkboxes / 11 native `<video controls>` ship as-is; the editor
+supports one operation (delete a time range) with one-level undo (`Editor.tsx:218`) and
+`localStorage` persistence (`:32`); `LongFormEditor.tsx:131-138` renders a fabricated waveform
+labelled "Source timeline"; `UPLOAD_MAX_MB = 500` rejects typical source footage on a path the ToS
+makes mandatory; and the four-level surface ladder at `index.css:25-28` plus the semantic type scale
+at `:91-115` are **built and unused**, which is why "blocky" is a cheap fix rather than a redesign.
+Full rationale in `docs/DECISIONS.md` (2026-08-03); defects logged in `docs/OFF_COURSE_BUGS.md`.
+
+---
+
 ## 2026-07-31 (latest, W5) — Issues 355 + 380 DONE: the last two buildable issues are closed
 
 **W5 was the whole remaining code-closeable backlog.** With these two, every issue in `docs/issues.md`
