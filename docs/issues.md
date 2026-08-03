@@ -93,7 +93,11 @@ not from weight and saturation
 ---
 
 ### Issue 385: Build the missing UI primitives
-- [ ] **Status:** open · **Batch:** A · **Size:** M · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** A · **Size:** M
+- **Scope amended at build time** (see `docs/DECISIONS.md` 2026-08-03): six primitives, not seven.
+  Slider / DropdownMenu / Popover have **zero call sites** today and are deferred to their first
+  real consumer (#390 / #394 / #396 / #398); **RadioGroup** — not on the original list but the last
+  native control left once the others land — takes their place.
 
 **What we're doing.** Building the primitives the app is missing — Select, Switch, Slider, Tooltip,
 Tabs, DropdownMenu, Popover — on Radix headless primitives, styled with the existing tokens, and
@@ -139,11 +143,19 @@ which is precisely the failure visible in our screenshots. The Select primitive 
 ListBox WAI-ARIA pattern ([Radix Select](https://www.radix-ui.com/primitives/docs/components/select)).
 
 **Acceptance**
-- [ ] Select, Switch, Slider, Tooltip, Tabs, DropdownMenu, Popover in `components/ui/`, token-driven
-- [ ] Built on Radix primitives — no hand-rolled focus traps or keyboard handlers
-- [ ] Zero native `<select>` / `<input type="checkbox">` outside `components/ui/` (grep test)
-- [ ] `selectCls`-style ad-hoc class strings removed at every call site
-- [ ] Render + interaction test per primitive; axe pass at desktop and mobile in the e2e suite
+- [x] **Select, Switch, Checkbox, RadioGroup, Tabs, Tooltip** in `components/ui/`, token-driven.
+      Slider / DropdownMenu / Popover deliberately deferred — zero consumers (KISS, per `CLAUDE.md`)
+- [x] Built on Radix primitives — no hand-rolled focus traps or keyboard handlers. Tabs additionally
+      fixes a live defect: the hand-rolled tablist had `role="tab"` but no `role="tabpanel"`, no
+      `aria-controls` and no roving tabindex
+- [x] Zero native `<select>` / `<input type="checkbox">` / `<input type="radio">` outside
+      `components/ui/` — `src/test/no-native-form-controls.test.ts` (TypeScript-AST source scan)
+- [x] `selectCls` removed at both call sites; option lists are now `SelectOption[]` data
+- [x] Render + interaction test per primitive (22 tests), incl. the load-bearing empty-string
+      round-trip (Radix Select **throws** on `value=""`; 5 of 8 call sites default to it) and a
+      clickwrap **label-click** test. All 10 existing `Login.test.tsx` tests pass unmodified
+- [ ] axe pass at desktop and mobile in the e2e suite — **deferred to the Batch A close-out**, which
+      adds the `editor`/`settings` routes to `e2e/a11y.spec.ts` after the baseline spike
 
 ---
 

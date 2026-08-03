@@ -5,6 +5,85 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 385: six UI primitives, not seven — and the two traps in swapping native controls for Radix
+
+**What was decided.** Select, Switch, Checkbox, RadioGroup, Tabs and Tooltip are built on Radix
+primitives in `frontend/src/components/ui/`, and every native `<select>`, checkbox and radio outside
+that directory is gone (enforced by `src/test/no-native-form-controls.test.ts`).
+
+**Scope amended: three of the issue's seven primitives were NOT built, and one that wasn't asked for
+was.** Slider, DropdownMenu and Popover have **zero call sites in the app today** — verified by
+grep, not assumed: there is no `<input type="range">` anywhere, the nearest DropdownMenu candidate
+(`Nav.tsx`'s mobile drawer) is a *disclosure* whose conversion to `role="menu"` would be an a11y
+**regression**, and nothing wants a Popover. Their first real consumers are #390 (timeline scrubbing),
+#394 (caption preview), #396 (manual overrides) and #398 (row overflow menus). Building them now
+would mean speccing an API from imagination that whoever first needs it rewrites — `CLAUDE.md`'s KISS
+rule, "no premature abstractions", is exactly on point. In their place **RadioGroup** was added: it
+was not on the issue's list but it has a live consumer (`IntakeModeSection.tsx`) and is the last
+control still rendering OS chrome once Select/Switch/Checkbox land, so omitting it would leave the
+issue's own thesis — "every one of these controls is a small hole punched through the design" — 90%
+delivered. The acceptance criteria in `docs/issues.md` were amended to match **before** the work, not
+retroactively at review.
+
+**Deviation: per-primitive packages, not the unified `radix-ui`.** Radix's current published guidance
+leans toward the single `radix-ui` package to avoid version drift across many `@radix-ui/react-*`
+dependencies. Deviated for reasons specific to this repo: `radix-ui` declares **~40 primitives as hard
+dependencies** and we need 6, paid on every `npm ci` across three CI jobs; and `package.json` has 8
+runtime deps and functions as a readable inventory, which is how this issue's own evidence section was
+written. Bundle size is identical either way (both are `sideEffects: false`) — the difference is
+install cost and legibility. Revisit if the primitive count passes ~12.
+
+**Trap 1 — Radix Select THROWS on `value=""`.** It reserves the empty string internally to mean "clear
+the selection". **Five of the eight call sites** use `<option value="">` as their default ("None —
+no captions", "9:16 — vertical Short (default)", "Default (black)"). The `Select` component therefore
+owns an internal `__none__` sentinel and translates in both directions, so call sites keep passing `''`
+exactly as before. Pushed to call sites this would have been missed at one of the five, and the failure
+mode is a runtime throw, not a visual glitch. Covered by an explicit test.
+
+**Trap 2 — the label relationship, which is load-bearing on the sign-in clickwrap.** Radix renders a
+`<button role="checkbox">`, not an `<input>`. A `<button>` *is* a labelable element, so `<label
+htmlFor>` still works — but the existing markup used a **wrapping `<label>` with no htmlFor**, which
+works for a native input and **silently stops working** for a button. Every migrated site moved the
+label to a sibling with `htmlFor`. On `Login.tsx` this is the Chabolla v. ClassPass consent artifact
+and the COPPA 13+ attestation, so it landed in its own commit, last, with a hard rule: **all 10
+existing `Login.test.tsx` tests must pass unmodified** — which they do, because `aria-label` is
+retained and the tests query the accessible name. One test was *added*, clicking the consent
+**sentence** rather than the box, because every pre-existing test clicks the control directly and would
+therefore have missed exactly this regression.
+
+**Select is data-driven, not shadcn's eight-part compound.** All eight call sites are flat lists built
+from a const array or literal `<option>`s, so an `options: SelectOption[]` prop collapses 6–10 lines
+per site to one and lets the duplicated `selectCls` strings be deleted outright. RadioGroup stayed
+compound, because its one call site wraps each option in a styled card and must own that markup.
+
+**Tabs fixes a real defect, not just styling.** The hand-rolled tablist it replaces
+(`pages/Editor.tsx`) had `role="tablist"` and `role="tab"` but **no `role="tabpanel"`, no
+`aria-controls`, no id wiring and no roving tabindex** — it announced itself to a screen reader as
+tabs while providing none of the navigation that promise implies.
+
+**Test-environment findings worth recording, both verified rather than assumed.**
+1. `src/test/setup.ts` needed jsdom stubs for `hasPointerCapture` / `setPointerCapture` /
+   `releasePointerCapture` / `scrollIntoView` / `ResizeObserver`. Without them **every** Select test
+   throws before it can assert anything.
+2. The RadioGroup arrow-key test needs a **held** key (`{ArrowDown>}`). Radix's roving-focus group
+   defers the move with `setTimeout(() => focusFirst(...))`, and RadioGroup only selects on focus while
+   a document-level keydown flag is set — a flag its keyup handler clears. A real key press lasts long
+   enough for the timer to land in between; userEvent's default press fires keydown and keyup
+   back-to-back with no macrotask gap. Read out of the Radix source rather than guessed at, and noted
+   in the test, because it looks like a component defect and is not one.
+
+**Verification.** Frontend **380 passed / 60 files** (364/57 after #384), `npx tsc -b` clean,
+`npm run lint` **0 errors** (3 pre-existing `exhaustive-deps` warnings), `npm run build` clean.
+**Bundle: +103,569 B raw / +35,970 B gzip** (631,161 → 734,730 raw; 178,046 → 214,016 gzip) — Radix
+Select's popper / portal / focus-scope / remove-scroll tree dominates. That buys WAI-ARIA-correct
+listbox behaviour, focus management and typeahead we were not going to write ourselves. If the single
+unsplit chunk keeps growing, the answer is route-level `React.lazy` splitting, not dropping Radix.
+The **axe pass on the e2e suite is deferred to the Batch A close-out**, which adds the currently
+unaudited `editor` and `settings` routes to `e2e/a11y.spec.ts` after a baseline spike on `main` — so
+that pre-existing violations are scoped rather than discovered as a merge-time block. **Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 384: icon system — one swappable seam, a source-scanning gate, and the glyph ruling
 
 **What was decided.** `lucide-react@1.28` is adopted and routed through a single
