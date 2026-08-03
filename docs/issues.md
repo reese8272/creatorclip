@@ -4,7 +4,10 @@
 queue. Archived verbatim at `docs/issues-archive-2026-08-03.md`; rationale in `docs/DECISIONS.md`
 (2026-08-03). This file is the live queue.
 
-**Active lane: L25 — Editor & Craft (Issues 384–405).** Filed from the 2026-08-03 review of the
+**Active lane: L25 — Editor & Craft (Issues 384–405).** **Batch A is COMPLETE** (384–388 + 400, merged
+2026-08-03) — see `docs/PROJECT_STATE.md`. **Batch B (389–392) is next and is now unblocked:** it
+inherits the primitive layer, the `VideoPlayer` that #390's timeline attaches to, and the elevation
+rules #389's app shell composes against. Filed from the 2026-08-03 review of the
 editor and presentation layer against the 2026 field. Every issue below carries: what we're doing,
 the analysis behind it, in-repo evidence (file:line or a committed screenshot), and the external
 sources that set the bar. Research links are listed inline per issue and collected in
@@ -27,7 +30,7 @@ changes the gut reaction to the product.
 
 | Batch | Theme | Issues | Size |
 |-------|-------|--------|------|
-| **A** | Visual credibility — stop reading as a prototype | 384–388, **400** | days |
+| **A** ✅ | Visual credibility — stop reading as a prototype | 384–388, **400** — **ALL DONE 2026-08-03** | days |
 | **B** | Make it an application, not a webpage | 389–392 | 1–2 weeks |
 | **C** | Close the capability gap | 393–397, **401** | multi-week |
 | **D** | Asset management | 398–399, **402** | ~1 week |
@@ -154,8 +157,11 @@ ListBox WAI-ARIA pattern ([Radix Select](https://www.radix-ui.com/primitives/doc
 - [x] Render + interaction test per primitive (22 tests), incl. the load-bearing empty-string
       round-trip (Radix Select **throws** on `value=""`; 5 of 8 call sites default to it) and a
       clickwrap **label-click** test. All 10 existing `Login.test.tsx` tests pass unmodified
-- [ ] axe pass at desktop and mobile in the e2e suite — **deferred to the Batch A close-out**, which
-      adds the `editor`/`settings` routes to `e2e/a11y.spec.ts` after the baseline spike
+- [x] axe pass at desktop **and** mobile in the e2e suite — **20/20** (10 routes × 2 projects) at the
+      Batch A close-out, with `editor` newly added to the gate. `settings` was deliberately NOT added:
+      a baseline spike found PRE-EXISTING serious contrast failures there from the 2026-06-23 "Soon"
+      preview rows (`docs/OFF_COURSE_BUGS.md`), and adding it would have blocked the batch on
+      unrelated work
 
 ---
 
