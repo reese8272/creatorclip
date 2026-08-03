@@ -103,7 +103,13 @@ def delete_prefix(prefix: str) -> int:
 
 # Top-level key prefixes whose footprint the daily storage-gauge sweep reports
 # (Issue 293). Fixed set — keeps the Prometheus `prefix` label low-cardinality.
-STORAGE_GAUGE_PREFIXES: tuple[str, ...] = ("source/", "audio/", "clips/", "summaries/")
+STORAGE_GAUGE_PREFIXES: tuple[str, ...] = (
+    "source/",
+    "audio/",
+    "clips/",
+    "summaries/",
+    "posters/",  # Issue 387 — poster frames, ~50 KB each.
+)
 
 
 def measure_prefix(prefix: str) -> tuple[int, int]:
@@ -184,8 +190,37 @@ def local_path(uri: str) -> Generator[Path, None, None]:
 # download / delete is in flight.
 
 
+def read_bytes(uri: str, *, max_bytes: int = 2_000_000) -> bytes | None:
+    """Read a small object into memory, or None when it is absent.
+
+    For POSTER FRAMES ONLY (Issue 387) — deliberately not a general media reader.
+    We refuse to proxy clip bytes because clips are 10-50 MB and need Range
+    support; a poster is ~50 KB, which is what makes the byte-proxy endpoint a
+    principled inconsistency rather than an oversight. `max_bytes` is
+    defence-in-depth: we wrote the file at a known size, so anything larger means
+    something is wrong.
+    """
+    if uri.startswith("s3://"):
+        _, _, rest = uri.partition("s3://")
+        bucket, _, key = rest.partition("/")
+        try:
+            obj = _r2().get_object(Bucket=bucket, Key=key)
+        except Exception:
+            return None
+        with obj["Body"] as body:
+            return body.read(max_bytes)
+    path = Path(uri)
+    if not path.is_file() or path.stat().st_size > max_bytes:
+        return None
+    return path.read_bytes()
+
+
 async def aupload_file(src: str | Path, key: str) -> str:
     return await asyncio.to_thread(upload_file, src, key)
+
+
+async def aread_bytes(uri: str, *, max_bytes: int = 2_000_000) -> bytes | None:
+    return await asyncio.to_thread(read_bytes, uri, max_bytes=max_bytes)
 
 
 async def adelete_file(uri: str) -> None:

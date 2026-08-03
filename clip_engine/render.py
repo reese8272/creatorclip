@@ -39,6 +39,7 @@ Near-silent clips are left un-normalized so we never amplify hiss. See
 
 import json
 import logging
+import math
 import re
 import shlex
 import subprocess
@@ -191,6 +192,116 @@ def _extract_keyframe(
         "keyframe extraction",
         timeout_s=timeout_s,
     )
+
+
+_POSTER_WIDTH = 640
+_POSTER_SEEK_FRACTION = 0.10
+_POSTER_SEEK_MIN_S = 3.0
+_POSTER_SEEK_MAX_S = 60.0
+_POSTER_JPEG_Q = 4
+_POSTER_THUMBNAIL_BATCH = 40
+
+
+def poster_seek_s(duration_s: float | None) -> float:
+    """Where to sample a representative still from a source of ``duration_s``.
+
+    10% in, floored at 3s and capped at 60s. A fixed 3s — the obvious choice —
+    lands inside the fade-in, cold open or channel bumper on a large fraction of
+    real uploads; the cap stops a three-hour podcast seeking eighteen minutes
+    deep for no extra representativeness. Unknown duration falls back to the
+    floor.
+    """
+    if duration_s is None or not math.isfinite(duration_s) or duration_s <= 0:
+        return _POSTER_SEEK_MIN_S
+    seek = min(max(duration_s * _POSTER_SEEK_FRACTION, _POSTER_SEEK_MIN_S), _POSTER_SEEK_MAX_S)
+    # Never seek past the end of a very short source.
+    return max(0.0, min(seek, duration_s - 1.0))
+
+
+def _poster_cmd(
+    source_path: Path, out_path: Path, seek_s: float, width: int, *, pick: bool
+) -> list[str]:
+    """Build the ffmpeg argv for a poster frame.
+
+    FILTER ORDER IS LOAD-BEARING. ``scale`` MUST precede ``thumbnail``: the
+    thumbnail filter buffers ``_POSTER_THUMBNAIL_BATCH`` frames to pick the most
+    histogram-representative one, which at 4K is ~1 GB of decoded frames inside a
+    Celery worker and ~27 MB at 640px. ``fps=2`` first widens that batch from
+    ~1.6s of source to ~20s for no extra decode cost, since decoding stops as
+    soon as a frame is emitted.
+
+    ``-map 0:V:0`` (capital V) excludes attached cover-art streams — ffmpeg's
+    "best video stream" heuristic will otherwise happily pick album art over
+    actual footage.
+    """
+    vf = f"fps=2,scale='min({width},iw)':-2"
+    if pick:
+        vf += f",thumbnail=n={_POSTER_THUMBNAIL_BATCH}"
+    return [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{seek_s:.3f}",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:V:0",
+        "-an",
+        "-sn",
+        "-dn",
+        "-vf",
+        vf,
+        "-frames:v",
+        "1",
+        "-q:v",
+        str(_POSTER_JPEG_Q),
+        "-f",
+        "image2",
+        str(out_path),
+    ]
+
+
+def extract_poster_frame(
+    source_path: Path,
+    out_path: Path,
+    *,
+    duration_s: float | None = None,
+    width: int = _POSTER_WIDTH,
+    timeout_s: float = 60.0,
+) -> bool:
+    """Write a representative JPEG still from ``source_path`` to ``out_path``.
+
+    Returns True when a non-empty file was produced, False otherwise. NEVER
+    raises: a poster frame is an index entry, and no caller should fail a video
+    ingest or a clip render because one could not be made (Issue 387).
+
+    Deliberately a sibling of ``_extract_keyframe`` rather than a parameter on
+    it. That function's only caller feeds its output to ``_detect_face_center_x``
+    and clamps the result against ``_frame_dimensions``, which is in SOURCE
+    pixels — adding a scale filter there would return face coordinates in scaled
+    space against a source-width clamp and silently off-centre every legacy-path
+    9:16 render, with no test to catch it.
+    """
+    seek = poster_seek_s(duration_s if duration_s is not None else _source_duration_s(source_path))
+
+    # `-ss` before `-i` is a fast seek and can land past the end on a VFR or
+    # broken-index source, exiting 0 with no output — hence the explicit
+    # non-empty check and the seek-0 retry rather than trusting the return code.
+    for attempt_seek, pick in ((seek, True), (0.0, False)):
+        try:
+            _run(
+                _poster_cmd(source_path, out_path, attempt_seek, width, pick=pick),
+                "poster frame",
+                timeout_s=timeout_s,
+            )
+        except (RuntimeError, OSError) as exc:
+            logger.warning("poster_frame_attempt_failed seek=%.3f err=%s", attempt_seek, exc)
+            continue
+        if out_path.exists() and out_path.stat().st_size > 0:
+            return True
+
+    logger.warning("poster_frame_unavailable source=%s", source_path.name)
+    return False
 
 
 def _frame_dimensions(source_path: Path) -> tuple[int, int]:

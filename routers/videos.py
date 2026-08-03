@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -22,7 +22,7 @@ from models import Creator, IngestStatus, OnboardingState, Transcript, Video, Vi
 from routers._enqueue import stamp_stream_owner
 from routers._owned import get_owned
 from routers._schemas import EmptyState, NextActionOut, build_envelope_state
-from worker.storage import presigned_download_url, upload_file
+from worker.storage import aread_bytes, presigned_download_url, upload_file
 from worker.tasks import start_pipeline
 from youtube.data_api import classify_video_kind, get_videos_metadata
 from youtube.ingest import probe_duration_s
@@ -50,6 +50,11 @@ class VideoListItemOut(BaseModel):
     # derived convenience flag (True only when stored media exists).
     origin: str
     clippable: bool
+    # Issue 387. A BOOLEAN, never the URI: poster_uri is an internal storage key
+    # and the bytes are served by the authed endpoint below. Defaults to False so
+    # the catalog endpoint, which reuses this model, is unaffected — the same
+    # trick `failure_reason` uses above.
+    has_poster: bool = False
 
 
 class VideoListOut(BaseModel):
@@ -158,6 +163,7 @@ async def list_videos(
             "origin": v.origin.value,
             # Only uploaded videos carry stored media and can run the pipeline.
             "clippable": v.source_uri is not None,
+            "has_poster": v.poster_uri is not None,
         }
         for v in videos
     ]
@@ -585,6 +591,52 @@ async def get_video_status(
 
 
 # ── Issue 372: full-source editing backbone ──────────────────────────────────
+
+
+@router.get("/{video_id}/poster", response_model=None)
+# 300/minute, NOT the 60/minute download tier. 60 is one request per deliberate
+# user action; a poster is one request per ROW, and a cold dashboard paints up to
+# _LIST_LIMIT of them, so 60 would 429 the first page load.
+@limiter.limit("300/minute", key_func=creator_key)
+async def get_video_poster(
+    request: Request,
+    video_id: uuid.UUID,
+    creator: Creator = Depends(get_current_creator),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Serve the poster still for a video (Issue 387).
+
+    A SAME-ORIGIN BYTE PROXY, deliberately diverging from the presigned-302 used
+    by /clips/{id}/download. Three reasons, all specific:
+
+    1. CSP. `_build_csp` in main.py already had to widen `media-src` to the R2
+       origin because browsers re-run CSP against redirect targets — a 302 does
+       not launder the origin. Doing the same for images would permanently widen
+       `img-src` to the whole R2 account for a 50 KB file.
+    2. Caching. The dashboard refetches /videos every 5s while work is in flight.
+       A presigned URL's signature changes per generation, so returning one per
+       row would cache-bust every poster on every poll.
+    3. Presigned URLs are bearer tokens; N per response puts N capability tokens
+       into the SPA's query cache and any captured response body.
+
+    The cost objection is real and answered by size: we refuse to proxy clips
+    because they are 10-50 MB and need Range support. A poster is ~50 KB, and the
+    cache headers below make repeat paints free.
+    """
+    video = await get_owned(session, Video, video_id, creator.id, detail="Video not found")
+    if not video.poster_uri:
+        raise HTTPException(status_code=404, detail="No poster frame for this video")
+    data = await aread_bytes(video.poster_uri)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Poster frame not found")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        # `private` is required: these bytes are per-creator and must never enter
+        # a shared or CDN cache. Immutable because the key is deterministic and
+        # only changes on re-ingest.
+        headers={"Cache-Control": "private, max-age=86400, immutable"},
+    )
 
 
 @router.get("/{video_id}/stream", response_model=None)

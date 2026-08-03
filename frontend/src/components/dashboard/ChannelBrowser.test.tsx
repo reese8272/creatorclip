@@ -20,6 +20,7 @@ function catalogPayload(): CatalogListResponse {
         created_at: '2026-06-01T00:00:00Z',
         origin: 'catalog',
         clippable: false,
+    has_poster: false,
       },
     ],
     total: 1,

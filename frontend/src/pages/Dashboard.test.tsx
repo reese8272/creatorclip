@@ -71,6 +71,7 @@ const baseVideo = (over: Partial<Video>): Video => ({
   created_at: '2026-06-01T00:00:00Z',
   origin: 'upload',
   clippable: true,
+  has_poster: false,
   ...over,
 })
 

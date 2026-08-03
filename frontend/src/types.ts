@@ -55,6 +55,10 @@ export interface Video {
   created_at: string
   origin: string
   clippable: boolean
+  // Issue 387 — whether /videos/{id}/poster will serve bytes. A boolean, not a
+  // URL: the poster is fetched from the authed endpoint, and a signed URL in
+  // this payload would cache-bust on every 5s dashboard poll.
+  has_poster: boolean
 }
 
 export interface VideoListResponse {

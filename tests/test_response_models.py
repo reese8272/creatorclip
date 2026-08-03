@@ -38,6 +38,8 @@ _EXEMPT_PATHS = {
     "/clips/{clip_id}/download",  # 302 → presigned R2 or FileResponse; no JSON schema
     "/summaries/{summary_id}/download",  # 302 → presigned R2 or FileResponse; no JSON schema (Issue 192)
     "/creators/me/export/download",  # 302 → presigned R2 or FileResponse; no JSON schema
+    "/videos/{video_id}/poster",  # image/jpeg bytes; no JSON schema (Issue 387)
+    "/clips/{clip_id}/poster",  # image/jpeg bytes; no JSON schema (Issue 387)
 }
 
 # Routes whose response_class signals a non-JSON body (redirect, HTML page, file

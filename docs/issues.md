@@ -209,7 +209,9 @@ cross-NLE convention for the viewer transport, with I/O for in/out points
 ---
 
 ### Issue 387: Poster-frame thumbnails across the library and clip surfaces
-- [ ] **Status:** open · **Batch:** A · **Size:** M · **Agent:** `python-senior-engineer` + frontend
+- [x] **Status:** DONE 2026-08-03 · **Batch:** A · **Size:** M
+- **Named `poster`, not `thumbnail`** — `routers/thumbnails.py` already owns "thumbnail" for the
+  YouTube thumbnail-*pattern* analyzer, and a second unrelated one makes every grep ambiguous.
 
 **What we're doing.** Extracting a poster frame at ingest, storing it, serving it through the authed
 path, backfilling existing videos, and rendering thumbnails in the library and clip lists.
@@ -243,11 +245,22 @@ and hold thumbnails, captions, and transcripts in one managed structure
 [Video Asset Management Software 2026](https://filestage.io/blog/video-asset-management-software/)).
 
 **Acceptance**
-- [ ] Poster frame extracted at ingest, stored alongside the source, served via the authed endpoint
-- [ ] Backfill task for existing videos; graceful placeholder where the source was already purged
-- [ ] Library rows and clip lists render thumbnails (hover-scrub is out of scope — see #399)
-- [ ] Thumbnail retention decision recorded in `docs/COMPLIANCE.md`; purge honors it
-- [ ] Per-creator isolation on the thumbnail endpoint, same as `/clips/{id}/download`
+- [x] Extracted at ingest (inside the existing `alocal_path` block, so no second R2 download) **and**
+      at render from the actual deliverable; served by `GET /videos/{id}/poster` + `/clips/{id}/poster`.
+      **Never fails the work that produced the media** — `ingest_video` is a `RefundOnFailureTask`,
+      so a propagating error would refund minutes for a successful transcription
+- [x] Hourly backfill (newest-first, batch 25) with a Redis failure marker — required, since the real
+      cost is R2 egress and an undecodable file would otherwise be re-downloaded hourly forever.
+      Purged sources are skipped **structurally**: the purge nulls `source_uri`, so they never match
+- [x] `PosterThumb` in the library rows, merged into the existing Video cell rather than a fifth
+      column (keeps #398's grid-card layout reusable). Placeholder says **why** — processing vs
+      expired vs none. Hover-scrub correctly out of scope
+- [x] Retention recorded in `docs/COMPLIANCE.md` with the argument for why a poster outlives the 72h
+      source purge **while the extracted WAV does not**; the audio row was sharpened so the two read
+      coherently
+- [x] Per-creator isolation via `get_owned`, same as `/clips/{id}/download`. **Caveat stated rather
+      than implied:** the mocked-session tests emulate the predicate; the RLS-enforced proof is the
+      integration lane, which needs Docker and must run in CI/staging before close
 
 ---
 

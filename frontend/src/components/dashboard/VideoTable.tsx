@@ -8,6 +8,7 @@ import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/video
 import { useStageStream } from '@/hooks/useStageStream'
 import type { AnalysisMode, IngestStatus, Video } from '@/types'
 import { videoMetaLine } from '@/lib/videoMeta'
+import { PosterThumb } from '@/components/media/PosterThumb'
 
 export interface ClipInfo {
   total: number
@@ -86,10 +87,29 @@ function VideoRow({
   return (
     <tr className="border-b border-default hover:bg-elevated">
       <td className="px-4 py-3.5 align-middle">
-        <div className="max-w-[280px] truncate text-fg" title={video.youtube_video_id ?? undefined}>
-          {video.title || <Badge variant="muted">Untitled</Badge>}
+        <div className="flex items-center gap-3">
+          <PosterThumb
+            src={video.has_poster ? `/videos/${video.id}/poster` : null}
+            alt=""
+            reason={
+              video.ingest_status === 'done'
+                ? video.clippable
+                  ? 'none'
+                  : 'expired'
+                : 'pending'
+            }
+            className="w-24"
+          />
+          <div className="min-w-0">
+            <div
+              className="max-w-[280px] truncate text-fg"
+              title={video.youtube_video_id ?? undefined}
+            >
+              {video.title || <Badge variant="muted">Untitled</Badge>}
+            </div>
+            <div className="text-small text-muted">{videoMetaLine(video)}</div>
+          </div>
         </div>
-        <div className="text-small text-muted">{videoMetaLine(video)}</div>
       </td>
       <td className="px-3 py-3.5 align-middle">
         {showStepper ? (

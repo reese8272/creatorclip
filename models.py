@@ -335,6 +335,12 @@ class Video(Base):
     # `source_uri` (the original video) so ingest no longer clobbers the video the
     # renderer needs — see migration 0039. NULL until ingest extracts audio.
     audio_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Poster frame — one 640px JPEG still (Issue 387, migration 0050). Unlike
+    # `audio_uri` this DELIBERATELY OUTLIVES the 72h source purge: the WAV is a
+    # complete lossless substitute for the source's audio track, whereas a single
+    # lossy still reconstructs nothing and functions as an index entry, like
+    # `title` and `duration_s`. See docs/COMPLIANCE.md. NULL = no poster.
+    poster_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     origin: Mapped[VideoOrigin] = mapped_column(
         sa.Enum(VideoOrigin, name="video_origin_enum"),
         nullable=False,
@@ -665,6 +671,11 @@ class Clip(Base):
     # swaps this into render_uri and clears the field. Independent of
     # render_status, which still tracks the original render's progress.
     cleaned_render_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Poster frame for the RENDERED deliverable (Issue 387) — reframed, captions
+    # burned in, correct aspect. Extracted from the clip the creator will
+    # actually publish, which is the most useful thing to show them. NULL until
+    # the clip renders, or if extraction failed.
+    poster_uri: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     render_status: Mapped[RenderStatus] = mapped_column(
         sa.Enum(RenderStatus, name="render_status_enum"),
         nullable=False,

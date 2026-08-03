@@ -99,12 +99,22 @@ celery.conf.beat_schedule = {
         "schedule": timedelta(hours=24),
     },
     # Issue 293 — daily object-storage footprint sweep. Sums bytes + object
-    # counts per top-level prefix (source/, audio/, clips/, summaries/) into
+    # counts per top-level prefix (source/, audio/, clips/, summaries/, posters/) into
     # the r2_bytes_stored{prefix} / r2_objects{prefix} gauges so storage COGS
     # is visible next to the LLM/transcription cost ledger. Best-effort:
     # errors are logged and swallowed; unconfigured storage skips cleanly.
     "collect-storage-gauges-daily": {
         "task": "worker.tasks.collect_storage_gauges",
         "schedule": timedelta(hours=24),
+    },
+    # Issue 387 — give videos ingested before poster frames existed one. Hourly,
+    # not every few minutes: the eligible set only grows from ingest (which now
+    # writes its own poster) and shrinks monotonically, so there is no urgency,
+    # and hourly keeps R2 EGRESS — the real cost of this task, since each row
+    # downloads a full source — smooth. Self-terminating: once drained it is a
+    # single cheap query per hour.
+    "backfill-video-posters-hourly": {
+        "task": "worker.tasks.backfill_video_posters",
+        "schedule": timedelta(hours=1),
     },
 }

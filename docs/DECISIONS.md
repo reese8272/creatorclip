@@ -5,6 +5,116 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 387: poster frames — three calls that read as inconsistent and are not
+
+**What was decided.** Videos and clips gain a `poster_uri` column (migration 0050), a poster still is
+extracted at ingest and at render, and the bytes are served by an authed same-origin endpoint. Three
+decisions here deliberately diverge from an existing precedent in this codebase, so each is recorded
+with the reason the divergence is principled rather than accidental.
+
+**`[DEC]` 1 — Poster frames OUTLIVE the 72h source purge; the extracted WAV does not.** This is the
+most contestable call in the issue and it reads, at a glance, like a contradiction of the
+"derived artifact" framing at `docs/COMPLIANCE.md`. The distinction is not derived-vs-not:
+
+> The extracted WAV is purged with the source because it is a **complete, lossless substitute for the
+> source's audio track** — every word spoken, in full. Retaining it after processing is retaining the
+> source in a different container, and the purge is doing real work. A poster frame is a **single
+> 640px lossy still**, roughly one frame in 30,000 for a 20-minute upload, from which nothing can be
+> reconstructed. Its function is identical to `videos.title` and `videos.duration_s`: an **index
+> entry** that lets a creator recognise their own library row — and we already retain those for the
+> life of the row.
+
+The feature also *requires* the retention. The moment the source is purged is precisely when a
+creator most needs to tell one row from another, because the title may be null and the only other
+handle was a raw ID. A poster that vanished with the source would go dark on exactly the rows it
+exists to rescue. The extracted-audio row in `COMPLIANCE.md` was **sharpened in the same change** so
+the two rows are coherent read together, rather than leaving a future compliance pass to "fix" this
+by purging posters. Re-open trigger: counsel or a regulator challenging still-frame retention.
+
+**`[DEC]` 2 — A same-origin byte proxy, not the presigned-302 used by `/clips/{id}/download`.** Three
+specific reasons, in order of weight:
+1. **CSP.** `_build_csp` in `main.py` already had to append `media-src 'self' {r2_origin}` *because*
+   browsers re-run the CSP check against redirect targets — a 302 does not launder the origin. Serving
+   posters as a 302 (or embedding a presigned URL in the list payload) would force the same widening
+   of `img-src`, permanently, to the entire R2 account, for a 50 KB file.
+2. **The 5-second poll.** `lib/videosPoll.ts` refetches `/videos` every 5s while work is in flight. A
+   presigned URL's signature changes on every generation, so a per-row `poster_url` would cache-bust
+   **every** poster on **every** poll — up to 100 image downloads every 5 seconds.
+3. **Presigned URLs are bearer tokens.** N per response puts N capability tokens into the SPA's query
+   cache and into any captured response body.
+
+The cost objection is real and is answered by size, which is what makes this a principled
+inconsistency rather than an oversight: we refuse to proxy *clips* because they are 10–50 MB and need
+Range support. A poster is ~50 KB, a cold 100-row paint proxies ≤6 MB, and
+`Cache-Control: private, max-age=86400, immutable` makes repeat paints free. Re-open trigger: poster
+egress appearing in the app-server bandwidth line. The rate limit is **300/min, not the 60/min
+download tier** — 60 is one request per deliberate user action, whereas a poster is one request per
+*row*, so 60 would 429 the first cold dashboard paint.
+
+**`[DEC]` 3 — `posters/` is creator-scoped; `clips/` is not, and that is a known gap.** Clip renders
+are written to `clips/{clip_id}.mp4`, while `DELETE /auth/me` purges the prefix `clips/{creator_id}/`
+— which therefore **matches nothing**. That is a live right-to-erasure gap, flagged here rather than
+fixed here because closing it means migrating existing objects, which is its own issue. The new
+prefix deliberately does not replicate the pattern, and `tests/test_account_deletion.py` now asserts
+the poster prefix is swept.
+
+**A correctness trap avoided, worth recording so nobody "simplifies" it later.**
+`extract_poster_frame` is a **sibling** of `_extract_keyframe`, not a parameter on it. That function's
+only caller feeds its output to `_detect_face_center_x` and clamps the result against
+`_frame_dimensions`, which is in **source pixels** — adding a scale filter would return face
+coordinates in scaled space against a source-width clamp and silently off-centre every legacy-path
+9:16 render. No existing test asserts on those pixels, so it would have shipped green. A guard test
+now asserts `_extract_keyframe`'s argv contains no `-vf`.
+
+**Two more load-bearing implementation details, both tested rather than commented.**
+- **Filter order.** `-vf fps=2,scale=…,thumbnail=n=40`. `scale` MUST precede `thumbnail`: the
+  thumbnail filter buffers 40 decoded frames to pick the most histogram-representative one, which is
+  ~1 GB at 4K inside a Celery worker versus ~27 MB at 640px. Reversing them OOMs the worker and
+  presents as a mysterious ingest failure. `fps=2` first widens the selection window from ~1.6s of
+  source to ~20s at no extra decode cost. A test asserts the ordering.
+- **Never fails the work that produced the media.** `ingest_video` is a `RefundOnFailureTask` with
+  `max_retries=3`, so a propagating poster error would retry the whole ingest three times and then
+  **refund the creator's minutes for a transcription that succeeded**. A missing poster is a
+  placeholder; a spurious refund is money. Both call sites swallow and continue, and
+  `tests/test_poster_ingest_safety.py` exists specifically to keep that true.
+
+**Seek point.** 10% in, floored at 3s and capped at 60s. A fixed 3s — the obvious choice — lands
+inside the fade-in, cold open or channel bumper on a large fraction of real uploads; the cap stops a
+three-hour podcast seeking eighteen minutes deep for no gain in representativeness.
+
+**JPEG, not WebP.** The Dockerfile installs Debian's `ffmpeg`, whose libwebp support is
+build-dependent — WebP would be a silent per-environment failure. 640px serves the 96px table thumb
+and #398's ~320px card at 2× DPR from one asset, so no responsive variants are needed here.
+
+**Backfill.** Hourly Beat task, newest-first, batch of 25, per-row `try/except`. Videos whose source
+was already purged are skipped **structurally**, not conditionally: the purge nulls `source_uri`, so
+they simply never match the candidate query. A Redis `poster_backfill_failed:{id}` marker at 7-day
+TTL is **required, not a nicety** — the real cost of this task is R2 **egress** (each row downloads a
+full source), and without the marker a permanently-undecodable file would be re-downloaded every hour
+forever. Clip posters get no backfill: that is a second sweep with its own egress bill for a surface
+(#399's grid) that does not exist yet.
+
+**Naming.** `poster`, not `thumbnail`. `routers/thumbnails.py` already owns "thumbnail" for the
+YouTube thumbnail-*pattern* analyzer; a second, unrelated "thumbnail" would make every grep ambiguous
+forever. It also matches the HTML `<video poster>` attribute.
+
+**Verification.** Backend **2516 passed / 64 skipped / 173 deselected** (2480 at W5; +36). Layer 0 all
+green: ruff 0 · mypy 0 · coverage **83.2** (floor 83.00; down from 83.51 — the backfill body is
+covered structurally rather than by execution, which is the honest weak spot here) · **`clip_engine`
+92.72, up from 92.51** because the poster tests more than cover the new statements · bandit 0/0 ·
+pip-audit 0. Clip-quality eval green (53 + 61 scenario tests). Frontend 409 passed / 66 files.
+`scripts/check_downgrades.py` clean.
+
+**Not verified locally, and stated rather than implied:** the integration lane (`-m integration`) needs
+a real Postgres and **Docker is unavailable on this box**, so the RLS-enforced cross-creator cases for
+the two new endpoints must run in CI or on staging before this closes. The mocked-session tests in
+`tests/test_poster_endpoints.py` emulate the `get_owned` predicate; they are not proof that RLS holds.
+Likewise the ffmpeg filter chain is asserted against mocked `_run` calls — it needs one pass over a
+genuinely ugly real file (VFR screen recording, `.mkv` with a broken index, a source shorter than the
+seek offset) during the staging soak. **Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 400a: the elevation highlight never composed, and seven colour tokens never existed
 
 **What was decided.** Before any hierarchy work, two foundations were fixed: the inset elevation

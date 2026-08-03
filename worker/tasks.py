@@ -923,6 +923,17 @@ def purge_stale_source_media() -> None:
     run_async(_purge_stale_source_media_async())
 
 
+@celery.task(name="worker.tasks.backfill_video_posters")
+def backfill_video_posters() -> None:
+    """Celery Beat task: give existing videos a poster frame (Issue 387).
+
+    Newest-first, small batches. Self-terminating — once the eligible set is
+    drained this is a single cheap query per hour, and the set only grows from
+    ingest, which now writes its own poster.
+    """
+    run_async(_backfill_video_posters_async())
+
+
 @celery.task(name="worker.tasks.purge_stale_youtube_analytics")
 def purge_stale_youtube_analytics() -> None:
     """Wave-4 Fix 3 (Issue 75b) — Celery Beat task.
@@ -994,7 +1005,7 @@ def purge_stale_event_logs() -> None:
 def collect_storage_gauges() -> None:
     """Issue 293 — daily storage-footprint sweep for object-storage COGS.
 
-    Paginates the bucket per top-level prefix (source/, audio/, clips/,
+    Paginates the bucket per top-level prefix (source/, audio/, clips/, posters/,
     summaries/) and sets the r2_bytes_stored{prefix} / r2_objects{prefix}
     gauges. With STORAGE_BACKEND=local the same gauges are filled by walking
     LOCAL_MEDIA_DIR. Best-effort observability: never raises — a failed prefix
@@ -1608,6 +1619,25 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
             finally:
                 wav_path.unlink(missing_ok=True)
 
+            # Poster frame (Issue 387) — extracted HERE because the source is
+            # already materialised locally by `alocal_path`; a separate task
+            # would pay a second full R2 download of a several-hundred-MB file
+            # for a ~50 KB output.
+            #
+            # NEVER FAILS INGEST. ingest_video is a RefundOnFailureTask with
+            # max_retries=3: a propagating poster error would retry the entire
+            # ingest three times and then REFUND the creator's minutes for a
+            # transcription that succeeded. A missing poster is a placeholder in
+            # the UI; a spurious refund is money.
+            try:
+                await aemit(video_id, "step", label="extract_poster", stage="ingest")
+                poster_uri = await _extract_and_upload_poster(
+                    src, f"posters/{creator_id}/{video_id}.jpg", duration_s=duration_s
+                )
+            except Exception as exc:  # noqa: BLE001 — see the note above
+                logger.warning("poster extraction failed for video %s: %s", video_id, exc)
+                poster_uri = None
+
         async with db.tenant_session(creator_id) as session:
             video = await session.get(Video, uuid.UUID(video_id))
             if video:
@@ -1617,6 +1647,8 @@ async def _ingest_async(video_id: str, creator_id: str | None = None) -> None:
                 # `purge_stale_source_media` (migration 0039 — fixes the broken render
                 # loop where source_uri was overwritten with audio + the mp4 deleted).
                 video.audio_uri = audio_uri
+                if poster_uri:
+                    video.poster_uri = poster_uri
                 if duration_s and not video.duration_s:
                     video.duration_s = duration_s
                 if duration_s:
@@ -1948,6 +1980,31 @@ async def _load_clip_render_plan(clip_id: str, creator_id: str) -> _ClipRenderPl
         )
 
 
+async def _extract_and_upload_poster(
+    src: Path, key: str, *, duration_s: float | None = None
+) -> str | None:
+    """Extract a poster still from ``src`` and upload it to ``key``.
+
+    Returns the stored URI, or None if no frame could be produced. Callers treat
+    None as "show the placeholder" — a poster is an index entry, never a reason
+    to fail the work that produced the media (Issue 387).
+    """
+    import tempfile
+
+    from clip_engine.render import extract_poster_frame
+    from worker.storage import aupload_file
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        poster_path = Path(tmp.name)
+    try:
+        ok = await asyncio.to_thread(extract_poster_frame, src, poster_path, duration_s=duration_s)
+        if not ok:
+            return None
+        return await aupload_file(poster_path, key)
+    finally:
+        poster_path.unlink(missing_ok=True)
+
+
 async def _encode_and_upload_clip(
     clip_id: str, src: Path, plan: _ClipRenderPlan, creator_id: str
 ) -> None:
@@ -1993,6 +2050,19 @@ async def _encode_and_upload_clip(
         )
         await aemit(clip_id, "step", label="upload_r2", stage="render")
         render_uri = await aupload_file(out_path, f"clips/{clip_id}.mp4")
+        # From the rendered deliverable, not the source: this is the reframed,
+        # caption-burned, correctly-aspected clip the creator will publish, which
+        # is the useful thing to show them. Same never-raise posture as ingest —
+        # render_clip retries, and a missing poster must not cost a re-encode.
+        try:
+            poster_uri = await _extract_and_upload_poster(
+                out_path,
+                f"posters/{creator_id}/clip-{clip_id}.jpg",
+                duration_s=plan.clip_duration_s,
+            )
+        except Exception as exc:  # noqa: BLE001 — a poster never fails a render
+            logger.warning("poster extraction failed for clip %s: %s", clip_id, exc)
+            poster_uri = None
     finally:
         out_path.unlink(missing_ok=True)
 
@@ -2000,6 +2070,8 @@ async def _encode_and_upload_clip(
         clip = await session.get(Clip, uuid.UUID(clip_id))
         if clip:
             clip.render_uri = render_uri
+            if poster_uri:
+                clip.poster_uri = poster_uri
             clip.render_status = RenderStatus.done
             await session.commit()
 
@@ -3119,6 +3191,86 @@ async def _generate_clips_async(video_id: str, creator_id: str | None = None) ->
             exc_type=type(exc).__name__,
         )
         raise
+
+
+# How many videos one backfill pass downloads from R2. The real cost of this
+# task is EGRESS, not CPU, and this number is the only throttle.
+_POSTER_BACKFILL_BATCH = 25
+# A permanently-undecodable source would otherwise be re-downloaded every hour
+# forever, since poster_uri stays NULL. Redis marker, one week.
+_POSTER_FAIL_TTL_S = 7 * 24 * 3600
+
+
+async def _backfill_video_posters_async() -> None:
+    from sqlalchemy import and_, select
+
+    from worker.storage import alocal_path
+
+    redis = _worker_redis()
+
+    # AdminSessionLocal: a genuine cross-tenant sweep, same posture (and same
+    # justification) as purge_stale_source_media above.
+    async with db.AdminSessionLocal() as session:
+        if not await _try_advisory_lock(session, "backfill_video_posters"):
+            logger.info("advisory lock held — skipping backfill_video_posters")
+            return
+        try:
+            # Videos whose source was already purged simply never match: the
+            # purge nulls source_uri when it deletes the blob. Nothing to detect
+            # — those rows keep poster_uri NULL and the UI shows a placeholder.
+            result = await session.execute(
+                select(Video.id, Video.creator_id, Video.source_uri, Video.duration_s)
+                .where(
+                    and_(
+                        Video.poster_uri.is_(None),
+                        Video.source_uri.is_not(None),
+                    )
+                )
+                # Newest first: if the drain is interrupted, the rows a creator is
+                # most likely to be looking at are done first.
+                .order_by(Video.created_at.desc())
+                .limit(_POSTER_BACKFILL_BATCH * 2)
+            )
+            candidates = result.all()
+        finally:
+            await _rollback_then_unlock(session, "backfill_video_posters")
+
+    if not candidates:
+        return
+
+    done = 0
+    for video_id, creator_id, source_uri, duration_s in candidates:
+        if done >= _POSTER_BACKFILL_BATCH:
+            break
+        marker = f"poster_backfill_failed:{video_id}"
+        skip = False
+        # The marker is an egress optimisation, never a correctness gate: if
+        # Redis is unreachable the row is simply retried next pass.
+        with contextlib.suppress(Exception):
+            skip = bool(await redis.get(marker))
+        if skip:
+            continue
+        try:
+            async with alocal_path(source_uri) as src:
+                poster_uri = await _extract_and_upload_poster(
+                    src, f"posters/{creator_id}/{video_id}.jpg", duration_s=duration_s
+                )
+        except Exception as exc:  # noqa: BLE001 — one bad source must not end the batch
+            logger.warning("poster backfill failed for video %s: %s", video_id, exc)
+            poster_uri = None
+
+        done += 1
+        if not poster_uri:
+            with contextlib.suppress(Exception):
+                await redis.set(marker, "1", ex=_POSTER_FAIL_TTL_S)
+            continue
+        async with db.tenant_session(str(creator_id)) as write:
+            video = await write.get(Video, video_id)
+            if video and video.poster_uri is None:
+                video.poster_uri = poster_uri
+                await write.commit()
+
+    logger.info("poster backfill: processed %d video(s)", done)
 
 
 async def _purge_stale_source_media_async() -> None:
