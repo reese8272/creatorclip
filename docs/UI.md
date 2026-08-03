@@ -5,6 +5,16 @@
 **Polish pass 1 (2026-06-19):** `index.css` reconciled to this spec (radii ladder, semantic
 type scale, Geist app-shell font) and the system applied to the shared primitives (Card, Panel,
 Button, Badge, **FitBadge**, Modal, Nav) — elevation/shadow/motion/confidence tokens now consumed.
+**Reconciliation + elevation rules (2026-08-03, Issue 400a):** five values in this
+doc had drifted from `index.css` and were corrected **in the CSS's favour**, per the
+"fix the mismatch, do not fork" rule below — the surface ladder, the two border
+tokens, `--color-subtle` (value, contrast figure *and* usage rule), and
+`--color-accent` (plus the missing `--color-accent-text` row). A dead `--ease-linear`
+line was deleted, the unenforceable "no odd values" spacing rule rewritten around the
+scale that actually generates utilities, and the shadow section updated for the
+`--shadow-inset` → `--inset-shadow-highlight` composition fix. New **Elevation** and
+**Hierarchy** sections make the four-level ladder a rule new screens inherit rather
+than a set of tokens nobody used. See DECISIONS 2026-08-03.
 **Polish pass 2 / per-page sweep (2026-06-19):** deferred items landed — `FitBadge` mounted on the
 Review clips (fit-tier thresholds in `frontend/src/lib/fit.ts`; **tunable** — see DECISIONS),
 `shadow-accent-glow` on the active clip + featured pricing pack, `text-h1/h2` on page titles,
@@ -54,33 +64,40 @@ Token names match the `@theme` (utilities derive from them: `--color-surface` �
 `bg-surface`, `--color-muted` → `text-muted`, `--color-default` →
 `border-default`).
 
-### Surfaces
-| Token | OKLCH | Utility | Purpose |
-|---|---|---|---|
-| `--color-bg` | `oklch(8% 0.008 285)` | `bg-bg` | Page background |
-| `--color-surface` | `oklch(11% 0.010 285)` | `bg-surface` | Card / panel base |
-| `--color-elevated` | `oklch(14% 0.012 285)` | `bg-elevated` | Modals, dropdowns, popovers |
-| `--color-raised` | `oklch(17% 0.013 285)` | `bg-raised` | Hover state on surfaces |
-| `--color-default` | `oklch(22% 0.012 285)` | `border-default` | Default dividers |
-| `--color-strong` | `oklch(30% 0.015 285)` | `border-strong` | Emphasized borders, focus rings |
+### Surfaces — the four-level elevation ladder
+| Level | Token | OKLCH | Utility | Role |
+|---|---|---|---|---|
+| **L0** | `--color-bg` | `oklch(7% 0.008 285)` | `bg-bg` | Page canvas — **and** recessed wells *inside* a panel (transcript scroll box, cut queue, timeline gutter), bounded by `border-default` |
+| **L1** | `--color-surface` | `oklch(13% 0.011 285)` | `bg-surface` | The default card. **Secondary** content. Hover → L2 |
+| **L2** | `--color-elevated` | `oklch(16.5% 0.013 285)` | `bg-elevated` | The **one dominant panel per screen**, and transient surfaces floating over L1 (select menu, popover, tooltip). Hover → L3 |
+| **L3** | `--color-raised` | `oklch(20% 0.014 285)` | `bg-raised` | Modal / dialog — floats over everything, including open L2 menus. Also the hover state of an L2 surface |
+| — | `--color-default` | `oklch(26% 0.014 285)` | `border-default` | Default dividers |
+| — | `--color-strong` | `oklch(34% 0.016 285)` | `border-strong` | Emphasised borders, focus rings, and the border of an L2 primary panel |
+
+Values re-tuned 2026-06-19 (a card cleared the page by only ~3% L, which is
+imperceptible); this table was corrected to match `index.css` on 2026-08-03.
 
 ### Foreground / text
 | Token | OKLCH | Utility | Contrast on `bg` | Use |
 |---|---|---|---|---|
 | `--color-fg` | `oklch(94% 0.008 285)` | `text-fg` | ~14:1 | Body copy, headings |
 | `--color-muted` | `oklch(65% 0.010 285)` | `text-muted` | ~5.5:1 | Secondary labels (14px+) |
-| `--color-subtle` | `oklch(45% 0.008 285)` | `text-subtle` | ~3.2:1 | Placeholder/disabled **only** |
+| `--color-subtle` | `oklch(62% 0.009 285)` | `text-subtle` | ~5:1 | Legitimate tertiary text (timestamps, counts) |
 | `--color-on-accent` | `oklch(98% 0.004 285)` | `text-on-accent` | — | Text on accent fills |
 
-**AA rule:** `text-fg` on any surface passes AA. `text-muted` only at ≥14px.
-Never use `text-subtle` for meaningful content.
+**AA rule:** all three text tokens meet AA (4.5:1) on the page background.
+`--color-subtle` was raised from 45% — which failed at 2.7:1 — per the live-site
+audit (Issue 165). It is now legitimate for tertiary text, but content the
+creator must actually READ still belongs on `text-muted` or `text-fg`: the fix
+was to contrast, not to hierarchy.
 
 ### Accent (warmer indigo)
 | Token | OKLCH | Purpose |
 |---|---|---|
-| `--color-accent` | `oklch(58% 0.18 280)` | Primary CTA, active state |
-| `--color-accent-hover` | `oklch(63% 0.19 278)` | Hover |
-| `--color-accent-active` | `oklch(53% 0.17 282)` | Pressed |
+| `--color-accent` | `oklch(54% 0.18 280)` | **Solid** CTA background — tuned dark enough that `--color-on-accent` clears 4.5:1 on it |
+| `--color-accent-text` | `oklch(72% 0.15 280)` | Accent-coloured **text** on dark. The solid value above is too dark to satisfy this, so one token cannot do both — they pull opposite ways (Issue 165, Radix's solid-vs-text convention) |
+| `--color-accent-hover` | `oklch(59% 0.19 278)` | Hover |
+| `--color-accent-active` | `oklch(49% 0.17 282)` | Pressed |
 | `--color-accent-soft` | `oklch(20% 0.06 280)` | Accent-tinted surface (selected row) |
 | `--color-accent-border` | `oklch(35% 0.10 280)` | Focus ring, selected outline |
 
@@ -92,6 +109,47 @@ Never use `text-subtle` for meaningful content.
 | `--color-danger` | `oklch(62% 0.20 25)` | `oklch(18% 0.06 25)` | `oklch(32% 0.11 25)` |
 
 ---
+
+## Elevation — which surface a container takes
+
+One rule, four levels (see the Surfaces table above for the values):
+
+| Container | Level | Utility |
+|---|---|---|
+| Page canvas | L0 | `bg-bg` |
+| A recessed well *inside* a panel — scroll region, timeline gutter, queue | L0 | `bg-bg` + `border-default` |
+| The ordinary card / panel — **secondary** content | L1 | `bg-surface` |
+| The **one** dominant panel on the screen | L2 | `bg-elevated` + `border-strong` |
+| Floating over a panel: select menu, popover, tooltip | L2 | `bg-elevated` |
+| Modal / dialog — over everything, including open menus | L3 | `bg-raised` |
+
+**Hover lifts exactly one rung.** L1 → L2, L2 → L3. Never skip.
+
+**Luminance alone is not enough.** L1 → L2 is a 3.5-point step; on its own it will
+not make a panel dominant. A primary panel moves **four cues together**:
+
+1. surface one rung up (`bg-surface` → `bg-elevated`),
+2. `border-strong` instead of `border-default`,
+3. more internal padding, at `rounded-lg` instead of `rounded-md`,
+4. a `text-h3` header instead of the `text-label` uppercase overline secondaries use.
+
+`components/ui/card.tsx` encodes this as `level="panel" | "primary"` — use the
+prop rather than reassembling the four cues by hand.
+
+**Known exception.** Badges and chips (`ui/badge.tsx`) use `bg-elevated` as an
+inline *tint*, not as a surface — they sit one step above their host. On an L2
+host they tie. A translucent tint token would fix it properly; deferred.
+
+## Hierarchy — what dominates a screen
+
+- **Exactly one primary panel per screen.** It is the thing the page exists to do:
+  the player on Review, the viewer on the Editor. Everything else is L1.
+- **Secondary panels recede.** The strongest lever is not a class — it is being
+  **collapsed by default**. A rail of four identically-weighted open cards gives
+  the eye no entry point and forces a linear scan, which is what "blocky" means.
+- **Body copy sits on the semantic type scale.** Content the creator must read
+  never uses `text-[10px]`, and never uses `text-subtle` (see the AA rule).
+- Timecodes use `font-mono text-mono` — the token exists for exactly this.
 
 ## Confidence badges — "fit with your channel style"
 
@@ -131,10 +189,18 @@ Letter-spacing: h1 `-0.025em`, h2/h3 `-0.015em`, label `+0.04em` (all-caps `+0.0
 
 ---
 
-## Spacing — 8pt grid
+## Spacing
 
-`--space-1:4px · -2:8px · -3:12px · -4:16px · -5:20px · -6:24px · -8:32px ·
--10:40px · -12:48px · -16:64px`. Every layout gap is a token; no odd values.
+Spacing comes from **Tailwind's default `--spacing` scale** (0.25rem base), i.e.
+`p-2` = 8px, `gap-3` = 12px, `py-6` = 24px. Prefer even steps.
+
+> **The `--space-*` tokens in `@theme` generate NOTHING.** Tailwind v4 derives
+> spacing utilities from the `--spacing` namespace, not `--space-*`, so those ten
+> declarations are reachable only as `var(--space-4)` inside an arbitrary value —
+> which no file does. Treat them as dead until deleted; do not add more.
+
+An arbitrary pixel value (`p-[18px]`, `py-[5px]`) is a smell — use the nearest
+step. Several predate this rule and are being migrated as surfaces are touched.
 
 ## Radii
 
@@ -147,14 +213,26 @@ Durations: `--duration-instant:80ms · -fast:150ms · -base:220ms · -slow:350ms
 -spring:500ms`.
 Easings: `--ease-standard cubic-bezier(0.2,0,0,1)` (most) ·
 `--ease-enter cubic-bezier(0,0,0.2,1)` · `--ease-exit cubic-bezier(0.4,0,1,1)` ·
-`--ease-spring cubic-bezier(0.34,1.56,0.64,1)` (clip-card pop, slight overshoot) ·
-`--ease-linear` (progress/skeleton).
+`--ease-spring cubic-bezier(0.34,1.56,0.64,1)` (clip-card pop, slight overshoot).
+`--ease-snappy cubic-bezier(0.4,0,0.2,1)`.
+Note `--duration-*` are the only motion tokens with hand-written `@utility` rules
+(`duration-instant/fast/base/slow`); `duration-spring` has a token but no utility,
+so writing it produces nothing.
 
 ## Shadows (dark-surface: black-alpha elevation + accent glow)
 
 `--shadow-sm` subtle card lift · `--shadow-md` dropdown/popover ·
-`--shadow-lg` modal/drawer · `--shadow-accent-glow` selected/active clip card ·
-`--shadow-inset` button top-edge highlight (restores 3D cue flat dark loses).
+`--shadow-lg` modal/drawer · `--shadow-accent-glow` selected/active clip card.
+
+`--inset-shadow-highlight` (utility `inset-shadow-highlight`) is the top-edge
+catch-light that restores the 3D cue flat dark loses — **the load-bearing
+elevation cue**, since black drop shadows barely register on near-black.
+
+> It was `--shadow-inset` until 2026-08-03, in the same namespace as
+> `--shadow-sm` — so `shadow-sm shadow-inset` **did not compose**: both write
+> `--tw-shadow` and the second wins. The highlight was silently dropped at ~30 of
+> its 43 call sites, which is most of why cards read flat. It now lives in v4's
+> inset-shadow namespace (`--tw-inset-shadow`) and composes. Pair them freely.
 
 ---
 

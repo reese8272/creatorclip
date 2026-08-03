@@ -292,7 +292,12 @@ the differentiator we hold is honesty about what the signal means, not exposure 
 ---
 
 ### Issue 400: Visual hierarchy pass — fix "blocky and hard on the eyes"
-- [ ] **Status:** open · **Batch:** A · **Size:** M · **Agent:** `general-purpose`
+- [ ] **Status:** in progress · **Batch:** A · **Size:** M
+- **Split into 400a + 400b.** **400a (DONE 2026-08-03)** is the foundation: the
+  `--shadow-inset` → `--inset-shadow-highlight` composition fix at 43 sites, `Card`'s `level` prop,
+  the `Card`/`Modal` elevation-ladder corrections, seven dead colour tokens, the
+  `design-tokens.contract` gate, and the `docs/UI.md` reconciliation + new Elevation/Hierarchy
+  sections. **400b** is the composition pass over Review and the Editor, and runs after #386/#388.
 
 **What we're doing.** An elevation and hierarchy pass across the app surfaces: differentiating card
 weight, establishing a real type rhythm, and removing the uniform-box repetition that makes every

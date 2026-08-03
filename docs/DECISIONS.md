@@ -5,6 +5,80 @@ implementation diverges from the PRD. Every entry must include what, why, source
 
 ---
 
+## 2026-08-03 — Issue 400a: the elevation highlight never composed, and seven colour tokens never existed
+
+**What was decided.** Before any hierarchy work, two foundations were fixed: the inset elevation
+highlight now actually renders, and a source-scanning contract test makes undeclared colour tokens a
+test failure. `docs/UI.md` is reconciled to `index.css` and gains **Elevation** and **Hierarchy**
+sections so new screens inherit the rules instead of rediscovering them.
+
+**The shadow bug, which is most of why the app reads "blocky".** `--shadow-inset` was declared in the
+same Tailwind namespace as `--shadow-sm`, so the idiom used across the app — `shadow-sm shadow-inset`
+— **did not compose**: both write `--tw-shadow`, and the second one wins. `index.css:157-160` states
+in its own comment that black drop shadows "barely register on near-black, so the load-bearing cue is
+the inset top-edge highlight" — and that cue was being silently discarded at roughly 30 of its **43**
+call sites. Renaming it to `--inset-shadow-highlight` moves it into v4's inset-shadow namespace, which
+writes `--tw-inset-shadow` and composes into the same `box-shadow`. Verified in the built CSS, not
+assumed. This is a rename, and it is the highest-value change in Batch A per unit of risk.
+
+**The dead tokens — five of the seven were unknown before the gate was written.** A utility naming a
+token that does not exist **fails silently**: Tailwind emits nothing, the element inherits, and the
+page still renders. Neither `tsc` nor a rendered-DOM assertion can see it. `text-error` (3×) and
+`bg-[color:var(--color-border)]` were already logged. The new test found five more, and one is
+material:
+
+> **`App.tsx`'s `RootError` — the crash-recovery screen — was written entirely in shadcn's default
+> token names**: `bg-background`, `text-foreground`, `text-muted-foreground`, `bg-primary`,
+> `text-primary-foreground`, `border-border`. This project declares none of them. The screen a user
+> sees **when the SPA has already crashed** has been rendering with no background, no foreground
+> colour, and a fill-less "Reload" button. It is the worst possible surface to have shipped unstyled,
+> and it survived review precisely because the class names look plausible.
+
+The gate's denylist was widened to the whole shadcn-default family (`popover`, `card`, `input`, `ring`,
+`destructive`, the `*-foreground` set) so this cannot recur by copy-paste from a shadcn snippet.
+
+**Elevation, stated as a rule rather than a palette.** `index.css` has defined a four-level ladder
+since June; the app used `bg-surface` 71 times, `bg-elevated` 32, and **`bg-raised` once**. The ladder
+was built and then stood on. The rule now documented: L0 canvas *and* recessed wells, L1 the ordinary
+secondary card, L2 the one dominant panel *and* floating menus, L3 overlays. Two primitive bugs fell
+out of writing it down: `Card`'s interactive hover jumped L1 straight to `bg-raised` (skipping a rung
+into the overlay level), and `Modal` sat at L2 — the same level as the Select menus it must float
+above. Both fixed.
+
+**The judgement call: luminance alone cannot carry dominance.** L1 → L2 is a 3.5-point lightness step.
+Current dark-mode guidance is right that hierarchy should come from luminance rather than weight, but
+at these values one rung is not enough on its own. `Card` therefore gains `level="panel" | "primary"`
+that moves **four cues together** — surface, border weight, padding, radius — and `UI.md` records that
+the biggest lever is not a class at all: secondary panels recede by being **collapsed by default**.
+
+**`docs/UI.md` reconciliation.** The doc declares itself the design SoT and `index.css` the
+implementation SoT, "when they disagree, fix the mismatch; do not fork." Five disagreements, all
+resolved **in the CSS's favour**, because each CSS value carries a comment recording why it moved:
+the surface ladder (doc 8/11/14/17% vs CSS 7/13/16.5/20%), the border pair (22/30 vs 26/34),
+`--color-subtle` (45% vs 62% — the Issue 165 WCAG fix, so the value, the quoted contrast ratio **and**
+the "placeholder/disabled only" usage rule were all wrong), and `--color-accent` (58 vs 54, plus an
+absent `--color-accent-text` row — the solid-vs-text split that is easiest to get wrong). Also deleted
+a documented `--ease-linear` that does not exist and has no consumers, and rewrote the "every layout
+gap is a token; no odd values" rule, which was unenforceable **and** already violated: the `--space-*`
+tokens generate **zero utilities**, because v4 derives spacing from `--spacing`, not `--space-*`.
+
+**One piece of test infrastructure was needed.** Reading `index.css` from a test is not possible by
+the obvious routes: `test.css: false` short-circuits anything ending in `.css` and `@tailwindcss/vite`
+claims the rest, so both `import.meta.glob(?raw)` and a direct `?raw` import return an empty string
+(measured, not assumed — the first version of the test reported every token as missing). A ~15-line
+`enforce: 'pre'` virtual-module plugin in `vite.config.ts` serves the file as text. `vite.config.ts` is
+the one place with `@types/node` (`tsconfig.node.json`), so this is also the only layer that *can*
+read it.
+
+**Verification.** Frontend **383 passed / 61 files** (380/60 after #385), `npx tsc -b` clean,
+`npm run lint` **0 errors** (3 pre-existing `exhaustive-deps` warnings), `npm run build` clean, and the
+compiled CSS confirms `inset-shadow-highlight` now emits `--tw-inset-shadow` alongside `--tw-shadow`.
+The three committed visual baselines (`login`, `pricing`, `empty-dashboard`) **will** move — the
+shadow fix reaches `buttonVariants`, which renders on all three — and are regenerated once at the
+Batch A close-out rather than per issue. **Date:** 2026-08-03
+
+---
+
 ## 2026-08-03 — Issue 385: six UI primitives, not seven — and the two traps in swapping native controls for Radix
 
 **What was decided.** Select, Switch, Checkbox, RadioGroup, Tabs and Tooltip are built on Radix
