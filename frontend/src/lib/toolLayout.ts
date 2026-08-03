@@ -36,3 +36,15 @@ export const EDITOR_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_30.5rem)*0.5625))]'
  * at 1440×900: 773px row, so the player gets 486px of height.
  */
 export const REVIEW_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_29.5rem)*0.5625))]'
+
+/**
+ * Long-form SOURCE player width. 1.7778 = 16/9, so this bounds a landscape
+ * player's height the same way — X = 41rem leaves room for the Chip callout, the
+ * master timeline and the clip lists below it.
+ *
+ * Without this the placeholder/player is `aspect-video w-full`: at the ~1075px
+ * column width that is 605px tall, which pushes the master timeline to the
+ * bottom edge of the viewport and the clip lists entirely off-screen. `min(100%)`
+ * keeps it from ever exceeding its column on a short, wide viewport.
+ */
+export const SOURCE_PLAYER_W = 'w-[min(100%,calc((100dvh_-_41rem)*1.7778))]'

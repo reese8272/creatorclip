@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { SOURCE_PLAYER_W } from '@/lib/toolLayout'
 import { fitTier } from '@/lib/fit'
 import { fmtClock, parseClock } from '@/lib/timecode'
 import type { FitTier } from '@/components/ui/fit-badge'
@@ -321,14 +322,14 @@ export function LongFormEditor({
   return (
     <div
       className={cn(
-        'grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px]',
-        // Scrolls as one region inside the clipped shell; the per-panel split is
-        // the next commit.
-        'lg:overflow-y-auto',
+        'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]',
         className,
       )}
     >
-      <div className="flex flex-col gap-4">
+      {/* The source player and its master timeline stay pinned; only the lists
+          below them scroll, so the timeline you are selecting against cannot
+          leave the viewport (Issue 389). */}
+      <div className="flex min-h-0 flex-col gap-4">
         {sourceAvailable ? (
           <VideoPlayer
             ref={playerRef}
@@ -338,10 +339,15 @@ export function LongFormEditor({
             transport
             onTimeChange={setCurrentTime}
             onError={() => setStreamError(true)}
-            className="w-full"
+            className={cn(SOURCE_PLAYER_W, 'mx-auto shrink-0')}
           />
         ) : (
-          <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle">
+          <div
+            className={cn(
+              SOURCE_PLAYER_W,
+              'mx-auto flex aspect-video shrink-0 flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black/60 px-6 text-center text-sm text-subtle',
+            )}
+          >
             <span className="text-danger">Source media expired</span>
             <span className="text-xs">
               The original upload passed its retention window — re-upload the video to edit the
@@ -357,7 +363,7 @@ export function LongFormEditor({
         )}
 
         {/* Chip scan callout */}
-        <div className="flex items-center gap-3 rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface px-3.5 py-2.5">
+        <div className="flex shrink-0 items-center gap-3 rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface px-3.5 py-2.5">
           <Chip pose="magnify" size={46} className="flex-shrink-0" />
           <div className="text-small leading-relaxed text-fg">
             <strong className="text-accent-text">Chip:</strong> I scanned your source and surfaced{' '}
@@ -382,6 +388,14 @@ export function LongFormEditor({
           />
         )}
 
+        {/* Everything below the timeline is a list — it scrolls, the instrument
+            above it does not. No tabIndex needed: every row carries an Open or
+            seek button, which already satisfies scrollable-region-focusable. */}
+        <section
+          data-tool-scroll
+          aria-label="Source clips and transcript"
+          className="flex min-h-0 flex-1 flex-col gap-4 lg:overflow-y-auto"
+        >
         {/* Your clips (Issue 373) — creator-made selections, honest provenance */}
         {creatorClips.length > 0 && (
           <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
@@ -455,10 +469,15 @@ export function LongFormEditor({
           onSeek={seek}
           onClipSegment={(seg) => setPendingSelection({ start_s: seg.start_s, end_s: seg.end_s })}
         />
+        </section>
       </div>
 
       {/* Right rail: chapters (functional) + export (UI only) */}
-      <div className="flex flex-col gap-4">
+      <section
+        data-tool-scroll
+        aria-label="Chapters and export"
+        className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
+      >
         <ChaptersPanel videoId={videoId} onChapters={setChapters} />
 
         {/* Export (Issue 373): real per-clip artifacts — every rendered clip
@@ -499,7 +518,7 @@ export function LongFormEditor({
             </p>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   )
 }
