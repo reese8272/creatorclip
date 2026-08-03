@@ -306,7 +306,7 @@ the differentiator we hold is honesty about what the signal means, not exposure 
 ---
 
 ### Issue 400: Visual hierarchy pass — fix "blocky and hard on the eyes"
-- [ ] **Status:** in progress · **Batch:** A · **Size:** M
+- [x] **Status:** DONE 2026-08-03 · **Batch:** A · **Size:** M
 - **Split into 400a + 400b.** **400a (DONE 2026-08-03)** is the foundation: the
   `--shadow-inset` → `--inset-shadow-highlight` composition fix at 43 sites, `Card`'s `level` prop,
   the `Card`/`Modal` elevation-ladder corrections, seven dead colour tokens, the
@@ -364,15 +364,21 @@ professionalism and reliability
 ([Dark Mode UI Design in 2026](https://www.tech-rz.com/blog/dark-mode-ui-design-in-2026-user-experience-and-ai-powered-interfaces/)).
 
 **Acceptance**
-- [ ] All four surface levels in active use, with a documented rule for which level each container
-      class takes (page / panel / nested card / overlay)
-- [ ] Primary panel on each screen visually dominant; secondary panels recede — no rail of four
-      identically-weighted boxes
-- [ ] Body copy on the semantic type scale; no `text-[10px]` for content the user must read
-- [ ] `docs/UI.md` updated with the elevation and hierarchy rules so new screens inherit them
-- [ ] WCAG AA contrast re-verified on every changed surface/text pairing (the `index.css:35-37`
-      a11y fix must not regress)
-- [ ] Visual-regression screenshots refreshed and reviewed
+- [x] All four levels in use: L0 page **and** recessed wells (transcript scroll box, cut queue),
+      L1 secondary cards, L2 the one primary panel + floating menus, L3 modals. Rule documented in
+      `docs/UI.md` and encoded as `Card level="panel"|"primary"`
+- [x] Primary panel dominant on both tool screens (Review's player, the Editor's viewer); the rail
+      recedes — Publish now **collapsed by default**, which is the strongest lever, and the
+      gradient "Open in the editor" card demoted so it stops competing with the player
+- [x] Body copy on the semantic scale; **all 12 arbitrary sizes gone** (`text-[10px]`/`[11px]`/
+      `[15px]` → `text-label`/`text-small`/`text-body`), timecodes onto `text-mono`. The remaining
+      ~400 legacy `text-xs`/`text-sm` on untouched surfaces are **explicitly deferred** and stated
+      in `UI.md`; the legacy scale is NOT deleted, since it still resolves those utilities
+- [x] `docs/UI.md` has the Elevation + Hierarchy sections (400a)
+- [x] axe gate green on all 10 routes including the editor, so the AA fix did not regress
+- [x] Artifact screenshots refreshed and **reviewed by eye** — which caught two defects tests
+      could not: the primary card framing a large empty region beside a 9:16 player (now `w-fit`),
+      and Select values wrapping out of their fixed-height trigger (now truncated)
 
 ---
 

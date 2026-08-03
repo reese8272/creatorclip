@@ -69,7 +69,12 @@ export function Select({
         aria-label={ariaLabel}
         className={cn(selectTriggerVariants({ size }), className)}
       >
-        <RadixSelect.Value placeholder={placeholder} />
+        {/* The trigger is a fixed height, so a long option label must ellipsise
+            rather than wrap out of it — several of ours are full sentences
+            ("Bold Pop Highlight — keywords in yellow"). */}
+        <span className="min-w-0 truncate">
+          <RadixSelect.Value placeholder={placeholder} />
+        </span>
         <RadixSelect.Icon asChild>
           <ChevronDown className={`${ICON_SIZE.sm} shrink-0 text-muted`} aria-hidden="true" />
         </RadixSelect.Icon>

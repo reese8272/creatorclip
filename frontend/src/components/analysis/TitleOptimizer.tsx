@@ -48,7 +48,7 @@ export function TitleOptimizer({ videoId, videoTitle }: { videoId: string; video
                 <div className="flex-1 text-sm font-medium leading-snug text-fg">{s.title}</div>
                 <div className="flex flex-shrink-0 items-center gap-2">
                   {s.search_grounded && (
-                    <span className="rounded-sm border border-default bg-surface px-1 font-mono text-[10px] text-subtle">
+                    <span className="rounded-sm border border-default bg-surface px-1 font-mono text-label text-muted">
                       web-grounded
                     </span>
                   )}

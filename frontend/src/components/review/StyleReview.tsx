@@ -227,7 +227,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
                     {item.feedback_tags.map((t) => (
                       <span
                         key={t}
-                        className="rounded-sm bg-elevated px-2 py-0.5 font-mono text-[10px] text-muted"
+                        className="rounded-sm bg-elevated px-2 py-0.5 font-mono text-label text-muted"
                       >
                         {t}
                       </span>

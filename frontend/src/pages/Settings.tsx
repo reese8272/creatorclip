@@ -203,7 +203,7 @@ export function Settings() {
             label="Watermark / logo"
             description="Overlaid on every clip"
             mock={
-              <span className="flex h-10 w-10 items-center justify-center rounded-sm border border-dashed border-strong font-mono text-[11px] text-subtle">
+              <span className="flex h-10 w-10 items-center justify-center rounded-sm border border-dashed border-strong font-mono text-label text-muted">
                 PNG
               </span>
             }

@@ -49,13 +49,13 @@ export function Landing() {
           <div className="flex flex-wrap justify-center gap-3">
             <a
               href="/auth/login"
-              className="inline-flex items-center justify-center rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg transition-opacity hover:opacity-90"
+              className="inline-flex items-center justify-center rounded-md border border-fg bg-fg px-5 py-3 text-body font-semibold text-bg transition-opacity hover:opacity-90"
             >
               Sign in with Google
             </a>
             <a
               href="/app/pricing"
-              className="inline-flex items-center justify-center rounded-md border border-default px-5 py-3 text-[15px] font-semibold text-fg hover:border-strong"
+              className="inline-flex items-center justify-center rounded-md border border-default px-5 py-3 text-body font-semibold text-fg hover:border-strong"
             >
               See pricing
             </a>

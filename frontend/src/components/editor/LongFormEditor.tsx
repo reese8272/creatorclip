@@ -91,7 +91,7 @@ function MasterTimeline({
           {ticks.map((t, i) => (
             <span
               key={i}
-              className="absolute -translate-x-1/2 whitespace-nowrap text-[10px] text-subtle"
+              className="absolute -translate-x-1/2 whitespace-nowrap text-label text-muted"
               style={{ left: `${Math.min(100, (t.at / dur) * 100)}%` }}
               title={`${t.title} · ${fmtClock(t.at)}`}
             >
@@ -186,7 +186,7 @@ function MasterTimeline({
             />
           )}
         </div>
-        <div className="flex justify-between border-t border-default px-2 py-[5px] font-mono text-[10px] text-muted">
+        <div className="flex justify-between border-t border-default px-2 py-[5px] font-mono text-label text-muted">
           <span>0:00</span>
           <span>{fmtClock(dur / 2)}</span>
           <span>{fmtClock(dur)}</span>

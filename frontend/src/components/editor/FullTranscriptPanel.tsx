@@ -96,7 +96,7 @@ export function FullTranscriptPanel({
                       <button
                         onClick={() => onClipSegment(seg)}
                         title="Create a clip from this segment"
-                        className="invisible shrink-0 rounded-sm border border-strong bg-bg px-2 py-0.5 text-[10px] text-muted hover:bg-elevated hover:text-fg group-hover:visible"
+                        className="invisible shrink-0 rounded-sm border border-strong bg-bg px-2 py-0.5 text-label text-muted hover:bg-elevated hover:text-fg group-hover:visible"
                       >
                         Clip this
                       </button>

@@ -131,7 +131,7 @@ export function Login() {
           {canSignIn ? (
             <a
               href={signInHref}
-              className="inline-flex w-full items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg transition-opacity hover:opacity-90"
+              className="inline-flex w-full items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-body font-semibold text-bg transition-opacity hover:opacity-90"
               aria-label="Sign in with Google"
             >
               <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -147,7 +147,7 @@ export function Login() {
               type="button"
               disabled
               aria-disabled="true"
-              className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-[15px] font-semibold text-bg opacity-40"
+              className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-md border border-fg bg-fg px-5 py-3 text-body font-semibold text-bg opacity-40"
               aria-label="Sign in with Google (please agree to Terms and confirm your age first)"
             >
               <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
