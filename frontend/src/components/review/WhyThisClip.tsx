@@ -17,6 +17,9 @@ import type {
 } from '@/types'
 import { Check } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Disclosure } from '@/components/ui/disclosure'
 
 // ── CopyButton — click-to-copy affordance ─────────────────────────────────────
 
@@ -104,17 +107,14 @@ function TitleSuggestionsCard({ clip }: { clip: ReviewClip }) {
 
   if (!open) {
     return (
-      <button
-        onClick={() => { setOpen(true); mutation.mutate() }}
-        className="mt-2 text-xs text-accent-text underline-offset-2 hover:underline"
-      >
+      <Button variant="ghost" size="sm" onClick={() => { setOpen(true); mutation.mutate() }}>
         Suggest titles / rewrite hook
-      </button>
+      </Button>
     )
   }
 
   return (
-    <div className="mt-3 rounded-md border border-default bg-surface p-3 text-xs">
+    <div className="mt-3 basis-full rounded-md border border-default bg-surface p-3 text-xs">
       <div className="mb-2 font-semibold text-fg">AI title suggestions</div>
       {mutation.isPending && <p className="text-muted">Generating…</p>}
       {mutation.isError && (
@@ -187,17 +187,14 @@ function CaptionHooksCard({ clip }: { clip: ReviewClip }) {
 
   if (!open) {
     return (
-      <button
-        onClick={() => { setOpen(true); mutation.mutate() }}
-        className="mt-1 text-xs text-accent-text underline-offset-2 hover:underline"
-      >
+      <Button variant="ghost" size="sm" onClick={() => { setOpen(true); mutation.mutate() }}>
         Suggest caption / overlay text
-      </button>
+      </Button>
     )
   }
 
   return (
-    <div className="mt-3 rounded-md border border-default bg-surface p-3 text-xs">
+    <div className="mt-3 basis-full rounded-md border border-default bg-surface p-3 text-xs">
       <div className="mb-2 font-semibold text-fg">Caption hook suggestions</div>
       {mutation.isPending && <p className="text-muted">Generating…</p>}
       {mutation.isError && (
@@ -283,12 +280,22 @@ export function WhyThisClip({ clip }: { clip: ReviewClip }) {
     <div className="text-sm">
       <div className="mb-3 flex items-center justify-between gap-3 border-b border-default pb-2">
         {isCreatorClip ? (
-          <span className="font-mono text-xs text-accent-text">Your selection</span>
+          <Badge variant="muted" casing="sentence">
+            Your selection
+          </Badge>
         ) : (
           <>
-            <span className="font-mono text-xs text-accent-text">
-              [principle] {clip.principle || '—'}
-            </span>
+            {/* Was `[principle] Open Loop` in bracketed monospace — which reads as
+                a log line, and a log line in a product surface reads as
+                unfinished. The tier leads; the principle is a named badge. */}
+            <Badge
+              variant="accent"
+              casing="sentence"
+              data-testid="principle-badge"
+              title="The storytelling principle this clip was selected for."
+            >
+              {clip.principle || '—'}
+            </Badge>
             <FitBadge tier={fitTier(clip.score)} />
           </>
         )}
@@ -299,23 +306,34 @@ export function WhyThisClip({ clip }: { clip: ReviewClip }) {
           : clip.reasoning ||
             'No reasoning recorded for this clip. The scoring engine still ranked it — the explanation is just not on file.'}
       </div>
-      <div className="mt-3 flex justify-between border-t border-default pt-3 font-mono text-xs text-subtle">
-        <span>Score (fit estimate, not a guarantee)</span>
-        <strong className="text-fg">{clip.score != null ? clip.score.toFixed(2) : '—'}</strong>
-      </div>
-      <div className="flex justify-between font-mono text-xs text-subtle">
-        <span>Setup → peak → end</span>
-        <strong className="text-fg">
-          {setupStart.toFixed(1)}s → {(clip.peak_s ?? clip.start_s).toFixed(1)}s →{' '}
-          {clip.end_s.toFixed(1)}s
-        </strong>
+      {/* The raw float and the setup→peak→end readout are internal
+          representations. They stay REACHABLE — the honesty constraint requires
+          the estimate framing to be available, and the wording below is
+          unchanged — but the fit tier in the header is what leads. */}
+      <div className="mt-3 border-t border-default pt-3">
+        <Disclosure summary="Scoring details">
+          <div className="flex justify-between font-mono text-mono text-muted">
+            <span>Score (fit estimate, not a guarantee)</span>
+            <strong className="text-fg">{clip.score != null ? clip.score.toFixed(2) : '—'}</strong>
+          </div>
+          <div className="flex justify-between font-mono text-mono text-muted">
+            <span>Setup → peak → end</span>
+            <strong className="text-fg">
+              {setupStart.toFixed(1)}s → {(clip.peak_s ?? clip.start_s).toFixed(1)}s →{' '}
+              {clip.end_s.toFixed(1)}s
+            </strong>
+          </div>
+        </Disclosure>
       </div>
 
       {/* Issue 325 — expandable Why-This-Clip narrative */}
       <ExplainClipCard clipId={clip.id} />
 
       {/* Issues 322/323 — on-demand title + caption suggestions */}
-      <div className="mt-3 border-t border-default pt-3">
+      <div
+        data-testid="clip-action-row"
+        className="mt-3 flex flex-wrap gap-2 border-t border-default pt-3"
+      >
         <TitleSuggestionsCard clip={clip} />
         <CaptionHooksCard clip={clip} />
       </div>

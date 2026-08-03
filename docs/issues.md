@@ -252,7 +252,7 @@ and hold thumbnails, captions, and transcripts in one managed structure
 ---
 
 ### Issue 388: De-debug the creator-facing surfaces
-- [ ] **Status:** open · **Batch:** A · **Size:** S · **Agent:** `general-purpose`
+- [x] **Status:** DONE 2026-08-03 · **Batch:** A · **Size:** S
 
 **What we're doing.** Removing raw internals from primary UI — bracketed principle tags, the numeric
 score, the setup→peak→end readout, raw YouTube IDs — and fixing a live layout bug in the Review
@@ -288,14 +288,20 @@ the differentiator we hold is honesty about what the signal means, not exposure 
 [Opus Clip alternatives, tested](https://www.choppity.com/blog/best-opus-clip-alternatives/)).
 
 **Acceptance**
-- [ ] Fit tier leads, using the existing `--color-fit-*` tokens; numeric score moves behind a
-      "details" disclosure — **the estimate-not-guarantee wording is preserved verbatim**
-- [ ] Principle rendered as a named badge, not `[bracketed]` monospace
-- [ ] setup→peak→end readout moved into the same details disclosure
-- [ ] Raw YouTube IDs removed from default library rows
-- [ ] `WhyThisClip` action row rebuilt as a flex row with a real gap; regression test asserts the two
-      actions are separated
-- [ ] Existing structural test for the no-virality-promise constraint still green
+- [x] `FitBadge` leads in the header; the numeric score moves behind a new `ui/disclosure.tsx`
+      (native `<details>`, chrome-less — **not** `CollapsibleTool`, whose own card would reproduce
+      the nested-box repetition #400 exists to remove). **The wording is byte-identical**, and
+      because `<details>` keeps children in the DOM the existing honesty guard passes unmodified
+- [x] Principle rendered as a `Badge` with a new `casing="sentence"` variant — the badge base is
+      uppercase + wide tracking, right for "SOON" and wrong for a sentence-length principle
+- [x] setup→peak→end readout in the same disclosure
+- [x] Raw YouTube IDs replaced by `Long-form · 12:34 · 3d ago` (`lib/videoMeta.ts`, shared by both
+      call sites). The ID moves to the row's `title` attribute and stays on the detail page
+- [x] Action row rebuilt as `flex flex-wrap gap-2`; triggers are real Buttons and open panels take
+      `basis-full`, which also fixes the layout jump when one opens. **Two tests**: structure in
+      vitest, and geometry in `e2e/review.spec.ts` — verified to FAIL on the pre-fix markup
+      (measured 0px horizontal gap) rather than merely passing on the fix
+- [x] No-virality structural tests green and untouched (`Review.test.tsx`, `fit-badge.test.tsx`)
 
 ---
 

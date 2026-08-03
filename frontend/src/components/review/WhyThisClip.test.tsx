@@ -9,7 +9,7 @@
  *  - Issue 323: "Suggest caption / overlay text" trigger renders.
  *  - No virality language in the rendered static copy.
  */
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -96,8 +96,11 @@ describe('WhyThisClip', () => {
     expect(await screen.findByText('Why this clip')).toBeInTheDocument()
     // Explanation text.
     expect(await screen.findByText(/hook lands in the first 3 seconds/i)).toBeInTheDocument()
-    // Principle citation.
-    expect(await screen.findByText('Hook in the first 3 seconds')).toBeInTheDocument()
+    // Principle citation — scoped to the card. Issue 388 promoted the principle
+    // to a named badge in the header, so an unscoped query now matches twice:
+    // the badge AND this citation. Both are correct; the query was ambiguous.
+    const card = await screen.findByTestId('explain-clip-card')
+    expect(within(card).getByText('Hook in the first 3 seconds')).toBeInTheDocument()
   })
 })
 
@@ -177,5 +180,45 @@ describe('Apply suggestions', () => {
         applied_description: 'Watch the hook land',
       })
     })
+  })
+  // ── Issue 388 — de-debug the surface ────────────────────────────────────────
+
+  it('renders the principle as a named badge, not [bracketed] monospace', () => {
+    const { container } = render(<WhyThisClip clip={CLIP} />, { wrapper })
+    expect(container.textContent).not.toContain('[principle]')
+    expect(screen.getByTestId('principle-badge')).toHaveTextContent('Hook in the first 3 seconds')
+  })
+
+  it('keeps the numeric score reachable but not leading', () => {
+    render(<WhyThisClip clip={CLIP} />, { wrapper })
+    const details = screen.getByText('0.82').closest('details')
+    expect(details, 'the score belongs behind a disclosure').toBeTruthy()
+    expect(details!.open, 'the disclosure starts closed').toBe(false)
+  })
+
+  it('preserves the estimate-not-guarantee wording verbatim', () => {
+    // The honesty constraint outranks the layout: moving the score behind a
+    // disclosure must not touch its framing. <details> keeps children in the DOM
+    // when closed, which is why this reads as plain text.
+    const { container } = render(<WhyThisClip clip={CLIP} />, { wrapper })
+    expect(container.textContent).toContain('Score (fit estimate, not a guarantee)')
+  })
+
+  it('separates the two suggestion actions in a flex row with a real gap', () => {
+    // The bug: both triggers were bare <button>s in a non-flex div, so as inline
+    // boxes they landed on one line with zero gap ("…rewrite hookSuggest
+    // caption"), and their mt-2/mt-1 did nothing. jsdom has no layout engine and
+    // vite.config sets css:false, so getComputedStyle proves nothing here — the
+    // geometric assertion lives in e2e/review.spec.ts.
+    render(<WhyThisClip clip={CLIP} />, { wrapper })
+    const row = screen.getByTestId('clip-action-row')
+    expect(row.className).toMatch(/\bflex\b/)
+    expect(row.className).toMatch(/\bgap-\d/)
+
+    const titles = screen.getByRole('button', { name: /Suggest titles/i })
+    const caption = screen.getByRole('button', { name: /Suggest caption/i })
+    expect(row).toContainElement(titles)
+    expect(row).toContainElement(caption)
+    expect(titles.parentElement).toBe(caption.parentElement)
   })
 })

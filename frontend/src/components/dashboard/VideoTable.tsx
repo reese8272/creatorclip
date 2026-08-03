@@ -7,6 +7,7 @@ import { StageStepper } from '@/components/dashboard/StageStepper'
 import { SOURCE_NEEDED_HELP, STATUS_VARIANT } from '@/components/dashboard/videoStatus'
 import { useStageStream } from '@/hooks/useStageStream'
 import type { AnalysisMode, IngestStatus, Video } from '@/types'
+import { videoMetaLine } from '@/lib/videoMeta'
 
 export interface ClipInfo {
   total: number
@@ -85,10 +86,10 @@ function VideoRow({
   return (
     <tr className="border-b border-default hover:bg-elevated">
       <td className="px-4 py-3.5 align-middle">
-        <div className="max-w-[280px] truncate text-fg">{video.title || '—'}</div>
-        <div className="font-mono text-xs text-subtle">
-          {video.kind} · {video.youtube_video_id}
+        <div className="max-w-[280px] truncate text-fg" title={video.youtube_video_id ?? undefined}>
+          {video.title || <Badge variant="muted">Untitled</Badge>}
         </div>
+        <div className="text-small text-muted">{videoMetaLine(video)}</div>
       </td>
       <td className="px-3 py-3.5 align-middle">
         {showStepper ? (

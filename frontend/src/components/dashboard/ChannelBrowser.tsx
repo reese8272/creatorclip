@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import type { CatalogListResponse, Video } from '@/types'
 import { ArrowLeft, ArrowRight, X } from '@/components/ui/icon'
 import { ICON_INLINE, ICON_SIZE } from '@/components/ui/iconSizes'
+import { Badge } from '@/components/ui/badge'
+import { videoMetaLine } from '@/lib/videoMeta'
 
 const PAGE_SIZE = 50
 
@@ -70,10 +72,10 @@ function CatalogRow({ video }: { video: Video }) {
   return (
     <tr className="border-b border-default hover:bg-elevated">
       <td className="px-4 py-3.5 align-middle">
-        <div className="max-w-[280px] truncate text-fg">{video.title || '—'}</div>
-        <div className="font-mono text-xs text-subtle">
-          {video.kind} · {video.youtube_video_id}
+        <div className="max-w-[280px] truncate text-fg" title={video.youtube_video_id ?? undefined}>
+          {video.title || <Badge variant="muted">Untitled</Badge>}
         </div>
+        <div className="text-small text-muted">{videoMetaLine(video)}</div>
       </td>
       <td className="px-4 py-3.5 align-middle text-right">
         <Button size="sm" disabled={busy} onClick={clip}>
