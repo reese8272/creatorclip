@@ -349,7 +349,10 @@ export function ShortFormEditor({
               onMouseUp={onTranscriptMouseUp}
               // bg-bg inside a panel is an L0 WELL — a scroll region reads as recessed on
               // dark by dropping a rung, not by adding a shadow.
-              className="min-h-0 flex-1 select-text overflow-y-auto rounded-md border border-default bg-bg px-3 py-2 text-body leading-[1.9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              // Below lg the page scrolls, so the region keeps a viewport-relative
+              // cap (it replaced a hard max-h-[200px]); at lg the flex row owns
+              // its height and the cap must come off or it fights min-h-0.
+              className="max-h-[45vh] min-h-0 flex-1 select-text overflow-y-auto rounded-md border border-default bg-bg px-3 py-2 text-body leading-[1.9] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent lg:max-h-none"
             >
               {words.map((w, i) => (
                 <Fragment key={i}>
@@ -536,7 +539,7 @@ export function ShortFormEditor({
                scroll region keyboard-reachable (scrollable-region-focusable). */
             <div
               data-tool-scroll
-              className="min-h-0 flex-1 overflow-y-auto rounded-sm border border-default bg-bg p-2 text-xs"
+              className="max-h-[30vh] min-h-0 flex-1 overflow-y-auto rounded-sm border border-default bg-bg p-2 text-xs lg:max-h-none"
             >
               {cuts.map((c, idx) => (
                 <div

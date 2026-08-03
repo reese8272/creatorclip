@@ -80,6 +80,30 @@ async function capturePage(
     animations: 'disabled',
   })
 
+  // Issue 389: the tool routes are a non-scrolling `100dvh` shell, so `fullPage`
+  // silently degrades to a viewport capture there — correct as "what the user
+  // sees", but it hides everything scrolled out of the panels, and these
+  // screenshots are the UX-audit artifact. Emit a second, un-shelled capture for
+  // those routes. Keyed off the data attribute rather than a Tailwind class so it
+  // cannot drift with restyling. Desktop only — mobile is below `lg`, where the
+  // shell is disengaged and the first capture is already full-content.
+  if (project === 'desktop' && (await page.locator('[data-tool-chrome]').count()) > 0) {
+    await page.addStyleTag({
+      content: `
+        [data-tool-chrome] { height: auto !important; overflow: visible !important; }
+        [data-tool-shell], [data-tool-shell] main { min-height: 0 !important; overflow: visible !important; }
+        [data-tool-scroll] { overflow: visible !important; max-height: none !important; }
+      `,
+    })
+    await page.screenshot({
+      path: `e2e/__screenshots__/${project}-${name}-expanded.png`,
+      fullPage: true,
+      animations: 'disabled',
+    })
+  }
+
+  // Asserted last: the injected stylesheet above must not be able to mask a real
+  // page error captured during the run.
   expect(pageErrors, `uncaught JS exceptions on /${name}`).toEqual([])
   expect(consoleErrors, `console errors on /${name}`).toEqual([])
 }
