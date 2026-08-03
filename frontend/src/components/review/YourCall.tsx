@@ -119,7 +119,7 @@ export function YourCall({
   const tags = panel === 'upvote' ? APPROVE_TAGS : DENY_TAGS
 
   return (
-    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
       <div className="mb-3.5 flex items-center justify-between">
         <span className="text-h3 font-semibold text-fg">Your call</span>
         <span className="min-h-[14px] font-mono text-small text-success">{flash}</span>
@@ -145,7 +145,7 @@ export function YourCall({
           <a
             href={downloadUrl}
             download
-            className="inline-flex h-[38px] flex-1 items-center justify-center gap-1.5 rounded-sm border border-strong bg-bg text-small text-muted shadow-inset hover:bg-elevated hover:text-fg"
+            className="inline-flex h-[38px] flex-1 items-center justify-center gap-1.5 rounded-sm border border-strong bg-bg text-small text-muted inset-shadow-highlight hover:bg-elevated hover:text-fg"
           >
             <Download className={ICON_SIZE.sm} aria-hidden="true" /> Download
           </a>

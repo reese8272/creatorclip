@@ -18,7 +18,7 @@ export function CollapsibleTool({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

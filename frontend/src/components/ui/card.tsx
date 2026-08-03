@@ -2,7 +2,18 @@ import type { HTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
-  /** Adds a hover lift (raised surface + deeper shadow). Use for clickable cards. */
+  /**
+   * Which rung of the elevation ladder this card sits on (docs/UI.md "Elevation").
+   * - `panel` (default) — L1, the ordinary card. SECONDARY content.
+   * - `primary` — L2, the ONE dominant panel on a screen.
+   *
+   * Luminance alone does not carry dominance: L1→L2 is a 3.5-point step. The
+   * `primary` treatment therefore moves four cues together — surface up, border
+   * to `strong`, more padding at a larger radius — which is what actually reads
+   * as "this is the thing" (Issue 400).
+   */
+  level?: 'panel' | 'primary'
+  /** Adds a hover lift (one rung up + deeper shadow). Use for clickable cards. */
   interactive?: boolean
 }
 
@@ -10,13 +21,19 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 // shadow ladder + the inset top-edge highlight that restores the 3D cue flat
 // dark loses (docs/UI.md "Shadows"). Flat bordered boxes are what made the UI
 // read as a wireframe; the shadow + radius-md (8px) are the de-blocking.
-export function Card({ className, interactive, ...props }: CardProps) {
+export function Card({ className, level = 'panel', interactive, ...props }: CardProps) {
   return (
     <div
       className={cn(
-        'rounded-md border border-default bg-surface shadow-sm shadow-inset',
+        'border shadow-sm inset-shadow-highlight',
+        level === 'primary'
+          ? 'rounded-lg border-strong bg-elevated'
+          : 'rounded-md border-default bg-surface',
+        // Hover lifts exactly ONE rung. This used to jump L1 straight to
+        // `bg-raised` (L3), which is the overlay level and skipped a step.
         interactive &&
-          'transition-[background-color,border-color,box-shadow,transform] duration-base ease-standard hover:-translate-y-0.5 hover:border-strong hover:bg-raised hover:shadow-md',
+          'transition-[background-color,border-color,box-shadow,transform] duration-base ease-standard hover:-translate-y-0.5 hover:border-strong hover:shadow-md',
+        interactive && (level === 'primary' ? 'hover:bg-raised' : 'hover:bg-elevated'),
         className,
       )}
       {...props}

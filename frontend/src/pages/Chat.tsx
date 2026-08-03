@@ -222,7 +222,7 @@ export function Chat() {
                     key={s}
                     type="button"
                     onClick={() => send(s)}
-                    className="rounded-full border border-strong bg-surface px-3.5 py-1.5 text-small text-fg shadow-inset transition-colors hover:bg-elevated focus:border-accent focus:outline-none"
+                    className="rounded-full border border-strong bg-surface px-3.5 py-1.5 text-small text-fg inset-shadow-highlight transition-colors hover:bg-elevated focus:border-accent focus:outline-none"
                   >
                     {s}
                   </button>

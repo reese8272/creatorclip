@@ -94,7 +94,7 @@ export function Profile() {
           {/* Main: DNA snapshot + saved analyses (read-only; editing lives in Settings) */}
           <div className="flex flex-col gap-6">
             <DnaCard identity={identity} niches={niches} />
-            <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+            <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
               <div className="flex items-center justify-between border-b border-default px-[18px] py-4">
                 {/* Issue 355: "Saved insights" everywhere — Insights calls the
                     same endpoint and query key ['saved-insights'] by that name. */}
@@ -140,7 +140,7 @@ export function Profile() {
 
           {/* Sidebar: library + YouTube analytics */}
           <div className="flex flex-col gap-4">
-            <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+            <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
               <div className="mb-3 text-label uppercase tracking-[0.08em] text-muted">Library</div>
               <div className="flex flex-col">
                 <StatRow label="Videos" value={String(videos.length)} />

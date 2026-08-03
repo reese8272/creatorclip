@@ -1,7 +1,32 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, type Plugin } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+// Exposes the design-token stylesheet to the test suite as plain text, so
+// src/test/design-tokens.contract.test.ts can check that every colour utility
+// names a token index.css actually declares (Issue 400a).
+//
+// A plain `?raw` import does not work: `test.css: false` short-circuits anything
+// ending in .css, and @tailwindcss/vite claims the rest. `enforce: 'pre'` runs
+// this resolver ahead of both. Reading the file is fine here — vite.config.ts is
+// the one place with @types/node (tsconfig.node.json); src/ has only vite/client.
+const VIRTUAL_TOKENS = 'virtual:design-tokens-css'
+
+function designTokensText(): Plugin {
+  const resolved = `\0${VIRTUAL_TOKENS}`
+  return {
+    name: 'design-tokens-text',
+    enforce: 'pre',
+    resolveId: (id) => (id === VIRTUAL_TOKENS ? resolved : undefined),
+    load(id) {
+      if (id !== resolved) return undefined
+      const css = readFileSync(fileURLToPath(new URL('./src/index.css', import.meta.url)), 'utf8')
+      return `export default ${JSON.stringify(css)}`
+    },
+  }
+}
 
 // The SPA is served by FastAPI under /app/* (see main.py + docs/DECISIONS.md
 // 2026-06-17). `base` makes every built asset URL absolute under /app/ so the
@@ -15,7 +40,7 @@ const API_PREFIXES = ['/auth', '/creators', '/billing', '/tasks', '/api']
 
 export default defineConfig({
   base: '/app/',
-  plugins: [react(), tailwindcss()],
+  plugins: [designTokensText(), react(), tailwindcss()],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

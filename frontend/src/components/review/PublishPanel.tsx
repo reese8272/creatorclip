@@ -243,7 +243,7 @@ export function PublishPanel({ clip }: { clip: ReviewClip }) {
   const privacyNote = query.data?.privacy_note
 
   return (
-    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-h3 font-semibold text-fg">Publish</span>
         <Button size="sm" disabled={!rendered} onClick={() => setDialogOpen(true)}>

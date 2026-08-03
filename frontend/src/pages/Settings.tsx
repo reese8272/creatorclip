@@ -16,7 +16,7 @@ import type { Identity, IdentityResponse, NicheOption } from '@/types'
 // A titled section card (matches the prototype's Settings card chrome).
 function SettingsCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
       <div className="border-b border-default px-[18px] py-[15px] text-body font-semibold text-fg">
         {title}
       </div>

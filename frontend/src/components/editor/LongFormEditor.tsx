@@ -99,7 +99,7 @@ function MasterTimeline({
           ))}
         </div>
       )}
-      <div className="relative overflow-hidden rounded-md border border-default bg-surface shadow-inset">
+      <div className="relative overflow-hidden rounded-md border border-default bg-surface inset-shadow-highlight">
         <div
           ref={barRef}
           data-testid="master-timeline-bar"
@@ -371,7 +371,7 @@ export function LongFormEditor({
 
         {/* Your clips (Issue 373) — creator-made selections, honest provenance */}
         {creatorClips.length > 0 && (
-          <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+          <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
             <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
               <Chip pose="laptop" size={24} />
               <span className="text-h3 font-semibold text-fg">Your clips</span>
@@ -397,7 +397,7 @@ export function LongFormEditor({
         )}
 
         {/* Suggested clips */}
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
           <div className="flex items-center gap-2 border-b border-default px-4 py-3.5">
             <Chip pose="idea" size={24} />
             <span className="text-h3 font-semibold text-fg">Suggested clips</span>
@@ -452,7 +452,7 @@ export function LongFormEditor({
             (engine + your selections) downloads through the existing authed
             endpoint. A single-file source-edit export does not exist in the
             render pipeline; we say so instead of faking it (DECISIONS 2026-07-30). */}
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
           <div className="border-b border-default px-4 py-3.5 text-h3 font-semibold text-fg">Export</div>
           <div className="flex flex-col gap-2.5 px-4 py-3.5">
             {ranked.filter((c) => c.render_status === 'done').length === 0 ? (

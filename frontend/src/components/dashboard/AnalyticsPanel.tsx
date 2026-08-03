@@ -63,7 +63,7 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
   // vertical metric list in its own card, with a "Full insights →" link.
   if (variant === 'sidebar') {
     return (
-      <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+      <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
         <div className="mb-3 flex items-center justify-between">
           <div className="text-label uppercase tracking-[0.08em] text-muted">YouTube Analytics</div>
           {periodSelect}
@@ -109,7 +109,7 @@ export function AnalyticsPanel({ variant = 'panel' }: { variant?: 'panel' | 'sid
   }
 
   return (
-    <div className="rounded-md border border-default bg-surface p-5 shadow-sm shadow-inset">
+    <div className="rounded-md border border-default bg-surface p-5 shadow-sm inset-shadow-highlight">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-label uppercase tracking-[0.08em] text-muted">YouTube Analytics</div>
         {periodSelect}

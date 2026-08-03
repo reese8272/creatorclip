@@ -255,7 +255,7 @@ export function ActivityPanel() {
         width: 'min(22rem, 90vw)',
       }}
       className={[
-        'flex flex-col gap-1.5 rounded-lg border border-border bg-surface shadow-lg p-3',
+        'flex flex-col gap-1.5 rounded-lg border border-default bg-surface shadow-lg p-3',
         reducedMotion ? '' : 'transition-all duration-200',
       ]
         .filter(Boolean)

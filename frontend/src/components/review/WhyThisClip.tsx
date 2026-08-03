@@ -118,7 +118,7 @@ function TitleSuggestionsCard({ clip }: { clip: ReviewClip }) {
       <div className="mb-2 font-semibold text-fg">AI title suggestions</div>
       {mutation.isPending && <p className="text-muted">Generating…</p>}
       {mutation.isError && (
-        <p className="text-error">Could not generate suggestions. Try again.</p>
+        <p className="text-danger">Could not generate suggestions. Try again.</p>
       )}
       {mutation.data && (
         <>
@@ -201,7 +201,7 @@ function CaptionHooksCard({ clip }: { clip: ReviewClip }) {
       <div className="mb-2 font-semibold text-fg">Caption hook suggestions</div>
       {mutation.isPending && <p className="text-muted">Generating…</p>}
       {mutation.isError && (
-        <p className="text-error">Could not generate suggestions. Try again.</p>
+        <p className="text-danger">Could not generate suggestions. Try again.</p>
       )}
       {mutation.data && (
         <>
@@ -253,7 +253,7 @@ function ExplainClipCard({ clipId }: { clipId: string }) {
       <div className="mb-2 font-semibold text-fg">Why this clip</div>
       {mutation.isPending && <p className="text-muted">Generating…</p>}
       {mutation.isError && (
-        <p className="text-error">Could not load explanation. Try again.</p>
+        <p className="text-danger">Could not load explanation. Try again.</p>
       )}
       {mutation.data && (
         <>

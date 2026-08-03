@@ -25,7 +25,7 @@ export function DnaCta({ setup }: { setup: SetupStep | null | undefined }) {
   if (!setup || setup.step === 'complete' || setup.step === 'link_first_video') return null
   const spaRoute = STEP_ROUTE[setup.step]
   return (
-    <div className="mb-6 flex items-center justify-between gap-4 rounded-md border border-default border-l-2 border-l-accent bg-surface px-5 py-4 shadow-sm shadow-inset">
+    <div className="mb-6 flex items-center justify-between gap-4 rounded-md border border-default border-l-2 border-l-accent bg-surface px-5 py-4 shadow-sm inset-shadow-highlight">
       <p className="text-sm text-muted">{setup.label}</p>
       {spaRoute ? (
         <Link to={spaRoute}>
@@ -84,7 +84,7 @@ export function TrialBanner({ balance }: { balance: Balance | null }) {
     <div
       role="status"
       aria-live="polite"
-      className={`mb-6 flex items-center justify-between gap-4 rounded-md border bg-surface px-5 py-4 shadow-sm shadow-inset ${
+      className={`mb-6 flex items-center justify-between gap-4 rounded-md border bg-surface px-5 py-4 shadow-sm inset-shadow-highlight ${
         finalDay ? 'border-warning-border' : 'border-default'
       }`}
     >

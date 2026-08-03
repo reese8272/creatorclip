@@ -59,7 +59,7 @@ export function InlineUploadFlow({ onReady }: { onReady: (videoId: string) => vo
   const done = row?.ingest_status === 'done'
 
   return (
-    <div className="mb-5 rounded-md border border-accent-border bg-surface px-[18px] py-4 shadow-sm shadow-inset">
+    <div className="mb-5 rounded-md border border-accent-border bg-surface px-[18px] py-4 shadow-sm inset-shadow-highlight">
       <div className="mb-2.5 flex items-center gap-2.5">
         <Chip pose="laptop" size={30} />
         <span className="max-w-[420px] truncate text-h3 font-semibold text-fg">{title}</span>

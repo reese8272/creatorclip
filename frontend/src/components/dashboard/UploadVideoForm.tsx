@@ -103,7 +103,7 @@ export function UploadVideoForm({
   if (!open) return null
 
   return (
-    <div className="mb-5 animate-slide-up rounded-md border border-accent-border bg-surface px-[18px] py-4 shadow-sm shadow-inset">
+    <div className="mb-5 animate-slide-up rounded-md border border-accent-border bg-surface px-[18px] py-4 shadow-sm inset-shadow-highlight">
       <div className="flex flex-wrap items-center gap-2.5">
         <input
           ref={fileRef}

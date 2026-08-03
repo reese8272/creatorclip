@@ -96,7 +96,7 @@ function ReviewClipView({
 
         <PublishPanel clip={clip} />
 
-        <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm shadow-inset">
+        <div className="rounded-md border border-accent-border bg-gradient-to-br from-accent-soft to-surface p-[18px] shadow-sm inset-shadow-highlight">
           <div className="mb-1.5 flex items-center gap-2.5">
             <Chip pose="laptop" size={30} />
             <span className="text-h3 font-semibold text-fg">Open in the editor</span>

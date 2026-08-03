@@ -512,7 +512,7 @@ export function Editor() {
 
           {/* Chip guidance callout (short-form) */}
           {clip.reasoning && (
-            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 shadow-inset">
+            <div className="flex items-start gap-3 rounded-md border border-default bg-surface px-4 py-3 inset-shadow-highlight">
               <Chip pose="think" size={30} className="mt-0.5 flex-shrink-0" />
               <p className="text-small leading-relaxed text-muted">{clip.reasoning}</p>
             </div>

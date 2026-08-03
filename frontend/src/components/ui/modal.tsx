@@ -49,7 +49,7 @@ export function Modal({ open, title, onClose, children }: ModalProps) {
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="w-full max-w-md rounded-lg border border-strong bg-elevated p-5 shadow-lg outline-none animate-scale-in"
+        className="w-full max-w-md rounded-lg border border-strong bg-raised p-5 shadow-lg outline-none animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 id={titleId} className="mb-3 text-h3 font-ui text-fg">

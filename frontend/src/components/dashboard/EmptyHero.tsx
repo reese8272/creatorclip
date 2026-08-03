@@ -29,7 +29,7 @@ export function EmptyHero({ onUploadClick }: { onUploadClick: () => void }) {
   return (
     <section
       aria-label="Get started"
-      className="my-6 animate-slide-up rounded-xl border border-default bg-surface px-7 py-8 shadow-sm shadow-inset"
+      className="my-6 animate-slide-up rounded-xl border border-default bg-surface px-7 py-8 shadow-sm inset-shadow-highlight"
     >
       <h2 className="mb-2 text-h2 text-fg">Let's get your first clip.</h2>
       <p className="mb-5 max-w-[60ch] text-sm leading-relaxed text-muted">

@@ -115,7 +115,7 @@ export function Pricing() {
         {PACKS.map((p) => (
           <div
             key={p.id}
-            className={`relative flex flex-col gap-2 rounded-md border bg-surface p-5 shadow-inset transition-[background-color,border-color,box-shadow,transform] duration-base ease-standard hover:-translate-y-0.5 hover:shadow-md ${
+            className={`relative flex flex-col gap-2 rounded-md border bg-surface p-5 inset-shadow-highlight transition-[background-color,border-color,box-shadow,transform] duration-base ease-standard hover:-translate-y-0.5 hover:shadow-md ${
               p.featured
                 ? 'border-accent shadow-accent-glow'
                 : 'border-default shadow-sm hover:border-strong'
@@ -140,7 +140,7 @@ export function Pricing() {
               onClick={() => buyPack(p.id)}
               className={
                 authed
-                  ? 'mt-4 w-full rounded-sm bg-accent py-3 text-sm font-medium text-on-accent shadow-inset transition-colors duration-fast hover:bg-accent-hover'
+                  ? 'mt-4 w-full rounded-sm bg-accent py-3 text-sm font-medium text-on-accent inset-shadow-highlight transition-colors duration-fast hover:bg-accent-hover'
                   : 'mt-4 w-full rounded-sm border border-strong py-3 text-sm font-medium text-fg transition-colors duration-fast hover:border-accent hover:text-accent-text'
               }
             >

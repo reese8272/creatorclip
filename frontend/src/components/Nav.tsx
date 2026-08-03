@@ -96,7 +96,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
       {LINKS.map((l, i) => (
         <Fragment key={l.href}>
           {l.group === 'account' && LINKS[i - 1]?.group === 'work' && (
-            <span aria-hidden="true" className="mx-1 h-4 w-px bg-[color:var(--color-border)]" />
+            <span aria-hidden="true" className="mx-1 h-4 w-px bg-default" />
           )}
           <NavLink
             to={l.href}

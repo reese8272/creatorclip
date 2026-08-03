@@ -24,6 +24,15 @@ const RAW = import.meta.glob('/src/**/*.{ts,tsx}', {
   eager: true,
 }) as Record<string, string>
 
+// Stylesheets are globbed separately: they are not parsed as TypeScript, but the
+// design-token contract test needs to read the @theme block that declares the
+// tokens every utility resolves against.
+const RAW_CSS = import.meta.glob('/src/**/*.css', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>
+
 export interface Hit {
   file: string
   line: number
@@ -45,7 +54,7 @@ export function sourcePaths(filter: (path: string) => boolean = () => true): str
 
 /** Raw text of one scanned file, for assertions that don't need the AST. */
 export function sourceText(path: string): string | undefined {
-  return RAW[path]
+  return RAW[path] ?? RAW_CSS[path]
 }
 
 /**

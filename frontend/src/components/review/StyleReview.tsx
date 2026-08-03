@@ -117,7 +117,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
 
       {/* Right: the style take + past notes */}
       <div className="flex flex-col gap-4">
-        <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface p-[18px] shadow-sm inset-shadow-highlight">
           <div className="mb-3.5 flex items-center justify-between">
             <span className="flex items-center gap-2 text-h3 font-semibold text-fg">
               <Chip pose="book" size={26} />
@@ -188,7 +188,7 @@ export function StyleReview({ videoId }: { videoId: string }) {
           )}
         </div>
 
-        <div className="rounded-md border border-default bg-surface shadow-sm shadow-inset">
+        <div className="rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight">
           <div className="border-b border-default px-4 py-3 text-label uppercase tracking-[0.06em] text-muted">
             Your style notes on this video
           </div>

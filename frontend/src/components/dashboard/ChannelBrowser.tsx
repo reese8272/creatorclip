@@ -114,7 +114,7 @@ export function ChannelBrowser({ open, onClose }: { open: boolean; onClose: () =
       onClick={onClose}
     >
       <div
-        className="mt-8 w-full max-w-3xl rounded-md border border-default bg-surface shadow-sm shadow-inset"
+        className="mt-8 w-full max-w-3xl rounded-md border border-default bg-surface shadow-sm inset-shadow-highlight"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-default px-5 py-4">
