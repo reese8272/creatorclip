@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { REVIEW_PLAYER_W } from '@/lib/toolLayout'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { fitTier } from '@/lib/fit'
 import { TrimFilmstrip } from '@/components/review/TrimFilmstrip'
@@ -91,10 +93,18 @@ export function ClipPlayer({
           // symptom). The primitive pairs autoPlay with muted for exactly this.
           autoPlay
           onTimeChange={setCurrentTime}
-          className="w-full max-w-[320px]"
+          // Issue 389: height-derived instead of a frozen 320px cap, so the
+          // player grows with the viewport inside the tool shell.
+          className={REVIEW_PLAYER_W}
         />
       ) : (
-        <div className="flex aspect-[9/16] w-full max-w-[340px] flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black px-6 text-center text-sm text-subtle">
+        <div
+          className={cn(
+            REVIEW_PLAYER_W,
+            // Same width as the real player so the two states do not jump.
+            'flex aspect-[9/16] flex-col items-center justify-center gap-3 rounded-xl border border-default bg-black px-6 text-center text-sm text-subtle',
+          )}
+        >
           {sourceExpired ? (
             <>
               <span className="text-danger">Source media expired</span>

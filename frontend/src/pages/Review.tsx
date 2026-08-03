@@ -29,21 +29,33 @@ import { Card } from '@/components/ui/card'
 // ratings being learned. Once personalized, the band collapses back to the thin
 // inline-chip strip (no large animation needed). prefers-reduced-motion collapses
 // the animation to a single resting frame via the global rule in index.css.
+// Issue 389 made this a compact toolbar item rather than a full-width band: three
+// stacked bands were spending ~110px of a fixed-height workspace on status. The
+// whole sentence stays inside ONE element on purpose — Review.test.tsx scopes its
+// no-virality check to `band.textContent`, so splitting the copy across siblings
+// would both break the query and widen what that check actually covers.
 function PersonalizationBand({ status }: { status: PersonalizationStatus }) {
-  if (!status.active) {
-    return (
-      <div className="flex flex-col items-center gap-1 border-b border-default bg-surface px-4 py-3 text-center text-xs text-muted">
-        <ChipPersonalizing />
-        <span>
-          Still learning — DNA-based ranking ({status.labels}/{status.threshold} ratings collected)
-        </span>
-      </div>
-    )
-  }
   return (
-    <div className="flex items-center justify-center gap-2 border-b border-default bg-surface px-4 py-1.5 text-center text-xs text-muted">
+    <span className="flex items-center gap-2 text-xs text-muted">
       <Chip pose="meditate" size={22} />
-      Personalized to your feedback ({status.labels} ratings collected)
+      <span>
+        {status.active
+          ? `Personalized to your feedback (${status.labels} ratings collected)`
+          : `Still learning — DNA-based ranking (${status.labels}/${status.threshold} ratings collected)`}
+      </span>
+    </span>
+  )
+}
+
+// The animated ChipPersonalizing (150×200, Issue 314) signals the keep/drop
+// ratings being learned. It cannot live in a 32px toolbar row, so below threshold
+// it moves to the top of the actions column where there is room for it.
+function PersonalizationCard({ status }: { status: PersonalizationStatus }) {
+  if (status.active) return null
+  return (
+    <div className="flex flex-col items-center gap-1 rounded-md border border-default bg-surface px-4 py-3 text-center text-xs text-muted">
+      <ChipPersonalizing />
+      <span>Learning your taste from every keep and drop.</span>
     </div>
   )
 }
@@ -55,10 +67,12 @@ function ReviewClipView({
   clip,
   videoId,
   onAdvance,
+  personalization,
 }: {
   clip: ReviewClip
   videoId: string
   onAdvance: () => void
+  personalization: PersonalizationStatus | null
 }) {
   const navigate = useNavigate()
   // Duration of the RENDERED mp4 — the render origin is setup_start_s when
@@ -67,30 +81,19 @@ function ReviewClipView({
   const clipDur = clip.end_s - (clip.setup_start_s ?? clip.start_s)
   const [trim, setTrim] = useState({ start: 0, end: clipDur })
 
-  // Asymmetric grid on purpose. A 50/50 layout is structurally symmetric, so no
-  // panel can dominate however it is styled — the eye gets no entry point and
-  // scans linearly, which is what "blocky" describes. max-w-6xl matches the
-  // Editor so the two tool routes share a measure.
+  // Three regions at lg (Issue 389): the argued case · the media · the decision.
+  // Promoting "Why this clip" out of the rail into its own column is what removes
+  // the 1440px dead space without inventing a feature — it is the most-read
+  // content on the page and it was sharing a rail with three other cards.
+  // grid-rows-[minmax(0,1fr)] is the grid analogue of min-h-0.
   return (
-    <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,1fr)]">
-      {/* Left: player + filmstrip trim + Next — the ONE primary panel (L2). It
-          had no container identity at all before, which is why the rail of four
-          equal cards read as heavier than the thing they describe. */}
-      {/* w-fit: the clip is 9:16, so a stretched card would frame a large empty
-          region beside a 320px player — dominance should come from weight, not
-          from enclosing dead space. The wider column still gives it the room. */}
-      <Card level="primary" className="mx-auto h-fit w-fit p-4">
-      <ClipPlayer
-        clip={clip}
-        trimStart={trim.start}
-        trimEnd={trim.end}
-        onTrimChange={(start, end) => setTrim({ start, end })}
-        onNext={onAdvance}
-      />
-      </Card>
-
-      {/* Right: Why this clip · Your call · Open in the editor */}
-      <div className="flex flex-col gap-4">
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,1.1fr)_auto_minmax(300px,26rem)] lg:grid-rows-[minmax(0,1fr)]">
+      {/* ── A · The case for this clip ── */}
+      <section
+        data-tool-scroll
+        aria-label="Why this clip"
+        className="min-h-0 lg:overflow-y-auto"
+      >
         <CollapsibleTool
           defaultOpen
           plain
@@ -103,6 +106,31 @@ function ReviewClipView({
         >
           <WhyThisClip clip={clip} />
         </CollapsibleTool>
+      </section>
+
+      {/* ── B · The media — the ONE primary panel (L2), on an `auto` track ──
+          w-fit: the clip is 9:16, so a stretched card would frame a large empty
+          region beside the player — dominance should come from weight, not from
+          enclosing dead space. */}
+      <section aria-label="Clip preview" className="flex min-h-0 justify-center lg:overflow-y-auto">
+        <Card level="primary" className="h-fit w-fit p-4">
+          <ClipPlayer
+            clip={clip}
+            trimStart={trim.start}
+            trimEnd={trim.end}
+            onTrimChange={(start, end) => setTrim({ start, end })}
+            onNext={onAdvance}
+          />
+        </Card>
+      </section>
+
+      {/* ── C · Your call ── */}
+      <section
+        data-tool-scroll
+        aria-label="Clip actions"
+        className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto"
+      >
+        {personalization && <PersonalizationCard status={personalization} />}
 
         <YourCall clip={clip} trimStart={trim.start} trimEnd={trim.end} onAdvance={onAdvance} />
 
@@ -132,14 +160,15 @@ function ReviewClipView({
             Refine in editor <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
         </Card>
-      </div>
+      </section>
     </div>
   )
 }
 
-// Port of static/review.html (Issue 85f), redesigned (Issue 306) to the player-first
-// two-column layout: player + filmstrip trim on the left; Why-this-clip, the
-// "Your call" triage card, and the editor entry point on the right.
+// Port of static/review.html (Issue 85f), redesigned (Issue 306) to a player-first
+// layout and again (Issue 389) into the full-height tool shell: the argued case,
+// the media, and the decision as three independently-scrolling regions under one
+// compact toolbar strip.
 export function Review() {
   const [params, setParams] = useSearchParams()
   const videoId = params.get('video_id')
@@ -269,49 +298,49 @@ export function Review() {
   const personalization = data?.personalization ?? null
 
   return (
-    <ToolShell>
-      {personalization && <PersonalizationBand status={personalization} />}
+    // scroll={false}: <main> clips and the three regions scroll independently, so
+    // the player never leaves the viewport while you read the case for the clip.
+    <ToolShell scroll={false} className="flex flex-col gap-3 px-4 py-3 lg:px-6">
+      {/* One toolbar strip where there were three stacked full-width bands
+          (personalization, style link, shortlist) — ~110px of a fixed-height
+          workspace reclaimed for the work itself. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted">
+        {personalization ? <PersonalizationBand status={personalization} /> : <span />}
 
-      {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
-      <div className="mx-auto flex w-full max-w-5xl justify-end px-4 pt-3">
+        {/* Issue 377 — shortlist mode: default queue is the engine's argued top
+            picks; "show all candidates" is the load-bearing escape hatch so an
+            engine miss can never be silently hidden. */}
+        {shortlistedClips.length > 0 && (
+          <div className="flex items-center gap-3" data-testid="shortlist-banner">
+            <span>
+              {showAllCandidates
+                ? `Showing all ${allClips.length} candidates`
+                : `Top ${shortlistedClips.length} picks — the case for each, ranked`}
+            </span>
+            {(hasHiddenCandidates || showAllCandidates) && (
+              <button onClick={toggleShowAllCandidates} className="text-accent-text hover:underline">
+                {showAllCandidates
+                  ? `Show top picks only (${shortlistedClips.length})`
+                  : `Show all ${allClips.length} candidates`}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
         <button
           onClick={() => setParams({ video_id: videoId, mode: 'style' })}
-          className="text-xs text-muted hover:text-accent-text"
+          className="hover:text-accent-text"
         >
           Review this video’s overall style <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
         </button>
       </div>
 
-      {/* Issue 377 — shortlist mode: default queue is the engine's argued top
-          picks; "show all candidates" is the load-bearing escape hatch so an
-          engine miss can never be silently hidden. */}
-      {shortlistedClips.length > 0 && (
-        <div
-          className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 pt-3 text-xs text-muted"
-          data-testid="shortlist-banner"
-        >
-          <span>
-            {showAllCandidates
-              ? `Showing all ${allClips.length} candidates`
-              : `Top ${shortlistedClips.length} picks — the case for each, ranked`}
-          </span>
-          {(hasHiddenCandidates || showAllCandidates) && (
-            <button
-              onClick={toggleShowAllCandidates}
-              className="text-accent-text hover:underline"
-            >
-              {showAllCandidates
-                ? `Show top picks only (${shortlistedClips.length})`
-                : `Show all ${allClips.length} candidates`}
-            </button>
-          )}
-        </div>
-      )}
-
       <ReviewClipView
         key={clip.id}
         clip={clip}
         videoId={videoId}
+        personalization={personalization}
         onAdvance={() => setIndex((i) => i + 1)}
       />
     </ToolShell>

@@ -30,5 +30,9 @@
  */
 export const EDITOR_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_30.5rem)*0.5625))]'
 
-/** Review player width. No timeline dock, so less chrome to subtract. */
-export const REVIEW_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_22rem)*0.5625))]'
+/**
+ * Review player width. X = 29.5rem — no timeline dock, but ClipPlayer wraps the
+ * video in 287px of its own chrome (trim filmstrip, fit badge, Next). Measured
+ * at 1440×900: 773px row, so the player gets 486px of height.
+ */
+export const REVIEW_PLAYER_W = 'w-[min(30rem,calc((100dvh_-_29.5rem)*0.5625))]'
