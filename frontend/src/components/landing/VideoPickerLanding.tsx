@@ -233,8 +233,11 @@ export function VideoPickerLanding({ tool }: { tool: 'review' | 'editor' }) {
   const isEmpty = !videosQuery.isPending && !videosQuery.isError && videos.length === 0
   const showUpload = uploadOpen || isEmpty
 
+  // A <div>, not a <main>: this only ever renders inside ToolShell, which owns
+  // the route's single <main> landmark (Issue 389). Two mains would fail axe's
+  // landmark-one-main on the editor and review routes, which are gated.
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
+    <div className="mx-auto w-full max-w-5xl px-4 py-8">
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-h2 text-fg">{copy.heading}</h1>
@@ -334,6 +337,6 @@ export function VideoPickerLanding({ tool }: { tool: 'review' | 'editor' }) {
           </table>
         </div>
       )}
-    </main>
+    </div>
   )
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { ToolMain, ToolShell } from '@/components/layout/ToolShell'
 import { Chip } from '@/components/Chip'
 import { ChipPersonalizing } from '@/components/chip/ChipStates'
 import { ClipPlayer } from '@/components/review/ClipPlayer'
@@ -72,7 +72,7 @@ function ReviewClipView({
   // scans linearly, which is what "blocky" describes. max-w-6xl matches the
   // Editor so the two tool routes share a measure.
   return (
-    <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,1fr)]">
+    <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-6 px-4 py-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,1fr)]">
       {/* Left: player + filmstrip trim + Next — the ONE primary panel (L2). It
           had no container identity at all before, which is why the rail of four
           equal cards read as heavier than the thing they describe. */}
@@ -133,7 +133,7 @@ function ReviewClipView({
           </Button>
         </Card>
       </div>
-    </main>
+    </div>
   )
 }
 
@@ -192,17 +192,16 @@ export function Review() {
     }
   }, [reviewed, navigate])
 
+  // Every branch renders inside ToolShell, so the honesty statement and the legal
+  // links are structurally impossible to omit — including the loading and error
+  // states, which each carried their own copy of the band before Issue 389.
   function message(text: string) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 text-center">
+      <ToolShell>
+        <ToolMain className="text-center">
           <p className="text-sm text-muted">{text}</p>
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
   }
 
@@ -210,21 +209,13 @@ export function Review() {
   // instead of a dead-end pointer at the Dashboard.
   if (!videoId)
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
+      <ToolShell>
         <VideoPickerLanding tool="review" />
-      </>
+      </ToolShell>
     )
   if (styleMode)
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
+      <ToolShell>
         <div className="mx-auto w-full max-w-5xl px-4 pt-4">
           <button
             onClick={() => setParams({ video_id: videoId })}
@@ -234,35 +225,27 @@ export function Review() {
           </button>
         </div>
         <StyleReview videoId={videoId} />
-      </>
+      </ToolShell>
     )
   if (isPending) return message('Loading clip…')
   // A failed load must NOT fall through to "No clips yet" — a creator whose
   // clips exist would be told to regenerate them (Recap retry idiom).
   if (isError)
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+      <ToolShell>
+        <ToolMain>
           <QueryErrorState
             title="Couldn’t load clips for this video."
             onRetry={() => void refetch()}
           />
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
   if (reviewed) return message('All clips reviewed! Great work. Taking you back to the dashboard…')
   if (!clip)
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-3 px-4 py-10">
+      <ToolShell>
+        <ToolMain className="flex flex-col items-center gap-3">
           {/* Issue 355: this used to point at the Dashboard in prose with nothing
               to click. Generating is the actual next step, so it happens here. */}
           <EmptyStatePrompt
@@ -279,18 +262,14 @@ export function Review() {
           >
             Review the style instead <ArrowRight className={`${ICON_SIZE.md} ${ICON_INLINE}`} aria-hidden="true" />
           </Button>
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
 
   const personalization = data?.personalization ?? null
 
   return (
-    <>
-      <DisclaimerBand>
-        AutoClip predicts fit with your style and audience — it does not promise virality. All scores
-        are estimates grounded in your own channel data.
-      </DisclaimerBand>
+    <ToolShell>
       {personalization && <PersonalizationBand status={personalization} />}
 
       {/* Issue 370: the whole video's style is reviewable, not just its clips. */}
@@ -335,6 +314,6 @@ export function Review() {
         videoId={videoId}
         onAdvance={() => setIndex((i) => i + 1)}
       />
-    </>
+    </ToolShell>
   )
 }

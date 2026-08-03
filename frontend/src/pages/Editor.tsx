@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { fitTier } from '@/lib/fit'
-import { DisclaimerBand } from '@/components/DisclaimerBand'
+import { ToolMain, ToolShell } from '@/components/layout/ToolShell'
 import { Timeline } from '@/components/editor/Timeline'
 import { FitBadge } from '@/components/ui/fit-badge'
 import { Button } from '@/components/ui/button'
@@ -348,17 +348,16 @@ export function Editor() {
 
   // ── Guard states ────────────────────────────────────────────────────────
 
+  // Every branch renders inside ToolShell, so the honesty statement and the legal
+  // links are structurally impossible to omit — including the loading and error
+  // states, which each carried their own copy of the band before Issue 389.
   function message(text: string) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+      <ToolShell>
+        <ToolMain>
           <p className="text-center text-sm text-muted">{text}</p>
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
   }
 
@@ -367,13 +366,9 @@ export function Editor() {
   // no clip, we open long-form source mode (Issue 307).
   if (!videoId) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
+      <ToolShell>
         <VideoPickerLanding tool="editor" />
-      </>
+      </ToolShell>
     )
   }
   if (clipsPending) return message('Loading…')
@@ -381,18 +376,14 @@ export function Editor() {
   // clips exist would be told there are none (Recap retry idiom, Issue 361 sweep).
   if (clipsError) {
     return (
-      <>
-        <DisclaimerBand>
-          AutoClip predicts fit with your style and audience — it does not promise virality. All
-          scores are estimates grounded in your own channel data.
-        </DisclaimerBand>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10">
+      <ToolShell>
+        <ToolMain>
           <QueryErrorState
             title="Couldn’t load clips for this video."
             onRetry={() => void refetchClips()}
           />
-        </main>
-      </>
+        </ToolMain>
+      </ToolShell>
     )
   }
 
@@ -412,13 +403,8 @@ export function Editor() {
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <DisclaimerBand>
-        AutoClip predicts fit with your style and audience — it does not promise virality. All scores
-        are estimates grounded in your own channel data.
-      </DisclaimerBand>
-
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+    <ToolShell>
+      <div className="mx-auto w-full max-w-6xl px-4 py-6">
         {/* Header + mode toggle (Issue 307) */}
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -696,8 +682,8 @@ export function Editor() {
             </div>
           </div>
         )}
-      </main>
-    </>
+      </div>
+    </ToolShell>
   )
 }
 
